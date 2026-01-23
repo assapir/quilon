@@ -88,6 +88,25 @@ fn main() {
                 }
             }
 
+            // Validate entry point exists (>> function required for executables)
+            let has_entry_point = program.items.iter().any(|item| {
+                if let ast::Item::FunctionDecl(func) = item {
+                    func.name == ">>"
+                } else {
+                    false
+                }
+            });
+
+            if !has_entry_point {
+                eprintln!("❌ Error: No entry point found!");
+                eprintln!("   Programs must define a >> function as the entry point.");
+                eprintln!("   Example: >> = () -> Num => 0");
+                eprintln!();
+                eprintln!("   Note: Module imports (<<) are not yet implemented.");
+                eprintln!("   For now, all programs must be standalone executables.");
+                std::process::exit(1);
+            }
+
             // Generate LLVM IR
             use inkwell::context::Context;
             let context = Context::create();
