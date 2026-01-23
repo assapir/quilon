@@ -157,21 +157,15 @@ impl TypeChecker {
 
     fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
         // Build function type from parameters and return type
+        // If no type annotation, use Num as default (we'll improve this with inference)
         let param_types: Vec<Type> = decl.params.iter()
             .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
             .collect();
 
-        let return_type = decl.return_type.clone().unwrap_or(Type::Num);
+        // For return type, we can try to infer from body if not specified
+        let mut inferred_return_type = None;
 
-        let func_type = Type::Function {
-            params: param_types.clone(),
-            return_type: Box::new(return_type.clone()),
-        };
-
-        // Define the function in current scope
-        self.env.define(decl.name.clone(), func_type, false, decl.span.clone())?;
-
-        // Check function body in new scope
+        // Push scope for body type checking
         self.env.push_scope();
 
         // Add parameters to scope
@@ -179,13 +173,31 @@ impl TypeChecker {
             self.env.define(param.name.clone(), param_type.clone(), false, param.span.clone())?;
         }
 
-        // Check body
+        // Check body and infer return type
         let body_type = self.infer_expr(&decl.body)?;
-
-        // Check return type matches
-        self.check_type_compatibility(&return_type, &body_type, &decl.span)?;
+        inferred_return_type = Some(body_type.clone());
 
         self.env.pop_scope();
+
+        // Determine final return type
+        let return_type = if let Some(ref annotated_type) = decl.return_type {
+            // If return type is annotated, check it matches inferred
+            if let Some(ref inferred) = inferred_return_type {
+                self.check_type_compatibility(annotated_type, inferred, &decl.span)?;
+            }
+            annotated_type.clone()
+        } else {
+            // Use inferred type
+            inferred_return_type.unwrap_or(Type::Num)
+        };
+
+        let func_type = Type::Function {
+            params: param_types,
+            return_type: Box::new(return_type),
+        };
+
+        // Define the function in current scope
+        self.env.define(decl.name.clone(), func_type, false, decl.span.clone())?;
 
         Ok(())
     }
@@ -596,6 +608,33 @@ result = add(1)").unwrap();
     #[test]
     fn test_pattern_match() {
         let tokens = Lexer::tokenize("result = 5 ? | 0 => \"zero\" | _ => \"other\"").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_program(&program).is_ok());
+    }
+
+    #[test]
+    fn test_inferred_return_type() {
+        // Function without return type annotation - should infer from body
+        let tokens = Lexer::tokenize("double = (x :: Num) => x + x").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_program(&program).is_ok());
+        
+        // Verify the function type was inferred correctly
+        let func_type = checker.env.get_type("double").unwrap();
+        if let Type::Function { params, return_type } = func_type {
+            assert_eq!(params, vec![Type::Num]);
+            assert_eq!(*return_type, Type::Num);
+        } else {
+            panic!("Expected function type");
+        }
+    }
+
+    #[test]
+    fn test_inferred_param_types() {
+        // Function without parameter type annotations - defaults to Num
+        let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_program(&program).is_ok());

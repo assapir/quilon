@@ -55,7 +55,46 @@ fn main() {
         }
         Commands::Check { file } => {
             println!("🔍 Checking: {}", file.display());
-            // TODO: Implement check
+            
+            // Read the file
+            let source = match std::fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("❌ Error reading file: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Lex
+            let tokens = match lexer::Lexer::tokenize(&source) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("❌ Lexer error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Parse
+            let program = match parser::parse(&tokens) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ Parse error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Type check
+            let mut checker = typechecker::TypeChecker::new();
+            match checker.check_program(&program) {
+                Ok(()) => {
+                    println!("✅ Type checking passed!");
+                    println!("📋 Program contains {} top-level item(s)", program.items.len());
+                }
+                Err(e) => {
+                    eprintln!("❌ Type error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
