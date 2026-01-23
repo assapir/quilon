@@ -4,7 +4,13 @@
 *.ll
 *.o
 
-# Compiled executables
+# Compiled executables (binaries)
+examples/*/
 examples/simple
 examples/string_test
 examples/fibonacci
+examples/hello_world
+examples/math
+examples/factorial
+examples/option
+examples/pattern_wildcard
