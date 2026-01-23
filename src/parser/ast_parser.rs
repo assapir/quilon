@@ -777,6 +777,10 @@ impl<'a> Parser<'a> {
             let name = self.peek().text.clone();
             self.advance();
             Ok(name)
+        } else if self.check(&TokenKind::EntryPoint) {
+            // Allow >> as a special function name (entry point)
+            self.advance();
+            Ok(">>".to_string())
         } else {
             Err(ParseError {
                 message: format!("Expected identifier, got {:?}", self.peek().kind),

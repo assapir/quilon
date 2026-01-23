@@ -2,4 +2,4 @@ square = (x :: Num) -> Num => x * x
 
 sum_of_squares = (a :: Num, b :: Num) -> Num => square(a) + square(b)
 
-quilon_main = () -> Num => sum_of_squares(3, 4)
+>> = () -> Num => sum_of_squares(3, 4)

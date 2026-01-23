@@ -40,6 +40,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.generate_item(item)?;
         }
 
+        // Check if entry point function (>>) exists and generate C main wrapper
+        if self.module.get_function(">>").is_some() {
+            self.generate_main_wrapper()?;
+        }
+
         // Verify the module
         if let Err(e) = self.module.verify() {
             return Err(format!("Module verification failed: {}", e));
@@ -47,6 +52,54 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Return the LLVM IR as a string
         Ok(self.module.print_to_string().to_string())
+    }
+
+    fn generate_main_wrapper(&mut self) -> Result<(), String> {
+        // Create C-compatible main: int main(int argc, char** argv)
+        let i32_type = self.context.i32_type();
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        
+        let main_type = i32_type.fn_type(
+            &[i32_type.into(), ptr_type.into()],
+            false
+        );
+        
+        let main_fn = self.module.add_function("main", main_type, None);
+        let entry = self.context.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(entry);
+        
+        // For now, we'll call >> with empty args (TODO: convert argc/argv to []String)
+        // Get the >> function
+        let user_entry = self.module.get_function(">>")
+            .ok_or_else(|| "Entry point function >> not found".to_string())?;
+        
+        // Create empty array for args (TODO: proper conversion)
+        let empty_array_type = self.context.f64_type().array_type(0);
+        let empty_array = empty_array_type.const_zero();
+        
+        // Call >> function (assuming it takes []String -> Num)
+        // For now, we'll create a simpler version that takes no args
+        let result = self.builder.build_call(user_entry, &[], "entry_result")
+            .map_err(|e| format!("Failed to call entry point: {:?}", e))?;
+        
+        // Convert result to i32
+        use inkwell::values::AnyValue;
+        let return_val = match result.as_any_value_enum() {
+            inkwell::values::AnyValueEnum::FloatValue(f) => {
+                // Convert double to i32
+                self.builder.build_float_to_signed_int(f, i32_type, "result_int")
+                    .map_err(|e| format!("Failed to convert result: {:?}", e))?
+            }
+            _ => {
+                // Return 0 if not a numeric result
+                i32_type.const_zero()
+            }
+        };
+        
+        self.builder.build_return(Some(&return_val))
+            .map_err(|e| format!("Failed to build return: {:?}", e))?;
+        
+        Ok(())
     }
 
     fn generate_item(&mut self, item: &Item) -> Result<(), String> {

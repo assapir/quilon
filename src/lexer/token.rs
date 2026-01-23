@@ -93,6 +93,9 @@ pub enum TokenKind {
     #[token("|>")]
     Pipeline,
 
+    #[token(">>")]
+    EntryPoint,
+
     #[token("?")]
     Question,
 
@@ -221,6 +224,7 @@ impl fmt::Display for TokenKind {
             TokenKind::ReturnArrow => write!(f, "->"),
             TokenKind::TypeAnnotation => write!(f, "::"),
             TokenKind::Pipeline => write!(f, "|>"),
+            TokenKind::EntryPoint => write!(f, ">>"),
             TokenKind::Question => write!(f, "?"),
             TokenKind::Pipe => write!(f, "|"),
             TokenKind::BlockOpen => write!(f, "<"),

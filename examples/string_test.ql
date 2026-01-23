@@ -1,3 +1,3 @@
 greet = (name :: String) -> String => name
 
-quilon_main = () -> String => greet("World")
+>> = () -> String => greet("World")
