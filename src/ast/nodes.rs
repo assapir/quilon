@@ -14,6 +14,12 @@ pub enum Item {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Statement {
+    Item(Item),
+    Expr(Expr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct VarDecl {
     pub mutable: bool,
     pub name: String,
@@ -79,7 +85,7 @@ pub enum Expr {
     
     // Block
     Block {
-        exprs: Vec<Expr>,
+        stmts: Vec<Statement>,
         span: Span,
     },
     

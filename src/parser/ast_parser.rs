@@ -208,30 +208,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        use crate::ast::Statement;
+        
         let start = self.current_span();
         self.expect(&TokenKind::BlockOpen)?;
 
-        let mut exprs = Vec::new();
+        let mut stmts = Vec::new();
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
             // Try to parse as item first (for nested declarations)
             if self.check(&TokenKind::Mut) || 
                (self.check(&TokenKind::Ident) && self.peek_ahead(1).kind == TokenKind::Assign) {
-                // This looks like a declaration, parse as statement
+                // This looks like a declaration
                 let item = self.parse_item()?;
-                // Convert item to expression for block
-                match item {
-                    Item::VarDecl(decl) => {
-                        // For now, just add the value expression
-                        // TODO: proper statement handling
-                        exprs.push(decl.value);
-                    }
-                    Item::FunctionDecl(_) => {
-                        // Skip for now
-                    }
-                }
+                stmts.push(Statement::Item(item));
             } else {
-                exprs.push(self.parse_expr()?);
+                stmts.push(Statement::Expr(self.parse_expr()?));
             }
 
             // Expressions in blocks can be separated by newlines (already skipped by lexer)
@@ -241,7 +233,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::BlockClose)?;
         let span = Span::new(start.start, self.previous_span().end);
 
-        Ok(Expr::Block { exprs, span })
+        Ok(Expr::Block { stmts, span })
     }
 
     fn peek_ahead(&self, offset: usize) -> &Token {
@@ -1070,8 +1062,8 @@ mod tests {
         
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
-            if let Expr::Block { exprs, .. } = &func.body {
-                assert_eq!(exprs.len(), 2);
+            if let Expr::Block { stmts, .. } = &func.body {
+                assert_eq!(stmts.len(), 2);
             } else {
                 panic!("Expected block expression");
             }
