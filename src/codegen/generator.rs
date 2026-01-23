@@ -23,7 +23,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
-        
+
         CodeGenerator {
             context,
             module,
@@ -58,27 +58,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Create C-compatible main: int main(int argc, char** argv)
         let i32_type = self.context.i32_type();
         let ptr_type = self.context.ptr_type(AddressSpace::default());
-        
+
         let main_type = i32_type.fn_type(
             &[i32_type.into(), ptr_type.into()],
             false
         );
-        
+
         let main_fn = self.module.add_function("main", main_type, None);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
-        
+
         let entry = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
-        
+
         // Get the >> function
         let user_entry = self.module.get_function(">>")
             .ok_or_else(|| "Entry point function >> not found".to_string())?;
-        
+
         // Check the signature of >> to determine how to call it
         let user_entry_type = user_entry.get_type();
         let param_count = user_entry_type.count_param_types();
-        
+
         let result = if param_count == 0 {
             // >> = () -> Num - Call with no arguments
             self.builder.build_call(user_entry, &[], "entry_result")
@@ -91,16 +91,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.context.f64_type(),
                 "argc_f64"
             ).map_err(|e| format!("Failed to convert argc: {:?}", e))?;
-            
+
             // For argv, since we don't have proper pointer types yet, pass 0
             // TODO: Convert argv to []String when we have proper array support
             let argv_placeholder = self.context.f64_type().const_zero();
-            
+
             let args: &[inkwell::values::BasicMetadataValueEnum] = &[
                 argc_as_f64.into(),
                 argv_placeholder.into(),
             ];
-            
+
             self.builder.build_call(user_entry, args, "entry_result")
                 .map_err(|e| format!("Failed to call entry point: {:?}", e))?
         } else {
@@ -110,7 +110,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 param_count
             ));
         };
-        
+
         // Convert result to i32
         use inkwell::values::AnyValue;
         let return_val = match result.as_any_value_enum() {
@@ -124,10 +124,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 i32_type.const_zero()
             }
         };
-        
+
         self.builder.build_return(Some(&return_val))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
-        
+
         Ok(())
     }
 
@@ -145,9 +145,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
             self.record_types.insert(decl.name.clone(), field_names);
         }
-        
+
         let value = self.generate_expr(&decl.value)?;
-        
+
         if self.current_function.is_some() {
             // Local variable - use alloca
             let var_type = value.get_type();
@@ -164,7 +164,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             );
             global.set_initializer(&value);
         }
-        
+
         Ok(())
     }
 
@@ -200,13 +200,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (i, param) in decl.params.iter().enumerate() {
             let llvm_param = function.get_nth_param(i as u32).unwrap();
             llvm_param.set_name(&param.name);
-            
+
             // Allocate space for the parameter
             let param_type = llvm_param.as_basic_value_enum().get_type();
             let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
             self.builder.build_store(alloca, llvm_param)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
-            
+
             self.variables.insert(param.name.clone(), (alloca, param_type));
         }
 
@@ -224,7 +224,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         ty: BasicTypeEnum<'ctx>,
     ) -> Result<PointerValue<'ctx>, String> {
         let builder = self.context.create_builder();
-        
+
         let entry = self.current_function.unwrap().get_first_basic_block().unwrap();
         match entry.get_first_instruction() {
             Some(first_instr) => builder.position_before(&first_instr),
@@ -241,62 +241,66 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // For now, use f64 for all numbers
                 Ok(self.context.f64_type().const_float(*value).into())
             }
-            
+
             Expr::String { value, .. } => {
                 // Create a global string constant
                 let string_val = self.builder.build_global_string_ptr(value, "str")
                     .map_err(|e| format!("Failed to build string: {:?}", e))?;
                 Ok(string_val.as_pointer_value().into())
             }
-            
+
             Expr::Bool { value, .. } => {
                 Ok(self.context.bool_type().const_int(*value as u64, false).into())
             }
-            
+
             Expr::Ident { name, .. } => {
                 let (ptr, ty) = self.variables.get(name)
                     .ok_or_else(|| format!("Undefined variable: {}", name))?;
-                
+
                 self.builder.build_load(*ty, *ptr, name)
                     .map_err(|e| format!("Failed to build load: {:?}", e))
             }
-            
+
             Expr::BinOp { left, op, right, .. } => {
                 self.generate_binop(left, *op, right)
             }
-            
+
             Expr::UnaryOp { op, expr, .. } => {
                 self.generate_unary_op(*op, expr)
             }
-            
+
             Expr::Call { func, args, .. } => {
                 self.generate_call(func, args)
             }
-            
+
             Expr::If { cond, then, else_, .. } => {
                 self.generate_if(cond, then, else_)
             }
-            
+
             Expr::Block { stmts, .. } => {
                 self.generate_block(stmts)
             }
-            
+
             Expr::Array { elements, .. } => {
                 self.generate_array(elements)
             }
-            
+
             Expr::Record { fields, .. } => {
                 self.generate_record(fields)
             }
-            
+
             Expr::FieldAccess { expr, field, .. } => {
                 self.generate_field_access(expr, field)
             }
             
+            Expr::Index { expr, index, .. } => {
+                self.generate_index(expr, index)
+            }
+
             Expr::Match { expr, arms, .. } => {
                 self.generate_match(expr, arms)
             }
-            
+
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
     }
@@ -397,7 +401,57 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Ge operation requires float values".to_string())
                 }
             }
+            BinOp::And => {
+                // Logical AND with short-circuit evaluation
+                // Convert operands to boolean (i1)
+                let lhs_bool = self.to_boolean(lhs)?;
+                let rhs_bool = self.to_boolean(rhs)?;
+
+                // Use LLVM's 'and' instruction
+                Ok(self.builder.build_and(lhs_bool, rhs_bool, "andtmp")
+                    .map_err(|e| format!("Failed to build and: {:?}", e))?.into())
+            }
+            BinOp::Or => {
+                // Logical OR with short-circuit evaluation
+                // Convert operands to boolean (i1)
+                let lhs_bool = self.to_boolean(lhs)?;
+                let rhs_bool = self.to_boolean(rhs)?;
+
+                // Use LLVM's 'or' instruction
+                Ok(self.builder.build_or(lhs_bool, rhs_bool, "ortmp")
+                    .map_err(|e| format!("Failed to build or: {:?}", e))?.into())
+            }
             _ => Err(format!("Unsupported binary operation: {:?}", op)),
+        }
+    }
+
+    // Helper to convert a value to boolean (i1)
+    fn to_boolean(&mut self, value: BasicValueEnum<'ctx>) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match value {
+            BasicValueEnum::IntValue(i) => {
+                // Already an int - check if it's i1
+                if i.get_type().get_bit_width() == 1 {
+                    Ok(i)
+                } else {
+                    // Convert to i1 by comparing with 0
+                    self.builder.build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        i,
+                        i.get_type().const_zero(),
+                        "tobool"
+                    ).map_err(|e| format!("Failed to convert to bool: {:?}", e))
+                }
+            }
+            BasicValueEnum::FloatValue(f) => {
+                // Convert float to bool by comparing with 0.0
+                self.builder.build_float_compare(
+                    inkwell::FloatPredicate::ONE,  // Ordered Not Equal
+                    f,
+                    f.get_type().const_zero(),
+                    "tobool"
+                ).map_err(|e| format!("Failed to convert float to bool: {:?}", e))
+            }
+            _ => Err("Cannot convert value to boolean".to_string())
         }
     }
 
@@ -464,7 +518,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // For now, we'll unsafely assume all functions return values
         use inkwell::values::AnyValue;
         let any_val = call_site.as_any_value_enum();
-        
+
         // Convert AnyValueEnum to BasicValueEnum
         match any_val {
             inkwell::values::AnyValueEnum::IntValue(v) => Ok(v.into()),
@@ -484,7 +538,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         else_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let cond_val = self.generate_expr(cond)?;
-        
+
         let cond_bool = if let BasicValueEnum::IntValue(i) = cond_val {
             i
         } else {
@@ -531,7 +585,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         stmts: &[crate::ast::Statement],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let mut result = self.context.f64_type().const_float(0.0).into();
-        
+
         for stmt in stmts {
             match stmt {
                 crate::ast::Statement::Item(item) => {
@@ -542,7 +596,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
         }
-        
+
         Ok(result)
     }
 
@@ -550,49 +604,97 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         elements: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if elements.is_empty() {
-            // Empty array - create array of f64 for now
-            let array_type = self.context.f64_type().array_type(0);
-            return Ok(array_type.const_zero().into());
+        // Arrays are represented as structs: { ptr data, i64 size }
+        // This allows .size field access
+
+        if self.current_function.is_none() {
+            return Err("Global arrays not yet implemented".to_string());
         }
-        
+
+        let size = elements.len();
+
+        if size == 0 {
+            // Empty array - create struct with null ptr and size 0
+            let ptr_type = self.context.ptr_type(AddressSpace::default());
+            let i64_type = self.context.i64_type();
+            let array_struct_type = self.context.struct_type(
+                &[ptr_type.into(), i64_type.into()],
+                false
+            );
+
+            let null_ptr = ptr_type.const_zero();
+            let zero_size = i64_type.const_zero();
+
+            return Ok(array_struct_type.const_named_struct(
+                &[null_ptr.into(), zero_size.into()]
+            ).into());
+        }
+
         // Generate all element values
         let values: Vec<BasicValueEnum> = elements.iter()
             .map(|e| self.generate_expr(e))
             .collect::<Result<Vec<_>, _>>()?;
-        
+
         // Get element type from first element
         let elem_type = values[0].get_type();
-        
-        // Create array type
-        let array_type = elem_type.array_type(values.len() as u32);
-        
-        // Build constant array if all values are constants
-        // For now, we'll allocate an array and store values
-        if self.current_function.is_some() {
-            let alloca = self.builder.build_alloca(array_type, "array")
-                .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
-            
-            // Store each element
-            for (i, value) in values.iter().enumerate() {
-                let index = self.context.i32_type().const_int(i as u64, false);
-                let gep = unsafe {
-                    self.builder.build_gep(
-                        array_type,
-                        alloca,
-                        &[self.context.i32_type().const_zero(), index],
-                        &format!("elem_{}", i)
-                    ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
-                };
-                self.builder.build_store(gep, *value)
-                    .map_err(|e| format!("Failed to build store: {:?}", e))?;
-            }
-            
-            Ok(alloca.into())
-        } else {
-            // For globals, we need constant values
-            Err("Global arrays not yet implemented".to_string())
+
+        // Allocate array storage
+        let array_type = elem_type.array_type(size as u32);
+        let array_alloca = self.builder.build_alloca(array_type, "array_data")
+            .map_err(|e| format!("Failed to allocate array: {:?}", e))?;
+
+        // Store each element
+        for (i, value) in values.iter().enumerate() {
+            let index = self.context.i32_type().const_int(i as u64, false);
+            let gep = unsafe {
+                self.builder.build_gep(
+                    array_type,
+                    array_alloca,
+                    &[self.context.i32_type().const_zero(), index],
+                    &format!("elem_{}", i)
+                ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+            };
+            self.builder.build_store(gep, *value)
+                .map_err(|e| format!("Failed to store element: {:?}", e))?;
         }
+
+        // Create the array struct { ptr, size }
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let i64_type = self.context.i64_type();
+        let array_struct_type = self.context.struct_type(
+            &[ptr_type.into(), i64_type.into()],
+            false
+        );
+
+        let array_struct = self.builder.build_alloca(array_struct_type, "array")
+            .map_err(|e| format!("Failed to allocate array struct: {:?}", e))?;
+
+        // Store pointer to data in field 0
+        let ptr_field = self.builder.build_struct_gep(
+            array_struct_type,
+            array_struct,
+            0,
+            "array_ptr_field"
+        ).map_err(|e| format!("Failed to get ptr field: {:?}", e))?;
+
+        self.builder.build_store(ptr_field, array_alloca)
+            .map_err(|e| format!("Failed to store ptr: {:?}", e))?;
+
+        // Store size in field 1
+        let size_field = self.builder.build_struct_gep(
+            array_struct_type,
+            array_struct,
+            1,
+            "array_size_field"
+        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
+
+        let size_value = i64_type.const_int(size as u64, false);
+        self.builder.build_store(size_field, size_value)
+            .map_err(|e| format!("Failed to store size: {:?}", e))?;
+
+        // Load and return the struct
+        self.builder.build_load(array_struct_type, array_struct, "array")
+            .map_err(|e| format!("Failed to load array struct: {:?}", e))
     }
 
     fn generate_record(
@@ -604,27 +706,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             let struct_type = self.context.struct_type(&[], false);
             return Ok(struct_type.const_zero().into());
         }
-        
+
         // Generate all field values
         let mut field_values: Vec<BasicValueEnum> = Vec::new();
         for (_name, expr) in fields {
             field_values.push(self.generate_expr(expr)?);
         }
-        
+
         // Get field types
         let field_types: Vec<BasicTypeEnum> = field_values.iter()
             .map(|v| v.get_type())
             .collect();
-        
+
         // Create struct type
         let struct_type = self.context.struct_type(&field_types, false);
-        
+
         // Create the struct value
         if self.current_function.is_some() {
             // Allocate space for the struct
             let alloca = self.builder.build_alloca(struct_type, "record")
                 .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
-            
+
             // Store each field
             for (i, value) in field_values.iter().enumerate() {
                 let gep = self.builder.build_struct_gep(struct_type, alloca, i as u32, &format!("field_{}", i))
@@ -632,7 +734,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_store(gep, *value)
                     .map_err(|e| format!("Failed to build store: {:?}", e))?;
             }
-            
+
             Ok(alloca.into())
         } else {
             // For globals, we need constant values
@@ -645,8 +747,44 @@ impl<'ctx> CodeGenerator<'ctx> {
         expr: &Expr,
         field_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // For field access, we need to know the field index
+        // Special handling for .size field on arrays
+        if field_name == "size" {
+            // For arrays (which are structs {ptr, i64}), we need special handling
+            // Check if it's an identifier - we can directly work with the alloca
+            if let Expr::Ident { name, .. } = expr {
+                if let Some((var_ptr, var_type)) = self.variables.get(name).cloned() {
+                    // Check if this is a struct type (could be an array)
+                    if let BasicTypeEnum::StructType(struct_type) = var_type {
+                        // Get field 1 (size field of array struct) directly from the alloca
+                        let size_field = self.builder.build_struct_gep(
+                            struct_type,
+                            var_ptr,
+                            1,
+                            "size_field"
+                        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
+                        
+                        let size_val = self.builder.build_load(
+                            self.context.i64_type(),
+                            size_field,
+                            "size"
+                        ).map_err(|e| format!("Failed to load size: {:?}", e))?;
+                        
+                        // Convert i64 to f64 (Num)
+                        if let BasicValueEnum::IntValue(i) = size_val {
+                            let size_f64 = self.builder.build_signed_int_to_float(
+                                i,
+                                self.context.f64_type(),
+                                "size_as_num"
+                            ).map_err(|e| format!("Failed to convert size: {:?}", e))?;
+                            
+                            return Ok(size_f64.into());
+                        }
+                    }
+                }
+            }
+        }
         
+        // For regular record field access
         // Special case: if expr is an identifier, check if we have record info
         if let Expr::Ident { name, .. } = expr {
             if let Some(field_names) = self.record_types.get(name) {
@@ -655,7 +793,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Get the variable pointer
                     let (var_ptr, _var_type) = self.variables.get(name)
                         .ok_or_else(|| format!("Variable not found: {}", name))?;
-                    
+
                     // The variable holds a pointer to the struct
                     // Load it to get the actual struct pointer
                     let struct_ptr = self.builder.build_load(
@@ -664,13 +802,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                         "load_struct_ptr"
                     ).map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
                         .into_pointer_value();
-                    
+
                     // Now we need the struct type for GEP
                     // We need to reconstruct the struct type from field count
                     // For now, assume all fields are f64 (this is a limitation)
                     let field_types: Vec<BasicTypeEnum> = vec![self.context.f64_type().into(); field_names.len()];
                     let struct_type = self.context.struct_type(&field_types, false);
-                    
+
                     // Use GEP to get field pointer
                     let field_ptr = self.builder.build_struct_gep(
                         struct_type,
@@ -678,23 +816,98 @@ impl<'ctx> CodeGenerator<'ctx> {
                         field_idx as u32,
                         &format!("field_{}", field_name)
                     ).map_err(|e| format!("Failed to build GEP: {:?}", e))?;
-                    
+
                     // Load the field value
                     let field_val = self.builder.build_load(
                         self.context.f64_type(),
                         field_ptr,
                         field_name
                     ).map_err(|e| format!("Failed to load field: {:?}", e))?;
-                    
+
                     return Ok(field_val);
                 }
             }
         }
-        
+
         Err(format!(
             "Field access not fully implemented. Need type information for field '{}'",
             field_name
         ))
+    }
+
+    fn generate_index(
+        &mut self,
+        expr: &Expr,
+        index_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Generate the array expression
+        let array_val = self.generate_expr(expr)?;
+        
+        // Generate the index expression
+        let index_val = self.generate_expr(index_expr)?;
+        
+        // Array is a struct { ptr data, i64 size }
+        // We need to:
+        // 1. Extract the data pointer (field 0)
+        // 2. Convert index from f64 to i64
+        // 3. Use GEP to get element pointer
+        // 4. Load the element
+        
+        if let BasicValueEnum::StructValue(struct_val) = array_val {
+            // Store struct temporarily to access fields
+            let struct_type = struct_val.get_type();
+            let alloca = self.builder.build_alloca(struct_type, "temp_array")
+                .map_err(|e| format!("Failed to allocate temp: {:?}", e))?;
+            
+            self.builder.build_store(alloca, struct_val)
+                .map_err(|e| format!("Failed to store array: {:?}", e))?;
+            
+            // Get data pointer (field 0)
+            let data_field = self.builder.build_struct_gep(
+                struct_type,
+                alloca,
+                0,
+                "data_ptr_field"
+            ).map_err(|e| format!("Failed to get data field: {:?}", e))?;
+            
+            let data_ptr = self.builder.build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                data_field,
+                "data_ptr"
+            ).map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+                .into_pointer_value();
+            
+            // Convert index from f64 to i64
+            let index_i64 = if let BasicValueEnum::FloatValue(f) = index_val {
+                self.builder.build_float_to_signed_int(
+                    f,
+                    self.context.i64_type(),
+                    "index_i64"
+                ).map_err(|e| format!("Failed to convert index: {:?}", e))?
+            } else {
+                return Err("Index must be a number".to_string());
+            };
+            
+            // Use GEP to get element pointer
+            // For now, assume elements are f64
+            let elem_ptr = unsafe {
+                self.builder.build_gep(
+                    self.context.f64_type(),
+                    data_ptr,
+                    &[index_i64],
+                    "elem_ptr"
+                ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+            };
+            
+            // Load the element
+            self.builder.build_load(
+                self.context.f64_type(),
+                elem_ptr,
+                "elem"
+            ).map_err(|e| format!("Failed to load element: {:?}", e))
+        } else {
+            Err("Can only index into arrays".to_string())
+        }
     }
 
     fn generate_match(
@@ -704,14 +917,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // For now, implement a simplified version that only handles constructor patterns
         // and wildcards for Option-like types
-        
+
         // Evaluate the expression being matched
         let match_val = self.generate_expr(expr)?;
-        
+
         // Get the current function
         let function = self.current_function
             .ok_or_else(|| "Match expression must be in a function".to_string())?;
-        
+
         // Create basic blocks for each arm and a continuation block
         let mut arm_blocks = vec![];
         let mut check_blocks = vec![];
@@ -720,23 +933,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             arm_blocks.push(self.context.append_basic_block(function, &format!("arm_{}", i)));
         }
         let cont_block = self.context.append_basic_block(function, "match_cont");
-        
+
         // Create a phi node to collect results from all arms
         // We need to determine the result type - for now assume f64
         let result_alloca = self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
-        
+
         // Jump to first check
         self.builder.build_unconditional_branch(check_blocks[0])
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
-        
+
         // Generate code for each arm
         for (i, arm) in arms.iter().enumerate() {
             // Position at check block
             self.builder.position_at_end(check_blocks[i]);
-            
+
             // Check if pattern matches
             let matches = self.check_pattern(&arm.pattern, match_val)?;
-            
+
             // Conditional branch to arm or next check
             let next_block = if i + 1 < check_blocks.len() {
                 check_blocks[i + 1]
@@ -745,32 +958,32 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // For now, just go to continuation with a default value
                 cont_block
             };
-            
+
             self.builder.build_conditional_branch(matches, arm_blocks[i], next_block)
                 .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
-            
+
             // Generate arm body
             self.builder.position_at_end(arm_blocks[i]);
-            
+
             // Bind pattern variables
             self.bind_pattern(&arm.pattern, match_val)?;
-            
+
             let arm_val = self.generate_expr(&arm.body)?;
             self.builder.build_store(result_alloca, arm_val)
                 .map_err(|e| format!("Failed to store result: {:?}", e))?;
-            
+
             self.builder.build_unconditional_branch(cont_block)
                 .map_err(|e| format!("Failed to build branch: {:?}", e))?;
         }
-        
+
         // Position at continuation block
         self.builder.position_at_end(cont_block);
-        
+
         // Load the result
         self.builder.build_load(self.context.f64_type(), result_alloca, "match_result")
             .map_err(|e| format!("Failed to load result: {:?}", e))
     }
-    
+
     fn check_pattern(
         &mut self,
         pattern: &Pattern,
@@ -781,12 +994,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Wildcard always matches
                 Ok(self.context.bool_type().const_all_ones())
             }
-            
+
             Pattern::Ident { .. } => {
                 // Identifier pattern always matches (binds the value)
                 Ok(self.context.bool_type().const_all_ones())
             }
-            
+
             Pattern::Number { value: num_val, .. } => {
                 // Compare the value
                 if let BasicValueEnum::FloatValue(fval) = value {
@@ -801,13 +1014,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Ok(self.context.bool_type().const_zero())
                 }
             }
-            
+
             Pattern::Constructor { name, args, .. } => {
                 // For constructors, we need to check the discriminant
                 // This is simplified - assumes Result-like pattern
                 // Result is represented as { i8 tag, value }
                 // OK = tag 1, NotOK = tag 0
-                
+
                 match name.as_str() {
                     "OK" => {
                         // TODO: For now, just return true as a placeholder
@@ -823,7 +1036,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
     }
-    
+
     fn bind_pattern(
         &mut self,
         pattern: &Pattern,
@@ -838,7 +1051,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.variables.insert(name.clone(), (alloca, value.get_type()));
                 Ok(())
             }
-            
+
             Pattern::Constructor { name, args, .. } => {
                 // For constructors with arguments, extract the payload
                 // Simplified: assumes first argument binds to the value
@@ -853,7 +1066,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(())
             }
-            
+
             _ => Ok(()) // Other patterns don't bind variables
         }
     }
@@ -889,13 +1102,13 @@ mod tests {
     fn test_simple_number() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         let tokens = Lexer::tokenize("x = 42").unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         // Global variable with float value
@@ -906,13 +1119,13 @@ mod tests {
     fn test_simple_function() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         assert!(ir.contains("define"));
         assert!(ir.contains("add"));
@@ -922,14 +1135,14 @@ mod tests {
     fn test_local_variable() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         let code = "double = x :: Num => < y = x + x y >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Local variable
@@ -942,18 +1155,18 @@ mod tests {
     fn test_array() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         // Test array in a function body - return the first element as a number
         let code = "sum = x :: Num => < arr = [x, x, x] x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Array allocation
@@ -964,7 +1177,7 @@ mod tests {
     fn test_function_call() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         // Test calling a function
         let code = "
             add = (a :: Num, b :: Num) => a + b
@@ -972,13 +1185,13 @@ mod tests {
         ";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("call")); // Function call
@@ -990,18 +1203,18 @@ mod tests {
     fn test_record() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         // Test record creation
         let code = "make_point = (x :: Num, y :: Num) => < p = {x = x, y = y} x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Struct allocation
@@ -1012,18 +1225,18 @@ mod tests {
     fn test_field_access() {
         let context = Context::create();
         let mut gen = CodeGenerator::new(&context, "test");
-        
+
         // Test field access
         let code = "get_x = (a :: Num, b :: Num) => < p = {x = a, y = b} p.x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
-        
+
         let result = gen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
         assert!(result.is_ok());
-        
+
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("getelementptr")); // Field GEP

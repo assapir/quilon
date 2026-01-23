@@ -375,8 +375,42 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
+                    Type::Array(_elem_type) => {
+                        // Arrays have a built-in .size field
+                        if field == "size" {
+                            return Ok(Type::Num);
+                        }
+                        Err(TypeError::UndefinedVariable {
+                            name: field.clone(),
+                            span: span.clone(),
+                        })
+                    }
                     _ => Err(TypeError::TypeMismatch {
                         expected: Type::Record(vec![]),
+                        got: expr_type,
+                        span: span.clone(),
+                    }),
+                }
+            }
+            
+            Expr::Index { expr, index, span } => {
+                let expr_type = self.infer_expr(expr)?;
+                let index_type = self.infer_expr(index)?;
+                
+                // Index must be Num
+                if index_type != Type::Num {
+                    return Err(TypeError::TypeMismatch {
+                        expected: Type::Num,
+                        got: index_type,
+                        span: span.clone(),
+                    });
+                }
+                
+                // Expression must be an array
+                match expr_type {
+                    Type::Array(elem_type) => Ok(*elem_type),
+                    _ => Err(TypeError::TypeMismatch {
+                        expected: Type::Array(Box::new(Type::Num)),
                         got: expr_type,
                         span: span.clone(),
                     }),

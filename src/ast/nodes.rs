@@ -126,6 +126,13 @@ pub enum Expr {
         span: Span,
     },
     
+    // Array indexing
+    Index {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
+    
     // Array literal
     Array {
         elements: Vec<Expr>,
@@ -154,6 +161,7 @@ impl Expr {
             Expr::If { span, .. } => span,
             Expr::Match { span, .. } => span,
             Expr::FieldAccess { span, .. } => span,
+            Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
             Expr::Record { span, .. } => span,
         }

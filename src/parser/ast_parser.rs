@@ -534,6 +534,17 @@ impl<'a> Parser<'a> {
                     field,
                     span,
                 };
+            } else if self.check(&TokenKind::BracketOpen) {
+                // Array indexing
+                self.advance();
+                let index = self.parse_expr()?;
+                self.expect(&TokenKind::BracketClose)?;
+                let span = Span::new(expr.span().start, self.previous_span().end);
+                expr = Expr::Index {
+                    expr: Box::new(expr),
+                    index: Box::new(index),
+                    span,
+                };
             } else if self.check(&TokenKind::ParenOpen) {
                 // Function call
                 self.advance();

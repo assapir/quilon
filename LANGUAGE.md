@@ -83,14 +83,30 @@ done = false
 ### Composite Types
 
 #### Arrays
-Homogeneous collections with `[]T` syntax.
+Homogeneous collections with `[]T` syntax. Arrays are implemented as structs with `{ptr, size}` internally.
 
 ```quilon
 numbers = [1, 2, 3, 4, 5]
 names = ["Alice", "Bob", "Charlie"]
 ```
 
-**Example:** [examples/simple.ql](examples/simple.ql)
+**Array Operations:**
+
+```quilon
+~ Get array size
+count = numbers.size    ~ Returns 5
+
+~ Access elements by index
+first = numbers[0]      ~ Returns 1
+last = numbers[4]       ~ Returns 5
+
+~ Index is zero-based
+third = names[2]        ~ Returns "Charlie"
+```
+
+**Example:** [examples/array_size.ql](examples/array_size.ql)
+
+**Note:** Arrays are internally represented as `struct { ptr data, i64 size }` which enables the `.size` field access.
 
 #### Records
 Structs/objects with named fields using `{ }` syntax.
@@ -290,13 +306,21 @@ x >= y          ~ Greater than or equal
 
 ### Logical Operations
 
-**Not yet implemented in codegen**
+Logical operators with short-circuit evaluation.
 
 ```quilon
 !flag           ~ Logical NOT
-x && y          ~ Logical AND (not yet in codegen)
-x || y          ~ Logical OR (not yet in codegen)
+x && y          ~ Logical AND
+x || y          ~ Logical OR
+
+~ Examples:
+valid = x > 0 && x < 100        ~ Both conditions must be true
+hasValue = x != 0 || y != 0     ~ At least one must be true
 ```
+
+**Example:** [examples/logical.ql](examples/logical.ql)
+
+**Implementation:** Operators convert operands to boolean (i1) and use LLVM's `and`/`or` instructions.
 
 ### Conditional Expressions (Ternary)
 
@@ -321,6 +345,35 @@ value = x > 0 ? "positive" : "non-positive"
 
 Both branches must return the same type.
 
+**Note:** For multi-statement conditionals, use blocks with ternary:
+```quilon
+result = condition ? <
+  x = compute1()
+  x * 2
+> : <
+  y = compute2()
+  y + 1
+>
+```
+
+### Loops
+
+**Not yet implemented.** Currently, use recursion for iteration.
+
+```quilon
+~ Example: Sum array using recursion
+sumArray = (arr :: []Num, index :: Num) -> Num => <
+  result = index >= arr.size ?
+    0
+  :
+    arr[index] + sumArray(arr, index + 1)
+  
+  result
+>
+```
+
+**Future:** While loops and for loops will be added.
+
 ### Blocks
 
 Blocks are expressions that return their last value:
@@ -335,12 +388,29 @@ result = <
 
 **Example:** Most examples use blocks, see [examples/fibonacci.ql](examples/fibonacci.ql)
 
-### Arrays
+### Array Operations
+
+Arrays are structs with `{ptr, size}` internally, enabling both `.size` access and `[index]` element access.
 
 ```quilon
 nums = [1, 2, 3, 4, 5]
-~ Element access not yet implemented
+
+~ Get array size
+count = nums.size       ~ Returns 5
+
+~ Access elements (zero-based indexing)
+first = nums[0]         ~ Returns 1
+third = nums[2]         ~ Returns 3
+last = nums[nums.size - 1]  ~ Returns 5
 ```
+
+**Example:** [examples/array_size.ql](examples/array_size.ql)
+
+**Implementation Details:**
+- Arrays are represented as `struct { ptr data, i64 size }`
+- `.size` field returns the number of elements (as Num/f64)
+- `[index]` uses GEP to access elements via the data pointer
+- Index is converted from Num (f64) to i64 for addressing
 
 ### Records
 
@@ -437,11 +507,33 @@ Every Quilon program must define an entry point using the `>>` symbol.
 ### Rules
 
 - The `>>` function is the program entry point (like `main` in C)
-- Currently must take no parameters: `() -> Num`
+- Supports two signatures:
+  - `() -> Num` - No command-line arguments
+  - `(argc :: Num, argv :: Num) -> Num` - With command-line arguments
 - Must return `Num` - becomes the program's exit code
 - The compiler auto-generates a C-compatible `main()` wrapper
 
-**Future:** Will support `(args, envp)` parameters for command-line arguments and environment variables.
+### Command-Line Arguments
+
+The `>>` function can accept command-line arguments:
+
+```quilon
+>> = (argc :: Num, argv :: Num) -> Num => <
+  ~ argc = number of arguments (including program name)
+  ~ argv = placeholder (currently 0, will be []String)
+  
+  argc  ~ Return argument count as exit code
+>
+```
+
+**Example:** [examples/args_test.ql](examples/args_test.ql)
+
+```bash
+./args_test           # exit 1 (just program name)
+./args_test a b c     # exit 4 (program + 3 args)
+```
+
+**Note:** `argv` is currently a placeholder (value 0). Full `[]String` conversion from C's `char**` is planned.
 
 ### Exit Codes
 
@@ -457,6 +549,7 @@ The value returned from `>>` becomes the program's exit code:
 - [examples/hello_world.ql](examples/hello_world.ql) - `exit 42`
 - [examples/factorial.ql](examples/factorial.ql) - `exit 120`
 - [examples/fibonacci.ql](examples/fibonacci.ql) - `exit 55`
+- [examples/args_test.ql](examples/args_test.ql) - `exit argc`
 
 ---
 
@@ -648,12 +741,14 @@ cargo run -- check examples/hello_world.ql
 - [x] Functions with recursion
 - [x] Arithmetic operations (+, -, *, /)
 - [x] Comparison operations (==, !=, <, <=, >, >=)
+- [x] Logical operators (&&, ||) with short-circuit evaluation
 - [x] Conditional expressions (ternary)
 - [x] Blocks
-- [x] Arrays (literals only)
+- [x] Arrays as structs with `.size` field
+- [x] Array element access with `[index]`
 - [x] Records with field access
 - [x] Pattern matching (numbers, wildcards, identifiers)
-- [x] Entry point (`>>`)
+- [x] Entry point (`>>`) with optional command-line args
 - [x] Result{T} sum type (type checking only)
 - [x] Native compilation to executables
 
@@ -661,17 +756,19 @@ cargo run -- check examples/hello_world.ql
 
 - [ ] Pattern matching on constructors (type checks but doesn't codegen discriminants)
 - [ ] Sum type constructors (OK/NotOK parsing works, codegen needed)
+- [ ] Command-line arguments (argc works, argv is placeholder)
 
 ### ❌ Not Yet Implemented
 
-- [ ] Logical operators in codegen (&&, ||)
-- [ ] Array element access
+- [ ] Loops (while, for) - use recursion instead
+- [ ] If/else blocks (only ternary expressions available)
+- [ ] Array methods beyond .size (map, filter, etc.)
 - [ ] Generic types (proper polymorphism)
 - [ ] Closures
 - [ ] Module system / imports
 - [ ] String operations (concatenation, interpolation)
 - [ ] Standard library
-- [ ] Command-line arguments / environment variables in `>>`
+- [ ] Full argv conversion to []String
 - [ ] Pipeline operator (`|>`)
 - [ ] Custom sum types (beyond Result)
 
