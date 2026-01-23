@@ -1,1 +1,10 @@
 /target
+
+# LLVM IR and object files
+*.ll
+*.o
+
+# Compiled executables
+examples/simple
+examples/string_test
+examples/fibonacci
