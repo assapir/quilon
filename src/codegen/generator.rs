@@ -282,12 +282,51 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_call(
         &mut self,
-        _func: &Expr,
-        _args: &[Expr],
+        func: &Expr,
+        args: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // TODO: Implement function calls properly
-        // For now, just return a dummy value
-        Err("Function calls not yet implemented".to_string())
+        // Get function name - only support direct calls for now
+        let func_name = if let Expr::Ident { name, .. } = func {
+            name
+        } else {
+            return Err("Only direct function calls supported".to_string());
+        };
+
+        // Get the function from the module
+        let function = self.module.get_function(func_name)
+            .ok_or_else(|| format!("Function not found: {}", func_name))?;
+
+        // Generate argument values
+        let arg_values: Vec<BasicValueEnum> = args.iter()
+            .map(|arg| self.generate_expr(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Convert to BasicMetadataValueEnum for the call
+        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> = arg_values.iter()
+            .map(|v| (*v).into())
+            .collect();
+
+        // Build the call
+        let call_site = self.builder.build_call(function, &arg_metadata, "calltmp")
+            .map_err(|e| format!("Failed to build call: {:?}", e))?;
+
+        // In Inkwell 0.8, try_as_basic_value returns a special ValueKind enum
+        // We need to pattern match on it, but since it's an opaque type,
+        // let's just use into_basic_value which works for functions that return values
+        // For now, we'll unsafely assume all functions return values
+        use inkwell::values::AnyValue;
+        let any_val = call_site.as_any_value_enum();
+        
+        // Convert AnyValueEnum to BasicValueEnum
+        match any_val {
+            inkwell::values::AnyValueEnum::IntValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::FloatValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::PointerValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::ArrayValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::StructValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::VectorValue(v) => Ok(v.into()),
+            _ => Err("Function does not return a basic value".to_string()),
+        }
     }
 
     fn generate_if(
@@ -503,5 +542,31 @@ mod tests {
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Array allocation
         assert!(ir.contains("getelementptr")); // Array element access
+    }
+
+    #[test]
+    fn test_function_call() {
+        let context = Context::create();
+        let mut gen = CodeGenerator::new(&context, "test");
+        
+        // Test calling a function
+        let code = "
+            add = (a :: Num, b :: Num) => a + b
+            main = => add(3, 4)
+        ";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+        
+        let result = gen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+        
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("call")); // Function call
+        assert!(ir.contains("@add")); // Call to add function
+        assert!(ir.contains("fadd")); // Addition in add function
     }
 }

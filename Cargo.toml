@@ -8,6 +8,7 @@ description = "A fast, statically-typed web programming language"
 [dependencies]
 # LLVM code generation - using latest Inkwell with LLVM 21
 inkwell = { version = "0.8", features = ["llvm21-1"] }
+either = "1.15"
 
 # Parsing
 logos = "0.14"
