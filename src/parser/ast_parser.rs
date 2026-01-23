@@ -34,11 +34,11 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut items = Vec::new();
-        
+
         while !self.is_at_end() {
             items.push(self.parse_item()?);
         }
-        
+
         Ok(Program { items })
     }
 
@@ -49,7 +49,7 @@ impl<'a> Parser<'a> {
 
     fn parse_var_decl(&mut self) -> Result<VarDecl, ParseError> {
         let start = self.current_span();
-        
+
         // Check for 'mut'
         let mutable = if self.check(&TokenKind::Mut) {
             self.advance();
@@ -87,7 +87,278 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_primary()
+        self.parse_ternary()
+    }
+
+    fn parse_ternary(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_logical_or()?;
+
+        // Check for ternary operator: expr ? then : else
+        if self.check(&TokenKind::Question) {
+            self.advance();
+            let then_expr = self.parse_expr()?;
+            self.expect(&TokenKind::Colon)?;
+            let else_expr = self.parse_expr()?;
+            let span = Span::new(expr.span().start, else_expr.span().end);
+
+            return Ok(Expr::If {
+                cond: Box::new(expr),
+                then: Box::new(then_expr),
+                else_: Box::new(else_expr),
+                span,
+            });
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_logical_or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_logical_and()?;
+
+        while self.check(&TokenKind::Or) {
+            self.advance();
+            let right = self.parse_logical_and()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOp::Or,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_logical_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_equality()?;
+
+        while self.check(&TokenKind::And) {
+            self.advance();
+            let right = self.parse_equality()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOp::And,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_equality(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_comparison()?;
+
+        while let Some(op) = self.match_equality() {
+            let right = self.parse_comparison()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_pipeline()?;
+
+        while let Some(op) = self.match_comparison() {
+            let right = self.parse_pipeline()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_pipeline(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_additive()?;
+
+        while self.check(&TokenKind::Pipeline) {
+            self.advance();
+            let right = self.parse_additive()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::Pipeline {
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_additive(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_multiplicative()?;
+
+        while let Some(op) = self.match_additive() {
+            let right = self.parse_multiplicative()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_multiplicative(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_unary()?;
+
+        while let Some(op) = self.match_multiplicative() {
+            let right = self.parse_unary()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        if self.check(&TokenKind::Minus) {
+            let start = self.current_span();
+            self.advance();
+            let expr = self.parse_unary()?;
+            let span = Span::new(start.start, expr.span().end);
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+                span,
+            });
+        }
+
+        if self.check(&TokenKind::Not) {
+            let start = self.current_span();
+            self.advance();
+            let expr = self.parse_unary()?;
+            let span = Span::new(start.start, expr.span().end);
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+                span,
+            });
+        }
+
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            if self.check(&TokenKind::Dot) {
+                self.advance();
+                let field = self.expect_ident()?;
+                let span = Span::new(expr.span().start, self.previous_span().end);
+                expr = Expr::FieldAccess {
+                    expr: Box::new(expr),
+                    field,
+                    span,
+                };
+            } else if self.check(&TokenKind::ParenOpen) {
+                // Function call
+                self.advance();
+                let mut args = Vec::new();
+
+                if !self.check(&TokenKind::ParenClose) {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if !self.check(&TokenKind::Comma) {
+                            break;
+                        }
+                        self.advance();
+                    }
+                }
+
+                self.expect(&TokenKind::ParenClose)?;
+                let span = Span::new(expr.span().start, self.previous_span().end);
+                expr = Expr::Call {
+                    func: Box::new(expr),
+                    args,
+                    span,
+                };
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    // Match helper functions
+    fn match_equality(&mut self) -> Option<BinOp> {
+        if self.check(&TokenKind::Eq) {
+            self.advance();
+            Some(BinOp::Eq)
+        } else if self.check(&TokenKind::Ne) {
+            self.advance();
+            Some(BinOp::Ne)
+        } else {
+            None
+        }
+    }
+
+    fn match_comparison(&mut self) -> Option<BinOp> {
+        match &self.peek().kind {
+            TokenKind::Le => {
+                self.advance();
+                Some(BinOp::Le)
+            }
+            TokenKind::Ge => {
+                self.advance();
+                Some(BinOp::Ge)
+            }
+            _ => None,
+        }
+    }
+
+    fn match_additive(&mut self) -> Option<BinOp> {
+        if self.check(&TokenKind::Plus) {
+            self.advance();
+            Some(BinOp::Add)
+        } else if self.check(&TokenKind::Minus) {
+            self.advance();
+            Some(BinOp::Sub)
+        } else {
+            None
+        }
+    }
+
+    fn match_multiplicative(&mut self) -> Option<BinOp> {
+        match &self.peek().kind {
+            TokenKind::Star => {
+                self.advance();
+                Some(BinOp::Mul)
+            }
+            TokenKind::Slash => {
+                self.advance();
+                Some(BinOp::Div)
+            }
+            TokenKind::Percent => {
+                self.advance();
+                Some(BinOp::Mod)
+            }
+            _ => None,
+        }
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
@@ -122,6 +393,15 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expr::Ident { name, span })
             }
+            TokenKind::ParenOpen => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                self.expect(&TokenKind::ParenClose)?;
+                Ok(expr)
+            }
+            TokenKind::BracketOpen => {
+                self.parse_array()
+            }
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 span: token.span.clone(),
@@ -129,9 +409,31 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_array(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::BracketOpen)?;
+
+        let mut elements = Vec::new();
+
+        if !self.check(&TokenKind::BracketClose) {
+            loop {
+                elements.push(self.parse_expr()?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
+        self.expect(&TokenKind::BracketClose)?;
+        let span = Span::new(start.start, self.previous_span().end);
+
+        Ok(Expr::Array { elements, span })
+    }
+
     fn parse_type(&mut self) -> Result<crate::ast::Type, ParseError> {
         let token = self.peek();
-        
+
         match token.text.as_str() {
             "Num" => {
                 self.advance();
@@ -226,31 +528,31 @@ mod tests {
         let tokens = Lexer::tokenize("x = 42").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         assert_eq!(program.items.len(), 1);
     }
-    
+
     #[test]
     fn test_parse_string() {
         let tokens = Lexer::tokenize(r#"msg = "hello""#).unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_boolean() {
         let tokens = Lexer::tokenize("flag = true").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_mutable() {
         let tokens = Lexer::tokenize("mut counter = 0").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(decl) = &program.items[0] {
             assert!(decl.mutable);
@@ -259,11 +561,111 @@ mod tests {
             panic!("Expected VarDecl");
         }
     }
-    
+
     #[test]
     fn test_parse_with_type() {
         let tokens = Lexer::tokenize("x :: Num = 42").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_arithmetic() {
+        let tokens = Lexer::tokenize("result = 2 + 3 * 4").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+
+        let program = result.unwrap();
+        assert_eq!(program.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_comparison() {
+        let tokens = Lexer::tokenize("flag = x >= 5").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_logical() {
+        let tokens = Lexer::tokenize("result = a && b || c").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_unary() {
+        let tokens = Lexer::tokenize("neg = -x").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+
+        let tokens2 = Lexer::tokenize("not_flag = !flag").unwrap();
+        let result2 = parse(&tokens2);
+        assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_parse_function_call() {
+        let tokens = Lexer::tokenize("result = add(1, 2)").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_field_access() {
+        let tokens = Lexer::tokenize("name = user.name").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_pipeline() {
+        let tokens = Lexer::tokenize("result = data |> filter |> collect").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_ternary() {
+        let tokens = Lexer::tokenize("abs = x >= 0 ? x : -x").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_parentheses() {
+        let tokens = Lexer::tokenize("result = (2 + 3) * 4").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_array() {
+        let tokens = Lexer::tokenize("nums = [1, 2, 3, 4, 5]").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_chained_calls() {
+        let tokens = Lexer::tokenize("result = obj.method(arg).field").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_precedence() {
+        // Should parse as: 2 + (3 * 4)
+        let tokens = Lexer::tokenize("x = 2 + 3 * 4").unwrap();
+        let program = parse(&tokens).unwrap();
+
+        if let Item::VarDecl(decl) = &program.items[0] {
+            // The root should be BinOp(Add)
+            if let Expr::BinOp { op: BinOp::Add, .. } = &decl.value {
+                // Correct precedence
+            } else {
+                panic!("Expected Add at root, got {:?}", decl.value);
+            }
+        }
     }
 }
