@@ -1,6 +1,6 @@
 // LLVM code generator for Quilon
 
-use crate::ast::{BinOp, Expr, FunctionDecl, Item, Program, Type, UnaryOp, VarDecl};
+use crate::ast::{BinOp, Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, UnaryOp, VarDecl};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
@@ -262,6 +262,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             
             Expr::FieldAccess { expr, field, .. } => {
                 self.generate_field_access(expr, field)
+            }
+            
+            Expr::Match { expr, arms, .. } => {
+                self.generate_match(expr, arms)
             }
             
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
@@ -662,6 +666,167 @@ impl<'ctx> CodeGenerator<'ctx> {
             "Field access not fully implemented. Need type information for field '{}'",
             field_name
         ))
+    }
+
+    fn generate_match(
+        &mut self,
+        expr: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // For now, implement a simplified version that only handles constructor patterns
+        // and wildcards for Option-like types
+        
+        // Evaluate the expression being matched
+        let match_val = self.generate_expr(expr)?;
+        
+        // Get the current function
+        let function = self.current_function
+            .ok_or_else(|| "Match expression must be in a function".to_string())?;
+        
+        // Create basic blocks for each arm and a continuation block
+        let mut arm_blocks = vec![];
+        let mut check_blocks = vec![];
+        for i in 0..arms.len() {
+            check_blocks.push(self.context.append_basic_block(function, &format!("check_{}", i)));
+            arm_blocks.push(self.context.append_basic_block(function, &format!("arm_{}", i)));
+        }
+        let cont_block = self.context.append_basic_block(function, "match_cont");
+        
+        // Create a phi node to collect results from all arms
+        // We need to determine the result type - for now assume f64
+        let result_alloca = self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
+        
+        // Jump to first check
+        self.builder.build_unconditional_branch(check_blocks[0])
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        
+        // Generate code for each arm
+        for (i, arm) in arms.iter().enumerate() {
+            // Position at check block
+            self.builder.position_at_end(check_blocks[i]);
+            
+            // Check if pattern matches
+            let matches = self.check_pattern(&arm.pattern, match_val)?;
+            
+            // Conditional branch to arm or next check
+            let next_block = if i + 1 < check_blocks.len() {
+                check_blocks[i + 1]
+            } else {
+                // Last arm - if it doesn't match, it's an error
+                // For now, just go to continuation with a default value
+                cont_block
+            };
+            
+            self.builder.build_conditional_branch(matches, arm_blocks[i], next_block)
+                .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
+            
+            // Generate arm body
+            self.builder.position_at_end(arm_blocks[i]);
+            
+            // Bind pattern variables
+            self.bind_pattern(&arm.pattern, match_val)?;
+            
+            let arm_val = self.generate_expr(&arm.body)?;
+            self.builder.build_store(result_alloca, arm_val)
+                .map_err(|e| format!("Failed to store result: {:?}", e))?;
+            
+            self.builder.build_unconditional_branch(cont_block)
+                .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        }
+        
+        // Position at continuation block
+        self.builder.position_at_end(cont_block);
+        
+        // Load the result
+        self.builder.build_load(self.context.f64_type(), result_alloca, "match_result")
+            .map_err(|e| format!("Failed to load result: {:?}", e))
+    }
+    
+    fn check_pattern(
+        &mut self,
+        pattern: &Pattern,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match pattern {
+            Pattern::Wildcard { .. } => {
+                // Wildcard always matches
+                Ok(self.context.bool_type().const_all_ones())
+            }
+            
+            Pattern::Ident { .. } => {
+                // Identifier pattern always matches (binds the value)
+                Ok(self.context.bool_type().const_all_ones())
+            }
+            
+            Pattern::Number { value: num_val, .. } => {
+                // Compare the value
+                if let BasicValueEnum::FloatValue(fval) = value {
+                    let const_val = self.context.f64_type().const_float(*num_val);
+                    self.builder.build_float_compare(
+                        inkwell::FloatPredicate::OEQ,
+                        fval,
+                        const_val,
+                        "num_match"
+                    ).map_err(|e| format!("Failed to build comparison: {:?}", e))
+                } else {
+                    Ok(self.context.bool_type().const_zero())
+                }
+            }
+            
+            Pattern::Constructor { name, args, .. } => {
+                // For constructors, we need to check the discriminant
+                // This is simplified - assumes Result-like pattern
+                // Result is represented as { i8 tag, value }
+                // OK = tag 1, NotOK = tag 0
+                
+                match name.as_str() {
+                    "OK" => {
+                        // TODO: For now, just return true as a placeholder
+                        // Full implementation needs to extract tag from struct
+                        Ok(self.context.bool_type().const_all_ones())
+                    }
+                    "NotOK" => {
+                        // TODO: Check tag == 0
+                        Ok(self.context.bool_type().const_all_ones())
+                    }
+                    _ => Err(format!("Unknown constructor: {}", name))
+                }
+            }
+        }
+    }
+    
+    fn bind_pattern(
+        &mut self,
+        pattern: &Pattern,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        match pattern {
+            Pattern::Ident { name, .. } => {
+                // Bind the value to the identifier
+                let alloca = self.create_entry_block_alloca(name, value.get_type())?;
+                self.builder.build_store(alloca, value)
+                    .map_err(|e| format!("Failed to store pattern binding: {:?}", e))?;
+                self.variables.insert(name.clone(), (alloca, value.get_type()));
+                Ok(())
+            }
+            
+            Pattern::Constructor { name, args, .. } => {
+                // For constructors with arguments, extract the payload
+                // Simplified: assumes first argument binds to the value
+                if let Some(first_arg) = args.first() {
+                    if let Pattern::Ident { name: arg_name, .. } = first_arg {
+                        // Bind the payload value
+                        let alloca = self.create_entry_block_alloca(arg_name, value.get_type())?;
+                        self.builder.build_store(alloca, value)
+                            .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
+                        self.variables.insert(arg_name.clone(), (alloca, value.get_type()));
+                    }
+                }
+                Ok(())
+            }
+            
+            _ => Ok(()) // Other patterns don't bind variables
+        }
     }
 
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {

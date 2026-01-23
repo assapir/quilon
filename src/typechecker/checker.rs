@@ -132,55 +132,26 @@ impl TypeChecker {
         use crate::ast::{SumVariant, Type};
         use crate::lexer::Span;
         
-        // Option<T> type
-        let option_type = Type::Sum {
-            name: "Option".to_string(),
+        // Unified Result{T} type with OK and NotOK constructors
+        // Replaces both Option and Result with a single type
+        let result_type = Type::Sum {
+            name: "Result".to_string(),
             variants: vec![
                 SumVariant {
-                    name: "Some".to_string(),
+                    name: "OK".to_string(),
                     fields: vec![Type::Generic {
                         name: "T".to_string(),
                         args: vec![],
                     }],
                 },
                 SumVariant {
-                    name: "None".to_string(),
+                    name: "NotOK".to_string(),
                     fields: vec![],
                 },
             ],
         };
         
-        // Result<T, E> type
-        let result_type = Type::Sum {
-            name: "Result".to_string(),
-            variants: vec![
-                SumVariant {
-                    name: "Ok".to_string(),
-                    fields: vec![Type::Generic {
-                        name: "T".to_string(),
-                        args: vec![],
-                    }],
-                },
-                SumVariant {
-                    name: "Err".to_string(),
-                    fields: vec![Type::Generic {
-                        name: "E".to_string(),
-                        args: vec![],
-                    }],
-                },
-            ],
-        };
-        
-        // Register type constructors
-        // For now, we'll just store them as symbols
-        // In a full implementation, we'd have a separate type environment
-        let _ = self.env.define(
-            "Option".to_string(),
-            option_type.clone(),
-            false,
-            Span::new(0, 0),
-        );
-        
+        // Register Result type
         let _ = self.env.define(
             "Result".to_string(),
             result_type.clone(),
@@ -814,9 +785,9 @@ result = add(1)").unwrap();
 
     #[test]
     fn test_sum_type_option() {
-        // Pattern match on Option-like sum type
+        // Pattern match on Result type with OK/NotOK
         let tokens = Lexer::tokenize("val = 5
-result = val ? | Some(x) => x | None => 0").unwrap();
+result = val ? | OK(x) => x | NotOK => 0").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_program(&program).is_ok());
@@ -826,7 +797,7 @@ result = val ? | Some(x) => x | None => 0").unwrap();
     fn test_exhaustiveness_with_wildcard() {
         // Wildcard makes match exhaustive
         let tokens = Lexer::tokenize("val = 5
-result = val ? | Some(x) => x | _ => 0").unwrap();
+result = val ? | OK(x) => x | _ => 0").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_program(&program).is_ok());
@@ -837,7 +808,7 @@ result = val ? | Some(x) => x | _ => 0").unwrap();
         // Constructor with wrong number of arguments should fail when we have proper sum types
         // For now this will pass, but once we implement full sum type checking it should fail
         let tokens = Lexer::tokenize("val = 5
-result = val ? | Some(x, y) => x | None => 0").unwrap();
+result = val ? | OK(x, y) => x | NotOK => 0").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         // Currently passes - will fail when sum types are fully implemented
@@ -846,11 +817,8 @@ result = val ? | Some(x, y) => x | None => 0").unwrap();
 
     #[test]
     fn test_builtin_sum_types() {
-        // Verify Option and Result types are available
+        // Verify Result type is available
         let mut checker = TypeChecker::new();
-        
-        // Check Option is defined
-        assert!(checker.env.get_type("Option").is_some());
         
         // Check Result is defined
         assert!(checker.env.get_type("Result").is_some());
