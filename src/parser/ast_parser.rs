@@ -43,14 +43,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        // For now, assume all items are variable declarations
-        self.parse_var_decl().map(Item::VarDecl)
-    }
-
-    fn parse_var_decl(&mut self) -> Result<VarDecl, ParseError> {
+        // Try to parse as function declaration first, then fall back to variable
+        // Function: name = params => body or name = => body
+        // Variable: name = value
+        
         let start = self.current_span();
-
-        // Check for 'mut'
         let mutable = if self.check(&TokenKind::Mut) {
             self.advance();
             true
@@ -58,10 +55,9 @@ impl<'a> Parser<'a> {
             false
         };
 
-        // Get identifier
         let name = self.expect_ident()?;
 
-        // Optional type annotation
+        // Check for type annotation
         let type_annotation = if self.check(&TokenKind::TypeAnnotation) {
             self.advance();
             Some(self.parse_type()?)
@@ -69,21 +65,192 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Expect '='
         self.expect(&TokenKind::Assign)?;
 
-        // Parse value expression
-        let value = self.parse_expr()?;
+        // Check if it's a function:
+        // - name = => ...  (no params)
+        // - name = (params) => ...
+        // - name = param => ...  (single param, no parens)
+        // Need to be careful not to confuse with: result = (2 + 3) * 4
+        
+        let is_function = if self.check(&TokenKind::Arrow) {
+            true
+        } else if self.check(&TokenKind::ParenOpen) {
+            // Look ahead to see if this is parameter list or expression
+            // Parameter list ends with ) =>
+            // We need to scan ahead to find matching )
+            let mut depth = 1;
+            let mut idx = 1;
+            let mut found_arrow = false;
+            
+            while idx < 50 && depth > 0 {  // reasonable limit for lookahead
+                let ahead = self.peek_ahead(idx);
+                match ahead.kind {
+                    TokenKind::ParenOpen => depth += 1,
+                    TokenKind::ParenClose => {
+                        depth -= 1;
+                        if depth == 0 {
+                            // Check if next token after ) is => or ->
+                            let next = self.peek_ahead(idx + 1);
+                            found_arrow = next.kind == TokenKind::Arrow || next.kind == TokenKind::ReturnArrow;
+                        }
+                    }
+                    TokenKind::Eof => break,
+                    _ => {}
+                }
+                idx += 1;
+            }
+            found_arrow
+        } else if self.check(&TokenKind::Ident) {
+            // Single param without parens: check if followed by => or ::
+            let ahead = self.peek_ahead(1);
+            ahead.kind == TokenKind::Arrow || ahead.kind == TokenKind::TypeAnnotation
+        } else {
+            false
+        };
+
+        if is_function {
+            self.parse_function_decl(name, start, type_annotation)
+        } else {
+            let value = self.parse_expr()?;
+            let end = self.previous_span();
+            
+            Ok(Item::VarDecl(VarDecl {
+                mutable,
+                name,
+                type_annotation,
+                value,
+                span: Span::new(start.start, end.end),
+            }))
+        }
+    }
+
+    fn parse_function_decl(
+        &mut self,
+        name: String,
+        start: Span,
+        return_type: Option<crate::ast::Type>,
+    ) -> Result<Item, ParseError> {
+        let mut params = Vec::new();
+
+        // Parse parameters: (a, b) or (a :: Type, b :: Type) or single param or just =>
+        if self.check(&TokenKind::ParenOpen) {
+            self.advance();
+            
+            if !self.check(&TokenKind::ParenClose) {
+                loop {
+                    let param_name = self.expect_ident()?;
+                    let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                        self.advance();
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    
+                    params.push(Param {
+                        name: param_name,
+                        type_annotation: param_type,
+                        span: self.previous_span(),
+                    });
+
+                    if !self.check(&TokenKind::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            
+            self.expect(&TokenKind::ParenClose)?;
+        } else if self.check(&TokenKind::Ident) {
+            // Single parameter without parentheses
+            let param_name = self.expect_ident()?;
+            let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            
+            params.push(Param {
+                name: param_name,
+                type_annotation: param_type,
+                span: self.previous_span(),
+            });
+        }
+
+        // Optional return type annotation with ->
+        let return_type = if self.check(&TokenKind::ReturnArrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            return_type
+        };
+
+        // Expect =>
+        self.expect(&TokenKind::Arrow)?;
+
+        // Parse body (can be a block or single expression)
+        let body = if self.check(&TokenKind::BlockOpen) {
+            self.parse_block()?
+        } else {
+            self.parse_expr()?
+        };
 
         let end = self.previous_span();
 
-        Ok(VarDecl {
-            mutable,
+        Ok(Item::FunctionDecl(FunctionDecl {
             name,
-            type_annotation,
-            value,
+            params,
+            return_type,
+            body,
             span: Span::new(start.start, end.end),
-        })
+        }))
+    }
+
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::BlockOpen)?;
+
+        let mut exprs = Vec::new();
+
+        while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
+            // Try to parse as item first (for nested declarations)
+            if self.check(&TokenKind::Mut) || 
+               (self.check(&TokenKind::Ident) && self.peek_ahead(1).kind == TokenKind::Assign) {
+                // This looks like a declaration, parse as statement
+                let item = self.parse_item()?;
+                // Convert item to expression for block
+                match item {
+                    Item::VarDecl(decl) => {
+                        // For now, just add the value expression
+                        // TODO: proper statement handling
+                        exprs.push(decl.value);
+                    }
+                    Item::FunctionDecl(_) => {
+                        // Skip for now
+                    }
+                }
+            } else {
+                exprs.push(self.parse_expr()?);
+            }
+
+            // Expressions in blocks can be separated by newlines (already skipped by lexer)
+            // or we just continue to the next one
+        }
+
+        self.expect(&TokenKind::BlockClose)?;
+        let span = Span::new(start.start, self.previous_span().end);
+
+        Ok(Expr::Block { exprs, span })
+    }
+
+    fn peek_ahead(&self, offset: usize) -> &Token {
+        let pos = self.pos + offset;
+        if pos < self.tokens.len() {
+            &self.tokens[pos]
+        } else {
+            &self.tokens[self.tokens.len() - 1]
+        }
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
@@ -667,5 +834,71 @@ mod tests {
                 panic!("Expected Add at root, got {:?}", decl.value);
             }
         }
+    }
+    
+    #[test]
+    fn test_parse_simple_function() {
+        let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            assert_eq!(func.name, "add");
+            assert_eq!(func.params.len(), 2);
+            assert_eq!(func.params[0].name, "a");
+            assert_eq!(func.params[1].name, "b");
+        } else {
+            panic!("Expected function declaration");
+        }
+    }
+    
+    #[test]
+    fn test_parse_function_with_types() {
+        let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            assert_eq!(func.params.len(), 2);
+            assert!(func.params[0].type_annotation.is_some());
+            assert!(func.return_type.is_some());
+        } else {
+            panic!("Expected function declaration");
+        }
+    }
+    
+    #[test]
+    fn test_parse_no_param_function() {
+        let tokens = Lexer::tokenize("main = => 42").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_parse_block() {
+        let tokens = Lexer::tokenize("test = => < x = 1 y = 2 >").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            if let Expr::Block { exprs, .. } = &func.body {
+                assert_eq!(exprs.len(), 2);
+            } else {
+                panic!("Expected block expression");
+            }
+        }
+    }
+    
+    #[test]
+    fn test_parse_function_with_block() {
+        let tokens = Lexer::tokenize("greet = name => < msg = \"Hello\" msg >").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
     }
 }
