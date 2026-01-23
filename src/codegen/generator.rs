@@ -266,6 +266,51 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Eq operation requires float values".to_string())
                 }
             }
+            BinOp::Ne => {
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self.builder.build_float_compare(
+                        inkwell::FloatPredicate::ONE, l, r, "netmp"
+                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                } else {
+                    Err("Ne operation requires float values".to_string())
+                }
+            }
+            BinOp::Lt => {
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self.builder.build_float_compare(
+                        inkwell::FloatPredicate::OLT, l, r, "lttmp"
+                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                } else {
+                    Err("Lt operation requires float values".to_string())
+                }
+            }
+            BinOp::Le => {
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self.builder.build_float_compare(
+                        inkwell::FloatPredicate::OLE, l, r, "letmp"
+                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                } else {
+                    Err("Le operation requires float values".to_string())
+                }
+            }
+            BinOp::Gt => {
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self.builder.build_float_compare(
+                        inkwell::FloatPredicate::OGT, l, r, "gttmp"
+                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                } else {
+                    Err("Gt operation requires float values".to_string())
+                }
+            }
+            BinOp::Ge => {
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self.builder.build_float_compare(
+                        inkwell::FloatPredicate::OGE, l, r, "getmp"
+                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                } else {
+                    Err("Ge operation requires float values".to_string())
+                }
+            }
             _ => Err(format!("Unsupported binary operation: {:?}", op)),
         }
     }
