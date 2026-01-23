@@ -248,6 +248,12 @@ impl TypeChecker {
     }
 
     fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
+        // TODO: Support recursion - function should be able to call itself
+        // Currently the function is not in scope when checking its body,
+        // so recursive calls fail with "Undefined variable" error.
+        // Solution: Add function to environment before checking body,
+        // with a placeholder or partially known type.
+        
         // Build function type from parameters and return type
         // If no type annotation, use Num as default (we'll improve this with inference)
         let param_types: Vec<Type> = decl.params.iter()
