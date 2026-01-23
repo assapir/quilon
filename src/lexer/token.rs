@@ -22,13 +22,31 @@ impl fmt::Display for Span {
     }
 }
 
-#[derive(Logos, Debug, Clone, PartialEq)]
+/// Wrapper for f64 to implement Eq/Hash for parser
+#[derive(Debug, Clone, Copy)]
+pub struct NumLit(pub f64);
+
+impl PartialEq for NumLit {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for NumLit {}
+
+impl std::hash::Hash for NumLit {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+#[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r\n]+")]  // Skip whitespace
 #[logos(skip r"~[^\n]*")]     // Skip comments
 pub enum TokenKind {
     // Literals
-    #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok())]
-    Number(f64),
+    #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
+    Number(NumLit),
 
     #[regex(r#""(\\.|[^"\\])*""#, parse_string)]
     String(String),
@@ -185,7 +203,7 @@ fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenKind::Number(n) => write!(f, "Number({})", n),
+            TokenKind::Number(n) => write!(f, "Number({})", n.0),
             TokenKind::String(s) => write!(f, "String(\"{}\")", s),
             TokenKind::True => write!(f, "true"),
             TokenKind::False => write!(f, "false"),

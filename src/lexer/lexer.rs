@@ -104,12 +104,12 @@ mod tests {
         assert_eq!(tokens.len(), 4); // 3 numbers + EOF
         
         match &tokens[0].kind {
-            TokenKind::Number(n) => assert_eq!(*n, 42.0),
+            TokenKind::Number(n) => assert_eq!(n.0, 42.0),
             _ => panic!("Expected number"),
         }
         
         match &tokens[1].kind {
-            TokenKind::Number(n) => assert_eq!(*n, 3.14),
+            TokenKind::Number(n) => assert_eq!(n.0, 3.14),
             _ => panic!("Expected number"),
         }
     }
