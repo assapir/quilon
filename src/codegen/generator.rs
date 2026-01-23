@@ -65,22 +65,51 @@ impl<'ctx> CodeGenerator<'ctx> {
         );
         
         let main_fn = self.module.add_function("main", main_type, None);
+        let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
+        let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
+        
         let entry = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         
-        // For now, we'll call >> with empty args (TODO: convert argc/argv to []String)
         // Get the >> function
         let user_entry = self.module.get_function(">>")
             .ok_or_else(|| "Entry point function >> not found".to_string())?;
         
-        // Create empty array for args (TODO: proper conversion)
-        let empty_array_type = self.context.f64_type().array_type(0);
-        let empty_array = empty_array_type.const_zero();
+        // Check the signature of >> to determine how to call it
+        let user_entry_type = user_entry.get_type();
+        let param_count = user_entry_type.count_param_types();
         
-        // Call >> function (assuming it takes []String -> Num)
-        // For now, we'll create a simpler version that takes no args
-        let result = self.builder.build_call(user_entry, &[], "entry_result")
-            .map_err(|e| format!("Failed to call entry point: {:?}", e))?;
+        let result = if param_count == 0 {
+            // >> = () -> Num - Call with no arguments
+            self.builder.build_call(user_entry, &[], "entry_result")
+                .map_err(|e| format!("Failed to call entry point: {:?}", e))?
+        } else if param_count == 2 {
+            // >> = (argc, argv) -> Num - Pass argc/argv
+            // Convert argc to Num (f64)
+            let argc_as_f64 = self.builder.build_signed_int_to_float(
+                argc,
+                self.context.f64_type(),
+                "argc_f64"
+            ).map_err(|e| format!("Failed to convert argc: {:?}", e))?;
+            
+            // For argv, since we don't have proper pointer types yet, pass 0
+            // TODO: Convert argv to []String when we have proper array support
+            let argv_placeholder = self.context.f64_type().const_zero();
+            
+            let args: &[inkwell::values::BasicMetadataValueEnum] = &[
+                argc_as_f64.into(),
+                argv_placeholder.into(),
+            ];
+            
+            self.builder.build_call(user_entry, args, "entry_result")
+                .map_err(|e| format!("Failed to call entry point: {:?}", e))?
+        } else {
+            return Err(format!(
+                "Entry point >> must have 0 or 2 parameters, found {}. \
+                 Valid signatures: '() -> Num' or '(argc :: Num, argv :: Num) -> Num'",
+                param_count
+            ));
+        };
         
         // Convert result to i32
         use inkwell::values::AnyValue;
