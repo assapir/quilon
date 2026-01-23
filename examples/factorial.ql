@@ -1,10 +1,3 @@
-~ Factorial example showing recursion and pattern matching
+factorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)
 
-factorial = n :: Num => n ?
-  | 0 => 1
-  | n => n * factorial (n - 1)
-
-main = => <
-  result = factorial 5
-  print "Factorial of 5 is: <result>"
->
+quilon_main = () -> Num => factorial(5)
