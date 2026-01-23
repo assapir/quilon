@@ -48,10 +48,79 @@ fn main() {
         }
         Commands::Compile { file, output } => {
             println!("🔨 Compiling: {}", file.display());
-            if let Some(out) = output {
-                println!("📦 Output: {}", out.display());
+            
+            // Read the file
+            let source = match std::fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("❌ Error reading file: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Lex
+            let tokens = match lexer::Lexer::tokenize(&source) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("❌ Lexer error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Parse
+            let program = match parser::parse(&tokens) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ Parse error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Type check
+            let mut checker = typechecker::TypeChecker::new();
+            match checker.check_program(&program) {
+                Ok(()) => {
+                    println!("✅ Type checking passed!");
+                }
+                Err(e) => {
+                    eprintln!("❌ Type error: {}", e);
+                    std::process::exit(1);
+                }
             }
-            // TODO: Implement compile
+
+            // Generate LLVM IR
+            use inkwell::context::Context;
+            let context = Context::create();
+            let mut generator = codegen::CodeGenerator::new(&context, "main");
+            
+            let ir = match generator.generate(&program) {
+                Ok(ir) => ir,
+                Err(e) => {
+                    eprintln!("❌ Code generation error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Determine output path
+            let output_path = output.unwrap_or_else(|| {
+                let mut path = file.clone();
+                path.set_extension("ll");
+                path
+            });
+
+            // Write IR to file
+            match std::fs::write(&output_path, ir) {
+                Ok(()) => {
+                    println!("✅ LLVM IR written to: {}", output_path.display());
+                    println!("💡 To compile to native code, run:");
+                    println!("   llc -filetype=obj {}", output_path.display());
+                    println!("   clang {} -o executable", output_path.with_extension("o").display());
+                }
+                Err(e) => {
+                    eprintln!("❌ Error writing output: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Check { file } => {
             println!("🔍 Checking: {}", file.display());
