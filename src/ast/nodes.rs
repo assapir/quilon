@@ -11,6 +11,21 @@ pub struct Program {
 pub enum Item {
     VarDecl(VarDecl),
     FunctionDecl(FunctionDecl),
+    TypeDecl(TypeDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDecl {
+    pub name: String,
+    pub type_def: TypeDef,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDef {
+    Sum(Vec<SumVariant>),
+    Record(Vec<(String, Type)>),
+    Alias(Type),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,4 +228,15 @@ pub enum Type {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
+    // Sum types (algebraic data types)
+    Sum {
+        name: String,
+        variants: Vec<SumVariant>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SumVariant {
+    pub name: String,
+    pub fields: Vec<Type>,
 }

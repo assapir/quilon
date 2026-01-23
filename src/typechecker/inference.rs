@@ -213,6 +213,10 @@ pub fn from_concrete(ty: &Type) -> InferType {
             params: params.iter().map(from_concrete).collect(),
             return_type: Box::new(from_concrete(return_type)),
         },
+        Type::Sum { .. } => {
+            // For now, treat sum types as concrete
+            InferType::Concrete(ty.clone())
+        }
     }
 }
 
