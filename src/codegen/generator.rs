@@ -194,6 +194,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.generate_array(elements)
             }
             
+            Expr::Record { fields, .. } => {
+                self.generate_record(fields)
+            }
+            
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
     }
@@ -447,6 +451,50 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    fn generate_record(
+        &mut self,
+        fields: &[(String, Expr)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if fields.is_empty() {
+            // Empty record - create empty struct
+            let struct_type = self.context.struct_type(&[], false);
+            return Ok(struct_type.const_zero().into());
+        }
+        
+        // Generate all field values
+        let mut field_values: Vec<BasicValueEnum> = Vec::new();
+        for (_name, expr) in fields {
+            field_values.push(self.generate_expr(expr)?);
+        }
+        
+        // Get field types
+        let field_types: Vec<BasicTypeEnum> = field_values.iter()
+            .map(|v| v.get_type())
+            .collect();
+        
+        // Create struct type
+        let struct_type = self.context.struct_type(&field_types, false);
+        
+        // Create the struct value
+        if self.current_function.is_some() {
+            // Allocate space for the struct
+            let alloca = self.builder.build_alloca(struct_type, "record")
+                .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
+            
+            // Store each field
+            for (i, value) in field_values.iter().enumerate() {
+                let gep = self.builder.build_struct_gep(struct_type, alloca, i as u32, &format!("field_{}", i))
+                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
+                self.builder.build_store(gep, *value)
+                    .map_err(|e| format!("Failed to build store: {:?}", e))?;
+            }
+            
+            Ok(alloca.into())
+        } else {
+            // For globals, we need constant values
+            Err("Global records not yet implemented".to_string())
+        }
+    }
 
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
@@ -457,6 +505,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let elem = self.type_to_llvm(elem_type)?;
                 // For now, represent arrays as pointers
                 Ok(elem.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Record(fields) => {
+                let field_types: Vec<BasicTypeEnum> = fields.iter()
+                    .map(|(_name, ty)| self.type_to_llvm(ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.context.struct_type(&field_types, false).into())
             }
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }
@@ -568,5 +622,27 @@ mod tests {
         assert!(ir.contains("call")); // Function call
         assert!(ir.contains("@add")); // Call to add function
         assert!(ir.contains("fadd")); // Addition in add function
+    }
+
+    #[test]
+    fn test_record() {
+        let context = Context::create();
+        let mut gen = CodeGenerator::new(&context, "test");
+        
+        // Test record creation
+        let code = "make_point = (x :: Num, y :: Num) => < p = {x = x, y = y} x >";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+        
+        let result = gen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+        
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("alloca")); // Struct allocation
+        assert!(ir.contains("getelementptr")); // Field access
     }
 }
