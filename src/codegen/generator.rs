@@ -13,7 +13,7 @@ pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    variables: HashMap<String, PointerValue<'ctx>>,
+    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     current_function: Option<FunctionValue<'ctx>>,
 }
 
@@ -55,16 +55,24 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
-        // Global variables
         let value = self.generate_expr(&decl.value)?;
         
-        // For now, create a global variable
-        let global = self.module.add_global(
-            value.get_type(),
-            Some(AddressSpace::default()),
-            &decl.name,
-        );
-        global.set_initializer(&value);
+        if self.current_function.is_some() {
+            // Local variable - use alloca
+            let var_type = value.get_type();
+            let alloca = self.create_entry_block_alloca(&decl.name, var_type)?;
+            self.builder.build_store(alloca, value)
+                .map_err(|e| format!("Failed to build store: {:?}", e))?;
+            self.variables.insert(decl.name.clone(), (alloca, var_type));
+        } else {
+            // Global variable
+            let global = self.module.add_global(
+                value.get_type(),
+                Some(AddressSpace::default()),
+                &decl.name,
+            );
+            global.set_initializer(&value);
+        }
         
         Ok(())
     }
@@ -103,12 +111,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             llvm_param.set_name(&param.name);
             
             // Allocate space for the parameter
-            let param_type = llvm_param.as_basic_value_enum();
-            let alloca = self.create_entry_block_alloca(&param.name, param_type.get_type())?;
+            let param_type = llvm_param.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
             self.builder.build_store(alloca, llvm_param)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
             
-            self.variables.insert(param.name.clone(), alloca);
+            self.variables.insert(param.name.clone(), (alloca, param_type));
         }
 
         // Generate function body
@@ -155,13 +163,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             
             Expr::Ident { name, .. } => {
-                let ptr = self.variables.get(name)
+                let (ptr, ty) = self.variables.get(name)
                     .ok_or_else(|| format!("Undefined variable: {}", name))?;
                 
-                // For load, we need to know the type - we'll use f64 for now
-                // In a real implementation, we'd track this properly
-                let ty = self.context.f64_type();
-                self.builder.build_load(ty, *ptr, name)
+                self.builder.build_load(*ty, *ptr, name)
                     .map_err(|e| format!("Failed to build load: {:?}", e))
             }
             
@@ -183,6 +188,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             
             Expr::Block { stmts, .. } => {
                 self.generate_block(stmts)
+            }
+            
+            Expr::Array { elements, .. } => {
+                self.generate_array(elements)
             }
             
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
@@ -350,6 +359,56 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(result)
     }
 
+    fn generate_array(
+        &mut self,
+        elements: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if elements.is_empty() {
+            // Empty array - create array of f64 for now
+            let array_type = self.context.f64_type().array_type(0);
+            return Ok(array_type.const_zero().into());
+        }
+        
+        // Generate all element values
+        let values: Vec<BasicValueEnum> = elements.iter()
+            .map(|e| self.generate_expr(e))
+            .collect::<Result<Vec<_>, _>>()?;
+        
+        // Get element type from first element
+        let elem_type = values[0].get_type();
+        
+        // Create array type
+        let array_type = elem_type.array_type(values.len() as u32);
+        
+        // Build constant array if all values are constants
+        // For now, we'll allocate an array and store values
+        if self.current_function.is_some() {
+            let alloca = self.builder.build_alloca(array_type, "array")
+                .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
+            
+            // Store each element
+            for (i, value) in values.iter().enumerate() {
+                let index = self.context.i32_type().const_int(i as u64, false);
+                let gep = unsafe {
+                    self.builder.build_gep(
+                        array_type,
+                        alloca,
+                        &[self.context.i32_type().const_zero(), index],
+                        &format!("elem_{}", i)
+                    ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+                };
+                self.builder.build_store(gep, *value)
+                    .map_err(|e| format!("Failed to build store: {:?}", e))?;
+            }
+            
+            Ok(alloca.into())
+        } else {
+            // For globals, we need constant values
+            Err("Global arrays not yet implemented".to_string())
+        }
+    }
+
+
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
@@ -402,5 +461,47 @@ mod tests {
         let ir = result.unwrap();
         assert!(ir.contains("define"));
         assert!(ir.contains("add"));
+    }
+
+    #[test]
+    fn test_local_variable() {
+        let context = Context::create();
+        let mut gen = CodeGenerator::new(&context, "test");
+        
+        let code = "double = x :: Num => < y = x + x y >";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+        
+        let result = gen.generate(&program);
+        assert!(result.is_ok());
+        
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("alloca")); // Local variable
+        assert!(ir.contains("load"));   // Variable load
+        assert!(ir.contains("store"));  // Variable store
+        assert!(ir.contains("fadd"));   // Addition
+    }
+
+    #[test]
+    fn test_array() {
+        let context = Context::create();
+        let mut gen = CodeGenerator::new(&context, "test");
+        
+        // Test array in a function body - return the first element as a number
+        let code = "sum = x :: Num => < arr = [x, x, x] x >";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+        
+        let result = gen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+        
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("alloca")); // Array allocation
+        assert!(ir.contains("getelementptr")); // Array element access
     }
 }
