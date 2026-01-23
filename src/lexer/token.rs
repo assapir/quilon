@@ -1,0 +1,249 @@
+// Token types for Quilon lexer
+
+use logos::Logos;
+use std::fmt;
+
+/// Source code position span
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}..{}", self.start, self.end)
+    }
+}
+
+#[derive(Logos, Debug, Clone, PartialEq)]
+#[logos(skip r"[ \t\r\n]+")]  // Skip whitespace
+#[logos(skip r"~[^\n]*")]     // Skip comments
+pub enum TokenKind {
+    // Literals
+    #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok())]
+    Number(f64),
+
+    #[regex(r#""(\\.|[^"\\])*""#, parse_string)]
+    String(String),
+
+    #[token("true")]
+    True,
+
+    #[token("false")]
+    False,
+
+    // Keywords
+    #[token("mut")]
+    Mut,
+
+    #[token("if")]
+    If,
+
+    #[token("while")]
+    While,
+
+    #[token("for")]
+    For,
+
+    // Identifiers
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
+    Ident,
+
+    // Operators and delimiters
+    #[token("=")]
+    Assign,
+
+    #[token("=>")]
+    Arrow,
+
+    #[token("->")]
+    ReturnArrow,
+
+    #[token("::")]
+    TypeAnnotation,
+
+    #[token("|>")]
+    Pipeline,
+
+    #[token("?")]
+    Question,
+
+    #[token("|")]
+    Pipe,
+
+    #[token("<")]
+    BlockOpen,
+
+    #[token(">")]
+    BlockClose,
+
+    #[token("{")]
+    BraceOpen,
+
+    #[token("}")]
+    BraceClose,
+
+    #[token("(")]
+    ParenOpen,
+
+    #[token(")")]
+    ParenClose,
+
+    #[token("[")]
+    BracketOpen,
+
+    #[token("]")]
+    BracketClose,
+
+    #[token(",")]
+    Comma,
+
+    #[token(".")]
+    Dot,
+
+    // Arithmetic operators
+    #[token("+")]
+    Plus,
+
+    #[token("-")]
+    Minus,
+
+    #[token("*")]
+    Star,
+
+    #[token("/")]
+    Slash,
+
+    #[token("%")]
+    Percent,
+
+    // Comparison operators
+    #[token("==")]
+    Eq,
+
+    #[token("!=")]
+    Ne,
+
+    #[token("<=")]
+    Le,
+
+    #[token(">=")]
+    Ge,
+
+    // Logical operators
+    #[token("&&")]
+    And,
+
+    #[token("||")]
+    Or,
+
+    #[token("!")]
+    Not,
+
+    #[token(":")]
+    Colon,
+
+    // End of file
+    Eof,
+}
+
+/// Parse string with escape sequences and interpolation
+fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
+    let s = lex.slice();
+    // Remove quotes
+    let content = &s[1..s.len()-1];
+    
+    let mut result = String::new();
+    let mut chars = content.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('"') => result.push('"'),
+                Some('\\') => result.push('\\'),
+                Some('<') => result.push('<'),
+                _ => return None,
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    Some(result)
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKind::Number(n) => write!(f, "Number({})", n),
+            TokenKind::String(s) => write!(f, "String(\"{}\")", s),
+            TokenKind::True => write!(f, "true"),
+            TokenKind::False => write!(f, "false"),
+            TokenKind::Mut => write!(f, "mut"),
+            TokenKind::If => write!(f, "if"),
+            TokenKind::While => write!(f, "while"),
+            TokenKind::For => write!(f, "for"),
+            TokenKind::Ident => write!(f, "Ident"),
+            TokenKind::Assign => write!(f, "="),
+            TokenKind::Arrow => write!(f, "=>"),
+            TokenKind::ReturnArrow => write!(f, "->"),
+            TokenKind::TypeAnnotation => write!(f, "::"),
+            TokenKind::Pipeline => write!(f, "|>"),
+            TokenKind::Question => write!(f, "?"),
+            TokenKind::Pipe => write!(f, "|"),
+            TokenKind::BlockOpen => write!(f, "<"),
+            TokenKind::BlockClose => write!(f, ">"),
+            TokenKind::BraceOpen => write!(f, "{{"),
+            TokenKind::BraceClose => write!(f, "}}"),
+            TokenKind::ParenOpen => write!(f, "("),
+            TokenKind::ParenClose => write!(f, ")"),
+            TokenKind::BracketOpen => write!(f, "["),
+            TokenKind::BracketClose => write!(f, "]"),
+            TokenKind::Comma => write!(f, ","),
+            TokenKind::Dot => write!(f, "."),
+            TokenKind::Plus => write!(f, "+"),
+            TokenKind::Minus => write!(f, "-"),
+            TokenKind::Star => write!(f, "*"),
+            TokenKind::Slash => write!(f, "/"),
+            TokenKind::Percent => write!(f, "%"),
+            TokenKind::Eq => write!(f, "=="),
+            TokenKind::Ne => write!(f, "!="),
+            TokenKind::Le => write!(f, "<="),
+            TokenKind::Ge => write!(f, ">="),
+            TokenKind::And => write!(f, "&&"),
+            TokenKind::Or => write!(f, "||"),
+            TokenKind::Not => write!(f, "!"),
+            TokenKind::Colon => write!(f, ":"),
+            TokenKind::Eof => write!(f, "EOF"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub span: Span,
+    pub text: String,
+}
+
+impl Token {
+    pub fn new(kind: TokenKind, span: Span, text: String) -> Self {
+        Self { kind, span, text }
+    }
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at {}", self.kind, self.span)
+    }
+}

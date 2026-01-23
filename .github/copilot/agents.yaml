@@ -1,0 +1,67 @@
+agents:
+  - name: lexer-agent
+    description: Expert in tokenization and lexer implementation for Quilon
+    expertise:
+      - Lexical analysis and tokenization
+      - Handling Quilon's unique symbolic syntax (|>, <, >, ::, =>, ?, ~)
+      - UTF-8 string processing
+      - Position tracking for error reporting
+      - Logos lexer generator patterns
+    context:
+      - src/lexer/**
+      - tests/lexer_tests.rs
+      - docs/syntax.md
+
+  - name: parser-agent
+    description: Expert in AST design and parsing for Quilon
+    expertise:
+      - Recursive descent parsing
+      - Chumsky parser combinator library
+      - AST node design and structure
+      - Handling Quilon's expression-based syntax
+      - Error recovery and reporting
+      - Precedence and associativity
+    context:
+      - src/parser/**
+      - src/ast/**
+      - tests/parser_tests.rs
+
+  - name: typechecker-agent
+    description: Expert in type systems and type inference for Quilon
+    expertise:
+      - Type inference algorithms (Hindley-Milner style)
+      - Unified Num type implementation (int/float inference)
+      - Deep immutability enforcement
+      - Sum types and pattern matching exhaustiveness
+      - Structural typing for records
+      - Generic type resolution
+    context:
+      - src/typechecker/**
+      - src/ast/**
+      - tests/typechecker_tests.rs
+
+  - name: codegen-agent
+    description: Expert in LLVM IR generation using Inkwell
+    expertise:
+      - Inkwell LLVM bindings
+      - Code generation for Quilon constructs
+      - Num type optimization (i64/f64 specialization)
+      - Function compilation and calling conventions
+      - Memory management strategies
+      - LLVM optimization passes
+    context:
+      - src/codegen/**
+      - tests/codegen_tests.rs
+
+  - name: runtime-agent
+    description: Expert in parallel execution runtime for Quilon
+    expertise:
+      - Work-stealing thread pool design
+      - Dependency analysis for auto-parallelization
+      - Parallel map/filter/reduce implementations
+      - Non-blocking I/O integration
+      - Event loop architecture (epoll/kqueue)
+      - Memory allocators
+    context:
+      - src/runtime/**
+      - tests/runtime_tests.rs

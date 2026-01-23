@@ -1,0 +1,68 @@
+skills:
+  - name: quilon-syntax
+    description: Deep knowledge of Quilon language syntax and semantics (.ql files)
+    rules:
+      - Variables declared with `name = value` (no let/var keywords)
+      - Functions declared with `name = params => body`
+      - Type annotations use `::` (e.g., `x :: Num`)
+      - Return type annotations use `->` (e.g., `-> String`)
+      - Multi-line blocks use `<` to open and `>` to close
+      - Comments use `~` prefix
+      - String interpolation uses `<var>` inside strings
+      - Pipeline operator is `|>`
+      - Pattern matching uses `?` with `|` for alternatives
+      - Ternary operator: `condition ? true_val : false_val`
+      - Generics use `{}` (e.g., `Result{T, E}`)
+      - Immutable by default, `mut` prefix for mutable bindings
+      - Deep immutability: immutable binding means entire structure is frozen
+      - Single `Num` type for all numbers (compiler infers int/float)
+      - All strings are UTF-8 `String` type
+      - No null - use Option{T} instead
+    examples:
+      - |
+        ~ Simple function
+        add = (a :: Num, b :: Num) => a + b
+      - |
+        ~ Multi-line function
+        fetch = url :: String => <
+          http.get url
+            |> json.parse{Response}
+        >
+      - |
+        ~ Pattern matching
+        unwrap = result :: Result{T, E} => result ?
+          | Ok value  => value
+          | Err error => panic error
+
+  - name: llvm-inkwell
+    description: LLVM IR generation patterns using Inkwell crate
+    rules:
+      - Use Inkwell builders for type-safe IR construction
+      - Handle context, module, and builder lifecycle carefully
+      - Generate appropriate LLVM types for Quilon types (Num -> i64/f64)
+      - Use phi nodes for control flow merging
+      - Implement proper function calling conventions
+      - Apply optimization passes appropriately
+      - Handle string constants as i8* (UTF-8)
+    patterns:
+      - "context.i64_type() for integer Num"
+      - "context.f64_type() for floating Num"
+      - "builder.build_call() for function calls"
+      - "builder.build_phi() for if/match expressions"
+
+  - name: parallel-safety
+    description: Rules for determining when auto-parallelization is safe
+    rules:
+      - Pure functions (no side effects) can be parallelized
+      - Immutable data can be safely accessed in parallel
+      - Operations on mutable data must be sequential
+      - Pipeline operators on immutable collections auto-parallelize
+      - Map/filter/reduce on immutable arrays auto-parallelize
+      - I/O operations are non-blocking but maintain order
+      - Check for data dependencies between iterations
+      - No parallelization if mutation occurs in loop/map body
+    conditions_for_parallelization:
+      - All inputs are immutable bindings
+      - Function body contains no mutable operations
+      - No loop-carried dependencies
+      - No explicit `@sequential` annotation

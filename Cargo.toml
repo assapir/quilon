@@ -1,0 +1,25 @@
+[package]
+name = "quilon"
+version = "0.1.0"
+edition = "2021"
+authors = ["Assaf"]
+description = "A fast, statically-typed web programming language"
+
+[dependencies]
+# LLVM code generation - using latest Inkwell with LLVM 21
+inkwell = { version = "0.8", features = ["llvm21-1"] }
+
+# Parsing
+logos = "0.14"
+chumsky = "0.9"
+
+# Error handling and utilities
+anyhow = "1.0"
+thiserror = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+# Testing
+pretty_assertions = "1.4"
