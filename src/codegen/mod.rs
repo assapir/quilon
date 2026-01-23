@@ -2,3 +2,5 @@
 
 pub mod generator;
 pub mod num_type;
+
+pub use generator::CodeGenerator;
