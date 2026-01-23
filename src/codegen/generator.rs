@@ -14,6 +14,8 @@ pub struct CodeGenerator<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    // Track record field mappings: variable name -> (field names, field types)
+    record_types: HashMap<String, Vec<String>>,
     current_function: Option<FunctionValue<'ctx>>,
 }
 
@@ -27,6 +29,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             module,
             builder,
             variables: HashMap::new(),
+            record_types: HashMap::new(),
             current_function: None,
         }
     }
@@ -55,6 +58,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
+        // Check if this is a record literal to track field names
+        if let Expr::Record { fields, .. } = &decl.value {
+            let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
+            self.record_types.insert(decl.name.clone(), field_names);
+        }
+        
         let value = self.generate_expr(&decl.value)?;
         
         if self.current_function.is_some() {
@@ -196,6 +205,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             
             Expr::Record { fields, .. } => {
                 self.generate_record(fields)
+            }
+            
+            Expr::FieldAccess { expr, field, .. } => {
+                self.generate_field_access(expr, field)
             }
             
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
@@ -496,6 +509,63 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    fn generate_field_access(
+        &mut self,
+        expr: &Expr,
+        field_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // For field access, we need to know the field index
+        
+        // Special case: if expr is an identifier, check if we have record info
+        if let Expr::Ident { name, .. } = expr {
+            if let Some(field_names) = self.record_types.get(name) {
+                // Find the field index
+                if let Some(field_idx) = field_names.iter().position(|f| f == field_name) {
+                    // Get the variable pointer
+                    let (var_ptr, _var_type) = self.variables.get(name)
+                        .ok_or_else(|| format!("Variable not found: {}", name))?;
+                    
+                    // The variable holds a pointer to the struct
+                    // Load it to get the actual struct pointer
+                    let struct_ptr = self.builder.build_load(
+                        self.context.ptr_type(AddressSpace::default()),
+                        *var_ptr,
+                        "load_struct_ptr"
+                    ).map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
+                        .into_pointer_value();
+                    
+                    // Now we need the struct type for GEP
+                    // We need to reconstruct the struct type from field count
+                    // For now, assume all fields are f64 (this is a limitation)
+                    let field_types: Vec<BasicTypeEnum> = vec![self.context.f64_type().into(); field_names.len()];
+                    let struct_type = self.context.struct_type(&field_types, false);
+                    
+                    // Use GEP to get field pointer
+                    let field_ptr = self.builder.build_struct_gep(
+                        struct_type,
+                        struct_ptr,
+                        field_idx as u32,
+                        &format!("field_{}", field_name)
+                    ).map_err(|e| format!("Failed to build GEP: {:?}", e))?;
+                    
+                    // Load the field value
+                    let field_val = self.builder.build_load(
+                        self.context.f64_type(),
+                        field_ptr,
+                        field_name
+                    ).map_err(|e| format!("Failed to load field: {:?}", e))?;
+                    
+                    return Ok(field_val);
+                }
+            }
+        }
+        
+        Err(format!(
+            "Field access not fully implemented. Need type information for field '{}'",
+            field_name
+        ))
+    }
+
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
@@ -644,5 +714,27 @@ mod tests {
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Struct allocation
         assert!(ir.contains("getelementptr")); // Field access
+    }
+
+    #[test]
+    fn test_field_access() {
+        let context = Context::create();
+        let mut gen = CodeGenerator::new(&context, "test");
+        
+        // Test field access
+        let code = "get_x = (a :: Num, b :: Num) => < p = {x = a, y = b} p.x >";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+        
+        let result = gen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+        
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("getelementptr")); // Field GEP
+        assert!(ir.contains("load")); // Field load
     }
 }
