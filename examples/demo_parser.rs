@@ -20,6 +20,8 @@ fn main() {
         ("No-param function", "main = => 42"),
         ("Single-param function", "greet = name => \"Hello\""),
         ("Function with block", "test = => < x = 1 x >"),
+        ("Pattern match", "result = x ? | Some(v) => v | None => 0"),
+        ("Record literal", "user = { name = \"Alice\", age = 30 }"),
     ];
 
     println!("Quilon Parser Demo");

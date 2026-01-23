@@ -158,6 +158,17 @@ pub enum Pattern {
     Wildcard { span: Span },
 }
 
+impl Pattern {
+    pub fn span(&self) -> &Span {
+        match self {
+            Pattern::Ident { span, .. } => span,
+            Pattern::Number { span, .. } => span,
+            Pattern::Constructor { span, .. } => span,
+            Pattern::Wildcard { span } => span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,

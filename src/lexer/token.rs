@@ -70,8 +70,11 @@ pub enum TokenKind {
     #[token("for")]
     For,
 
-    // Identifiers
-    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
+    #[token("_")]
+    Underscore,
+
+    // Identifiers (but not just "_")
+    #[regex(r"_[a-zA-Z0-9_]+|[a-zA-Z][a-zA-Z0-9_]*")]
     Ident,
 
     // Operators and delimiters
@@ -211,6 +214,7 @@ impl fmt::Display for TokenKind {
             TokenKind::If => write!(f, "if"),
             TokenKind::While => write!(f, "while"),
             TokenKind::For => write!(f, "for"),
+            TokenKind::Underscore => write!(f, "_"),
             TokenKind::Ident => write!(f, "Ident"),
             TokenKind::Assign => write!(f, "="),
             TokenKind::Arrow => write!(f, "=>"),

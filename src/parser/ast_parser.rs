@@ -260,23 +260,124 @@ impl<'a> Parser<'a> {
     fn parse_ternary(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_logical_or()?;
 
-        // Check for ternary operator: expr ? then : else
+        // Check for ? operator - could be ternary or pattern match
         if self.check(&TokenKind::Question) {
             self.advance();
-            let then_expr = self.parse_expr()?;
-            self.expect(&TokenKind::Colon)?;
-            let else_expr = self.parse_expr()?;
-            let span = Span::new(expr.span().start, else_expr.span().end);
+            
+            // Check if it's pattern match (next token is |) or ternary
+            if self.check(&TokenKind::Pipe) {
+                // Pattern match: expr ? | pattern => body | pattern => body
+                return self.parse_match(expr);
+            } else {
+                // Ternary: expr ? then : else
+                let then_expr = self.parse_expr()?;
+                self.expect(&TokenKind::Colon)?;
+                let else_expr = self.parse_expr()?;
+                let span = Span::new(expr.span().start, else_expr.span().end);
 
-            return Ok(Expr::If {
-                cond: Box::new(expr),
-                then: Box::new(then_expr),
-                else_: Box::new(else_expr),
-                span,
-            });
+                return Ok(Expr::If {
+                    cond: Box::new(expr),
+                    then: Box::new(then_expr),
+                    else_: Box::new(else_expr),
+                    span,
+                });
+            }
         }
 
         Ok(expr)
+    }
+
+    fn parse_match(&mut self, expr: Expr) -> Result<Expr, ParseError> {
+        let start = expr.span().start;
+        let mut arms = Vec::new();
+
+        // Parse match arms: | pattern => body
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            
+            let pattern = self.parse_pattern()?;
+            self.expect(&TokenKind::Arrow)?;
+            let body = self.parse_expr()?;
+            let arm_span = Span::new(pattern.span().start, body.span().end);
+            
+            arms.push(crate::ast::MatchArm {
+                pattern,
+                body,
+                span: arm_span,
+            });
+        }
+
+        if arms.is_empty() {
+            return Err(ParseError {
+                message: "Match expression must have at least one arm".to_string(),
+                span: Span::new(start, start),
+            });
+        }
+
+        let end = arms.last().unwrap().span.end;
+
+        Ok(Expr::Match {
+            expr: Box::new(expr),
+            arms,
+            span: Span::new(start, end),
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<crate::ast::Pattern, ParseError> {
+        use crate::ast::Pattern;
+        
+        let token = self.peek();
+        
+        match &token.kind {
+            TokenKind::Ident => {
+                let name = token.text.clone();
+                let span = token.span.clone();
+                self.advance();
+                
+                // Check if it's a constructor: Name(patterns) or Name pattern
+                if self.check(&TokenKind::ParenOpen) {
+                    self.advance();
+                    let mut args = Vec::new();
+                    
+                    if !self.check(&TokenKind::ParenClose) {
+                        loop {
+                            args.push(self.parse_pattern()?);
+                            if !self.check(&TokenKind::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(&TokenKind::ParenClose)?;
+                    let end = self.previous_span().end;
+                    
+                    Ok(Pattern::Constructor {
+                        name,
+                        args,
+                        span: Span::new(span.start, end),
+                    })
+                } else {
+                    // Just an identifier pattern
+                    Ok(Pattern::Ident { name, span })
+                }
+            }
+            TokenKind::Number(value) => {
+                let value = value.0;
+                let span = token.span.clone();
+                self.advance();
+                Ok(Pattern::Number { value, span })
+            }
+            TokenKind::Underscore => {
+                let span = token.span.clone();
+                self.advance();
+                Ok(Pattern::Wildcard { span })
+            }
+            _ => Err(ParseError {
+                message: format!("Expected pattern, got {:?}", token.kind),
+                span: token.span.clone(),
+            }),
+        }
     }
 
     fn parse_logical_or(&mut self) -> Result<Expr, ParseError> {
@@ -569,11 +670,40 @@ impl<'a> Parser<'a> {
             TokenKind::BracketOpen => {
                 self.parse_array()
             }
+            TokenKind::BraceOpen => {
+                self.parse_record()
+            }
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 span: token.span.clone(),
             }),
         }
+    }
+
+    fn parse_record(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::BraceOpen)?;
+
+        let mut fields = Vec::new();
+
+        if !self.check(&TokenKind::BraceClose) {
+            loop {
+                let field_name = self.expect_ident()?;
+                self.expect(&TokenKind::Assign)?;
+                let value = self.parse_expr()?;
+                fields.push((field_name, value));
+                
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
+        self.expect(&TokenKind::BraceClose)?;
+        let span = Span::new(start.start, self.previous_span().end);
+
+        Ok(Expr::Record { fields, span })
     }
 
     fn parse_array(&mut self) -> Result<Expr, ParseError> {
@@ -795,6 +925,59 @@ mod tests {
     #[test]
     fn test_parse_ternary() {
         let tokens = Lexer::tokenize("abs = x >= 0 ? x : -x").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_pattern_match() {
+        let tokens = Lexer::tokenize("result = value ? | Some(x) => x | None => 0").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::VarDecl(decl) = &program.items[0] {
+            if let Expr::Match { arms, .. } = &decl.value {
+                assert_eq!(arms.len(), 2);
+            } else {
+                panic!("Expected Match expression");
+            }
+        } else {
+            panic!("Expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parse_pattern_wildcard() {
+        let tokens = Lexer::tokenize("result = value ? | 0 => \"zero\" | _ => \"other\"").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_record() {
+        let tokens = Lexer::tokenize("user = { name = \"Alice\", age = 30 }").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::VarDecl(decl) = &program.items[0] {
+            if let Expr::Record { fields, .. } = &decl.value {
+                assert_eq!(fields.len(), 2);
+            } else {
+                panic!("Expected Record expression");
+            }
+        } else {
+            panic!("Expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_record() {
+        let tokens = Lexer::tokenize("empty = {}").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
