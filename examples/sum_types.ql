@@ -5,7 +5,7 @@
 success = Ok(42)
 failure = NotOk("error message")
 
-~ Pattern matching on numbers (simple case)
+~ Pattern matching on numbers
 classify = (n) => n ?
     | 0 => "zero"
     | 1 => "one"  
@@ -17,11 +17,12 @@ check_positive = (n) => n ?
     | 0 => "zero"
     | _ => "positive or negative"
 
-~ Returning Result from pattern match
-~ Note: Type inference limitations mean we can't easily
-~ pass Result values to untyped function parameters
-~ This will be improved in future versions
+~ Pattern matching on Results to extract values
+~ Note: Inline matching works great!
+value1 = (Ok(100)) ?
+    | Ok(val) => val
+    | NotOk(err) => 0
 
-~ For now, demonstrate construction
-make_success = () => Ok(100)
-make_failure = () => NotOk(404)
+value2 = (NotOk(999)) ?
+    | Ok(val) => val
+    | NotOk(err) => -1

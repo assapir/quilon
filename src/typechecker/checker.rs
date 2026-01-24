@@ -918,10 +918,21 @@ impl TypeChecker {
                 self.env.define(name.clone(), type_.clone(), false, span.clone())?;
                 Ok(())
             }
-            Pattern::Constructor { args, .. } => {
-                // For now, just bind args with the same type
-                for arg in args {
-                    self.bind_pattern_vars(arg, type_)?;
+            Pattern::Constructor { name: constructor_name, args, .. } => {
+                // For sum type constructors, bind args with their field types
+                if let Type::Sum { variants, .. } = type_ {
+                    // Find the variant that matches this constructor
+                    if let Some(variant) = variants.iter().find(|v| &v.name == constructor_name) {
+                        // Bind each argument with its corresponding field type
+                        for (arg_pattern, field_type) in args.iter().zip(variant.fields.iter()) {
+                            self.bind_pattern_vars(arg_pattern, field_type)?;
+                        }
+                    }
+                } else {
+                    // Not a sum type - fall back to binding with the same type
+                    for arg in args {
+                        self.bind_pattern_vars(arg, type_)?;
+                    }
                 }
                 Ok(())
             }
