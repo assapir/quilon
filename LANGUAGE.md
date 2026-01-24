@@ -121,6 +121,39 @@ Field access uses `.` notation:
 userName = user.name    ~ "Alice"
 ```
 
+**Named Record Types with Methods** (In Development):
+
+Define reusable record types with methods:
+
+```quilon
+User = {
+  name :: String,
+  age :: Num,
+  
+  ~ Methods with implicit "it" parameter
+  getName = => it.name,
+  getAge = => it.age,
+  incrementAge = amount => it.age + amount,
+  greet = => "Hello, " + it.name
+}
+
+~ Create instances
+user = User { name = "Alice", age = 30 }
+
+~ Call methods
+name = user.getName()           ~ it.name where it = user
+newAge = user.incrementAge(5)   ~ it.age + amount where it = user
+greeting = user.greet()         ~ "Hello, Alice"
+```
+
+**Key Points:**
+- Methods are defined inside the type declaration
+- `it` refers to the instance calling the method
+- Methods have access to all fields via `it.fieldName`
+- Method calls use dot notation: `instance.methodName(args)`
+
+**Status:** 🚧 Implementation in progress
+
 #### Function Types
 Functions are first-class values.
 
@@ -786,12 +819,15 @@ cargo run -- check examples/hello_world.ql
 - [ ] Pattern matching on constructors (type checks but doesn't codegen discriminants)
 - [ ] Sum type constructors (OK/NotOK parsing works, codegen needed)
 - [ ] Command-line arguments (argc works, argv is placeholder)
+- [ ] Methods on structs (AST ready, parser and type checker in progress)
 
 ### ❌ Not Yet Implemented
 
 - [ ] While loops
 - [ ] If/else blocks (only ternary expressions available)
 - [ ] Array methods (map, filter, reduce, etc.)
+- [ ] Implicit `it` parameter in methods
+- [ ] Method definitions in type declarations
 - [ ] Generic types (proper polymorphism)
 - [ ] Closures
 - [ ] Module system / imports
