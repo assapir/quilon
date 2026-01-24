@@ -1,6 +1,6 @@
 // Parser implementation - simple recursive descent
 
-use crate::ast::{Expr, BinOp, UnaryOp, VarDecl, Item, Program, Param, FunctionDecl, ForPattern};
+use crate::ast::{Expr, BinOp, UnaryOp, VarDecl, Item, Program, Param, FunctionDecl, ForPattern, TypeDecl, TypeDef, MethodDecl};
 use crate::lexer::{Token, TokenKind, Span};
 
 pub struct Parser<'a> {
@@ -43,9 +43,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        // Try to parse as function declaration first, then fall back to variable
-        // Function: name = params => body or name = => body
-        // Variable: name = value
+        // Three possibilities:
+        // 1. Type declaration: Name = { fields and methods }
+        // 2. Function declaration: name = params => body
+        // 3. Variable declaration: name = value
         
         let start = self.current_span();
         let mutable = if self.check(&TokenKind::Mut) {
@@ -66,6 +67,13 @@ impl<'a> Parser<'a> {
         };
 
         self.expect(&TokenKind::Assign)?;
+
+        // Check if it's a type declaration (Name = { ... })
+        // Type declarations can't be mutable and don't have type annotations
+        if !mutable && type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
+            // This is a type declaration
+            return self.parse_type_decl(name, start);
+        }
 
         // Check if it's a function:
         // - name = => ...  (no params)
@@ -203,6 +211,123 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            span: Span::new(start.start, end.end),
+        }))
+    }
+
+    fn parse_type_decl(&mut self, name: String, start: Span) -> Result<Item, ParseError> {
+        // Parse type definition: Name = { field :: Type, ... method = => body, ... }
+        self.expect(&TokenKind::BraceOpen)?;
+        
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        
+        while !self.check(&TokenKind::BraceClose) && !self.is_at_end() {
+            let field_name = self.expect_ident()?;
+            
+            if self.check(&TokenKind::TypeAnnotation) {
+                // This is a field: name :: Type
+                self.advance();
+                let field_type = self.parse_type()?;
+                fields.push((field_name, field_type));
+            } else if self.check(&TokenKind::Assign) {
+                // This is a method: name = params => body
+                self.advance();
+                
+                let method_start = self.current_span();
+                let mut params = Vec::new();
+                
+                // Parse method parameters (note: "it" is implicit, not included here)
+                if self.check(&TokenKind::ParenOpen) {
+                    self.advance();
+                    
+                    if !self.check(&TokenKind::ParenClose) {
+                        loop {
+                            let param_name = self.expect_ident()?;
+                            let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                                self.advance();
+                                Some(self.parse_type()?)
+                            } else {
+                                None
+                            };
+                            
+                            params.push(Param {
+                                name: param_name,
+                                type_annotation: param_type,
+                                span: self.previous_span(),
+                            });
+                            
+                            if !self.check(&TokenKind::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(&TokenKind::ParenClose)?;
+                } else if self.check(&TokenKind::Ident) {
+                    // Single parameter without parentheses
+                    let param_name = self.expect_ident()?;
+                    let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                        self.advance();
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    
+                    params.push(Param {
+                        name: param_name,
+                        type_annotation: param_type,
+                        span: self.previous_span(),
+                    });
+                }
+                
+                // Optional return type annotation
+                let return_type = if self.check(&TokenKind::ReturnArrow) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                
+                // Expect =>
+                self.expect(&TokenKind::Arrow)?;
+                
+                // Parse method body
+                let body = if self.check(&TokenKind::BlockOpen) {
+                    self.parse_block()?
+                } else {
+                    self.parse_expr()?
+                };
+                
+                let method_end = self.previous_span();
+                
+                methods.push(MethodDecl {
+                    name: field_name,
+                    params,
+                    return_type,
+                    body,
+                    span: Span::new(method_start.start, method_end.end),
+                });
+            } else {
+                return Err(ParseError {
+                    message: format!("Expected :: or = after field/method name"),
+                    span: self.peek().span.clone(),
+                });
+            }
+            
+            // Optional comma separator
+            if self.check(&TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        
+        self.expect(&TokenKind::BraceClose)?;
+        let end = self.previous_span();
+        
+        Ok(Item::TypeDecl(TypeDecl {
+            name,
+            type_def: TypeDef::Record { fields, methods },
             span: Span::new(start.start, end.end),
         }))
     }
@@ -1303,5 +1428,78 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_parse_type_decl_with_fields() {
+        let tokens = Lexer::tokenize("User = { name :: String, age :: Num }").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::TypeDecl(decl) = &program.items[0] {
+            assert_eq!(decl.name, "User");
+            if let TypeDef::Record { fields, methods } = &decl.type_def {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(methods.len(), 0);
+            } else {
+                panic!("Expected Record type definition");
+            }
+        } else {
+            panic!("Expected type declaration");
+        }
+    }
+    
+    #[test]
+    fn test_parse_type_decl_with_methods() {
+        let tokens = Lexer::tokenize("User = { 
+  name :: String, 
+  getName = => it.name 
+}").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::TypeDecl(decl) = &program.items[0] {
+            assert_eq!(decl.name, "User");
+            if let TypeDef::Record { fields, methods } = &decl.type_def {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name, "getName");
+                assert_eq!(methods[0].params.len(), 0); // "it" is implicit
+            } else {
+                panic!("Expected Record type definition");
+            }
+        } else {
+            panic!("Expected type declaration");
+        }
+    }
+    
+    #[test]
+    fn test_parse_type_decl_method_with_params() {
+        let tokens = Lexer::tokenize("User = { 
+  age :: Num,
+  incrementAge = amount => it.age + amount
+}").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::TypeDecl(decl) = &program.items[0] {
+            if let TypeDef::Record { fields: _, methods } = &decl.type_def {
+                assert_eq!(methods[0].name, "incrementAge");
+                assert_eq!(methods[0].params.len(), 1);
+                assert_eq!(methods[0].params[0].name, "amount");
+            }
+        }
     }
 }
