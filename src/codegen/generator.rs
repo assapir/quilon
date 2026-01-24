@@ -288,6 +288,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Record { fields, .. } => {
                 self.generate_record(fields)
             }
+            
+            Expr::Constructor { type_name: _, fields, .. } => {
+                // Constructors have the same representation as records
+                self.generate_record(fields)
+            }
 
             Expr::FieldAccess { expr, field, .. } => {
                 self.generate_field_access(expr, field)

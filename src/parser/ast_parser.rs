@@ -70,9 +70,44 @@ impl<'a> Parser<'a> {
 
         // Check if it's a type declaration (Name = { ... })
         // Type declarations can't be mutable and don't have type annotations
+        // AND they must have field declarations (name :: Type) or methods (name = => ...)
         if !mutable && type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
-            // This is a type declaration
-            return self.parse_type_decl(name, start);
+            // Lookahead to check if this is a type decl or record literal
+            // Type decl has: { name :: Type ... } or { name = => ... }
+            // Record literal has: { name = value ... }
+            
+            let mut idx = 1; // After {
+            let mut is_type_decl = false;
+            
+            // Skip to first field
+            while idx < 10 {
+                let tok = self.peek_ahead(idx);
+                if tok.kind == TokenKind::Ident {
+                    // Check what follows the identifier
+                    let next = self.peek_ahead(idx + 1);
+                    if next.kind == TokenKind::TypeAnnotation {
+                        // name :: Type - this is a field declaration
+                        is_type_decl = true;
+                    } else if next.kind == TokenKind::Assign {
+                        // name = ... - check if it's a method (name = => ...)
+                        let after_assign = self.peek_ahead(idx + 2);
+                        if after_assign.kind == TokenKind::Arrow {
+                            // name = => ... - this is a method
+                            is_type_decl = true;
+                        }
+                        // else: name = value - this is a record literal
+                    }
+                    break;
+                }
+                if tok.kind == TokenKind::BraceClose || tok.kind == TokenKind::Eof {
+                    break;
+                }
+                idx += 1;
+            }
+            
+            if is_type_decl {
+                return self.parse_type_decl(name, start);
+            }
         }
 
         // Check if it's a function:
@@ -869,7 +904,39 @@ impl<'a> Parser<'a> {
                 let span = token.span.clone();
                 let name = token.text.clone();
                 self.advance();
-                Ok(Expr::Ident { name, span })
+                
+                // Check if this is a type constructor: Ident { ... }
+                if self.check(&TokenKind::BraceOpen) {
+                    let start = span.start;
+                    self.advance(); // consume '{'
+                    
+                    let mut fields = Vec::new();
+                    
+                    if !self.check(&TokenKind::BraceClose) {
+                        loop {
+                            let field_name = self.expect_ident()?;
+                            self.expect(&TokenKind::Assign)?;
+                            let value = self.parse_expr()?;
+                            fields.push((field_name, value));
+                            
+                            if !self.check(&TokenKind::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(&TokenKind::BraceClose)?;
+                    let span = Span::new(start, self.previous_span().end);
+                    
+                    Ok(Expr::Constructor {
+                        type_name: name,
+                        fields,
+                        span,
+                    })
+                } else {
+                    Ok(Expr::Ident { name, span })
+                }
             }
             TokenKind::ParenOpen => {
                 self.advance();
@@ -1194,6 +1261,25 @@ mod tests {
         let tokens = Lexer::tokenize("empty = {}").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_parse_constructor() {
+        let tokens = Lexer::tokenize("user = User { name = \"Alice\", age = 30 }").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::VarDecl(decl) = &program.items[0] {
+            if let Expr::Constructor { type_name, fields, .. } = &decl.value {
+                assert_eq!(type_name, "User");
+                assert_eq!(fields.len(), 2);
+            } else {
+                panic!("Expected Constructor expression, got {:?}", decl.value);
+            }
+        } else {
+            panic!("Expected VarDecl");
+        }
     }
 
     #[test]

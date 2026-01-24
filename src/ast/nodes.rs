@@ -157,6 +157,13 @@ pub enum Expr {
         span: Span,
     },
     
+    // Type constructor (e.g., User { name = "Alice", age = 30 })
+    Constructor {
+        type_name: String,
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    
     // For loop (collection |> for pattern => body)
     ForLoop {
         collection: Box<Expr>,
@@ -184,6 +191,7 @@ impl Expr {
             Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
             Expr::Record { span, .. } => span,
+            Expr::Constructor { span, .. } => span,
             Expr::ForLoop { span, .. } => span,
         }
     }

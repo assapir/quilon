@@ -1,6 +1,6 @@
 // Type checker implementation
 
-use crate::ast::{Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, VarDecl};
+use crate::ast::{Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, VarDecl, Param};
 use crate::ast::{BinOp, UnaryOp};
 use crate::lexer::Span;
 use std::collections::HashMap;
@@ -114,12 +114,15 @@ impl Environment {
 
 pub struct TypeChecker {
     env: Environment,
+    // Registry of methods: (TypeName, MethodName) -> (Params, ReturnType, Body)
+    methods: std::collections::HashMap<(String, String), (Vec<Param>, Option<Type>, Expr)>,
 }
 
 impl TypeChecker {
     pub fn new() -> Self {
         let mut checker = TypeChecker {
             env: Environment::new(),
+            methods: std::collections::HashMap::new(),
         };
         
         // Add built-in sum types to the environment
@@ -185,8 +188,55 @@ impl TypeChecker {
                 variants: variants.clone(),
             },
             TypeDef::Record { fields, methods } => {
-                // For now, create a Named type with methods
-                // TODO: Store method implementations for later lookup
+                // Type-check each method
+                for method in methods {
+                    // Create a new scope for the method
+                    self.env.push_scope();
+                    
+                    // Bind implicit "it" parameter to the struct type
+                    let struct_type = Type::Named {
+                        name: decl.name.clone(),
+                        fields: fields.clone(),
+                        methods: methods.iter().map(|m| m.name.clone()).collect(),
+                    };
+                    
+                    self.env.define(
+                        "it".to_string(),
+                        struct_type,
+                        false,
+                        method.span.clone(),
+                    )?;
+                    
+                    // Bind method parameters
+                    for param in &method.params {
+                        let param_type = param.type_annotation.clone()
+                            .unwrap_or(Type::Num); // Default to Num if no type annotation
+                        self.env.define(
+                            param.name.clone(),
+                            param_type,
+                            false,
+                            param.span.clone(),
+                        )?;
+                    }
+                    
+                    // Type-check method body
+                    let body_type = self.infer_expr(&method.body)?;
+                    
+                    // Check return type if specified
+                    if let Some(ref return_type) = method.return_type {
+                        self.check_type_compatibility(return_type, &body_type, &method.span)?;
+                    }
+                    
+                    self.env.pop_scope();
+                    
+                    // Store method for later lookup
+                    self.methods.insert(
+                        (decl.name.clone(), method.name.clone()),
+                        (method.params.clone(), method.return_type.clone(), method.body.clone()),
+                    );
+                }
+                
+                // Create a Named type with methods
                 Type::Named {
                     name: decl.name.clone(),
                     fields: fields.clone(),
@@ -383,6 +433,18 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
+                    Type::Named { name: _, fields, methods: _ } => {
+                        // Handle field access on named types
+                        for (f, t) in fields {
+                            if f == *field {
+                                return Ok(t);
+                            }
+                        }
+                        Err(TypeError::UndefinedVariable {
+                            name: field.clone(),
+                            span: span.clone(),
+                        })
+                    }
                     Type::Array(_elem_type) => {
                         // Arrays have a built-in .size field
                         if field == "size" {
@@ -450,6 +512,71 @@ impl TypeChecker {
                 }
                 
                 Ok(Type::Record(field_types))
+            }
+            
+            Expr::Constructor { type_name, fields, span } => {
+                // Look up the type definition
+                if let Some(symbol) = self.env.lookup(type_name) {
+                    match &symbol.type_ {
+                        Type::Named { name, fields: type_fields, methods } => {
+                            // Clone the type info to avoid borrow issues
+                            let name = name.clone();
+                            let type_fields = type_fields.clone();
+                            let methods = methods.clone();
+                            
+                            // Type-check each field
+                            let mut provided_fields = std::collections::HashSet::new();
+                            
+                            for (field_name, field_expr) in fields {
+                                provided_fields.insert(field_name.clone());
+                                
+                                // Find the expected type for this field
+                                let expected_type = type_fields.iter()
+                                    .find(|(f, _)| f == field_name)
+                                    .map(|(_, t)| t.clone())
+                                    .ok_or_else(|| TypeError::UndefinedVariable {
+                                        name: format!("field {} in type {}", field_name, type_name),
+                                        span: span.clone(),
+                                    })?;
+                                
+                                // Type-check the field value
+                                let actual_type = self.infer_expr(field_expr)?;
+                                self.check_type_compatibility(&expected_type, &actual_type, span)?;
+                            }
+                            
+                            // Check all fields are provided
+                            for (field_name, _) in &type_fields {
+                                if !provided_fields.contains(field_name) {
+                                    return Err(TypeError::UndefinedVariable {
+                                        name: format!("Missing field {} in constructor for {}", field_name, type_name),
+                                        span: span.clone(),
+                                    });
+                                }
+                            }
+                            
+                            // Return the Named type
+                            Ok(Type::Named {
+                                name,
+                                fields: type_fields,
+                                methods,
+                            })
+                        }
+                        _ => Err(TypeError::TypeMismatch {
+                            expected: Type::Named {
+                                name: type_name.clone(),
+                                fields: vec![],
+                                methods: vec![],
+                            },
+                            got: symbol.type_.clone(),
+                            span: span.clone(),
+                        })
+                    }
+                } else {
+                    Err(TypeError::UndefinedVariable {
+                        name: type_name.clone(),
+                        span: span.clone(),
+                    })
+                }
             }
             
             Expr::ForLoop { collection, pattern, body, span } => {
@@ -531,6 +658,47 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, func: &Expr, args: &[Expr], span: &Span) -> Result<Type, TypeError> {
+        // Check if this is a method call: func is Ident and first arg is a Named type
+        if let Expr::Ident { name, .. } = func {
+            if !args.is_empty() {
+                let first_arg_type = self.infer_expr(&args[0])?;
+                
+                // Check if first argument is a Named type with this method
+                if let Type::Named { name: type_name, fields: _, methods: _ } = &first_arg_type {
+                    // Look up method in the type's method list
+                    if let Some(method_sig) = self.methods.get(&(type_name.clone(), name.clone())).cloned() {
+                        let (method_params, method_return_type, _body) = method_sig;
+                        
+                        // Method parameters don't include the implicit receiver
+                        // But args[0] is the receiver, so we need args[1..] to match method_params
+                        let call_args = &args[1..];
+                        
+                        if method_params.len() != call_args.len() {
+                            return Err(TypeError::WrongNumberOfArguments {
+                                expected: method_params.len(),
+                                got: call_args.len(),
+                                span: span.clone(),
+                            });
+                        }
+                        
+                        // Type check arguments
+                        for (param, arg) in method_params.iter().zip(call_args.iter()) {
+                            let arg_type = self.infer_expr(arg)?;
+                            // Extract the type from the Param
+                            if let Some(param_type) = &param.type_annotation {
+                                self.check_type_compatibility(param_type, &arg_type, span)?;
+                            }
+                            // If no type annotation, we can't check (would need inference)
+                        }
+                        
+                        // Return the method's return type (or Num if not specified)
+                        return Ok(method_return_type.unwrap_or(Type::Num));
+                    }
+                }
+            }
+        }
+        
+        // Fall back to regular function call
         let func_type = self.infer_expr(func)?;
 
         match func_type {
@@ -992,10 +1160,14 @@ result = val ? | OK(x, y) => x | NotOK => 0").unwrap();
     
     #[test]
     fn test_method_call_simple() {
-        // Test that method calls are properly desugared
-        let tokens = Lexer::tokenize("getName = self => self.name
+        // Test that method calls work with type constructors
+        let tokens = Lexer::tokenize("User = {
+  name :: String,
+  age :: Num,
+  getName = => it.name
+}
 test = => <
-  user = { name = \"Alice\", age = 30 }
+  user = User { name = \"Alice\", age = 30 }
   name = user.getName()
   0
 >").unwrap();
