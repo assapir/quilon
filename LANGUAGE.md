@@ -910,3 +910,55 @@ See [plan.md](/.copilot/session-state/f77dc225-c857-4b67-a2ce-00b4479ea48c/plan.
 ---
 
 **End of Language Reference**
+
+## Sum Types and Pattern Matching
+
+Quilon supports sum types (also known as algebraic data types or tagged unions) for representing values that can be one of several variants.
+
+### Built-in Result Type
+
+The `Result` type is built into the language for handling success/failure cases:
+
+```quilon
+~ Creating Result values
+success = Ok(42)
+failure = NotOk("error message")
+
+~ Functions can return Results
+make_result = () => Ok(100)
+```
+
+The Result type has two constructors:
+- `Ok(value)` - represents a successful result with a value
+- `NotOk(error)` - represents a failure with an error value
+
+### Pattern Matching
+
+Pattern matching allows you to handle different cases:
+
+```quilon
+~ Match on Result
+handle = (result) => result ?
+    | Ok(x) => x * 2      ~ Extract and use the value
+    | NotOk(e) => 0       ~ Handle the error case
+
+~ Match on numbers
+classify = (n) => n ?
+    | 0 => "zero"
+    | 1 => "one"
+    | _ => "other"        ~ Wildcard matches anything
+```
+
+### Implementation Details
+
+Sum types are implemented as tagged unions in LLVM:
+- Each value carries a discriminant tag (i8) to identify the variant
+- The payload is stored alongside the tag
+- Pattern matching compares tags and extracts payloads
+
+### Current Limitations
+
+1. **Type Inference**: Functions that return Result types need explicit return type annotations
+2. **Custom Sum Types**: Parser support for user-defined sum types (e.g., `Color = Red | Green | Blue`) is not yet implemented
+3. **Payload Types**: Currently simplified to use f64 for all payloads in code generation
+
