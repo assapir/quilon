@@ -503,6 +503,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Only direct function calls supported".to_string());
         };
 
+        // Check if this is a sum type constructor (Ok, NotOk, etc.)
+        // For now, hardcode the builtin Result constructors
+        match func_name.as_str() {
+            "Ok" => return self.generate_sum_constructor(0, args),  // Tag 0 for Ok
+            "NotOk" => return self.generate_sum_constructor(1, args), // Tag 1 for NotOk
+            _ => {}
+        }
+
         // Get the function from the module
         let function = self.module.get_function(func_name)
             .ok_or_else(|| format!("Function not found: {}", func_name))?;
@@ -538,6 +546,56 @@ impl<'ctx> CodeGenerator<'ctx> {
             inkwell::values::AnyValueEnum::VectorValue(v) => Ok(v.into()),
             _ => Err("Function does not return a basic value".to_string()),
         }
+    }
+    
+    fn generate_sum_constructor(
+        &mut self,
+        tag: u8,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Tagged union layout: { i8 tag, f64 payload }
+        // This is a simplified representation - proper implementation would use
+        // actual union types and support multiple payload types
+        
+        let i8_type = self.context.i8_type();
+        let f64_type = self.context.f64_type();
+        
+        // Create struct type for Result
+        let result_struct = self.context.struct_type(
+            &[i8_type.into(), f64_type.into()],
+            false,
+        );
+        
+        // Create the tag value
+        let tag_val = i8_type.const_int(tag as u64, false);
+        
+        // Generate the payload value (first argument, or 0.0 if none)
+        let payload_val = if !args.is_empty() {
+            let arg_val = self.generate_expr(&args[0])?;
+            // Convert to f64 if needed
+            match arg_val {
+                BasicValueEnum::FloatValue(f) => f,
+                BasicValueEnum::IntValue(i) => {
+                    // Convert int to float
+                    self.builder.build_unsigned_int_to_float(i, f64_type, "inttofloat")
+                        .map_err(|e| format!("Failed to convert int to float: {:?}", e))?
+                }
+                _ => f64_type.const_float(0.0), // Default for unsupported types
+            }
+        } else {
+            f64_type.const_float(0.0)
+        };
+        
+        // Build the struct value
+        let undef = result_struct.get_undef();
+        let with_tag = self.builder.build_insert_value(undef, tag_val, 0, "with_tag")
+            .map_err(|e| format!("Failed to insert tag: {:?}", e))?
+            .into_struct_value();
+        let with_payload = self.builder.build_insert_value(with_tag, payload_val, 1, "with_payload")
+            .map_err(|e| format!("Failed to insert payload: {:?}", e))?
+            .into_struct_value();
+        
+        Ok(with_payload.into())
     }
 
     fn generate_if(
@@ -1026,21 +1084,32 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Pattern::Constructor { name, args, .. } => {
                 // For constructors, we need to check the discriminant
-                // This is simplified - assumes Result-like pattern
-                // Result is represented as { i8 tag, value }
-                // OK = tag 1, NotOK = tag 0
+                // Result is represented as { i8 tag, f64 payload }
+                // Ok = tag 0, NotOk = tag 1
 
-                match name.as_str() {
-                    "OK" => {
-                        // TODO: For now, just return true as a placeholder
-                        // Full implementation needs to extract tag from struct
-                        Ok(self.context.bool_type().const_all_ones())
-                    }
-                    "NotOK" => {
-                        // TODO: Check tag == 0
-                        Ok(self.context.bool_type().const_all_ones())
-                    }
-                    _ => Err(format!("Unknown constructor: {}", name))
+                let expected_tag = match name.as_str() {
+                    "Ok" => 0u8,
+                    "NotOk" => 1u8,
+                    _ => return Err(format!("Unknown constructor: {}", name)),
+                };
+
+                // Extract tag from struct (field 0)
+                if let BasicValueEnum::StructValue(struct_val) = value {
+                    let tag_val = self.builder.build_extract_value(struct_val, 0, "tag")
+                        .map_err(|e| format!("Failed to extract tag: {:?}", e))?
+                        .into_int_value();
+                    
+                    let expected_tag_val = self.context.i8_type().const_int(expected_tag as u64, false);
+                    
+                    self.builder.build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        tag_val,
+                        expected_tag_val,
+                        "tag_match"
+                    ).map_err(|e| format!("Failed to compare tags: {:?}", e))
+                } else {
+                    // Not a struct - pattern doesn't match
+                    Ok(self.context.bool_type().const_zero())
                 }
             }
         }
@@ -1063,14 +1132,20 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Pattern::Constructor { name, args, .. } => {
                 // For constructors with arguments, extract the payload
-                // Simplified: assumes first argument binds to the value
+                // Result is { i8 tag, f64 payload }
                 if let Some(first_arg) = args.first() {
                     if let Pattern::Ident { name: arg_name, .. } = first_arg {
-                        // Bind the payload value
-                        let alloca = self.create_entry_block_alloca(arg_name, value.get_type())?;
-                        self.builder.build_store(alloca, value)
-                            .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
-                        self.variables.insert(arg_name.clone(), (alloca, value.get_type()));
+                        // Extract payload (field 1) from the struct
+                        if let BasicValueEnum::StructValue(struct_val) = value {
+                            let payload = self.builder.build_extract_value(struct_val, 1, "payload")
+                                .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
+                            
+                            // Bind the payload value
+                            let alloca = self.create_entry_block_alloca(arg_name, payload.get_type())?;
+                            self.builder.build_store(alloca, payload)
+                                .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
+                            self.variables.insert(arg_name.clone(), (alloca, payload.get_type()));
+                        }
                     }
                 }
                 Ok(())
