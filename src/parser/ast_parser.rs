@@ -576,12 +576,46 @@ impl<'a> Parser<'a> {
             if self.check(&TokenKind::Dot) {
                 self.advance();
                 let field = self.expect_ident()?;
-                let span = Span::new(expr.span().start, self.previous_span().end);
-                expr = Expr::FieldAccess {
-                    expr: Box::new(expr),
-                    field,
-                    span,
-                };
+                
+                // Check if this is a method call: obj.method(args)
+                if self.check(&TokenKind::ParenOpen) {
+                    // Method call: desugar obj.method(a, b) to method(obj, a, b)
+                    self.advance(); // consume '('
+                    
+                    // Parse arguments
+                    let mut args = vec![expr]; // receiver is first argument
+                    
+                    if !self.check(&TokenKind::ParenClose) {
+                        loop {
+                            args.push(self.parse_expr()?);
+                            if !self.check(&TokenKind::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(&TokenKind::ParenClose)?;
+                    let span = Span::new(args[0].span().start, self.previous_span().end);
+                    
+                    // Create function call with method name
+                    expr = Expr::Call {
+                        func: Box::new(Expr::Ident {
+                            name: field,
+                            span: span.clone(),
+                        }),
+                        args,
+                        span,
+                    };
+                } else {
+                    // Regular field access
+                    let span = Span::new(expr.span().start, self.previous_span().end);
+                    expr = Expr::FieldAccess {
+                        expr: Box::new(expr),
+                        field,
+                        span,
+                    };
+                }
             } else if self.check(&TokenKind::BracketOpen) {
                 // Array indexing
                 self.advance();
@@ -1207,5 +1241,67 @@ mod tests {
                 panic!("Expected for loop expression");
             }
         }
+    }
+    
+    #[test]
+    fn test_parse_method_call() {
+        let tokens = Lexer::tokenize("result = user.getName()").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::VarDecl(var) = &program.items[0] {
+            // Should be desugared to a Call with Ident("getName") as func
+            if let Expr::Call { func, args, .. } = &var.value {
+                // func should be Ident("getName")
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    assert_eq!(name, "getName");
+                    // First arg should be the receiver (user)
+                    assert_eq!(args.len(), 1);
+                    if let Expr::Ident { name, .. } = &args[0] {
+                        assert_eq!(name, "user");
+                    } else {
+                        panic!("Expected receiver as first argument");
+                    }
+                } else {
+                    panic!("Expected Ident as function in method call");
+                }
+            } else {
+                panic!("Expected method call to be desugared to Call");
+            }
+        } else {
+            panic!("Expected variable declaration");
+        }
+    }
+    
+    #[test]
+    fn test_parse_method_call_with_args() {
+        let tokens = Lexer::tokenize("result = user.setAge(25)").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::VarDecl(var) = &program.items[0] {
+            if let Expr::Call { func, args, .. } = &var.value {
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    assert_eq!(name, "setAge");
+                    // Should have 2 args: receiver and the argument
+                    assert_eq!(args.len(), 2);
+                }
+            }
+        }
+    }
+    
+    #[test]
+    fn test_parse_chained_method_calls() {
+        let tokens = Lexer::tokenize("result = user.getName().toUpper()").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
     }
 }

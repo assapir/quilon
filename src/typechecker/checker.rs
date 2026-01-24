@@ -184,7 +184,15 @@ impl TypeChecker {
                 name: decl.name.clone(),
                 variants: variants.clone(),
             },
-            TypeDef::Record(fields) => Type::Record(fields.clone()),
+            TypeDef::Record { fields, methods } => {
+                // For now, create a Named type with methods
+                // TODO: Store method implementations for later lookup
+                Type::Named {
+                    name: decl.name.clone(),
+                    fields: fields.clone(),
+                    methods: methods.iter().map(|m| m.name.clone()).collect(),
+                }
+            },
             TypeDef::Alias(ty) => ty.clone(),
         };
         
@@ -972,6 +980,59 @@ result = val ? | OK(x, y) => x | NotOK => 0").unwrap();
         let tokens = Lexer::tokenize("test = => <
   result = [1, 2, 3] |> for n => n
   result + 1
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_method_call_simple() {
+        // Test that method calls are properly desugared
+        let tokens = Lexer::tokenize("getName = self => self.name
+test = => <
+  user = { name = \"Alice\", age = 30 }
+  name = user.getName()
+  0
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_method_call_with_args() {
+        // Test method calls with additional arguments
+        let tokens = Lexer::tokenize("add = (self, x) => self + x
+test = => <
+  result = (5).add(10)
+  result
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_method_vs_function_call() {
+        // Both method and function call syntax should work
+        let tokens = Lexer::tokenize("double = x => x * 2
+test = => <
+  a = (5).double()     ~ Method syntax
+  b = double(5)         ~ Function syntax
+  a + b
 >").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();

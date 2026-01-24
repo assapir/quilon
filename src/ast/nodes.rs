@@ -24,8 +24,20 @@ pub struct TypeDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDef {
     Sum(Vec<SumVariant>),
-    Record(Vec<(String, Type)>),
+    Record {
+        fields: Vec<(String, Type)>,
+        methods: Vec<MethodDecl>,
+    },
     Alias(Type),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodDecl {
+    pub name: String,
+    pub params: Vec<Param>,  // Does not include implicit "it" parameter
+    pub return_type: Option<Type>,
+    pub body: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,7 +261,12 @@ pub enum Type {
     String,
     Bool,
     Array(Box<Type>),
-    Record(Vec<(String, Type)>),
+    Record(Vec<(String, Type)>),  // For anonymous records
+    Named {
+        name: String,
+        fields: Vec<(String, Type)>,
+        methods: Vec<String>,  // Method names (bodies stored elsewhere)
+    },
     Generic {
         name: String,
         args: Vec<Type>,

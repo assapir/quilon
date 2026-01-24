@@ -205,6 +205,10 @@ pub fn from_concrete(ty: &Type) -> InferType {
         Type::Record(fields) => {
             InferType::Concrete(Type::Record(fields.clone()))
         }
+        Type::Named { .. } => {
+            // Treat named types as concrete
+            InferType::Concrete(ty.clone())
+        }
         Type::Generic { .. } => {
             // For now, treat generics as concrete
             InferType::Concrete(ty.clone())
