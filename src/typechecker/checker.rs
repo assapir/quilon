@@ -579,6 +579,15 @@ impl TypeChecker {
                 }
             }
             
+            Expr::SumConstructor { variant, args, span } => {
+                // TODO: Implement sum type constructor type checking
+                // For now, return a placeholder error
+                Err(TypeError::UndefinedVariable {
+                    name: format!("Sum type constructor {} not yet implemented", variant),
+                    span: span.clone(),
+                })
+            }
+            
             Expr::ForLoop { collection, pattern, body, span } => {
                 use crate::ast::ForPattern;
                 

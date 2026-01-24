@@ -910,7 +910,7 @@ impl<'a> Parser<'a> {
                 let name = token.text.clone();
                 self.advance();
                 
-                // Check if this is a type constructor: Ident { ... }
+                // Check if this is a record constructor: Ident { ... }
                 if self.check(&TokenKind::BraceOpen) {
                     let start = span.start;
                     self.advance(); // consume '{'
@@ -940,6 +940,8 @@ impl<'a> Parser<'a> {
                         span,
                     })
                 } else {
+                    // Regular identifier - could be variable, function, or sum constructor
+                    // The type checker will disambiguate
                     Ok(Expr::Ident { name, span })
                 }
             }

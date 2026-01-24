@@ -164,6 +164,13 @@ pub enum Expr {
         span: Span,
     },
     
+    // Sum type constructor call (e.g., Some(42), OK("value"), NotOK)
+    SumConstructor {
+        variant: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    
     // For loop (collection |> for pattern => body)
     ForLoop {
         collection: Box<Expr>,
@@ -192,6 +199,7 @@ impl Expr {
             Expr::Array { span, .. } => span,
             Expr::Record { span, .. } => span,
             Expr::Constructor { span, .. } => span,
+            Expr::SumConstructor { span, .. } => span,
             Expr::ForLoop { span, .. } => span,
         }
     }

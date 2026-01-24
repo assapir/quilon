@@ -1,16 +1,23 @@
-~ Test the unified Result type with OK/NotOK
+~ Test the unified Result type with Ok/NotOk
 ~ Simulates a computation that might succeed or fail
 >> = () -> Num => <
-  ~ For now we can't actually create Result values yet
-  ~ But we can pattern match on them
+  ~ Now we can create Result values
   
   value = 42
   
-  ~ This will be useful once we can create OK(value) and NotOK
-  result = value ?
-    | OK(x) => x * 2
-    | NotOK => 0
+  ~ Creating and matching on result values
+  success = Ok(value)
+  failure = NotOk
+  
+  result1 = success ?
+    | Ok(x) => x * 2
+    | NotOk => 0
     | _ => -1
   
-  result
+  result2 = failure ?
+    | Ok(x) => x * 2
+    | NotOk => 0
+    | _ => -1
+  
+  result1
 >
