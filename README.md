@@ -77,7 +77,7 @@ quilon run program.ql
 
 ## License
 
-MIT
+GPL-2.0 License
 
 ## Learn More
 
