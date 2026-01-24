@@ -443,6 +443,45 @@ impl TypeChecker {
                 
                 Ok(Type::Record(field_types))
             }
+            
+            Expr::ForLoop { collection, pattern, body, span } => {
+                use crate::ast::ForPattern;
+                
+                // Infer collection type
+                let collection_type = self.infer_expr(collection)?;
+                
+                // Collection must be an array (for now; struct iteration can be added later)
+                match collection_type {
+                    Type::Array(elem_type) => {
+                        // Create a new scope for the loop body
+                        self.env.push_scope();
+                        
+                        // Bind pattern variables (immutable bindings in loop scope)
+                        match pattern {
+                            ForPattern::Item { name, span: pat_span } => {
+                                self.env.define(name.clone(), *elem_type.clone(), false, pat_span.clone())?;
+                            }
+                            ForPattern::ItemIndex { item, index, span: pat_span } => {
+                                self.env.define(item.clone(), *elem_type.clone(), false, pat_span.clone())?;
+                                self.env.define(index.clone(), Type::Num, false, pat_span.clone())?;
+                            }
+                        }
+                        
+                        // Type check body (result is ignored, loop returns unit)
+                        let _ = self.infer_expr(body)?;
+                        
+                        self.env.pop_scope();
+                        
+                        // For loops return Num (0 - unit/void equivalent)
+                        Ok(Type::Num)
+                    }
+                    _ => Err(TypeError::TypeMismatch {
+                        expected: Type::Array(Box::new(Type::Num)), // Placeholder
+                        got: collection_type,
+                        span: span.clone(),
+                    })
+                }
+            }
         }
     }
 
@@ -856,5 +895,90 @@ result = val ? | OK(x, y) => x | NotOK => 0").unwrap();
         
         // Check Result is defined
         assert!(checker.env.get_type("Result").is_some());
+    }
+    
+    #[test]
+    fn test_for_loop_simple() {
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => n").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_for_loop_with_index() {
+        let tokens = Lexer::tokenize("test = => <
+  items = [10, 20, 30]
+  items |> for (val, i) => val
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_for_loop_type_bindings() {
+        // Test that loop variables are properly bound with correct types
+        let tokens = Lexer::tokenize("test = => <
+  nums = [1.5, 2.5, 3.5]
+  nums |> for n => n + 1.0
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_for_loop_index_is_num() {
+        // Test that index variable is Num type
+        let tokens = Lexer::tokenize("test = => [10, 20] |> for (val, i) => i + val").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_for_loop_non_array_fails() {
+        // For loop on non-array should fail
+        let tokens = Lexer::tokenize("test = => <
+  x = 42
+  x |> for n => n
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_for_loop_returns_num() {
+        // For loops should return Num (unit/0)
+        let tokens = Lexer::tokenize("test = => <
+  result = [1, 2, 3] |> for n => n
+  result + 1
+>").unwrap();
+        let program = parse(&tokens).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        if result.is_err() {
+            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
     }
 }

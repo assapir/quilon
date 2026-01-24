@@ -300,6 +300,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Match { expr, arms, .. } => {
                 self.generate_match(expr, arms)
             }
+            
+            Expr::ForLoop { collection, pattern, body, .. } => {
+                self.generate_for_loop(collection, pattern, body)
+            }
 
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
@@ -1069,6 +1073,168 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             _ => Ok(()) // Other patterns don't bind variables
         }
+    }
+    
+    fn generate_for_loop(
+        &mut self,
+        collection: &Expr,
+        pattern: &crate::ast::ForPattern,
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use crate::ast::ForPattern;
+        
+        // Generate the collection (should be an array struct: {ptr, size})
+        let array_val = self.generate_expr(collection)?;
+        
+        // Get current function
+        let function = self.current_function
+            .ok_or_else(|| "For loop must be in a function".to_string())?;
+        
+        // Allocate the array struct to memory so we can access its fields
+        let array_struct_type = self.context.struct_type(
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+            ],
+            false,
+        );
+        
+        let array_alloca = self.create_entry_block_alloca("array_temp", array_struct_type.into())?;
+        self.builder.build_store(array_alloca, array_val)
+            .map_err(|e| format!("Failed to store array: {:?}", e))?;
+        
+        // Extract size field (field 1)
+        let size_field_ptr = self.builder.build_struct_gep(
+            array_struct_type,
+            array_alloca,
+            1,
+            "size_field_ptr"
+        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
+        
+        let size = self.builder.build_load(
+            self.context.i64_type(),
+            size_field_ptr,
+            "size"
+        ).map_err(|e| format!("Failed to load size: {:?}", e))?
+            .into_int_value();
+        
+        // Extract data pointer (field 0)
+        let data_field_ptr = self.builder.build_struct_gep(
+            array_struct_type,
+            array_alloca,
+            0,
+            "data_field_ptr"
+        ).map_err(|e| format!("Failed to get data field: {:?}", e))?;
+        
+        let data_ptr = self.builder.build_load(
+            self.context.ptr_type(AddressSpace::default()),
+            data_field_ptr,
+            "data_ptr"
+        ).map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+            .into_pointer_value();
+        
+        // Create basic blocks
+        let loop_header = self.context.append_basic_block(function, "loop_header");
+        let loop_body_block = self.context.append_basic_block(function, "loop_body");
+        let loop_exit = self.context.append_basic_block(function, "loop_exit");
+        
+        // Create counter variable (i = 0)
+        let counter_alloca = self.create_entry_block_alloca("loop_counter", self.context.i64_type().into())?;
+        self.builder.build_store(counter_alloca, self.context.i64_type().const_int(0, false))
+            .map_err(|e| format!("Failed to store counter: {:?}", e))?;
+        
+        // Jump to loop header
+        self.builder.build_unconditional_branch(loop_header)
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        
+        // Loop header: check condition (i < size)
+        self.builder.position_at_end(loop_header);
+        let counter_val = self.builder.build_load(
+            self.context.i64_type(),
+            counter_alloca,
+            "i"
+        ).map_err(|e| format!("Failed to load counter: {:?}", e))?
+            .into_int_value();
+        
+        let cond = self.builder.build_int_compare(
+            inkwell::IntPredicate::SLT,
+            counter_val,
+            size,
+            "loop_cond"
+        ).map_err(|e| format!("Failed to build compare: {:?}", e))?;
+        
+        self.builder.build_conditional_branch(cond, loop_body_block, loop_exit)
+            .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
+        
+        // Loop body
+        self.builder.position_at_end(loop_body_block);
+        
+        // Get current element: data_ptr[i]
+        let elem_ptr = unsafe {
+            self.builder.build_gep(
+                self.context.f64_type(), // TODO: support other element types
+                data_ptr,
+                &[counter_val],
+                "elem_ptr"
+            ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+        };
+        
+        let elem_val = self.builder.build_load(
+            self.context.f64_type(),
+            elem_ptr,
+            "elem"
+        ).map_err(|e| format!("Failed to load element: {:?}", e))?;
+        
+        // Bind pattern variables
+        match pattern {
+            ForPattern::Item { name, .. } => {
+                // Bind item
+                let item_alloca = self.create_entry_block_alloca(name, elem_val.get_type())?;
+                self.builder.build_store(item_alloca, elem_val)
+                    .map_err(|e| format!("Failed to store item: {:?}", e))?;
+                self.variables.insert(name.clone(), (item_alloca, elem_val.get_type()));
+            }
+            ForPattern::ItemIndex { item, index, .. } => {
+                // Bind item
+                let item_alloca = self.create_entry_block_alloca(item, elem_val.get_type())?;
+                self.builder.build_store(item_alloca, elem_val)
+                    .map_err(|e| format!("Failed to store item: {:?}", e))?;
+                self.variables.insert(item.clone(), (item_alloca, elem_val.get_type()));
+                
+                // Bind index (convert i64 to f64 for Num type)
+                let index_f64 = self.builder.build_signed_int_to_float(
+                    counter_val,
+                    self.context.f64_type(),
+                    "index_f64"
+                ).map_err(|e| format!("Failed to convert index: {:?}", e))?;
+                
+                let index_alloca = self.create_entry_block_alloca(index, index_f64.get_type().into())?;
+                self.builder.build_store(index_alloca, index_f64)
+                    .map_err(|e| format!("Failed to store index: {:?}", e))?;
+                self.variables.insert(index.clone(), (index_alloca, index_f64.get_type().into()));
+            }
+        }
+        
+        // Generate loop body code
+        let _ = self.generate_expr(body)?;
+        
+        // Increment counter: i = i + 1
+        let next_counter = self.builder.build_int_add(
+            counter_val,
+            self.context.i64_type().const_int(1, false),
+            "next_i"
+        ).map_err(|e| format!("Failed to build add: {:?}", e))?;
+        
+        self.builder.build_store(counter_alloca, next_counter)
+            .map_err(|e| format!("Failed to store next counter: {:?}", e))?;
+        
+        // Jump back to loop header
+        self.builder.build_unconditional_branch(loop_header)
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        
+        // Loop exit: position builder and return 0 (unit/void equivalent)
+        self.builder.position_at_end(loop_exit);
+        Ok(self.context.f64_type().const_float(0.0).into())
     }
 
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {

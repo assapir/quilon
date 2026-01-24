@@ -144,6 +144,14 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
         span: Span,
     },
+    
+    // For loop (collection |> for pattern => body)
+    ForLoop {
+        collection: Box<Expr>,
+        pattern: ForPattern,
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -164,6 +172,7 @@ impl Expr {
             Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
             Expr::Record { span, .. } => span,
+            Expr::ForLoop { span, .. } => span,
         }
     }
 }
@@ -185,6 +194,19 @@ pub enum Pattern {
         span: Span,
     },
     Wildcard { span: Span },
+}
+
+/// Pattern for for loops - supports both `item` and `(item, index)`
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForPattern {
+    /// Single binding: item
+    Item { name: String, span: Span },
+    /// Tuple binding: (item, index)
+    ItemIndex {
+        item: String,
+        index: String,
+        span: Span,
+    },
 }
 
 impl Pattern {

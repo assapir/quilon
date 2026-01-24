@@ -358,21 +358,48 @@ result = condition ? <
 
 ### Loops
 
-**Not yet implemented.** Currently, use recursion for iteration.
+For loops iterate over arrays and execute a block of code for each element.
+
+**Syntax:** `collection |> for pattern => body`
 
 ```quilon
-~ Example: Sum array using recursion
-sumArray = (arr :: []Num, index :: Num) -> Num => <
-  result = index >= arr.size ?
-    0
-  :
-    arr[index] + sumArray(arr, index + 1)
+~ Simple for loop - iterate over values
+[1, 2, 3, 4, 5] |> for n => <
+  print(n)
+>
+
+~ For loop with index
+["Alice", "Bob", "Charlie"] |> for (name, index) => <
+  print(index)
+  print(name)
+>
+
+~ Using for loops in function
+processItems = items :: []Num => <
+  items |> for (val, i) => <
+    result = val * (i + 1)
+    print(result)
+  >
   
-  result
+  0  ~ For loops return 0 (unit/void)
 >
 ```
 
-**Future:** While loops and for loops will be added.
+**Key Points:**
+- For loops return `Num` (0) - they are for side effects only
+- Pattern `n` binds just the element value
+- Pattern `(val, i)` binds both element and index (0-based)
+- Index is always of type `Num`
+- For transformations, use `map` instead of `for`
+
+**Example with map vs for:**
+```quilon
+~ Use map for transformations (returns new array)
+doubled = [1, 2, 3] |> map n => n * 2  ~ Returns [2, 4, 6]
+
+~ Use for for side effects (returns 0)
+[1, 2, 3] |> for n => print(n)  ~ Returns 0
+```
 
 ### Blocks
 
@@ -751,6 +778,8 @@ cargo run -- check examples/hello_world.ql
 - [x] Entry point (`>>`) with optional command-line args
 - [x] Result{T} sum type (type checking only)
 - [x] Native compilation to executables
+- [x] For loops over arrays with `|> for pattern => body`
+- [x] Pipeline operator (`|>`)
 
 ### 🚧 Partially Implemented
 
@@ -760,17 +789,17 @@ cargo run -- check examples/hello_world.ql
 
 ### ❌ Not Yet Implemented
 
-- [ ] Loops (while, for) - use recursion instead
+- [ ] While loops
 - [ ] If/else blocks (only ternary expressions available)
-- [ ] Array methods beyond .size (map, filter, etc.)
+- [ ] Array methods (map, filter, reduce, etc.)
 - [ ] Generic types (proper polymorphism)
 - [ ] Closures
 - [ ] Module system / imports
 - [ ] String operations (concatenation, interpolation)
 - [ ] Standard library
 - [ ] Full argv conversion to []String
-- [ ] Pipeline operator (`|>`)
 - [ ] Custom sum types (beyond Result)
+- [ ] For loops over struct fields (key-value iteration)
 
 ---
 

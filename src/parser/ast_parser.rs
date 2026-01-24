@@ -1,6 +1,6 @@
 // Parser implementation - simple recursive descent
 
-use crate::ast::{Expr, BinOp, UnaryOp, VarDecl, Item, Program, Param, FunctionDecl};
+use crate::ast::{Expr, BinOp, UnaryOp, VarDecl, Item, Program, Param, FunctionDecl, ForPattern};
 use crate::lexer::{Token, TokenKind, Span};
 
 pub struct Parser<'a> {
@@ -447,13 +447,61 @@ impl<'a> Parser<'a> {
 
         while self.check(&TokenKind::Pipeline) {
             self.advance();
-            let right = self.parse_additive()?;
-            let span = Span::new(left.span().start, right.span().end);
-            left = Expr::Pipeline {
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-            };
+            
+            // Check if this is a for loop: |> for pattern => body
+            if self.check(&TokenKind::For) {
+                self.advance(); // consume 'for'
+                
+                // Parse pattern: either `item` or `(item, index)`
+                let pattern = if self.check(&TokenKind::ParenOpen) {
+                    // Parse (item, index) pattern
+                    self.advance(); // consume '('
+                    
+                    let item = self.expect_ident()?;
+                    self.expect(&TokenKind::Comma)?;
+                    let index = self.expect_ident()?;
+                    
+                    self.expect(&TokenKind::ParenClose)?;
+                    let end = self.previous_span();
+                    
+                    ForPattern::ItemIndex {
+                        item,
+                        index,
+                        span: Span::new(left.span().start, end.end),
+                    }
+                } else {
+                    // Parse simple item pattern
+                    let item = self.expect_ident()?;
+                    let span = self.previous_span();
+                    
+                    ForPattern::Item {
+                        name: item,
+                        span,
+                    }
+                };
+                
+                // Expect =>
+                self.expect(&TokenKind::Arrow)?;
+                
+                // Parse body expression
+                let body = self.parse_expr()?;
+                let span = Span::new(left.span().start, body.span().end);
+                
+                left = Expr::ForLoop {
+                    collection: Box::new(left),
+                    pattern,
+                    body: Box::new(body),
+                    span,
+                };
+            } else {
+                let right = self.parse_additive()?;
+                let span = Span::new(left.span().start, right.span().end);
+                left = Expr::Pipeline {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span,
+                };
+            }
         }
 
         Ok(left)
@@ -1090,5 +1138,74 @@ mod tests {
         let tokens = Lexer::tokenize("greet = name => < msg = \"Hello\" msg >").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_parse_for_loop_simple() {
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => print(n)").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            if let Expr::ForLoop { pattern, .. } = &func.body {
+                match pattern {
+                    crate::ast::ForPattern::Item { name, .. } => {
+                        assert_eq!(name, "n");
+                    }
+                    _ => panic!("Expected simple item pattern"),
+                }
+            } else {
+                panic!("Expected for loop expression");
+            }
+        }
+    }
+    
+    #[test]
+    fn test_parse_for_loop_with_index() {
+        let tokens = Lexer::tokenize("test = => items |> for (val, i) => print(val)").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            if let Expr::ForLoop { pattern, .. } = &func.body {
+                match pattern {
+                    crate::ast::ForPattern::ItemIndex { item, index, .. } => {
+                        assert_eq!(item, "val");
+                        assert_eq!(index, "i");
+                    }
+                    _ => panic!("Expected item-index pattern"),
+                }
+            } else {
+                panic!("Expected for loop expression");
+            }
+        }
+    }
+    
+    #[test]
+    fn test_parse_for_loop_with_block_body() {
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => n * 2").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            if let Expr::ForLoop { body, .. } = &func.body {
+                // Success - we have a for loop body
+                let _ = body;
+            } else {
+                panic!("Expected for loop expression");
+            }
+        }
     }
 }
