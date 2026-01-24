@@ -1,36 +1,27 @@
 ~ Sum types (algebraic data types) example
+~ Demonstrates the built-in Result type with Ok/NotOk
 
-~ Option type pattern matching
-unwrap_or = (opt, default) => opt ?
-    | Ok(val) => val
-    | NotOk => default
+~ Creating Result values
+success = Ok(42)
+failure = NotOk("error message")
 
-~ Using the function
-x = unwrap_or(Ok(5), 0)
-y = unwrap_or(NotOk, 42)
-
-~ Result type pattern matching  
-handle_result = (res) => res ?
-    | Ok(value) => value
-    | NotOk => 0
+~ Pattern matching on numbers (simple case)
+classify = (n) => n ?
+    | 0 => "zero"
+    | 1 => "one"  
+    | 2 => "two"
+    | _ => "other"
 
 ~ Pattern matching with wildcards
-safe_divide = (a, b) => b ?
-    | 0 => NotOk
-    | _ => Ok(a)
+check_positive = (n) => n ?
+    | 0 => "zero"
+    | _ => "positive or negative"
 
-~ Nested pattern matching
-process = (opt) => opt ?
-    | Ok(val) => val ?
-        | 0 => "zero"
-        | _ => "non-zero"
-    | NotOk => "nothing"
+~ Returning Result from pattern match
+~ Note: Type inference limitations mean we can't easily
+~ pass Result values to untyped function parameters
+~ This will be improved in future versions
 
-~ Custom sum type (will need type declarations in future)
-~ For now, we can pattern match on constructor names
-
-color_name = (c) => c ?
-    | Red => "red"
-    | Green => "green"
-    | Blue => "blue"
-    | _ => "unknown"
+~ For now, demonstrate construction
+make_success = () => Ok(100)
+make_failure = () => NotOk(404)
