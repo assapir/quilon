@@ -423,6 +423,8 @@ processItems = items :: []Num => <
 - Pattern `n` binds just the element value
 - Pattern `(val, i)` binds both element and index (0-based)
 - Index is always of type `Num`
+- **Loop body can be a single expression or a block** (`< ... >`)
+- Blocks allow multiple statements in loop body
 - For transformations, use `map` instead of `for`
 
 **Example with map vs for:**

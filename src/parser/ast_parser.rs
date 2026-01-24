@@ -644,7 +644,12 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::Arrow)?;
                 
                 // Parse body expression
-                let body = self.parse_expr()?;
+                // Allow blocks in for loop bodies by checking explicitly
+                let body = if self.check(&TokenKind::BlockOpen) {
+                    self.parse_block()?
+                } else {
+                    self.parse_expr()?
+                };
                 let span = Span::new(left.span().start, body.span().end);
                 
                 left = Expr::ForLoop {
@@ -1436,7 +1441,7 @@ mod tests {
     
     #[test]
     fn test_parse_for_loop_with_block_body() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => n * 2").unwrap();
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
@@ -1446,12 +1451,27 @@ mod tests {
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             if let Expr::ForLoop { body, .. } = &func.body {
-                // Success - we have a for loop body
-                let _ = body;
+                // Body should be a block
+                match body.as_ref() {
+                    Expr::Block { .. } => {
+                        // Success - body is a block
+                    }
+                    _ => panic!("Expected block expression in for loop body"),
+                }
             } else {
                 panic!("Expected for loop expression");
             }
         }
+    }
+    
+    #[test]
+    fn test_parse_nested_for_loops_with_blocks() {
+        let tokens = Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
     }
     
     #[test]

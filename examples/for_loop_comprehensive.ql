@@ -22,8 +22,14 @@ iterateWithIndex = () -> Num => <
 nestedLoops = () -> Num => <
   rows = [1, 2, 3]
   
-  ~ Nested iteration
-  rows |> for row => rows |> for col => row * col
+  ~ Nested iteration with blocks
+  rows |> for row => <
+    cols = [10, 20, 30]
+    cols |> for col => <
+      product = row * col
+      product
+    >
+  >
   
   0
 >
@@ -47,7 +53,13 @@ arrayOfArrays = () -> Num => <
     [7, 8, 9]
   ]
   
-  matrix |> for (row, i) => row |> for (val, j) => val
+  ~ Nested loops with blocks
+  matrix |> for (row, i) => <
+    row |> for (val, j) => <
+      sum = i + j + val
+      sum
+    >
+  >
   
   0
 >
