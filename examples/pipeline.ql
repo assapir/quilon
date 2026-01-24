@@ -1,11 +1,13 @@
-~ Pipeline example showing auto-parallelization
+~ Pipeline example
+~ (map, filter, fold will be added as array methods later)
 
-numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+~ Simple pipeline example
+double = x :: Num => x * 2
+addFive = x :: Num => x + 5
 
-~ This automatically parallelizes!
-result = numbers
-  |> filter (x => x % 2 == 0)  ~ keep even numbers
-  |> map (x => x * x)          ~ square them
-  |> fold 0 (acc, x => acc + x) ~ sum them
-
-main = => print "Sum of squares of evens: <result>"
+>> = () -> Num => <
+  ~ Pipeline operator chains operations
+  result = 10 |> double |> addFive
+  
+  result  ~ Returns 25
+>

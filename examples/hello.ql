@@ -1,4 +1,3 @@
 ~ Hello World in Quilon
-main = => <
-  print "Hello, World!"
->
+~ Returns 42 (print will be added later as a builtin)
+>> = () -> Num => 42

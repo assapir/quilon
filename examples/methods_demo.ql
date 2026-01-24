@@ -1,4 +1,4 @@
-~ Methods on Structs - Example (Not Yet Fully Implemented)
+~ Methods on Structs - Fully Implemented
 
 ~ Define a User type with methods
 User = {
@@ -8,8 +8,7 @@ User = {
   ~ Methods with implicit "it" parameter
   getName = => it.name,
   getAge = => it.age,
-  incrementAge = amount => it.age + amount,
-  greet = => "Hello, " + it.name,
+  incrementAge = amount :: Num => it.age + amount,
   isAdult = => it.age >= 18
 }
 
@@ -21,13 +20,10 @@ User = {
   name = user.getName()           ~ Returns "Alice"
   age = user.getAge()             ~ Returns 30
   newAge = user.incrementAge(5)   ~ Returns 35
-  greeting = user.greet()         ~ Returns "Hello, Alice"
-  adult = user.isAdult()          ~ Returns true
+  adult = user.isAdult()          ~ Returns true (1)
   
   ~ Methods can be chained (if they return the right type)
-  ~ message = user.getName().toUpper()  ~ Future feature
+  ~ message = user.getName().toUpper()  ~ Future: String methods
   
-  print(greeting)
-  
-  0
+  newAge
 >
