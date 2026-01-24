@@ -110,12 +110,25 @@ impl Environment {
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
+    
+    pub fn update_type(&mut self, name: &str, new_type: Type) -> Result<(), ()> {
+        // Update a binding's type (used for function type inference)
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(symbol) = scope.get_mut(name) {
+                symbol.type_ = new_type;
+                return Ok(());
+            }
+        }
+        Err(())
+    }
 }
 
 pub struct TypeChecker {
     env: Environment,
     // Registry of methods: (TypeName, MethodName) -> (Params, ReturnType, Body)
     methods: std::collections::HashMap<(String, String), (Vec<Param>, Option<Type>, Expr)>,
+    // Registry of sum types: TypeName -> Type::Sum
+    sum_types: std::collections::HashMap<String, Type>,
 }
 
 impl TypeChecker {
@@ -123,6 +136,7 @@ impl TypeChecker {
         let mut checker = TypeChecker {
             env: Environment::new(),
             methods: std::collections::HashMap::new(),
+            sum_types: std::collections::HashMap::new(),
         };
         
         // Add built-in sum types to the environment
@@ -135,26 +149,30 @@ impl TypeChecker {
         use crate::ast::{SumVariant, Type};
         use crate::lexer::Span;
         
-        // Unified Result{T} type with OK and NotOK constructors
-        // Replaces both Option and Result with a single type
+        // Unified Result{T} type with Ok and NotOk constructors
+        // Ok(value) for success, NotOk(error) for failure
         let result_type = Type::Sum {
             name: "Result".to_string(),
             variants: vec![
                 SumVariant {
-                    name: "OK".to_string(),
+                    name: "Ok".to_string(),
                     fields: vec![Type::Generic {
                         name: "T".to_string(),
                         args: vec![],
                     }],
                 },
                 SumVariant {
-                    name: "NotOK".to_string(),
-                    fields: vec![],
+                    name: "NotOk".to_string(),
+                    fields: vec![Type::Generic {
+                        name: "E".to_string(),
+                        args: vec![],
+                    }],
                 },
             ],
         };
         
-        // Register Result type
+        // Register Result type in both env and sum_types registry
+        self.sum_types.insert("Result".to_string(), result_type.clone());
         let _ = self.env.define(
             "Result".to_string(),
             result_type.clone(),
@@ -183,9 +201,14 @@ impl TypeChecker {
         
         // Build the type from the definition
         let type_value = match &decl.type_def {
-            TypeDef::Sum(variants) => Type::Sum {
-                name: decl.name.clone(),
-                variants: variants.clone(),
+            TypeDef::Sum(variants) => {
+                let sum_type = Type::Sum {
+                    name: decl.name.clone(),
+                    variants: variants.clone(),
+                };
+                // Register the sum type for constructor lookup
+                self.sum_types.insert(decl.name.clone(), sum_type.clone());
+                sum_type
             },
             TypeDef::Record { fields, methods } => {
                 // Type-check each method
@@ -312,18 +335,16 @@ impl TypeChecker {
         if let Some(ref annotated_type) = decl.return_type {
             self.check_type_compatibility(annotated_type, &body_type, &decl.span)?;
         } else {
-            // If no annotation, verify inferred type matches what we assumed
+            // Update the function type with the inferred return type
             if body_type != preliminary_return_type {
-                // Update the function type in environment with correct inferred type
                 let correct_func_type = Type::Function {
                     params: param_types,
                     return_type: Box::new(body_type.clone()),
                 };
-                // We need to update the binding - for now, just verify they match
-                self.check_type_compatibility(&preliminary_return_type, &body_type, &decl.span)?;
+                let _ = self.env.update_type(&decl.name, correct_func_type);
             }
         }
-
+        
         Ok(())
     }
 
@@ -667,6 +688,41 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, func: &Expr, args: &[Expr], span: &Span) -> Result<Type, TypeError> {
+        // Check if this is a sum type constructor call: Ok(42), NotOk, etc.
+        if let Expr::Ident { name: constructor_name, .. } = func {
+            // Clone sum_types to avoid borrow conflicts
+            let sum_types = self.sum_types.clone();
+            
+            // Look for a sum type that has this constructor
+            for (_type_name, sum_type) in sum_types.iter() {
+                if let Type::Sum { name: sum_name, variants } = sum_type {
+                    // Check if any variant matches the constructor name
+                    if let Some(variant) = variants.iter().find(|v| &v.name == constructor_name) {
+                        // Validate argument count
+                        if variant.fields.len() != args.len() {
+                            return Err(TypeError::WrongNumberOfArguments {
+                                expected: variant.fields.len(),
+                                got: args.len(),
+                                span: span.clone(),
+                            });
+                        }
+                        
+                        // Type check each argument
+                        for (field_type, arg) in variant.fields.iter().zip(args.iter()) {
+                            let arg_type = self.infer_expr(arg)?;
+                            self.check_type_compatibility(field_type, &arg_type, span)?;
+                        }
+                        
+                        // Return the sum type
+                        return Ok(Type::Sum {
+                            name: sum_name.clone(),
+                            variants: variants.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        
         // Check if this is a method call: func is Ident and first arg is a Named type
         if let Expr::Ident { name, .. } = func {
             if !args.is_empty() {
@@ -874,14 +930,21 @@ impl TypeChecker {
     }
 
     fn check_type_compatibility(&self, expected: &Type, got: &Type, span: &Span) -> Result<(), TypeError> {
-        if expected == got {
-            Ok(())
-        } else {
-            Err(TypeError::TypeMismatch {
-                expected: expected.clone(),
-                got: got.clone(),
-                span: span.clone(),
-            })
+        // Allow any type to match a generic type parameter
+        match expected {
+            Type::Generic { .. } => Ok(()),
+            _ => match got {
+                Type::Generic { .. } => Ok(()),
+                _ => if expected == got {
+                    Ok(())
+                } else {
+                    Err(TypeError::TypeMismatch {
+                        expected: expected.clone(),
+                        got: got.clone(),
+                        span: span.clone(),
+                    })
+                }
+            }
         }
     }
 }
