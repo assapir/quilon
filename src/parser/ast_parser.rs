@@ -1105,6 +1105,7 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
+    use crate::ast::Type;
 
     #[test]
     fn test_parse_number() {
@@ -1388,6 +1389,29 @@ mod tests {
         let tokens = Lexer::tokenize("greet = name => < msg = \"Hello\" msg >").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_parse_no_param_function_with_return_type() {
+        let tokens = Lexer::tokenize("greet = () -> String => \"Hello\"").unwrap();
+        let result = parse(&tokens);
+        if result.is_err() {
+            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        }
+        assert!(result.is_ok());
+        
+        let program = result.unwrap();
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            assert_eq!(func.params.len(), 0);
+            assert!(func.return_type.is_some());
+            if let Some(Type::String) = func.return_type {
+                // Success
+            } else {
+                panic!("Expected String return type");
+            }
+        } else {
+            panic!("Expected FunctionDecl");
+        }
     }
     
     #[test]
