@@ -1,19 +1,21 @@
-//! Runtime intrinsics linked into every compiled Quilon program.
+//! Quilon runtime intrinsics — linked into every compiled Quilon program.
 //!
-//! These are `#[unsafe(no_mangle)] extern "C"` symbols so they resolve identically from
-//! the in-process LLVM JIT (`quilon run`, via the execution engine's process
-//! symbol lookup) and from ahead-of-time linked executables. The code generator
-//! declares matching external prototypes and emits calls to these names; see
-//! `CodeGenerator::get_intrinsic`.
+//! These are `#[unsafe(no_mangle)] extern "C"` symbols so they resolve identically
+//! from the in-process LLVM JIT (`quilon run`, via `add_global_mapping`) and from
+//! ahead-of-time-linked native executables (`quilon compile` -> `llc` -> `gcc`,
+//! linking `libquilon_rt.a`). The code generator declares matching external
+//! prototypes and emits calls to these names; see `CodeGenerator::get_intrinsic`.
+//!
+//! This crate is built as both a `staticlib` (`libquilon_rt.a`, for AOT linking)
+//! and an `rlib` (so the `quilon` binary embeds the same symbols for the JIT).
 //!
 //! Memory is managed by the Boehm conservative GC (libgc). `__alloc` forwards to
 //! `GC_malloc` and `__gc_init` to `GC_init`; both are referenced here so the
-//! linker keeps libgc loaded (see `build.rs`).
+//! linker keeps libgc loaded. libgc must be installed (`libgc-dev` / `gc`).
+//! When linking an AOT binary with gcc, pass `-lgc` explicitly (the `#[link]`
+//! directive below only drives rustc's own links, not a downstream gcc invocation).
 
 use std::ffi::CStr;
-use std::fs::File;
-use std::io::Write;
-use std::os::fd::FromRawFd;
 use std::os::raw::{c_char, c_void};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -108,14 +110,35 @@ pub extern "C" fn __print_text_fd(fd: i64, ptr: *const c_char) {
 }
 
 /// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
+///
+/// Uses libc `write(2)` directly rather than `std::fs::File`. AOT-linked native
+/// binaries enter through the LLVM-generated C `main`, so the Rust std runtime is
+/// never initialized and std's higher-level I/O does not work there — a raw
+/// syscall does, and resolves identically under the JIT.
 fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
-    // SAFETY: `fd` is a live descriptor owned by the running program; we wrap it
-    // only to write, then `forget` the File so its Drop does not close the fd.
-    let mut file = unsafe { File::from_raw_fd(fd as i32) };
-    let written = file.write(bytes).unwrap_or(0);
-    let _ = file.flush();
-    std::mem::forget(file);
-    written as i64
+    if bytes.is_empty() {
+        return 0;
+    }
+    // SAFETY: `fd` is a live descriptor owned by the running program; we only
+    // write to it (never close it). `buf`/`count` describe a valid byte slice.
+    unsafe extern "C" {
+        fn write(fd: i32, buf: *const c_void, count: usize) -> isize;
+    }
+    let mut total = 0usize;
+    while total < bytes.len() {
+        let n = unsafe {
+            write(
+                fd as i32,
+                bytes[total..].as_ptr() as *const c_void,
+                bytes.len() - total,
+            )
+        };
+        if n <= 0 {
+            break;
+        }
+        total += n as usize;
+    }
+    total as i64
 }
 
 fn cstr_to_str<'a>(ptr: *const c_char) -> Option<std::borrow::Cow<'a, str>> {

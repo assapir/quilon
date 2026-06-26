@@ -5,6 +5,9 @@ edition = "2024"
 authors = ["Assaf Sapir <assaf@sapir.io>"]
 description = "A fast, statically-typed web programming language"
 
+[workspace]
+members = ["quilon-rt"]
+
 [dependencies]
 # LLVM code generation - using latest Inkwell with LLVM 21
 inkwell = { version = "0.9", features = ["llvm21-1"] }
@@ -12,8 +15,10 @@ inkwell = { version = "0.9", features = ["llvm21-1"] }
 # Lexing
 logos = "0.16"
 
-# Unicode-aware text operations (grapheme cluster counting for Text.length)
-unicode-segmentation = "1"
-
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+
+# Runtime intrinsics (GC alloc, grapheme counting, output). Linked as an rlib so
+# the JIT resolves the same `#[no_mangle]` symbols it maps; also built as a
+# staticlib (`libquilon_rt.a`) for ahead-of-time-linked native binaries.
+quilon-rt = { path = "quilon-rt" }
