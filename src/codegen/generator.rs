@@ -70,6 +70,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
 
+        // Initialize the Boehm GC before any user code runs. Compiled programs
+        // allocate heap memory (Text, sum payloads) via GC_malloc.
+        let gc_init = self.get_intrinsic("__gc_init")?;
+        self.builder
+            .build_call(gc_init, &[], "")
+            .map_err(|e| format!("Failed to call GC init: {:?}", e))?;
+
         // Get the ^ (entry point) function
         let user_entry = self
             .module
@@ -542,6 +549,100 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Declare (once) and return an external runtime intrinsic by its
+    /// Quilon-internal name. These resolve to `#[no_mangle]` symbols in
+    /// `src/runtime/intrinsics.rs` (or libc, e.g. `memcpy`) — available both to
+    /// the in-process JIT and to AOT-linked executables.
+    fn get_intrinsic(&self, name: &str) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let ctx = self.context;
+        let ptr = ctx.ptr_type(AddressSpace::default());
+        let i64t = ctx.i64_type();
+        let f64t = ctx.f64_type();
+        let void = ctx.void_type();
+        let fn_type = match name {
+            // i8* __alloc(i64) — GC-managed allocation.
+            "__alloc" => ptr.fn_type(&[i64t.into()], false),
+            // void __gc_init() — initialize the Boehm GC.
+            "__gc_init" => void.fn_type(&[], false),
+            // i8* memcpy(i8*, i8*, i64) — libc.
+            "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
+            // i64 __text_length(i8*, i64) — grapheme-cluster count.
+            "__text_length" => i64t.fn_type(&[ptr.into(), i64t.into()], false),
+            // void __print_num(double) / __println_num(double).
+            "__print_num" | "__println_num" => void.fn_type(&[f64t.into()], false),
+            // void __print_cstr(i8*) / __println_cstr(i8*).
+            "__print_cstr" | "__println_cstr" => void.fn_type(&[ptr.into()], false),
+            other => return Err(format!("Unknown runtime intrinsic: {}", other)),
+        };
+        Ok(self.module.add_function(name, fn_type, None))
+    }
+
+    /// Lower a `print`/`println` builtin call. Dispatches on the static LLVM type
+    /// of the (single) argument: floats print as numbers, pointers as C strings,
+    /// integers (incl. bools) are widened to numbers. Yields `Num` 0, so a print
+    /// is usable in expression position.
+    fn generate_print(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "{} expects exactly 1 argument, got {}",
+                name,
+                args.len()
+            ));
+        }
+        let newline = name == "println";
+        let val = self.generate_expr(&args[0])?;
+        let (intrinsic, arg): (&str, inkwell::values::BasicMetadataValueEnum) = match val {
+            BasicValueEnum::FloatValue(f) => (
+                if newline {
+                    "__println_num"
+                } else {
+                    "__print_num"
+                },
+                f.into(),
+            ),
+            BasicValueEnum::PointerValue(p) => (
+                if newline {
+                    "__println_cstr"
+                } else {
+                    "__print_cstr"
+                },
+                p.into(),
+            ),
+            BasicValueEnum::IntValue(i) => {
+                let f = self
+                    .builder
+                    .build_unsigned_int_to_float(i, self.context.f64_type(), "print_num")
+                    .map_err(|e| format!("Failed to convert int for print: {:?}", e))?;
+                (
+                    if newline {
+                        "__println_num"
+                    } else {
+                        "__print_num"
+                    },
+                    f.into(),
+                )
+            }
+            other => {
+                return Err(format!(
+                    "print does not support a value of type {:?}",
+                    other.get_type()
+                ));
+            }
+        };
+        let print_fn = self.get_intrinsic(intrinsic)?;
+        self.builder
+            .build_call(print_fn, &[arg], "")
+            .map_err(|e| format!("Failed to build print call: {:?}", e))?;
+        Ok(self.context.f64_type().const_float(0.0).into())
+    }
+
     fn generate_call(
         &mut self,
         func: &Expr,
@@ -553,6 +654,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             return Err("Only direct function calls supported".to_string());
         };
+
+        // Core IO builtins, lowered to runtime intrinsics (see runtime::intrinsics).
+        match func_name.as_str() {
+            "print" | "println" => return self.generate_print(func_name, args),
+            _ => {}
+        }
 
         // Check if this is a sum type constructor (Ok, NotOk, etc.)
         // For now, hardcode the builtin Result constructors
