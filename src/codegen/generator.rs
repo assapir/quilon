@@ -608,40 +608,47 @@ impl<'ctx> CodeGenerator<'ctx> {
         tag: u8,
         args: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // Tagged union layout: { i8 tag, f64 payload }
-        // This is a simplified representation - proper implementation would use
-        // actual union types and support multiple payload types
-
+        // Tagged-union layout: { i8 tag, <payload> }.
+        // The payload field is typed as the actual payload value's LLVM type:
+        //   Ok(42)        -> { i8 0, double 42.0 }
+        //   NotOk("err")  -> { i8 1, ptr <str> }
+        // Numeric payloads are normalized to f64 so the canonical Result type
+        // (see `type_to_llvm` for `Type::Sum`) is { i8, double }. Non-numeric
+        // payloads (pointers, structs) are stored at their real type without
+        // coercion. This fixes the previous bug where every payload was forced
+        // to f64, so `NotOk("error")` silently became `{ i8 1, double 0.0 }`.
+        //
+        // NOTE: a single Result *value* therefore carries one concrete payload
+        // type. Unifying different payload types behind one value (e.g. a
+        // branch yielding `Ok(num)` or `NotOk(text)`, or a function returning a
+        // non-numeric Result) needs a sized union and is deferred — the
+        // canonical return-position representation here is numeric.
         let i8_type = self.context.i8_type();
         let f64_type = self.context.f64_type();
-
-        // Create struct type for Result
-        let result_struct = self
-            .context
-            .struct_type(&[i8_type.into(), f64_type.into()], false);
 
         // Create the tag value
         let tag_val = i8_type.const_int(tag as u64, false);
 
-        // Generate the payload value (first argument, or 0.0 if none)
-        let payload_val = if !args.is_empty() {
-            let arg_val = self.generate_expr(&args[0])?;
-            // Convert to f64 if needed
+        // Generate the payload value at its real type (first argument, or 0.0
+        // if the variant has no payload), normalizing integers to f64.
+        let payload_val: BasicValueEnum = if let Some(arg) = args.first() {
+            let arg_val = self.generate_expr(arg)?;
             match arg_val {
-                BasicValueEnum::FloatValue(f) => f,
-                BasicValueEnum::IntValue(i) => {
-                    // Convert int to float
-                    self.builder
-                        .build_unsigned_int_to_float(i, f64_type, "inttofloat")
-                        .map_err(|e| format!("Failed to convert int to float: {:?}", e))?
-                }
-                _ => f64_type.const_float(0.0), // Default for unsupported types
+                BasicValueEnum::IntValue(i) => self
+                    .builder
+                    .build_unsigned_int_to_float(i, f64_type, "inttofloat")
+                    .map_err(|e| format!("Failed to convert int to float: {:?}", e))?
+                    .into(),
+                other => other,
             }
         } else {
-            f64_type.const_float(0.0)
+            f64_type.const_float(0.0).into()
         };
 
-        // Build the struct value
+        // Build the Result struct sized to the payload's real LLVM type.
+        let result_struct = self
+            .context
+            .struct_type(&[i8_type.into(), payload_val.get_type()], false);
         let undef = result_struct.get_undef();
         let with_tag = self
             .builder
@@ -1453,6 +1460,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map(|(_name, ty)| self.type_to_llvm(ty))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.context.struct_type(&field_types, false).into())
+            }
+            Type::Sum { .. } => {
+                // Canonical Result representation: { i8 tag, double payload }.
+                // Matches the numeric payload built by `generate_sum_constructor`,
+                // which lets functions declare `-> Result`. Non-numeric payloads
+                // in return position are not yet unified (see the note there).
+                Ok(self
+                    .context
+                    .struct_type(
+                        &[
+                            self.context.i8_type().into(),
+                            self.context.f64_type().into(),
+                        ],
+                        false,
+                    )
+                    .into())
             }
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }

@@ -1033,6 +1033,52 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(crate::ast::Type::Bool)
             }
+            "Result" => {
+                self.advance();
+                // Optional generic args, e.g. `Result{T, E}` — consumed and
+                // ignored for now (the builtin Result is monomorphic in codegen).
+                if self.check(&TokenKind::BraceOpen) {
+                    let mut depth = 0usize;
+                    loop {
+                        if self.check(&TokenKind::BraceOpen) {
+                            depth += 1;
+                            self.advance();
+                        } else if self.check(&TokenKind::BraceClose) {
+                            self.advance();
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        } else if self.is_at_end() {
+                            break;
+                        } else {
+                            self.advance();
+                        }
+                    }
+                }
+                // Must match `add_builtins` in the type checker exactly so that a
+                // declared `-> Result` is equal to an inferred `Ok(..)`/`NotOk(..)`
+                // body type under `check_type_compatibility`.
+                Ok(crate::ast::Type::Sum {
+                    name: "Result".to_string(),
+                    variants: vec![
+                        crate::ast::SumVariant {
+                            name: "Ok".to_string(),
+                            fields: vec![crate::ast::Type::Generic {
+                                name: "T".to_string(),
+                                args: vec![],
+                            }],
+                        },
+                        crate::ast::SumVariant {
+                            name: "NotOk".to_string(),
+                            fields: vec![crate::ast::Type::Generic {
+                                name: "E".to_string(),
+                                args: vec![],
+                            }],
+                        },
+                    ],
+                })
+            }
             _ => Err(ParseError {
                 message: format!("Expected type, got {:?}", token.kind),
                 span: token.span.clone(),
