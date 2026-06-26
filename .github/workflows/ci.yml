@@ -8,6 +8,9 @@ env:
   CARGO_TERM_COLOR: always
   # inkwell's llvm-sys (LLVM 21.x) looks for this prefix to find the toolchain.
   LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+  # Strict: any compiler/rustdoc warning is a hard error in build, test, and doc.
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
 
 jobs:
   build-and-test:
@@ -56,14 +59,12 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      # Non-blocking for now: the codebase is mid-construction (intentional stubs,
-      # dead-code variants the 0.9 features will start using). Tighten to
-      # `-- -D warnings` once the 0.9 "stable basics" workstreams land.
+      # Strict: clippy warnings (including its lints over all targets/features) are errors.
       - name: Clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --all-targets --verbose
 
       - name: Test
         run: cargo test --verbose

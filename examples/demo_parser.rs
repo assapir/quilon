@@ -39,15 +39,10 @@ fn main() {
                     println!("✓ Parsed successfully");
                     println!("  Items: {}", program.items.len());
 
-                    if let Some(item) = program.items.first() {
-                        match item {
-                            quilon::ast::Item::VarDecl(decl) => {
-                                println!("  Variable: {}", decl.name);
-                                println!("  Mutable: {}", decl.mutable);
-                                println!("  Type: {:?}", decl.type_annotation);
-                            }
-                            _ => {}
-                        }
+                    if let Some(quilon::ast::Item::VarDecl(decl)) = program.items.first() {
+                        println!("  Variable: {}", decl.name);
+                        println!("  Mutable: {}", decl.mutable);
+                        println!("  Type: {:?}", decl.type_annotation);
                     }
                 }
                 Err(e) => {

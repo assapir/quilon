@@ -1,4 +1,10 @@
-// Type inference engine using unification
+// Type inference engine using unification.
+//
+// This module is forward-looking scaffolding: a Hindley–Milner-style unifier that
+// is not yet wired into the 0.9 checker (which does local inference directly).
+// Allowed dead_code so the API can land ahead of the integration work; the large
+// `Err` variant is fine here since these helpers are not on any hot path yet.
+#![allow(dead_code, clippy::result_large_err)]
 
 use crate::ast::Type;
 use std::collections::HashMap;
@@ -29,6 +35,12 @@ pub enum InferType {
 #[derive(Debug, Clone)]
 pub struct Substitution {
     map: HashMap<TypeVar, InferType>,
+}
+
+impl Default for Substitution {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Substitution {
@@ -77,7 +89,7 @@ impl Substitution {
 
     pub fn compose(&mut self, other: &Substitution) {
         // Apply other to all bindings in self
-        for (var, ty) in &mut self.map {
+        for ty in self.map.values_mut() {
             *ty = other.apply(ty);
         }
 

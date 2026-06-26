@@ -3,19 +3,11 @@
 use crate::lexer::{Span, Token, TokenKind};
 use logos::Logos;
 
-pub struct Lexer<'source> {
-    source: &'source str,
-    lexer: logos::Lexer<'source, TokenKind>,
-}
+/// Namespace for the lexer's entry point. Tokenizing is a single batch call
+/// (`Lexer::tokenize`); there is no streaming/stateful lexer.
+pub struct Lexer;
 
-impl<'source> Lexer<'source> {
-    pub fn new(source: &'source str) -> Self {
-        Self {
-            source,
-            lexer: TokenKind::lexer(source),
-        }
-    }
-
+impl Lexer {
     /// Tokenize the entire source and return all tokens
     pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
@@ -54,33 +46,6 @@ impl<'source> Lexer<'source> {
         }
 
         Ok(tokens)
-    }
-
-    /// Get the next token
-    pub fn next_token(&mut self) -> Result<Token, LexerError> {
-        match self.lexer.next() {
-            Some(Ok(kind)) => {
-                let span = self.lexer.span();
-                let text = self.source[span.clone()].to_string();
-                Ok(Token::new(kind, Span::new(span.start, span.end), text))
-            }
-            Some(Err(_)) => {
-                let span = self.lexer.span();
-                let text = self.source[span.clone()].to_string();
-                Err(LexerError {
-                    message: format!("Invalid token: '{}'", text),
-                    span: Span::new(span.start, span.end),
-                })
-            }
-            None => {
-                let pos = self.source.len();
-                Ok(Token::new(
-                    TokenKind::Eof,
-                    Span::new(pos, pos),
-                    String::new(),
-                ))
-            }
-        }
     }
 }
 
