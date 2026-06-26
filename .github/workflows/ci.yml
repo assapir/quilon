@@ -29,9 +29,11 @@ jobs:
         run: |
           set -euxo pipefail
           # libgc-dev provides Boehm GC (GC_malloc / GC_init), used by the runtime.
-          # gcc is needed for the AOT link smoke test; llc ships with LLVM.
+          # `quilon build` emits the object in-process and links with the system C
+          # toolchain; the JIT/AOT parity gate exercises BOTH linkers, so install
+          # gcc AND clang. (llc still ships with LLVM for the manual compile flow.)
           sudo apt-get update
-          sudo apt-get install -y libgc-dev gcc
+          sudo apt-get install -y libgc-dev gcc clang
           # Install LLVM 21 via the official apt script (sets up the apt.llvm.org repo
           # and installs clang/llc-21).
           wget https://apt.llvm.org/llvm.sh
