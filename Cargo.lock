@@ -191,9 +191,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "llvm-sys"
-version = "211.0.1"
+version = "221.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44007a7a44b73bdd877fa9c9ccef256036511220e90f65b4d50e7a15773c0ee3"
+checksum = "2abcc34a3b190f03c2a61b555f218f529589ff13657bdd2ff8ac3e85f2abe6bb"
 dependencies = [
  "anyhow",
  "cc",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "quilon"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "clap",
  "inkwell",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "quilon-rt"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "unicode-segmentation",
 ]

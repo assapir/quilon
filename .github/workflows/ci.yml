@@ -6,8 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # inkwell's llvm-sys (LLVM 21.x) looks for this prefix to find the toolchain.
-  LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+  # inkwell's llvm-sys (LLVM 22.x) looks for this prefix to find the toolchain.
+  LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
   # Strict: any compiler/rustdoc warning is a hard error in build, test, and doc.
   RUSTFLAGS: "-D warnings"
   RUSTDOCFLAGS: "-D warnings"
@@ -18,14 +18,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Install LLVM 21 and system dependencies
+      - name: Install LLVM 22 and system dependencies
         run: |
           set -euxo pipefail
           # libgc-dev provides Boehm GC (GC_malloc / GC_init), used by the runtime.
@@ -34,18 +34,19 @@ jobs:
           # gcc AND clang. (llc still ships with LLVM for the manual compile flow.)
           sudo apt-get update
           sudo apt-get install -y libgc-dev gcc clang
-          # Install LLVM 21 via the official apt script (sets up the apt.llvm.org repo
-          # and installs clang/llc-21).
+          # Install LLVM 22 via the official apt script (sets up the apt.llvm.org repo
+          # and installs clang/llc-22). LLVM 22 currently lives in apt.llvm.org's
+          # development channel.
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
+          sudo ./llvm.sh 22
           # inkwell links llvm-sys *statically* by default, which needs the LLVM dev
           # libraries including the Polly static lib (libPolly.a). llvm.sh alone does
           # not install these, so pull them in explicitly.
-          sudo apt-get install -y llvm-21-dev libpolly-21-dev
-          # Make the unversioned `llc` resolve to the LLVM 21 build for the AOT step.
-          sudo ln -sf /usr/lib/llvm-21/bin/llc /usr/local/bin/llc
-          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev
+          # Make the unversioned `llc` resolve to the LLVM 22 build for the AOT step.
+          sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
       - name: Cache cargo
         uses: actions/cache@v4

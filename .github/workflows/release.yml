@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM 22 and system dependencies
+        run: |
+          set -euxo pipefail
+          # Same toolchain as CI: Boehm GC + both C linkers, LLVM 22 dev libs.
+          sudo apt-get update
+          sudo apt-get install -y libgc-dev gcc clang
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev
+          sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Build release
+        run: cargo build --release --bin quilon
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/quilon
+          generate_release_notes: true
+          body: |
+            ## Quilon ${{ github.ref_name }} — "Stable basics"
+
+            A stable, verified **core** of the Quilon language — **not yet
+            feature-complete**. Programs run via `quilon run` (in-process LLVM
+            JIT) or compile to native executables via `quilon build`.
+
+            Highlights: `^` entry point (implicit exit-0), `<<`/`>>` modules,
+            `|>` first-argument-injection pipe, `for n <- collection => body`
+            loops, the built-in `Text` type, `core.io` (`print`/`eprint`/`write`),
+            sum types with pattern matching, methods on records, and conservative
+            (Boehm) GC. Built against LLVM 22.
+
+            **Known limitations:** no generics yet (so `Text`/non-numeric values
+            inside records, arrays, or `Ok`/`NotOk` payloads are unsupported — numeric
+            payloads work), no closures / `while` loops / user-defined sum types,
+            dynamic `libgc`, placeholder `argv`. See CHANGELOG.md for the full list.
+
+            The attached `quilon` binary is a dynamically-linked Linux x86-64 build
+            (requires `libgc` at runtime).
