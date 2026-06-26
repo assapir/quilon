@@ -1,5 +1,6 @@
 mod ast;
 mod codegen;
+mod driver;
 mod jit;
 mod lexer;
 mod modules;
@@ -8,20 +9,7 @@ mod runtime;
 mod typechecker;
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-
-/// Resolve `program`'s `<<` imports (relative to `file`) and prepend the imported exported
-/// items, returning the linked program ready for type checking and codegen. Exits on error.
-fn link_imports(program: ast::Program, file: &std::path::Path) -> ast::Program {
-    let base_dir = file.parent().unwrap_or_else(|| std::path::Path::new("."));
-    match modules::link(program, base_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ Import error: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "quilon")]
@@ -53,65 +41,36 @@ enum Commands {
     },
 }
 
+/// Run the shared front-end (read → lex → parse → resolve imports → type-check),
+/// printing the diagnostic and exiting on any failure.
+fn checked_program(file: &Path) -> ast::Program {
+    match driver::front_end(file) {
+        Ok(program) => program,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Exit with the standard diagnostic unless `program` defines the `^` entry point
+/// required to build an executable (compile/run, but not check).
+fn require_entry_point(program: &ast::Program) {
+    if !driver::has_entry_point(program) {
+        eprintln!("❌ Error: No entry point found!");
+        eprintln!("   Programs must define a ^ function as the entry point.");
+        eprintln!("   Example: ^ = () -> Num => 0");
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Run { file } => {
-            // Read the file
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("❌ Error reading file: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Lex
-            let tokens = match lexer::Lexer::tokenize(&source) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("❌ Lexer error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Parse
-            let program = match parser::parse(&tokens) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("❌ Parse error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Resolve `<<` imports (e.g. `core.io`) into the program before
-            // type checking, so imported items like `print` are in scope —
-            // same as `compile`/`check`.
-            let program = link_imports(program, &file);
-
-            // Type check
-            let mut checker = typechecker::TypeChecker::new();
-            if let Err(e) = checker.check_program(&program) {
-                eprintln!("❌ Type error: {}", e);
-                std::process::exit(1);
-            }
-
-            // Validate entry point exists (^ function required for executables)
-            let has_entry_point = program.items.iter().any(|item| {
-                if let ast::Item::FunctionDecl(func) = item {
-                    func.name == "^"
-                } else {
-                    false
-                }
-            });
-
-            if !has_entry_point {
-                eprintln!("❌ Error: No entry point found!");
-                eprintln!("   Programs must define a ^ function as the entry point.");
-                eprintln!("   Example: ^ = () -> Num => 0");
-                std::process::exit(1);
-            }
+            let program = checked_program(&file);
+            require_entry_point(&program);
 
             // JIT-compile and execute in-process; the entry point's value
             // becomes the program's exit code.
@@ -126,63 +85,9 @@ fn main() {
         Commands::Compile { file, output } => {
             println!("🔨 Compiling: {}", file.display());
 
-            // Read the file
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("❌ Error reading file: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Lex
-            let tokens = match lexer::Lexer::tokenize(&source) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("❌ Lexer error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Parse
-            let program = match parser::parse(&tokens) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("❌ Parse error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Resolve `<<` imports and merge exported module items.
-            let program = link_imports(program, &file);
-
-            // Type check
-            let mut checker = typechecker::TypeChecker::new();
-            match checker.check_program(&program) {
-                Ok(()) => {
-                    println!("✅ Type checking passed!");
-                }
-                Err(e) => {
-                    eprintln!("❌ Type error: {}", e);
-                    std::process::exit(1);
-                }
-            }
-
-            // Validate entry point exists (^ function required for executables)
-            let has_entry_point = program.items.iter().any(|item| {
-                if let ast::Item::FunctionDecl(func) = item {
-                    func.name == "^"
-                } else {
-                    false
-                }
-            });
-
-            if !has_entry_point {
-                eprintln!("❌ Error: No entry point found!");
-                eprintln!("   Programs must define a ^ function as the entry point.");
-                eprintln!("   Example: ^ = () -> Num => 0");
-                std::process::exit(1);
-            }
+            let program = checked_program(&file);
+            println!("✅ Type checking passed!");
+            require_entry_point(&program);
 
             // Generate LLVM IR
             use inkwell::context::Context;
@@ -224,51 +129,12 @@ fn main() {
         Commands::Check { file } => {
             println!("🔍 Checking: {}", file.display());
 
-            // Read the file
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("❌ Error reading file: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Lex
-            let tokens = match lexer::Lexer::tokenize(&source) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("❌ Lexer error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Parse
-            let program = match parser::parse(&tokens) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("❌ Parse error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Resolve `<<` imports and merge exported module items.
-            let program = link_imports(program, &file);
-
-            // Type check
-            let mut checker = typechecker::TypeChecker::new();
-            match checker.check_program(&program) {
-                Ok(()) => {
-                    println!("✅ Type checking passed!");
-                    println!(
-                        "📋 Program contains {} top-level item(s)",
-                        program.items.len()
-                    );
-                }
-                Err(e) => {
-                    eprintln!("❌ Type error: {}", e);
-                    std::process::exit(1);
-                }
-            }
+            let program = checked_program(&file);
+            println!("✅ Type checking passed!");
+            println!(
+                "📋 Program contains {} top-level item(s)",
+                program.items.len()
+            );
         }
     }
 }
