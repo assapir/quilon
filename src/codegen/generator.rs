@@ -316,8 +316,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|p| self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Convert return type
-        let return_type = self.type_to_llvm(&decl.return_type.clone().unwrap_or(Type::Num))?;
+        // Convert return type. The entry point `^` always returns a Num exit code at
+        // the LLVM level (the C `main` wrapper expects an f64), regardless of its body
+        // type — so a side-effecting main can omit the trailing `0`.
+        let return_type = if decl.name == "^" {
+            self.context.f64_type().into()
+        } else {
+            self.type_to_llvm(&decl.return_type.clone().unwrap_or(Type::Num))?
+        };
 
         // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
         let fn_type = return_type.fn_type(
@@ -360,8 +366,19 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Generate function body
         let body_value = self.generate_expr(&decl.body)?;
+
+        // Entry point `^`: if the body's value isn't a Num (f64) — e.g. a side-effecting
+        // main ending in a Text/Bool/record expression — discard it and implicitly
+        // return 0 (C `main`-style success). A Num body is used as the exit code as
+        // usual. Scoped to `^`; ordinary functions return their body's actual type.
+        let return_value: inkwell::values::BasicValueEnum =
+            if decl.name == "^" && !body_value.is_float_value() {
+                self.context.f64_type().const_float(0.0).into()
+            } else {
+                body_value
+            };
         self.builder
-            .build_return(Some(&body_value))
+            .build_return(Some(&return_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
         Ok(())

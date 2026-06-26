@@ -182,3 +182,26 @@ fn run_for_loop_with_index_in_block() {
         0,
     );
 }
+
+// --- Implicit exit-0 for the entry point `^` (C main-style success) ---
+// When `^`'s body isn't a Num, the program runs the body for its side effects
+// and exits 0, so a side-effecting main needs no trailing `0`. A Num body is
+// still used as the exit code. Scoped to `^`; ordinary functions are unaffected.
+
+#[test]
+fn run_entry_non_num_body_exits_zero() {
+    // Body is a Text value, not a Num -> implicit exit 0.
+    assert_exit("^ = () => \"done\"", 0);
+}
+
+#[test]
+fn run_entry_num_body_still_is_exit_code() {
+    // A Num body is unchanged: it becomes the exit code.
+    assert_exit("^ = () -> Num => 42", 42);
+}
+
+#[test]
+fn run_entry_side_effecting_main_no_trailing_zero() {
+    // `<< core.io` + a print as the last expression, with NO trailing 0 -> exit 0.
+    assert_exit_linked("<< core.io\n^ = () => print(\"hi\")", 0);
+}
