@@ -420,14 +420,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .into()),
 
             Expr::Ident { name, .. } => {
-                let (ptr, ty) = self
-                    .variables
-                    .get(name)
-                    .ok_or_else(|| format!("Undefined variable: {}", name))?;
-
-                self.builder
-                    .build_load(*ty, *ptr, name)
-                    .map_err(|e| format!("Failed to build load: {:?}", e))
+                // Local binding (function-scoped alloca) first.
+                if let Some((ptr, ty)) = self.variables.get(name) {
+                    return self
+                        .builder
+                        .build_load(*ty, *ptr, name)
+                        .map_err(|e| format!("Failed to build load: {:?}", e));
+                }
+                // Otherwise a top-level/module global constant (e.g. core.io's
+                // `stdout`/`stderr`, or any top-level `name = <const>`).
+                if let Some(global) = self.module.get_global(name) {
+                    let ty = global
+                        .get_initializer()
+                        .map(|v| v.get_type())
+                        .unwrap_or_else(|| self.context.f64_type().into());
+                    return self
+                        .builder
+                        .build_load(ty, global.as_pointer_value(), name)
+                        .map_err(|e| format!("Failed to build load global: {:?}", e));
+                }
+                Err(format!("Undefined variable: {}", name))
             }
 
             Expr::BinOp {
@@ -469,6 +481,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 body,
                 ..
             } => self.generate_for_loop(collection, pattern, body),
+
+            // `left |> right` desugars to a call with `left` as the first arg
+            // (must match the type checker's desugaring exactly).
+            Expr::Pipeline { left, right, span } => {
+                let call = Expr::desugar_pipeline(left, right, span);
+                self.generate_expr(&call)
+            }
 
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
@@ -717,19 +736,24 @@ impl<'ctx> CodeGenerator<'ctx> {
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
             "__text_length" => i64t.fn_type(&[ptr.into(), i64t.into()], false),
-            // void __print_num(double) / __println_num(double).
-            "__print_num" | "__println_num" => void.fn_type(&[f64t.into()], false),
-            // void __print_cstr(i8*) / __println_cstr(i8*).
-            "__print_cstr" | "__println_cstr" => void.fn_type(&[ptr.into()], false),
+            // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
+            "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
+            // void __print_num_fd(i64 fd, double) — number + newline to fd.
+            "__print_num_fd" => void.fn_type(&[i64t.into(), f64t.into()], false),
+            // void __print_bool_fd(i64 fd, i64 b) — "true"/"false" + newline to fd.
+            "__print_bool_fd" => void.fn_type(&[i64t.into(), i64t.into()], false),
+            // void __print_text_fd(i64 fd, i8*) — C string + newline to fd.
+            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into()], false),
             other => return Err(format!("Unknown runtime intrinsic: {}", other)),
         };
         Ok(self.module.add_function(name, fn_type, None))
     }
 
-    /// Lower a `print`/`println` builtin call. Dispatches on the static LLVM type
-    /// of the (single) argument: floats print as numbers, pointers as C strings,
-    /// integers (incl. bools) are widened to numbers. Yields `Num` 0, so a print
-    /// is usable in expression position.
+    /// Lower a `print`/`eprint` builtin call: render the single argument's text
+    /// and write it, followed by a newline, to stdout (`print`, fd 1) or stderr
+    /// (`eprint`, fd 2). Dispatches on the LLVM type of the argument: floats print
+    /// as numbers, Text structs / pointers as C strings, integers (incl. bools)
+    /// widen to numbers. Yields `Num` 0, so it is usable in expression position.
     fn generate_print(
         &mut self,
         name: &str,
@@ -742,25 +766,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args.len()
             ));
         }
-        let newline = name == "println";
+        let fd = if name == "eprint" { 2 } else { 1 };
+        let fd_val = self.context.i64_type().const_int(fd, false);
         let val = self.generate_expr(&args[0])?;
         let (intrinsic, arg): (&str, inkwell::values::BasicMetadataValueEnum) = match val {
-            BasicValueEnum::FloatValue(f) => (
-                if newline {
-                    "__println_num"
-                } else {
-                    "__print_num"
-                },
-                f.into(),
-            ),
-            BasicValueEnum::PointerValue(p) => (
-                if newline {
-                    "__println_cstr"
-                } else {
-                    "__print_cstr"
-                },
-                p.into(),
-            ),
+            BasicValueEnum::FloatValue(f) => ("__print_num_fd", f.into()),
             // Text is { ptr data, i64 len }; print its NUL-terminated `data`.
             BasicValueEnum::StructValue(s) => {
                 let data = self
@@ -768,28 +778,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_extract_value(s, 0, "text_data")
                     .map_err(|e| format!("Failed to extract text data: {:?}", e))?
                     .into_pointer_value();
-                (
-                    if newline {
-                        "__println_cstr"
-                    } else {
-                        "__print_cstr"
-                    },
-                    data.into(),
-                )
+                ("__print_text_fd", data.into())
+            }
+            // A bare pointer (C string) prints as text.
+            BasicValueEnum::PointerValue(p) => ("__print_text_fd", p.into()),
+            // A Bool (i1) prints as "true"/"false"; any wider int widens to a number.
+            BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() == 1 => {
+                let b = self
+                    .builder
+                    .build_int_z_extend(i, self.context.i64_type(), "bool_ext")
+                    .map_err(|e| format!("Failed to extend bool for print: {:?}", e))?;
+                ("__print_bool_fd", b.into())
             }
             BasicValueEnum::IntValue(i) => {
                 let f = self
                     .builder
                     .build_unsigned_int_to_float(i, self.context.f64_type(), "print_num")
                     .map_err(|e| format!("Failed to convert int for print: {:?}", e))?;
-                (
-                    if newline {
-                        "__println_num"
-                    } else {
-                        "__print_num"
-                    },
-                    f.into(),
-                )
+                ("__print_num_fd", f.into())
             }
             other => {
                 return Err(format!(
@@ -800,9 +806,73 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let print_fn = self.get_intrinsic(intrinsic)?;
         self.builder
-            .build_call(print_fn, &[arg], "")
+            .build_call(print_fn, &[fd_val.into(), arg], "")
             .map_err(|e| format!("Failed to build print call: {:?}", e))?;
         Ok(self.context.f64_type().const_float(0.0).into())
+    }
+
+    /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
+    /// `content` to file descriptor `fd` (a `Num`), with no trailing newline.
+    /// Yields `Num` (bytes written).
+    fn generate_write(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "write expects exactly 2 arguments (content, fd), got {}",
+                args.len()
+            ));
+        }
+        let content = self.generate_expr(&args[0])?;
+        let fd_num = self.generate_expr(&args[1])?;
+        // content must be a Text { ptr data, i64 byte_len }.
+        let s = match content {
+            BasicValueEnum::StructValue(s) => s,
+            other => {
+                return Err(format!(
+                    "write expects a Text content, got {:?}",
+                    other.get_type()
+                ));
+            }
+        };
+        let data = self
+            .builder
+            .build_extract_value(s, 0, "write_data")
+            .map_err(|e| format!("Failed to extract text data: {:?}", e))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(s, 1, "write_len")
+            .map_err(|e| format!("Failed to extract text len: {:?}", e))?
+            .into_int_value();
+        let fd_float = match fd_num {
+            BasicValueEnum::FloatValue(f) => f,
+            other => {
+                return Err(format!(
+                    "write expects a Num fd, got {:?}",
+                    other.get_type()
+                ));
+            }
+        };
+        let fd_i64 = self
+            .builder
+            .build_float_to_signed_int(fd_float, self.context.i64_type(), "write_fd")
+            .map_err(|e| format!("Failed to convert fd: {:?}", e))?;
+        let write_fn = self.get_intrinsic("__write_bytes")?;
+        use inkwell::values::AnyValue;
+        let written = self
+            .builder
+            .build_call(
+                write_fn,
+                &[fd_i64.into(), data.into(), len.into()],
+                "write_n",
+            )
+            .map_err(|e| format!("Failed to call __write_bytes: {:?}", e))?
+            .as_any_value_enum()
+            .into_int_value();
+        Ok(self
+            .builder
+            .build_signed_int_to_float(written, self.context.f64_type(), "write_ret")
+            .map_err(|e| format!("Failed to convert write result: {:?}", e))?
+            .into())
     }
 
     fn generate_call(
@@ -819,7 +889,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Core IO builtins, lowered to runtime intrinsics (see runtime::intrinsics).
         match func_name.as_str() {
-            "print" | "println" => return self.generate_print(func_name, args),
+            "print" | "eprint" => return self.generate_print(func_name, args),
+            "write" => return self.generate_write(args),
             _ => {}
         }
 

@@ -1,9 +1,8 @@
 // Codegen tests for the core IO builtins and the Boehm GC wiring.
 //
-// These exercise the code generator directly (no typecheck pass): `print`/
-// `println` are recognized and lowered by codegen regardless of whether the
-// `core.io` module has been imported, and import/typecheck wiring lands in a
-// sibling workstream. We assert the generated LLVM IR declares the right runtime
+// These exercise the code generator directly (no typecheck pass): `print`/`eprint`/
+// `write` are recognized and lowered by codegen regardless of whether `core.io` has
+// been imported. We assert the generated LLVM IR declares the right runtime
 // intrinsics and that `main` initializes the GC.
 
 use inkwell::context::Context;
@@ -22,7 +21,7 @@ fn gen_ir(source: &str) -> String {
 }
 
 #[test]
-fn print_number_lowers_to_print_num_intrinsic() {
+fn print_number_lowers_to_print_num_fd_intrinsic() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
@@ -32,30 +31,13 @@ fn print_number_lowers_to_print_num_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("__print_num"),
-        "expected __print_num call in:\n{ir}"
-    );
-    assert!(ir.contains("call") && ir.contains("@__print_num"));
-}
-
-#[test]
-fn println_number_lowers_to_println_num_intrinsic() {
-    let ir = gen_ir(
-        r#"
-        ^ = () -> Num => <
-            println(7)
-            0
-        >
-    "#,
-    );
-    assert!(
-        ir.contains("__println_num"),
-        "expected __println_num in:\n{ir}"
+        ir.contains("@__print_num_fd"),
+        "expected __print_num_fd call in:\n{ir}"
     );
 }
 
 #[test]
-fn print_string_lowers_to_cstr_intrinsic() {
+fn print_text_lowers_to_print_text_fd_intrinsic() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
@@ -65,8 +47,41 @@ fn print_string_lowers_to_cstr_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("__print_cstr"),
-        "expected __print_cstr in:\n{ir}"
+        ir.contains("@__print_text_fd"),
+        "expected __print_text_fd in:\n{ir}"
+    );
+}
+
+#[test]
+fn write_lowers_to_write_bytes_intrinsic() {
+    let ir = gen_ir(
+        r#"
+        ^ = () -> Num => <
+            write("hello", 1)
+            0
+        >
+    "#,
+    );
+    assert!(
+        ir.contains("@__write_bytes"),
+        "expected __write_bytes in:\n{ir}"
+    );
+}
+
+#[test]
+fn print_bool_lowers_to_print_bool_fd_intrinsic() {
+    // Bool prints as "true"/"false" via __print_bool_fd, not widened to a number.
+    let ir = gen_ir(
+        r#"
+        ^ = () -> Num => <
+            print(true)
+            0
+        >
+    "#,
+    );
+    assert!(
+        ir.contains("@__print_bool_fd"),
+        "expected __print_bool_fd in:\n{ir}"
     );
 }
 

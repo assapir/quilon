@@ -87,6 +87,9 @@ pub enum TokenKind {
     #[token("->")]
     ReturnArrow,
 
+    #[token("<-")]
+    LeftArrow,
+
     #[token("::")]
     TypeAnnotation,
 
@@ -228,6 +231,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Assign => write!(f, "="),
             TokenKind::Arrow => write!(f, "=>"),
             TokenKind::ReturnArrow => write!(f, "->"),
+            TokenKind::LeftArrow => write!(f, "<-"),
             TokenKind::TypeAnnotation => write!(f, "::"),
             TokenKind::Pipeline => write!(f, "|>"),
             TokenKind::EntryPoint => write!(f, "^"),

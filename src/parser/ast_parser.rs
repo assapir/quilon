@@ -461,7 +461,57 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        if self.check(&TokenKind::For) {
+            return self.parse_for_loop();
+        }
         self.parse_ternary()
+    }
+
+    /// Parse a for-loop: `for <pattern> <- <collection> => <body>`, where
+    /// `<pattern>` is `item` or `(item, index)`. Produces an `Expr::ForLoop`.
+    fn parse_for_loop(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::For)?;
+
+        // Pattern: `item` or `(item, index)`.
+        let pattern = if self.check(&TokenKind::ParenOpen) {
+            self.advance(); // consume '('
+            let item = self.expect_ident()?;
+            self.expect(&TokenKind::Comma)?;
+            let index = self.expect_ident()?;
+            self.expect(&TokenKind::ParenClose)?;
+            let end = self.previous_span();
+            ForPattern::ItemIndex {
+                item,
+                index,
+                span: Span::new(start.start, end.end),
+            }
+        } else {
+            let item = self.expect_ident()?;
+            let span = self.previous_span();
+            ForPattern::Item { name: item, span }
+        };
+
+        // `<- collection`. The collection is a full expression (may itself be a
+        // pipeline); it stops at the `=>` that introduces the body.
+        self.expect(&TokenKind::LeftArrow)?;
+        let collection = self.parse_ternary()?;
+
+        // `=> body` — a single expression or a `< ... >` block.
+        self.expect(&TokenKind::Arrow)?;
+        let body = if self.check(&TokenKind::BlockOpen) {
+            self.parse_block()?
+        } else {
+            self.parse_expr()?
+        };
+
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::ForLoop {
+            collection: Box::new(collection),
+            pattern,
+            body: Box::new(body),
+            span,
+        })
     }
 
     fn parse_ternary(&mut self) -> Result<Expr, ParseError> {
@@ -662,63 +712,13 @@ impl<'a> Parser<'a> {
 
         while self.check(&TokenKind::Pipeline) {
             self.advance();
-
-            // Check if this is a for loop: |> for pattern => body
-            if self.check(&TokenKind::For) {
-                self.advance(); // consume 'for'
-
-                // Parse pattern: either `item` or `(item, index)`
-                let pattern = if self.check(&TokenKind::ParenOpen) {
-                    // Parse (item, index) pattern
-                    self.advance(); // consume '('
-
-                    let item = self.expect_ident()?;
-                    self.expect(&TokenKind::Comma)?;
-                    let index = self.expect_ident()?;
-
-                    self.expect(&TokenKind::ParenClose)?;
-                    let end = self.previous_span();
-
-                    ForPattern::ItemIndex {
-                        item,
-                        index,
-                        span: Span::new(left.span().start, end.end),
-                    }
-                } else {
-                    // Parse simple item pattern
-                    let item = self.expect_ident()?;
-                    let span = self.previous_span();
-
-                    ForPattern::Item { name: item, span }
-                };
-
-                // Expect =>
-                self.expect(&TokenKind::Arrow)?;
-
-                // Parse body expression
-                // Allow blocks in for loop bodies by checking explicitly
-                let body = if self.check(&TokenKind::BlockOpen) {
-                    self.parse_block()?
-                } else {
-                    self.parse_expr()?
-                };
-                let span = Span::new(left.span().start, body.span().end);
-
-                left = Expr::ForLoop {
-                    collection: Box::new(left),
-                    pattern,
-                    body: Box::new(body),
-                    span,
-                };
-            } else {
-                let right = self.parse_additive()?;
-                let span = Span::new(left.span().start, right.span().end);
-                left = Expr::Pipeline {
-                    left: Box::new(left),
-                    right: Box::new(right),
-                    span,
-                };
-            }
+            let right = self.parse_additive()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::Pipeline {
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
         }
 
         Ok(left)
@@ -1557,7 +1557,7 @@ mod tests {
 
     #[test]
     fn test_parse_for_loop_simple() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => print(n)").unwrap();
+        let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => print(n)").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1581,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_parse_for_loop_with_index() {
-        let tokens = Lexer::tokenize("test = => items |> for (val, i) => print(val)").unwrap();
+        let tokens = Lexer::tokenize("test = => for (val, i) <- items => print(val)").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1607,7 +1607,7 @@ mod tests {
     #[test]
     fn test_parse_for_loop_with_block_body() {
         let tokens =
-            Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
+            Lexer::tokenize("test = => for n <- [1, 2, 3] => < doubled = n * 2 doubled >").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1633,7 +1633,7 @@ mod tests {
     #[test]
     fn test_parse_nested_for_loops_with_blocks() {
         let tokens =
-            Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
+            Lexer::tokenize("test = => for row <- [[1, 2]] => < for val <- row => val >").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);

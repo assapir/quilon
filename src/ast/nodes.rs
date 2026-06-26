@@ -215,7 +215,7 @@ pub enum Expr {
         span: Span,
     },
 
-    // For loop (collection |> for pattern => body)
+    // For loop (for pattern <- collection => body)
     ForLoop {
         collection: Box<Expr>,
         pattern: ForPattern,
@@ -245,6 +245,24 @@ impl Expr {
             Expr::Constructor { span, .. } => span,
             Expr::SumConstructor { span, .. } => span,
             Expr::ForLoop { span, .. } => span,
+        }
+    }
+
+    /// Desugar a pipeline `left |> right` into the equivalent call, injecting
+    /// `left` as the FIRST argument of the right-hand call:
+    ///   `x |> f`      => `f(x)`
+    ///   `x |> f(a, b)` => `f(x, a, b)`
+    /// Used by both the type checker and codegen so the two never diverge.
+    pub fn desugar_pipeline(left: &Expr, right: &Expr, span: &Span) -> Expr {
+        let (func, mut args) = match right {
+            Expr::Call { func, args, .. } => ((**func).clone(), args.clone()),
+            other => (other.clone(), Vec::new()),
+        };
+        args.insert(0, left.clone());
+        Expr::Call {
+            func: Box::new(func),
+            args,
+            span: span.clone(),
         }
     }
 }
