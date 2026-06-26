@@ -2,6 +2,16 @@
 
 All notable changes to Quilon are documented here.
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** removed the `mut` keyword. Mutability is now the `:=` operator,
+  consistent with Quilon's no-keywords, symbol-based design. `x = 0` is an
+  immutable binding; `counter := 0` declares a mutable binding; `counter := counter + 1`
+  reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
+  immutability is now enforced by the checker.
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the

@@ -33,7 +33,6 @@ pub enum TypeError {
         expr: String,
         span: Span,
     },
-    #[allow(dead_code)]
     ImmutableAssignment {
         name: String,
         span: Span,
@@ -119,8 +118,7 @@ impl std::error::Error for TypeError {}
 
 #[derive(Debug, Clone)]
 // `pub` so it doesn't leak through the public `Environment::lookup` signature.
-// `mutable`/`span` are recorded for diagnostics not yet emitted (mutability
-// enforcement, source spans in errors).
+// `span` is recorded for diagnostics not yet emitted (source spans in errors).
 #[allow(dead_code)]
 pub struct Symbol {
     type_: Type,
@@ -193,8 +191,6 @@ impl Environment {
         self.lookup(name).map(|s| s.type_.clone())
     }
 
-    // Reserved for mutability enforcement, not yet wired into the checker.
-    #[allow(dead_code)]
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
@@ -387,15 +383,27 @@ impl TypeChecker {
             value_type
         };
 
-        // Define the variable in the environment
-        self.env.define(
-            decl.name.clone(),
-            final_type,
-            decl.mutable,
-            decl.span.clone(),
-        )?;
-
-        Ok(())
+        if decl.mutable {
+            // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
+            if let Some(existing_type) = self.env.get_type(&decl.name) {
+                if !self.env.is_mutable(&decl.name) {
+                    return Err(TypeError::ImmutableAssignment {
+                        name: decl.name.clone(),
+                        span: decl.span.clone(),
+                    });
+                }
+                // Reassignment: the new value must match the binding's type.
+                self.check_type_compatibility(&existing_type, &final_type, &decl.span)?;
+                Ok(())
+            } else {
+                self.env
+                    .define(decl.name.clone(), final_type, true, decl.span.clone())
+            }
+        } else {
+            // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.
+            self.env
+                .define(decl.name.clone(), final_type, false, decl.span.clone())
+        }
     }
 
     fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
