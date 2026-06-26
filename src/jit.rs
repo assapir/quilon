@@ -40,10 +40,29 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
         .create_jit_execution_engine(OptimizationLevel::None)
         .map_err(|e| format!("Failed to create JIT execution engine: {}", e))?;
 
-    // Extension point: sibling workstreams (Text intrinsics, Boehm GC) register
-    // their runtime symbols here, e.g.
-    //   engine.add_global_mapping(&fn_value, runtime_fn as usize);
-    // before the program is invoked. libc symbols need no registration.
+    // Register the Rust-provided runtime intrinsics with the JIT. libc/libgc
+    // symbols (memcpy, GC_*) resolve from the host process automatically, but
+    // our `#[no_mangle]` Rust wrappers are not in the dynamic symbol table, so
+    // the JIT cannot find them via dlsym — map any the module declares to their
+    // in-process addresses. Without this, the generated `main` calls
+    // `__gc_init` at a null address and segfaults.
+    {
+        use crate::runtime::intrinsics;
+        let mappings: &[(&str, usize)] = &[
+            ("__gc_init", intrinsics::__gc_init as usize),
+            ("__alloc", intrinsics::__alloc as usize),
+            ("__text_length", intrinsics::__text_length as usize),
+            ("__print_num", intrinsics::__print_num as usize),
+            ("__println_num", intrinsics::__println_num as usize),
+            ("__print_cstr", intrinsics::__print_cstr as usize),
+            ("__println_cstr", intrinsics::__println_cstr as usize),
+        ];
+        for (name, addr) in mappings {
+            if let Some(func) = module.get_function(name) {
+                engine.add_global_mapping(&func, *addr);
+            }
+        }
+    }
 
     unsafe {
         let main: JitFunction<MainFn> = engine
