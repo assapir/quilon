@@ -1,5 +1,8 @@
 /target
 
+# Claude Code worktrees and transient files
+/.claude/worktrees/
+
 # LLVM IR and object files
 *.ll
 *.o
