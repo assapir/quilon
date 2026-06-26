@@ -157,7 +157,9 @@ fn runnable_examples_match_across_jit_and_aot() {
     };
     let quilon = env!("CARGO_BIN_EXE_quilon");
     let rt_dir = runtime_lib_dir();
-    let tmp = std::env::temp_dir().join("quilon_aot_gate");
+    // Unique per process so concurrent `cargo test` invocations never share (and
+    // clobber) intermediate `.ll`/`.o`/binary paths. Cleaned up at the end.
+    let tmp = std::env::temp_dir().join(format!("quilon_aot_gate_{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir");
 
     for (name, expected) in EXPECTED_EXIT {
@@ -218,6 +220,9 @@ fn runnable_examples_match_across_jit_and_aot() {
             "{name}: JIT and AOT disagree on exit code"
         );
     }
+
+    // Best-effort cleanup of this run's intermediates.
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Keep the exit-code table honest: every runnable example (one defining `^`, and
