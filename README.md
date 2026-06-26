@@ -1,84 +1,54 @@
 # Quilon
 
-**A fast, statically-typed web programming language**
+**A statically-typed, symbol-based language that compiles to native code via LLVM.**
 
-Quilon (`.ql`) is a systems-level language designed specifically for high-performance web applications. It combines the safety and speed of compiled languages with the ergonomics of modern web development.
+Quilon (`.ql`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
-## Key Features
+> **Status: 0.9.0 — "stable basics."** The core language works and is verified end-to-end (it compiles, runs, and is tested). It is **not** feature-complete. For exactly what is and isn't implemented, see the feature matrix in **[LANGUAGE.md](./LANGUAGE.md)**.
 
-- **Implicit Parallelism**: Write sequential code, get parallel execution automatically
-- **Static Strong Typing**: With a simple unified `Num` type and full type inference
-- **Deep Immutability**: Immutable by default with no interior mutation escapes
-- **Native Compilation**: Compiles to native code via LLVM for maximum performance
-- **Unique Syntax**: No curly braces, no indentation rules, symbolic delimiters
-- **UTF-8 First**: All strings are UTF-8 by default
-- **No Function Coloring**: No async/await - I/O is non-blocking under the hood
-
-## Syntax Overview
+## A taste
 
 ```quilon
-~ Variables - no keywords needed
-name = "Quilon"
-port = 3000
+<< core.io
 
-~ Functions are arrow assignments
-greet = name :: String => "Hello, <name>!"
+~ functions are arrow bindings
+double = x => x * 2
 
-~ Multi-line blocks use < >
-fetch_user = id :: Num => <
-  http.get "https://api.example.com/users/<id>"
-    |> json.parse{User}
+~ Text is a built-in type: + concatenates, .length counts graphemes
+greet = name :: Text => "Hello, " + name
+
+~ the pipe |> injects the left value as the first argument
+^ = () -> Num => <
+  print(greet("Quilon"))      ~ stdout: Hello, Quilon
+  for n <- [1, 2, 3] => print(n)
+  10 |> double                ~ ≡ double(10)
 >
-
-~ Auto-parallelized pipelines
-process = data :: []Record => <
-  data
-    |> filter .active
-    |> map transform
-    |> collect
->
-
-~ Pattern matching with ?
-handle = result :: Result{T, E} => result ?
-  | Ok value  => value
-  | Err error => panic error
 ```
 
-## Core Types
+See **[LANGUAGE.md](./LANGUAGE.md)** for the full reference (types, modules, pattern matching, I/O, the symbol table, and the feature matrix).
 
-- `Num` - All numbers (int/float inferred by compiler)
-- `String` - UTF-8 text
-- `Bool` - true/false
-- `[]T` - Arrays
-- `{}` - Records/objects
-
-## Building from Source
+## Build & run
 
 ```bash
-cargo build --release
+cargo build --release            # binary at target/release/quilon
+cargo run -- run   program.ql    # JIT-compile and execute (exit code = the program's result)
+cargo run -- build program.ql    # build a native executable (links libquilon_rt + libgc)
+cargo run -- check program.ql    # typecheck only
 ```
 
-## Running Quilon Programs
+Requires LLVM 22 and `libgc` (Boehm GC) installed. Contributor and architecture notes are in **[CLAUDE.md](./CLAUDE.md)**.
 
-```bash
-quilon run program.ql
-```
+## Vision (aspirational)
 
-## Project Status
+The longer-term goals that motivate the design — **not all implemented in 0.9**:
 
-🚧 **Early Development** - The compiler is currently being built.
+- **Implicit parallelism** — sequential-looking code, parallel execution.
+- **Deep immutability** — immutable by default, enabling fearless parallelism.
+- **No function coloring** — non-blocking I/O without `async`/`await`.
+- **Web-first** — a systems-level language aimed at high-performance web services.
 
-## Design Principles
-
-1. **Simplicity**: No unnecessary keywords or syntax noise
-2. **Performance**: Native speed through LLVM compilation
-3. **Safety**: Deep immutability enables fearless parallelism
-4. **Ergonomics**: Write simple code that runs fast
+Today these are direction, not delivered features; the runtime is single-threaded and the parallel/non-blocking machinery is not built yet.
 
 ## License
 
-GPL-2.0 License
-
-## Learn More
-
-See the [docs](./docs) directory for detailed documentation.
+GPL-2.0.
