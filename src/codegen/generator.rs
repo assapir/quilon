@@ -191,7 +191,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let return_type =
                     self.type_to_llvm(&method.return_type.clone().unwrap_or(Type::Num))?;
                 let fn_type = return_type.fn_type(&param_types, false);
-                self.module.add_function(&mangled, fn_type, None);
+                let method_fn = self.module.add_function(&mangled, fn_type, None);
+                // Internal linkage: method symbols are module-private (see generate_function_decl).
+                method_fn.set_linkage(inkwell::module::Linkage::Internal);
             }
 
             // Pass 2: generate each method body.
@@ -326,8 +328,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             false,
         );
 
-        // Create the function
+        // Create the function. Use internal linkage so a Quilon function name never
+        // collides with a C library / runtime symbol when the whole program is linked
+        // into one native binary (AOT). For example core.io's `write` placeholder, or
+        // a user function named `read`/`open`, would otherwise shadow libc and break
+        // the runtime intrinsics. Only the generated `main` wrapper is exported.
         let function = self.module.add_function(&decl.name, fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
         self.current_function = Some(function);
 
         // Create entry block

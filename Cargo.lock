@@ -263,6 +263,13 @@ dependencies = [
  "clap",
  "inkwell",
  "logos",
+ "quilon-rt",
+]
+
+[[package]]
+name = "quilon-rt"
+version = "0.1.0"
+dependencies = [
  "unicode-segmentation",
 ]
 

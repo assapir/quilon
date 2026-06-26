@@ -1,0 +1,16 @@
+[package]
+name = "quilon-rt"
+version = "0.1.0"
+edition = "2024"
+authors = ["Assaf Sapir <assaf@sapir.io>"]
+description = "Quilon runtime intrinsics, linked into compiled programs (JIT and AOT)"
+
+[lib]
+# `staticlib` produces `libquilon_rt.a` for ahead-of-time-linked native binaries
+# (`quilon compile` -> llc -> gcc). `rlib` lets the `quilon` binary link the same
+# symbols so the in-process JIT (`quilon run`) resolves them at the same addresses.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Grapheme-cluster counting for `Text.length`.
+unicode-segmentation = "1"
