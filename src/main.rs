@@ -1,4 +1,5 @@
 mod ast;
+mod build;
 mod codegen;
 mod driver;
 mod jit;
@@ -33,6 +34,17 @@ enum Commands {
         /// Output file path
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Build a Quilon program into a native executable
+    Build {
+        /// Path to the .ql file
+        file: PathBuf,
+        /// Output executable path (defaults to the source name without `.ql`)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Linker to drive the final link (clang is natural for LLVM objects)
+        #[arg(long, default_value = "clang")]
+        linker: String,
     },
     /// Check a Quilon program for errors without running
     Check {
@@ -113,15 +125,34 @@ fn main() {
             match std::fs::write(&output_path, ir) {
                 Ok(()) => {
                     println!("✅ LLVM IR written to: {}", output_path.display());
-                    println!("💡 To compile to native code, run:");
-                    println!("   llc -filetype=obj {}", output_path.display());
                     println!(
-                        "   gcc {} -o executable",
-                        output_path.with_extension("o").display()
+                        "💡 To build a native executable directly, run: quilon build {}",
+                        file.display()
                     );
                 }
                 Err(e) => {
                     eprintln!("❌ Error writing output: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Build {
+            file,
+            output,
+            linker,
+        } => {
+            println!("🔨 Building: {}", file.display());
+
+            let program = checked_program(&file);
+            require_entry_point(&program);
+
+            // Default the output to the source name without its `.ql` extension.
+            let out = output.unwrap_or_else(|| file.with_extension(""));
+
+            match build::build_native(&program, &out, &linker) {
+                Ok(()) => println!("✅ Built native executable: {}", out.display()),
+                Err(e) => {
+                    eprintln!("❌ Build error: {}", e);
                     std::process::exit(1);
                 }
             }
