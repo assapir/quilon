@@ -1,8 +1,8 @@
 // Parser implementation - simple recursive descent
 
 use crate::ast::{
-    BinOp, Expr, ForPattern, FunctionDecl, Item, MethodDecl, Param, Program, TypeDecl, TypeDef,
-    UnaryOp, VarDecl,
+    BinOp, Expr, ForPattern, FunctionDecl, Import, Item, MethodDecl, ModulePath, Param, Program,
+    TypeDecl, TypeDef, UnaryOp, VarDecl,
 };
 use crate::lexer::{Span, Token, TokenKind};
 
@@ -36,16 +36,44 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut imports = Vec::new();
         let mut items = Vec::new();
 
-        // NOTE: `<<` import parsing is implemented in Workstream B1; for now `imports` is empty.
-        let imports = Vec::new();
-
         while !self.is_at_end() {
-            items.push(self.parse_item()?);
+            if self.check(&TokenKind::Import) {
+                imports.push(self.parse_import()?);
+            } else {
+                items.push(self.parse_item()?);
+            }
         }
 
         Ok(Program { imports, items })
+    }
+
+    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.ql"` (file path).
+    fn parse_import(&mut self) -> Result<Import, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::Import)?;
+
+        let path = if let TokenKind::String(s) = self.peek().kind.clone() {
+            // File-path import: << "some/path.ql"
+            self.advance();
+            ModulePath::FilePath(s)
+        } else {
+            // Built-in dotted import: << core.io
+            let mut parts = vec![self.expect_ident()?];
+            while self.check(&TokenKind::Dot) {
+                self.advance();
+                parts.push(self.expect_ident()?);
+            }
+            ModulePath::BuiltinDotted(parts)
+        };
+
+        let end = self.previous_span();
+        Ok(Import {
+            path,
+            span: Span::new(start.start, end.end),
+        })
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
@@ -55,6 +83,15 @@ impl<'a> Parser<'a> {
         // 3. Variable declaration: name = value
 
         let start = self.current_span();
+
+        // Optional `>>` export prefix: marks this top-level item as exported from its module.
+        let exported = if self.check(&TokenKind::Export) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         let mutable = if self.check(&TokenKind::Mut) {
             self.advance();
             true
@@ -112,7 +149,7 @@ impl<'a> Parser<'a> {
             }
 
             if is_type_decl {
-                return self.parse_type_decl(name, start);
+                return self.parse_type_decl(name, start, exported);
             }
         }
 
@@ -161,7 +198,7 @@ impl<'a> Parser<'a> {
         };
 
         if is_function {
-            self.parse_function_decl(name, start, type_annotation)
+            self.parse_function_decl(name, start, type_annotation, exported)
         } else {
             let value = self.parse_expr()?;
             let end = self.previous_span();
@@ -171,7 +208,7 @@ impl<'a> Parser<'a> {
                 name,
                 type_annotation,
                 value,
-                exported: false,
+                exported,
                 span: Span::new(start.start, end.end),
             }))
         }
@@ -182,6 +219,7 @@ impl<'a> Parser<'a> {
         name: String,
         start: Span,
         return_type: Option<crate::ast::Type>,
+        exported: bool,
     ) -> Result<Item, ParseError> {
         let mut params = Vec::new();
 
@@ -255,12 +293,17 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
-            exported: false,
+            exported,
             span: Span::new(start.start, end.end),
         }))
     }
 
-    fn parse_type_decl(&mut self, name: String, start: Span) -> Result<Item, ParseError> {
+    fn parse_type_decl(
+        &mut self,
+        name: String,
+        start: Span,
+        exported: bool,
+    ) -> Result<Item, ParseError> {
         // Parse type definition: Name = { field :: Type, ... method = => body, ... }
         self.expect(&TokenKind::BraceOpen)?;
 
@@ -373,7 +416,7 @@ impl<'a> Parser<'a> {
         Ok(Item::TypeDecl(TypeDecl {
             name,
             type_def: TypeDef::Record { fields, methods },
-            exported: false,
+            exported,
             span: Span::new(start.start, end.end),
         }))
     }
@@ -1175,6 +1218,48 @@ mod tests {
         let tokens = Lexer::tokenize(r#"msg = "hello""#).unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_builtin_import() {
+        let tokens = Lexer::tokenize("<< core.io\n^ = () -> Num => 0").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(program.imports.len(), 1);
+        match &program.imports[0].path {
+            ModulePath::BuiltinDotted(parts) => assert_eq!(parts, &["core", "io"]),
+            other => panic!("expected BuiltinDotted, got {:?}", other),
+        }
+        assert_eq!(program.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_file_path_import() {
+        let tokens = Lexer::tokenize("<< \"lib/math.ql\"\n^ = () -> Num => 0").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(program.imports.len(), 1);
+        match &program.imports[0].path {
+            ModulePath::FilePath(p) => assert_eq!(p, "lib/math.ql"),
+            other => panic!("expected FilePath, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_marker() {
+        let tokens = Lexer::tokenize(">> add = (a, b) => a + b\nhelper = x => x").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(program.items.len(), 2);
+        // First item is exported, second is private.
+        match &program.items[0] {
+            Item::FunctionDecl(f) => {
+                assert_eq!(f.name, "add");
+                assert!(f.exported, "`>> add` should be exported");
+            }
+            other => panic!("expected FunctionDecl, got {:?}", other),
+        }
+        match &program.items[1] {
+            Item::FunctionDecl(f) => assert!(!f.exported, "`helper` should be private"),
+            other => panic!("expected FunctionDecl, got {:?}", other),
+        }
     }
 
     #[test]
