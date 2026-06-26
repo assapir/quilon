@@ -41,8 +41,8 @@ impl std::hash::Hash for NumLit {
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
-#[logos(skip r"[ \t\r\n]+")]  // Skip whitespace
-#[logos(skip r"~[^\n]*")]     // Skip comments
+#[logos(skip r"[ \t\r\n]+")] // Skip whitespace
+#[logos(skip("~[^\n]*", allow_greedy = true))] // Skip comments (rest of line)
 pub enum TokenKind {
     // Literals
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
@@ -182,11 +182,11 @@ pub enum TokenKind {
 fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
     let s = lex.slice();
     // Remove quotes
-    let content = &s[1..s.len()-1];
-    
+    let content = &s[1..s.len() - 1];
+
     let mut result = String::new();
     let mut chars = content.chars().peekable();
-    
+
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
@@ -202,7 +202,7 @@ fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
             result.push(ch);
         }
     }
-    
+
     Some(result)
 }
 

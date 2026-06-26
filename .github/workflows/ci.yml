@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # inkwell's llvm-sys (LLVM 21.x) looks for this prefix to find the toolchain.
+  LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install LLVM 21 and system dependencies
+        run: |
+          set -euxo pipefail
+          # libgc-dev provides Boehm GC (GC_malloc / GC_init), used by the runtime.
+          # gcc is needed for the AOT link smoke test; llc ships with LLVM.
+          sudo apt-get update
+          sudo apt-get install -y libgc-dev gcc
+          # Install LLVM 21 via the official apt script (sets up the apt.llvm.org repo
+          # and installs clang/llc-21).
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          # inkwell links llvm-sys *statically* by default, which needs the LLVM dev
+          # libraries including the Polly static lib (libPolly.a). llvm.sh alone does
+          # not install these, so pull them in explicitly.
+          sudo apt-get install -y llvm-21-dev libpolly-21-dev
+          # Make the unversioned `llc` resolve to the LLVM 21 build for the AOT step.
+          sudo ln -sf /usr/lib/llvm-21/bin/llc /usr/local/bin/llc
+          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      # Non-blocking for now: the codebase is mid-construction (intentional stubs,
+      # dead-code variants the 0.9 features will start using). Tighten to
+      # `-- -D warnings` once the 0.9 "stable basics" workstreams land.
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Test
+        run: cargo test --verbose

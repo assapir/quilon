@@ -60,7 +60,10 @@ impl Substitution {
                     InferType::Variable(var.clone())
                 }
             }
-            InferType::Function { params, return_type } => {
+            InferType::Function {
+                params,
+                return_type,
+            } => {
                 let new_params = params.iter().map(|p| self.apply(p)).collect();
                 let new_return = Box::new(self.apply(return_type));
                 InferType::Function {
@@ -68,9 +71,7 @@ impl Substitution {
                     return_type: new_return,
                 }
             }
-            InferType::Array(elem) => {
-                InferType::Array(Box::new(self.apply(elem)))
-            }
+            InferType::Array(elem) => InferType::Array(Box::new(self.apply(elem))),
         }
     }
 
@@ -115,9 +116,7 @@ impl std::error::Error for UnifyError {}
 pub fn unify(t1: &InferType, t2: &InferType) -> Result<Substitution, UnifyError> {
     match (t1, t2) {
         // Same concrete types unify
-        (InferType::Concrete(c1), InferType::Concrete(c2)) if c1 == c2 => {
-            Ok(Substitution::empty())
-        }
+        (InferType::Concrete(c1), InferType::Concrete(c2)) if c1 == c2 => Ok(Substitution::empty()),
 
         // Variable unifies with anything (if occurs check passes)
         (InferType::Variable(v), t) | (t, InferType::Variable(v)) => {
@@ -134,8 +133,14 @@ pub fn unify(t1: &InferType, t2: &InferType) -> Result<Substitution, UnifyError>
 
         // Functions unify if params and return types unify
         (
-            InferType::Function { params: p1, return_type: r1 },
-            InferType::Function { params: p2, return_type: r2 },
+            InferType::Function {
+                params: p1,
+                return_type: r1,
+            },
+            InferType::Function {
+                params: p2,
+                return_type: r2,
+            },
         ) => {
             if p1.len() != p2.len() {
                 return Err(UnifyError::Mismatch(t1.clone(), t2.clone()));
@@ -155,9 +160,7 @@ pub fn unify(t1: &InferType, t2: &InferType) -> Result<Substitution, UnifyError>
         }
 
         // Arrays unify if element types unify
-        (InferType::Array(e1), InferType::Array(e2)) => {
-            unify(e1, e2)
-        }
+        (InferType::Array(e1), InferType::Array(e2)) => unify(e1, e2),
 
         // Otherwise mismatch
         _ => Err(UnifyError::Mismatch(t1.clone(), t2.clone())),
@@ -169,9 +172,10 @@ fn occurs(var: &TypeVar, ty: &InferType) -> bool {
     match ty {
         InferType::Concrete(_) => false,
         InferType::Variable(v) => v == var,
-        InferType::Function { params, return_type } => {
-            params.iter().any(|p| occurs(var, p)) || occurs(var, return_type)
-        }
+        InferType::Function {
+            params,
+            return_type,
+        } => params.iter().any(|p| occurs(var, p)) || occurs(var, return_type),
         InferType::Array(elem) => occurs(var, elem),
     }
 }
@@ -181,7 +185,10 @@ pub fn to_concrete(ty: &InferType) -> Option<Type> {
     match ty {
         InferType::Concrete(c) => Some(c.clone()),
         InferType::Variable(_) => None, // Can't convert unresolved variable
-        InferType::Function { params, return_type } => {
+        InferType::Function {
+            params,
+            return_type,
+        } => {
             let concrete_params: Option<Vec<Type>> = params.iter().map(to_concrete).collect();
             let concrete_return = to_concrete(return_type)?;
             concrete_params.map(|p| Type::Function {
@@ -189,9 +196,7 @@ pub fn to_concrete(ty: &InferType) -> Option<Type> {
                 return_type: Box::new(concrete_return),
             })
         }
-        InferType::Array(elem) => {
-            to_concrete(elem).map(|e| Type::Array(Box::new(e)))
-        }
+        InferType::Array(elem) => to_concrete(elem).map(|e| Type::Array(Box::new(e))),
     }
 }
 
@@ -202,9 +207,7 @@ pub fn from_concrete(ty: &Type) -> InferType {
         Type::String => InferType::Concrete(Type::String),
         Type::Bool => InferType::Concrete(Type::Bool),
         Type::Array(elem) => InferType::Array(Box::new(from_concrete(elem))),
-        Type::Record(fields) => {
-            InferType::Concrete(Type::Record(fields.clone()))
-        }
+        Type::Record(fields) => InferType::Concrete(Type::Record(fields.clone())),
         Type::Named { .. } => {
             // Treat named types as concrete
             InferType::Concrete(ty.clone())
@@ -213,7 +216,10 @@ pub fn from_concrete(ty: &Type) -> InferType {
             // For now, treat generics as concrete
             InferType::Concrete(ty.clone())
         }
-        Type::Function { params, return_type } => InferType::Function {
+        Type::Function {
+            params,
+            return_type,
+        } => InferType::Function {
             params: params.iter().map(from_concrete).collect(),
             return_type: Box::new(from_concrete(return_type)),
         },
@@ -242,7 +248,7 @@ mod tests {
         let t2 = InferType::Concrete(Type::Num);
         let result = unify(&t1, &t2);
         assert!(result.is_ok());
-        
+
         let sub = result.unwrap();
         let applied = sub.apply(&t1);
         assert_eq!(applied, InferType::Concrete(Type::Num));
@@ -266,13 +272,13 @@ mod tests {
             params: vec![InferType::Concrete(Type::Num)],
             return_type: Box::new(InferType::Concrete(Type::String)),
         };
-        
+
         let result = unify(&t1, &t2);
         assert!(result.is_ok());
-        
+
         let sub = result.unwrap();
         let applied = sub.apply(&t1);
-        
+
         if let InferType::Function { return_type, .. } = applied {
             assert_eq!(*return_type, InferType::Concrete(Type::String));
         } else {
@@ -284,7 +290,7 @@ mod tests {
     fn test_occurs_check() {
         let var = TypeVar::new(0);
         let t = InferType::Array(Box::new(InferType::Variable(var.clone())));
-        
+
         let result = unify(&InferType::Variable(var), &t);
         assert!(result.is_err());
     }

@@ -1,7 +1,10 @@
 // Parser implementation - simple recursive descent
 
-use crate::ast::{Expr, BinOp, UnaryOp, VarDecl, Item, Program, Param, FunctionDecl, ForPattern, TypeDecl, TypeDef, MethodDecl};
-use crate::lexer::{Token, TokenKind, Span};
+use crate::ast::{
+    BinOp, Expr, ForPattern, FunctionDecl, Item, MethodDecl, Param, Program, TypeDecl, TypeDef,
+    UnaryOp, VarDecl,
+};
+use crate::lexer::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
@@ -47,7 +50,7 @@ impl<'a> Parser<'a> {
         // 1. Type declaration: Name = { fields and methods }
         // 2. Function declaration: name = params => body
         // 3. Variable declaration: name = value
-        
+
         let start = self.current_span();
         let mutable = if self.check(&TokenKind::Mut) {
             self.advance();
@@ -75,10 +78,10 @@ impl<'a> Parser<'a> {
             // Lookahead to check if this is a type decl or record literal
             // Type decl has: { name :: Type ... } or { name = => ... }
             // Record literal has: { name = value ... }
-            
+
             let mut idx = 1; // After {
             let mut is_type_decl = false;
-            
+
             // Skip to first field
             while idx < 10 {
                 let tok = self.peek_ahead(idx);
@@ -104,7 +107,7 @@ impl<'a> Parser<'a> {
                 }
                 idx += 1;
             }
-            
+
             if is_type_decl {
                 return self.parse_type_decl(name, start);
             }
@@ -115,7 +118,7 @@ impl<'a> Parser<'a> {
         // - name = (params) => ...
         // - name = param => ...  (single param, no parens)
         // Need to be careful not to confuse with: result = (2 + 3) * 4
-        
+
         let is_function = if self.check(&TokenKind::Arrow) {
             true
         } else if self.check(&TokenKind::ParenOpen) {
@@ -125,8 +128,9 @@ impl<'a> Parser<'a> {
             let mut depth = 1;
             let mut idx = 1;
             let mut found_arrow = false;
-            
-            while idx < 50 && depth > 0 {  // reasonable limit for lookahead
+
+            while idx < 50 && depth > 0 {
+                // reasonable limit for lookahead
                 let ahead = self.peek_ahead(idx);
                 match ahead.kind {
                     TokenKind::ParenOpen => depth += 1,
@@ -135,7 +139,8 @@ impl<'a> Parser<'a> {
                         if depth == 0 {
                             // Check if next token after ) is => or ->
                             let next = self.peek_ahead(idx + 1);
-                            found_arrow = next.kind == TokenKind::Arrow || next.kind == TokenKind::ReturnArrow;
+                            found_arrow = next.kind == TokenKind::Arrow
+                                || next.kind == TokenKind::ReturnArrow;
                         }
                     }
                     TokenKind::Eof => break,
@@ -157,7 +162,7 @@ impl<'a> Parser<'a> {
         } else {
             let value = self.parse_expr()?;
             let end = self.previous_span();
-            
+
             Ok(Item::VarDecl(VarDecl {
                 mutable,
                 name,
@@ -179,7 +184,7 @@ impl<'a> Parser<'a> {
         // Parse parameters: (a, b) or (a :: Type, b :: Type) or single param or just =>
         if self.check(&TokenKind::ParenOpen) {
             self.advance();
-            
+
             if !self.check(&TokenKind::ParenClose) {
                 loop {
                     let param_name = self.expect_ident()?;
@@ -189,7 +194,7 @@ impl<'a> Parser<'a> {
                     } else {
                         None
                     };
-                    
+
                     params.push(Param {
                         name: param_name,
                         type_annotation: param_type,
@@ -202,7 +207,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
             }
-            
+
             self.expect(&TokenKind::ParenClose)?;
         } else if self.check(&TokenKind::Ident) {
             // Single parameter without parentheses
@@ -213,7 +218,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            
+
             params.push(Param {
                 name: param_name,
                 type_annotation: param_type,
@@ -253,13 +258,13 @@ impl<'a> Parser<'a> {
     fn parse_type_decl(&mut self, name: String, start: Span) -> Result<Item, ParseError> {
         // Parse type definition: Name = { field :: Type, ... method = => body, ... }
         self.expect(&TokenKind::BraceOpen)?;
-        
+
         let mut fields = Vec::new();
         let mut methods = Vec::new();
-        
+
         while !self.check(&TokenKind::BraceClose) && !self.is_at_end() {
             let field_name = self.expect_ident()?;
-            
+
             if self.check(&TokenKind::TypeAnnotation) {
                 // This is a field: name :: Type
                 self.advance();
@@ -268,14 +273,14 @@ impl<'a> Parser<'a> {
             } else if self.check(&TokenKind::Assign) {
                 // This is a method: name = params => body
                 self.advance();
-                
+
                 let method_start = self.current_span();
                 let mut params = Vec::new();
-                
+
                 // Parse method parameters (note: "it" is implicit, not included here)
                 if self.check(&TokenKind::ParenOpen) {
                     self.advance();
-                    
+
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
                             let param_name = self.expect_ident()?;
@@ -285,20 +290,20 @@ impl<'a> Parser<'a> {
                             } else {
                                 None
                             };
-                            
+
                             params.push(Param {
                                 name: param_name,
                                 type_annotation: param_type,
                                 span: self.previous_span(),
                             });
-                            
+
                             if !self.check(&TokenKind::Comma) {
                                 break;
                             }
                             self.advance();
                         }
                     }
-                    
+
                     self.expect(&TokenKind::ParenClose)?;
                 } else if self.check(&TokenKind::Ident) {
                     // Single parameter without parentheses
@@ -309,14 +314,14 @@ impl<'a> Parser<'a> {
                     } else {
                         None
                     };
-                    
+
                     params.push(Param {
                         name: param_name,
                         type_annotation: param_type,
                         span: self.previous_span(),
                     });
                 }
-                
+
                 // Optional return type annotation
                 let return_type = if self.check(&TokenKind::ReturnArrow) {
                     self.advance();
@@ -324,19 +329,19 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                
+
                 // Expect =>
                 self.expect(&TokenKind::Arrow)?;
-                
+
                 // Parse method body
                 let body = if self.check(&TokenKind::BlockOpen) {
                     self.parse_block()?
                 } else {
                     self.parse_expr()?
                 };
-                
+
                 let method_end = self.previous_span();
-                
+
                 methods.push(MethodDecl {
                     name: field_name,
                     params,
@@ -350,16 +355,16 @@ impl<'a> Parser<'a> {
                     span: self.peek().span.clone(),
                 });
             }
-            
+
             // Optional comma separator
             if self.check(&TokenKind::Comma) {
                 self.advance();
             }
         }
-        
+
         self.expect(&TokenKind::BraceClose)?;
         let end = self.previous_span();
-        
+
         Ok(Item::TypeDecl(TypeDecl {
             name,
             type_def: TypeDef::Record { fields, methods },
@@ -369,7 +374,7 @@ impl<'a> Parser<'a> {
 
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
         use crate::ast::Statement;
-        
+
         let start = self.current_span();
         self.expect(&TokenKind::BlockOpen)?;
 
@@ -377,8 +382,9 @@ impl<'a> Parser<'a> {
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
             // Try to parse as item first (for nested declarations)
-            if self.check(&TokenKind::Mut) || 
-               (self.check(&TokenKind::Ident) && self.peek_ahead(1).kind == TokenKind::Assign) {
+            if self.check(&TokenKind::Mut)
+                || (self.check(&TokenKind::Ident) && self.peek_ahead(1).kind == TokenKind::Assign)
+            {
                 // This looks like a declaration
                 let item = self.parse_item()?;
                 stmts.push(Statement::Item(item));
@@ -415,7 +421,7 @@ impl<'a> Parser<'a> {
         // Check for ? operator - could be ternary or pattern match
         if self.check(&TokenKind::Question) {
             self.advance();
-            
+
             // Check if it's pattern match (next token is |) or ternary
             if self.check(&TokenKind::Pipe) {
                 // Pattern match: expr ? | pattern => body | pattern => body
@@ -446,12 +452,12 @@ impl<'a> Parser<'a> {
         // Parse match arms: | pattern => body
         while self.check(&TokenKind::Pipe) {
             self.advance();
-            
+
             let pattern = self.parse_pattern()?;
             self.expect(&TokenKind::Arrow)?;
             let body = self.parse_expr()?;
             let arm_span = Span::new(pattern.span().start, body.span().end);
-            
+
             arms.push(crate::ast::MatchArm {
                 pattern,
                 body,
@@ -477,20 +483,20 @@ impl<'a> Parser<'a> {
 
     fn parse_pattern(&mut self) -> Result<crate::ast::Pattern, ParseError> {
         use crate::ast::Pattern;
-        
+
         let token = self.peek();
-        
+
         match &token.kind {
             TokenKind::Ident => {
                 let name = token.text.clone();
                 let span = token.span.clone();
                 self.advance();
-                
+
                 // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {
                     self.advance();
                     let mut args = Vec::new();
-                    
+
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
                             args.push(self.parse_pattern()?);
@@ -500,10 +506,10 @@ impl<'a> Parser<'a> {
                             self.advance();
                         }
                     }
-                    
+
                     self.expect(&TokenKind::ParenClose)?;
                     let end = self.previous_span().end;
-                    
+
                     Ok(Pattern::Constructor {
                         name,
                         args,
@@ -607,23 +613,23 @@ impl<'a> Parser<'a> {
 
         while self.check(&TokenKind::Pipeline) {
             self.advance();
-            
+
             // Check if this is a for loop: |> for pattern => body
             if self.check(&TokenKind::For) {
                 self.advance(); // consume 'for'
-                
+
                 // Parse pattern: either `item` or `(item, index)`
                 let pattern = if self.check(&TokenKind::ParenOpen) {
                     // Parse (item, index) pattern
                     self.advance(); // consume '('
-                    
+
                     let item = self.expect_ident()?;
                     self.expect(&TokenKind::Comma)?;
                     let index = self.expect_ident()?;
-                    
+
                     self.expect(&TokenKind::ParenClose)?;
                     let end = self.previous_span();
-                    
+
                     ForPattern::ItemIndex {
                         item,
                         index,
@@ -633,16 +639,13 @@ impl<'a> Parser<'a> {
                     // Parse simple item pattern
                     let item = self.expect_ident()?;
                     let span = self.previous_span();
-                    
-                    ForPattern::Item {
-                        name: item,
-                        span,
-                    }
+
+                    ForPattern::Item { name: item, span }
                 };
-                
+
                 // Expect =>
                 self.expect(&TokenKind::Arrow)?;
-                
+
                 // Parse body expression
                 // Allow blocks in for loop bodies by checking explicitly
                 let body = if self.check(&TokenKind::BlockOpen) {
@@ -651,7 +654,7 @@ impl<'a> Parser<'a> {
                     self.parse_expr()?
                 };
                 let span = Span::new(left.span().start, body.span().end);
-                
+
                 left = Expr::ForLoop {
                     collection: Box::new(left),
                     pattern,
@@ -741,15 +744,15 @@ impl<'a> Parser<'a> {
             if self.check(&TokenKind::Dot) {
                 self.advance();
                 let field = self.expect_ident()?;
-                
+
                 // Check if this is a method call: obj.method(args)
                 if self.check(&TokenKind::ParenOpen) {
                     // Method call: desugar obj.method(a, b) to method(obj, a, b)
                     self.advance(); // consume '('
-                    
+
                     // Parse arguments
                     let mut args = vec![expr]; // receiver is first argument
-                    
+
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
                             args.push(self.parse_expr()?);
@@ -759,10 +762,10 @@ impl<'a> Parser<'a> {
                             self.advance();
                         }
                     }
-                    
+
                     self.expect(&TokenKind::ParenClose)?;
                     let span = Span::new(args[0].span().start, self.previous_span().end);
-                    
+
                     // Create function call with method name
                     expr = Expr::Call {
                         func: Box::new(Expr::Ident {
@@ -909,31 +912,31 @@ impl<'a> Parser<'a> {
                 let span = token.span.clone();
                 let name = token.text.clone();
                 self.advance();
-                
+
                 // Check if this is a record constructor: Ident { ... }
                 if self.check(&TokenKind::BraceOpen) {
                     let start = span.start;
                     self.advance(); // consume '{'
-                    
+
                     let mut fields = Vec::new();
-                    
+
                     if !self.check(&TokenKind::BraceClose) {
                         loop {
                             let field_name = self.expect_ident()?;
                             self.expect(&TokenKind::Assign)?;
                             let value = self.parse_expr()?;
                             fields.push((field_name, value));
-                            
+
                             if !self.check(&TokenKind::Comma) {
                                 break;
                             }
                             self.advance();
                         }
                     }
-                    
+
                     self.expect(&TokenKind::BraceClose)?;
                     let span = Span::new(start, self.previous_span().end);
-                    
+
                     Ok(Expr::Constructor {
                         type_name: name,
                         fields,
@@ -951,12 +954,8 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::ParenClose)?;
                 Ok(expr)
             }
-            TokenKind::BracketOpen => {
-                self.parse_array()
-            }
-            TokenKind::BraceOpen => {
-                self.parse_record()
-            }
+            TokenKind::BracketOpen => self.parse_array(),
+            TokenKind::BraceOpen => self.parse_record(),
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 span: token.span.clone(),
@@ -976,7 +975,7 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::Assign)?;
                 let value = self.parse_expr()?;
                 fields.push((field_name, value));
-                
+
                 if !self.check(&TokenKind::Comma) {
                     break;
                 }
@@ -1106,8 +1105,8 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Lexer;
     use crate::ast::Type;
+    use crate::lexer::Lexer;
 
     #[test]
     fn test_parse_number() {
@@ -1226,7 +1225,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(decl) = &program.items[0] {
             if let Expr::Match { arms, .. } = &decl.value {
@@ -1251,7 +1250,7 @@ mod tests {
         let tokens = Lexer::tokenize("user = { name = \"Alice\", age = 30 }").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(decl) = &program.items[0] {
             if let Expr::Record { fields, .. } = &decl.value {
@@ -1270,16 +1269,19 @@ mod tests {
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_constructor() {
         let tokens = Lexer::tokenize("user = User { name = \"Alice\", age = 30 }").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(decl) = &program.items[0] {
-            if let Expr::Constructor { type_name, fields, .. } = &decl.value {
+            if let Expr::Constructor {
+                type_name, fields, ..
+            } = &decl.value
+            {
                 assert_eq!(type_name, "User");
                 assert_eq!(fields.len(), 2);
             } else {
@@ -1326,13 +1328,13 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_simple_function() {
         let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             assert_eq!(func.name, "add");
@@ -1343,7 +1345,7 @@ mod tests {
             panic!("Expected function declaration");
         }
     }
-    
+
     #[test]
     fn test_parse_function_with_types() {
         let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
@@ -1352,7 +1354,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             assert_eq!(func.params.len(), 2);
@@ -1362,20 +1364,20 @@ mod tests {
             panic!("Expected function declaration");
         }
     }
-    
+
     #[test]
     fn test_parse_no_param_function() {
         let tokens = Lexer::tokenize("main = => 42").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_block() {
         let tokens = Lexer::tokenize("test = => < x = 1 y = 2 >").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             if let Expr::Block { stmts, .. } = &func.body {
@@ -1385,14 +1387,14 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_function_with_block() {
         let tokens = Lexer::tokenize("greet = name => < msg = \"Hello\" msg >").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_no_param_function_with_return_type() {
         let tokens = Lexer::tokenize("greet = () -> String => \"Hello\"").unwrap();
@@ -1401,7 +1403,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             assert_eq!(func.params.len(), 0);
@@ -1415,7 +1417,7 @@ mod tests {
             panic!("Expected FunctionDecl");
         }
     }
-    
+
     #[test]
     fn test_parse_for_loop_simple() {
         let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => print(n)").unwrap();
@@ -1424,7 +1426,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             if let Expr::ForLoop { pattern, .. } = &func.body {
@@ -1439,7 +1441,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_for_loop_with_index() {
         let tokens = Lexer::tokenize("test = => items |> for (val, i) => print(val)").unwrap();
@@ -1448,7 +1450,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             if let Expr::ForLoop { pattern, .. } = &func.body {
@@ -1464,16 +1466,17 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_for_loop_with_block_body() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
+        let tokens =
+            Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::FunctionDecl(func) = &program.items[0] {
             if let Expr::ForLoop { body, .. } = &func.body {
@@ -1489,17 +1492,18 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_nested_for_loops_with_blocks() {
-        let tokens = Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
+        let tokens =
+            Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_method_call() {
         let tokens = Lexer::tokenize("result = user.getName()").unwrap();
@@ -1508,7 +1512,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(var) = &program.items[0] {
             // Should be desugared to a Call with Ident("getName") as func
@@ -1533,13 +1537,13 @@ mod tests {
             panic!("Expected variable declaration");
         }
     }
-    
+
     #[test]
     fn test_parse_method_call_with_args() {
         let tokens = Lexer::tokenize("result = user.setAge(25)").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::VarDecl(var) = &program.items[0] {
             if let Expr::Call { func, args, .. } = &var.value {
@@ -1551,7 +1555,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_parse_chained_method_calls() {
         let tokens = Lexer::tokenize("result = user.getName().toUpper()").unwrap();
@@ -1561,7 +1565,7 @@ mod tests {
         }
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_parse_type_decl_with_fields() {
         let tokens = Lexer::tokenize("User = { name :: String, age :: Num }").unwrap();
@@ -1570,7 +1574,7 @@ mod tests {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::TypeDecl(decl) = &program.items[0] {
             assert_eq!(decl.name, "User");
@@ -1584,19 +1588,22 @@ mod tests {
             panic!("Expected type declaration");
         }
     }
-    
+
     #[test]
     fn test_parse_type_decl_with_methods() {
-        let tokens = Lexer::tokenize("User = { 
+        let tokens = Lexer::tokenize(
+            "User = { 
   name :: String, 
   getName = => it.name 
-}").unwrap();
+}",
+        )
+        .unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::TypeDecl(decl) = &program.items[0] {
             assert_eq!(decl.name, "User");
@@ -1612,19 +1619,22 @@ mod tests {
             panic!("Expected type declaration");
         }
     }
-    
+
     #[test]
     fn test_parse_type_decl_method_with_params() {
-        let tokens = Lexer::tokenize("User = { 
+        let tokens = Lexer::tokenize(
+            "User = { 
   age :: Num,
   incrementAge = amount => it.age + amount
-}").unwrap();
+}",
+        )
+        .unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
         }
         assert!(result.is_ok());
-        
+
         let program = result.unwrap();
         if let Item::TypeDecl(decl) = &program.items[0] {
             if let TypeDef::Record { fields: _, methods } = &decl.type_def {

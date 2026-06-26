@@ -77,11 +77,14 @@ fn test_notok_wrong_argument_count_two() {
 #[test]
 fn test_sum_constructor_in_match() {
     // Pattern match returns different Results
-    let tokens = Lexer::tokenize(r#"
+    let tokens = Lexer::tokenize(
+        r#"
         check = (x) => x ?
             | 0 => NotOk("zero")
             | _ => Ok(x)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -90,10 +93,13 @@ fn test_sum_constructor_in_match() {
 #[test]
 fn test_sum_constructor_as_return_value() {
     // Function that returns Result
-    let tokens = Lexer::tokenize(r#"
+    let tokens = Lexer::tokenize(
+        r#"
         make_ok = () => Ok(42)
         x = make_ok()
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -102,10 +108,12 @@ fn test_sum_constructor_as_return_value() {
 #[test]
 fn test_custom_sum_type_constructor() {
     // Custom sum type syntax not yet supported in parser
-    let tokens = Lexer::tokenize(r#"
+    let tokens = Lexer::tokenize(
+        r#"
         Color = Red | Green | Blue
         test = Red
-    "#);
+    "#,
+    );
     // Parser doesn't support sum type declarations yet (pipe syntax)
     assert!(tokens.is_ok());
     let result = parse(&tokens.unwrap());
@@ -115,10 +123,12 @@ fn test_custom_sum_type_constructor() {
 #[test]
 fn test_custom_sum_type_with_fields() {
     // Custom sum type syntax not yet supported in parser
-    let tokens = Lexer::tokenize(r#"
+    let tokens = Lexer::tokenize(
+        r#"
         Point = Cartesian(Num, Num) | Polar(Num, Num)
         test = Cartesian(3, 4)
-    "#);
+    "#,
+    );
     // Parser doesn't support sum type declarations yet (pipe syntax)
     assert!(tokens.is_ok());
     let result = parse(&tokens.unwrap());

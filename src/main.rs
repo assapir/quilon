@@ -1,9 +1,9 @@
+mod ast;
+mod codegen;
 mod lexer;
 mod parser;
-mod ast;
-mod typechecker;
-mod codegen;
 mod runtime;
+mod typechecker;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -48,7 +48,7 @@ fn main() {
         }
         Commands::Compile { file, output } => {
             println!("🔨 Compiling: {}", file.display());
-            
+
             // Read the file
             let source = match std::fs::read_to_string(&file) {
                 Ok(s) => s,
@@ -111,7 +111,7 @@ fn main() {
             use inkwell::context::Context;
             let context = Context::create();
             let mut generator = codegen::CodeGenerator::new(&context, "main");
-            
+
             let ir = match generator.generate(&program) {
                 Ok(ir) => ir,
                 Err(e) => {
@@ -133,7 +133,10 @@ fn main() {
                     println!("✅ LLVM IR written to: {}", output_path.display());
                     println!("💡 To compile to native code, run:");
                     println!("   llc -filetype=obj {}", output_path.display());
-                    println!("   clang {} -o executable", output_path.with_extension("o").display());
+                    println!(
+                        "   clang {} -o executable",
+                        output_path.with_extension("o").display()
+                    );
                 }
                 Err(e) => {
                     eprintln!("❌ Error writing output: {}", e);
@@ -143,7 +146,7 @@ fn main() {
         }
         Commands::Check { file } => {
             println!("🔍 Checking: {}", file.display());
-            
+
             // Read the file
             let source = match std::fs::read_to_string(&file) {
                 Ok(s) => s,
@@ -176,7 +179,10 @@ fn main() {
             match checker.check_program(&program) {
                 Ok(()) => {
                     println!("✅ Type checking passed!");
-                    println!("📋 Program contains {} top-level item(s)", program.items.len());
+                    println!(
+                        "📋 Program contains {} top-level item(s)",
+                        program.items.len()
+                    );
                 }
                 Err(e) => {
                     eprintln!("❌ Type error: {}", e);
@@ -186,4 +192,3 @@ fn main() {
         }
     }
 }
-
