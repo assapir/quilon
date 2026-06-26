@@ -103,6 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a generic decimal test value, not PI
     fn test_numbers() {
         let tokens = Lexer::tokenize("42 3.14 0.5").unwrap();
         assert_eq!(tokens.len(), 4); // 3 numbers + EOF
