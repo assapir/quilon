@@ -36,6 +36,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Access the underlying LLVM module after `generate` has populated it.
+    /// Used by the JIT runner to create an execution engine in-process.
+    pub fn module(&self) -> &Module<'ctx> {
+        &self.module
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Generate code for all top-level items
         for item in &program.items {
