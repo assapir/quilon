@@ -1,0 +1,169 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Quilon",
+  "scopeName": "source.quilon",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#constants" },
+    { "include": "#module-lines" },
+    { "include": "#entry-point" },
+    { "include": "#builtin-types" },
+    { "include": "#type-names" },
+    { "include": "#function-calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.tilde.quilon",
+          "begin": "~",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.quilon" }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.quilon",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.quilon" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.quilon" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.quilon",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.quilon",
+      "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.quilon",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.wildcard.quilon",
+          "match": "(?<![A-Za-z0-9_])_(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "module-lines": {
+      "patterns": [
+        {
+          "name": "meta.import.quilon",
+          "match": "(<<)\\s*([A-Za-z0-9_.\\/\\\\\"-]+)?",
+          "captures": {
+            "1": { "name": "keyword.control.import.quilon" },
+            "2": { "name": "entity.name.namespace.quilon" }
+          }
+        },
+        {
+          "name": "keyword.control.export.quilon",
+          "match": ">>"
+        }
+      ]
+    },
+    "entry-point": {
+      "name": "keyword.control.entrypoint.quilon",
+      "match": "\\^"
+    },
+    "builtin-types": {
+      "name": "support.type.builtin.quilon",
+      "match": "\\b(Num|Text|Bool)\\b"
+    },
+    "type-names": {
+      "comment": "Capitalized identifiers are types / sum-type constructors (Ok, NotOk, Color, Circle).",
+      "name": "entity.name.type.quilon",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "function-calls": {
+      "comment": "lowercase identifier immediately followed by ( is a function call",
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.quilon" }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.pipeline.quilon",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.assignment.mutable.quilon",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.type-annotation.quilon",
+          "match": "::"
+        },
+        {
+          "name": "keyword.operator.arrow.body.quilon",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.arrow.return.quilon",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.arrow.iterate.quilon",
+          "match": "<-"
+        },
+        {
+          "name": "keyword.operator.comparison.quilon",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.logical.quilon",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.match.quilon",
+          "match": "\\?|\\|"
+        },
+        {
+          "name": "keyword.operator.assignment.quilon",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.quilon",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.comparison.quilon",
+          "match": "[<>]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.colon.quilon",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.separator.comma.quilon",
+          "match": ","
+        },
+        {
+          "name": "punctuation.accessor.quilon",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}
