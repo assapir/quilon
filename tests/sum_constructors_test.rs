@@ -132,5 +132,5 @@ fn test_custom_sum_type_with_fields() {
     // Parser doesn't support sum type declarations yet (pipe syntax)
     assert!(tokens.is_ok());
     let result = parse(&tokens.unwrap());
-    assert!(result.is_err()); // Parse error expected  
+    assert!(result.is_err()); // Parse error expected
 }
