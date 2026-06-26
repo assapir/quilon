@@ -1,13 +1,8 @@
-~ Pipeline example
-~ (map, filter, fold will be added as array methods later)
+~ The pipe `|>` feeds the left value in as the FIRST argument of the right call:
+~   x |> f        is  f(x)
+~   x |> f(a)     is  f(x, a)
+~   a |> b |> c   is  c(b(a))
+double  = (x :: Num) -> Num => x * 2
+addFive = (x :: Num) -> Num => x + 5
 
-~ Simple pipeline example
-double = x :: Num => x * 2
-addFive = x :: Num => x + 5
-
->> = () -> Num => <
-  ~ Pipeline operator chains operations
-  result = 10 |> double |> addFive
-  
-  result  ~ Returns 25
->
+^ = () -> Num => 10 |> double |> addFive   ~ addFive(double(10)) = 25
