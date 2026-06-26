@@ -205,3 +205,27 @@ fn run_entry_side_effecting_main_no_trailing_zero() {
     // `<< core.io` + a print as the last expression, with NO trailing 0 -> exit 0.
     assert_exit_linked("<< core.io\n^ = () => print(\"hi\")", 0);
 }
+
+// --- Mutability: `:=` declares a mutable binding and reassigns it; `=` is immutable. ---
+
+#[test]
+fn run_mutable_declare_and_reassign() {
+    // Declare with `:=`, reassign with `:=`; the final value is the exit code.
+    assert_exit(
+        "^ = () -> Num => <\n  counter := 0\n  counter := counter + 5\n  counter := counter + 37\n  counter\n>",
+        42,
+    );
+}
+
+#[test]
+fn reassigning_immutable_binding_is_a_type_error() {
+    // `x` is immutable (`=`); reassigning it with `:=` must fail type checking.
+    let src = "^ = () -> Num => <\n  x = 1\n  x := 2\n  x\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected reassigning an immutable binding to be a type error"
+    );
+}

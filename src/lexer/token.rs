@@ -58,9 +58,6 @@ pub enum TokenKind {
     False,
 
     // Keywords
-    #[token("mut")]
-    Mut,
-
     #[token("if")]
     If,
 
@@ -80,6 +77,10 @@ pub enum TokenKind {
     // Operators and delimiters
     #[token("=")]
     Assign,
+
+    // Mutable bind/reassign operator (replaces the old `mut` keyword).
+    #[token(":=")]
+    MutAssign,
 
     #[token("=>")]
     Arrow,
@@ -222,13 +223,13 @@ impl fmt::Display for TokenKind {
             TokenKind::String(s) => write!(f, "String(\"{}\")", s),
             TokenKind::True => write!(f, "true"),
             TokenKind::False => write!(f, "false"),
-            TokenKind::Mut => write!(f, "mut"),
             TokenKind::If => write!(f, "if"),
             TokenKind::While => write!(f, "while"),
             TokenKind::For => write!(f, "for"),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Ident => write!(f, "Ident"),
             TokenKind::Assign => write!(f, "="),
+            TokenKind::MutAssign => write!(f, ":="),
             TokenKind::Arrow => write!(f, "=>"),
             TokenKind::ReturnArrow => write!(f, "->"),
             TokenKind::LeftArrow => write!(f, "<-"),

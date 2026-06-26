@@ -10,7 +10,8 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 | Symbol | Meaning | Example |
 |--------|---------|---------|
-| `=` | Binding | `x = 42` |
+| `=` | Immutable binding | `x = 42` |
+| `:=` | Mutable bind / reassign | `counter := 0` |
 | `::` | Type annotation | `x :: Num` |
 | `=>` | Function body / match arm | `f = x => x + 1` |
 | `->` | Return type | `f = x -> Num => x` |
@@ -99,12 +100,13 @@ Numeric payloads work end-to-end. (See `examples/result.ql`. Non-numeric payload
 
 ## Variables
 
-Immutable by default; `mut` for reassignable bindings.
+Immutable by default (`=`); use `:=` to declare a mutable binding **and** to reassign it.
 ```quilon
-x = 42                 ~ immutable
-mut counter = 0
-counter = counter + 1  ~ ok
+x = 42                  ~ immutable bind (rebinding x with = is an error)
+counter := 0            ~ mutable bind
+counter := counter + 1  ~ reassign (also :=)
 ```
+Reassigning requires the binding to be mutable: `x := 5` on an immutable `x` is an error.
 Types are inferred but can be annotated: `x :: Num = 42`.
 
 ---

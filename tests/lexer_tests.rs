@@ -59,12 +59,13 @@ result = data
 
 #[test]
 fn test_mutable_variable() {
-    let source = "mut counter = 0";
+    // `:=` is the mutable bind/reassign operator (replaces the old `mut` keyword).
+    let source = "counter := 0";
     let tokens = Lexer::tokenize(source).unwrap();
 
-    assert_eq!(tokens[0].kind, TokenKind::Mut);
-    assert_eq!(tokens[1].text, "counter");
-    assert_eq!(tokens[2].kind, TokenKind::Assign);
+    assert_eq!(tokens[0].text, "counter");
+    assert_eq!(tokens[1].kind, TokenKind::MutAssign);
+    assert!(matches!(tokens[2].kind, TokenKind::Number(_)));
 }
 
 #[test]

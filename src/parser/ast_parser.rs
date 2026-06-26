@@ -92,13 +92,6 @@ impl<'a> Parser<'a> {
             false
         };
 
-        let mutable = if self.check(&TokenKind::Mut) {
-            self.advance();
-            true
-        } else {
-            false
-        };
-
         let name = self.expect_ident()?;
 
         // Check for type annotation
@@ -109,12 +102,34 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.expect(&TokenKind::Assign)?;
+        // Binding operator: `=` (immutable bind) or `:=` (mutable bind / reassign).
+        let mutable = if self.check(&TokenKind::MutAssign) {
+            self.advance();
+            true
+        } else {
+            self.expect(&TokenKind::Assign)?;
+            false
+        };
+
+        // A `:=` binding is always a mutable value binding (or a reassignment of one);
+        // it is never a type or function declaration.
+        if mutable {
+            let value = self.parse_expr()?;
+            let end = self.previous_span();
+            return Ok(Item::VarDecl(VarDecl {
+                mutable: true,
+                name,
+                type_annotation,
+                value,
+                exported,
+                span: Span::new(start.start, end.end),
+            }));
+        }
 
         // Check if it's a type declaration (Name = { ... })
         // Type declarations can't be mutable and don't have type annotations
         // AND they must have field declarations (name :: Type) or methods (name = => ...)
-        if !mutable && type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
+        if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
             // Lookahead to check if this is a type decl or record literal
             // Type decl has: { name :: Type ... } or { name = => ... }
             // Record literal has: { name = value ... }
@@ -430,9 +445,13 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
-            // Try to parse as item first (for nested declarations)
-            if self.check(&TokenKind::Mut)
-                || (self.check(&TokenKind::Ident) && self.peek_ahead(1).kind == TokenKind::Assign)
+            // Try to parse as item first (for nested declarations / reassignments).
+            // `name = …` is an immutable binding; `name := …` is a mutable bind/reassign.
+            if self.check(&TokenKind::Ident)
+                && matches!(
+                    self.peek_ahead(1).kind,
+                    TokenKind::Assign | TokenKind::MutAssign
+                )
             {
                 // This looks like a declaration
                 let item = self.parse_item()?;
@@ -1271,7 +1290,7 @@ mod tests {
 
     #[test]
     fn test_parse_mutable() {
-        let tokens = Lexer::tokenize("mut counter = 0").unwrap();
+        let tokens = Lexer::tokenize("counter := 0").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
 
