@@ -706,10 +706,39 @@ impl TypeChecker {
                 args,
                 span,
             } => {
-                // TODO: Implement sum type constructor type checking
-                // For now, return a placeholder error
+                // A sum-type constructor in expression position (e.g. `Ok(x)`).
+                // The parser currently lowers `Ok(..)`/`NotOk(..)` to `Expr::Call`,
+                // so in practice constructors are type-checked in `check_call`;
+                // this arm makes a direct `SumConstructor` node type-check the same
+                // way (variant lookup + arity + payload type) instead of erroring.
+                let sum_types = self.sum_types.clone();
+                for (_type_name, sum_type) in sum_types.iter() {
+                    if let Type::Sum {
+                        name: sum_name,
+                        variants,
+                    } = sum_type
+                    {
+                        if let Some(v) = variants.iter().find(|v| &v.name == variant) {
+                            if v.fields.len() != args.len() {
+                                return Err(TypeError::WrongNumberOfArguments {
+                                    expected: v.fields.len(),
+                                    got: args.len(),
+                                    span: span.clone(),
+                                });
+                            }
+                            for (field_type, arg) in v.fields.iter().zip(args.iter()) {
+                                let arg_type = self.infer_expr(arg)?;
+                                self.check_type_compatibility(field_type, &arg_type, span)?;
+                            }
+                            return Ok(Type::Sum {
+                                name: sum_name.clone(),
+                                variants: variants.clone(),
+                            });
+                        }
+                    }
+                }
                 Err(TypeError::UndefinedVariable {
-                    name: format!("Sum type constructor {} not yet implemented", variant),
+                    name: format!("Unknown sum-type constructor: {}", variant),
                     span: span.clone(),
                 })
             }
