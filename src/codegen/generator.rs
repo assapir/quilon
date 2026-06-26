@@ -1258,8 +1258,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         expr: &Expr,
         field_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // A record may legitimately have a field literally named `size`/`length`.
+        // Resolve known record fields by NAME first (matching the type checker,
+        // which dispatches on static type) so they don't collide with the Text/array
+        // `.size`/`.length` struct-shape handling below. Text/array values are never
+        // tracked in `record_types`, so this only diverts genuine record fields.
+        let is_named_record_field = matches!(expr, Expr::Ident { name, .. }
+            if self
+                .record_types
+                .get(name)
+                .is_some_and(|fields| fields.iter().any(|f| f == field_name)));
+
         // Special handling for .size field on arrays
-        if field_name == "size" {
+        if !is_named_record_field && field_name == "size" {
             // For arrays (which are structs {ptr, i64}), we need special handling
             // Check if it's an identifier - we can directly work with the alloca
             if let Expr::Ident { name, .. } = expr
@@ -1294,7 +1305,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Text/array as a value: `.size` is the i64 length field (byte length for
         // Text); `.length` is the grapheme count (Text only — the checker rejects
         // `.length` on arrays). Handles non-identifier receivers like `("a"+"b").size`.
-        if field_name == "size" || field_name == "length" {
+        if !is_named_record_field && (field_name == "size" || field_name == "length") {
             let val = self.generate_expr(expr)?;
             if let BasicValueEnum::StructValue(s) = val {
                 let len = self

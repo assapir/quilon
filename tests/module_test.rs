@@ -34,14 +34,23 @@ fn test_builtin_import_resolves_and_exports_usable() {
 }
 
 #[test]
-fn test_core_text_import_resolves() {
-    // `<< core.text` must resolve; Text ops (`+`, `.size`, `.length`) are built-in.
-    let source = r#"
-        << core.text
-        ^ = () -> Num => ("a" + "b").length
-    "#;
+fn test_text_ops_need_no_import() {
+    // Text is a built-in primitive (like Num/arrays): its ops (`+`, `.size`,
+    // `.length`) work with NO import.
+    let source = r#"^ = () -> Num => ("a" + "b").length"#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_core_text_is_not_a_module() {
+    // There is no `core.text` module — Text is intrinsic — so importing it errors.
+    let source = r#"
+        << core.text
+        ^ = () -> Num => 0
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_err(), "expected unknown-module error, got ok");
 }
 
 #[test]
@@ -50,6 +59,19 @@ fn test_print_accepts_text() {
     let source = r#"
         << core.io
         ^ = () -> Num => print("hello, " + "world")
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_user_defined_print_not_shadowed() {
+    // Regression: a user-defined `println` with its own signature must be resolved
+    // normally, not hard-shadowed by the polymorphic builtin (which only accepts a
+    // single Num/Text/Bool arg). A 2-arg user `println` must type-check.
+    let source = r#"
+        println = (a :: Num, b :: Num) -> Num => a + b
+        ^ = () -> Num => println(2, 3)
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);

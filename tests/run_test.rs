@@ -98,3 +98,14 @@ fn run_text_ascii_concat_size() {
     // ASCII: bytes == graphemes.
     assert_exit("^ = () -> Num => <\n  s = \"ab\" + \"cde\"\n  s.size\n>", 5);
 }
+
+#[test]
+fn run_record_size_field_not_shadowed() {
+    // Regression: a record field literally named `size` must resolve by NAME
+    // (field 0 here -> 7), not be hijacked by the Text/array `.size` struct-shape
+    // handling (which would read field index 1 -> 9).
+    assert_exit(
+        "^ = () -> Num => <\n  r = { size = 7, other = 9 }\n  r.size\n>",
+        7,
+    );
+}

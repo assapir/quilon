@@ -898,33 +898,6 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, func: &Expr, args: &[Expr], span: &Span) -> Result<Type, TypeError> {
-        // `print`/`println` are compiler-lowered (see CodeGenerator::generate_print)
-        // and polymorphic over Num / Text / Bool. Type-check them directly rather
-        // than against the inert `x => 0` placeholder in core.io (whose untyped
-        // param would otherwise default to Num and reject Text).
-        if let Expr::Ident { name, .. } = func
-            && (name == "print" || name == "println")
-        {
-            if args.len() != 1 {
-                return Err(TypeError::WrongNumberOfArguments {
-                    expected: 1,
-                    got: args.len(),
-                    span: span.clone(),
-                });
-            }
-            let arg_type = self.infer_expr(&args[0])?;
-            match arg_type {
-                Type::Num | Type::Text | Type::Bool => return Ok(Type::Num),
-                other => {
-                    return Err(TypeError::TypeMismatch {
-                        expected: Box::new(Type::Text),
-                        got: Box::new(other),
-                        span: span.clone(),
-                    });
-                }
-            }
-        }
-
         // Check if this is a sum type constructor call: Ok(42), NotOk, etc.
         if let Expr::Ident {
             name: constructor_name,
@@ -1020,6 +993,15 @@ impl TypeChecker {
         // Fall back to regular function call
         let func_type = self.infer_expr(func)?;
 
+        // `print`/`println` are compiler-lowered (see CodeGenerator::generate_print)
+        // and polymorphic over Num / Text / Bool. They are applied as a FALLBACK:
+        // a user-defined or registered `print`/`println` whose signature accepts the
+        // arguments is resolved normally below and takes precedence; only when that
+        // resolution would reject the call (e.g. the core.io placeholder's untyped
+        // param defaulting to Num, given a Text) does the builtin kick in.
+        let is_print_builtin = matches!(func, Expr::Ident { name, .. }
+            if name == "print" || name == "println");
+
         match func_type {
             Type::Function {
                 params,
@@ -1033,12 +1015,33 @@ impl TypeChecker {
                     });
                 }
 
-                for (param_type, arg) in params.iter().zip(args.iter()) {
-                    let arg_type = self.infer_expr(arg)?;
-                    self.check_type_compatibility(param_type, &arg_type, span)?;
+                // Type the arguments once.
+                let mut arg_types = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_types.push(self.infer_expr(arg)?);
                 }
 
-                Ok(*return_type)
+                // Check the resolved signature, remembering the first mismatch.
+                let mut first_err = None;
+                for (param_type, arg_type) in params.iter().zip(arg_types.iter()) {
+                    if let Err(e) = self.check_type_compatibility(param_type, arg_type, span) {
+                        first_err = Some(e);
+                        break;
+                    }
+                }
+                match first_err {
+                    None => Ok(*return_type),
+                    // Builtin print/println fallback: accept a single Num/Text/Bool
+                    // when the resolved signature (e.g. core.io's placeholder) rejects it.
+                    Some(_)
+                        if is_print_builtin
+                            && arg_types.len() == 1
+                            && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool) =>
+                    {
+                        Ok(Type::Num)
+                    }
+                    Some(e) => Err(e),
+                }
             }
             _ => Err(TypeError::NotAFunction {
                 got: func_type,

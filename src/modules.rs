@@ -105,7 +105,9 @@ impl Loader {
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(include_str!("../corelib/io.ql")),
-        "core.text" => Some(include_str!("../corelib/text.ql")),
+        // Text is a built-in primitive type (like Num/Bool/arrays): its operations
+        // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
+        // there is intentionally no `core.text` module.
         _ => None,
     }
 }
