@@ -34,7 +34,7 @@ pub enum TypeDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodDecl {
     pub name: String,
-    pub params: Vec<Param>,  // Does not include implicit "it" parameter
+    pub params: Vec<Param>, // Does not include implicit "it" parameter
     pub return_type: Option<Type>,
     pub body: Expr,
     pub span: Span,
@@ -74,13 +74,25 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals
-    Number { value: f64, span: Span },
-    String { value: String, span: Span },
-    Bool { value: bool, span: Span },
-    
+    Number {
+        value: f64,
+        span: Span,
+    },
+    String {
+        value: String,
+        span: Span,
+    },
+    Bool {
+        value: bool,
+        span: Span,
+    },
+
     // Variables
-    Ident { name: String, span: Span },
-    
+    Ident {
+        name: String,
+        span: Span,
+    },
+
     // Binary operations
     BinOp {
         left: Box<Expr>,
@@ -88,34 +100,34 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
-    
+
     // Unary operations
     UnaryOp {
         op: UnaryOp,
         expr: Box<Expr>,
         span: Span,
     },
-    
+
     // Function call
     Call {
         func: Box<Expr>,
         args: Vec<Expr>,
         span: Span,
     },
-    
+
     // Pipeline
     Pipeline {
         left: Box<Expr>,
         right: Box<Expr>,
         span: Span,
     },
-    
+
     // Block
     Block {
         stmts: Vec<Statement>,
         span: Span,
     },
-    
+
     // If expression (ternary)
     If {
         cond: Box<Expr>,
@@ -123,54 +135,54 @@ pub enum Expr {
         else_: Box<Expr>,
         span: Span,
     },
-    
+
     // Pattern match
     Match {
         expr: Box<Expr>,
         arms: Vec<MatchArm>,
         span: Span,
     },
-    
+
     // Field access
     FieldAccess {
         expr: Box<Expr>,
         field: String,
         span: Span,
     },
-    
+
     // Array indexing
     Index {
         expr: Box<Expr>,
         index: Box<Expr>,
         span: Span,
     },
-    
+
     // Array literal
     Array {
         elements: Vec<Expr>,
         span: Span,
     },
-    
+
     // Record literal
     Record {
         fields: Vec<(String, Expr)>,
         span: Span,
     },
-    
+
     // Type constructor (e.g., User { name = "Alice", age = 30 })
     Constructor {
         type_name: String,
         fields: Vec<(String, Expr)>,
         span: Span,
     },
-    
+
     // Sum type constructor call (e.g., Some(42), OK("value"), NotOK)
     SumConstructor {
         variant: String,
         args: Vec<Expr>,
         span: Span,
     },
-    
+
     // For loop (collection |> for pattern => body)
     ForLoop {
         collection: Box<Expr>,
@@ -214,14 +226,22 @@ pub struct MatchArm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    Ident { name: String, span: Span },
-    Number { value: f64, span: Span },
+    Ident {
+        name: String,
+        span: Span,
+    },
+    Number {
+        value: f64,
+        span: Span,
+    },
     Constructor {
         name: String,
         args: Vec<Pattern>,
         span: Span,
     },
-    Wildcard { span: Span },
+    Wildcard {
+        span: Span,
+    },
 }
 
 /// Pattern for for loops - supports both `item` and `(item, index)`
@@ -277,11 +297,11 @@ pub enum Type {
     String,
     Bool,
     Array(Box<Type>),
-    Record(Vec<(String, Type)>),  // For anonymous records
+    Record(Vec<(String, Type)>), // For anonymous records
     Named {
         name: String,
         fields: Vec<(String, Type)>,
-        methods: Vec<String>,  // Method names (bodies stored elsewhere)
+        methods: Vec<String>, // Method names (bodies stored elsewhere)
     },
     Generic {
         name: String,

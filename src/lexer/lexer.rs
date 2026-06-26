@@ -1,6 +1,6 @@
 // Lexer implementation for Quilon
 
-use crate::lexer::{Token, TokenKind, Span};
+use crate::lexer::{Span, Token, TokenKind};
 use logos::Logos;
 
 pub struct Lexer<'source> {
@@ -43,7 +43,11 @@ impl<'source> Lexer<'source> {
                 }
                 None => {
                     let pos = source.len();
-                    tokens.push(Token::new(TokenKind::Eof, Span::new(pos, pos), String::new()));
+                    tokens.push(Token::new(
+                        TokenKind::Eof,
+                        Span::new(pos, pos),
+                        String::new(),
+                    ));
                     break;
                 }
             }
@@ -102,12 +106,12 @@ mod tests {
     fn test_numbers() {
         let tokens = Lexer::tokenize("42 3.14 0.5").unwrap();
         assert_eq!(tokens.len(), 4); // 3 numbers + EOF
-        
+
         match &tokens[0].kind {
             TokenKind::Number(n) => assert_eq!(n.0, 42.0),
             _ => panic!("Expected number"),
         }
-        
+
         match &tokens[1].kind {
             TokenKind::Number(n) => assert_eq!(n.0, 3.14),
             _ => panic!("Expected number"),
@@ -118,12 +122,12 @@ mod tests {
     fn test_strings() {
         let tokens = Lexer::tokenize(r#""hello" "world\n""#).unwrap();
         assert_eq!(tokens.len(), 3); // 2 strings + EOF
-        
+
         match &tokens[0].kind {
             TokenKind::String(s) => assert_eq!(s, "hello"),
             _ => panic!("Expected string"),
         }
-        
+
         match &tokens[1].kind {
             TokenKind::String(s) => assert_eq!(s, "world\n"),
             _ => panic!("Expected string with newline"),
@@ -203,7 +207,7 @@ mod tests {
     fn test_simple_function() {
         let source = "add = (a :: Num, b :: Num) => a + b";
         let tokens = Lexer::tokenize(source).unwrap();
-        
+
         assert_eq!(tokens[0].text, "add");
         assert_eq!(tokens[1].kind, TokenKind::Assign);
         assert_eq!(tokens[2].kind, TokenKind::ParenOpen);
@@ -215,16 +219,22 @@ mod tests {
     fn test_pipeline() {
         let source = "data |> filter .active |> collect";
         let tokens = Lexer::tokenize(source).unwrap();
-        
+
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Pipeline));
-        assert_eq!(tokens.iter().filter(|t| t.kind == TokenKind::Pipeline).count(), 2);
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|t| t.kind == TokenKind::Pipeline)
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn test_block() {
         let source = "process = data => <\n  data |> map transform\n>";
         let tokens = Lexer::tokenize(source).unwrap();
-        
+
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockOpen));
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockClose));
     }

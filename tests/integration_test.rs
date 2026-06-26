@@ -1,8 +1,8 @@
+use inkwell::context::Context;
+use quilon::codegen::CodeGenerator;
 use quilon::lexer::Lexer;
 use quilon::parser::parse;
 use quilon::typechecker::TypeChecker;
-use quilon::codegen::CodeGenerator;
-use inkwell::context::Context;
 
 /// Integration test: All major features working together
 #[test]
@@ -31,15 +31,15 @@ fn test_all_features_integration() {
             value + check
         >
     "#;
-    
+
     // Parse
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
-    
+
     // Type check
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
-    
+
     // Generate code
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "integration_test");
@@ -66,7 +66,7 @@ fn test_result_pattern_extraction() {
             v1 + v2
         >
     "#;
-    
+
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
@@ -97,7 +97,7 @@ fn test_nested_pattern_matching() {
             final
         >
     "#;
-    
+
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
@@ -117,7 +117,7 @@ fn test_inline_result_matching() {
             value
         >
     "#;
-    
+
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();

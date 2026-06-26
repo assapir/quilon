@@ -26,8 +26,9 @@ main = => <
         Ok(tokens) => {
             for (i, token) in tokens.iter().enumerate() {
                 if token.kind != quilon::lexer::TokenKind::Eof {
-                    println!("{:3}: {:20} {} at {}", 
-                        i, 
+                    println!(
+                        "{:3}: {:20} {} at {}",
+                        i,
                         format!("{:?}", token.kind),
                         token.text,
                         token.span

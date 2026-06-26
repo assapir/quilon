@@ -16,7 +16,10 @@ fn main() {
         ("Array", "nums = [1, 2, 3]"),
         ("Complex", "result = (a + b) * c |> process"),
         ("Simple function", "add = (a, b) => a + b"),
-        ("Typed function", "add = (a :: Num, b :: Num) -> Num => a + b"),
+        (
+            "Typed function",
+            "add = (a :: Num, b :: Num) -> Num => a + b",
+        ),
         ("No-param function", "main = => 42"),
         ("Single-param function", "greet = name => \"Hello\""),
         ("Function with block", "test = => < x = 1 x >"),
@@ -29,30 +32,28 @@ fn main() {
 
     for (desc, source) in examples {
         println!("\n{}: {}", desc, source);
-        
+
         match Lexer::tokenize(source) {
-            Ok(tokens) => {
-                match parse(&tokens) {
-                    Ok(program) => {
-                        println!("✓ Parsed successfully");
-                        println!("  Items: {}", program.items.len());
-                        
-                        if let Some(item) = program.items.first() {
-                            match item {
-                                quilon::ast::Item::VarDecl(decl) => {
-                                    println!("  Variable: {}", decl.name);
-                                    println!("  Mutable: {}", decl.mutable);
-                                    println!("  Type: {:?}", decl.type_annotation);
-                                }
-                                _ => {}
+            Ok(tokens) => match parse(&tokens) {
+                Ok(program) => {
+                    println!("✓ Parsed successfully");
+                    println!("  Items: {}", program.items.len());
+
+                    if let Some(item) = program.items.first() {
+                        match item {
+                            quilon::ast::Item::VarDecl(decl) => {
+                                println!("  Variable: {}", decl.name);
+                                println!("  Mutable: {}", decl.mutable);
+                                println!("  Type: {:?}", decl.type_annotation);
                             }
+                            _ => {}
                         }
                     }
-                    Err(e) => {
-                        println!("✗ Parse error: {}", e);
-                    }
                 }
-            }
+                Err(e) => {
+                    println!("✗ Parse error: {}", e);
+                }
+            },
             Err(e) => {
                 println!("✗ Lexer error: {}", e);
             }

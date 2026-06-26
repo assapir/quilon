@@ -1,8 +1,8 @@
 // Quilon compiler library
 
+pub mod ast;
+pub mod codegen;
 pub mod lexer;
 pub mod parser;
-pub mod ast;
-pub mod typechecker;
-pub mod codegen;
 pub mod runtime;
+pub mod typechecker;
