@@ -1,7 +1,8 @@
 // LLVM code generator for Quilon
 
 use crate::ast::{
-    BinOp, Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, UnaryOp, VarDecl,
+    BinOp, Expr, FunctionDecl, Item, MatchArm, MethodDecl, Pattern, Program, Type, TypeDecl,
+    TypeDef, UnaryOp, VarDecl,
 };
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
@@ -18,6 +19,10 @@ pub struct CodeGenerator<'ctx> {
     variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     // Track record field mappings: variable name -> (field names, field types)
     record_types: HashMap<String, Vec<String>>,
+    // Named record types: type name -> field names (declared order)
+    named_type_fields: HashMap<String, Vec<String>>,
+    // Track which named type a variable was constructed from: var name -> type name
+    var_named_types: HashMap<String, String>,
     current_function: Option<FunctionValue<'ctx>>,
 }
 
@@ -32,6 +37,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             builder,
             variables: HashMap::new(),
             record_types: HashMap::new(),
+            named_type_fields: HashMap::new(),
+            var_named_types: HashMap::new(),
             current_function: None,
         }
     }
@@ -137,8 +144,110 @@ impl<'ctx> CodeGenerator<'ctx> {
         match item {
             Item::VarDecl(decl) => self.generate_var_decl(decl),
             Item::FunctionDecl(decl) => self.generate_function_decl(decl),
-            Item::TypeDecl(_) => Ok(()), // Type declarations don't generate code
+            Item::TypeDecl(decl) => self.generate_type_decl(decl),
         }
+    }
+
+    /// Generate code for a named type declaration.
+    ///
+    /// Sum types carry no code. Record types register their field layout and emit each
+    /// method as a top-level function `"{TypeName}_{method}"` whose first parameter is the
+    /// implicit receiver `it` (passed as a pointer to the record struct). Dispatch is static
+    /// (monomorphic) — `recv.method(args)` resolves to that mangled function at the call site.
+    fn generate_type_decl(&mut self, decl: &TypeDecl) -> Result<(), String> {
+        if let TypeDef::Record { fields, methods } = &decl.type_def {
+            let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+            self.named_type_fields
+                .insert(decl.name.clone(), field_names.clone());
+
+            let ptr_type = self.context.ptr_type(AddressSpace::default());
+
+            // Pass 1: declare every method signature first, so a method body may reference
+            // sibling methods (or recurse) regardless of declaration order.
+            for method in methods {
+                let mangled = format!("{}_{}", decl.name, method.name);
+                if self.module.get_function(&mangled).is_some() {
+                    continue;
+                }
+                let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                    vec![ptr_type.into()];
+                for p in &method.params {
+                    let pt = self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num))?;
+                    param_types.push(pt.into());
+                }
+                let return_type =
+                    self.type_to_llvm(&method.return_type.clone().unwrap_or(Type::Num))?;
+                let fn_type = return_type.fn_type(&param_types, false);
+                self.module.add_function(&mangled, fn_type, None);
+            }
+
+            // Pass 2: generate each method body.
+            for method in methods {
+                self.generate_method(&decl.name, &field_names, method)?;
+            }
+        }
+
+        // Type declarations are not inside a function; clear any stray function context so a
+        // following global declaration is not mistaken for a local.
+        self.current_function = None;
+        Ok(())
+    }
+
+    /// Emit the body of a single method as the pre-declared `"{TypeName}_{method}"` function,
+    /// with `it` bound to the receiver pointer so `it.field` / sibling-method calls resolve.
+    fn generate_method(
+        &mut self,
+        type_name: &str,
+        field_names: &[String],
+        method: &MethodDecl,
+    ) -> Result<(), String> {
+        let mangled = format!("{}_{}", type_name, method.name);
+        let function = self
+            .module
+            .get_function(&mangled)
+            .ok_or_else(|| format!("Method function not declared: {}", mangled))?;
+        self.current_function = Some(function);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        self.variables.clear();
+
+        // Param 0 is the implicit receiver `it` (a pointer to the record struct).
+        let it_param = function.get_nth_param(0).unwrap();
+        it_param.set_name("it");
+        let it_type = it_param.as_basic_value_enum().get_type();
+        let it_alloca = self.create_entry_block_alloca("it", it_type)?;
+        self.builder
+            .build_store(it_alloca, it_param)
+            .map_err(|e| format!("Failed to store it: {:?}", e))?;
+        self.variables
+            .insert("it".to_string(), (it_alloca, it_type));
+        // So `it.field` and `it.method()` resolve against this type.
+        self.record_types
+            .insert("it".to_string(), field_names.to_vec());
+        self.var_named_types
+            .insert("it".to_string(), type_name.to_string());
+
+        // Remaining params follow the receiver.
+        for (i, param) in method.params.iter().enumerate() {
+            let llvm_param = function.get_nth_param((i + 1) as u32).unwrap();
+            llvm_param.set_name(&param.name);
+            let param_type = llvm_param.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
+            self.builder
+                .build_store(alloca, llvm_param)
+                .map_err(|e| format!("Failed to build store: {:?}", e))?;
+            self.variables
+                .insert(param.name.clone(), (alloca, param_type));
+        }
+
+        let body_value = self.generate_expr(&method.body)?;
+        self.builder
+            .build_return(Some(&body_value))
+            .map_err(|e| format!("Failed to build return: {:?}", e))?;
+
+        Ok(())
     }
 
     fn generate_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
@@ -146,6 +255,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Expr::Record { fields, .. } = &decl.value {
             let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
             self.record_types.insert(decl.name.clone(), field_names);
+        }
+        // A named-type instance (e.g. `u = User { ... }`) — remember its type so method calls
+        // on `u` can resolve to the mangled `User_method` functions.
+        if let Expr::Constructor {
+            type_name, fields, ..
+        } = &decl.value
+        {
+            let field_names: Vec<String> = self
+                .named_type_fields
+                .get(type_name)
+                .cloned()
+                .unwrap_or_else(|| fields.iter().map(|(name, _)| name.clone()).collect());
+            self.record_types.insert(decl.name.clone(), field_names);
+            self.var_named_types
+                .insert(decl.name.clone(), type_name.clone());
         }
 
         let value = self.generate_expr(&decl.value)?;
@@ -562,11 +686,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => {}
         }
 
-        // Get the function from the module
-        let function = self
-            .module
-            .get_function(func_name)
-            .ok_or_else(|| format!("Function not found: {}", func_name))?;
+        // Get the function from the module. If there is no plain top-level function with this
+        // name, it may be a method call: the parser desugars `recv.method(a, b)` to
+        // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
+        let function = match self.module.get_function(func_name) {
+            Some(f) => f,
+            None => {
+                let mangled = args
+                    .first()
+                    .and_then(|recv| self.receiver_type_name(recv))
+                    .map(|type_name| format!("{}_{}", type_name, func_name));
+                match mangled.and_then(|m| self.module.get_function(&m)) {
+                    Some(f) => f,
+                    None => return Err(format!("Function not found: {}", func_name)),
+                }
+            }
+        };
 
         // Generate argument values
         let arg_values: Vec<BasicValueEnum> = args
@@ -600,6 +735,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             inkwell::values::AnyValueEnum::StructValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::VectorValue(v) => Ok(v.into()),
             _ => Err("Function does not return a basic value".to_string()),
+        }
+    }
+
+    /// Resolve the named record type of a method-call receiver, if known. Handles both a
+    /// variable holding a constructed instance and a constructor expression used directly.
+    fn receiver_type_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident { name, .. } => self.var_named_types.get(name).cloned(),
+            Expr::Constructor { type_name, .. } => Some(type_name.clone()),
+            _ => None,
         }
     }
 
@@ -1608,5 +1753,72 @@ mod tests {
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("getelementptr")); // Field GEP
         assert!(ir.contains("load")); // Field load
+    }
+
+    #[test]
+    fn test_method_codegen_and_dispatch() {
+        let context = Context::create();
+        let mut codegen = CodeGenerator::new(&context, "test");
+
+        // A named record with a method; the entry point constructs an instance and calls it.
+        // All fields are Num so the field layout/access is exact.
+        let code = "Point = {
+  x :: Num,
+  y :: Num,
+  sum = => it.x + it.y
+}
+
+^ = () -> Num => <
+  p = Point { x = 3, y = 4 }
+  p.sum()
+>";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+
+        let result = codegen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        // The method is emitted as a mangled top-level function taking the receiver pointer.
+        assert!(ir.contains("@Point_sum"));
+        // And the call site dispatches to it.
+        assert!(ir.contains("call") && ir.contains("Point_sum"));
+    }
+
+    #[test]
+    fn test_method_calls_sibling_method() {
+        let context = Context::create();
+        let mut codegen = CodeGenerator::new(&context, "test");
+
+        // `doubled` calls the sibling method `sum` via `it.sum()` — exercises the signature
+        // pre-pass (forward reference) and `it`-based dispatch.
+        let code = "Point = {
+  x :: Num,
+  y :: Num,
+  sum = => it.x + it.y,
+  doubled = => it.sum() + it.sum()
+}
+
+^ = () -> Num => <
+  p = Point { x = 10, y = 5 }
+  p.doubled()
+>";
+        let tokens = Lexer::tokenize(code).unwrap();
+        let program = parse(&tokens).unwrap();
+
+        let result = codegen.generate(&program);
+        if let Err(e) = &result {
+            println!("Error: {}", e);
+        }
+        assert!(result.is_ok());
+
+        let ir = result.unwrap();
+        println!("Generated IR:\n{}", ir);
+        assert!(ir.contains("@Point_sum"));
+        assert!(ir.contains("@Point_doubled"));
     }
 }
