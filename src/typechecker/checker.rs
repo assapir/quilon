@@ -593,6 +593,16 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
+                    Type::Text => {
+                        // Text has `.size` (byte length) and `.length` (grapheme count).
+                        if field == "size" || field == "length" {
+                            return Ok(Type::Num);
+                        }
+                        Err(TypeError::UndefinedVariable {
+                            name: field.clone(),
+                            span: span.clone(),
+                        })
+                    }
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Record(vec![])),
                         got: Box::new(expr_type),
@@ -849,6 +859,12 @@ impl TypeChecker {
         let right_type = self.infer_expr(right)?;
 
         match op {
+            // `+` is overloaded: Text + Text concatenates, otherwise it is numeric.
+            BinOp::Add if left_type == Type::Text || right_type == Type::Text => {
+                self.check_type_compatibility(&Type::Text, &left_type, span)?;
+                self.check_type_compatibility(&Type::Text, &right_type, span)?;
+                Ok(Type::Text)
+            }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 self.check_type_compatibility(&Type::Num, &left_type, span)?;
                 self.check_type_compatibility(&Type::Num, &right_type, span)?;
@@ -977,6 +993,15 @@ impl TypeChecker {
         // Fall back to regular function call
         let func_type = self.infer_expr(func)?;
 
+        // `print`/`println` are compiler-lowered (see CodeGenerator::generate_print)
+        // and polymorphic over Num / Text / Bool. They are applied as a FALLBACK:
+        // a user-defined or registered `print`/`println` whose signature accepts the
+        // arguments is resolved normally below and takes precedence; only when that
+        // resolution would reject the call (e.g. the core.io placeholder's untyped
+        // param defaulting to Num, given a Text) does the builtin kick in.
+        let is_print_builtin = matches!(func, Expr::Ident { name, .. }
+            if name == "print" || name == "println");
+
         match func_type {
             Type::Function {
                 params,
@@ -990,12 +1015,33 @@ impl TypeChecker {
                     });
                 }
 
-                for (param_type, arg) in params.iter().zip(args.iter()) {
-                    let arg_type = self.infer_expr(arg)?;
-                    self.check_type_compatibility(param_type, &arg_type, span)?;
+                // Type the arguments once.
+                let mut arg_types = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_types.push(self.infer_expr(arg)?);
                 }
 
-                Ok(*return_type)
+                // Check the resolved signature, remembering the first mismatch.
+                let mut first_err = None;
+                for (param_type, arg_type) in params.iter().zip(arg_types.iter()) {
+                    if let Err(e) = self.check_type_compatibility(param_type, arg_type, span) {
+                        first_err = Some(e);
+                        break;
+                    }
+                }
+                match first_err {
+                    None => Ok(*return_type),
+                    // Builtin print/println fallback: accept a single Num/Text/Bool
+                    // when the resolved signature (e.g. core.io's placeholder) rejects it.
+                    Some(_)
+                        if is_print_builtin
+                            && arg_types.len() == 1
+                            && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool) =>
+                    {
+                        Ok(Type::Num)
+                    }
+                    Some(e) => Err(e),
+                }
             }
             _ => Err(TypeError::NotAFunction {
                 got: func_type,

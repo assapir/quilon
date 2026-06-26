@@ -390,12 +390,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Expr::String { value, .. } => {
-                // Create a global string constant
-                let string_val = self
+                // Text is { ptr data, i64 byte_len }. `data` points at a global,
+                // NUL-terminated C string (so `print` can treat it as a C string);
+                // `byte_len` is the UTF-8 byte length, excluding the terminator.
+                let global = self
                     .builder
                     .build_global_string_ptr(value, "str")
                     .map_err(|e| format!("Failed to build string: {:?}", e))?;
-                Ok(string_val.as_pointer_value().into())
+                let data_ptr = global.as_pointer_value();
+                let len = self.context.i64_type().const_int(value.len() as u64, false);
+                let text_ty = self.ptr_len_struct_type();
+                let with_ptr = self
+                    .builder
+                    .build_insert_value(text_ty.get_undef(), data_ptr, 0, "text_ptr")
+                    .map_err(|e| format!("Failed to insert text ptr: {:?}", e))?
+                    .into_struct_value();
+                let text = self
+                    .builder
+                    .build_insert_value(with_ptr, len, 1, "text_len")
+                    .map_err(|e| format!("Failed to insert text len: {:?}", e))?
+                    .into_struct_value();
+                Ok(text.into())
             }
 
             Expr::Bool { value, .. } => Ok(self
@@ -469,17 +484,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         let rhs = self.generate_expr(right)?;
 
         match op {
-            BinOp::Add => {
-                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self
-                        .builder
-                        .build_float_add(l, r, "addtmp")
-                        .map_err(|e| format!("Failed to build add: {:?}", e))?
-                        .into())
-                } else {
-                    Err("Add operation requires float values".to_string())
+            BinOp::Add => match (lhs, rhs) {
+                (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                    .builder
+                    .build_float_add(l, r, "addtmp")
+                    .map_err(|e| format!("Failed to build add: {:?}", e))?
+                    .into()),
+                // Text + Text = concatenation (both are { ptr, i64 } structs).
+                (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) => {
+                    self.generate_text_concat(l, r)
                 }
-            }
+                _ => Err("Add requires two Nums or two Texts".to_string()),
+            },
             BinOp::Sub => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
@@ -745,6 +761,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 },
                 p.into(),
             ),
+            // Text is { ptr data, i64 len }; print its NUL-terminated `data`.
+            BasicValueEnum::StructValue(s) => {
+                let data = self
+                    .builder
+                    .build_extract_value(s, 0, "text_data")
+                    .map_err(|e| format!("Failed to extract text data: {:?}", e))?
+                    .into_pointer_value();
+                (
+                    if newline {
+                        "__println_cstr"
+                    } else {
+                        "__print_cstr"
+                    },
+                    data.into(),
+                )
+            }
             BasicValueEnum::IntValue(i) => {
                 let f = self
                     .builder
@@ -1144,13 +1176,101 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Concatenate two `Text` values into a fresh, GC-allocated, NUL-terminated
+    /// buffer and return a new `{ ptr, byte_len }` struct.
+    fn generate_text_concat(
+        &mut self,
+        left: inkwell::values::StructValue<'ctx>,
+        right: inkwell::values::StructValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i8t = self.context.i8_type();
+        let i64t = self.context.i64_type();
+
+        let field = |s: inkwell::values::StructValue<'ctx>,
+                     idx: u32,
+                     name: &str|
+         -> Result<BasicValueEnum<'ctx>, String> {
+            self.builder
+                .build_extract_value(s, idx, name)
+                .map_err(|e| format!("Failed to extract text field: {:?}", e))
+        };
+        let l_ptr = field(left, 0, "l_ptr")?.into_pointer_value();
+        let l_len = field(left, 1, "l_len")?.into_int_value();
+        let r_ptr = field(right, 0, "r_ptr")?.into_pointer_value();
+        let r_len = field(right, 1, "r_len")?.into_int_value();
+
+        let total = self
+            .builder
+            .build_int_add(l_len, r_len, "concat_len")
+            .map_err(|e| format!("Failed to add lengths: {:?}", e))?;
+        // +1 byte for the NUL terminator so the result is also a valid C string.
+        let alloc_size = self
+            .builder
+            .build_int_add(total, i64t.const_int(1, false), "concat_alloc")
+            .map_err(|e| format!("Failed to size alloc: {:?}", e))?;
+
+        use inkwell::values::AnyValue;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let dest = self
+            .builder
+            .build_call(alloc_fn, &[alloc_size.into()], "concat_buf")
+            .map_err(|e| format!("Failed to call __alloc: {:?}", e))?
+            .as_any_value_enum()
+            .into_pointer_value();
+
+        let memcpy_fn = self.get_intrinsic("memcpy")?;
+        self.builder
+            .build_call(memcpy_fn, &[dest.into(), l_ptr.into(), l_len.into()], "")
+            .map_err(|e| format!("Failed to copy left text: {:?}", e))?;
+        let tail = unsafe {
+            self.builder
+                .build_gep(i8t, dest, &[l_len], "concat_tail")
+                .map_err(|e| format!("Failed to offset into buffer: {:?}", e))?
+        };
+        self.builder
+            .build_call(memcpy_fn, &[tail.into(), r_ptr.into(), r_len.into()], "")
+            .map_err(|e| format!("Failed to copy right text: {:?}", e))?;
+        let nul = unsafe {
+            self.builder
+                .build_gep(i8t, dest, &[total], "concat_nul")
+                .map_err(|e| format!("Failed to offset NUL: {:?}", e))?
+        };
+        self.builder
+            .build_store(nul, i8t.const_zero())
+            .map_err(|e| format!("Failed to write NUL: {:?}", e))?;
+
+        let text_ty = self.ptr_len_struct_type();
+        let with_ptr = self
+            .builder
+            .build_insert_value(text_ty.get_undef(), dest, 0, "cat_ptr")
+            .map_err(|e| format!("Failed to insert concat ptr: {:?}", e))?
+            .into_struct_value();
+        let text = self
+            .builder
+            .build_insert_value(with_ptr, total, 1, "cat_len")
+            .map_err(|e| format!("Failed to insert concat len: {:?}", e))?
+            .into_struct_value();
+        Ok(text.into())
+    }
+
     fn generate_field_access(
         &mut self,
         expr: &Expr,
         field_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // A record may legitimately have a field literally named `size`/`length`.
+        // Resolve known record fields by NAME first (matching the type checker,
+        // which dispatches on static type) so they don't collide with the Text/array
+        // `.size`/`.length` struct-shape handling below. Text/array values are never
+        // tracked in `record_types`, so this only diverts genuine record fields.
+        let is_named_record_field = matches!(expr, Expr::Ident { name, .. }
+            if self
+                .record_types
+                .get(name)
+                .is_some_and(|fields| fields.iter().any(|f| f == field_name)));
+
         // Special handling for .size field on arrays
-        if field_name == "size" {
+        if !is_named_record_field && field_name == "size" {
             // For arrays (which are structs {ptr, i64}), we need special handling
             // Check if it's an identifier - we can directly work with the alloca
             if let Expr::Ident { name, .. } = expr
@@ -1179,6 +1299,46 @@ impl<'ctx> CodeGenerator<'ctx> {
                         return Ok(size_f64.into());
                     }
                 }
+            }
+        }
+
+        // Text/array as a value: `.size` is the i64 length field (byte length for
+        // Text); `.length` is the grapheme count (Text only — the checker rejects
+        // `.length` on arrays). Handles non-identifier receivers like `("a"+"b").size`.
+        if !is_named_record_field && (field_name == "size" || field_name == "length") {
+            let val = self.generate_expr(expr)?;
+            if let BasicValueEnum::StructValue(s) = val {
+                let len = self
+                    .builder
+                    .build_extract_value(s, 1, "len_field")
+                    .map_err(|e| format!("Failed to extract length field: {:?}", e))?
+                    .into_int_value();
+                if field_name == "size" {
+                    return Ok(self
+                        .builder
+                        .build_signed_int_to_float(len, self.context.f64_type(), "size_as_num")
+                        .map_err(|e| format!("Failed to convert size: {:?}", e))?
+                        .into());
+                }
+                // `.length`: grapheme-cluster count via __text_length(data, byte_len).
+                let data = self
+                    .builder
+                    .build_extract_value(s, 0, "data_field")
+                    .map_err(|e| format!("Failed to extract data field: {:?}", e))?
+                    .into_pointer_value();
+                let len_fn = self.get_intrinsic("__text_length")?;
+                use inkwell::values::AnyValue;
+                let count = self
+                    .builder
+                    .build_call(len_fn, &[data.into(), len.into()], "graphemes")
+                    .map_err(|e| format!("Failed to call __text_length: {:?}", e))?
+                    .as_any_value_enum()
+                    .into_int_value();
+                return Ok(self
+                    .builder
+                    .build_signed_int_to_float(count, self.context.f64_type(), "length_as_num")
+                    .map_err(|e| format!("Failed to convert length: {:?}", e))?
+                    .into());
             }
         }
 
@@ -1694,11 +1854,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.context.f64_type().const_float(0.0).into())
     }
 
+    /// The `{ ptr data, i64 len }` struct shared by arrays and `Text`. For `Text`,
+    /// `data` is a NUL-terminated UTF-8 buffer and `len` is its byte length.
+    fn ptr_len_struct_type(&self) -> inkwell::types::StructType<'ctx> {
+        self.context.struct_type(
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.i64_type().into(),
+            ],
+            false,
+        )
+    }
+
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
             Type::Bool => Ok(self.context.bool_type().into()),
-            Type::Text => Ok(self.context.ptr_type(AddressSpace::default()).into()),
+            // Text is { ptr data, i64 byte_len } (same shape as an array).
+            Type::Text => Ok(self.ptr_len_struct_type().into()),
             Type::Array(elem_type) => {
                 // Validate the element type, but LLVM uses opaque pointers so the
                 // pointee type is not encoded in the pointer itself.
