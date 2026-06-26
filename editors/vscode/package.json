@@ -1,0 +1,72 @@
+{
+  "name": "quilon",
+  "displayName": "Quilon",
+  "description": "Syntax highlighting and editor tasks for the Quilon programming language (.ql).",
+  "version": "0.1.0",
+  "publisher": "quilon",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/assapir/quilon.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "quilon",
+    "ql",
+    "language"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "quilon",
+        "aliases": [
+          "Quilon",
+          "quilon"
+        ],
+        "extensions": [
+          ".ql"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "quilon",
+        "scopeName": "source.quilon",
+        "path": "./syntaxes/quilon.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "quilon.check",
+        "title": "Quilon: Check Current File"
+      },
+      {
+        "command": "quilon.run",
+        "title": "Quilon: Run Current File"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "quilon"
+      }
+    ],
+    "configuration": {
+      "title": "Quilon",
+      "properties": {
+        "quilon.command": {
+          "type": "string",
+          "default": "quilon",
+          "description": "How to invoke the Quilon compiler. Use \"quilon\" if the binary is on your PATH, or e.g. \"cargo run --\" to run from a checkout of the compiler repo."
+        }
+      }
+    }
+  }
+}

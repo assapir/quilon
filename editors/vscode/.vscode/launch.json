@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Quilon: run current file (no breakpoints)",
+      "comment": "Trivial run-only config. Real breakpoint/step debugging is NOT supported: the Quilon compiler does not emit DWARF debug info yet. See README.md.",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "quilon run \"${file}\""
+    }
+  ]
+}
