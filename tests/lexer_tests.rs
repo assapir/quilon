@@ -155,7 +155,7 @@ fn test_array_syntax() {
 
 #[test]
 fn test_record_syntax() {
-    let source = "{ name :: String, age :: Num }";
+    let source = "{ name :: Text, age :: Num }";
     let tokens = Lexer::tokenize(source).unwrap();
 
     assert_eq!(tokens[0].kind, TokenKind::BraceOpen);

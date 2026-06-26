@@ -8,7 +8,7 @@ use quilon::typechecker::TypeChecker;
 #[test]
 fn test_all_features_integration() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             ~ For loops with blocks
             arr = [1, 2, 3]
             arr |> for n => <
@@ -51,7 +51,7 @@ fn test_all_features_integration() {
 #[test]
 fn test_result_pattern_extraction() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             success = Ok(100)
             failure = NotOk(404)
             
@@ -77,7 +77,7 @@ fn test_result_pattern_extraction() {
 #[test]
 fn test_nested_pattern_matching() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             ~ Pattern match on number to get Result,
             ~ then pattern match on Result
             x = 5
@@ -108,7 +108,7 @@ fn test_nested_pattern_matching() {
 #[test]
 fn test_inline_result_matching() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             ~ Create Result inline and immediately match
             value = (Ok(123)) ?
                 | Ok(x) => x + 7

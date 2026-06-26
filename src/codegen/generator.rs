@@ -42,8 +42,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.generate_item(item)?;
         }
 
-        // Check if entry point function (>>) exists and generate C main wrapper
-        if self.module.get_function(">>").is_some() {
+        // Check if entry point function (^) exists and generate C main wrapper
+        if self.module.get_function("^").is_some() {
             self.generate_main_wrapper()?;
         }
 
@@ -70,13 +70,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
 
-        // Get the >> function
+        // Get the ^ (entry point) function
         let user_entry = self
             .module
-            .get_function(">>")
-            .ok_or_else(|| "Entry point function >> not found".to_string())?;
+            .get_function("^")
+            .ok_or_else(|| "Entry point function ^ not found".to_string())?;
 
-        // Check the signature of >> to determine how to call it
+        // Check the signature of ^ to determine how to call it
         let user_entry_type = user_entry.get_type();
         let param_count = user_entry_type.count_param_types();
 
@@ -1437,7 +1437,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
             Type::Bool => Ok(self.context.bool_type().into()),
-            Type::String => Ok(self
+            Type::Text => Ok(self
                 .context
                 .i8_type()
                 .ptr_type(AddressSpace::default())

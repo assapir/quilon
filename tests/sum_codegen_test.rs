@@ -7,7 +7,7 @@ use quilon::typechecker::TypeChecker;
 #[test]
 fn test_ok_constructor_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = Ok(42)
             0
         >
@@ -32,7 +32,7 @@ fn test_ok_constructor_codegen() {
 #[test]
 fn test_notok_constructor_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = NotOk(404)
             0
         >
@@ -57,7 +57,7 @@ fn test_notok_constructor_codegen() {
 #[test]
 fn test_both_constructors_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = Ok(100)
             y = NotOk(500)
             0
@@ -80,41 +80,15 @@ fn test_both_constructors_codegen() {
     assert!(ir.contains("i8 0") && ir.contains("i8 1"));
 }
 
-#[test]
-#[ignore] // TODO: Functions that return Result need return type annotations
-fn test_constructor_in_function() {
-    // This test fails because functions that return Result types
-    // need explicit return type annotations. Without them, the function
-    // signature defaults to Num (f64), but the body returns a struct.
-    // Proper fix would require updating AST with inferred types.
-
-    let source = r#"
-        make_ok = () => Ok(42)
-        make_err = () => NotOk(0)
-        
-        >> = () -> Num => <
-            x = make_ok()
-            y = make_err()
-            0
-        >
-    "#;
-
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    // Generate LLVM IR
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
-    assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
-}
+// NOTE: a test for functions that *return* Result (e.g. `make_ok = () => Ok(42)`)
+// belongs here, but requires inferring/storing the Result return type from the body
+// and the typed-payload struct representation — that is Workstream B3. B3 should add a
+// passing version of this test. (Removed the previously #[ignore]d stub here.)
 
 #[test]
 fn test_string_in_constructor() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = NotOk("error message")
             0
         >

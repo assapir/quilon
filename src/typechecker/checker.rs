@@ -430,7 +430,7 @@ impl TypeChecker {
     fn infer_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match expr {
             Expr::Number { .. } => Ok(Type::Num),
-            Expr::String { .. } => Ok(Type::String),
+            Expr::String { .. } => Ok(Type::Text),
             Expr::Bool { .. } => Ok(Type::Bool),
 
             Expr::Ident { name, span } => {
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_type_mismatch() {
-        let tokens = Lexer::tokenize("x :: String = 42").unwrap();
+        let tokens = Lexer::tokenize("x :: Text = 42").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_program(&program).is_err());
@@ -1453,7 +1453,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         // Test that method calls work with type constructors
         let tokens = Lexer::tokenize(
             "User = {
-  name :: String,
+  name :: Text,
   age :: Num,
   getName = => it.name
 }
