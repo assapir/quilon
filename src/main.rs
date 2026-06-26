@@ -85,6 +85,11 @@ fn main() {
                 }
             };
 
+            // Resolve `<<` imports (e.g. `core.io`) into the program before
+            // type checking, so imported items like `print` are in scope —
+            // same as `compile`/`check`.
+            let program = link_imports(program, &file);
+
             // Type check
             let mut checker = typechecker::TypeChecker::new();
             if let Err(e) = checker.check_program(&program) {
