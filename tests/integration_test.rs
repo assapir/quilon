@@ -11,7 +11,7 @@ fn test_all_features_integration() {
         ^ = () -> Num => <
             ~ For loops with blocks
             arr = [1, 2, 3]
-            arr |> for n => <
+            arr :> for n => <
                 doubled = n * 2
                 doubled
             >

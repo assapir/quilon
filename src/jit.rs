@@ -55,18 +55,17 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
                 "__text_length",
                 intrinsics::__text_length as *const () as usize,
             ),
-            ("__print_num", intrinsics::__print_num as *const () as usize),
             (
-                "__println_num",
-                intrinsics::__println_num as *const () as usize,
+                "__write_bytes",
+                intrinsics::__write_bytes as *const () as usize,
             ),
             (
-                "__print_cstr",
-                intrinsics::__print_cstr as *const () as usize,
+                "__print_num_fd",
+                intrinsics::__print_num_fd as *const () as usize,
             ),
             (
-                "__println_cstr",
-                intrinsics::__println_cstr as *const () as usize,
+                "__print_text_fd",
+                intrinsics::__print_text_fd as *const () as usize,
             ),
         ];
         for (name, addr) in mappings {

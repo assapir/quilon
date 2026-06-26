@@ -66,12 +66,12 @@ fn test_print_accepts_text() {
 
 #[test]
 fn test_user_defined_print_not_shadowed() {
-    // Regression: a user-defined `println` with its own signature must be resolved
+    // Regression: a user-defined `print` with its own signature must be resolved
     // normally, not hard-shadowed by the polymorphic builtin (which only accepts a
-    // single Num/Text/Bool arg). A 2-arg user `println` must type-check.
+    // single Num/Text/Bool arg). A 2-arg user `print` must type-check.
     let source = r#"
-        println = (a :: Num, b :: Num) -> Num => a + b
-        ^ = () -> Num => println(2, 3)
+        print = (a :: Num, b :: Num) -> Num => a + b
+        ^ = () -> Num => print(2, 3)
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);

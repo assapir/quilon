@@ -663,7 +663,7 @@ impl<'a> Parser<'a> {
         while self.check(&TokenKind::Pipeline) {
             self.advance();
 
-            // Check if this is a for loop: |> for pattern => body
+            // Check if this is a for loop: :> for pattern => body
             if self.check(&TokenKind::For) {
                 self.advance(); // consume 'for'
 
@@ -1342,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_parse_pipeline() {
-        let tokens = Lexer::tokenize("result = data |> filter |> collect").unwrap();
+        let tokens = Lexer::tokenize("result = data :> filter :> collect").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
     }
@@ -1557,7 +1557,7 @@ mod tests {
 
     #[test]
     fn test_parse_for_loop_simple() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => print(n)").unwrap();
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] :> for n => print(n)").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1581,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_parse_for_loop_with_index() {
-        let tokens = Lexer::tokenize("test = => items |> for (val, i) => print(val)").unwrap();
+        let tokens = Lexer::tokenize("test = => items :> for (val, i) => print(val)").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1607,7 +1607,7 @@ mod tests {
     #[test]
     fn test_parse_for_loop_with_block_body() {
         let tokens =
-            Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
+            Lexer::tokenize("test = => [1, 2, 3] :> for n => < doubled = n * 2 doubled >").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);
@@ -1633,7 +1633,7 @@ mod tests {
     #[test]
     fn test_parse_nested_for_loops_with_blocks() {
         let tokens =
-            Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
+            Lexer::tokenize("test = => [[1, 2]] :> for row => < row :> for val => val >").unwrap();
         let result = parse(&tokens);
         if let Err(e) = result.as_ref() {
             eprintln!("Error: {:?}", e);

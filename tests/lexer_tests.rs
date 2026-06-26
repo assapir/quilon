@@ -42,9 +42,9 @@ factorial = n :: Num => n ?
 fn test_pipeline_expression() {
     let source = r#"
 result = data
-  |> filter .active
-  |> map transform
-  |> collect
+  :> filter .active
+  :> map transform
+  :> collect
 "#;
 
     let tokens = Lexer::tokenize(source).unwrap();

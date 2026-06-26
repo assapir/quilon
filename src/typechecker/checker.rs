@@ -482,34 +482,11 @@ impl TypeChecker {
             Expr::Call { func, args, span } => self.check_call(func, args, span),
 
             Expr::Pipeline { left, right, span } => {
-                // For now, treat pipeline as function application
-                // left |> right means right(left)
-                let left_type = self.infer_expr(left)?;
-
-                // right should be a function that takes left_type
-                let right_type = self.infer_expr(right)?;
-
-                match right_type {
-                    Type::Function {
-                        params,
-                        return_type,
-                    } => {
-                        if params.len() == 1 {
-                            self.check_type_compatibility(&params[0], &left_type, span)?;
-                            Ok(*return_type)
-                        } else {
-                            Err(TypeError::WrongNumberOfArguments {
-                                expected: 1,
-                                got: params.len(),
-                                span: span.clone(),
-                            })
-                        }
-                    }
-                    _ => Err(TypeError::NotAFunction {
-                        got: right_type,
-                        span: span.clone(),
-                    }),
-                }
+                // `left :> right` injects `left` as the first argument of the
+                // right-hand call: `x :> f` => `f(x)`, `x :> f(a)` => `f(x, a)`.
+                // Desugar and type-check the resulting call (shared with codegen).
+                let call = Expr::desugar_pipeline(left, right, span);
+                self.infer_expr(&call)
             }
 
             Expr::Block { stmts, span: _ } => {
@@ -993,14 +970,16 @@ impl TypeChecker {
         // Fall back to regular function call
         let func_type = self.infer_expr(func)?;
 
-        // `print`/`println` are compiler-lowered (see CodeGenerator::generate_print)
-        // and polymorphic over Num / Text / Bool. They are applied as a FALLBACK:
-        // a user-defined or registered `print`/`println` whose signature accepts the
-        // arguments is resolved normally below and takes precedence; only when that
-        // resolution would reject the call (e.g. the core.io placeholder's untyped
-        // param defaulting to Num, given a Text) does the builtin kick in.
+        // `print`/`eprint` are compiler-lowered (see CodeGenerator::generate_print)
+        // and polymorphic over Num / Text / Bool — which a single placeholder param
+        // can't express. They are applied as a FALLBACK: a user-defined/registered
+        // `print`/`eprint` whose signature accepts the args is resolved normally
+        // below and takes precedence; only when that resolution would reject the call
+        // (the core.io placeholder's untyped param defaulting to Num, given a Text)
+        // does the polymorphic builtin kick in. (`write` needs no fallback — its
+        // core.io placeholder is typed `(Text, Num) -> Num`.)
         let is_print_builtin = matches!(func, Expr::Ident { name, .. }
-            if name == "print" || name == "println");
+            if name == "print" || name == "eprint");
 
         match func_type {
             Type::Function {
@@ -1031,7 +1010,7 @@ impl TypeChecker {
                 }
                 match first_err {
                     None => Ok(*return_type),
-                    // Builtin print/println fallback: accept a single Num/Text/Bool
+                    // Builtin print/eprint fallback: accept a single Num/Text/Bool
                     // when the resolved signature (e.g. core.io's placeholder) rejects it.
                     Some(_)
                         if is_print_builtin
@@ -1455,7 +1434,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
 
     #[test]
     fn test_for_loop_simple() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => n").unwrap();
+        let tokens = Lexer::tokenize("test = => [1, 2, 3] :> for n => n").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
@@ -1470,7 +1449,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   items = [10, 20, 30]
-  items |> for (val, i) => val
+  items :> for (val, i) => val
 >",
         )
         .unwrap();
@@ -1489,7 +1468,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   nums = [1.5, 2.5, 3.5]
-  nums |> for n => n + 1.0
+  nums :> for n => n + 1.0
 >",
         )
         .unwrap();
@@ -1505,7 +1484,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
     #[test]
     fn test_for_loop_index_is_num() {
         // Test that index variable is Num type
-        let tokens = Lexer::tokenize("test = => [10, 20] |> for (val, i) => i + val").unwrap();
+        let tokens = Lexer::tokenize("test = => [10, 20] :> for (val, i) => i + val").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
@@ -1521,7 +1500,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   x = 42
-  x |> for n => n
+  x :> for n => n
 >",
         )
         .unwrap();
@@ -1536,7 +1515,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         // For loops should return Num (unit/0)
         let tokens = Lexer::tokenize(
             "test = => <
-  result = [1, 2, 3] |> for n => n
+  result = [1, 2, 3] :> for n => n
   result + 1
 >",
         )

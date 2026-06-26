@@ -11,7 +11,9 @@
 //! linker keeps libgc loaded (see `build.rs`).
 
 use std::ffi::CStr;
+use std::fs::File;
 use std::io::Write;
+use std::os::fd::FromRawFd;
 use std::os::raw::{c_char, c_void};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -62,36 +64,51 @@ pub extern "C" fn __text_length(ptr: *const u8, len: i64) -> i64 {
     }
 }
 
-/// Print a number without a trailing newline. Whole values print without a
-/// fractional part (`3`, not `3.0`); others use the shortest round-trip form.
+/// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
+/// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin.
+///
+/// # Safety contract (upheld by the compiler)
+/// `ptr` is null or points to at least `len` readable bytes; `fd` is a valid
+/// descriptor (e.g. `stdout`=1, `stderr`=2). The borrowed fd is never closed.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_num(x: f64) {
-    print!("{}", format_num(x));
-    let _ = std::io::stdout().flush();
+pub extern "C" fn __write_bytes(fd: i64, ptr: *const u8, len: i64) -> i64 {
+    if ptr.is_null() || len <= 0 {
+        return 0;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    write_to_fd(fd, bytes)
 }
 
-/// Print a number followed by a newline.
+/// Format and write a number to `fd` followed by a newline (backs `print`/`eprint`
+/// of a `Num`). Whole values print without a fractional part (`3`, not `3.0`).
 #[unsafe(no_mangle)]
-pub extern "C" fn __println_num(x: f64) {
-    println!("{}", format_num(x));
+pub extern "C" fn __print_num_fd(fd: i64, x: f64) {
+    write_to_fd(fd, format!("{}\n", format_num(x)).as_bytes());
 }
 
-/// Print a NUL-terminated C string without a trailing newline.
+/// Write a NUL-terminated C string to `fd` followed by a newline (backs
+/// `print`/`eprint` of a `Text`).
 ///
 /// # Safety contract (upheld by the compiler)
 /// `ptr` is null or points to a NUL-terminated byte string.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_cstr(ptr: *const c_char) {
-    if let Some(s) = cstr_to_str(ptr) {
-        print!("{}", s);
-        let _ = std::io::stdout().flush();
-    }
+pub extern "C" fn __print_text_fd(fd: i64, ptr: *const c_char) {
+    let mut s = cstr_to_str(ptr).unwrap_or_default().into_owned();
+    s.push('\n');
+    write_to_fd(fd, s.as_bytes());
 }
 
-/// Print a NUL-terminated C string followed by a newline.
-#[unsafe(no_mangle)]
-pub extern "C" fn __println_cstr(ptr: *const c_char) {
-    println!("{}", cstr_to_str(ptr).unwrap_or_default());
+/// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
+fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
+    // SAFETY: `fd` is a live descriptor owned by the running program; we wrap it
+    // only to write, then `forget` the File so its Drop does not close the fd.
+    let mut file = unsafe { File::from_raw_fd(fd as i32) };
+    let written = file.write(bytes).unwrap_or(0);
+    let _ = file.flush();
+    std::mem::forget(file);
+    written as i64
 }
 
 fn cstr_to_str<'a>(ptr: *const c_char) -> Option<std::borrow::Cow<'a, str>> {
