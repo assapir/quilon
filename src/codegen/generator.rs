@@ -78,7 +78,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let main_fn = self.module.add_function("main", main_type, None);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
-        let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let _argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
 
         let entry = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
@@ -582,8 +582,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             BinOp::And => {
                 // Logical AND with short-circuit evaluation
                 // Convert operands to boolean (i1)
-                let lhs_bool = self.to_boolean(lhs)?;
-                let rhs_bool = self.to_boolean(rhs)?;
+                let lhs_bool = self.value_to_boolean(lhs)?;
+                let rhs_bool = self.value_to_boolean(rhs)?;
 
                 // Use LLVM's 'and' instruction
                 Ok(self
@@ -595,8 +595,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             BinOp::Or => {
                 // Logical OR with short-circuit evaluation
                 // Convert operands to boolean (i1)
-                let lhs_bool = self.to_boolean(lhs)?;
-                let rhs_bool = self.to_boolean(rhs)?;
+                let lhs_bool = self.value_to_boolean(lhs)?;
+                let rhs_bool = self.value_to_boolean(rhs)?;
 
                 // Use LLVM's 'or' instruction
                 Ok(self
@@ -610,7 +610,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     // Helper to convert a value to boolean (i1)
-    fn to_boolean(
+    fn value_to_boolean(
         &mut self,
         value: BasicValueEnum<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
@@ -1153,34 +1153,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         if field_name == "size" {
             // For arrays (which are structs {ptr, i64}), we need special handling
             // Check if it's an identifier - we can directly work with the alloca
-            if let Expr::Ident { name, .. } = expr {
-                if let Some((var_ptr, var_type)) = self.variables.get(name).cloned() {
-                    // Check if this is a struct type (could be an array)
-                    if let BasicTypeEnum::StructType(struct_type) = var_type {
-                        // Get field 1 (size field of array struct) directly from the alloca
-                        let size_field = self
+            if let Expr::Ident { name, .. } = expr
+                && let Some((var_ptr, var_type)) = self.variables.get(name).cloned()
+            {
+                // Check if this is a struct type (could be an array)
+                if let BasicTypeEnum::StructType(struct_type) = var_type {
+                    // Get field 1 (size field of array struct) directly from the alloca
+                    let size_field = self
+                        .builder
+                        .build_struct_gep(struct_type, var_ptr, 1, "size_field")
+                        .map_err(|e| format!("Failed to get size field: {:?}", e))?;
+
+                    let size_val = self
+                        .builder
+                        .build_load(self.context.i64_type(), size_field, "size")
+                        .map_err(|e| format!("Failed to load size: {:?}", e))?;
+
+                    // Convert i64 to f64 (Num)
+                    if let BasicValueEnum::IntValue(i) = size_val {
+                        let size_f64 = self
                             .builder
-                            .build_struct_gep(struct_type, var_ptr, 1, "size_field")
-                            .map_err(|e| format!("Failed to get size field: {:?}", e))?;
+                            .build_signed_int_to_float(i, self.context.f64_type(), "size_as_num")
+                            .map_err(|e| format!("Failed to convert size: {:?}", e))?;
 
-                        let size_val = self
-                            .builder
-                            .build_load(self.context.i64_type(), size_field, "size")
-                            .map_err(|e| format!("Failed to load size: {:?}", e))?;
-
-                        // Convert i64 to f64 (Num)
-                        if let BasicValueEnum::IntValue(i) = size_val {
-                            let size_f64 = self
-                                .builder
-                                .build_signed_int_to_float(
-                                    i,
-                                    self.context.f64_type(),
-                                    "size_as_num",
-                                )
-                                .map_err(|e| format!("Failed to convert size: {:?}", e))?;
-
-                            return Ok(size_f64.into());
-                        }
+                        return Ok(size_f64.into());
                     }
                 }
             }
@@ -1188,54 +1184,54 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // For regular record field access
         // Special case: if expr is an identifier, check if we have record info
-        if let Expr::Ident { name, .. } = expr {
-            if let Some(field_names) = self.record_types.get(name) {
-                // Find the field index
-                if let Some(field_idx) = field_names.iter().position(|f| f == field_name) {
-                    // Get the variable pointer
-                    let (var_ptr, _var_type) = self
-                        .variables
-                        .get(name)
-                        .ok_or_else(|| format!("Variable not found: {}", name))?;
+        if let Expr::Ident { name, .. } = expr
+            && let Some(field_names) = self.record_types.get(name)
+        {
+            // Find the field index
+            if let Some(field_idx) = field_names.iter().position(|f| f == field_name) {
+                // Get the variable pointer
+                let (var_ptr, _var_type) = self
+                    .variables
+                    .get(name)
+                    .ok_or_else(|| format!("Variable not found: {}", name))?;
 
-                    // The variable holds a pointer to the struct
-                    // Load it to get the actual struct pointer
-                    let struct_ptr = self
-                        .builder
-                        .build_load(
-                            self.context.ptr_type(AddressSpace::default()),
-                            *var_ptr,
-                            "load_struct_ptr",
-                        )
-                        .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
-                        .into_pointer_value();
+                // The variable holds a pointer to the struct
+                // Load it to get the actual struct pointer
+                let struct_ptr = self
+                    .builder
+                    .build_load(
+                        self.context.ptr_type(AddressSpace::default()),
+                        *var_ptr,
+                        "load_struct_ptr",
+                    )
+                    .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
+                    .into_pointer_value();
 
-                    // Now we need the struct type for GEP
-                    // We need to reconstruct the struct type from field count
-                    // For now, assume all fields are f64 (this is a limitation)
-                    let field_types: Vec<BasicTypeEnum> =
-                        vec![self.context.f64_type().into(); field_names.len()];
-                    let struct_type = self.context.struct_type(&field_types, false);
+                // Now we need the struct type for GEP
+                // We need to reconstruct the struct type from field count
+                // For now, assume all fields are f64 (this is a limitation)
+                let field_types: Vec<BasicTypeEnum> =
+                    vec![self.context.f64_type().into(); field_names.len()];
+                let struct_type = self.context.struct_type(&field_types, false);
 
-                    // Use GEP to get field pointer
-                    let field_ptr = self
-                        .builder
-                        .build_struct_gep(
-                            struct_type,
-                            struct_ptr,
-                            field_idx as u32,
-                            &format!("field_{}", field_name),
-                        )
-                        .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
+                // Use GEP to get field pointer
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        struct_type,
+                        struct_ptr,
+                        field_idx as u32,
+                        &format!("field_{}", field_name),
+                    )
+                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
 
-                    // Load the field value
-                    let field_val = self
-                        .builder
-                        .build_load(self.context.f64_type(), field_ptr, field_name)
-                        .map_err(|e| format!("Failed to load field: {:?}", e))?;
+                // Load the field value
+                let field_val = self
+                    .builder
+                    .build_load(self.context.f64_type(), field_ptr, field_name)
+                    .map_err(|e| format!("Failed to load field: {:?}", e))?;
 
-                    return Ok(field_val);
-                }
+                return Ok(field_val);
             }
         }
 
@@ -1437,7 +1433,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Pattern::Constructor { name, args, .. } => {
+            Pattern::Constructor { name, args: _, .. } => {
                 // For constructors, we need to check the discriminant
                 // Result is represented as { i8 tag, f64 payload }
                 // Ok = tag 0, NotOk = tag 1
@@ -1492,27 +1488,27 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
 
-            Pattern::Constructor { name, args, .. } => {
+            Pattern::Constructor { name: _, args, .. } => {
                 // For constructors with arguments, extract the payload
                 // Result is { i8 tag, f64 payload }
-                if let Some(first_arg) = args.first() {
-                    if let Pattern::Ident { name: arg_name, .. } = first_arg {
-                        // Extract payload (field 1) from the struct
-                        if let BasicValueEnum::StructValue(struct_val) = value {
-                            let payload = self
-                                .builder
-                                .build_extract_value(struct_val, 1, "payload")
-                                .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
+                if let Some(first_arg) = args.first()
+                    && let Pattern::Ident { name: arg_name, .. } = first_arg
+                {
+                    // Extract payload (field 1) from the struct
+                    if let BasicValueEnum::StructValue(struct_val) = value {
+                        let payload = self
+                            .builder
+                            .build_extract_value(struct_val, 1, "payload")
+                            .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
 
-                            // Bind the payload value
-                            let alloca =
-                                self.create_entry_block_alloca(arg_name, payload.get_type())?;
-                            self.builder
-                                .build_store(alloca, payload)
-                                .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
-                            self.variables
-                                .insert(arg_name.clone(), (alloca, payload.get_type()));
-                        }
+                        // Bind the payload value
+                        let alloca =
+                            self.create_entry_block_alloca(arg_name, payload.get_type())?;
+                        self.builder
+                            .build_store(alloca, payload)
+                            .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
+                        self.variables
+                            .insert(arg_name.clone(), (alloca, payload.get_type()));
                     }
                 }
                 Ok(())
@@ -1702,15 +1698,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
             Type::Bool => Ok(self.context.bool_type().into()),
-            Type::Text => Ok(self
-                .context
-                .i8_type()
-                .ptr_type(AddressSpace::default())
-                .into()),
+            Type::Text => Ok(self.context.ptr_type(AddressSpace::default()).into()),
             Type::Array(elem_type) => {
-                let elem = self.type_to_llvm(elem_type)?;
-                // For now, represent arrays as pointers
-                Ok(elem.ptr_type(AddressSpace::default()).into())
+                // Validate the element type, but LLVM uses opaque pointers so the
+                // pointee type is not encoded in the pointer itself.
+                let _elem = self.type_to_llvm(elem_type)?;
+                Ok(self.context.ptr_type(AddressSpace::default()).into())
             }
             Type::Record(fields) => {
                 let field_types: Vec<BasicTypeEnum> = fields

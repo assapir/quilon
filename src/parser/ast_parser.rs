@@ -399,7 +399,7 @@ impl<'a> Parser<'a> {
                 });
             } else {
                 return Err(ParseError {
-                    message: format!("Expected :: or = after field/method name"),
+                    message: "Expected :: or = after field/method name".to_string(),
                     span: self.peek().span.clone(),
                 });
             }
@@ -1358,8 +1358,8 @@ mod tests {
     fn test_parse_pattern_match() {
         let tokens = Lexer::tokenize("result = value ? | Some(x) => x | None => 0").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1487,8 +1487,8 @@ mod tests {
     fn test_parse_function_with_types() {
         let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1536,8 +1536,8 @@ mod tests {
     fn test_parse_no_param_function_with_return_type() {
         let tokens = Lexer::tokenize("greet = () -> Text => \"Hello\"").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1559,8 +1559,8 @@ mod tests {
     fn test_parse_for_loop_simple() {
         let tokens = Lexer::tokenize("test = => [1, 2, 3] |> for n => print(n)").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1583,8 +1583,8 @@ mod tests {
     fn test_parse_for_loop_with_index() {
         let tokens = Lexer::tokenize("test = => items |> for (val, i) => print(val)").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1609,8 +1609,8 @@ mod tests {
         let tokens =
             Lexer::tokenize("test = => [1, 2, 3] |> for n => < doubled = n * 2 doubled >").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1635,8 +1635,8 @@ mod tests {
         let tokens =
             Lexer::tokenize("test = => [[1, 2]] |> for row => < row |> for val => val >").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1645,8 +1645,8 @@ mod tests {
     fn test_parse_method_call() {
         let tokens = Lexer::tokenize("result = user.getName()").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1682,14 +1682,13 @@ mod tests {
         assert!(result.is_ok());
 
         let program = result.unwrap();
-        if let Item::VarDecl(var) = &program.items[0] {
-            if let Expr::Call { func, args, .. } = &var.value {
-                if let Expr::Ident { name, .. } = func.as_ref() {
-                    assert_eq!(name, "setAge");
-                    // Should have 2 args: receiver and the argument
-                    assert_eq!(args.len(), 2);
-                }
-            }
+        if let Item::VarDecl(var) = &program.items[0]
+            && let Expr::Call { func, args, .. } = &var.value
+            && let Expr::Ident { name, .. } = func.as_ref()
+        {
+            assert_eq!(name, "setAge");
+            // Should have 2 args: receiver and the argument
+            assert_eq!(args.len(), 2);
         }
     }
 
@@ -1697,8 +1696,8 @@ mod tests {
     fn test_parse_chained_method_calls() {
         let tokens = Lexer::tokenize("result = user.getName().toUpper()").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1707,8 +1706,8 @@ mod tests {
     fn test_parse_type_decl_with_fields() {
         let tokens = Lexer::tokenize("User = { name :: Text, age :: Num }").unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1736,8 +1735,8 @@ mod tests {
         )
         .unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1767,18 +1766,18 @@ mod tests {
         )
         .unwrap();
         let result = parse(&tokens);
-        if result.is_err() {
-            eprintln!("Error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Error: {:?}", e);
         }
         assert!(result.is_ok());
 
         let program = result.unwrap();
-        if let Item::TypeDecl(decl) = &program.items[0] {
-            if let TypeDef::Record { fields: _, methods } = &decl.type_def {
-                assert_eq!(methods[0].name, "incrementAge");
-                assert_eq!(methods[0].params.len(), 1);
-                assert_eq!(methods[0].params[0].name, "amount");
-            }
+        if let Item::TypeDecl(decl) = &program.items[0]
+            && let TypeDef::Record { fields: _, methods } = &decl.type_def
+        {
+            assert_eq!(methods[0].name, "incrementAge");
+            assert_eq!(methods[0].params.len(), 1);
+            assert_eq!(methods[0].params[0].name, "amount");
         }
     }
 }

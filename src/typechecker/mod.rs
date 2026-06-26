@@ -3,4 +3,4 @@
 pub mod checker;
 pub mod inference;
 
-pub use checker::{TypeChecker, TypeError};
+pub use checker::TypeChecker;

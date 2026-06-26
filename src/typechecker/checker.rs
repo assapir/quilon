@@ -12,8 +12,10 @@ pub enum TypeError {
         span: Span,
     },
     TypeMismatch {
-        expected: Type,
-        got: Type,
+        // Boxed: keeps `TypeError` small so `Result<_, TypeError>` stays cheap to
+        // pass by value (clippy::result_large_err).
+        expected: Box<Type>,
+        got: Box<Type>,
         span: Span,
     },
     NotAFunction {
@@ -25,10 +27,13 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
+    // Reserved diagnostics not yet emitted by the 0.9 checker.
+    #[allow(dead_code)]
     CannotInfer {
         expr: String,
         span: Span,
     },
+    #[allow(dead_code)]
     ImmutableAssignment {
         name: String,
         span: Span,
@@ -37,9 +42,10 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    #[allow(dead_code)]
     PatternTypeMismatch {
-        expected: Type,
-        got: Type,
+        expected: Box<Type>,
+        got: Box<Type>,
         span: Span,
     },
     NonExhaustiveMatch {
@@ -112,7 +118,11 @@ impl std::fmt::Display for TypeError {
 impl std::error::Error for TypeError {}
 
 #[derive(Debug, Clone)]
-struct Symbol {
+// `pub` so it doesn't leak through the public `Environment::lookup` signature.
+// `mutable`/`span` are recorded for diagnostics not yet emitted (mutability
+// enforcement, source spans in errors).
+#[allow(dead_code)]
+pub struct Symbol {
     type_: Type,
     mutable: bool,
     span: Span,
@@ -121,6 +131,12 @@ struct Symbol {
 #[derive(Debug, Clone)]
 pub struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Environment {
@@ -177,28 +193,40 @@ impl Environment {
         self.lookup(name).map(|s| s.type_.clone())
     }
 
+    // Reserved for mutability enforcement, not yet wired into the checker.
+    #[allow(dead_code)]
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
 
-    pub fn update_type(&mut self, name: &str, new_type: Type) -> Result<(), ()> {
-        // Update a binding's type (used for function type inference)
+    /// Update a binding's type (used for function type inference).
+    /// Returns `true` if a binding was found and updated.
+    pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(symbol) = scope.get_mut(name) {
                 symbol.type_ = new_type;
-                return Ok(());
+                return true;
             }
         }
-        Err(())
+        false
     }
 }
 
+/// A method's signature and body: (params, return type, body expression).
+type MethodDef = (Vec<Param>, Option<Type>, Expr);
+
 pub struct TypeChecker {
     env: Environment,
-    // Registry of methods: (TypeName, MethodName) -> (Params, ReturnType, Body)
-    methods: std::collections::HashMap<(String, String), (Vec<Param>, Option<Type>, Expr)>,
+    // Registry of methods: (TypeName, MethodName) -> method definition
+    methods: std::collections::HashMap<(String, String), MethodDef>,
     // Registry of sum types: TypeName -> Type::Sum
     sum_types: std::collections::HashMap<String, Type>,
+}
+
+impl Default for TypeChecker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeChecker {
@@ -492,7 +520,7 @@ impl TypeChecker {
                 // Process statements in order, last one is the result
                 let mut result_type = Type::Num;
 
-                for (_i, stmt) in stmts.iter().enumerate() {
+                for stmt in stmts.iter() {
                     match stmt {
                         crate::ast::Statement::Item(item) => {
                             self.check_item(item)?;
@@ -566,8 +594,8 @@ impl TypeChecker {
                         })
                     }
                     _ => Err(TypeError::TypeMismatch {
-                        expected: Type::Record(vec![]),
-                        got: expr_type,
+                        expected: Box::new(Type::Record(vec![])),
+                        got: Box::new(expr_type),
                         span: span.clone(),
                     }),
                 }
@@ -580,8 +608,8 @@ impl TypeChecker {
                 // Index must be Num
                 if index_type != Type::Num {
                     return Err(TypeError::TypeMismatch {
-                        expected: Type::Num,
-                        got: index_type,
+                        expected: Box::new(Type::Num),
+                        got: Box::new(index_type),
                         span: span.clone(),
                     });
                 }
@@ -590,8 +618,8 @@ impl TypeChecker {
                 match expr_type {
                     Type::Array(elem_type) => Ok(*elem_type),
                     _ => Err(TypeError::TypeMismatch {
-                        expected: Type::Array(Box::new(Type::Num)),
-                        got: expr_type,
+                        expected: Box::new(Type::Array(Box::new(Type::Num))),
+                        got: Box::new(expr_type),
                         span: span.clone(),
                     }),
                 }
@@ -684,12 +712,12 @@ impl TypeChecker {
                             })
                         }
                         _ => Err(TypeError::TypeMismatch {
-                            expected: Type::Named {
+                            expected: Box::new(Type::Named {
                                 name: type_name.clone(),
                                 fields: vec![],
                                 methods: vec![],
-                            },
-                            got: symbol.type_.clone(),
+                            }),
+                            got: Box::new(symbol.type_.clone()),
                             span: span.clone(),
                         }),
                     }
@@ -717,24 +745,23 @@ impl TypeChecker {
                         name: sum_name,
                         variants,
                     } = sum_type
+                        && let Some(v) = variants.iter().find(|v| &v.name == variant)
                     {
-                        if let Some(v) = variants.iter().find(|v| &v.name == variant) {
-                            if v.fields.len() != args.len() {
-                                return Err(TypeError::WrongNumberOfArguments {
-                                    expected: v.fields.len(),
-                                    got: args.len(),
-                                    span: span.clone(),
-                                });
-                            }
-                            for (field_type, arg) in v.fields.iter().zip(args.iter()) {
-                                let arg_type = self.infer_expr(arg)?;
-                                self.check_type_compatibility(field_type, &arg_type, span)?;
-                            }
-                            return Ok(Type::Sum {
-                                name: sum_name.clone(),
-                                variants: variants.clone(),
+                        if v.fields.len() != args.len() {
+                            return Err(TypeError::WrongNumberOfArguments {
+                                expected: v.fields.len(),
+                                got: args.len(),
+                                span: span.clone(),
                             });
                         }
+                        for (field_type, arg) in v.fields.iter().zip(args.iter()) {
+                            let arg_type = self.infer_expr(arg)?;
+                            self.check_type_compatibility(field_type, &arg_type, span)?;
+                        }
+                        return Ok(Type::Sum {
+                            name: sum_name.clone(),
+                            variants: variants.clone(),
+                        });
                     }
                 }
                 Err(TypeError::UndefinedVariable {
@@ -802,8 +829,8 @@ impl TypeChecker {
                         Ok(Type::Num)
                     }
                     _ => Err(TypeError::TypeMismatch {
-                        expected: Type::Array(Box::new(Type::Num)), // Placeholder
-                        got: collection_type,
+                        expected: Box::new(Type::Array(Box::new(Type::Num))), // Placeholder
+                        got: Box::new(collection_type),
                         span: span.clone(),
                     }),
                 }
@@ -899,50 +926,50 @@ impl TypeChecker {
         }
 
         // Check if this is a method call: func is Ident and first arg is a Named type
-        if let Expr::Ident { name, .. } = func {
-            if !args.is_empty() {
-                let first_arg_type = self.infer_expr(&args[0])?;
+        if let Expr::Ident { name, .. } = func
+            && !args.is_empty()
+        {
+            let first_arg_type = self.infer_expr(&args[0])?;
 
-                // Check if first argument is a Named type with this method
-                if let Type::Named {
-                    name: type_name,
-                    fields: _,
-                    methods: _,
-                } = &first_arg_type
+            // Check if first argument is a Named type with this method
+            if let Type::Named {
+                name: type_name,
+                fields: _,
+                methods: _,
+            } = &first_arg_type
+            {
+                // Look up method in the type's method list
+                if let Some(method_sig) = self
+                    .methods
+                    .get(&(type_name.clone(), name.clone()))
+                    .cloned()
                 {
-                    // Look up method in the type's method list
-                    if let Some(method_sig) = self
-                        .methods
-                        .get(&(type_name.clone(), name.clone()))
-                        .cloned()
-                    {
-                        let (method_params, method_return_type, _body) = method_sig;
+                    let (method_params, method_return_type, _body) = method_sig;
 
-                        // Method parameters don't include the implicit receiver
-                        // But args[0] is the receiver, so we need args[1..] to match method_params
-                        let call_args = &args[1..];
+                    // Method parameters don't include the implicit receiver
+                    // But args[0] is the receiver, so we need args[1..] to match method_params
+                    let call_args = &args[1..];
 
-                        if method_params.len() != call_args.len() {
-                            return Err(TypeError::WrongNumberOfArguments {
-                                expected: method_params.len(),
-                                got: call_args.len(),
-                                span: span.clone(),
-                            });
-                        }
-
-                        // Type check arguments
-                        for (param, arg) in method_params.iter().zip(call_args.iter()) {
-                            let arg_type = self.infer_expr(arg)?;
-                            // Extract the type from the Param
-                            if let Some(param_type) = &param.type_annotation {
-                                self.check_type_compatibility(param_type, &arg_type, span)?;
-                            }
-                            // If no type annotation, we can't check (would need inference)
-                        }
-
-                        // Return the method's return type (or Num if not specified)
-                        return Ok(method_return_type.unwrap_or(Type::Num));
+                    if method_params.len() != call_args.len() {
+                        return Err(TypeError::WrongNumberOfArguments {
+                            expected: method_params.len(),
+                            got: call_args.len(),
+                            span: span.clone(),
+                        });
                     }
+
+                    // Type check arguments
+                    for (param, arg) in method_params.iter().zip(call_args.iter()) {
+                        let arg_type = self.infer_expr(arg)?;
+                        // Extract the type from the Param
+                        if let Some(param_type) = &param.type_annotation {
+                            self.check_type_compatibility(param_type, &arg_type, span)?;
+                        }
+                        // If no type annotation, we can't check (would need inference)
+                    }
+
+                    // Return the method's return type (or Num if not specified)
+                    return Ok(method_return_type.unwrap_or(Type::Num));
                 }
             }
         }
@@ -1154,8 +1181,8 @@ impl TypeChecker {
                         Ok(())
                     } else {
                         Err(TypeError::TypeMismatch {
-                            expected: expected.clone(),
-                            got: got.clone(),
+                            expected: Box::new(expected.clone()),
+                            got: Box::new(got.clone()),
                             span: span.clone(),
                         })
                     }
@@ -1374,7 +1401,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
     #[test]
     fn test_builtin_sum_types() {
         // Verify Result type is available
-        let mut checker = TypeChecker::new();
+        let checker = TypeChecker::new();
 
         // Check Result is defined
         assert!(checker.env.get_type("Result").is_some());
@@ -1386,8 +1413,8 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1404,8 +1431,8 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1423,8 +1450,8 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1436,8 +1463,8 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1471,8 +1498,8 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1496,8 +1523,8 @@ test = => <
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1516,8 +1543,8 @@ test = => <
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }
@@ -1537,8 +1564,8 @@ test = => <
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
-        if result.is_err() {
-            eprintln!("Type error: {:?}", result.as_ref().unwrap_err());
+        if let Err(e) = result.as_ref() {
+            eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
     }

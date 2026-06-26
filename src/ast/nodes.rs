@@ -25,6 +25,9 @@ pub enum ModulePath {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// The `*Decl` suffix mirrors the AST node names (VarDecl/FunctionDecl/TypeDecl);
+// renaming would churn the whole codebase for no clarity gain.
+#[allow(clippy::enum_variant_names)]
 pub enum Item {
     VarDecl(VarDecl),
     FunctionDecl(FunctionDecl),
@@ -42,11 +45,14 @@ pub struct TypeDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDef {
+    // Reserved for user-defined sum types and type aliases (not yet parsed in 0.9).
+    #[allow(dead_code)]
     Sum(Vec<SumVariant>),
     Record {
         fields: Vec<(String, Type)>,
         methods: Vec<MethodDecl>,
     },
+    #[allow(dead_code)]
     Alias(Type),
 }
 
@@ -199,7 +205,10 @@ pub enum Expr {
         span: Span,
     },
 
-    // Sum type constructor call (e.g., Some(42), OK("value"), NotOK)
+    // Sum type constructor call (e.g., Some(42), OK("value"), NotOK).
+    // Reserved AST surface: constructor calls currently flow through `Call`, so this
+    // variant is matched-but-not-yet-built. Kept for the planned dedicated lowering.
+    #[allow(dead_code)]
     SumConstructor {
         variant: String,
         args: Vec<Expr>,
@@ -300,8 +309,12 @@ pub enum BinOp {
     Mod,
     Eq,
     Ne,
+    // `<` and `>` are block delimiters in Quilon, so bare less/greater-than are not
+    // parsed as operators yet; reserved for when the grammar disambiguates them.
+    #[allow(dead_code)]
     Lt,
     Le,
+    #[allow(dead_code)]
     Gt,
     Ge,
     And,
