@@ -88,10 +88,10 @@ fn main() {
                 }
             }
 
-            // Validate entry point exists (>> function required for executables)
+            // Validate entry point exists (^ function required for executables)
             let has_entry_point = program.items.iter().any(|item| {
                 if let ast::Item::FunctionDecl(func) = item {
-                    func.name == ">>"
+                    func.name == "^"
                 } else {
                     false
                 }
@@ -99,11 +99,8 @@ fn main() {
 
             if !has_entry_point {
                 eprintln!("❌ Error: No entry point found!");
-                eprintln!("   Programs must define a >> function as the entry point.");
-                eprintln!("   Example: >> = () -> Num => 0");
-                eprintln!();
-                eprintln!("   Note: Module imports (<<) are not yet implemented.");
-                eprintln!("   For now, all programs must be standalone executables.");
+                eprintln!("   Programs must define a ^ function as the entry point.");
+                eprintln!("   Example: ^ = () -> Num => 0");
                 std::process::exit(1);
             }
 

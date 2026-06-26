@@ -204,7 +204,7 @@ pub fn to_concrete(ty: &InferType) -> Option<Type> {
 pub fn from_concrete(ty: &Type) -> InferType {
     match ty {
         Type::Num => InferType::Concrete(Type::Num),
-        Type::String => InferType::Concrete(Type::String),
+        Type::Text => InferType::Concrete(Type::Text),
         Type::Bool => InferType::Concrete(Type::Bool),
         Type::Array(elem) => InferType::Array(Box::new(from_concrete(elem))),
         Type::Record(fields) => InferType::Concrete(Type::Record(fields.clone())),
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_unify_mismatch() {
         let t1 = InferType::Concrete(Type::Num);
-        let t2 = InferType::Concrete(Type::String);
+        let t2 = InferType::Concrete(Type::Text);
         let result = unify(&t1, &t2);
         assert!(result.is_err());
     }
@@ -270,7 +270,7 @@ mod tests {
         };
         let t2 = InferType::Function {
             params: vec![InferType::Concrete(Type::Num)],
-            return_type: Box::new(InferType::Concrete(Type::String)),
+            return_type: Box::new(InferType::Concrete(Type::Text)),
         };
 
         let result = unify(&t1, &t2);
@@ -280,7 +280,7 @@ mod tests {
         let applied = sub.apply(&t1);
 
         if let InferType::Function { return_type, .. } = applied {
-            assert_eq!(*return_type, InferType::Concrete(Type::String));
+            assert_eq!(*return_type, InferType::Concrete(Type::Text));
         } else {
             panic!("Expected function type");
         }

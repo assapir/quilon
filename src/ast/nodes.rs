@@ -4,7 +4,24 @@ use crate::lexer::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub imports: Vec<Import>,
     pub items: Vec<Item>,
+}
+
+/// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.ql"` (file path).
+/// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Import {
+    pub path: ModulePath,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModulePath {
+    /// Built-in module referenced by dotted name, e.g. `core.io` -> ["core", "io"].
+    BuiltinDotted(Vec<String>),
+    /// User module referenced by a (relative or absolute) file path.
+    FilePath(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +35,8 @@ pub enum Item {
 pub struct TypeDecl {
     pub name: String,
     pub type_def: TypeDef,
+    /// `>>`-marked top-level items are exported from their module (Workstream B1).
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -52,6 +71,8 @@ pub struct VarDecl {
     pub name: String,
     pub type_annotation: Option<Type>,
     pub value: Expr,
+    /// `>>`-marked top-level items are exported from their module (Workstream B1).
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -61,6 +82,8 @@ pub struct FunctionDecl {
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     pub body: Expr,
+    /// `>>`-marked top-level items are exported from their module (Workstream B1).
+    pub exported: bool,
     pub span: Span,
 }
 
@@ -294,7 +317,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Num,
-    String,
+    Text,
     Bool,
     Array(Box<Type>),
     Record(Vec<(String, Type)>), // For anonymous records

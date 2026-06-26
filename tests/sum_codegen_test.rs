@@ -7,7 +7,7 @@ use quilon::typechecker::TypeChecker;
 #[test]
 fn test_ok_constructor_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = Ok(42)
             0
         >
@@ -32,7 +32,7 @@ fn test_ok_constructor_codegen() {
 #[test]
 fn test_notok_constructor_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = NotOk(404)
             0
         >
@@ -57,7 +57,7 @@ fn test_notok_constructor_codegen() {
 #[test]
 fn test_both_constructors_codegen() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = Ok(100)
             y = NotOk(500)
             0
@@ -92,7 +92,7 @@ fn test_constructor_in_function() {
         make_ok = () => Ok(42)
         make_err = () => NotOk(0)
         
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = make_ok()
             y = make_err()
             0
@@ -114,7 +114,7 @@ fn test_constructor_in_function() {
 #[test]
 fn test_string_in_constructor() {
     let source = r#"
-        >> = () -> Num => <
+        ^ = () -> Num => <
             x = NotOk("error message")
             0
         >

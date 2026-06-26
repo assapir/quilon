@@ -38,11 +38,14 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut items = Vec::new();
 
+        // NOTE: `<<` import parsing is implemented in Workstream B1; for now `imports` is empty.
+        let imports = Vec::new();
+
         while !self.is_at_end() {
             items.push(self.parse_item()?);
         }
 
-        Ok(Program { items })
+        Ok(Program { imports, items })
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
@@ -168,6 +171,7 @@ impl<'a> Parser<'a> {
                 name,
                 type_annotation,
                 value,
+                exported: false,
                 span: Span::new(start.start, end.end),
             }))
         }
@@ -251,6 +255,7 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            exported: false,
             span: Span::new(start.start, end.end),
         }))
     }
@@ -368,6 +373,7 @@ impl<'a> Parser<'a> {
         Ok(Item::TypeDecl(TypeDecl {
             name,
             type_def: TypeDef::Record { fields, methods },
+            exported: false,
             span: Span::new(start.start, end.end),
         }))
     }
@@ -1019,9 +1025,9 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(crate::ast::Type::Num)
             }
-            "String" => {
+            "Text" => {
                 self.advance();
-                Ok(crate::ast::Type::String)
+                Ok(crate::ast::Type::Text)
             }
             "Bool" => {
                 self.advance();
@@ -1069,9 +1075,9 @@ impl<'a> Parser<'a> {
             self.advance();
             Ok(name)
         } else if self.check(&TokenKind::EntryPoint) {
-            // Allow >> as a special function name (entry point)
+            // Allow ^ as a special function name (entry point)
             self.advance();
-            Ok(">>".to_string())
+            Ok("^".to_string())
         } else {
             Err(ParseError {
                 message: format!("Expected identifier, got {:?}", self.peek().kind),
@@ -1397,7 +1403,7 @@ mod tests {
 
     #[test]
     fn test_parse_no_param_function_with_return_type() {
-        let tokens = Lexer::tokenize("greet = () -> String => \"Hello\"").unwrap();
+        let tokens = Lexer::tokenize("greet = () -> Text => \"Hello\"").unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
@@ -1408,10 +1414,10 @@ mod tests {
         if let Item::FunctionDecl(func) = &program.items[0] {
             assert_eq!(func.params.len(), 0);
             assert!(func.return_type.is_some());
-            if let Some(Type::String) = func.return_type {
+            if let Some(Type::Text) = func.return_type {
                 // Success
             } else {
-                panic!("Expected String return type");
+                panic!("Expected Text return type");
             }
         } else {
             panic!("Expected FunctionDecl");
@@ -1568,7 +1574,7 @@ mod tests {
 
     #[test]
     fn test_parse_type_decl_with_fields() {
-        let tokens = Lexer::tokenize("User = { name :: String, age :: Num }").unwrap();
+        let tokens = Lexer::tokenize("User = { name :: Text, age :: Num }").unwrap();
         let result = parse(&tokens);
         if result.is_err() {
             eprintln!("Error: {:?}", result.as_ref().unwrap_err());
@@ -1592,9 +1598,9 @@ mod tests {
     #[test]
     fn test_parse_type_decl_with_methods() {
         let tokens = Lexer::tokenize(
-            "User = { 
-  name :: String, 
-  getName = => it.name 
+            "User = {
+  name :: Text,
+  getName = => it.name
 }",
         )
         .unwrap();

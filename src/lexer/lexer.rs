@@ -165,6 +165,19 @@ mod tests {
     }
 
     #[test]
+    fn test_module_and_entry_symbols() {
+        // `<<` import, `^` entry point, `>>` export
+        let tokens = Lexer::tokenize("<< ^ >>").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Import);
+        assert_eq!(tokens[1].kind, TokenKind::EntryPoint);
+        assert_eq!(tokens[2].kind, TokenKind::Export);
+        // `<<` must lex as a single Import token, not two BlockOpen
+        let two = Lexer::tokenize("< <").unwrap();
+        assert_eq!(two[0].kind, TokenKind::BlockOpen);
+        assert_eq!(two[1].kind, TokenKind::BlockOpen);
+    }
+
+    #[test]
     fn test_delimiters() {
         let tokens = Lexer::tokenize("< > { } ( ) [ ]").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::BlockOpen);
