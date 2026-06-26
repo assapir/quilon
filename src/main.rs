@@ -1,5 +1,6 @@
 mod ast;
 mod codegen;
+mod jit;
 mod lexer;
 mod parser;
 mod runtime;
@@ -43,8 +44,65 @@ fn main() {
 
     match cli.command {
         Commands::Run { file } => {
-            println!("🚀 Running Quilon program: {}", file.display());
-            // TODO: Implement run
+            // Read the file
+            let source = match std::fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("❌ Error reading file: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Lex
+            let tokens = match lexer::Lexer::tokenize(&source) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("❌ Lexer error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Parse
+            let program = match parser::parse(&tokens) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ Parse error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Type check
+            let mut checker = typechecker::TypeChecker::new();
+            if let Err(e) = checker.check_program(&program) {
+                eprintln!("❌ Type error: {}", e);
+                std::process::exit(1);
+            }
+
+            // Validate entry point exists (^ function required for executables)
+            let has_entry_point = program.items.iter().any(|item| {
+                if let ast::Item::FunctionDecl(func) = item {
+                    func.name == "^"
+                } else {
+                    false
+                }
+            });
+
+            if !has_entry_point {
+                eprintln!("❌ Error: No entry point found!");
+                eprintln!("   Programs must define a ^ function as the entry point.");
+                eprintln!("   Example: ^ = () -> Num => 0");
+                std::process::exit(1);
+            }
+
+            // JIT-compile and execute in-process; the entry point's value
+            // becomes the program's exit code.
+            match jit::run_program(&program) {
+                Ok(code) => std::process::exit(code),
+                Err(e) => {
+                    eprintln!("❌ Runtime error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Compile { file, output } => {
             println!("🔨 Compiling: {}", file.display());
@@ -131,7 +189,7 @@ fn main() {
                     println!("💡 To compile to native code, run:");
                     println!("   llc -filetype=obj {}", output_path.display());
                     println!(
-                        "   clang {} -o executable",
+                        "   gcc {} -o executable",
                         output_path.with_extension("o").display()
                     );
                 }
