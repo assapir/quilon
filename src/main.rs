@@ -2,12 +2,26 @@ mod ast;
 mod codegen;
 mod jit;
 mod lexer;
+mod modules;
 mod parser;
 mod runtime;
 mod typechecker;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+
+/// Resolve `program`'s `<<` imports (relative to `file`) and prepend the imported exported
+/// items, returning the linked program ready for type checking and codegen. Exits on error.
+fn link_imports(program: ast::Program, file: &std::path::Path) -> ast::Program {
+    let base_dir = file.parent().unwrap_or_else(|| std::path::Path::new("."));
+    match modules::link(program, base_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ Import error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "quilon")]
@@ -134,6 +148,9 @@ fn main() {
                 }
             };
 
+            // Resolve `<<` imports and merge exported module items.
+            let program = link_imports(program, &file);
+
             // Type check
             let mut checker = typechecker::TypeChecker::new();
             match checker.check_program(&program) {
@@ -228,6 +245,9 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+
+            // Resolve `<<` imports and merge exported module items.
+            let program = link_imports(program, &file);
 
             // Type check
             let mut checker = typechecker::TypeChecker::new();
