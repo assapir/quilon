@@ -1,12 +1,14 @@
 // LLVM code generator for Quilon
 
-use crate::ast::{BinOp, Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, UnaryOp, VarDecl};
+use crate::ast::{
+    BinOp, Expr, FunctionDecl, Item, MatchArm, Pattern, Program, Type, UnaryOp, VarDecl,
+};
+use inkwell::AddressSpace;
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::builder::Builder;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
-use inkwell::types::{BasicTypeEnum, BasicType};
-use inkwell::AddressSpace;
 use std::collections::HashMap;
 
 pub struct CodeGenerator<'ctx> {
@@ -59,10 +61,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i32_type = self.context.i32_type();
         let ptr_type = self.context.ptr_type(AddressSpace::default());
 
-        let main_type = i32_type.fn_type(
-            &[i32_type.into(), ptr_type.into()],
-            false
-        );
+        let main_type = i32_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
 
         let main_fn = self.module.add_function("main", main_type, None);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
@@ -72,7 +71,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         // Get the >> function
-        let user_entry = self.module.get_function(">>")
+        let user_entry = self
+            .module
+            .get_function(">>")
             .ok_or_else(|| "Entry point function >> not found".to_string())?;
 
         // Check the signature of >> to determine how to call it
@@ -81,27 +82,26 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let result = if param_count == 0 {
             // >> = () -> Num - Call with no arguments
-            self.builder.build_call(user_entry, &[], "entry_result")
+            self.builder
+                .build_call(user_entry, &[], "entry_result")
                 .map_err(|e| format!("Failed to call entry point: {:?}", e))?
         } else if param_count == 2 {
             // >> = (argc, argv) -> Num - Pass argc/argv
             // Convert argc to Num (f64)
-            let argc_as_f64 = self.builder.build_signed_int_to_float(
-                argc,
-                self.context.f64_type(),
-                "argc_f64"
-            ).map_err(|e| format!("Failed to convert argc: {:?}", e))?;
+            let argc_as_f64 = self
+                .builder
+                .build_signed_int_to_float(argc, self.context.f64_type(), "argc_f64")
+                .map_err(|e| format!("Failed to convert argc: {:?}", e))?;
 
             // For argv, since we don't have proper pointer types yet, pass 0
             // TODO: Convert argv to []String when we have proper array support
             let argv_placeholder = self.context.f64_type().const_zero();
 
-            let args: &[inkwell::values::BasicMetadataValueEnum] = &[
-                argc_as_f64.into(),
-                argv_placeholder.into(),
-            ];
+            let args: &[inkwell::values::BasicMetadataValueEnum] =
+                &[argc_as_f64.into(), argv_placeholder.into()];
 
-            self.builder.build_call(user_entry, args, "entry_result")
+            self.builder
+                .build_call(user_entry, args, "entry_result")
                 .map_err(|e| format!("Failed to call entry point: {:?}", e))?
         } else {
             return Err(format!(
@@ -116,7 +116,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_val = match result.as_any_value_enum() {
             inkwell::values::AnyValueEnum::FloatValue(f) => {
                 // Convert double to i32
-                self.builder.build_float_to_signed_int(f, i32_type, "result_int")
+                self.builder
+                    .build_float_to_signed_int(f, i32_type, "result_int")
                     .map_err(|e| format!("Failed to convert result: {:?}", e))?
             }
             _ => {
@@ -125,7 +126,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         };
 
-        self.builder.build_return(Some(&return_val))
+        self.builder
+            .build_return(Some(&return_val))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
         Ok(())
@@ -152,16 +154,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Local variable - use alloca
             let var_type = value.get_type();
             let alloca = self.create_entry_block_alloca(&decl.name, var_type)?;
-            self.builder.build_store(alloca, value)
+            self.builder
+                .build_store(alloca, value)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
             self.variables.insert(decl.name.clone(), (alloca, var_type));
         } else {
             // Global variable
-            let global = self.module.add_global(
-                value.get_type(),
-                Some(AddressSpace::default()),
-                &decl.name,
-            );
+            let global =
+                self.module
+                    .add_global(value.get_type(), Some(AddressSpace::default()), &decl.name);
             global.set_initializer(&value);
         }
 
@@ -170,21 +171,22 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), String> {
         // Convert parameter types to LLVM types
-        let param_types: Vec<BasicTypeEnum> = decl.params.iter()
+        let param_types: Vec<BasicTypeEnum> = decl
+            .params
+            .iter()
             .map(|p| self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Convert return type
-        let return_type = self.type_to_llvm(
-            &decl.return_type.clone().unwrap_or(Type::Num)
-        )?;
+        let return_type = self.type_to_llvm(&decl.return_type.clone().unwrap_or(Type::Num))?;
 
         // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
         let fn_type = return_type.fn_type(
-            &param_types.iter()
+            &param_types
+                .iter()
                 .map(|t| (*t).into())
                 .collect::<Vec<inkwell::types::BasicMetadataTypeEnum>>(),
-            false
+            false,
         );
 
         // Create the function
@@ -204,15 +206,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Allocate space for the parameter
             let param_type = llvm_param.as_basic_value_enum().get_type();
             let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
-            self.builder.build_store(alloca, llvm_param)
+            self.builder
+                .build_store(alloca, llvm_param)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
 
-            self.variables.insert(param.name.clone(), (alloca, param_type));
+            self.variables
+                .insert(param.name.clone(), (alloca, param_type));
         }
 
         // Generate function body
         let body_value = self.generate_expr(&decl.body)?;
-        self.builder.build_return(Some(&body_value))
+        self.builder
+            .build_return(Some(&body_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
         Ok(())
@@ -225,13 +230,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<PointerValue<'ctx>, String> {
         let builder = self.context.create_builder();
 
-        let entry = self.current_function.unwrap().get_first_basic_block().unwrap();
+        let entry = self
+            .current_function
+            .unwrap()
+            .get_first_basic_block()
+            .unwrap();
         match entry.get_first_instruction() {
             Some(first_instr) => builder.position_before(&first_instr),
             None => builder.position_at_end(entry),
         }
 
-        builder.build_alloca(ty, name)
+        builder
+            .build_alloca(ty, name)
             .map_err(|e| format!("Failed to build alloca: {:?}", e))
     }
 
@@ -244,71 +254,69 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::String { value, .. } => {
                 // Create a global string constant
-                let string_val = self.builder.build_global_string_ptr(value, "str")
+                let string_val = self
+                    .builder
+                    .build_global_string_ptr(value, "str")
                     .map_err(|e| format!("Failed to build string: {:?}", e))?;
                 Ok(string_val.as_pointer_value().into())
             }
 
-            Expr::Bool { value, .. } => {
-                Ok(self.context.bool_type().const_int(*value as u64, false).into())
-            }
+            Expr::Bool { value, .. } => Ok(self
+                .context
+                .bool_type()
+                .const_int(*value as u64, false)
+                .into()),
 
             Expr::Ident { name, .. } => {
-                let (ptr, ty) = self.variables.get(name)
+                let (ptr, ty) = self
+                    .variables
+                    .get(name)
                     .ok_or_else(|| format!("Undefined variable: {}", name))?;
 
-                self.builder.build_load(*ty, *ptr, name)
+                self.builder
+                    .build_load(*ty, *ptr, name)
                     .map_err(|e| format!("Failed to build load: {:?}", e))
             }
 
-            Expr::BinOp { left, op, right, .. } => {
-                self.generate_binop(left, *op, right)
-            }
+            Expr::BinOp {
+                left, op, right, ..
+            } => self.generate_binop(left, *op, right),
 
-            Expr::UnaryOp { op, expr, .. } => {
-                self.generate_unary_op(*op, expr)
-            }
+            Expr::UnaryOp { op, expr, .. } => self.generate_unary_op(*op, expr),
 
-            Expr::Call { func, args, .. } => {
-                self.generate_call(func, args)
-            }
+            Expr::Call { func, args, .. } => self.generate_call(func, args),
 
-            Expr::If { cond, then, else_, .. } => {
-                self.generate_if(cond, then, else_)
-            }
+            Expr::If {
+                cond, then, else_, ..
+            } => self.generate_if(cond, then, else_),
 
-            Expr::Block { stmts, .. } => {
-                self.generate_block(stmts)
-            }
+            Expr::Block { stmts, .. } => self.generate_block(stmts),
 
-            Expr::Array { elements, .. } => {
-                self.generate_array(elements)
-            }
+            Expr::Array { elements, .. } => self.generate_array(elements),
 
-            Expr::Record { fields, .. } => {
-                self.generate_record(fields)
-            }
-            
-            Expr::Constructor { type_name: _, fields, .. } => {
+            Expr::Record { fields, .. } => self.generate_record(fields),
+
+            Expr::Constructor {
+                type_name: _,
+                fields,
+                ..
+            } => {
                 // Constructors have the same representation as records
                 self.generate_record(fields)
             }
 
-            Expr::FieldAccess { expr, field, .. } => {
-                self.generate_field_access(expr, field)
-            }
-            
-            Expr::Index { expr, index, .. } => {
-                self.generate_index(expr, index)
-            }
+            Expr::FieldAccess { expr, field, .. } => self.generate_field_access(expr, field),
 
-            Expr::Match { expr, arms, .. } => {
-                self.generate_match(expr, arms)
-            }
-            
-            Expr::ForLoop { collection, pattern, body, .. } => {
-                self.generate_for_loop(collection, pattern, body)
-            }
+            Expr::Index { expr, index, .. } => self.generate_index(expr, index),
+
+            Expr::Match { expr, arms, .. } => self.generate_match(expr, arms),
+
+            Expr::ForLoop {
+                collection,
+                pattern,
+                body,
+                ..
+            } => self.generate_for_loop(collection, pattern, body),
 
             _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
@@ -326,86 +334,110 @@ impl<'ctx> CodeGenerator<'ctx> {
         match op {
             BinOp::Add => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_add(l, r, "addtmp")
-                        .map_err(|e| format!("Failed to build add: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_add(l, r, "addtmp")
+                        .map_err(|e| format!("Failed to build add: {:?}", e))?
+                        .into())
                 } else {
                     Err("Add operation requires float values".to_string())
                 }
             }
             BinOp::Sub => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_sub(l, r, "subtmp")
-                        .map_err(|e| format!("Failed to build sub: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_sub(l, r, "subtmp")
+                        .map_err(|e| format!("Failed to build sub: {:?}", e))?
+                        .into())
                 } else {
                     Err("Sub operation requires float values".to_string())
                 }
             }
             BinOp::Mul => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_mul(l, r, "multmp")
-                        .map_err(|e| format!("Failed to build mul: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_mul(l, r, "multmp")
+                        .map_err(|e| format!("Failed to build mul: {:?}", e))?
+                        .into())
                 } else {
                     Err("Mul operation requires float values".to_string())
                 }
             }
             BinOp::Div => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_div(l, r, "divtmp")
-                        .map_err(|e| format!("Failed to build div: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_div(l, r, "divtmp")
+                        .map_err(|e| format!("Failed to build div: {:?}", e))?
+                        .into())
                 } else {
                     Err("Div operation requires float values".to_string())
                 }
             }
             BinOp::Eq => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OEQ, l, r, "eqtmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OEQ, l, r, "eqtmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Eq operation requires float values".to_string())
                 }
             }
             BinOp::Ne => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::ONE, l, r, "netmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::ONE, l, r, "netmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Ne operation requires float values".to_string())
                 }
             }
             BinOp::Lt => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OLT, l, r, "lttmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OLT, l, r, "lttmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Lt operation requires float values".to_string())
                 }
             }
             BinOp::Le => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OLE, l, r, "letmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OLE, l, r, "letmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Le operation requires float values".to_string())
                 }
             }
             BinOp::Gt => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OGT, l, r, "gttmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OGT, l, r, "gttmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Gt operation requires float values".to_string())
                 }
             }
             BinOp::Ge => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OGE, l, r, "getmp"
-                    ).map_err(|e| format!("Failed to build compare: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OGE, l, r, "getmp")
+                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                        .into())
                 } else {
                     Err("Ge operation requires float values".to_string())
                 }
@@ -417,8 +449,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rhs_bool = self.to_boolean(rhs)?;
 
                 // Use LLVM's 'and' instruction
-                Ok(self.builder.build_and(lhs_bool, rhs_bool, "andtmp")
-                    .map_err(|e| format!("Failed to build and: {:?}", e))?.into())
+                Ok(self
+                    .builder
+                    .build_and(lhs_bool, rhs_bool, "andtmp")
+                    .map_err(|e| format!("Failed to build and: {:?}", e))?
+                    .into())
             }
             BinOp::Or => {
                 // Logical OR with short-circuit evaluation
@@ -427,15 +462,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rhs_bool = self.to_boolean(rhs)?;
 
                 // Use LLVM's 'or' instruction
-                Ok(self.builder.build_or(lhs_bool, rhs_bool, "ortmp")
-                    .map_err(|e| format!("Failed to build or: {:?}", e))?.into())
+                Ok(self
+                    .builder
+                    .build_or(lhs_bool, rhs_bool, "ortmp")
+                    .map_err(|e| format!("Failed to build or: {:?}", e))?
+                    .into())
             }
             _ => Err(format!("Unsupported binary operation: {:?}", op)),
         }
     }
 
     // Helper to convert a value to boolean (i1)
-    fn to_boolean(&mut self, value: BasicValueEnum<'ctx>) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    fn to_boolean(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         match value {
             BasicValueEnum::IntValue(i) => {
                 // Already an int - check if it's i1
@@ -443,24 +484,28 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Ok(i)
                 } else {
                     // Convert to i1 by comparing with 0
-                    self.builder.build_int_compare(
-                        inkwell::IntPredicate::NE,
-                        i,
-                        i.get_type().const_zero(),
-                        "tobool"
-                    ).map_err(|e| format!("Failed to convert to bool: {:?}", e))
+                    self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            i,
+                            i.get_type().const_zero(),
+                            "tobool",
+                        )
+                        .map_err(|e| format!("Failed to convert to bool: {:?}", e))
                 }
             }
             BasicValueEnum::FloatValue(f) => {
                 // Convert float to bool by comparing with 0.0
-                self.builder.build_float_compare(
-                    inkwell::FloatPredicate::ONE,  // Ordered Not Equal
-                    f,
-                    f.get_type().const_zero(),
-                    "tobool"
-                ).map_err(|e| format!("Failed to convert float to bool: {:?}", e))
+                self.builder
+                    .build_float_compare(
+                        inkwell::FloatPredicate::ONE, // Ordered Not Equal
+                        f,
+                        f.get_type().const_zero(),
+                        "tobool",
+                    )
+                    .map_err(|e| format!("Failed to convert float to bool: {:?}", e))
             }
-            _ => Err("Cannot convert value to boolean".to_string())
+            _ => Err("Cannot convert value to boolean".to_string()),
         }
     }
 
@@ -474,16 +519,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         match op {
             UnaryOp::Neg => {
                 if let BasicValueEnum::FloatValue(f) = val {
-                    Ok(self.builder.build_float_neg(f, "negtmp")
-                        .map_err(|e| format!("Failed to build neg: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_float_neg(f, "negtmp")
+                        .map_err(|e| format!("Failed to build neg: {:?}", e))?
+                        .into())
                 } else {
                     Err("Neg operation requires float value".to_string())
                 }
             }
             UnaryOp::Not => {
                 if let BasicValueEnum::IntValue(i) = val {
-                    Ok(self.builder.build_not(i, "nottmp")
-                        .map_err(|e| format!("Failed to build not: {:?}", e))?.into())
+                    Ok(self
+                        .builder
+                        .build_not(i, "nottmp")
+                        .map_err(|e| format!("Failed to build not: {:?}", e))?
+                        .into())
                 } else {
                     Err("Not operation requires int value".to_string())
                 }
@@ -506,27 +557,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Check if this is a sum type constructor (Ok, NotOk, etc.)
         // For now, hardcode the builtin Result constructors
         match func_name.as_str() {
-            "Ok" => return self.generate_sum_constructor(0, args),  // Tag 0 for Ok
+            "Ok" => return self.generate_sum_constructor(0, args), // Tag 0 for Ok
             "NotOk" => return self.generate_sum_constructor(1, args), // Tag 1 for NotOk
             _ => {}
         }
 
         // Get the function from the module
-        let function = self.module.get_function(func_name)
+        let function = self
+            .module
+            .get_function(func_name)
             .ok_or_else(|| format!("Function not found: {}", func_name))?;
 
         // Generate argument values
-        let arg_values: Vec<BasicValueEnum> = args.iter()
+        let arg_values: Vec<BasicValueEnum> = args
+            .iter()
             .map(|arg| self.generate_expr(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Convert to BasicMetadataValueEnum for the call
-        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> = arg_values.iter()
-            .map(|v| (*v).into())
-            .collect();
+        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> =
+            arg_values.iter().map(|v| (*v).into()).collect();
 
         // Build the call
-        let call_site = self.builder.build_call(function, &arg_metadata, "calltmp")
+        let call_site = self
+            .builder
+            .build_call(function, &arg_metadata, "calltmp")
             .map_err(|e| format!("Failed to build call: {:?}", e))?;
 
         // In Inkwell 0.8, try_as_basic_value returns a special ValueKind enum
@@ -547,7 +602,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => Err("Function does not return a basic value".to_string()),
         }
     }
-    
+
     fn generate_sum_constructor(
         &mut self,
         tag: u8,
@@ -556,19 +611,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Tagged union layout: { i8 tag, f64 payload }
         // This is a simplified representation - proper implementation would use
         // actual union types and support multiple payload types
-        
+
         let i8_type = self.context.i8_type();
         let f64_type = self.context.f64_type();
-        
+
         // Create struct type for Result
-        let result_struct = self.context.struct_type(
-            &[i8_type.into(), f64_type.into()],
-            false,
-        );
-        
+        let result_struct = self
+            .context
+            .struct_type(&[i8_type.into(), f64_type.into()], false);
+
         // Create the tag value
         let tag_val = i8_type.const_int(tag as u64, false);
-        
+
         // Generate the payload value (first argument, or 0.0 if none)
         let payload_val = if !args.is_empty() {
             let arg_val = self.generate_expr(&args[0])?;
@@ -577,7 +631,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 BasicValueEnum::FloatValue(f) => f,
                 BasicValueEnum::IntValue(i) => {
                     // Convert int to float
-                    self.builder.build_unsigned_int_to_float(i, f64_type, "inttofloat")
+                    self.builder
+                        .build_unsigned_int_to_float(i, f64_type, "inttofloat")
                         .map_err(|e| format!("Failed to convert int to float: {:?}", e))?
                 }
                 _ => f64_type.const_float(0.0), // Default for unsupported types
@@ -585,16 +640,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             f64_type.const_float(0.0)
         };
-        
+
         // Build the struct value
         let undef = result_struct.get_undef();
-        let with_tag = self.builder.build_insert_value(undef, tag_val, 0, "with_tag")
+        let with_tag = self
+            .builder
+            .build_insert_value(undef, tag_val, 0, "with_tag")
             .map_err(|e| format!("Failed to insert tag: {:?}", e))?
             .into_struct_value();
-        let with_payload = self.builder.build_insert_value(with_tag, payload_val, 1, "with_payload")
+        let with_payload = self
+            .builder
+            .build_insert_value(with_tag, payload_val, 1, "with_payload")
             .map_err(|e| format!("Failed to insert payload: {:?}", e))?
             .into_struct_value();
-        
+
         Ok(with_payload.into())
     }
 
@@ -612,7 +671,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Condition must be a boolean".to_string());
         };
 
-        let function = self.current_function
+        let function = self
+            .current_function
             .ok_or_else(|| "If expression outside of function".to_string())?;
 
         // Create blocks
@@ -621,26 +681,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         let merge_bb = self.context.append_basic_block(function, "ifcont");
 
         // Build conditional branch
-        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb)
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
             .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
 
         // Generate then block
         self.builder.position_at_end(then_bb);
         let then_val = self.generate_expr(then_expr)?;
-        self.builder.build_unconditional_branch(merge_bb)
+        self.builder
+            .build_unconditional_branch(merge_bb)
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
         let then_bb = self.builder.get_insert_block().unwrap();
 
         // Generate else block
         self.builder.position_at_end(else_bb);
         let else_val = self.generate_expr(else_expr)?;
-        self.builder.build_unconditional_branch(merge_bb)
+        self.builder
+            .build_unconditional_branch(merge_bb)
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
         let else_bb = self.builder.get_insert_block().unwrap();
 
         // Generate merge block
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(then_val.get_type(), "iftmp")
+        let phi = self
+            .builder
+            .build_phi(then_val.get_type(), "iftmp")
             .map_err(|e| format!("Failed to build phi: {:?}", e))?;
         phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
 
@@ -667,10 +732,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(result)
     }
 
-    fn generate_array(
-        &mut self,
-        elements: &[Expr],
-    ) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_array(&mut self, elements: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
         // Arrays are represented as structs: { ptr data, i64 size }
         // This allows .size field access
 
@@ -684,21 +746,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Empty array - create struct with null ptr and size 0
             let ptr_type = self.context.ptr_type(AddressSpace::default());
             let i64_type = self.context.i64_type();
-            let array_struct_type = self.context.struct_type(
-                &[ptr_type.into(), i64_type.into()],
-                false
-            );
+            let array_struct_type = self
+                .context
+                .struct_type(&[ptr_type.into(), i64_type.into()], false);
 
             let null_ptr = ptr_type.const_zero();
             let zero_size = i64_type.const_zero();
 
-            return Ok(array_struct_type.const_named_struct(
-                &[null_ptr.into(), zero_size.into()]
-            ).into());
+            return Ok(array_struct_type
+                .const_named_struct(&[null_ptr.into(), zero_size.into()])
+                .into());
         }
 
         // Generate all element values
-        let values: Vec<BasicValueEnum> = elements.iter()
+        let values: Vec<BasicValueEnum> = elements
+            .iter()
             .map(|e| self.generate_expr(e))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -707,60 +769,65 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Allocate array storage
         let array_type = elem_type.array_type(size as u32);
-        let array_alloca = self.builder.build_alloca(array_type, "array_data")
+        let array_alloca = self
+            .builder
+            .build_alloca(array_type, "array_data")
             .map_err(|e| format!("Failed to allocate array: {:?}", e))?;
 
         // Store each element
         for (i, value) in values.iter().enumerate() {
             let index = self.context.i32_type().const_int(i as u64, false);
             let gep = unsafe {
-                self.builder.build_gep(
-                    array_type,
-                    array_alloca,
-                    &[self.context.i32_type().const_zero(), index],
-                    &format!("elem_{}", i)
-                ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+                self.builder
+                    .build_gep(
+                        array_type,
+                        array_alloca,
+                        &[self.context.i32_type().const_zero(), index],
+                        &format!("elem_{}", i),
+                    )
+                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?
             };
-            self.builder.build_store(gep, *value)
+            self.builder
+                .build_store(gep, *value)
                 .map_err(|e| format!("Failed to store element: {:?}", e))?;
         }
 
         // Create the array struct { ptr, size }
         let ptr_type = self.context.ptr_type(AddressSpace::default());
         let i64_type = self.context.i64_type();
-        let array_struct_type = self.context.struct_type(
-            &[ptr_type.into(), i64_type.into()],
-            false
-        );
+        let array_struct_type = self
+            .context
+            .struct_type(&[ptr_type.into(), i64_type.into()], false);
 
-        let array_struct = self.builder.build_alloca(array_struct_type, "array")
+        let array_struct = self
+            .builder
+            .build_alloca(array_struct_type, "array")
             .map_err(|e| format!("Failed to allocate array struct: {:?}", e))?;
 
         // Store pointer to data in field 0
-        let ptr_field = self.builder.build_struct_gep(
-            array_struct_type,
-            array_struct,
-            0,
-            "array_ptr_field"
-        ).map_err(|e| format!("Failed to get ptr field: {:?}", e))?;
+        let ptr_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 0, "array_ptr_field")
+            .map_err(|e| format!("Failed to get ptr field: {:?}", e))?;
 
-        self.builder.build_store(ptr_field, array_alloca)
+        self.builder
+            .build_store(ptr_field, array_alloca)
             .map_err(|e| format!("Failed to store ptr: {:?}", e))?;
 
         // Store size in field 1
-        let size_field = self.builder.build_struct_gep(
-            array_struct_type,
-            array_struct,
-            1,
-            "array_size_field"
-        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
+        let size_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 1, "array_size_field")
+            .map_err(|e| format!("Failed to get size field: {:?}", e))?;
 
         let size_value = i64_type.const_int(size as u64, false);
-        self.builder.build_store(size_field, size_value)
+        self.builder
+            .build_store(size_field, size_value)
             .map_err(|e| format!("Failed to store size: {:?}", e))?;
 
         // Load and return the struct
-        self.builder.build_load(array_struct_type, array_struct, "array")
+        self.builder
+            .build_load(array_struct_type, array_struct, "array")
             .map_err(|e| format!("Failed to load array struct: {:?}", e))
     }
 
@@ -781,9 +848,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Get field types
-        let field_types: Vec<BasicTypeEnum> = field_values.iter()
-            .map(|v| v.get_type())
-            .collect();
+        let field_types: Vec<BasicTypeEnum> = field_values.iter().map(|v| v.get_type()).collect();
 
         // Create struct type
         let struct_type = self.context.struct_type(&field_types, false);
@@ -791,14 +856,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Create the struct value
         if self.current_function.is_some() {
             // Allocate space for the struct
-            let alloca = self.builder.build_alloca(struct_type, "record")
+            let alloca = self
+                .builder
+                .build_alloca(struct_type, "record")
                 .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
 
             // Store each field
             for (i, value) in field_values.iter().enumerate() {
-                let gep = self.builder.build_struct_gep(struct_type, alloca, i as u32, &format!("field_{}", i))
+                let gep = self
+                    .builder
+                    .build_struct_gep(struct_type, alloca, i as u32, &format!("field_{}", i))
                     .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
-                self.builder.build_store(gep, *value)
+                self.builder
+                    .build_store(gep, *value)
                     .map_err(|e| format!("Failed to build store: {:?}", e))?;
             }
 
@@ -823,34 +893,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Check if this is a struct type (could be an array)
                     if let BasicTypeEnum::StructType(struct_type) = var_type {
                         // Get field 1 (size field of array struct) directly from the alloca
-                        let size_field = self.builder.build_struct_gep(
-                            struct_type,
-                            var_ptr,
-                            1,
-                            "size_field"
-                        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
-                        
-                        let size_val = self.builder.build_load(
-                            self.context.i64_type(),
-                            size_field,
-                            "size"
-                        ).map_err(|e| format!("Failed to load size: {:?}", e))?;
-                        
+                        let size_field = self
+                            .builder
+                            .build_struct_gep(struct_type, var_ptr, 1, "size_field")
+                            .map_err(|e| format!("Failed to get size field: {:?}", e))?;
+
+                        let size_val = self
+                            .builder
+                            .build_load(self.context.i64_type(), size_field, "size")
+                            .map_err(|e| format!("Failed to load size: {:?}", e))?;
+
                         // Convert i64 to f64 (Num)
                         if let BasicValueEnum::IntValue(i) = size_val {
-                            let size_f64 = self.builder.build_signed_int_to_float(
-                                i,
-                                self.context.f64_type(),
-                                "size_as_num"
-                            ).map_err(|e| format!("Failed to convert size: {:?}", e))?;
-                            
+                            let size_f64 = self
+                                .builder
+                                .build_signed_int_to_float(
+                                    i,
+                                    self.context.f64_type(),
+                                    "size_as_num",
+                                )
+                                .map_err(|e| format!("Failed to convert size: {:?}", e))?;
+
                             return Ok(size_f64.into());
                         }
                     }
                 }
             }
         }
-        
+
         // For regular record field access
         // Special case: if expr is an identifier, check if we have record info
         if let Expr::Ident { name, .. } = expr {
@@ -858,38 +928,46 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Find the field index
                 if let Some(field_idx) = field_names.iter().position(|f| f == field_name) {
                     // Get the variable pointer
-                    let (var_ptr, _var_type) = self.variables.get(name)
+                    let (var_ptr, _var_type) = self
+                        .variables
+                        .get(name)
                         .ok_or_else(|| format!("Variable not found: {}", name))?;
 
                     // The variable holds a pointer to the struct
                     // Load it to get the actual struct pointer
-                    let struct_ptr = self.builder.build_load(
-                        self.context.ptr_type(AddressSpace::default()),
-                        *var_ptr,
-                        "load_struct_ptr"
-                    ).map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
+                    let struct_ptr = self
+                        .builder
+                        .build_load(
+                            self.context.ptr_type(AddressSpace::default()),
+                            *var_ptr,
+                            "load_struct_ptr",
+                        )
+                        .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
                         .into_pointer_value();
 
                     // Now we need the struct type for GEP
                     // We need to reconstruct the struct type from field count
                     // For now, assume all fields are f64 (this is a limitation)
-                    let field_types: Vec<BasicTypeEnum> = vec![self.context.f64_type().into(); field_names.len()];
+                    let field_types: Vec<BasicTypeEnum> =
+                        vec![self.context.f64_type().into(); field_names.len()];
                     let struct_type = self.context.struct_type(&field_types, false);
 
                     // Use GEP to get field pointer
-                    let field_ptr = self.builder.build_struct_gep(
-                        struct_type,
-                        struct_ptr,
-                        field_idx as u32,
-                        &format!("field_{}", field_name)
-                    ).map_err(|e| format!("Failed to build GEP: {:?}", e))?;
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            struct_type,
+                            struct_ptr,
+                            field_idx as u32,
+                            &format!("field_{}", field_name),
+                        )
+                        .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
 
                     // Load the field value
-                    let field_val = self.builder.build_load(
-                        self.context.f64_type(),
-                        field_ptr,
-                        field_name
-                    ).map_err(|e| format!("Failed to load field: {:?}", e))?;
+                    let field_val = self
+                        .builder
+                        .build_load(self.context.f64_type(), field_ptr, field_name)
+                        .map_err(|e| format!("Failed to load field: {:?}", e))?;
 
                     return Ok(field_val);
                 }
@@ -909,69 +987,66 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Generate the array expression
         let array_val = self.generate_expr(expr)?;
-        
+
         // Generate the index expression
         let index_val = self.generate_expr(index_expr)?;
-        
+
         // Array is a struct { ptr data, i64 size }
         // We need to:
         // 1. Extract the data pointer (field 0)
         // 2. Convert index from f64 to i64
         // 3. Use GEP to get element pointer
         // 4. Load the element
-        
+
         if let BasicValueEnum::StructValue(struct_val) = array_val {
             // Store struct temporarily to access fields
             let struct_type = struct_val.get_type();
-            let alloca = self.builder.build_alloca(struct_type, "temp_array")
+            let alloca = self
+                .builder
+                .build_alloca(struct_type, "temp_array")
                 .map_err(|e| format!("Failed to allocate temp: {:?}", e))?;
-            
-            self.builder.build_store(alloca, struct_val)
+
+            self.builder
+                .build_store(alloca, struct_val)
                 .map_err(|e| format!("Failed to store array: {:?}", e))?;
-            
+
             // Get data pointer (field 0)
-            let data_field = self.builder.build_struct_gep(
-                struct_type,
-                alloca,
-                0,
-                "data_ptr_field"
-            ).map_err(|e| format!("Failed to get data field: {:?}", e))?;
-            
-            let data_ptr = self.builder.build_load(
-                self.context.ptr_type(AddressSpace::default()),
-                data_field,
-                "data_ptr"
-            ).map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+            let data_field = self
+                .builder
+                .build_struct_gep(struct_type, alloca, 0, "data_ptr_field")
+                .map_err(|e| format!("Failed to get data field: {:?}", e))?;
+
+            let data_ptr = self
+                .builder
+                .build_load(
+                    self.context.ptr_type(AddressSpace::default()),
+                    data_field,
+                    "data_ptr",
+                )
+                .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
                 .into_pointer_value();
-            
+
             // Convert index from f64 to i64
             let index_i64 = if let BasicValueEnum::FloatValue(f) = index_val {
-                self.builder.build_float_to_signed_int(
-                    f,
-                    self.context.i64_type(),
-                    "index_i64"
-                ).map_err(|e| format!("Failed to convert index: {:?}", e))?
+                self.builder
+                    .build_float_to_signed_int(f, self.context.i64_type(), "index_i64")
+                    .map_err(|e| format!("Failed to convert index: {:?}", e))?
             } else {
                 return Err("Index must be a number".to_string());
             };
-            
+
             // Use GEP to get element pointer
             // For now, assume elements are f64
             let elem_ptr = unsafe {
-                self.builder.build_gep(
-                    self.context.f64_type(),
-                    data_ptr,
-                    &[index_i64],
-                    "elem_ptr"
-                ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+                self.builder
+                    .build_gep(self.context.f64_type(), data_ptr, &[index_i64], "elem_ptr")
+                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?
             };
-            
+
             // Load the element
-            self.builder.build_load(
-                self.context.f64_type(),
-                elem_ptr,
-                "elem"
-            ).map_err(|e| format!("Failed to load element: {:?}", e))
+            self.builder
+                .build_load(self.context.f64_type(), elem_ptr, "elem")
+                .map_err(|e| format!("Failed to load element: {:?}", e))
         } else {
             Err("Can only index into arrays".to_string())
         }
@@ -989,24 +1064,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         let match_val = self.generate_expr(expr)?;
 
         // Get the current function
-        let function = self.current_function
+        let function = self
+            .current_function
             .ok_or_else(|| "Match expression must be in a function".to_string())?;
 
         // Create basic blocks for each arm and a continuation block
         let mut arm_blocks = vec![];
         let mut check_blocks = vec![];
         for i in 0..arms.len() {
-            check_blocks.push(self.context.append_basic_block(function, &format!("check_{}", i)));
-            arm_blocks.push(self.context.append_basic_block(function, &format!("arm_{}", i)));
+            check_blocks.push(
+                self.context
+                    .append_basic_block(function, &format!("check_{}", i)),
+            );
+            arm_blocks.push(
+                self.context
+                    .append_basic_block(function, &format!("arm_{}", i)),
+            );
         }
         let cont_block = self.context.append_basic_block(function, "match_cont");
 
         // Create a phi node to collect results from all arms
         // We need to determine the result type - for now assume f64
-        let result_alloca = self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
+        let result_alloca =
+            self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
 
         // Jump to first check
-        self.builder.build_unconditional_branch(check_blocks[0])
+        self.builder
+            .build_unconditional_branch(check_blocks[0])
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
 
         // Generate code for each arm
@@ -1026,7 +1110,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 cont_block
             };
 
-            self.builder.build_conditional_branch(matches, arm_blocks[i], next_block)
+            self.builder
+                .build_conditional_branch(matches, arm_blocks[i], next_block)
                 .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
 
             // Generate arm body
@@ -1036,10 +1121,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.bind_pattern(&arm.pattern, match_val)?;
 
             let arm_val = self.generate_expr(&arm.body)?;
-            self.builder.build_store(result_alloca, arm_val)
+            self.builder
+                .build_store(result_alloca, arm_val)
                 .map_err(|e| format!("Failed to store result: {:?}", e))?;
 
-            self.builder.build_unconditional_branch(cont_block)
+            self.builder
+                .build_unconditional_branch(cont_block)
                 .map_err(|e| format!("Failed to build branch: {:?}", e))?;
         }
 
@@ -1047,7 +1134,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(cont_block);
 
         // Load the result
-        self.builder.build_load(self.context.f64_type(), result_alloca, "match_result")
+        self.builder
+            .build_load(self.context.f64_type(), result_alloca, "match_result")
             .map_err(|e| format!("Failed to load result: {:?}", e))
     }
 
@@ -1071,12 +1159,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Compare the value
                 if let BasicValueEnum::FloatValue(fval) = value {
                     let const_val = self.context.f64_type().const_float(*num_val);
-                    self.builder.build_float_compare(
-                        inkwell::FloatPredicate::OEQ,
-                        fval,
-                        const_val,
-                        "num_match"
-                    ).map_err(|e| format!("Failed to build comparison: {:?}", e))
+                    self.builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::OEQ,
+                            fval,
+                            const_val,
+                            "num_match",
+                        )
+                        .map_err(|e| format!("Failed to build comparison: {:?}", e))
                 } else {
                     Ok(self.context.bool_type().const_zero())
                 }
@@ -1095,18 +1185,23 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Extract tag from struct (field 0)
                 if let BasicValueEnum::StructValue(struct_val) = value {
-                    let tag_val = self.builder.build_extract_value(struct_val, 0, "tag")
+                    let tag_val = self
+                        .builder
+                        .build_extract_value(struct_val, 0, "tag")
                         .map_err(|e| format!("Failed to extract tag: {:?}", e))?
                         .into_int_value();
-                    
-                    let expected_tag_val = self.context.i8_type().const_int(expected_tag as u64, false);
-                    
-                    self.builder.build_int_compare(
-                        inkwell::IntPredicate::EQ,
-                        tag_val,
-                        expected_tag_val,
-                        "tag_match"
-                    ).map_err(|e| format!("Failed to compare tags: {:?}", e))
+
+                    let expected_tag_val =
+                        self.context.i8_type().const_int(expected_tag as u64, false);
+
+                    self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            tag_val,
+                            expected_tag_val,
+                            "tag_match",
+                        )
+                        .map_err(|e| format!("Failed to compare tags: {:?}", e))
                 } else {
                     // Not a struct - pattern doesn't match
                     Ok(self.context.bool_type().const_zero())
@@ -1124,9 +1219,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             Pattern::Ident { name, .. } => {
                 // Bind the value to the identifier
                 let alloca = self.create_entry_block_alloca(name, value.get_type())?;
-                self.builder.build_store(alloca, value)
+                self.builder
+                    .build_store(alloca, value)
                     .map_err(|e| format!("Failed to store pattern binding: {:?}", e))?;
-                self.variables.insert(name.clone(), (alloca, value.get_type()));
+                self.variables
+                    .insert(name.clone(), (alloca, value.get_type()));
                 Ok(())
             }
 
@@ -1137,24 +1234,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if let Pattern::Ident { name: arg_name, .. } = first_arg {
                         // Extract payload (field 1) from the struct
                         if let BasicValueEnum::StructValue(struct_val) = value {
-                            let payload = self.builder.build_extract_value(struct_val, 1, "payload")
+                            let payload = self
+                                .builder
+                                .build_extract_value(struct_val, 1, "payload")
                                 .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
-                            
+
                             // Bind the payload value
-                            let alloca = self.create_entry_block_alloca(arg_name, payload.get_type())?;
-                            self.builder.build_store(alloca, payload)
+                            let alloca =
+                                self.create_entry_block_alloca(arg_name, payload.get_type())?;
+                            self.builder
+                                .build_store(alloca, payload)
                                 .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
-                            self.variables.insert(arg_name.clone(), (alloca, payload.get_type()));
+                            self.variables
+                                .insert(arg_name.clone(), (alloca, payload.get_type()));
                         }
                     }
                 }
                 Ok(())
             }
 
-            _ => Ok(()) // Other patterns don't bind variables
+            _ => Ok(()), // Other patterns don't bind variables
         }
     }
-    
+
     fn generate_for_loop(
         &mut self,
         collection: &Expr,
@@ -1162,14 +1264,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         body: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use crate::ast::ForPattern;
-        
+
         // Generate the collection (should be an array struct: {ptr, size})
         let array_val = self.generate_expr(collection)?;
-        
+
         // Get current function
-        let function = self.current_function
+        let function = self
+            .current_function
             .ok_or_else(|| "For loop must be in a function".to_string())?;
-        
+
         // Allocate the array struct to memory so we can access its fields
         let array_struct_type = self.context.struct_type(
             &[
@@ -1178,140 +1281,153 @@ impl<'ctx> CodeGenerator<'ctx> {
             ],
             false,
         );
-        
-        let array_alloca = self.create_entry_block_alloca("array_temp", array_struct_type.into())?;
-        self.builder.build_store(array_alloca, array_val)
+
+        let array_alloca =
+            self.create_entry_block_alloca("array_temp", array_struct_type.into())?;
+        self.builder
+            .build_store(array_alloca, array_val)
             .map_err(|e| format!("Failed to store array: {:?}", e))?;
-        
+
         // Extract size field (field 1)
-        let size_field_ptr = self.builder.build_struct_gep(
-            array_struct_type,
-            array_alloca,
-            1,
-            "size_field_ptr"
-        ).map_err(|e| format!("Failed to get size field: {:?}", e))?;
-        
-        let size = self.builder.build_load(
-            self.context.i64_type(),
-            size_field_ptr,
-            "size"
-        ).map_err(|e| format!("Failed to load size: {:?}", e))?
+        let size_field_ptr = self
+            .builder
+            .build_struct_gep(array_struct_type, array_alloca, 1, "size_field_ptr")
+            .map_err(|e| format!("Failed to get size field: {:?}", e))?;
+
+        let size = self
+            .builder
+            .build_load(self.context.i64_type(), size_field_ptr, "size")
+            .map_err(|e| format!("Failed to load size: {:?}", e))?
             .into_int_value();
-        
+
         // Extract data pointer (field 0)
-        let data_field_ptr = self.builder.build_struct_gep(
-            array_struct_type,
-            array_alloca,
-            0,
-            "data_field_ptr"
-        ).map_err(|e| format!("Failed to get data field: {:?}", e))?;
-        
-        let data_ptr = self.builder.build_load(
-            self.context.ptr_type(AddressSpace::default()),
-            data_field_ptr,
-            "data_ptr"
-        ).map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+        let data_field_ptr = self
+            .builder
+            .build_struct_gep(array_struct_type, array_alloca, 0, "data_field_ptr")
+            .map_err(|e| format!("Failed to get data field: {:?}", e))?;
+
+        let data_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                data_field_ptr,
+                "data_ptr",
+            )
+            .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
             .into_pointer_value();
-        
+
         // Create basic blocks
         let loop_header = self.context.append_basic_block(function, "loop_header");
         let loop_body_block = self.context.append_basic_block(function, "loop_body");
         let loop_exit = self.context.append_basic_block(function, "loop_exit");
-        
+
         // Create counter variable (i = 0)
-        let counter_alloca = self.create_entry_block_alloca("loop_counter", self.context.i64_type().into())?;
-        self.builder.build_store(counter_alloca, self.context.i64_type().const_int(0, false))
+        let counter_alloca =
+            self.create_entry_block_alloca("loop_counter", self.context.i64_type().into())?;
+        self.builder
+            .build_store(counter_alloca, self.context.i64_type().const_int(0, false))
             .map_err(|e| format!("Failed to store counter: {:?}", e))?;
-        
+
         // Jump to loop header
-        self.builder.build_unconditional_branch(loop_header)
+        self.builder
+            .build_unconditional_branch(loop_header)
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
-        
+
         // Loop header: check condition (i < size)
         self.builder.position_at_end(loop_header);
-        let counter_val = self.builder.build_load(
-            self.context.i64_type(),
-            counter_alloca,
-            "i"
-        ).map_err(|e| format!("Failed to load counter: {:?}", e))?
+        let counter_val = self
+            .builder
+            .build_load(self.context.i64_type(), counter_alloca, "i")
+            .map_err(|e| format!("Failed to load counter: {:?}", e))?
             .into_int_value();
-        
-        let cond = self.builder.build_int_compare(
-            inkwell::IntPredicate::SLT,
-            counter_val,
-            size,
-            "loop_cond"
-        ).map_err(|e| format!("Failed to build compare: {:?}", e))?;
-        
-        self.builder.build_conditional_branch(cond, loop_body_block, loop_exit)
+
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, counter_val, size, "loop_cond")
+            .map_err(|e| format!("Failed to build compare: {:?}", e))?;
+
+        self.builder
+            .build_conditional_branch(cond, loop_body_block, loop_exit)
             .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
-        
+
         // Loop body
         self.builder.position_at_end(loop_body_block);
-        
+
         // Get current element: data_ptr[i]
         let elem_ptr = unsafe {
-            self.builder.build_gep(
-                self.context.f64_type(), // TODO: support other element types
-                data_ptr,
-                &[counter_val],
-                "elem_ptr"
-            ).map_err(|e| format!("Failed to build GEP: {:?}", e))?
+            self.builder
+                .build_gep(
+                    self.context.f64_type(), // TODO: support other element types
+                    data_ptr,
+                    &[counter_val],
+                    "elem_ptr",
+                )
+                .map_err(|e| format!("Failed to build GEP: {:?}", e))?
         };
-        
-        let elem_val = self.builder.build_load(
-            self.context.f64_type(),
-            elem_ptr,
-            "elem"
-        ).map_err(|e| format!("Failed to load element: {:?}", e))?;
-        
+
+        let elem_val = self
+            .builder
+            .build_load(self.context.f64_type(), elem_ptr, "elem")
+            .map_err(|e| format!("Failed to load element: {:?}", e))?;
+
         // Bind pattern variables
         match pattern {
             ForPattern::Item { name, .. } => {
                 // Bind item
                 let item_alloca = self.create_entry_block_alloca(name, elem_val.get_type())?;
-                self.builder.build_store(item_alloca, elem_val)
+                self.builder
+                    .build_store(item_alloca, elem_val)
                     .map_err(|e| format!("Failed to store item: {:?}", e))?;
-                self.variables.insert(name.clone(), (item_alloca, elem_val.get_type()));
+                self.variables
+                    .insert(name.clone(), (item_alloca, elem_val.get_type()));
             }
             ForPattern::ItemIndex { item, index, .. } => {
                 // Bind item
                 let item_alloca = self.create_entry_block_alloca(item, elem_val.get_type())?;
-                self.builder.build_store(item_alloca, elem_val)
+                self.builder
+                    .build_store(item_alloca, elem_val)
                     .map_err(|e| format!("Failed to store item: {:?}", e))?;
-                self.variables.insert(item.clone(), (item_alloca, elem_val.get_type()));
-                
+                self.variables
+                    .insert(item.clone(), (item_alloca, elem_val.get_type()));
+
                 // Bind index (convert i64 to f64 for Num type)
-                let index_f64 = self.builder.build_signed_int_to_float(
-                    counter_val,
-                    self.context.f64_type(),
-                    "index_f64"
-                ).map_err(|e| format!("Failed to convert index: {:?}", e))?;
-                
-                let index_alloca = self.create_entry_block_alloca(index, index_f64.get_type().into())?;
-                self.builder.build_store(index_alloca, index_f64)
+                let index_f64 = self
+                    .builder
+                    .build_signed_int_to_float(counter_val, self.context.f64_type(), "index_f64")
+                    .map_err(|e| format!("Failed to convert index: {:?}", e))?;
+
+                let index_alloca =
+                    self.create_entry_block_alloca(index, index_f64.get_type().into())?;
+                self.builder
+                    .build_store(index_alloca, index_f64)
                     .map_err(|e| format!("Failed to store index: {:?}", e))?;
-                self.variables.insert(index.clone(), (index_alloca, index_f64.get_type().into()));
+                self.variables
+                    .insert(index.clone(), (index_alloca, index_f64.get_type().into()));
             }
         }
-        
+
         // Generate loop body code
         let _ = self.generate_expr(body)?;
-        
+
         // Increment counter: i = i + 1
-        let next_counter = self.builder.build_int_add(
-            counter_val,
-            self.context.i64_type().const_int(1, false),
-            "next_i"
-        ).map_err(|e| format!("Failed to build add: {:?}", e))?;
-        
-        self.builder.build_store(counter_alloca, next_counter)
+        let next_counter = self
+            .builder
+            .build_int_add(
+                counter_val,
+                self.context.i64_type().const_int(1, false),
+                "next_i",
+            )
+            .map_err(|e| format!("Failed to build add: {:?}", e))?;
+
+        self.builder
+            .build_store(counter_alloca, next_counter)
             .map_err(|e| format!("Failed to store next counter: {:?}", e))?;
-        
+
         // Jump back to loop header
-        self.builder.build_unconditional_branch(loop_header)
+        self.builder
+            .build_unconditional_branch(loop_header)
             .map_err(|e| format!("Failed to build branch: {:?}", e))?;
-        
+
         // Loop exit: position builder and return 0 (unit/void equivalent)
         self.builder.position_at_end(loop_exit);
         Ok(self.context.f64_type().const_float(0.0).into())
@@ -1321,14 +1437,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
             Type::Bool => Ok(self.context.bool_type().into()),
-            Type::String => Ok(self.context.i8_type().ptr_type(AddressSpace::default()).into()),
+            Type::String => Ok(self
+                .context
+                .i8_type()
+                .ptr_type(AddressSpace::default())
+                .into()),
             Type::Array(elem_type) => {
                 let elem = self.type_to_llvm(elem_type)?;
                 // For now, represent arrays as pointers
                 Ok(elem.ptr_type(AddressSpace::default()).into())
             }
             Type::Record(fields) => {
-                let field_types: Vec<BasicTypeEnum> = fields.iter()
+                let field_types: Vec<BasicTypeEnum> = fields
+                    .iter()
                     .map(|(_name, ty)| self.type_to_llvm(ty))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.context.struct_type(&field_types, false).into())
@@ -1347,12 +1468,12 @@ mod tests {
     #[test]
     fn test_simple_number() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         let tokens = Lexer::tokenize("x = 42").unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         assert!(result.is_ok());
 
         let ir = result.unwrap();
@@ -1364,12 +1485,12 @@ mod tests {
     #[test]
     fn test_simple_function() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         assert!(result.is_ok());
 
         let ir = result.unwrap();
@@ -1380,34 +1501,34 @@ mod tests {
     #[test]
     fn test_local_variable() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         let code = "double = x :: Num => < y = x + x y >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         assert!(result.is_ok());
 
         let ir = result.unwrap();
         println!("Generated IR:\n{}", ir);
         assert!(ir.contains("alloca")); // Local variable
-        assert!(ir.contains("load"));   // Variable load
-        assert!(ir.contains("store"));  // Variable store
-        assert!(ir.contains("fadd"));   // Addition
+        assert!(ir.contains("load")); // Variable load
+        assert!(ir.contains("store")); // Variable store
+        assert!(ir.contains("fadd")); // Addition
     }
 
     #[test]
     fn test_array() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         // Test array in a function body - return the first element as a number
         let code = "sum = x :: Num => < arr = [x, x, x] x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
@@ -1422,7 +1543,7 @@ mod tests {
     #[test]
     fn test_function_call() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         // Test calling a function
         let code = "
@@ -1432,7 +1553,7 @@ mod tests {
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
@@ -1448,14 +1569,14 @@ mod tests {
     #[test]
     fn test_record() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         // Test record creation
         let code = "make_point = (x :: Num, y :: Num) => < p = {x = x, y = y} x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
@@ -1470,14 +1591,14 @@ mod tests {
     #[test]
     fn test_field_access() {
         let context = Context::create();
-        let mut gen = CodeGenerator::new(&context, "test");
+        let mut codegen = CodeGenerator::new(&context, "test");
 
         // Test field access
         let code = "get_x = (a :: Num, b :: Num) => < p = {x = a, y = b} p.x >";
         let tokens = Lexer::tokenize(code).unwrap();
         let program = parse(&tokens).unwrap();
 
-        let result = gen.generate(&program);
+        let result = codegen.generate(&program);
         if let Err(e) = &result {
             println!("Error: {}", e);
         }
