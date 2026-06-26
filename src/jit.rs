@@ -64,6 +64,10 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
                 intrinsics::__print_num_fd as *const () as usize,
             ),
             (
+                "__print_bool_fd",
+                intrinsics::__print_bool_fd as *const () as usize,
+            ),
+            (
                 "__print_text_fd",
                 intrinsics::__print_text_fd as *const () as usize,
             ),

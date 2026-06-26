@@ -128,23 +128,23 @@ fn run_record_size_field_not_shadowed() {
     );
 }
 
-// --- Pipeline `:>` (first-arg injection) ---
+// --- Pipeline `|>` (first-arg injection) ---
 
 #[test]
 fn run_pipeline_chain() {
-    // 10 :> double :> addFive  ==  addFive(double(10)) = 25
+    // 10 |> double |> addFive  ==  addFive(double(10)) = 25
     assert_exit(
-        "double = (x :: Num) -> Num => x * 2\naddFive = (x :: Num) -> Num => x + 5\n^ = () -> Num => 10 :> double :> addFive",
+        "double = (x :: Num) -> Num => x * 2\naddFive = (x :: Num) -> Num => x + 5\n^ = () -> Num => 10 |> double |> addFive",
         25,
     );
 }
 
 #[test]
 fn run_pipeline_injects_left_as_first_arg() {
-    // 10 :> sub(3)  desugars to  sub(10, 3) = 7  (NOT sub(3, 10) = -7),
+    // 10 |> sub(3)  desugars to  sub(10, 3) = 7  (NOT sub(3, 10) = -7),
     // proving the left operand is injected as the FIRST argument.
     assert_exit(
-        "sub = (a :: Num, b :: Num) -> Num => a - b\n^ = () -> Num => 10 :> sub(3)",
+        "sub = (a :: Num, b :: Num) -> Num => a - b\n^ = () -> Num => 10 |> sub(3)",
         7,
     );
 }
@@ -153,8 +153,8 @@ fn run_pipeline_injects_left_as_first_arg() {
 
 #[test]
 fn run_write_to_stdout_returns_byte_count() {
-    // `"hi" :> write(stdout)` == `write("hi", stdout)`; write returns bytes written = 2.
-    assert_exit_linked("<< core.io\n^ = () -> Num => \"hi\" :> write(stdout)", 2);
+    // `"hi" |> write(stdout)` == `write("hi", stdout)`; write returns bytes written = 2.
+    assert_exit_linked("<< core.io\n^ = () -> Num => \"hi\" |> write(stdout)", 2);
 }
 
 #[test]
@@ -162,6 +162,23 @@ fn run_print_text_then_exit() {
     // print writes "hello\n" to stdout and yields Num 0.
     assert_exit_linked(
         "<< core.io\n^ = () -> Num => <\n  print(\"hello\")\n  0\n>",
+        0,
+    );
+}
+
+// --- Loop: `for <pattern> <- <collection> => <body>` (decoupled from `|>`) ---
+
+#[test]
+fn run_for_loop_new_syntax_executes() {
+    // The for-loop is side-effecting and yields Num 0; this proves the new
+    // `for n <- coll => body` surface syntax parses, type-checks, and runs.
+    assert_exit("^ = () -> Num => for n <- [1, 2, 3] => n", 0);
+}
+
+#[test]
+fn run_for_loop_with_index_in_block() {
+    assert_exit(
+        "^ = () -> Num => <\n  for (val, i) <- [10, 20, 30] => <\n    x = val + i\n    x\n  >\n>",
         0,
     );
 }

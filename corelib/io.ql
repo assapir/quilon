@@ -11,7 +11,7 @@
 ~   ^ = () -> Num => <
 ~     print("hello")              ~ prints: hello\n
 ~     print(42)                   ~ prints: 42\n
-~     "raw" :> write(stdout)      ~ prints: raw   (no newline); == write("raw", stdout)
+~     "raw" |> write(stdout)      ~ prints: raw   (no newline); == write("raw", stdout)
 ~     eprint("oops")              ~ to stderr, with a newline
 ~     0
 ~   >
@@ -28,12 +28,12 @@
 >> stderr = 2
 
 ~ Write a value to stdout followed by a newline. Polymorphic over Num / Text / Bool.
-~ `print(x)` is the ergonomic form of `x :> write(stdout)` (plus the newline).
+~ `print(x)` is the ergonomic form of `x |> write(stdout)` (plus the newline).
 >> print = x => 0
 
 ~ Write a value to stderr followed by a newline. Polymorphic over Num / Text / Bool.
 >> eprint = x => 0
 
 ~ Write a Text's raw bytes to a file descriptor (no trailing newline).
-~ Returns the number of bytes written. e.g. `"hi" :> write(stdout)`.
+~ Returns the number of bytes written. e.g. `"hi" |> write(stdout)`.
 >> write = (content :: Text, fd :: Num) -> Num => 0

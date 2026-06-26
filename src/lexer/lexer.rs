@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_operators() {
-        let tokens = Lexer::tokenize("= => -> :: :> ? |").unwrap();
+        let tokens = Lexer::tokenize("= => -> :: |> ? |").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Assign);
         assert_eq!(tokens[1].kind, TokenKind::Arrow);
         assert_eq!(tokens[2].kind, TokenKind::ReturnArrow);
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_pipeline() {
-        let source = "data :> filter .active :> collect";
+        let source = "data |> filter .active |> collect";
         let tokens = Lexer::tokenize(source).unwrap();
 
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Pipeline));
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_block() {
-        let source = "process = data => <\n  data :> map transform\n>";
+        let source = "process = data => <\n  data |> map transform\n>";
         let tokens = Lexer::tokenize(source).unwrap();
 
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockOpen));

@@ -482,7 +482,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ..
             } => self.generate_for_loop(collection, pattern, body),
 
-            // `left :> right` desugars to a call with `left` as the first arg
+            // `left |> right` desugars to a call with `left` as the first arg
             // (must match the type checker's desugaring exactly).
             Expr::Pipeline { left, right, span } => {
                 let call = Expr::desugar_pipeline(left, right, span);
@@ -740,6 +740,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
             // void __print_num_fd(i64 fd, double) — number + newline to fd.
             "__print_num_fd" => void.fn_type(&[i64t.into(), f64t.into()], false),
+            // void __print_bool_fd(i64 fd, i64 b) — "true"/"false" + newline to fd.
+            "__print_bool_fd" => void.fn_type(&[i64t.into(), i64t.into()], false),
             // void __print_text_fd(i64 fd, i8*) — C string + newline to fd.
             "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into()], false),
             other => return Err(format!("Unknown runtime intrinsic: {}", other)),
@@ -780,7 +782,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // A bare pointer (C string) prints as text.
             BasicValueEnum::PointerValue(p) => ("__print_text_fd", p.into()),
-            // Bools (and other ints) widen to a number.
+            // A Bool (i1) prints as "true"/"false"; any wider int widens to a number.
+            BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() == 1 => {
+                let b = self
+                    .builder
+                    .build_int_z_extend(i, self.context.i64_type(), "bool_ext")
+                    .map_err(|e| format!("Failed to extend bool for print: {:?}", e))?;
+                ("__print_bool_fd", b.into())
+            }
             BasicValueEnum::IntValue(i) => {
                 let f = self
                     .builder

@@ -215,7 +215,7 @@ pub enum Expr {
         span: Span,
     },
 
-    // For loop (collection :> for pattern => body)
+    // For loop (for pattern <- collection => body)
     ForLoop {
         collection: Box<Expr>,
         pattern: ForPattern,
@@ -248,10 +248,10 @@ impl Expr {
         }
     }
 
-    /// Desugar a pipeline `left :> right` into the equivalent call, injecting
+    /// Desugar a pipeline `left |> right` into the equivalent call, injecting
     /// `left` as the FIRST argument of the right-hand call:
-    ///   `x :> f`      => `f(x)`
-    ///   `x :> f(a, b)` => `f(x, a, b)`
+    ///   `x |> f`      => `f(x)`
+    ///   `x |> f(a, b)` => `f(x, a, b)`
     /// Used by both the type checker and codegen so the two never diverge.
     pub fn desugar_pipeline(left: &Expr, right: &Expr, span: &Span) -> Expr {
         let (func, mut args) = match right {

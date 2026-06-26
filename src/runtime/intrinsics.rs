@@ -87,6 +87,13 @@ pub extern "C" fn __print_num_fd(fd: i64, x: f64) {
     write_to_fd(fd, format!("{}\n", format_num(x)).as_bytes());
 }
 
+/// Write `true`/`false` to `fd` followed by a newline (backs `print`/`eprint` of
+/// a `Bool`). `b` is the bool zero-extended to an integer (0 = false).
+#[unsafe(no_mangle)]
+pub extern "C" fn __print_bool_fd(fd: i64, b: i64) {
+    write_to_fd(fd, if b != 0 { b"true\n" } else { b"false\n" });
+}
+
 /// Write a NUL-terminated C string to `fd` followed by a newline (backs
 /// `print`/`eprint` of a `Text`).
 ///

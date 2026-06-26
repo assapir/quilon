@@ -69,6 +69,23 @@ fn write_lowers_to_write_bytes_intrinsic() {
 }
 
 #[test]
+fn print_bool_lowers_to_print_bool_fd_intrinsic() {
+    // Bool prints as "true"/"false" via __print_bool_fd, not widened to a number.
+    let ir = gen_ir(
+        r#"
+        ^ = () -> Num => <
+            print(true)
+            0
+        >
+    "#,
+    );
+    assert!(
+        ir.contains("@__print_bool_fd"),
+        "expected __print_bool_fd in:\n{ir}"
+    );
+}
+
+#[test]
 fn main_wrapper_initializes_gc() {
     let ir = gen_ir(r#"^ = () -> Num => 0"#);
     assert!(

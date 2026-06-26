@@ -482,8 +482,8 @@ impl TypeChecker {
             Expr::Call { func, args, span } => self.check_call(func, args, span),
 
             Expr::Pipeline { left, right, span } => {
-                // `left :> right` injects `left` as the first argument of the
-                // right-hand call: `x :> f` => `f(x)`, `x :> f(a)` => `f(x, a)`.
+                // `left |> right` injects `left` as the first argument of the
+                // right-hand call: `x |> f` => `f(x)`, `x |> f(a)` => `f(x, a)`.
                 // Desugar and type-check the resulting call (shared with codegen).
                 let call = Expr::desugar_pipeline(left, right, span);
                 self.infer_expr(&call)
@@ -1434,7 +1434,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
 
     #[test]
     fn test_for_loop_simple() {
-        let tokens = Lexer::tokenize("test = => [1, 2, 3] :> for n => n").unwrap();
+        let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => n").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
@@ -1449,7 +1449,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   items = [10, 20, 30]
-  items :> for (val, i) => val
+  for (val, i) <- items => val
 >",
         )
         .unwrap();
@@ -1468,7 +1468,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   nums = [1.5, 2.5, 3.5]
-  nums :> for n => n + 1.0
+  for n <- nums => n + 1.0
 >",
         )
         .unwrap();
@@ -1484,7 +1484,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
     #[test]
     fn test_for_loop_index_is_num() {
         // Test that index variable is Num type
-        let tokens = Lexer::tokenize("test = => [10, 20] :> for (val, i) => i + val").unwrap();
+        let tokens = Lexer::tokenize("test = => for (val, i) <- [10, 20] => i + val").unwrap();
         let program = parse(&tokens).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
@@ -1500,7 +1500,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         let tokens = Lexer::tokenize(
             "test = => <
   x = 42
-  x :> for n => n
+  for n <- x => n
 >",
         )
         .unwrap();
@@ -1515,7 +1515,7 @@ result = val ? | OK(x, y) => x | NotOK => 0",
         // For loops should return Num (unit/0)
         let tokens = Lexer::tokenize(
             "test = => <
-  result = [1, 2, 3] :> for n => n
+  result = for n <- [1, 2, 3] => n
   result + 1
 >",
         )
