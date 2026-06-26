@@ -34,6 +34,28 @@ fn test_builtin_import_resolves_and_exports_usable() {
 }
 
 #[test]
+fn test_core_text_import_resolves() {
+    // `<< core.text` must resolve; Text ops (`+`, `.size`, `.length`) are built-in.
+    let source = r#"
+        << core.text
+        ^ = () -> Num => ("a" + "b").length
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_print_accepts_text() {
+    // print is polymorphic over Num/Text; printing a Text must type-check.
+    let source = r#"
+        << core.io
+        ^ = () -> Num => print("hello, " + "world")
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
 fn test_file_path_import_exported_item_usable() {
     let source = r#"
         << "mathlib.ql"

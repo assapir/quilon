@@ -77,3 +77,24 @@ fn run_pattern_match_wildcard() {
         99,
     );
 }
+
+// --- Text: { ptr, byte_len }, with `+` concatenation, `.size` (bytes) and
+//     `.length` (grapheme clusters). "héllo" + " 🌍":
+//       bytes     = 6 ("héllo": é is 2 bytes) + 5 (" 🌍": 🌍 is 4 bytes) = 11
+//       graphemes = 5 + 2 = 7   (so graphemes < bytes for multibyte/emoji input)
+
+#[test]
+fn run_text_concat_byte_size() {
+    assert_exit("^ = () -> Num => (\"héllo\" + \" 🌍\").size", 11);
+}
+
+#[test]
+fn run_text_grapheme_length() {
+    assert_exit("^ = () -> Num => (\"héllo\" + \" 🌍\").length", 7);
+}
+
+#[test]
+fn run_text_ascii_concat_size() {
+    // ASCII: bytes == graphemes.
+    assert_exit("^ = () -> Num => <\n  s = \"ab\" + \"cde\"\n  s.size\n>", 5);
+}

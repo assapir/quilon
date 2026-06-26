@@ -593,6 +593,16 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
+                    Type::Text => {
+                        // Text has `.size` (byte length) and `.length` (grapheme count).
+                        if field == "size" || field == "length" {
+                            return Ok(Type::Num);
+                        }
+                        Err(TypeError::UndefinedVariable {
+                            name: field.clone(),
+                            span: span.clone(),
+                        })
+                    }
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Record(vec![])),
                         got: Box::new(expr_type),
@@ -849,6 +859,12 @@ impl TypeChecker {
         let right_type = self.infer_expr(right)?;
 
         match op {
+            // `+` is overloaded: Text + Text concatenates, otherwise it is numeric.
+            BinOp::Add if left_type == Type::Text || right_type == Type::Text => {
+                self.check_type_compatibility(&Type::Text, &left_type, span)?;
+                self.check_type_compatibility(&Type::Text, &right_type, span)?;
+                Ok(Type::Text)
+            }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 self.check_type_compatibility(&Type::Num, &left_type, span)?;
                 self.check_type_compatibility(&Type::Num, &right_type, span)?;
@@ -882,6 +898,33 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, func: &Expr, args: &[Expr], span: &Span) -> Result<Type, TypeError> {
+        // `print`/`println` are compiler-lowered (see CodeGenerator::generate_print)
+        // and polymorphic over Num / Text / Bool. Type-check them directly rather
+        // than against the inert `x => 0` placeholder in core.io (whose untyped
+        // param would otherwise default to Num and reject Text).
+        if let Expr::Ident { name, .. } = func
+            && (name == "print" || name == "println")
+        {
+            if args.len() != 1 {
+                return Err(TypeError::WrongNumberOfArguments {
+                    expected: 1,
+                    got: args.len(),
+                    span: span.clone(),
+                });
+            }
+            let arg_type = self.infer_expr(&args[0])?;
+            match arg_type {
+                Type::Num | Type::Text | Type::Bool => return Ok(Type::Num),
+                other => {
+                    return Err(TypeError::TypeMismatch {
+                        expected: Box::new(Type::Text),
+                        got: Box::new(other),
+                        span: span.clone(),
+                    });
+                }
+            }
+        }
+
         // Check if this is a sum type constructor call: Ok(42), NotOk, etc.
         if let Expr::Ident {
             name: constructor_name,

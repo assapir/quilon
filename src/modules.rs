@@ -105,6 +105,7 @@ impl Loader {
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(include_str!("../corelib/io.ql")),
+        "core.text" => Some(include_str!("../corelib/text.ql")),
         _ => None,
     }
 }
