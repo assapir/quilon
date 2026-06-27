@@ -104,6 +104,7 @@
       }
     },
     "operators": {
+      "comment": "TextMate applies, at each position, the FIRST pattern in this list that matches there — ties at the same start position are NOT broken by length. So every multi-character operator MUST be listed before the single-character rules, and before any single-char operator that is a prefix of it (e.g. `|>` and `||` before `|`, `<=` before `<`, `=>`/`==` before `=`). That ordering is what keeps a two-char operator from being split into its first character + the rest. Each multi-char operator is its own scope.",
       "patterns": [
         {
           "name": "keyword.operator.pipeline.quilon",
@@ -130,12 +131,18 @@
           "match": "<-"
         },
         {
+          "comment": "== != <= >= — listed before `=`, `!`, `<`, `>` so a two-char comparison is never split into its first char + the rest.",
           "name": "keyword.operator.comparison.quilon",
           "match": "==|!=|<=|>="
         },
         {
+          "comment": "&& || — the two-char logical operators, listed before the single-char `!` and `|` below.",
           "name": "keyword.operator.logical.quilon",
-          "match": "&&|\\|\\||!"
+          "match": "&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.logical.quilon",
+          "match": "!"
         },
         {
           "name": "keyword.operator.match.quilon",

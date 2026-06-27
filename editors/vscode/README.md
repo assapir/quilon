@@ -12,7 +12,9 @@ compiles to native code via LLVM. Files use the `.ql` extension.
   - Operators: `|>` (pipe), `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
     `=>` (function body / match arm), `->` (return type), `<-` (loop iterate),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,
-    logical `&& || !`.
+    logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`, `|>`,
+    `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`) is highlighted as a **single**
+    token — never split into its first character colored separately from the rest.
   - Built-in types `Num` / `Text` / `Bool`, and the unit type/value `$` (`$` is
     both the type, as in `-> $`, and its sole value — highlighted like the other
     built-in types).
@@ -77,9 +79,21 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests cover the diagnostic-output parser (`src/diagnostics.ts`), which is
-kept free of any `vscode` import so it runs under plain Node. To verify the
-**inline diagnostics** end-to-end manually:
+Unit tests (`pnpm test`) cover three things, all kept free of any `vscode`
+import so they run under plain Node:
+
+- the diagnostic-output parser (`src/diagnostics.ts` ↔ `src/diagnostics.test.ts`);
+- the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
+  `src/entryPoints.test.ts`);
+- **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
+  `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
+  (`=>`, `->`, `:=`, `|>`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
+  tokenizes to a **single** scope, plus regression guards for `<` / `>`, `=`,
+  `$`, comments, strings, and numbers. `src/grammar.ts` is a tiny dependency-free
+  re-implementation of TextMate's ordered first-match-wins rule (the behaviour
+  the operator ordering relies on), so no native engine is needed.
+
+To verify the **inline diagnostics** end-to-end manually:
 
 1. Set `quilon.command` to a working compiler (e.g. `"cargo run --"` from a
    checkout, or `"quilon"` if it's on your `PATH`).
