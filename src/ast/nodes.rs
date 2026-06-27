@@ -93,6 +93,21 @@ pub struct FunctionDecl {
     pub span: Span,
 }
 
+impl FunctionDecl {
+    /// Whether this is the inert `core.io` `print`/`eprint` placeholder: a single
+    /// UNannotated parameter with an inert body. The compiler fully provides
+    /// `print`/`eprint` as built-in overloads (lowered to runtime intrinsics), so the
+    /// placeholder is ignored everywhere — neither registered as a user overload nor
+    /// type-checked / emitted. A genuine user `print`/`eprint` overload has fully
+    /// annotated parameters and is therefore NOT a placeholder. Shared by the type
+    /// checker and codegen so the two never disagree on what to skip.
+    pub fn is_inert_io_placeholder(&self) -> bool {
+        (self.name == "print" || self.name == "eprint")
+            && self.params.len() == 1
+            && self.params[0].type_annotation.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: String,

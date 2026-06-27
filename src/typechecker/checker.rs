@@ -226,17 +226,6 @@ fn fmt_type_list(types: &[Type]) -> String {
     types.iter().map(type_label).collect::<Vec<_>>().join(", ")
 }
 
-/// Whether `decl` is the inert `core.io` `print`/`eprint` placeholder (a single
-/// UNannotated param with an inert body). The compiler fully provides these as
-/// built-in overloads, so the placeholder is ignored — neither registered as a
-/// user overload nor type-checked/emitted. A genuine user `print`/`eprint` overload
-/// (fully annotated params) is NOT a placeholder and is handled normally.
-fn is_inert_io_placeholder(decl: &FunctionDecl) -> bool {
-    (decl.name == "print" || decl.name == "eprint")
-        && decl.params.len() == 1
-        && decl.params[0].type_annotation.is_none()
-}
-
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
 /// match by identity; a user type matches by NAME (so a `Named`/`Sum` annotation and
 /// the inferred instance line up regardless of carried fields); a `Generic` payload
@@ -699,7 +688,7 @@ impl TypeChecker {
             std::collections::HashMap::new();
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
-                && !is_inert_io_placeholder(decl)
+                && !decl.is_inert_io_placeholder()
             {
                 *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
             }
@@ -724,7 +713,7 @@ impl TypeChecker {
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
                 && self.overloaded_names.contains(&decl.name)
-                && !is_inert_io_placeholder(decl)
+                && !decl.is_inert_io_placeholder()
             {
                 self.register_overload_decl(decl)?;
             }
@@ -1108,7 +1097,7 @@ impl TypeChecker {
     fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
         // The inert core.io `print`/`eprint` placeholder is fully provided by the
         // compiler as a built-in overload; ignore its declaration entirely.
-        if is_inert_io_placeholder(decl) {
+        if decl.is_inert_io_placeholder() {
             return Ok(());
         }
 

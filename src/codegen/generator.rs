@@ -19,15 +19,6 @@ fn is_builtin_overload_name(name: &str) -> bool {
     matches!(name, "print" | "eprint")
 }
 
-/// The inert `core.io` `print`/`eprint` placeholder (single unannotated param). The
-/// compiler fully provides these as intrinsics, so the placeholder is never emitted
-/// or registered as an overload member — see the type checker's matching predicate.
-fn is_inert_io_placeholder(decl: &FunctionDecl) -> bool {
-    (decl.name == "print" || decl.name == "eprint")
-        && decl.params.len() == 1
-        && decl.params[0].type_annotation.is_none()
-}
-
 /// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
 /// deterministic and identical at definition and call sites (built from the declared
 /// parameter type and from the inferred argument type respectively).
@@ -228,14 +219,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut fn_counts: HashMap<&str, usize> = HashMap::new();
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
-                && !is_inert_io_placeholder(decl)
+                && !decl.is_inert_io_placeholder()
             {
                 *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
             }
         }
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
-                && !is_inert_io_placeholder(decl)
+                && !decl.is_inert_io_placeholder()
                 && (is_operator_symbol(&decl.name)
                     || fn_counts.get(decl.name.as_str()).copied().unwrap_or(0) > 1
                     || is_builtin_overload_name(&decl.name))
@@ -261,7 +252,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // overloaded call/operator (keeps codegen dispatch in sync with the checker).
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
-                && !is_inert_io_placeholder(decl)
+                && !decl.is_inert_io_placeholder()
                 && !self.overloads.contains_key(&decl.name)
                 && let Some(ret) = &decl.return_type
             {
@@ -588,7 +579,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), String> {
         // The inert core.io print/eprint placeholder is never emitted (the compiler
         // lowers print/eprint to runtime intrinsics).
-        if is_inert_io_placeholder(decl) {
+        if decl.is_inert_io_placeholder() {
             return Ok(());
         }
 
