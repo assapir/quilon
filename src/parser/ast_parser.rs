@@ -871,10 +871,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_pipeline()?;
+        let mut left = self.parse_range()?;
 
         while let Some(op) = self.match_comparison() {
-            let right = self.parse_pipeline()?;
+            let right = self.parse_range()?;
             let span = Span::new(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
@@ -882,6 +882,27 @@ impl<'a> Parser<'a> {
                 right: Box::new(right),
                 span,
             };
+        }
+
+        Ok(left)
+    }
+
+    /// Infix range `lo <- hi` → inclusive `[]Num` (see the `Expr::Range` node).
+    /// Non-associative: consumes at most one `<-`, so `a <- b <- c` is rejected.
+    /// Only general expression position reaches here; the `for` header consumes its
+    /// own `<-` in `parse_for_loop`, so `for n <- coll` never parses as a range.
+    fn parse_range(&mut self) -> Result<Expr, ParseError> {
+        let left = self.parse_pipeline()?;
+
+        if self.check(&TokenKind::LeftArrow) {
+            self.advance(); // consume `<-`
+            let right = self.parse_pipeline()?;
+            let span = Span::new(left.span().start, right.span().end);
+            return Ok(Expr::Range {
+                start: Box::new(left),
+                end: Box::new(right),
+                span,
+            });
         }
 
         Ok(left)
@@ -1945,6 +1966,39 @@ mod tests {
             } else {
                 panic!("Expected for loop expression");
             }
+        }
+    }
+
+    #[test]
+    fn test_parse_infix_range() {
+        // `1 <- 4` in general expression position parses as an Expr::Range,
+        // NOT a for-loop (no `for` keyword precedes it).
+        let tokens = Lexer::tokenize("r = 1 <- 4").unwrap();
+        let program = parse(&tokens).expect("range should parse");
+        if let Item::VarDecl(v) = &program.items[0] {
+            assert!(
+                matches!(v.value, Expr::Range { .. }),
+                "expected Expr::Range, got {:?}",
+                v.value
+            );
+        } else {
+            panic!("expected a var decl");
+        }
+    }
+
+    #[test]
+    fn test_infix_range_does_not_capture_for_header() {
+        // CRITICAL coexistence: the `for` header's `<-` must still parse as a
+        // for-loop, never as an infix range. `for n <- [1,2,3]` is a ForLoop.
+        let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => print(n)").unwrap();
+        let program = parse(&tokens).expect("for loop should still parse");
+        if let Item::FunctionDecl(func) = &program.items[0] {
+            assert!(
+                matches!(func.body, Expr::ForLoop { .. }),
+                "for header must parse as ForLoop, not Range"
+            );
+        } else {
+            panic!("expected a function decl");
         }
     }
 
