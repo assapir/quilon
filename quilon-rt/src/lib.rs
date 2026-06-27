@@ -183,6 +183,39 @@ fn format_num(x: f64) -> String {
     }
 }
 
+/// Force every runtime intrinsic to be RETAINED in the `staticlib` archive, even
+/// though nothing in this crate calls them (they are only ever called from the
+/// LLVM IR the code generator emits, which rustc never sees). Without an in-crate
+/// reference, the staticlib's link step can dead-strip an intrinsic — observed in
+/// CI as `undefined reference to __text_cmp` during AOT linking while the JIT (which
+/// maps symbols by address) was unaffected. The `#[used]` table is a reachability
+/// root that pins all of them deterministically, independent of codegen-unit layout
+/// or linker GC. (The AOT link also wraps the archive in `--whole-archive`; this
+/// guarantees the symbols are present to be pulled in the first place.)
+// Function pointers transmuted to a common fn-pointer type — `Sync`,
+// const-constructible, and each entry pins its intrinsic. Kept as a `#[used]`
+// reachability root so the staticlib link never dead-strips an intrinsic that is
+// only ever called from generated LLVM IR (never from Rust). All entries are plain
+// `extern "C"` fn items; the transmute only erases their (ABI-compatible) parameter
+// lists for storage — the pointers are never called through this array.
+type RtFn = unsafe extern "C" fn();
+// Each `transmute` only erases an (ABI-irrelevant) parameter list to a common
+// fn-pointer type for storage; the entries are never called through this array.
+#[allow(clippy::missing_transmute_annotations)]
+#[used]
+static QUILON_RT_INTRINSICS: [RtFn; 8] = unsafe {
+    [
+        core::mem::transmute(__gc_init as extern "C" fn()),
+        core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
+        core::mem::transmute(__text_length as extern "C" fn(*const u8, i64) -> i64),
+        core::mem::transmute(__text_cmp as extern "C" fn(*const u8, i64, *const u8, i64) -> i32),
+        core::mem::transmute(__write_bytes as extern "C" fn(i64, *const u8, i64) -> i64),
+        core::mem::transmute(__print_num_fd as extern "C" fn(i64, f64)),
+        core::mem::transmute(__print_bool_fd as extern "C" fn(i64, i64)),
+        core::mem::transmute(__print_text_fd as extern "C" fn(i64, *const c_char)),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

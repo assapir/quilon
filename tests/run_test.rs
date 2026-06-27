@@ -417,6 +417,13 @@ fn run_operator_overload_on_user_type() {
 }
 
 #[test]
+fn comparison_operator_overload_must_return_bool() {
+    // A comparison/equality operator overload is a predicate — a non-Bool return type
+    // is a compile error. (Arithmetic operators have no such constraint.)
+    assert_check_err("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0");
+}
+
+#[test]
 fn run_operator_overload_returning_record_survives_frame() {
     // A user `+` overload that RETURNS a record: the record is GC-allocated, so its
     // fields are still readable after the operator call returns (would dangle if it

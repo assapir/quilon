@@ -283,6 +283,12 @@ over `Text` (lexicographic order) are built-in overloads, so text comparisons wo
 of the box: `"abc" < "abd"`, `"hi" == "hi"`. (Defining `<`/`>` is reserved — a top-level
 `<`/`>` would read as a block; overload the others, or use `<=`/`>=`.)
 
+A **comparison/equality** operator overload (`== != < <= > >=`) **must return `Bool`** —
+these are predicates that feed `?`/`|` matching and conditionals; a non-`Bool` return is
+a compile error. **Arithmetic** operators (`+ - * / %`) are unconstrained: an overload
+returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `Vec * Vec
+-> Num` dot product are all legal).
+
 (See `examples/overloading.ql`.)
 
 ---

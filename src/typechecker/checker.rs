@@ -77,6 +77,13 @@ pub enum TypeError {
         param: String,
         span: Span,
     },
+    /// A comparison/equality operator overload (`== != < <= > >=`) declared a non-`Bool`
+    /// return type. These operators are predicates and must yield `Bool`.
+    ComparisonOverloadNotBool {
+        operator: String,
+        got: Box<Type>,
+        span: Span,
+    },
     #[allow(dead_code)]
     PatternTypeMismatch {
         expected: Box<Type>,
@@ -104,6 +111,7 @@ impl TypeError {
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
             | TypeError::NonExhaustiveMatch { span } => span,
         }
@@ -189,6 +197,14 @@ impl std::fmt::Display for TypeError {
                     name, param
                 )
             }
+            TypeError::ComparisonOverloadNotBool { operator, got, .. } => {
+                write!(
+                    f,
+                    "comparison operator '{}' overload must return Bool, found {}",
+                    operator,
+                    type_label(got)
+                )
+            }
             TypeError::PatternTypeMismatch { expected, got, .. } => {
                 write!(
                     f,
@@ -224,6 +240,12 @@ fn type_label(ty: &Type) -> String {
 /// Render a comma-separated parameter/argument type list (`Num, Text`).
 fn fmt_type_list(types: &[Type]) -> String {
     types.iter().map(type_label).collect::<Vec<_>>().join(", ")
+}
+
+/// Whether `name` is a comparison/equality operator — these overloads are predicates
+/// and are required to return `Bool` (arithmetic operators are unconstrained).
+fn is_comparison_operator(name: &str) -> bool {
+    matches!(name, "==" | "!=" | "<" | "<=" | ">" | ">=")
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
@@ -749,6 +771,17 @@ impl TypeChecker {
             .as_ref()
             .map(|t| self.resolve_type(t))
             .unwrap_or(Type::Num);
+
+        // A comparison/equality operator overload (`== != < <= > >=`) must return `Bool`:
+        // these are predicates that feed `?`/`|` matching and conditionals. (Arithmetic
+        // operators are unconstrained — e.g. `Vec * Num -> Vec` is fine.)
+        if is_comparison_operator(&decl.name) && ret != Type::Bool {
+            return Err(TypeError::ComparisonOverloadNotBool {
+                operator: decl.name.clone(),
+                got: Box::new(ret),
+                span: decl.span.clone(),
+            });
+        }
 
         // Reject an exact-duplicate signature (same parameter types) up front — it
         // would make every call to it ambiguous.
@@ -2152,6 +2185,40 @@ result = val ? | OK(x, y) => x | NotOK => 0",
     fn test_duplicate_overload_signature_is_error() {
         let err = check_ok("f = (n :: Num) -> Num => n\nf = (m :: Num) -> Num => m").unwrap_err();
         assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+    }
+
+    #[test]
+    fn test_comparison_operator_overload_must_return_bool() {
+        // A `==` overload returning a non-Bool is rejected with a clear diagnostic.
+        let err = check_ok("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0")
+            .unwrap_err();
+        assert!(matches!(err, TypeError::ComparisonOverloadNotBool { .. }));
+        // `<=` too (a definable comparison operator).
+        assert!(
+            check_ok("V = { x :: Num }\n<= = (a :: V, b :: V) -> Num => 1\n^ = () -> Num => 0")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_bool_returning_comparison_overload_is_accepted() {
+        assert!(
+            check_ok(
+                "V = { x :: Num }\n== = (a :: V, b :: V) -> Bool => a.x == b.x\n^ = () -> Num => V { x = 1 } == V { x = 1 } ? 1 : 0"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
+        // No homogeneity rule on arithmetic operators: `V * Num -> V` is fine.
+        assert!(
+            check_ok(
+                "V = { x :: Num }\n* = (a :: V, k :: Num) -> V => V { x = a.x }\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
