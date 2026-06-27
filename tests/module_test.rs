@@ -19,6 +19,7 @@ fn check_with_base(source: &str, base_dir: &Path) -> Result<(), String> {
     let mut checker = TypeChecker::new();
     checker
         .check_program(&linked)
+        .map(|_| ())
         .map_err(|e| format!("type: {}", e))
 }
 

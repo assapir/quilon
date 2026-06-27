@@ -81,7 +81,10 @@ Anonymous structs with named fields:
 user = { name = "Alice", age = 30 }
 n    = user.name
 ```
-(See `examples/records.ql`.)
+Fields may hold any type — `Text`, arrays, nested arrays, etc. — and read back at
+their real type (no numeric-only restriction). (See `examples/records.ql` and
+`examples/composites.ql`, which exercises a `Text` record field, an array of `Text`,
+and a nested array together.)
 
 ### Named record types with methods
 Methods take an implicit `it` (the receiver):
@@ -141,8 +144,8 @@ classify = v => v ?
   | Ok(x)    => x * 2
   | NotOk(e) => 0
 ```
-Numeric payloads work end-to-end. (See `examples/result.ql`. Non-numeric payloads in
-some positions: see [Known limitations](#known-limitations).)
+Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
+`NotOk("error")`). (See `examples/result.ql` and `examples/composites.ql`.)
 
 #### `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. They are told apart
@@ -401,11 +404,11 @@ message instead. Any compile error exits with status 1.
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
-| Sum-type payloads: `Num` / `Bool` (and `Text`, see limitations) | ✅ |
+| Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
-| `Text` in records/arrays, or as a sum-type payload (`Ok(text)`) | 🚧 |
+| `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
 | Generics, closures, `while` loops | ❌ |
 | Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
@@ -416,7 +419,6 @@ message instead. Any compile error exits with status 1.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
 - **No generics, closures, or `while` loops.** The module system is minimal (`core.io` built-in + file-path imports).

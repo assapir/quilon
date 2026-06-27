@@ -237,6 +237,15 @@ impl Environment {
 /// A method's signature and body: (params, return type, body expression).
 type MethodDef = (Vec<Param>, Option<Type>, Expr);
 
+/// The **type oracle**: a side-table mapping each expression's source `Span` to the
+/// `Type` the checker inferred for it. Produced by `check_program` and consumed by
+/// codegen so that READ sites (array indexing, record-field access, match-arm results)
+/// recover the *declared* element / field / result type instead of guessing `f64` from
+/// a runtime LLVM value. Spans are unique per expression (every AST node carries its
+/// own source span), so they make a stable, AST-agnostic key. See the consumer-side
+/// wrapper `codegen::TypeOracle`.
+pub type TypeTable = std::collections::HashMap<Span, Type>;
+
 pub struct TypeChecker {
     env: Environment,
     // Registry of methods: (TypeName, MethodName) -> method definition
@@ -247,6 +256,9 @@ pub struct TypeChecker {
     // body containing `it.field := …` (or a call to another setter on `it`).
     // Calling such a method requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
+    // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
+    // populated as a side effect of `infer_expr` and returned by `check_program`.
+    type_table: TypeTable,
 }
 
 impl Default for TypeChecker {
@@ -262,6 +274,7 @@ impl TypeChecker {
             methods: std::collections::HashMap::new(),
             sum_types: std::collections::HashMap::new(),
             setter_methods: std::collections::HashSet::new(),
+            type_table: TypeTable::new(),
         };
 
         // Add built-in sum types to the environment
@@ -342,11 +355,43 @@ impl TypeChecker {
                 span: span.clone(),
             });
         }
+        let mut arg_types = Vec::with_capacity(args.len());
         for (field_type, arg) in field_types.iter().zip(args.iter()) {
             let arg_type = self.infer_expr(arg)?;
             self.check_type_compatibility(field_type, &arg_type, span)?;
+            arg_types.push(arg_type);
         }
-        Ok(Some(sum_type))
+
+        // For a sum type with GENERIC payload positions (the built-in `Result`'s
+        // `Ok(T)` / `NotOk(E)`), specialize the constructed variant's generic fields to
+        // the concrete argument types. This lets `Ok("x")` carry `Text` (not the opaque
+        // `T`), so a later `match` binds the payload at its real type and `.length` /
+        // field access on it type-check — the front-end half of making `Ok(text)` /
+        // `NotOk(text)` round-trip (codegen already preserves the payload's LLVM type).
+        // Non-generic field types (user sum types, already concrete) pass through.
+        let specialized = Self::specialize_variant(&sum_type, variant, &arg_types);
+        Ok(Some(specialized))
+    }
+
+    /// Return `sum_type` with the `variant`'s generic payload fields replaced by the
+    /// corresponding concrete `arg_types`. Only `Type::Generic` fields are substituted;
+    /// already-concrete fields are left as declared, and other variants are untouched.
+    /// Clones the sum type once and mutates only the matched variant's generic fields in
+    /// place, rather than rebuilding every (mostly unchanged) sibling variant.
+    fn specialize_variant(sum_type: &Type, variant: &str, arg_types: &[Type]) -> Type {
+        let mut specialized = sum_type.clone();
+        if let Type::Sum { variants, .. } = &mut specialized
+            && let Some(v) = variants.iter_mut().find(|v| v.name == variant)
+        {
+            for (i, field) in v.fields.iter_mut().enumerate() {
+                if matches!(field, Type::Generic { .. })
+                    && let Some(arg) = arg_types.get(i)
+                {
+                    *field = arg.clone();
+                }
+            }
+        }
+        specialized
     }
 
     /// If `variant` names a constructor of some registered sum type, return that
@@ -377,11 +422,15 @@ impl TypeChecker {
         }
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
+    /// Type-check `program` and, on success, return the **type oracle** (`TypeTable`):
+    /// every expression's inferred type keyed by its source span. Codegen consumes this
+    /// to recover precise element/field/match-result types at read sites. The table is
+    /// taken (moved) out of the checker, so a checker is single-use per program.
+    pub fn check_program(&mut self, program: &Program) -> Result<TypeTable, TypeError> {
         for item in &program.items {
             self.check_item(item)?;
         }
-        Ok(())
+        Ok(std::mem::take(&mut self.type_table))
     }
 
     fn check_item(&mut self, item: &Item) -> Result<(), TypeError> {
@@ -770,7 +819,19 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
+    /// keyed by the expression's source span. This is the public inference entry point;
+    /// the per-node logic lives in `infer_expr_inner`. The recorded side-table is what
+    /// `check_program` returns and codegen consults to recover the precise element /
+    /// field / match-result types it would otherwise lose at read sites (see
+    /// `TypeOracle` in codegen). Only successfully-typed expressions are recorded.
     fn infer_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
+        let ty = self.infer_expr_inner(expr)?;
+        self.type_table.insert(expr.span().clone(), ty.clone());
+        Ok(ty)
+    }
+
+    fn infer_expr_inner(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match expr {
             Expr::Number { .. } => Ok(Type::Num),
             Expr::String { .. } => Ok(Type::Text),
@@ -1366,11 +1427,22 @@ impl TypeChecker {
 
             self.env.pop_scope();
 
-            // All arms must return same type
-            if let Some(ref expected_type) = result_type {
-                self.check_type_compatibility(expected_type, &body_type, &arm.span)?;
-            } else {
-                result_type = Some(body_type);
+            // All arms must agree (compatibly). Prefer the most concrete arm type as the
+            // result: an arm binding an un-specialized payload (`Generic`, e.g. a
+            // never-constructed `NotOk(e) => e`) must not make the whole match's result
+            // type generic when another arm yields a concrete type — codegen needs a
+            // concrete result type to size the match value. So when the running result is
+            // `Generic` and this arm is concrete, upgrade to the concrete type.
+            match result_type {
+                Some(ref expected_type) => {
+                    self.check_type_compatibility(expected_type, &body_type, &arm.span)?;
+                    if matches!(expected_type, Type::Generic { .. })
+                        && !matches!(body_type, Type::Generic { .. })
+                    {
+                        result_type = Some(body_type);
+                    }
+                }
+                None => result_type = Some(body_type),
             }
         }
 
@@ -1502,23 +1574,53 @@ impl TypeChecker {
         got: &Type,
         span: &Span,
     ) -> Result<(), TypeError> {
-        // Allow any type to match a generic type parameter
-        match expected {
-            Type::Generic { .. } => Ok(()),
-            _ => match got {
-                Type::Generic { .. } => Ok(()),
-                _ => {
-                    if expected == got {
-                        Ok(())
-                    } else {
-                        Err(TypeError::TypeMismatch {
-                            expected: Box::new(expected.clone()),
-                            got: Box::new(got.clone()),
-                            span: span.clone(),
-                        })
-                    }
-                }
-            },
+        if Self::types_compatible(expected, got) {
+            Ok(())
+        } else {
+            Err(TypeError::TypeMismatch {
+                expected: Box::new(expected.clone()),
+                got: Box::new(got.clone()),
+                span: span.clone(),
+            })
+        }
+    }
+
+    /// Structural type compatibility with a `Generic` wildcard. A `Generic` on either
+    /// side matches anything (no real type variables yet). For sum types this recurses
+    /// into the variants so that the SAME sum type carrying a specialized payload in one
+    /// value and a generic/`$` payload in another (e.g. `Ok("x")` vs `Ok($)`, both
+    /// `Result`) stays compatible — the constructor result is specialized to the actual
+    /// payload type (see `specialize_variant`) purely so a match can bind the payload at
+    /// its real type; that specialization must NOT make two `Result` values incompatible.
+    fn types_compatible(a: &Type, b: &Type) -> bool {
+        match (a, b) {
+            // A generic stands in for any type (forward-compat with future generics).
+            (Type::Generic { .. }, _) | (_, Type::Generic { .. }) => true,
+            (
+                Type::Sum {
+                    name: n1,
+                    variants: v1,
+                },
+                Type::Sum {
+                    name: n2,
+                    variants: v2,
+                },
+            ) => {
+                // Same sum type (by name) with structurally-compatible variants: same
+                // variant names in order, payload fields pairwise compatible.
+                n1 == n2
+                    && v1.len() == v2.len()
+                    && v1.iter().zip(v2).all(|(x, y)| {
+                        x.name == y.name
+                            && x.fields.len() == y.fields.len()
+                            && x.fields
+                                .iter()
+                                .zip(&y.fields)
+                                .all(|(fa, fb)| Self::types_compatible(fa, fb))
+                    })
+            }
+            (Type::Array(e1), Type::Array(e2)) => Self::types_compatible(e1, e2),
+            _ => a == b,
         }
     }
 }

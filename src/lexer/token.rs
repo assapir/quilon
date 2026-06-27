@@ -4,7 +4,7 @@ use logos::Logos;
 use std::fmt;
 
 /// Source code position span
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
