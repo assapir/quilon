@@ -486,7 +486,29 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::For) {
             return self.parse_for_loop();
         }
-        self.parse_ternary()
+        self.parse_assignment()
+    }
+
+    /// Assignment is the lowest-precedence form. Parse a ternary; if it is a
+    /// field-access path (`a.b` / `a.b.c`) immediately followed by `:=`, treat
+    /// the whole thing as an in-place field write `target := value`. Anything
+    /// else (including a bare `name := …`, which `parse_item` handles) falls
+    /// straight through unchanged.
+    fn parse_assignment(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_ternary()?;
+
+        if self.check(&TokenKind::MutAssign) && matches!(expr, Expr::FieldAccess { .. }) {
+            self.advance(); // consume `:=`
+            let value = self.parse_assignment()?;
+            let span = Span::new(expr.span().start, value.span().end);
+            return Ok(Expr::FieldAssign {
+                target: Box::new(expr),
+                value: Box::new(value),
+                span,
+            });
+        }
+
+        Ok(expr)
     }
 
     /// Parse a for-loop: `for <pattern> <- <collection> => <body>`, where

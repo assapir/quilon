@@ -184,6 +184,17 @@ pub enum Expr {
         span: Span,
     },
 
+    // In-place field write: `obj.field := value`. `target` is a `FieldAccess`;
+    // it mutates the existing record memory in place rather than re-binding a
+    // name. Only allowed when `obj`'s binding is mutable (`:=`); the type checker
+    // enforces this. (Nested records aren't representable yet, so the type checker
+    // rejects deeper paths like `a.b.c := …` before codegen.)
+    FieldAssign {
+        target: Box<Expr>,
+        value: Box<Expr>,
+        span: Span,
+    },
+
     // Array indexing
     Index {
         expr: Box<Expr>,
@@ -245,6 +256,7 @@ impl Expr {
             Expr::If { span, .. } => span,
             Expr::Match { span, .. } => span,
             Expr::FieldAccess { span, .. } => span,
+            Expr::FieldAssign { span, .. } => span,
             Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
             Expr::Record { span, .. } => span,

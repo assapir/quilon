@@ -11,7 +11,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | Symbol | Meaning | Example |
 |--------|---------|---------|
 | `=` | Immutable binding | `x = 42` |
-| `:=` | Mutable bind / reassign | `counter := 0` |
+| `:=` | Mutable bind / reassign / in-place field write | `counter := 0`, `obj.field := v` |
 | `::` | Type annotation | `x :: Num` |
 | `=>` | Function body / match arm | `f = x => x + 1` |
 | `->` | Return type | `f = x -> Num => x` |
@@ -98,6 +98,10 @@ a = u.olderBy(5)       ~ 35
 ```
 (See `examples/methods.ql`.)
 
+A method is a **setter** (mutating) iff its body writes `it.field := …` (or calls
+another setter on `it`); there is no marker — the visible `:=` *is* the signal.
+Calling a setter requires a mutable (`:=`) receiver (see [Mutation](#mutation-in-place-field-writes--setters)).
+
 ### Sum types — `Ok` / `NotOk`
 The built-in result type for success/failure. Construct with `Ok(value)` / `NotOk(value)`, consume with pattern matching:
 ```quilon
@@ -119,6 +123,43 @@ counter := counter + 1  ~ reassign (also :=)
 ```
 Reassigning requires the binding to be mutable: `x := 5` on an immutable `x` is an error.
 Types are inferred but can be annotated: `x :: Num = 42`.
+
+---
+
+## Mutation: in-place field writes & setters
+
+Mutability is **Rust-like**, decided by the binding operator — it governs not just
+reassignment but in-place mutation of records:
+
+- An `=`-bound instance is **immutable** (frozen): no field writes, and calling a
+  setter (mutating) method on it is a compile error.
+- A `:=`-bound instance is **mutable**: both forms of in-place mutation are allowed —
+  a direct field write `obj.field := value` (mutates the existing record, no
+  re-allocation), and any **setter** method.
+
+```quilon
+Counter = {
+  value :: Num,
+  bump = (by :: Num) => it.value := it.value + by   ~ setter: writes `it.value := …`
+}
+
+c := Counter { value = 30 }   ~ `:=` -> mutable
+c.bump(5)                      ~ setter mutates in place -> value = 35
+c.value := c.value + 7         ~ direct field write    -> value = 42
+```
+
+A method is a **setter** iff its body writes `it.field := …` (or calls another setter
+on `it`) — there is **no marker/annotation**; the `:=` in the body is the signal.
+A setter call requires a `:=` receiver:
+
+```quilon
+c = Counter { value = 30 }   ~ `=` -> immutable
+c.value := 99                 ~ error: cannot write a field of immutable `c`
+c.bump(5)                     ~ error: cannot call mutating method `bump` on immutable `c`
+```
+
+Non-mutating (getter) methods carry no `it.field := …` and so are callable on `=`
+instances too. (See `examples/mutation.ql`.)
 
 ---
 
@@ -308,6 +349,7 @@ message instead. Any compile error exits with status 1.
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
+| In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
