@@ -26,7 +26,8 @@ fn emit_object(program: &Program, obj_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
 
     let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "main");
+    // Build the generator with the type oracle installed (precise composite read types).
+    let mut generator = CodeGenerator::with_oracle(&context, "main", program)?;
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
     let module = generator.module();

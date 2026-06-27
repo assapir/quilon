@@ -82,7 +82,10 @@ Anonymous structs with named fields:
 user = { name = "Alice", age = 30 }
 n    = user.name
 ```
-(See `examples/records.ql`.)
+Fields may hold any type — `Text`, arrays, nested arrays, etc. — and read back at
+their real type (no numeric-only restriction). (See `examples/records.ql` and
+`examples/composites.ql`, which exercises a `Text` record field, an array of `Text`,
+and a nested array together.)
 
 ### Named record types with methods
 Methods take an implicit `it` (the receiver):
@@ -142,8 +145,8 @@ classify = v => v ?
   | Ok(x)    => x * 2
   | NotOk(e) => 0
 ```
-Numeric payloads work end-to-end. (See `examples/result.ql`. Non-numeric payloads in
-some positions: see [Known limitations](#known-limitations).)
+Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
+`NotOk("error")`). (See `examples/result.ql` and `examples/composites.ql`.)
 
 #### `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. They are told apart
@@ -498,11 +501,11 @@ message instead. Any compile error exits with status 1.
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
-| Sum-type payloads: `Num` / `Bool` (and `Text`, see limitations) | ✅ |
+| Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
-| `Text` in records/arrays, or as a sum-type payload (`Ok(text)`) | 🚧 |
+| `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
 | Generics / type variables (overloading is the only polymorphism), closures, `while` loops | ❌ |
 | Overloaded name passed as a value (higher-order); only direct call sites resolve | ❌ |
@@ -514,7 +517,7 @@ message instead. Any compile error exits with status 1.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release. A corollary for [overloading](#overloading): a `Result` payload is generic, so binding it (`Ok(x) => …`) and passing it to an [overload set](#overloading) resolves to the **`Num`** member (numeric payloads work end-to-end); a non-numeric `Result` payload (`Ok("x")`) routed through an overload is part of this same non-numeric-payload gap. A **user** sum type's payloads are concrete (`Circle(Num)`, `On(Bool)`), so they dispatch overloads correctly by their declared type.
+- **A generic `Result` payload routed through an overload set resolves to the `Num` member.** `Text`/array fields and `Ok("x")`/`NotOk("e")` payloads now type-check and round-trip end-to-end (see [records](#records), [`Result`](#result-is-a-normal-sum-type)). But a `Result` payload is *generic*, so binding it (`Ok(x) => …`) and passing `x` to an [overload set](#overloading) still resolves to the **`Num`** member; a user sum type's payloads are concrete (`Circle(Num)`, `On(Bool)`), so they dispatch overloads correctly by their declared type.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - **No generics, closures, or `while` loops.** Overloading (ad-hoc, exact-type
   dispatch) is the only polymorphism; there are no type variables. The module system is

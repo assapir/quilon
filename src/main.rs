@@ -105,7 +105,14 @@ fn main() {
             // Generate LLVM IR
             use inkwell::context::Context;
             let context = Context::create();
-            let mut generator = codegen::CodeGenerator::new(&context, "main");
+            let mut generator =
+                match codegen::CodeGenerator::with_oracle(&context, "main", &program) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("❌ Code generation error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
 
             let ir = match generator.generate(&program) {
                 Ok(ir) => ir,

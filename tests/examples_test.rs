@@ -50,6 +50,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("text.ql", 7),
     ("io.ql", 0),
     ("records.ql", 28),
+    ("composites.ql", 12),
     ("methods.ql", 35),
     ("mutation.ql", 42),
     ("result.ql", 84),

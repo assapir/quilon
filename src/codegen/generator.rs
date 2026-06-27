@@ -123,6 +123,12 @@ pub struct CodeGenerator<'ctx> {
     // payloads are sized per-value at construction — see `register_builtin_sum_types`).
     sum_layouts: HashMap<String, Vec<BasicTypeEnum<'ctx>>>,
     current_function: Option<FunctionValue<'ctx>>,
+    // The type oracle: authoritative inferred types for every expression, keyed by span,
+    // produced by the type checker (see `TypeOracle`). Codegen consults it at READ sites
+    // (array index, record-field access, match-arm result) to recover the *declared*
+    // element/field/result LLVM type instead of guessing `f64` from a runtime value.
+    // Populated at the start of `generate`; empty before then.
+    oracle: TypeOracle,
     // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
     // Each entry is the list of that name's overload parameter-type signatures. A name
     // is present here iff it is an overload set (operator-named, or 2+ same-named
@@ -143,6 +149,51 @@ pub struct CodeGenerator<'ctx> {
     fn_return_types: HashMap<String, Type>,
 }
 
+/// Codegen-side view of the type checker's [`TypeTable`] — the "type oracle".
+///
+/// # Why this exists
+/// Codegen used to recover LLVM types from runtime `BasicValueEnum::get_type()`, which
+/// loses element/field types at every READ site and hardcodes `f64`. That corrupts any
+/// non-`f64` payload nested in a composite — `Text` in a record/array, nested arrays,
+/// `Ok(text)`/`NotOk(text)`. The fix is to thread the *declared* types (already computed
+/// by the checker) through to the read sites.
+///
+/// # API (for downstream M3 waves: array methods, spread, args/env)
+/// The single primitive is [`TypeOracle::expr_type`] — the inferred `Type` of any
+/// expression, looked up by its source `Span`. The checker records the *result* type of
+/// every node, so the element type of an `arr[i]` is `expr_type(<the Index node>)`, the
+/// type of `rec.field` is `expr_type(<the FieldAccess node>)`, and a `match`'s result is
+/// `expr_type(<the Match node>)` — there is no need for per-shape accessors, the read
+/// site just asks for the type of the whole node it is lowering.
+///
+/// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
+/// additive: new expression kinds get types recorded automatically by `infer_expr`. A
+/// `None` means the span wasn't recorded (e.g. the IR-only codegen tests that skip the
+/// type-check pass); callers fall back to their historical `f64` assumption.
+///
+/// LIMITATION (tracked for a later M-wave): a `Span` is a byte range with no file/module
+/// identity, and the `<<` import system lexes each module independently (offsets restart
+/// at 0) before merging items into one `Program`. Two expressions in different modules can
+/// therefore share a span and collide in the table (last-inferred wins). Today's imported
+/// modules are numeric helpers/intrinsics with no composite reads, so this is latent, not
+/// live; the robust fix is a stable per-node id (or a `(module, span)` key) assigned at
+/// parse time. Until then, the oracle is only fully sound for single-file programs.
+#[derive(Default)]
+struct TypeOracle {
+    table: crate::typechecker::TypeTable,
+}
+
+impl TypeOracle {
+    fn new(table: crate::typechecker::TypeTable) -> Self {
+        Self { table }
+    }
+
+    /// The inferred type of `expr`, by its span. `None` if the checker didn't record it.
+    fn expr_type(&self, expr: &Expr) -> Option<&Type> {
+        self.table.get(expr.span())
+    }
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
@@ -160,6 +211,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             variant_payloads: HashMap::new(),
             sum_layouts: HashMap::new(),
             current_function: None,
+            oracle: TypeOracle::default(),
             overloads: HashMap::new(),
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
@@ -197,6 +249,41 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Used by the JIT runner to create an execution engine in-process.
     pub fn module(&self) -> &Module<'ctx> {
         &self.module
+    }
+
+    /// Construct a generator with its **type oracle** already installed.
+    ///
+    /// Real compilation paths (`quilon run`/`compile`/`build`) reach codegen with a
+    /// `program` that already passed the front-end type check (in `driver::front_end`),
+    /// but that check's `TypeTable` isn't threaded down to here — so we re-derive it by
+    /// type-checking once more and harvesting the table. The re-check is deliberate: it
+    /// keeps every codegen entry point (CLI, JIT, tests) oracle-backed through one call
+    /// without each caller having to carry the table, and `check_program` is a pure
+    /// function of the AST, so the second run cannot disagree with the first. (If the
+    /// double pass ever shows up in compile-time profiles, the fix is to have
+    /// `front_end` return its table and feed it via [`set_type_table`].) A failure here
+    /// would mean codegen was handed an unchecked program — surfaced as an internal error.
+    pub fn with_oracle(
+        context: &'ctx Context,
+        module_name: &str,
+        program: &Program,
+    ) -> Result<Self, String> {
+        let table = crate::typechecker::TypeChecker::new()
+            .check_program(program)
+            .map_err(|e| format!("internal: type check failed before codegen: {e}"))?;
+        let mut codegen = Self::new(context, module_name);
+        codegen.set_type_table(table);
+        Ok(codegen)
+    }
+
+    /// Install the **type oracle** (the type checker's per-expression `TypeTable`) that
+    /// codegen consults at read sites to recover precise element/field/match-result
+    /// types. The companion to [`with_oracle`] for callers that already hold a table.
+    /// Without it the oracle is empty, every lookup misses, and read sites fall back to
+    /// their historical `f64` assumption — which is what the IR-only codegen tests (no
+    /// typecheck pass) rely on.
+    pub fn set_type_table(&mut self, table: crate::typechecker::TypeTable) {
+        self.oracle = TypeOracle::new(table);
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
@@ -805,21 +892,31 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Record { fields, .. } => self.generate_record(fields),
 
             Expr::Constructor {
-                type_name: _,
-                fields,
-                ..
+                type_name, fields, ..
             } => {
-                // Constructors have the same representation as records
-                self.generate_record(fields)
+                // A named-type instance has the same struct representation as a record,
+                // but its field SLOTS follow the type's DECLARATION order — which is the
+                // order `record_types` and the type oracle use to index/GEP fields later.
+                // The constructor call may list fields in any order, so reorder them to
+                // declaration order before lowering; otherwise a later `obj.field` read
+                // would GEP the wrong slot (silent corruption once fields differ in type).
+                let ordered = self.constructor_fields_in_decl_order(type_name, fields);
+                self.generate_record(&ordered)
             }
 
             Expr::FieldAccess { expr, field, .. } => self.generate_field_access(expr, field),
 
             Expr::FieldAssign { target, value, .. } => self.generate_field_assign(target, value),
 
-            Expr::Index { expr, index, .. } => self.generate_index(expr, index),
+            Expr::Index {
+                expr: array, index, ..
+            } => self.generate_index(expr, array, index),
 
-            Expr::Match { expr, arms, .. } => self.generate_match(expr, arms),
+            Expr::Match {
+                expr: scrutinee,
+                arms,
+                ..
+            } => self.generate_match(expr, scrutinee, arms),
 
             Expr::Range { start, end, .. } => self.generate_range(start, end),
 
@@ -1669,6 +1766,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load array struct: {:?}", e))
     }
 
+    /// Reorder a constructor call's `fields` into the named type's DECLARATION order so
+    /// the lowered struct's slot order matches what `record_types` and the type oracle
+    /// use to index fields. Falls back to the provided order if the type's field list
+    /// isn't registered. (The expressions are cloned — constructor field lists are tiny.)
+    fn constructor_fields_in_decl_order(
+        &self,
+        type_name: &str,
+        fields: &[(String, Expr)],
+    ) -> Vec<(String, Expr)> {
+        let Some(decl_order) = self.named_type_fields.get(type_name) else {
+            return fields.to_vec();
+        };
+        decl_order
+            .iter()
+            .filter_map(|fname| {
+                fields
+                    .iter()
+                    .find(|(provided, _)| provided == fname)
+                    .cloned()
+            })
+            .collect()
+    }
+
     /// Materialize an inclusive range `lo <- hi` into a `[]Num` (the `{ptr, size}`
     /// array shape, same as `generate_array`). The element count is `|hi - lo| + 1`
     /// and the direction (ascending vs descending) is decided at runtime, since the
@@ -2141,11 +2261,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Regular record field access: resolve a pointer to the field inside the
-        // record's memory (shared by the in-place field-write path) and load it.
-        if let Some(field_ptr) = self.record_field_pointer(expr, field_name)? {
+        // record's memory (shared by the in-place field-write path) and load it with the
+        // field's declared LLVM type from the oracle (NOT a hardcoded `f64`), so a
+        // `Text`/array field reads back correctly.
+        if let Some((field_ptr, field_llvm)) = self.record_field_pointer(expr, field_name)? {
             return self
                 .builder
-                .build_load(self.context.f64_type(), field_ptr, field_name)
+                .build_load(field_llvm, field_ptr, field_name)
                 .map_err(|e| format!("Failed to load field: {:?}", e));
         }
 
@@ -2169,7 +2291,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Field-write target must be a field access".to_string());
         };
         let new_value = self.generate_expr(value)?;
-        let field_ptr = self
+        let (field_ptr, _field_llvm) = self
             .record_field_pointer(expr, field)?
             .ok_or_else(|| format!("Unknown record for field write: {}", field))?;
         self.builder
@@ -2178,20 +2300,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// Pointer to `base.field` inside the record's memory, the shared primitive for
-    /// both reads (`generate_field_access`) and in-place writes
-    /// (`generate_field_assign`). `base` must be a record-typed identifier (a
-    /// variable such as `u`, or the method receiver `it`); the variable's alloca
-    /// holds a pointer to the struct. Records are a flat struct of f64 fields (the
-    /// current numeric-record layout), so a field cannot itself hold a record —
-    /// chained paths (`a.b.c`) are rejected by the type checker before reaching
-    /// codegen. Returns `Ok(None)` when `base` isn't a tracked record (so the read
-    /// path can fall through to its Text/array `.size` handling).
+    /// Pointer to `base.field` inside the record's memory, plus the field's value-repr
+    /// LLVM type — the shared primitive for both reads (`generate_field_access`) and
+    /// in-place writes (`generate_field_assign`).
+    ///
+    /// `base` must be a record/named-type identifier (a variable such as `u`, or the
+    /// method receiver `it`); the variable's alloca holds a pointer-to-struct (the
+    /// record ABI). The struct's field types are recovered from the **type oracle** (the
+    /// record's declared field types), mapped through `value_repr_type` so the
+    /// reconstructed struct type matches exactly how `generate_record` laid it out —
+    /// `Text`/array/etc. fields keep their real type instead of being treated as `f64`.
+    /// The returned LLVM type is what the read site must `load` (and the write site is
+    /// already type-checked to match).
+    ///
+    /// Nested records (`a.b.c`) are rejected by the type checker before codegen, so a
+    /// single GEP level suffices. Returns `Ok(None)` when `base` isn't a tracked record
+    /// (so the read path can fall through to its Text/array `.size` handling).
     fn record_field_pointer(
         &mut self,
         base: &Expr,
         field: &str,
-    ) -> Result<Option<PointerValue<'ctx>>, String> {
+    ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>, String> {
         let Expr::Ident { name, .. } = base else {
             return Ok(None);
         };
@@ -2201,6 +2330,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         let Some(field_idx) = field_names.iter().position(|f| f == field) else {
             return Ok(None);
         };
+
+        // Reconstruct the struct field types from the oracle (the record's declared
+        // field types), in declared order, so the GEP type matches construction. Fall
+        // back to all-`f64` only if the oracle has no record type for `base` (it always
+        // should for a tracked record) — preserving the historical numeric layout. The
+        // loaded field's own LLVM type is then just the indexed slot, computed once here.
+        let field_types: Vec<BasicTypeEnum> = match self.oracle.expr_type(base) {
+            Some(Type::Record(fields)) | Some(Type::Named { fields, .. }) => fields
+                .clone()
+                .iter()
+                .map(|(_, t)| self.value_repr_type(t))
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => vec![self.context.f64_type().into(); field_names.len()],
+        };
+        let field_llvm = field_types[field_idx];
+        let struct_type = self.context.struct_type(&field_types, false);
 
         // The variable's alloca holds a pointer to the struct; load it.
         let (var_ptr, _) = self
@@ -2217,11 +2362,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
             .into_pointer_value();
 
-        // Reconstruct the (all-f64) struct type for the GEP.
-        let field_types: Vec<BasicTypeEnum> =
-            vec![self.context.f64_type().into(); field_names.len()];
-        let struct_type = self.context.struct_type(&field_types, false);
-
         let field_ptr = self
             .builder
             .build_struct_gep(
@@ -2231,16 +2371,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &format!("field_{}_ptr", field),
             )
             .map_err(|e| format!("Failed to build field GEP: {:?}", e))?;
-        Ok(Some(field_ptr))
+        Ok(Some((field_ptr, field_llvm)))
     }
 
+    /// Lower an array index `array[index]`. `index_node` is the whole `Expr::Index`
+    /// (used to look up the element type in the oracle — the checker records an index
+    /// expression's type as its element type); `array` and `index_expr` are its parts.
     fn generate_index(
         &mut self,
-        expr: &Expr,
+        index_node: &Expr,
+        array: &Expr,
         index_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Generate the array expression
-        let array_val = self.generate_expr(expr)?;
+        let array_val = self.generate_expr(array)?;
 
         // Generate the index expression
         let index_val = self.generate_expr(index_expr)?;
@@ -2289,33 +2433,38 @@ impl<'ctx> CodeGenerator<'ctx> {
                 return Err("Index must be a number".to_string());
             };
 
-            // Use GEP to get element pointer
-            // For now, assume elements are f64
+            // Element LLVM type comes from the type oracle (the index expression's type
+            // IS the element type), NOT from a hardcoded `f64` — so `Text`/array/record
+            // elements load correctly. The element memory was laid out by `generate_array`
+            // using this same value representation.
+            let elem_llvm = self.oracle_value_type(index_node)?;
+
+            // Use GEP (indexing by element type) to get the element pointer, then load it.
             let elem_ptr = unsafe {
                 self.builder
-                    .build_gep(self.context.f64_type(), data_ptr, &[index_i64], "elem_ptr")
+                    .build_gep(elem_llvm, data_ptr, &[index_i64], "elem_ptr")
                     .map_err(|e| format!("Failed to build GEP: {:?}", e))?
             };
 
-            // Load the element
             self.builder
-                .build_load(self.context.f64_type(), elem_ptr, "elem")
+                .build_load(elem_llvm, elem_ptr, "elem")
                 .map_err(|e| format!("Failed to load element: {:?}", e))
         } else {
             Err("Can only index into arrays".to_string())
         }
     }
 
+    /// Lower a `match` (`scrutinee ? | pat => body ...`). `match_expr` is the whole
+    /// `Expr::Match` node (used only to look up the match's result type in the oracle);
+    /// `scrutinee` is the value being matched.
     fn generate_match(
         &mut self,
-        expr: &Expr,
+        match_expr: &Expr,
+        scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // For now, implement a simplified version that only handles constructor patterns
-        // and wildcards for Option-like types
-
         // Evaluate the expression being matched
-        let match_val = self.generate_expr(expr)?;
+        let match_val = self.generate_expr(scrutinee)?;
 
         // Get the current function
         let function = self
@@ -2337,10 +2486,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let cont_block = self.context.append_basic_block(function, "match_cont");
 
-        // Create a phi node to collect results from all arms
-        // We need to determine the result type - for now assume f64
-        let result_alloca =
-            self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
+        // The result type of the match (the common type of its arm bodies) comes from
+        // the type oracle — NOT a hardcoded `f64` — so a match yielding `Text` (e.g. the
+        // `Ok(text)` payload) allocates and loads a `Text` struct rather than corrupting
+        // it through an f64 slot. Falls back to `f64` if the oracle didn't record it.
+        let result_llvm = self.oracle_value_type(match_expr)?;
+        let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
         // Jump to first check
         self.builder
@@ -2387,9 +2538,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Position at continuation block
         self.builder.position_at_end(cont_block);
 
-        // Load the result
+        // Load the result with the match's declared result type (see `result_llvm`).
         self.builder
-            .build_load(self.context.f64_type(), result_alloca, "match_result")
+            .build_load(result_llvm, result_alloca, "match_result")
             .map_err(|e| format!("Failed to load result: {:?}", e))
     }
 
@@ -2748,6 +2899,45 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             Expr::If { then, else_, .. } => self.expr_is_unit(then) && self.expr_is_unit(else_),
             _ => false,
+        }
+    }
+
+    /// The **value representation** of a Quilon type — the LLVM type that a value of
+    /// `ty` is materialized as by `generate_expr` and stored inline inside a composite.
+    /// Read sites that GEP/load an element/field/match-result must size it with THIS
+    /// function so the type matches how the value was stored at construction. It differs
+    /// from [`type_to_llvm`] in three places:
+    ///   - `Array` — an array *value* is the `{ ptr, i64 }` struct `generate_array`
+    ///     produces and stores inline (so a nested array `[][]T` keeps that struct as its
+    ///     element), whereas `type_to_llvm` lowers `[]T` to a bare opaque pointer.
+    ///   - `Record` / `Named` — a record *value* is a POINTER to its struct (the record
+    ///     ABI: `generate_record` returns the alloca), not the struct by value.
+    ///   - `Generic` — a payload type variable that survived to a read site (e.g. a match
+    ///     whose result type was taken from a never-constructed variant's generic arm)
+    ///     has no concrete LLVM type; it falls back to the canonical numeric payload
+    ///     representation `f64`, matching how generic/unknown payloads are materialized
+    ///     elsewhere (`payload_slot_type`). This keeps such a program compiling (it did
+    ///     before the oracle existed) rather than erroring in `type_to_llvm`.
+    fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
+            Type::Record(_) | Type::Named { .. } => {
+                Ok(self.context.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            _ => self.type_to_llvm(ty),
+        }
+    }
+
+    /// The value-representation LLVM type to use when GEPing/loading the result of `expr`
+    /// (an `arr[i]`, `rec.field`, or `match`), taken from the type oracle. This is the
+    /// single read-site policy: ask the oracle for `expr`'s inferred type and lower it
+    /// via [`value_repr_type`]; if the oracle has no entry (e.g. the IR-only codegen
+    /// tests that skip the type-check pass), fall back to the historical `f64`.
+    fn oracle_value_type(&self, expr: &Expr) -> Result<BasicTypeEnum<'ctx>, String> {
+        match self.oracle.expr_type(expr) {
+            Some(t) => self.value_repr_type(t),
+            None => Ok(self.context.f64_type().into()),
         }
     }
 
