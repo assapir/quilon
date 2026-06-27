@@ -58,6 +58,9 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("use_module.ql", 5),
     ("unit.ql", 0),
     ("overloading.ql", 161),
+    // Recurses 1_000_000 deep; only terminates because self-tail-recursion is lowered
+    // to a loop (guaranteed TCO). 1_000_000 mod 251 = 16.
+    ("tail_recursion.ql", 16),
 ];
 
 fn ql_files() -> Vec<PathBuf> {

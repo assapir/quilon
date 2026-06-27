@@ -233,6 +233,24 @@ factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.ql`, `examples/fibonacci.ql`.)
 
+#### Tail self-recursion is optimized to a loop (guaranteed)
+
+When a function returns a call **to itself in tail position** — i.e. the self-call is
+the function's whole result, with nothing left to do to it — the compiler **guarantees**
+it is lowered to a loop (the parameters become loop-carried slots and the call becomes a
+back-edge jump) instead of a stack-pushing call. So a tail-recursive function runs in
+**constant stack** and will not overflow, however deep the recursion:
+```quilon
+count = (n :: Num, acc :: Num) -> Num =>
+  n == 0 ? acc : count(n - 1, acc + n)   ~ the self-call IS the `:` branch → tail position
+```
+Tail position flows through the constructs that yield a value directly: `?`/`|` match
+arms, `if`/ternary branches, the tail of a `< >` block, and a `|>` pipeline. A self-call
+**not** in tail position (e.g. `n * fact(n - 1)`, whose result is multiplied first) stays
+ordinary recursion, as does a tail call to a *different* function (general/mutual tail
+calls are a later follow-up). This is codegen-only — there is no surface syntax for it.
+(See `examples/tail_recursion.ql`, which recurses 1,000,000 deep.)
+
 ---
 
 ## Overloading
@@ -495,6 +513,7 @@ message instead. Any compile error exits with status 1.
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
+| Guaranteed self-tail-call optimization (tail self-recursion → loop, constant stack) | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
 | Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`) | ✅ |
