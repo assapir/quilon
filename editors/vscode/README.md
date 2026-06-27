@@ -22,6 +22,8 @@ compiles to native code via LLVM. Files use the `.ql` extension.
 - **Inline diagnostics** — type/parse/lex errors from the compiler appear as
   editor squiggles (see [Diagnostics & debugging](#diagnostics--debugging)).
 - **Editor tasks & commands** to run the compiler on the active file.
+- **CodeLens** — **▶ Run** and **Check** actions appear above each `^`
+  entry-point definition (see [Running the compiler](#running-the-compiler-from-the-editor)).
 
 ## Install / run locally
 
@@ -109,6 +111,20 @@ compiler instead, set:
 
 The bundled `.vscode/tasks.json` also provides **quilon: check current file**
 and **quilon: run current file** tasks (`Terminal → Run Task…`).
+
+### CodeLens above the entry point
+
+Every executable Quilon program defines a top-level `^` entry point (its
+`main`). Above each `^` definition the extension shows two clickable CodeLens
+actions:
+
+- **▶ Run** — invokes **Quilon: Run Current File** (`quilon run <file>`).
+- **Check** — invokes **Quilon: Check Current File** (`quilon check <file>`).
+
+Both act on the file containing the lens. There is intentionally **no "Debug"
+lens**: Quilon has no debugger yet (step debugging needs DWARF debug info the
+compiler does not emit), so a dead button would only mislead — see
+[Diagnostics & debugging](#diagnostics--debugging).
 
 > The `quilon run` subcommand must exist in your toolchain. Depending on your
 > build it may instead be `compile` + manual `llc`/link — see the repo's
