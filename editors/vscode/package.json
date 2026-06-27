@@ -26,12 +26,19 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test \"out/**/*.test.js\"",
+    "lint": "oxlint src",
+    "lint:fix": "oxlint --fix src",
+    "fmt": "oxfmt --write src",
+    "fmt:check": "oxfmt --check src",
     "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
     "@types/vscode": "^1.75.1",
     "@vscode/vsce": "^3.9.2",
+    "oxfmt": "^0.56.0",
+    "oxlint": "^1.71.0",
     "typescript": "^6.0.3"
   },
   "contributes": {

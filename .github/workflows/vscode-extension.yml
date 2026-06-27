@@ -3,7 +3,8 @@ name: VS Code Extension
 # Build/publish automation for the Quilon VS Code extension (editors/vscode).
 #
 #   validate  — PR gate. Runs on pull requests and pushes that touch
-#               editors/vscode/**. Type-checks the TypeScript, validates the
+#               editors/vscode/**. Lints (oxlint) and checks formatting (oxfmt),
+#               type-checks the TypeScript, runs the unit tests, validates the
 #               JSON, and proves the extension still compiles + packages into a
 #               .vsix, so the extension can't silently rot.
 #
@@ -69,8 +70,16 @@ jobs:
             node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
           done
 
-      - name: Compile TypeScript (type-check + emit)
-        run: npm run compile
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Check formatting (oxfmt)
+        run: npm run fmt:check
+
+      # `npm test` compiles (type-check + emit) and then runs the unit tests, so
+      # it doubles as the TypeScript compile gate.
+      - name: Compile + test
+        run: npm test
 
       - name: Package extension (.vsix)
         run: npx @vscode/vsce package
