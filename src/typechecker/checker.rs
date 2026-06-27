@@ -1531,6 +1531,15 @@ impl TypeChecker {
                 }
             }
 
+            Expr::Range { start, end, span } => {
+                // `lo <- hi` materializes an inclusive `[]Num`; both ends must be Num.
+                let start_type = self.infer_expr(start)?;
+                self.check_type_compatibility(&Type::Num, &start_type, span)?;
+                let end_type = self.infer_expr(end)?;
+                self.check_type_compatibility(&Type::Num, &end_type, span)?;
+                Ok(Type::Array(Box::new(Type::Num)))
+            }
+
             Expr::ForLoop {
                 collection,
                 pattern,

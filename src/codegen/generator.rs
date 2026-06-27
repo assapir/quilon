@@ -821,6 +821,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::Match { expr, arms, .. } => self.generate_match(expr, arms),
 
+            Expr::Range { start, end, .. } => self.generate_range(start, end),
+
             Expr::ForLoop {
                 collection,
                 pattern,
@@ -1665,6 +1667,167 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(array_struct_type, array_struct, "array")
             .map_err(|e| format!("Failed to load array struct: {:?}", e))
+    }
+
+    /// Materialize an inclusive range `lo <- hi` into a `[]Num` (the `{ptr, size}`
+    /// array shape, same as `generate_array`). The element count is `|hi - lo| + 1`
+    /// and the direction (ascending vs descending) is decided at runtime, since the
+    /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
+    /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage is GC-allocated (`__alloc`)
+    /// so the array may safely escape the current frame.
+    fn generate_range(&mut self, start: &Expr, end: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| "Range must be in a function".to_string())?;
+
+        let i64_type = self.context.i64_type();
+        let f64_type = self.context.f64_type();
+
+        // Evaluate both ends (Num = f64) and truncate to i64 endpoints.
+        let lo_f = self.generate_expr(start)?.into_float_value();
+        let hi_f = self.generate_expr(end)?.into_float_value();
+        let lo = self
+            .builder
+            .build_float_to_signed_int(lo_f, i64_type, "range_lo")
+            .map_err(|e| format!("Failed to convert range start: {:?}", e))?;
+        let hi = self
+            .builder
+            .build_float_to_signed_int(hi_f, i64_type, "range_hi")
+            .map_err(|e| format!("Failed to convert range end: {:?}", e))?;
+
+        // Ascending iff lo <= hi; pick step = +1 / -1 and the inclusive span.
+        let ascending = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, lo, hi, "range_asc")
+            .map_err(|e| format!("Failed to compare range ends: {:?}", e))?;
+        let one = i64_type.const_int(1, false);
+        let neg_one = i64_type.const_all_ones(); // -1 in two's complement
+        let step = self
+            .builder
+            .build_select(ascending, one, neg_one, "range_step")
+            .map_err(|e| format!("Failed to select range step: {:?}", e))?
+            .into_int_value();
+        // |hi - lo| + 1: compute the signed delta once, then pick it or its
+        // negation so the span is non-negative in either direction.
+        let delta = self
+            .builder
+            .build_int_sub(hi, lo, "range_delta")
+            .map_err(|e| format!("Failed to subtract range ends: {:?}", e))?;
+        let neg_delta = self
+            .builder
+            .build_int_neg(delta, "range_neg_delta")
+            .map_err(|e| format!("Failed to negate range delta: {:?}", e))?;
+        let span_abs = self
+            .builder
+            .build_select(ascending, delta, neg_delta, "range_span")
+            .map_err(|e| format!("Failed to select range span: {:?}", e))?
+            .into_int_value();
+        let count = self
+            .builder
+            .build_int_add(span_abs, one, "range_count")
+            .map_err(|e| format!("Failed to add range count: {:?}", e))?;
+
+        // GC-allocate count * sizeof(f64) bytes for the backing data.
+        let eight = i64_type.const_int(8, false);
+        let bytes = self
+            .builder
+            .build_int_mul(count, eight, "range_bytes")
+            .map_err(|e| format!("Failed to size range alloc: {:?}", e))?;
+        let alloc = self.get_intrinsic("__alloc")?;
+        let alloc_call = self
+            .builder
+            .build_call(alloc, &[bytes.into()], "range_data")
+            .map_err(|e| format!("Failed to allocate range: {:?}", e))?;
+        let data_ptr = {
+            use inkwell::values::AnyValue;
+            alloc_call.as_any_value_enum().into_pointer_value()
+        };
+
+        // Fill loop: for i in 0..count: data[i] = (f64)(lo + i*step).
+        let counter = self.create_entry_block_alloca("range_i", i64_type.into())?;
+        self.builder
+            .build_store(counter, i64_type.const_zero())
+            .map_err(|e| format!("Failed to init range counter: {:?}", e))?;
+
+        let header = self.context.append_basic_block(function, "range_header");
+        let body = self.context.append_basic_block(function, "range_body");
+        let exit = self.context.append_basic_block(function, "range_exit");
+
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch to range header: {:?}", e))?;
+
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64_type, counter, "i")
+            .map_err(|e| format!("Failed to load range counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, count, "range_cond")
+            .map_err(|e| format!("Failed to build range condition: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body, exit)
+            .map_err(|e| format!("Failed to build range branch: {:?}", e))?;
+
+        self.builder.position_at_end(body);
+        // value = lo + i*step
+        let i_step = self
+            .builder
+            .build_int_mul(i, step, "range_i_step")
+            .map_err(|e| format!("Failed to scale range index: {:?}", e))?;
+        let val_i = self
+            .builder
+            .build_int_add(lo, i_step, "range_val_i")
+            .map_err(|e| format!("Failed to compute range element: {:?}", e))?;
+        let val_f = self
+            .builder
+            .build_signed_int_to_float(val_i, f64_type, "range_val")
+            .map_err(|e| format!("Failed to convert range element: {:?}", e))?;
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(f64_type, data_ptr, &[i], "range_elem")
+                .map_err(|e| format!("Failed to index range data: {:?}", e))?
+        };
+        self.builder
+            .build_store(elem_ptr, val_f)
+            .map_err(|e| format!("Failed to store range element: {:?}", e))?;
+        let next = self
+            .builder
+            .build_int_add(i, one, "range_next")
+            .map_err(|e| format!("Failed to increment range counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(|e| format!("Failed to store range counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop range: {:?}", e))?;
+
+        // Build the { ptr, size } array struct (the shared array/Text shape).
+        self.builder.position_at_end(exit);
+        let array_struct_type = self.ptr_len_struct_type();
+        let array_struct = self
+            .builder
+            .build_alloca(array_struct_type, "range_array")
+            .map_err(|e| format!("Failed to allocate range struct: {:?}", e))?;
+        let ptr_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 0, "range_ptr_field")
+            .map_err(|e| format!("Failed to get range ptr field: {:?}", e))?;
+        self.builder
+            .build_store(ptr_field, data_ptr)
+            .map_err(|e| format!("Failed to store range ptr: {:?}", e))?;
+        let size_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 1, "range_size_field")
+            .map_err(|e| format!("Failed to get range size field: {:?}", e))?;
+        self.builder
+            .build_store(size_field, count)
+            .map_err(|e| format!("Failed to store range size: {:?}", e))?;
+        self.builder
+            .build_load(array_struct_type, array_struct, "range_array")
+            .map_err(|e| format!("Failed to load range struct: {:?}", e))
     }
 
     fn generate_record(

@@ -22,6 +22,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `for n <- xs => body` | Loop over a collection | `for n <- [1,2,3] => print(n)` |
+| `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
 | `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
@@ -333,6 +334,28 @@ for (val, i) <- xs => print(i)   ~ with index
 ```
 The body may be a single expression or a `< >` block. (See `examples/for_loop.ql`.)
 
+### Ranges — infix `lo <- hi`
+The infix `<-` operator builds an **inclusive** `[]Num`:
+```quilon
+1 <- 4          ~ [1, 2, 3, 4]
+4 <- 1          ~ [4, 3, 2, 1]   (descends when the left end is larger)
+5 <- 5          ~ [5]            (single point)
+```
+It is pure **array sugar** — there is no distinct `Range` type; the result *is* a
+`[]Num`, so it composes with `.size`, indexing `[i]`, and `for` loops:
+```quilon
+r = 2 <- 5      ~ [2, 3, 4, 5]
+n = r.size      ~ 4   (inclusive count = |hi - lo| + 1)
+first = r[0]    ~ 2
+for x <- 1 <- 3 => print(x)   ~ a range drives a loop like any array
+```
+Both ends are full `Num` expressions (they may be dynamic, not just literals); the
+direction (ascending vs descending) is decided at runtime. (See `examples/ranges.ql`.)
+
+> Note: the infix range `<-` is distinct from the `for` header's `<-`
+> (`for n <- collection => …`). The `for` form is the loop binder; the infix form,
+> *between two value expressions*, is the range constructor.
+
 ---
 
 ## Pattern matching
@@ -471,6 +494,7 @@ message instead. Any compile error exits with status 1.
 | Functions, recursion, blocks, type inference | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
+| Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`) | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
