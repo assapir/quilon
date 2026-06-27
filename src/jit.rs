@@ -29,7 +29,9 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;
 
     let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "main");
+    // Build the generator with the type oracle installed (so read sites recover precise
+    // element/field/match-result types instead of assuming f64).
+    let mut generator = CodeGenerator::with_oracle(&context, "main", program)?;
 
     // Populate, verify, and emit the module (also builds the `main` wrapper).
     generator.generate(program)?;
@@ -55,6 +57,7 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
                 "__text_length",
                 intrinsics::__text_length as *const () as usize,
             ),
+            ("__text_cmp", intrinsics::__text_cmp as *const () as usize),
             (
                 "__write_bytes",
                 intrinsics::__write_bytes as *const () as usize,

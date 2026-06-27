@@ -45,16 +45,19 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("pattern_match.ql", 50),
     ("arrays.ql", 5),
     ("for_loop.ql", 0),
+    ("ranges.ql", 14),
     ("pipeline.ql", 25),
     ("text.ql", 7),
     ("io.ql", 0),
     ("records.ql", 28),
+    ("composites.ql", 12),
     ("methods.ql", 35),
     ("mutation.ql", 42),
     ("result.ql", 84),
     ("sum_types.ql", 42),
     ("use_module.ql", 5),
     ("unit.ql", 0),
+    ("overloading.ql", 161),
     ("closures.ql", 42),
 ];
 
@@ -114,18 +117,39 @@ fn tool_available(tool: &str) -> bool {
         .is_ok()
 }
 
-/// Ensure `libquilon_rt.a` sits next to the `quilon` binary — `quilon build` links
-/// it from there. `cargo build --all-targets` (CI) emits it; a bare `cargo test`
-/// may not, so build the staticlib on demand.
+/// Ensure a FRESH `libquilon_rt.a` sits next to the `quilon` binary — `quilon build`
+/// links it from there. This is subtle:
+///
+/// - Neither `cargo test` nor `cargo build --all-targets` emits the `staticlib`
+///   artifact (nothing in those target sets *consumes* it as a staticlib), so the `.a`
+///   in `target/` is whatever a previous build left — and in CI that is a STALE copy
+///   restored from the build cache. That is exactly how a newly-added runtime intrinsic
+///   (`__text_cmp`) links under the JIT yet fails AOT with `undefined reference`: the
+///   program references it, but the cached `.a` predates it.
+/// - Simply re-running `cargo build -p quilon-rt` does NOT help: if the crate's
+///   fingerprint is already up to date (the rlib was compiled this run), cargo will not
+///   re-emit the staticlib output, even if the `.a` on disk is stale/missing.
+///
+/// So build `quilon-rt` into a DEDICATED, cache-free target dir (which forces a fresh
+/// staticlib emit every time) and copy that `.a` next to the `quilon` binary.
 fn ensure_runtime_lib(bin_dir: &Path) {
-    if bin_dir.join("libquilon_rt.a").exists() {
-        return;
-    }
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let _ = Command::new(cargo)
+    let rt_target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("rt-staticlib");
+    let status = Command::new(&cargo)
         .args(["build", "-p", "quilon-rt"])
+        .arg("--target-dir")
+        .arg(&rt_target)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .status();
+    assert!(
+        status.is_ok_and(|s| s.success()),
+        "failed to build libquilon_rt.a for the native-AOT gate"
+    );
+    let fresh = rt_target.join("debug").join("libquilon_rt.a");
+    std::fs::copy(&fresh, bin_dir.join("libquilon_rt.a"))
+        .expect("copy fresh libquilon_rt.a next to the quilon binary");
 }
 
 /// Every runnable example must produce its documented exit code via the in-process

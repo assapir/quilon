@@ -54,7 +54,13 @@ fn collect(
     match expr {
         Expr::Ident { name, .. } => note(name, local, outer, seen, out),
         Expr::Number { .. } | Expr::String { .. } | Expr::Bool { .. } | Expr::Unit { .. } => {}
-        Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
+        Expr::BinOp { left, right, .. }
+        | Expr::Pipeline { left, right, .. }
+        | Expr::Range {
+            start: left,
+            end: right,
+            ..
+        } => {
             collect(left, local, outer, seen, out);
             collect(right, local, outer, seen, out);
         }

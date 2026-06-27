@@ -2,7 +2,7 @@
 
 use crate::ast::{
     BinOp, Expr, FunctionDecl, Item, MatchArm, MethodDecl, Pattern, Program, Type, TypeDecl,
-    TypeDef, UnaryOp, VarDecl,
+    TypeDef, UnaryOp, VarDecl, is_operator_symbol,
 };
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
@@ -11,6 +11,72 @@ use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
+
+/// Names that the compiler provides built-in overloads for (`print`/`eprint`, lowered
+/// to runtime intrinsics). A user definition of one ADDS an overload member (and is
+/// mangled), rather than shadowing the built-in single-arg Num/Text/Bool forms.
+fn is_builtin_overload_name(name: &str) -> bool {
+    matches!(name, "print" | "eprint")
+}
+
+/// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
+/// deterministic and identical at definition and call sites (built from the declared
+/// parameter type and from the inferred argument type respectively).
+fn type_mangle(ty: &Type) -> String {
+    match ty {
+        Type::Num => "N".to_string(),
+        Type::Text => "T".to_string(),
+        Type::Bool => "B".to_string(),
+        Type::Unit => "U".to_string(),
+        Type::Array(elem) => format!("A{}", type_mangle(elem)),
+        Type::Named { name, .. } | Type::Sum { name, .. } => format!("named${}", name),
+        // A not-yet-concrete sum payload (`Generic`) resolves as `Num` for overload
+        // dispatch (see the type checker's `types_match`), so it mangles to the Num tag
+        // — keeping codegen's chosen symbol in agreement with the checker.
+        Type::Generic { .. } => "N".to_string(),
+        // Any other shape (e.g. a function type) — a stable, mangling-safe fallback.
+        other => format!("X{:?}", other)
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '$')
+            .collect(),
+    }
+}
+
+/// The distinct LLVM symbol for one overload member: its name plus a per-parameter
+/// type tag. Operator symbols (which aren't valid LLVM identifiers) are spelled out so
+/// e.g. `+` on `(Point, Point)` becomes `op.add$named$Point$named$Point`.
+fn mangle_overload(name: &str, params: &[Type]) -> String {
+    let base = operator_word(name)
+        .map(|w| format!("op.{}", w))
+        .unwrap_or_else(|| name.to_string());
+    let mut s = base;
+    for p in params {
+        s.push('$');
+        s.push_str(&type_mangle(p));
+    }
+    s
+}
+
+/// A pronounceable word for an operator symbol, for use in a mangled LLVM name (which
+/// can't contain the raw symbol). Returns `None` for non-operator (ordinary) names.
+fn operator_word(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        "/" => "div",
+        "%" => "mod",
+        "==" => "eq",
+        "!=" => "ne",
+        "<" => "lt",
+        "<=" => "le",
+        ">" => "gt",
+        ">=" => "ge",
+        "&&" => "and",
+        "||" => "or",
+        _ => return None,
+    })
+}
 
 /// A zero/`undef`-free constant of any basic LLVM type, used to fill a payload slot that
 /// carries no information (a `$` Unit payload stored into a sized slot).
@@ -65,6 +131,12 @@ pub struct CodeGenerator<'ctx> {
     // the variant's declaration index. Drives constructor codegen and tag-based pattern
     // dispatch (generalizing the old hardcoded Ok=0/NotOk=1).
     sum_variants: HashMap<String, (u8, String)>,
+    // Declared payload Quilon types per variant (constructor name -> field types).
+    // Lets `bind_pattern` record a matched payload binding's type in `var_types`, so an
+    // overloaded call on that binding (e.g. `Circle(n) => area(n)`) mangles by the
+    // payload's concrete type. (Result's `Ok`/`NotOk` carry `Generic`, which resolves
+    // as Num for overloads — see the type checker's `types_match`.)
+    variant_payloads: HashMap<String, Vec<Type>>,
     // Per-sum-type canonical payload layout (one LLVM type per payload slot), sized to
     // the widest variant so EVERY value of the type has the same struct shape
     // `{ i8 tag, slot0, slot1, ... }`. This lets a match arm extract any variant's
@@ -91,6 +163,77 @@ pub struct CodeGenerator<'ctx> {
     // one needs the signature recovered here (recorded when the lambda is bound). The
     // trailing env-pointer parameter is implicit and not stored. Cleared per function.
     closure_sigs: HashMap<String, ClosureSig<'ctx>>,
+    // The type oracle: authoritative inferred types for every expression, keyed by span,
+    // produced by the type checker (see `TypeOracle`). Codegen consults it at READ sites
+    // (array index, record-field access, match-arm result) to recover the *declared*
+    // element/field/result LLVM type instead of guessing `f64` from a runtime value.
+    // Populated at the start of `generate`; empty before then.
+    oracle: TypeOracle,
+    // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
+    // Each entry is the list of that name's overload parameter-type signatures. A name
+    // is present here iff it is an overload set (operator-named, or 2+ same-named
+    // top-level defs); calls/operators to these names dispatch to a NAME-MANGLED
+    // function (`mangle_overload`) chosen by exact argument types. Operator builtins
+    // (Num/Text `+`, comparisons) are NOT entered here — they keep their inline
+    // lowering; only USER operator overloads add an operator symbol to this map.
+    // Each member is its `(parameter types, return type)`.
+    overloads: HashMap<String, Vec<(Vec<Type>, Type)>>,
+    // Quilon type of each in-scope local/param, for argument-type inference at
+    // overloaded call sites (codegen lacks the type checker's full inference, so it
+    // tracks just enough — locals, params, and constructor results — to mangle).
+    var_types: HashMap<String, Type>,
+    // Declared return type of each NON-overloaded top-level function, so `infer_type`
+    // can give a call's result its real type (not a `Num` default) when that result is
+    // an argument to an overloaded call/operator — keeping codegen dispatch in sync
+    // with the type checker. (Overloaded callees' returns come from `overloads`.)
+    fn_return_types: HashMap<String, Type>,
+}
+// (merge note) `boxed_vars`/`lambda_counter`/`closure_sigs` (closures, M3) coexist with
+// `oracle`/`overloads`/`var_types`/`fn_return_types` (overloads + Text-in-composite oracle).
+
+/// Codegen-side view of the type checker's [`TypeTable`] — the "type oracle".
+///
+/// # Why this exists
+/// Codegen used to recover LLVM types from runtime `BasicValueEnum::get_type()`, which
+/// loses element/field types at every READ site and hardcodes `f64`. That corrupts any
+/// non-`f64` payload nested in a composite — `Text` in a record/array, nested arrays,
+/// `Ok(text)`/`NotOk(text)`. The fix is to thread the *declared* types (already computed
+/// by the checker) through to the read sites.
+///
+/// # API (for downstream M3 waves: array methods, spread, args/env)
+/// The single primitive is [`TypeOracle::expr_type`] — the inferred `Type` of any
+/// expression, looked up by its source `Span`. The checker records the *result* type of
+/// every node, so the element type of an `arr[i]` is `expr_type(<the Index node>)`, the
+/// type of `rec.field` is `expr_type(<the FieldAccess node>)`, and a `match`'s result is
+/// `expr_type(<the Match node>)` — there is no need for per-shape accessors, the read
+/// site just asks for the type of the whole node it is lowering.
+///
+/// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
+/// additive: new expression kinds get types recorded automatically by `infer_expr`. A
+/// `None` means the span wasn't recorded (e.g. the IR-only codegen tests that skip the
+/// type-check pass); callers fall back to their historical `f64` assumption.
+///
+/// LIMITATION (tracked for a later M-wave): a `Span` is a byte range with no file/module
+/// identity, and the `<<` import system lexes each module independently (offsets restart
+/// at 0) before merging items into one `Program`. Two expressions in different modules can
+/// therefore share a span and collide in the table (last-inferred wins). Today's imported
+/// modules are numeric helpers/intrinsics with no composite reads, so this is latent, not
+/// live; the robust fix is a stable per-node id (or a `(module, span)` key) assigned at
+/// parse time. Until then, the oracle is only fully sound for single-file programs.
+#[derive(Default)]
+struct TypeOracle {
+    table: crate::typechecker::TypeTable,
+}
+
+impl TypeOracle {
+    fn new(table: crate::typechecker::TypeTable) -> Self {
+        Self { table }
+    }
+
+    /// The inferred type of `expr`, by its span. `None` if the checker didn't record it.
+    fn expr_type(&self, expr: &Expr) -> Option<&Type> {
+        self.table.get(expr.span())
+    }
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -107,11 +250,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             named_type_fields: HashMap::new(),
             var_named_types: HashMap::new(),
             sum_variants: HashMap::new(),
+            variant_payloads: HashMap::new(),
             sum_layouts: HashMap::new(),
             current_function: None,
             boxed_vars: std::collections::HashSet::new(),
             lambda_counter: 0,
             closure_sigs: HashMap::new(),
+            oracle: TypeOracle::default(),
+            overloads: HashMap::new(),
+            var_types: HashMap::new(),
+            fn_return_types: HashMap::new(),
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -130,12 +278,57 @@ impl<'ctx> CodeGenerator<'ctx> {
             .insert("Ok".to_string(), (0u8, "Result".to_string()));
         self.sum_variants
             .insert("NotOk".to_string(), (1u8, "Result".to_string()));
+        // Result's payloads are generic (`Ok(T)` / `NotOk(E)`); a `Generic` binding
+        // resolves as Num for overload dispatch (see the type checker's `types_match`).
+        let generic = |n: &str| Type::Generic {
+            name: n.to_string(),
+            args: vec![],
+        };
+        self.variant_payloads
+            .insert("Ok".to_string(), vec![generic("T")]);
+        self.variant_payloads
+            .insert("NotOk".to_string(), vec![generic("E")]);
     }
 
     /// Access the underlying LLVM module after `generate` has populated it.
     /// Used by the JIT runner to create an execution engine in-process.
     pub fn module(&self) -> &Module<'ctx> {
         &self.module
+    }
+
+    /// Construct a generator with its **type oracle** already installed.
+    ///
+    /// Real compilation paths (`quilon run`/`compile`/`build`) reach codegen with a
+    /// `program` that already passed the front-end type check (in `driver::front_end`),
+    /// but that check's `TypeTable` isn't threaded down to here — so we re-derive it by
+    /// type-checking once more and harvesting the table. The re-check is deliberate: it
+    /// keeps every codegen entry point (CLI, JIT, tests) oracle-backed through one call
+    /// without each caller having to carry the table, and `check_program` is a pure
+    /// function of the AST, so the second run cannot disagree with the first. (If the
+    /// double pass ever shows up in compile-time profiles, the fix is to have
+    /// `front_end` return its table and feed it via [`set_type_table`].) A failure here
+    /// would mean codegen was handed an unchecked program — surfaced as an internal error.
+    pub fn with_oracle(
+        context: &'ctx Context,
+        module_name: &str,
+        program: &Program,
+    ) -> Result<Self, String> {
+        let table = crate::typechecker::TypeChecker::new()
+            .check_program(program)
+            .map_err(|e| format!("internal: type check failed before codegen: {e}"))?;
+        let mut codegen = Self::new(context, module_name);
+        codegen.set_type_table(table);
+        Ok(codegen)
+    }
+
+    /// Install the **type oracle** (the type checker's per-expression `TypeTable`) that
+    /// codegen consults at read sites to recover precise element/field/match-result
+    /// types. The companion to [`with_oracle`] for callers that already hold a table.
+    /// Without it the oracle is empty, every lookup misses, and read sites fall back to
+    /// their historical `f64` assumption — which is what the IR-only codegen tests (no
+    /// typecheck pass) rely on.
+    pub fn set_type_table(&mut self, table: crate::typechecker::TypeTable) {
+        self.oracle = TypeOracle::new(table);
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
@@ -152,10 +345,57 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        // Pre-pass: discover overload sets (operator-named, or 2+ same-named defs),
+        // mirroring the type checker. Their definitions are name-mangled by parameter
+        // type and dispatched by exact argument type at each call/operator site.
+        let mut fn_counts: HashMap<&str, usize> = HashMap::new();
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && !decl.is_inert_io_placeholder()
+            {
+                *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
+            }
+        }
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && !decl.is_inert_io_placeholder()
+                && (is_operator_symbol(&decl.name)
+                    || fn_counts.get(decl.name.as_str()).copied().unwrap_or(0) > 1
+                    || is_builtin_overload_name(&decl.name))
+                && decl.name != "^"
+            {
+                let params: Vec<Type> = decl
+                    .params
+                    .iter()
+                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                    .collect();
+                // The return type drives argument-type inference for a value bound to
+                // an overloaded call/operator (e.g. a user `+` returning a record).
+                let ret = decl.return_type.clone().unwrap_or(Type::Num);
+                self.overloads
+                    .entry(decl.name.clone())
+                    .or_default()
+                    .push((params, ret));
+            }
+        }
+
+        // Pre-pass: record each NON-overloaded top-level function's declared return
+        // type, so `infer_type` can give a call result its real type when it feeds an
+        // overloaded call/operator (keeps codegen dispatch in sync with the checker).
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && !decl.is_inert_io_placeholder()
+                && !self.overloads.contains_key(&decl.name)
+                && let Some(ret) = &decl.return_type
+            {
+                self.fn_return_types.insert(decl.name.clone(), ret.clone());
+            }
+        }
+
         // Generate code for all top-level items. Reset the current-function context
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level decl (which would make it
-        // look like a nested/local declaration).
+        // look like a nested/local declaration — see `generate_function_decl`).
         for item in &program.items {
             self.current_function = None;
             self.generate_item(item)?;
@@ -282,6 +522,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (tag, variant) in variants.iter().enumerate() {
             self.sum_variants
                 .insert(variant.name.clone(), (tag as u8, type_name.to_string()));
+            // Record the variant's declared (concrete) payload types so a match arm's
+            // payload binding gets its real type for overloaded-call mangling.
+            self.variant_payloads
+                .insert(variant.name.clone(), variant.fields.clone());
         }
 
         let max_arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
@@ -447,6 +691,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.closure_sigs.insert(decl.name.clone(), sig);
         }
 
+        // Remember the binding's Quilon type for overloaded-call argument mangling.
+        let inferred_qty = self.infer_type(&decl.value);
+        // If the value is a named record (e.g. bound to a user operator overload's
+        // result), track its type/fields so later `name.field` / method calls resolve.
+        if let Type::Named { name, .. } = &inferred_qty
+            && let Some(fields) = self.named_type_fields.get(name).cloned()
+        {
+            self.record_types.insert(decl.name.clone(), fields);
+            self.var_named_types.insert(decl.name.clone(), name.clone());
+        }
+        self.var_types.insert(decl.name.clone(), inferred_qty);
+
         let value = self.generate_expr(&decl.value)?;
 
         if self.current_function.is_some() {
@@ -490,6 +746,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), String> {
+        // The inert core.io print/eprint placeholder is never emitted (the compiler
+        // lowers print/eprint to runtime intrinsics).
+        if decl.is_inert_io_placeholder() {
+            return Ok(());
+        }
+
         // A function declared INSIDE another function (we are mid-emitting a body) is a
         // local declaration. If its body references enclosing locals it is a capturing
         // CLOSURE (lowered via the lambda machinery); otherwise it is a self-contained
@@ -505,19 +767,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                 return self.generate_local_closure(decl);
             }
             // No captures: emit a plain module function, but save/restore the enclosing
-            // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/builder state)
-            // around it, since `emit_module_function` clears and repopulates them.
+            // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
+            // state) around it, since `emit_module_function` clears and repopulates them.
             let saved_block = self.builder.get_insert_block();
             let saved_function = self.current_function;
             let saved_vars = std::mem::take(&mut self.variables);
             let saved_boxed = std::mem::take(&mut self.boxed_vars);
             let saved_sigs = std::mem::take(&mut self.closure_sigs);
+            let saved_var_types = std::mem::take(&mut self.var_types);
 
             let result = self.emit_module_function(decl);
 
             self.variables = saved_vars;
             self.boxed_vars = saved_boxed;
             self.closure_sigs = saved_sigs;
+            self.var_types = saved_var_types;
             self.current_function = saved_function;
             if let Some(block) = saved_block {
                 self.builder.position_at_end(block);
@@ -530,9 +794,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Emit `decl` as a top-level/module function (internal linkage). Clears and
     /// repopulates the per-function emission state (`variables`, `closure_sigs`,
-    /// `boxed_vars`); the entry point `^` gets the special f64-return / implicit-0
-    /// treatment. Used for true top-level functions and for non-capturing nested
-    /// functions (which can recurse, unlike a closure value).
+    /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
+    /// implicit-0 treatment. Used for true top-level functions and for non-capturing
+    /// nested functions (which can recurse, unlike a closure value).
     fn emit_module_function(&mut self, decl: &FunctionDecl) -> Result<(), String> {
         // Convert parameter types to LLVM types
         let param_types: Vec<BasicTypeEnum> = decl
@@ -568,7 +832,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         // into one native binary (AOT). For example core.io's `write` placeholder, or
         // a user function named `read`/`open`, would otherwise shadow libc and break
         // the runtime intrinsics. Only the generated `main` wrapper is exported.
-        let function = self.module.add_function(&decl.name, fn_type, None);
+        //
+        // An overloaded member (operator-named, or one of several same-named defs) is
+        // emitted under a per-signature MANGLED name so the members don't collide; each
+        // call site dispatches to the matching mangled symbol by exact argument type.
+        let symbol = if self.overloads.contains_key(&decl.name) {
+            let params: Vec<Type> = decl
+                .params
+                .iter()
+                .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                .collect();
+            mangle_overload(&decl.name, &params)
+        } else {
+            decl.name.clone()
+        };
+        let function = self.module.add_function(&symbol, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
         self.current_function = Some(function);
 
@@ -578,6 +856,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Store parameters in variables map
         self.variables.clear();
+        self.var_types.clear();
         self.closure_sigs.clear();
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
         self.boxed_vars = self.compute_boxed_vars(&decl.body);
@@ -594,6 +873,17 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.variables
                 .insert(param.name.clone(), (alloca, param_type));
+            // Track the parameter's Quilon type for overloaded-call mangling, and so a
+            // record/sum parameter's methods/fields resolve.
+            let qty = param.type_annotation.clone().unwrap_or(Type::Num);
+            if let Type::Named { name, .. } | Type::Sum { name, .. } = &qty {
+                self.var_named_types
+                    .insert(param.name.clone(), name.clone());
+                if let Some(fields) = self.named_type_fields.get(name) {
+                    self.record_types.insert(param.name.clone(), fields.clone());
+                }
+            }
+            self.var_types.insert(param.name.clone(), qty);
         }
 
         // Generate function body
@@ -727,7 +1017,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
             }
-            Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
+            Expr::BinOp { left, right, .. }
+            | Expr::Pipeline { left, right, .. }
+            | Expr::Range {
+                start: left,
+                end: right,
+                ..
+            } => {
                 Self::collect_mutable_locals(left, out);
                 Self::collect_mutable_locals(right, out);
             }
@@ -834,7 +1130,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn walk_exprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
         f(expr);
         match expr {
-            Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
+            Expr::BinOp { left, right, .. }
+            | Expr::Pipeline { left, right, .. }
+            | Expr::Range {
+                start: left,
+                end: right,
+                ..
+            } => {
                 Self::walk_exprs(left, f);
                 Self::walk_exprs(right, f);
             }
@@ -1258,21 +1560,33 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Record { fields, .. } => self.generate_record(fields),
 
             Expr::Constructor {
-                type_name: _,
-                fields,
-                ..
+                type_name, fields, ..
             } => {
-                // Constructors have the same representation as records
-                self.generate_record(fields)
+                // A named-type instance has the same struct representation as a record,
+                // but its field SLOTS follow the type's DECLARATION order — which is the
+                // order `record_types` and the type oracle use to index/GEP fields later.
+                // The constructor call may list fields in any order, so reorder them to
+                // declaration order before lowering; otherwise a later `obj.field` read
+                // would GEP the wrong slot (silent corruption once fields differ in type).
+                let ordered = self.constructor_fields_in_decl_order(type_name, fields);
+                self.generate_record(&ordered)
             }
 
             Expr::FieldAccess { expr, field, .. } => self.generate_field_access(expr, field),
 
             Expr::FieldAssign { target, value, .. } => self.generate_field_assign(target, value),
 
-            Expr::Index { expr, index, .. } => self.generate_index(expr, index),
+            Expr::Index {
+                expr: array, index, ..
+            } => self.generate_index(expr, array, index),
 
-            Expr::Match { expr, arms, .. } => self.generate_match(expr, arms),
+            Expr::Match {
+                expr: scrutinee,
+                arms,
+                ..
+            } => self.generate_match(expr, scrutinee, arms),
+
+            Expr::Range { start, end, .. } => self.generate_range(start, end),
 
             Expr::ForLoop {
                 collection,
@@ -1298,8 +1612,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         op: BinOp,
         right: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // A USER operator overload (e.g. `+`/`==` on a record type) lowers to a direct
+        // call to its mangled function — the operator is just a named overload set.
+        // Built-in operators (Num arithmetic/compare, Text `+`/comparison) keep their
+        // inline lowering below; they are not entered in `self.overloads`.
+        let sym = op.symbol();
+        if self.overloads.contains_key(sym) {
+            let arg_types = [self.infer_type(left), self.infer_type(right)];
+            if let Some(symbol) = self.resolve_overload_symbol(sym, &arg_types) {
+                let l = self.generate_expr(left)?;
+                let r = self.generate_expr(right)?;
+                return self.build_direct_call(&symbol, &[l, r]);
+            }
+        }
+
         let lhs = self.generate_expr(left)?;
         let rhs = self.generate_expr(right)?;
+
+        // Text comparison: both operands are `Text` { ptr, i64 } structs. Lower
+        // equality and lexicographic ordering via the `__text_cmp` runtime intrinsic
+        // (returns -1/0/1), then compare its result against 0 with the matching
+        // integer predicate. (Num operands fall through to the float paths below.)
+        if matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        ) && matches!(lhs, BasicValueEnum::StructValue(_))
+            && matches!(rhs, BasicValueEnum::StructValue(_))
+        {
+            return self.generate_text_compare(op, lhs, rhs);
+        }
 
         match op {
             BinOp::Add => match (lhs, rhs) {
@@ -1347,28 +1688,33 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Div operation requires float values".to_string())
                 }
             }
-            BinOp::Eq => {
-                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::OEQ, l, r, "eqtmp")
-                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
-                        .into())
-                } else {
-                    Err("Eq operation requires float values".to_string())
-                }
-            }
-            BinOp::Ne => {
-                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
-                    Ok(self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::ONE, l, r, "netmp")
-                        .map_err(|e| format!("Failed to build compare: {:?}", e))?
-                        .into())
-                } else {
-                    Err("Ne operation requires float values".to_string())
-                }
-            }
+            BinOp::Eq => match (lhs, rhs) {
+                (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::OEQ, l, r, "eqtmp")
+                    .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                    .into()),
+                // Bool == Bool (both i1) compares the integer values.
+                (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, l, r, "eqtmp")
+                    .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                    .into()),
+                _ => Err("Eq requires two Nums or two Bools".to_string()),
+            },
+            BinOp::Ne => match (lhs, rhs) {
+                (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::ONE, l, r, "netmp")
+                    .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                    .into()),
+                (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, l, r, "netmp")
+                    .map_err(|e| format!("Failed to build compare: {:?}", e))?
+                    .into()),
+                _ => Err("Ne requires two Nums or two Bools".to_string()),
+            },
             BinOp::Lt => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
@@ -1535,6 +1881,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
             "__text_length" => i64t.fn_type(&[ptr.into(), i64t.into()], false),
+            // i32 __text_cmp(i8* a, i64 alen, i8* b, i64 blen) — lexicographic byte
+            // comparison, returning -1 / 0 / 1. Backs Text ==/!=/</<=/>/>=.
+            "__text_cmp" => ctx
+                .i32_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
             "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
             // void __print_num_fd(i64 fd, double) — number + newline to fd.
@@ -1688,8 +2039,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         // Core IO builtins, lowered to runtime intrinsics (see runtime::intrinsics).
+        // `print`/`eprint` are the built-in single-arg Num/Text/Bool overloads; a
+        // *user* overload of the same name (a different signature) is dispatched as a
+        // mangled function below, so only use the intrinsic when no user overload
+        // matches the argument types.
         match func_name.as_str() {
-            "print" | "eprint" => return self.generate_print(func_name, args),
+            "print" | "eprint" => {
+                let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                let is_builtin_print = arg_types.len() == 1
+                    && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool);
+                let has_user_match = self
+                    .resolve_overload_symbol(func_name, &arg_types)
+                    .is_some();
+                if is_builtin_print && !has_user_match {
+                    return self.generate_print(func_name, args);
+                }
+            }
             "write" => return self.generate_write(args),
             _ => {}
         }
@@ -1703,26 +2068,42 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // A local variable bound to a closure value: call it indirectly, passing the
         // captured environment as the trailing argument. Recognized by the variable's
-        // recorded closure signature (see `closure_sigs`).
+        // recorded closure signature (see `closure_sigs`). Checked before overload
+        // dispatch — a local closure binding shadows any same-named top-level function.
         if let Some((param_tys, ret_ty)) = self.closure_sigs.get(func_name.as_str()).cloned()
             && self.variables.contains_key(func_name.as_str())
         {
             return self.generate_closure_call(func_name, &param_tys, ret_ty, args);
         }
 
+        // Overloaded function call: dispatch to the per-signature mangled symbol chosen
+        // by exact argument types (the type checker has already verified a unique match).
+        let overload_symbol = if self.overloads.contains_key(func_name.as_str()) {
+            let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+            self.resolve_overload_symbol(func_name, &arg_types)
+        } else {
+            None
+        };
+
         // Get the function from the module. If there is no plain top-level function with this
         // name, it may be a method call: the parser desugars `recv.method(a, b)` to
         // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
-        let function = match self.module.get_function(func_name) {
-            Some(f) => f,
-            None => {
-                let mangled = args
-                    .first()
-                    .and_then(|recv| self.receiver_type_name(recv))
-                    .map(|type_name| format!("{}_{}", type_name, func_name));
-                match mangled.and_then(|m| self.module.get_function(&m)) {
-                    Some(f) => f,
-                    None => return Err(format!("Function not found: {}", func_name)),
+        let function = if let Some(sym) = &overload_symbol {
+            self.module
+                .get_function(sym)
+                .ok_or_else(|| format!("Overload not found: {}", sym))?
+        } else {
+            match self.module.get_function(func_name) {
+                Some(f) => f,
+                None => {
+                    let mangled = args
+                        .first()
+                        .and_then(|recv| self.receiver_type_name(recv))
+                        .map(|type_name| format!("{}_{}", type_name, func_name));
+                    match mangled.and_then(|m| self.module.get_function(&m)) {
+                        Some(f) => f,
+                        None => return Err(format!("Function not found: {}", func_name)),
+                    }
                 }
             }
         };
@@ -2127,6 +2508,190 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load array struct: {:?}", e))
     }
 
+    /// Reorder a constructor call's `fields` into the named type's DECLARATION order so
+    /// the lowered struct's slot order matches what `record_types` and the type oracle
+    /// use to index fields. Falls back to the provided order if the type's field list
+    /// isn't registered. (The expressions are cloned — constructor field lists are tiny.)
+    fn constructor_fields_in_decl_order(
+        &self,
+        type_name: &str,
+        fields: &[(String, Expr)],
+    ) -> Vec<(String, Expr)> {
+        let Some(decl_order) = self.named_type_fields.get(type_name) else {
+            return fields.to_vec();
+        };
+        decl_order
+            .iter()
+            .filter_map(|fname| {
+                fields
+                    .iter()
+                    .find(|(provided, _)| provided == fname)
+                    .cloned()
+            })
+            .collect()
+    }
+
+    /// Materialize an inclusive range `lo <- hi` into a `[]Num` (the `{ptr, size}`
+    /// array shape, same as `generate_array`). The element count is `|hi - lo| + 1`
+    /// and the direction (ascending vs descending) is decided at runtime, since the
+    /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
+    /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage is GC-allocated (`__alloc`)
+    /// so the array may safely escape the current frame.
+    fn generate_range(&mut self, start: &Expr, end: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| "Range must be in a function".to_string())?;
+
+        let i64_type = self.context.i64_type();
+        let f64_type = self.context.f64_type();
+
+        // Evaluate both ends (Num = f64) and truncate to i64 endpoints.
+        let lo_f = self.generate_expr(start)?.into_float_value();
+        let hi_f = self.generate_expr(end)?.into_float_value();
+        let lo = self
+            .builder
+            .build_float_to_signed_int(lo_f, i64_type, "range_lo")
+            .map_err(|e| format!("Failed to convert range start: {:?}", e))?;
+        let hi = self
+            .builder
+            .build_float_to_signed_int(hi_f, i64_type, "range_hi")
+            .map_err(|e| format!("Failed to convert range end: {:?}", e))?;
+
+        // Ascending iff lo <= hi; pick step = +1 / -1 and the inclusive span.
+        let ascending = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, lo, hi, "range_asc")
+            .map_err(|e| format!("Failed to compare range ends: {:?}", e))?;
+        let one = i64_type.const_int(1, false);
+        let neg_one = i64_type.const_all_ones(); // -1 in two's complement
+        let step = self
+            .builder
+            .build_select(ascending, one, neg_one, "range_step")
+            .map_err(|e| format!("Failed to select range step: {:?}", e))?
+            .into_int_value();
+        // |hi - lo| + 1: compute the signed delta once, then pick it or its
+        // negation so the span is non-negative in either direction.
+        let delta = self
+            .builder
+            .build_int_sub(hi, lo, "range_delta")
+            .map_err(|e| format!("Failed to subtract range ends: {:?}", e))?;
+        let neg_delta = self
+            .builder
+            .build_int_neg(delta, "range_neg_delta")
+            .map_err(|e| format!("Failed to negate range delta: {:?}", e))?;
+        let span_abs = self
+            .builder
+            .build_select(ascending, delta, neg_delta, "range_span")
+            .map_err(|e| format!("Failed to select range span: {:?}", e))?
+            .into_int_value();
+        let count = self
+            .builder
+            .build_int_add(span_abs, one, "range_count")
+            .map_err(|e| format!("Failed to add range count: {:?}", e))?;
+
+        // GC-allocate count * sizeof(f64) bytes for the backing data.
+        let eight = i64_type.const_int(8, false);
+        let bytes = self
+            .builder
+            .build_int_mul(count, eight, "range_bytes")
+            .map_err(|e| format!("Failed to size range alloc: {:?}", e))?;
+        let alloc = self.get_intrinsic("__alloc")?;
+        let alloc_call = self
+            .builder
+            .build_call(alloc, &[bytes.into()], "range_data")
+            .map_err(|e| format!("Failed to allocate range: {:?}", e))?;
+        let data_ptr = {
+            use inkwell::values::AnyValue;
+            alloc_call.as_any_value_enum().into_pointer_value()
+        };
+
+        // Fill loop: for i in 0..count: data[i] = (f64)(lo + i*step).
+        let counter = self.create_entry_block_alloca("range_i", i64_type.into())?;
+        self.builder
+            .build_store(counter, i64_type.const_zero())
+            .map_err(|e| format!("Failed to init range counter: {:?}", e))?;
+
+        let header = self.context.append_basic_block(function, "range_header");
+        let body = self.context.append_basic_block(function, "range_body");
+        let exit = self.context.append_basic_block(function, "range_exit");
+
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch to range header: {:?}", e))?;
+
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64_type, counter, "i")
+            .map_err(|e| format!("Failed to load range counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, count, "range_cond")
+            .map_err(|e| format!("Failed to build range condition: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body, exit)
+            .map_err(|e| format!("Failed to build range branch: {:?}", e))?;
+
+        self.builder.position_at_end(body);
+        // value = lo + i*step
+        let i_step = self
+            .builder
+            .build_int_mul(i, step, "range_i_step")
+            .map_err(|e| format!("Failed to scale range index: {:?}", e))?;
+        let val_i = self
+            .builder
+            .build_int_add(lo, i_step, "range_val_i")
+            .map_err(|e| format!("Failed to compute range element: {:?}", e))?;
+        let val_f = self
+            .builder
+            .build_signed_int_to_float(val_i, f64_type, "range_val")
+            .map_err(|e| format!("Failed to convert range element: {:?}", e))?;
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(f64_type, data_ptr, &[i], "range_elem")
+                .map_err(|e| format!("Failed to index range data: {:?}", e))?
+        };
+        self.builder
+            .build_store(elem_ptr, val_f)
+            .map_err(|e| format!("Failed to store range element: {:?}", e))?;
+        let next = self
+            .builder
+            .build_int_add(i, one, "range_next")
+            .map_err(|e| format!("Failed to increment range counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(|e| format!("Failed to store range counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop range: {:?}", e))?;
+
+        // Build the { ptr, size } array struct (the shared array/Text shape).
+        self.builder.position_at_end(exit);
+        let array_struct_type = self.ptr_len_struct_type();
+        let array_struct = self
+            .builder
+            .build_alloca(array_struct_type, "range_array")
+            .map_err(|e| format!("Failed to allocate range struct: {:?}", e))?;
+        let ptr_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 0, "range_ptr_field")
+            .map_err(|e| format!("Failed to get range ptr field: {:?}", e))?;
+        self.builder
+            .build_store(ptr_field, data_ptr)
+            .map_err(|e| format!("Failed to store range ptr: {:?}", e))?;
+        let size_field = self
+            .builder
+            .build_struct_gep(array_struct_type, array_struct, 1, "range_size_field")
+            .map_err(|e| format!("Failed to get range size field: {:?}", e))?;
+        self.builder
+            .build_store(size_field, count)
+            .map_err(|e| format!("Failed to store range size: {:?}", e))?;
+        self.builder
+            .build_load(array_struct_type, array_struct, "range_array")
+            .map_err(|e| format!("Failed to load range struct: {:?}", e))
+    }
+
     fn generate_record(
         &mut self,
         fields: &[(String, Expr)],
@@ -2151,24 +2716,34 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Create the struct value
         if self.current_function.is_some() {
-            // Allocate space for the struct
-            let alloca = self
+            // GC-allocate the struct (not a stack alloca) so a record VALUE can outlive
+            // the frame that built it — e.g. a record returned from a function or a user
+            // operator overload (`+ = (a :: Vec, b :: Vec) -> Vec => Vec { ... }`). A
+            // stack alloca would dangle once the callee returned.
+            use inkwell::values::AnyValue;
+            let size = struct_type
+                .size_of()
+                .ok_or_else(|| "record struct type has no compile-time size".to_string())?;
+            let alloc_fn = self.get_intrinsic("__alloc")?;
+            let record_ptr = self
                 .builder
-                .build_alloca(struct_type, "record")
-                .map_err(|e| format!("Failed to build alloca: {:?}", e))?;
+                .build_call(alloc_fn, &[size.into()], "record")
+                .map_err(|e| format!("Failed to call __alloc for record: {:?}", e))?
+                .as_any_value_enum()
+                .into_pointer_value();
 
             // Store each field
             for (i, value) in field_values.iter().enumerate() {
                 let gep = self
                     .builder
-                    .build_struct_gep(struct_type, alloca, i as u32, &format!("field_{}", i))
+                    .build_struct_gep(struct_type, record_ptr, i as u32, &format!("field_{}", i))
                     .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
                 self.builder
                     .build_store(gep, *value)
                     .map_err(|e| format!("Failed to build store: {:?}", e))?;
             }
 
-            Ok(alloca.into())
+            Ok(record_ptr.into())
         } else {
             // For globals, we need constant values
             Err("Global records not yet implemented".to_string())
@@ -2250,6 +2825,92 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to insert concat len: {:?}", e))?
             .into_struct_value();
         Ok(text.into())
+    }
+
+    /// Build a direct call to an already-emitted function by symbol, given the
+    /// already-generated argument values. Used to lower a resolved operator/function
+    /// overload to its mangled target.
+    fn build_direct_call(
+        &mut self,
+        symbol: &str,
+        arg_values: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self
+            .module
+            .get_function(symbol)
+            .ok_or_else(|| format!("Overload not found: {}", symbol))?;
+        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> =
+            arg_values.iter().map(|v| (*v).into()).collect();
+        use inkwell::values::AnyValue;
+        let call_site = self
+            .builder
+            .build_call(function, &arg_metadata, "calltmp")
+            .map_err(|e| format!("Failed to build call: {:?}", e))?;
+        match call_site.as_any_value_enum() {
+            inkwell::values::AnyValueEnum::IntValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::FloatValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::PointerValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::ArrayValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::StructValue(v) => Ok(v.into()),
+            inkwell::values::AnyValueEnum::VectorValue(v) => Ok(v.into()),
+            _ => Err("Overloaded function does not return a basic value".to_string()),
+        }
+    }
+
+    /// Lower a `Text`-vs-`Text` comparison: call `__text_cmp(aptr, alen, bptr, blen)`
+    /// (returns -1/0/1, memcmp-style with the shorter string ordering first on a common
+    /// prefix), then compare that i32 result against 0 with the predicate matching `op`.
+    /// Backs `Text` equality and lexicographic ordering (`==`/`!=`/`<`/`<=`/`>`/`>=`).
+    fn generate_text_compare(
+        &mut self,
+        op: BinOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) else {
+            return Err("Text comparison requires two Text values".to_string());
+        };
+        let extract = |s: inkwell::values::StructValue<'ctx>,
+                       idx: u32,
+                       name: &str|
+         -> Result<BasicValueEnum<'ctx>, String> {
+            self.builder
+                .build_extract_value(s, idx, name)
+                .map_err(|e| format!("Failed to extract text field: {:?}", e))
+        };
+        let l_ptr = extract(l, 0, "lcmp_ptr")?.into_pointer_value();
+        let l_len = extract(l, 1, "lcmp_len")?.into_int_value();
+        let r_ptr = extract(r, 0, "rcmp_ptr")?.into_pointer_value();
+        let r_len = extract(r, 1, "rcmp_len")?.into_int_value();
+
+        let cmp_fn = self.get_intrinsic("__text_cmp")?;
+        use inkwell::values::AnyValue;
+        let cmp = self
+            .builder
+            .build_call(
+                cmp_fn,
+                &[l_ptr.into(), l_len.into(), r_ptr.into(), r_len.into()],
+                "text_cmp",
+            )
+            .map_err(|e| format!("Failed to call __text_cmp: {:?}", e))?
+            .as_any_value_enum()
+            .into_int_value();
+
+        let pred = match op {
+            BinOp::Eq => inkwell::IntPredicate::EQ,
+            BinOp::Ne => inkwell::IntPredicate::NE,
+            BinOp::Lt => inkwell::IntPredicate::SLT,
+            BinOp::Le => inkwell::IntPredicate::SLE,
+            BinOp::Gt => inkwell::IntPredicate::SGT,
+            BinOp::Ge => inkwell::IntPredicate::SGE,
+            _ => return Err("non-comparison operator in text compare".to_string()),
+        };
+        let zero = cmp.get_type().const_zero();
+        Ok(self
+            .builder
+            .build_int_compare(pred, cmp, zero, "text_cmp_res")
+            .map_err(|e| format!("Failed to build text compare: {:?}", e))?
+            .into())
     }
 
     fn generate_field_access(
@@ -2342,11 +3003,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Regular record field access: resolve a pointer to the field inside the
-        // record's memory (shared by the in-place field-write path) and load it.
-        if let Some(field_ptr) = self.record_field_pointer(expr, field_name)? {
+        // record's memory (shared by the in-place field-write path) and load it with the
+        // field's declared LLVM type from the oracle (NOT a hardcoded `f64`), so a
+        // `Text`/array field reads back correctly.
+        if let Some((field_ptr, field_llvm)) = self.record_field_pointer(expr, field_name)? {
             return self
                 .builder
-                .build_load(self.context.f64_type(), field_ptr, field_name)
+                .build_load(field_llvm, field_ptr, field_name)
                 .map_err(|e| format!("Failed to load field: {:?}", e));
         }
 
@@ -2370,7 +3033,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Field-write target must be a field access".to_string());
         };
         let new_value = self.generate_expr(value)?;
-        let field_ptr = self
+        let (field_ptr, _field_llvm) = self
             .record_field_pointer(expr, field)?
             .ok_or_else(|| format!("Unknown record for field write: {}", field))?;
         self.builder
@@ -2379,20 +3042,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// Pointer to `base.field` inside the record's memory, the shared primitive for
-    /// both reads (`generate_field_access`) and in-place writes
-    /// (`generate_field_assign`). `base` must be a record-typed identifier (a
-    /// variable such as `u`, or the method receiver `it`); the variable's alloca
-    /// holds a pointer to the struct. Records are a flat struct of f64 fields (the
-    /// current numeric-record layout), so a field cannot itself hold a record —
-    /// chained paths (`a.b.c`) are rejected by the type checker before reaching
-    /// codegen. Returns `Ok(None)` when `base` isn't a tracked record (so the read
-    /// path can fall through to its Text/array `.size` handling).
+    /// Pointer to `base.field` inside the record's memory, plus the field's value-repr
+    /// LLVM type — the shared primitive for both reads (`generate_field_access`) and
+    /// in-place writes (`generate_field_assign`).
+    ///
+    /// `base` must be a record/named-type identifier (a variable such as `u`, or the
+    /// method receiver `it`); the variable's alloca holds a pointer-to-struct (the
+    /// record ABI). The struct's field types are recovered from the **type oracle** (the
+    /// record's declared field types), mapped through `value_repr_type` so the
+    /// reconstructed struct type matches exactly how `generate_record` laid it out —
+    /// `Text`/array/etc. fields keep their real type instead of being treated as `f64`.
+    /// The returned LLVM type is what the read site must `load` (and the write site is
+    /// already type-checked to match).
+    ///
+    /// Nested records (`a.b.c`) are rejected by the type checker before codegen, so a
+    /// single GEP level suffices. Returns `Ok(None)` when `base` isn't a tracked record
+    /// (so the read path can fall through to its Text/array `.size` handling).
     fn record_field_pointer(
         &mut self,
         base: &Expr,
         field: &str,
-    ) -> Result<Option<PointerValue<'ctx>>, String> {
+    ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>, String> {
         let Expr::Ident { name, .. } = base else {
             return Ok(None);
         };
@@ -2402,6 +3072,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         let Some(field_idx) = field_names.iter().position(|f| f == field) else {
             return Ok(None);
         };
+
+        // Reconstruct the struct field types from the oracle (the record's declared
+        // field types), in declared order, so the GEP type matches construction. Fall
+        // back to all-`f64` only if the oracle has no record type for `base` (it always
+        // should for a tracked record) — preserving the historical numeric layout. The
+        // loaded field's own LLVM type is then just the indexed slot, computed once here.
+        let field_types: Vec<BasicTypeEnum> = match self.oracle.expr_type(base) {
+            Some(Type::Record(fields)) | Some(Type::Named { fields, .. }) => fields
+                .clone()
+                .iter()
+                .map(|(_, t)| self.value_repr_type(t))
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => vec![self.context.f64_type().into(); field_names.len()],
+        };
+        let field_llvm = field_types[field_idx];
+        let struct_type = self.context.struct_type(&field_types, false);
 
         // The variable's alloca holds a pointer to the struct; load it.
         let (var_ptr, _) = self
@@ -2418,11 +3104,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
             .into_pointer_value();
 
-        // Reconstruct the (all-f64) struct type for the GEP.
-        let field_types: Vec<BasicTypeEnum> =
-            vec![self.context.f64_type().into(); field_names.len()];
-        let struct_type = self.context.struct_type(&field_types, false);
-
         let field_ptr = self
             .builder
             .build_struct_gep(
@@ -2432,16 +3113,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &format!("field_{}_ptr", field),
             )
             .map_err(|e| format!("Failed to build field GEP: {:?}", e))?;
-        Ok(Some(field_ptr))
+        Ok(Some((field_ptr, field_llvm)))
     }
 
+    /// Lower an array index `array[index]`. `index_node` is the whole `Expr::Index`
+    /// (used to look up the element type in the oracle — the checker records an index
+    /// expression's type as its element type); `array` and `index_expr` are its parts.
     fn generate_index(
         &mut self,
-        expr: &Expr,
+        index_node: &Expr,
+        array: &Expr,
         index_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Generate the array expression
-        let array_val = self.generate_expr(expr)?;
+        let array_val = self.generate_expr(array)?;
 
         // Generate the index expression
         let index_val = self.generate_expr(index_expr)?;
@@ -2490,33 +3175,38 @@ impl<'ctx> CodeGenerator<'ctx> {
                 return Err("Index must be a number".to_string());
             };
 
-            // Use GEP to get element pointer
-            // For now, assume elements are f64
+            // Element LLVM type comes from the type oracle (the index expression's type
+            // IS the element type), NOT from a hardcoded `f64` — so `Text`/array/record
+            // elements load correctly. The element memory was laid out by `generate_array`
+            // using this same value representation.
+            let elem_llvm = self.oracle_value_type(index_node)?;
+
+            // Use GEP (indexing by element type) to get the element pointer, then load it.
             let elem_ptr = unsafe {
                 self.builder
-                    .build_gep(self.context.f64_type(), data_ptr, &[index_i64], "elem_ptr")
+                    .build_gep(elem_llvm, data_ptr, &[index_i64], "elem_ptr")
                     .map_err(|e| format!("Failed to build GEP: {:?}", e))?
             };
 
-            // Load the element
             self.builder
-                .build_load(self.context.f64_type(), elem_ptr, "elem")
+                .build_load(elem_llvm, elem_ptr, "elem")
                 .map_err(|e| format!("Failed to load element: {:?}", e))
         } else {
             Err("Can only index into arrays".to_string())
         }
     }
 
+    /// Lower a `match` (`scrutinee ? | pat => body ...`). `match_expr` is the whole
+    /// `Expr::Match` node (used only to look up the match's result type in the oracle);
+    /// `scrutinee` is the value being matched.
     fn generate_match(
         &mut self,
-        expr: &Expr,
+        match_expr: &Expr,
+        scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // For now, implement a simplified version that only handles constructor patterns
-        // and wildcards for Option-like types
-
         // Evaluate the expression being matched
-        let match_val = self.generate_expr(expr)?;
+        let match_val = self.generate_expr(scrutinee)?;
 
         // Get the current function
         let function = self
@@ -2538,10 +3228,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let cont_block = self.context.append_basic_block(function, "match_cont");
 
-        // Create a phi node to collect results from all arms
-        // We need to determine the result type - for now assume f64
-        let result_alloca =
-            self.create_entry_block_alloca("match_result", self.context.f64_type().into())?;
+        // The result type of the match (the common type of its arm bodies) comes from
+        // the type oracle — NOT a hardcoded `f64` — so a match yielding `Text` (e.g. the
+        // `Ok(text)` payload) allocates and loads a `Text` struct rather than corrupting
+        // it through an f64 slot. Falls back to `f64` if the oracle didn't record it.
+        let result_llvm = self.oracle_value_type(match_expr)?;
+        let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
         // Jump to first check
         self.builder
@@ -2588,9 +3280,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Position at continuation block
         self.builder.position_at_end(cont_block);
 
-        // Load the result
+        // Load the result with the match's declared result type (see `result_llvm`).
         self.builder
-            .build_load(self.context.f64_type(), result_alloca, "match_result")
+            .build_load(result_llvm, result_alloca, "match_result")
             .map_err(|e| format!("Failed to load result: {:?}", e))
     }
 
@@ -2681,11 +3373,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
 
-            Pattern::Constructor { name: _, args, .. } => {
+            Pattern::Constructor { name, args, .. } => {
                 // Extract each payload field and bind it to the corresponding sub-pattern.
                 // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
                 // struct field `i + 1`. Only identifier sub-patterns bind a name; others
                 // (wildcards, nested constructors) are matched structurally elsewhere.
+                let payload_types = self.variant_payloads.get(name).cloned();
                 if let BasicValueEnum::StructValue(struct_val) = value {
                     for (i, arg) in args.iter().enumerate() {
                         if let Pattern::Ident { name: arg_name, .. } = arg {
@@ -2700,6 +3393,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
                             self.variables
                                 .insert(arg_name.clone(), (alloca, payload.get_type()));
+                            // Track the payload binding's declared Quilon type so an
+                            // overloaded call on it (`Circle(n) => area(n)`) mangles by
+                            // the concrete payload type, agreeing with the type checker.
+                            if let Some(ty) = payload_types.as_ref().and_then(|t| t.get(i)) {
+                                self.var_types.insert(arg_name.clone(), ty.clone());
+                            }
                         }
                     }
                 }
@@ -2833,6 +3532,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(|e| format!("Failed to store item: {:?}", e))?;
                 self.variables
                     .insert(name.clone(), (item_alloca, elem_val.get_type()));
+                // Loop elements are loaded as Num (codegen supports numeric arrays);
+                // track it so an overloaded call on the loop var mangles correctly.
+                self.var_types.insert(name.clone(), Type::Num);
             }
             ForPattern::ItemIndex { item, index, .. } => {
                 // Bind item
@@ -2842,6 +3544,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(|e| format!("Failed to store item: {:?}", e))?;
                 self.variables
                     .insert(item.clone(), (item_alloca, elem_val.get_type()));
+                self.var_types.insert(item.clone(), Type::Num);
+                self.var_types.insert(index.clone(), Type::Num);
 
                 // Bind index (convert i64 to f64 for Num type)
                 let index_f64 = self
@@ -2940,6 +3644,180 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// The **value representation** of a Quilon type — the LLVM type that a value of
+    /// `ty` is materialized as by `generate_expr` and stored inline inside a composite.
+    /// Read sites that GEP/load an element/field/match-result must size it with THIS
+    /// function so the type matches how the value was stored at construction. It differs
+    /// from [`type_to_llvm`] in three places:
+    ///   - `Array` — an array *value* is the `{ ptr, i64 }` struct `generate_array`
+    ///     produces and stores inline (so a nested array `[][]T` keeps that struct as its
+    ///     element), whereas `type_to_llvm` lowers `[]T` to a bare opaque pointer.
+    ///   - `Record` / `Named` — a record *value* is a POINTER to its struct (the record
+    ///     ABI: `generate_record` returns the alloca), not the struct by value.
+    ///   - `Generic` — a payload type variable that survived to a read site (e.g. a match
+    ///     whose result type was taken from a never-constructed variant's generic arm)
+    ///     has no concrete LLVM type; it falls back to the canonical numeric payload
+    ///     representation `f64`, matching how generic/unknown payloads are materialized
+    ///     elsewhere (`payload_slot_type`). This keeps such a program compiling (it did
+    ///     before the oracle existed) rather than erroring in `type_to_llvm`.
+    fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
+            Type::Record(_) | Type::Named { .. } => {
+                Ok(self.context.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            _ => self.type_to_llvm(ty),
+        }
+    }
+
+    /// The value-representation LLVM type to use when GEPing/loading the result of `expr`
+    /// (an `arr[i]`, `rec.field`, or `match`), taken from the type oracle. This is the
+    /// single read-site policy: ask the oracle for `expr`'s inferred type and lower it
+    /// via [`value_repr_type`]; if the oracle has no entry (e.g. the IR-only codegen
+    /// tests that skip the type-check pass), fall back to the historical `f64`.
+    fn oracle_value_type(&self, expr: &Expr) -> Result<BasicTypeEnum<'ctx>, String> {
+        match self.oracle.expr_type(expr) {
+            Some(t) => self.value_repr_type(t),
+            None => Ok(self.context.f64_type().into()),
+        }
+    }
+
+    /// Best-effort Quilon type of `expr`, sufficient to mangle overloaded call sites.
+    /// Codegen lacks the type checker's full inference, so this covers exactly the
+    /// shapes that can be an overloaded argument: literals, locals/params (tracked in
+    /// `var_types`), constructor results, field access on a known record, and the
+    /// result types of the supported operators. Falls back to `Num` (the historical
+    /// default) when it can't tell — overloaded dispatch then simply won't match and a
+    /// clear "function not found" surfaces, never a silent miscompile.
+    fn infer_type(&self, expr: &Expr) -> Type {
+        match expr {
+            Expr::Number { .. } => Type::Num,
+            Expr::String { .. } => Type::Text,
+            Expr::Bool { .. } => Type::Bool,
+            Expr::Unit { .. } => Type::Unit,
+            Expr::Ident { name, .. } => {
+                // A bare nullary sum-type constructor (not a bound variable) is a value
+                // of its sum type.
+                if let Some((_, type_name)) = self.sum_variants.get(name)
+                    && !self.var_types.contains_key(name)
+                {
+                    return self.sum_or_named(type_name);
+                }
+                self.var_types.get(name).cloned().unwrap_or(Type::Num)
+            }
+            Expr::Constructor { type_name, .. } => self.sum_or_named(type_name),
+            Expr::Call { func, args, .. } => {
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    // A constructor call yields its sum type.
+                    if let Some((_, type_name)) = self.sum_variants.get(name) {
+                        return self.sum_or_named(type_name);
+                    }
+                    // An overloaded function call yields its resolved member's return.
+                    let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                    if let Some((_, ret)) = self.matching_overload(name, &arg_types) {
+                        return ret.clone();
+                    }
+                    // A non-overloaded top-level function yields its declared return
+                    // type — so a call result that feeds an overloaded call/operator
+                    // mangles to the right member (codegen agrees with the checker).
+                    if let Some(ret) = self.fn_return_types.get(name) {
+                        return self.resolve_named(ret);
+                    }
+                }
+                // Unknown callee (no declared return, e.g. an unannotated function):
+                // default to Num, the historical inference default.
+                Type::Num
+            }
+            Expr::BinOp {
+                left, op, right, ..
+            } => {
+                // A user operator overload yields its resolved member's return type.
+                let sym = op.symbol();
+                if self.overloads.contains_key(sym) {
+                    let arg_types = [self.infer_type(left), self.infer_type(right)];
+                    if let Some((_, ret)) = self.matching_overload(sym, &arg_types) {
+                        return ret.clone();
+                    }
+                }
+                // Built-ins: comparisons/logicals yield Bool; `+` on Text yields Text;
+                // arithmetic yields Num. Matches the type checker's operator results
+                // closely enough to mangle a nested overloaded argument.
+                match op {
+                    BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+                    | BinOp::And
+                    | BinOp::Or => Type::Bool,
+                    BinOp::Add
+                        if self.infer_type(left) == Type::Text
+                            || self.infer_type(right) == Type::Text =>
+                    {
+                        Type::Text
+                    }
+                    _ => Type::Num,
+                }
+            }
+            Expr::If { then, .. } => self.infer_type(then),
+            Expr::Block { stmts, .. } => match stmts.last() {
+                Some(crate::ast::Statement::Expr(tail)) => self.infer_type(tail),
+                _ => Type::Num,
+            },
+            Expr::FieldAccess { field, .. } if field == "size" || field == "length" => Type::Num,
+            _ => Type::Num,
+        }
+    }
+
+    /// Normalize a declared type annotation for `infer_type`: a bare `Named { name }`
+    /// (the parser's form for a `:: SomeType` reference) becomes the canonical sum/named
+    /// tag so it mangles identically to an inferred value of that type. Built-ins pass
+    /// through unchanged.
+    fn resolve_named(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Named { name, .. } | Type::Sum { name, .. } => self.sum_or_named(name),
+            other => other.clone(),
+        }
+    }
+
+    /// The `Type` for a registered type name: a sum type if known, else a `Named`.
+    fn sum_or_named(&self, name: &str) -> Type {
+        if self.sum_layouts.contains_key(name) || name == "Result" {
+            Type::Sum {
+                name: name.to_string(),
+                variants: vec![],
+            }
+        } else {
+            Type::Named {
+                name: name.to_string(),
+                fields: vec![],
+                methods: vec![],
+            }
+        }
+    }
+
+    /// If `name` is an overload set, pick the member matching `arg_types` exactly and
+    /// return its mangled LLVM symbol. `None` if `name` isn't overloaded or nothing
+    /// matches (the caller then falls back to its non-overloaded path).
+    fn resolve_overload_symbol(&self, name: &str, arg_types: &[Type]) -> Option<String> {
+        let (params, _) = self.matching_overload(name, arg_types)?;
+        Some(mangle_overload(name, params))
+    }
+
+    /// The overload member of `name` whose parameter types match `arg_types` exactly
+    /// (by type tag), if any. Shared by symbol resolution and return-type inference.
+    fn matching_overload(&self, name: &str, arg_types: &[Type]) -> Option<&(Vec<Type>, Type)> {
+        self.overloads.get(name)?.iter().find(|(params, _)| {
+            params.len() == arg_types.len()
+                && params
+                    .iter()
+                    .zip(arg_types)
+                    .all(|(p, a)| type_mangle(p) == type_mangle(a))
+        })
+    }
+
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
@@ -2970,6 +3848,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             {
                 Ok(self.sum_struct_type(name).into())
             }
+            // Any other named RECORD type (a `:: SomeRecord` parameter/return, e.g. on a
+            // user operator overload) is passed by pointer — record instances are
+            // represented as a pointer to their struct alloca (see `generate_record`).
+            Type::Named { .. } => Ok(self.context.ptr_type(AddressSpace::default()).into()),
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }
     }

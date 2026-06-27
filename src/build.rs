@@ -26,7 +26,8 @@ fn emit_object(program: &Program, obj_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
 
     let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "main");
+    // Build the generator with the type oracle installed (precise composite read types).
+    let mut generator = CodeGenerator::with_oracle(&context, "main", program)?;
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
     let module = generator.module();
@@ -80,8 +81,22 @@ pub fn build_native(program: &Program, out: &Path, linker: &str) -> Result<(), S
         .arg(&obj)
         .arg("-L")
         .arg(&lib_dir)
-        // The Rust staticlib needs these system libs alongside Boehm GC.
-        .args(["-lquilon_rt", "-lgc", "-lpthread", "-ldl", "-lm"])
+        // Pull EVERY object out of `libquilon_rt.a`, not just the members that resolve
+        // an already-undefined symbol. The Rust staticlib splits the `#[no_mangle]`
+        // runtime intrinsics across codegen-unit objects (and their order in the archive
+        // is unspecified), so a single linker pass over a plain `-lquilon_rt` can miss an
+        // intrinsic the program references (e.g. `__text_cmp`) when its defining object
+        // sits earlier than the object that first pulled the archive in — manifesting as
+        // an `undefined reference` only under whatever CU split CI happens to produce.
+        // `--whole-archive` makes inclusion deterministic; `--no-whole-archive` restores
+        // normal (on-demand) linking for the system libs that follow.
+        .args([
+            "-Wl,--whole-archive",
+            "-lquilon_rt",
+            "-Wl,--no-whole-archive",
+        ])
+        // System libs the Rust staticlib needs, alongside Boehm GC.
+        .args(["-lgc", "-lpthread", "-ldl", "-lm"])
         .arg("-o")
         .arg(out)
         .status()
