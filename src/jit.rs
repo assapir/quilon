@@ -11,9 +11,11 @@ use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
 use inkwell::targets::{InitializationConfig, Target};
+use std::ffi::CString;
+use std::os::raw::c_char;
 
-/// Signature of the generated C `main`: `int main(int argc, char** argv)`.
-type MainFn = unsafe extern "C" fn(i32, *const *const u8) -> i32;
+/// Signature of the generated C `main`: `int main(int argc, char** argv, char** envp)`.
+type MainFn = unsafe extern "C" fn(i32, *const *const c_char, *const *const c_char) -> i32;
 
 /// JIT-compile and execute a type-checked program in-process.
 ///
@@ -74,6 +76,14 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
                 "__print_text_fd",
                 intrinsics::__print_text_fd as *const () as usize,
             ),
+            (
+                "__argv_to_text_array",
+                intrinsics::__argv_to_text_array as *const () as usize,
+            ),
+            (
+                "__envp_to_pairs",
+                intrinsics::__envp_to_pairs as *const () as usize,
+            ),
         ];
         for (name, addr) in mappings {
             if let Some(func) = module.get_function(name) {
@@ -82,12 +92,29 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
         }
     }
 
+    // Build the real `argv`/`envp` the JIT'd `main` will thread into an `^` that
+    // declares `args :: []Text` / `env :: [][]Text`. These mirror the C arrays a
+    // native `main` receives: NULL-terminated arrays of NUL-terminated C strings. The
+    // owning `CString`/pointer `Vec`s must outlive the `main.call` below (the runtime
+    // copies their bytes into GC memory during the call), so they are bound here.
+    let arg_cstrings: Vec<CString> = std::env::args()
+        .map(|a| CString::new(a).unwrap_or_default())
+        .collect();
+    let mut argv: Vec<*const c_char> = arg_cstrings.iter().map(|c| c.as_ptr()).collect();
+    argv.push(std::ptr::null()); // argv is conventionally NULL-terminated
+    let argc = arg_cstrings.len() as i32;
+
+    let env_cstrings: Vec<CString> = std::env::vars()
+        .map(|(k, v)| CString::new(format!("{k}={v}")).unwrap_or_default())
+        .collect();
+    let mut envp: Vec<*const c_char> = env_cstrings.iter().map(|c| c.as_ptr()).collect();
+    envp.push(std::ptr::null()); // envp is NULL-terminated
+
     unsafe {
         let main: JitFunction<MainFn> = engine
             .get_function("main")
             .map_err(|_| "Program has no entry point to execute (expected `^`)".to_string())?;
 
-        // Numeric entry points (`() -> Num`) ignore argc/argv; pass empty args.
-        Ok(main.call(0, std::ptr::null()))
+        Ok(main.call(argc, argv.as_ptr(), envp.as_ptr()))
     }
 }

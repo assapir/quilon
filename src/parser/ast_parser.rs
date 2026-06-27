@@ -1322,6 +1322,16 @@ impl<'a> Parser<'a> {
             return Ok(crate::ast::Type::Unit);
         }
 
+        // `[]T` — an array type (e.g. `[]Text`, and nested `[][]Text`). The `[]` prefix
+        // wraps the element type that follows, so `[][]Text` parses as
+        // `Array(Array(Text))` via the recursive `parse_type` call.
+        if token.kind == TokenKind::BracketOpen {
+            self.advance();
+            self.expect(&TokenKind::BracketClose)?;
+            let elem = self.parse_type()?;
+            return Ok(crate::ast::Type::Array(Box::new(elem)));
+        }
+
         match token.text.as_str() {
             "Num" => {
                 self.advance();

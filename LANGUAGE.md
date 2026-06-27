@@ -417,12 +417,26 @@ There is no `println` — `print` owns the newline; `write` is the raw form. (Se
 
 Every executable defines `^` (main); the compiler generates a C-compatible `main()` wrapper (and initializes the GC).
 ```quilon
-^ = () -> Num => 42                              ~ exit 42
-^ = (argc :: Num, argv :: Num) -> Num => argc    ~ argv is a placeholder for now
+^ = () -> Num => 42                              ~ no args/env
+^ = (args :: []Text) -> Num => args.size         ~ command-line arguments
+^ = (args :: []Text, env :: [][]Text) -> Num => args.size   ~ args + environment
 ```
+**Arguments & environment.** `^` may declare, in order, two typed parameters that the
+generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
+- `args :: []Text` — the command-line arguments (argv), **including** `argv[0]` (the
+  program name), so `args.size` is always at least 1, and `args[i]` is the *i*-th
+  argument as a `Text`.
+- `env :: [][]Text` — the environment, as an array of `[key, value]` pairs. Each inner
+  array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
+  (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
+
+Both are real Quilon arrays — `.size`, `[index]`, and `for` loops work on them. (The
+legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
+compiles for backward compatibility but is superseded by `args :: []Text`.)
+
 **Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
 
-(See `examples/hello_world.ql`.)
+(See `examples/hello_world.ql` and `examples/args.ql`.)
 
 ---
 
@@ -506,7 +520,7 @@ message instead. Any compile error exits with status 1.
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
-| Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
+| `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
 | Generics / type variables (overloading is the only polymorphism), closures, `while` loops | ❌ |
 | Overloaded name passed as a value (higher-order); only direct call sites resolve | ❌ |
 | Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
@@ -525,7 +539,9 @@ message instead. Any compile error exits with status 1.
 - **Overloads resolve at direct call sites only.** Passing an overloaded name as a value
   (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
-- `argv` is a placeholder (0); full `[]Text` conversion is planned.
+- A `Text` value bound from an `args`/`env` element supports the full `Text` API
+  (`.size`/`.length`/`+`/comparison); the only remaining limitation is the general one
+  above — a value routed through a *generic* overload still resolves to the `Num` member.
 
 ---
 

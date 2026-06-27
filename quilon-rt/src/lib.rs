@@ -168,6 +168,143 @@ fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
     total as i64
 }
 
+/// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
+/// matching the code generator's `ptr_len_struct_type` (`{ i8*, i64 }`). For a `Text`,
+/// `data` points to `len` UTF-8 bytes; for an array, `data` points to `len` contiguous
+/// element-representation values and `len` is the element count. `#[repr(C)]` so the
+/// field offsets (ptr at 0, i64 at 8) match what LLVM emits.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct QlSlice {
+    data: *const c_void,
+    len: i64,
+}
+
+/// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC
+/// (so it outlives the C `argv`/`envp` buffers, which the program may not keep), and is
+/// NUL-terminated past `len` so `print`/`eprint` (which expect a C string) work too.
+fn alloc_text(bytes: &[u8]) -> QlSlice {
+    let len = bytes.len();
+    // +1 for a trailing NUL so the buffer doubles as a C string for `print`.
+    let buf = __alloc(len as i64 + 1) as *mut u8;
+    if !buf.is_null() && len > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len) };
+    }
+    QlSlice {
+        data: buf as *const c_void,
+        len: len as i64,
+    }
+}
+
+/// Build a Quilon `[]Text` from the C `argc`/`argv` the program's `main` received: one
+/// `Text` per argument (including `argv[0]`, the program name), in order. Backs an `^`
+/// entry point that declares `args :: []Text`.
+///
+/// Returns the array as a `{ ptr, i64 }` `QlSlice` whose `data` points to `argc`
+/// contiguous `Text` structs — exactly the layout codegen loads for a `[]Text` value.
+///
+/// # Safety contract (upheld by the C runtime / `main`)
+/// `argv` is null, or points to `argc` valid NUL-terminated C strings (the standard
+/// `main` contract); a non-positive `argc` yields an empty array.
+// Exported C-ABI symbol called from generated code; a safe Rust signature is
+// intentional (the contract is upheld by the compiler emitting the call).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) -> QlSlice {
+    if argv.is_null() || argc <= 0 {
+        return QlSlice {
+            data: std::ptr::null(),
+            len: 0,
+        };
+    }
+    let n = argc as usize;
+    // Allocate the backing array of `n` Text structs (GC-owned).
+    let elems = __alloc((n * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+    for i in 0..n {
+        // SAFETY: `argv[0..argc]` are valid C strings per the `main` contract.
+        let cstr = unsafe { *argv.add(i) };
+        let bytes = cstr_to_str_bytes(cstr);
+        let text = alloc_text(&bytes);
+        unsafe { std::ptr::write(elems.add(i), text) };
+    }
+    QlSlice {
+        data: elems as *const c_void,
+        len: argc,
+    }
+}
+
+/// Build a Quilon `[][]Text` from the C `envp` the program's `main` received: one inner
+/// `[]Text` per environment entry, each an exactly-2-element `[key, value]` split on the
+/// FIRST `=`. An entry with no `=` becomes `[entry, ""]` (the whole string as the key,
+/// an empty value). Backs an `^` entry point that declares `env :: [][]Text`.
+///
+/// `envp` is the conventional NULL-terminated array of `key=value` C strings.
+///
+/// # Safety contract (upheld by the C runtime / `main`)
+/// `envp` is null, or points to a NULL-terminated array of valid NUL-terminated C
+/// strings (the standard `main`/`environ` contract).
+// Exported C-ABI symbol called from generated code; a safe Rust signature is
+// intentional (the contract is upheld by the compiler emitting the call).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __envp_to_pairs(envp: *const *const c_char) -> QlSlice {
+    if envp.is_null() {
+        return QlSlice {
+            data: std::ptr::null(),
+            len: 0,
+        };
+    }
+    // First pass: count entries up to the NULL terminator.
+    let mut count = 0usize;
+    while !unsafe { *envp.add(count) }.is_null() {
+        count += 1;
+    }
+    if count == 0 {
+        return QlSlice {
+            data: std::ptr::null(),
+            len: 0,
+        };
+    }
+    // Backing array of `count` inner `[]Text` structs (each itself a `QlSlice`).
+    let pairs = __alloc((count * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+    for i in 0..count {
+        // SAFETY: i < count, and entries 0..count are non-null per the loop above.
+        let cstr = unsafe { *envp.add(i) };
+        let bytes = cstr_to_str_bytes(cstr);
+        // Split on the FIRST '='; an entry with no '=' is [entry, ""].
+        let (key, value): (&[u8], &[u8]) = match bytes.iter().position(|&b| b == b'=') {
+            Some(eq) => (&bytes[..eq], &bytes[eq + 1..]),
+            None => (&bytes[..], &[]),
+        };
+        // Inner 2-element `[]Text`: a backing array of exactly two Text structs.
+        let kv = __alloc((2 * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+        unsafe {
+            std::ptr::write(kv, alloc_text(key));
+            std::ptr::write(kv.add(1), alloc_text(value));
+            std::ptr::write(
+                pairs.add(i),
+                QlSlice {
+                    data: kv as *const c_void,
+                    len: 2,
+                },
+            );
+        }
+    }
+    QlSlice {
+        data: pairs as *const c_void,
+        len: count as i64,
+    }
+}
+
+/// The bytes of a NUL-terminated C string (empty for null). Used to copy `argv`/`envp`
+/// entries into GC-owned `Text`s.
+fn cstr_to_str_bytes(ptr: *const c_char) -> Vec<u8> {
+    if ptr.is_null() {
+        return Vec::new();
+    }
+    unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec()
+}
+
 fn cstr_to_str<'a>(ptr: *const c_char) -> Option<std::borrow::Cow<'a, str>> {
     if ptr.is_null() {
         return None;
@@ -203,7 +340,7 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 8] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 10] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
@@ -213,6 +350,10 @@ static QUILON_RT_INTRINSICS: [RtFn; 8] = unsafe {
         core::mem::transmute(__print_num_fd as extern "C" fn(i64, f64)),
         core::mem::transmute(__print_bool_fd as extern "C" fn(i64, i64)),
         core::mem::transmute(__print_text_fd as extern "C" fn(i64, *const c_char)),
+        core::mem::transmute(
+            __argv_to_text_array as extern "C" fn(i64, *const *const c_char) -> QlSlice,
+        ),
+        core::mem::transmute(__envp_to_pairs as extern "C" fn(*const *const c_char) -> QlSlice),
     ]
 };
 

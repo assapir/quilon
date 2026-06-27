@@ -588,6 +588,58 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
     assert_check_err("^ = () -> Num => 1 + true");
 }
 
+// --- Entry-point `^` receiving `args :: []Text` and `env :: [][]Text`. ---
+// Under the JIT, `args`/`env` come from this test process's real argv/environment,
+// which is not deterministic — so JIT tests assert only invocation-INDEPENDENT facts
+// (argv[0] is always present, env size is non-negative). Argv-DEPENDENT behavior is
+// pinned by `run_test_native` below, which runs a freshly built native binary with an
+// explicit argv.
+
+#[test]
+fn run_entry_with_args_param_typechecks_and_runs() {
+    // `^(args :: []Text)` — `args.size` is always >= 1 (argv[0] is the program name),
+    // so this is deterministic regardless of how the test harness was invoked.
+    assert_exit("^ = (args :: []Text) -> Num => args.size >= 1 ? 7 : 0", 7);
+}
+
+#[test]
+fn run_entry_with_args_and_env_params_runs() {
+    // `^(args :: []Text, env :: [][]Text)` — touches both arrays; the result depends
+    // only on invocation-independent facts (sizes), so it is deterministic.
+    assert_exit(
+        "^ = (args :: []Text, env :: [][]Text) -> Num => <\n  args.size >= 1 && env.size >= 0 ? 9 : 0\n>",
+        9,
+    );
+}
+
+#[test]
+fn run_entry_indexes_into_args() {
+    // Indexing `args[0]` yields a `Text`; binding it must type-check and run (the value
+    // itself is non-deterministic, so we only assert the program completes -> exit 4).
+    assert_exit(
+        "^ = (args :: []Text) -> Num => <\n  first = args[0]\n  4\n>",
+        4,
+    );
+}
+
+#[test]
+fn legacy_numeric_argc_argv_entry_still_runs() {
+    // Backward compatibility: the legacy `(argc :: Num, argv :: Num)` entry signature
+    // still compiles and runs (argv is a `0` placeholder), exiting on `argc`'s value.
+    // Under the JIT argc is this process's real argument count (>= 1), so assert it is
+    // positive rather than a fixed number.
+    let src = "^ = (argc :: Num, argv :: Num) -> Num => argc >= 1 ? 3 : 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .expect("legacy numeric entry should type-check");
+    let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let code = jit::run_program(&program).expect("legacy numeric entry should run");
+    assert_eq!(code, 3, "legacy (Num, Num) entry should still run");
+}
+
 // --- The `>` lexing rule: line-final `>` closes a block; otherwise it is `Gt`. ---
 
 #[test]
