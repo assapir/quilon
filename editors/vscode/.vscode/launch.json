@@ -2,6 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Run Extension",
+      "comment": "Launch an Extension Development Host with this extension loaded (F5). Compiles the TypeScript first via the `compile` task.",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "compile"
+    },
+    {
       "name": "Quilon: run current file (no breakpoints)",
       "comment": "Trivial run-only config. Real breakpoint/step debugging is NOT supported: the Quilon compiler does not emit DWARF debug info yet. See README.md.",
       "type": "node-terminal",

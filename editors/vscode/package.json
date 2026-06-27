@@ -4,7 +4,7 @@
   "description": "Syntax highlighting and editor tasks for the Quilon programming language (.ql).",
   "version": "0.1.0",
   "publisher": "quilon",
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "GPL-2.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/assapir/quilon.git",
@@ -21,7 +21,19 @@
     "ql",
     "language"
   ],
-  "main": "./extension.js",
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "@types/vscode": "^1.75.1",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^6.0.3"
+  },
   "contributes": {
     "languages": [
       {
