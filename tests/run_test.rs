@@ -230,6 +230,92 @@ fn reassigning_immutable_binding_is_a_type_error() {
     );
 }
 
+// --- In-place record mutation: `:=` instances allow field writes + setter methods. ---
+
+#[test]
+fn run_mutable_record_field_write_mutates_in_place() {
+    // A `:=`-bound record allows a direct in-place field write `c.value := …`.
+    // The mutation is observable on the same binding afterwards.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_setter_method_mutates_mutable_instance() {
+    // A setter method (its body writes `it.field := …`) mutates a `:=` instance
+    // in place; the change is visible through the same binding after the call.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_setter_with_block_body_writes_multiple_fields() {
+    // A setter whose body is a `< >` block performing several `it.f := …` writes
+    // mutates every field in place.
+    assert_exit(
+        "Point = {\n  x :: Num,\n  y :: Num,\n  shift = (d :: Num) => <\n    it.x := it.x + d\n    it.y := it.y + d\n  >\n}\n^ = () -> Num => <\n  p := Point { x = 1, y = 2 }\n  p.shift(10)\n  p.x + p.y\n>",
+        23,
+    );
+}
+
+#[test]
+fn field_write_on_immutable_instance_is_a_type_error() {
+    // `c` is bound with `=` (immutable); a direct field write `c.value := …`
+    // must fail type checking — immutable instances are frozen.
+    let src = "Counter = {\n  value :: Num\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.value := 99\n  c.value\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected a field write on an `=`-bound instance to be a type error"
+    );
+}
+
+#[test]
+fn setter_call_on_immutable_instance_is_a_type_error() {
+    // Calling a mutating (setter) method on an `=`-bound instance must fail type
+    // checking; only a `:=` receiver may be mutated.
+    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected a setter call on an `=`-bound instance to be a type error"
+    );
+}
+
+#[test]
+fn setter_call_result_is_unit_not_num() {
+    // A setter's body is a field write, which yields `$` (Unit) — so an unannotated
+    // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
+    // fail type checking, keeping the checker in agreement with codegen (a setter
+    // call emits an i8/Unit, not an f64). Regression for a check/compile divergence.
+    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected using a setter's Unit result in a Num position to be a type error"
+    );
+}
+
+#[test]
+fn run_non_setter_method_on_immutable_instance_is_allowed() {
+    // A non-mutating (getter) method has no `it.field := …` in its body, so it may
+    // be called on an `=`-bound (frozen) instance — only setters need `:=`.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  peek = => it.value\n}\n^ = () -> Num => <\n  c = Counter { value = 42 }\n  c.peek()\n>",
+        42,
+    );
+}
+
 // --- Unit type (`$`): the type and its sole value share the symbol `$`. ---
 
 #[test]

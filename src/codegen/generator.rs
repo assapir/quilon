@@ -283,8 +283,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let pt = self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num))?;
                     param_types.push(pt.into());
                 }
-                let return_type =
-                    self.type_to_llvm(&method.return_type.clone().unwrap_or(Type::Num))?;
+                // Unannotated return type defaults to Num, except a setter body whose
+                // tail is an in-place field write (`it.field := v`) yields `$` (i8).
+                let inferred_ret = match &method.return_type {
+                    Some(t) => t.clone(),
+                    None if self.expr_is_unit(&method.body) => Type::Unit,
+                    None => Type::Num,
+                };
+                let return_type = self.type_to_llvm(&inferred_ret)?;
                 let fn_type = return_type.fn_type(&param_types, false);
                 let method_fn = self.module.add_function(&mangled, fn_type, None);
                 // Internal linkage: method symbols are module-private (see generate_function_decl).
@@ -609,6 +615,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Expr::FieldAccess { expr, field, .. } => self.generate_field_access(expr, field),
+
+            Expr::FieldAssign { target, value, .. } => self.generate_field_assign(target, value),
 
             Expr::Index { expr, index, .. } => self.generate_index(expr, index),
 
@@ -1608,63 +1616,98 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // For regular record field access
-        // Special case: if expr is an identifier, check if we have record info
-        if let Expr::Ident { name, .. } = expr
-            && let Some(field_names) = self.record_types.get(name)
-        {
-            // Find the field index
-            if let Some(field_idx) = field_names.iter().position(|f| f == field_name) {
-                // Get the variable pointer
-                let (var_ptr, _var_type) = self
-                    .variables
-                    .get(name)
-                    .ok_or_else(|| format!("Variable not found: {}", name))?;
-
-                // The variable holds a pointer to the struct
-                // Load it to get the actual struct pointer
-                let struct_ptr = self
-                    .builder
-                    .build_load(
-                        self.context.ptr_type(AddressSpace::default()),
-                        *var_ptr,
-                        "load_struct_ptr",
-                    )
-                    .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
-                    .into_pointer_value();
-
-                // Now we need the struct type for GEP
-                // We need to reconstruct the struct type from field count
-                // For now, assume all fields are f64 (this is a limitation)
-                let field_types: Vec<BasicTypeEnum> =
-                    vec![self.context.f64_type().into(); field_names.len()];
-                let struct_type = self.context.struct_type(&field_types, false);
-
-                // Use GEP to get field pointer
-                let field_ptr = self
-                    .builder
-                    .build_struct_gep(
-                        struct_type,
-                        struct_ptr,
-                        field_idx as u32,
-                        &format!("field_{}", field_name),
-                    )
-                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
-
-                // Load the field value
-                let field_val = self
-                    .builder
-                    .build_load(self.context.f64_type(), field_ptr, field_name)
-                    .map_err(|e| format!("Failed to load field: {:?}", e))?;
-
-                return Ok(field_val);
-            }
+        // Regular record field access: resolve a pointer to the field inside the
+        // record's memory (shared by the in-place field-write path) and load it.
+        if let Some(field_ptr) = self.record_field_pointer(expr, field_name)? {
+            return self
+                .builder
+                .build_load(self.context.f64_type(), field_ptr, field_name)
+                .map_err(|e| format!("Failed to load field: {:?}", e));
         }
 
         Err(format!(
             "Field access not fully implemented. Need type information for field '{}'",
             field_name
         ))
+    }
+
+    /// In-place field write `target := value`, where `target` is a field access
+    /// `obj.field`. Computes a pointer into the existing record memory via GEP and
+    /// stores `value` there — no re-allocation — so the mutation is observable
+    /// through every alias of the record. Yields `$` (a unit i8), matching the
+    /// type checker's `Unit` result for a field write.
+    fn generate_field_assign(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Expr::FieldAccess { expr, field, .. } = target else {
+            return Err("Field-write target must be a field access".to_string());
+        };
+        let new_value = self.generate_expr(value)?;
+        let field_ptr = self
+            .record_field_pointer(expr, field)?
+            .ok_or_else(|| format!("Unknown record for field write: {}", field))?;
+        self.builder
+            .build_store(field_ptr, new_value)
+            .map_err(|e| format!("Failed to store field: {:?}", e))?;
+        Ok(self.unit_value().into())
+    }
+
+    /// Pointer to `base.field` inside the record's memory, the shared primitive for
+    /// both reads (`generate_field_access`) and in-place writes
+    /// (`generate_field_assign`). `base` must be a record-typed identifier (a
+    /// variable such as `u`, or the method receiver `it`); the variable's alloca
+    /// holds a pointer to the struct. Records are a flat struct of f64 fields (the
+    /// current numeric-record layout), so a field cannot itself hold a record —
+    /// chained paths (`a.b.c`) are rejected by the type checker before reaching
+    /// codegen. Returns `Ok(None)` when `base` isn't a tracked record (so the read
+    /// path can fall through to its Text/array `.size` handling).
+    fn record_field_pointer(
+        &mut self,
+        base: &Expr,
+        field: &str,
+    ) -> Result<Option<PointerValue<'ctx>>, String> {
+        let Expr::Ident { name, .. } = base else {
+            return Ok(None);
+        };
+        let Some(field_names) = self.record_types.get(name).cloned() else {
+            return Ok(None);
+        };
+        let Some(field_idx) = field_names.iter().position(|f| f == field) else {
+            return Ok(None);
+        };
+
+        // The variable's alloca holds a pointer to the struct; load it.
+        let (var_ptr, _) = self
+            .variables
+            .get(name)
+            .ok_or_else(|| format!("Variable not found: {}", name))?;
+        let struct_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                *var_ptr,
+                "load_struct_ptr",
+            )
+            .map_err(|e| format!("Failed to load struct pointer: {:?}", e))?
+            .into_pointer_value();
+
+        // Reconstruct the (all-f64) struct type for the GEP.
+        let field_types: Vec<BasicTypeEnum> =
+            vec![self.context.f64_type().into(); field_names.len()];
+        let struct_type = self.context.struct_type(&field_types, false);
+
+        let field_ptr = self
+            .builder
+            .build_struct_gep(
+                struct_type,
+                struct_ptr,
+                field_idx as u32,
+                &format!("field_{}_ptr", field),
+            )
+            .map_err(|e| format!("Failed to build field GEP: {:?}", e))?;
+        Ok(Some(field_ptr))
     }
 
     fn generate_index(
@@ -2158,6 +2201,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn expr_is_unit(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Unit { .. } => true,
+            // An in-place field write `obj.field := v` is an effect; it yields `$`.
+            Expr::FieldAssign { .. } => true,
             Expr::Call { func, .. } => {
                 matches!(func.as_ref(), Expr::Ident { name, .. } if name == "print" || name == "eprint")
             }

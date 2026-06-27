@@ -37,6 +37,17 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// `obj.field := v` where `obj`'s root binding is immutable (`=`-bound).
+    ImmutableFieldWrite {
+        name: String,
+        span: Span,
+    },
+    /// Calling a mutating (setter) method on an immutable (`=`-bound) receiver.
+    MutatingMethodOnImmutable {
+        method: String,
+        receiver: String,
+        span: Span,
+    },
     DuplicateDefinition {
         name: String,
         span: Span,
@@ -62,6 +73,8 @@ impl TypeError {
             | TypeError::WrongNumberOfArguments { span, .. }
             | TypeError::CannotInfer { span, .. }
             | TypeError::ImmutableAssignment { span, .. }
+            | TypeError::ImmutableFieldWrite { span, .. }
+            | TypeError::MutatingMethodOnImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
             | TypeError::NonExhaustiveMatch { span } => span,
@@ -93,6 +106,22 @@ impl std::fmt::Display for TypeError {
             }
             TypeError::ImmutableAssignment { name, .. } => {
                 write!(f, "Cannot assign to immutable variable '{}'", name)
+            }
+            TypeError::ImmutableFieldWrite { name, .. } => {
+                write!(
+                    f,
+                    "Cannot write to a field of immutable '{}'; bind it with ':=' to allow in-place mutation",
+                    name
+                )
+            }
+            TypeError::MutatingMethodOnImmutable {
+                method, receiver, ..
+            } => {
+                write!(
+                    f,
+                    "Cannot call mutating method '{}' on immutable '{}'; bind it with ':=' to allow in-place mutation",
+                    method, receiver
+                )
             }
             TypeError::DuplicateDefinition { name, .. } => {
                 write!(f, "Duplicate definition of '{}'", name)
@@ -214,6 +243,10 @@ pub struct TypeChecker {
     methods: std::collections::HashMap<(String, String), MethodDef>,
     // Registry of sum types: TypeName -> Type::Sum
     sum_types: std::collections::HashMap<String, Type>,
+    // Methods that mutate their receiver in place ("setters"), inferred from the
+    // body containing `it.field := …` (or a call to another setter on `it`).
+    // Calling such a method requires a `:=`-bound (mutable) receiver.
+    setter_methods: std::collections::HashSet<(String, String)>,
 }
 
 impl Default for TypeChecker {
@@ -228,6 +261,7 @@ impl TypeChecker {
             env: Environment::new(),
             methods: std::collections::HashMap::new(),
             sum_types: std::collections::HashMap::new(),
+            setter_methods: std::collections::HashSet::new(),
         };
 
         // Add built-in sum types to the environment
@@ -446,6 +480,12 @@ impl TypeChecker {
                 sum_type
             }
             TypeDef::Record { fields, methods } => {
+                // Infer which methods mutate the receiver in place ("setters"), so
+                // a later call-site can require a `:=` receiver. A method is a setter
+                // iff its body writes `it.field := …` or calls a sibling setter on
+                // `it`. The latter is resolved to a fixpoint (setters calling setters).
+                self.infer_setter_methods(&decl.name, methods);
+
                 // Type-check each method
                 for method in methods {
                     // Create a new scope for the method
@@ -475,10 +515,17 @@ impl TypeChecker {
                     // Type-check method body
                     let body_type = self.infer_expr(&method.body)?;
 
-                    // Check return type if specified
-                    if let Some(ref return_type) = method.return_type {
+                    // Check return type if specified, and resolve the method's actual
+                    // result type: the annotation when present, otherwise the inferred
+                    // body type. Storing the *resolved* type (not the raw annotation)
+                    // keeps call sites in agreement with codegen — e.g. an unannotated
+                    // setter whose body is a field write yields `$` (Unit), not Num.
+                    let resolved_return_type = if let Some(ref return_type) = method.return_type {
                         self.check_type_compatibility(return_type, &body_type, &method.span)?;
-                    }
+                        return_type.clone()
+                    } else {
+                        body_type
+                    };
 
                     self.env.pop_scope();
 
@@ -487,7 +534,7 @@ impl TypeChecker {
                         (decl.name.clone(), method.name.clone()),
                         (
                             method.params.clone(),
-                            method.return_type.clone(),
+                            Some(resolved_return_type),
                             method.body.clone(),
                         ),
                     );
@@ -509,6 +556,115 @@ impl TypeChecker {
             .define(decl.name.clone(), type_value, false, decl.span.clone())?;
 
         Ok(())
+    }
+
+    /// Populate `self.setter_methods` for `type_name`'s methods. A method is a
+    /// setter iff its body mutates the receiver: a direct `it.field := …`, or a
+    /// call to a sibling method on `it` that is itself a setter. Because setters
+    /// can call setters, this is iterated to a fixpoint over the method set.
+    fn infer_setter_methods(&mut self, type_name: &str, methods: &[crate::ast::MethodDecl]) {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for method in methods {
+                let key = (type_name.to_string(), method.name.clone());
+                if self.setter_methods.contains(&key) {
+                    continue;
+                }
+                if self.body_mutates_receiver(type_name, &method.body) {
+                    self.setter_methods.insert(key);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    /// Does `expr` (a method body) mutate the receiver `it`? True if it contains a
+    /// field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a call to a
+    /// sibling method already known to be a setter, applied to `it`.
+    fn body_mutates_receiver(&self, type_name: &str, expr: &Expr) -> bool {
+        match expr {
+            Expr::FieldAssign { target, value, .. } => {
+                Self::field_path_root_name(target).as_deref() == Some("it")
+                    || self.body_mutates_receiver(type_name, value)
+            }
+            Expr::Call { func, args, .. } => {
+                // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter
+                // applied to `it` propagates "mutating" to the caller.
+                if let Expr::Ident { name, .. } = func.as_ref()
+                    && args.first().is_some_and(
+                        |recv| matches!(recv, Expr::Ident { name, .. } if name == "it"),
+                    )
+                    && self
+                        .setter_methods
+                        .contains(&(type_name.to_string(), name.clone()))
+                {
+                    return true;
+                }
+                args.iter()
+                    .any(|a| self.body_mutates_receiver(type_name, a))
+            }
+            Expr::Block { stmts, .. } => stmts.iter().any(|s| match s {
+                crate::ast::Statement::Expr(e) => self.body_mutates_receiver(type_name, e),
+                crate::ast::Statement::Item(Item::VarDecl(d)) => {
+                    self.body_mutates_receiver(type_name, &d.value)
+                }
+                crate::ast::Statement::Item(_) => false,
+            }),
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                self.body_mutates_receiver(type_name, cond)
+                    || self.body_mutates_receiver(type_name, then)
+                    || self.body_mutates_receiver(type_name, else_)
+            }
+            Expr::Match { expr, arms, .. } => {
+                self.body_mutates_receiver(type_name, expr)
+                    || arms
+                        .iter()
+                        .any(|a| self.body_mutates_receiver(type_name, &a.body))
+            }
+            Expr::ForLoop {
+                collection, body, ..
+            } => {
+                self.body_mutates_receiver(type_name, collection)
+                    || self.body_mutates_receiver(type_name, body)
+            }
+            Expr::BinOp { left, right, .. } => {
+                self.body_mutates_receiver(type_name, left)
+                    || self.body_mutates_receiver(type_name, right)
+            }
+            Expr::UnaryOp { expr, .. } => self.body_mutates_receiver(type_name, expr),
+            Expr::Pipeline { left, right, .. } => {
+                self.body_mutates_receiver(type_name, left)
+                    || self.body_mutates_receiver(type_name, right)
+            }
+            _ => false,
+        }
+    }
+
+    /// The name of the variable at the root of a field-access path, if any:
+    /// `a.b.c` -> `Some("a")`. Returns `None` if the root isn't a plain ident.
+    fn field_path_root_name(target: &Expr) -> Option<String> {
+        match target {
+            Expr::FieldAccess { expr, .. } => Self::field_path_root_name(expr),
+            Expr::Ident { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// If a mutation rooted at `receiver` would write through an *immutable*
+    /// binding, return that binding's name; otherwise `None`. A `:=`-bound
+    /// receiver and the method receiver `it` (whose mutability is enforced at the
+    /// outer call site) are both allowed. Shared by the field-write and
+    /// setter-call mutability gates so they can never diverge.
+    fn immutable_mutation_root(&self, receiver: &Expr) -> Option<String> {
+        let name = Self::field_path_root_name(receiver)?;
+        if name != "it" && !self.env.is_mutable(&name) {
+            Some(name)
+        } else {
+            None
+        }
     }
 
     fn check_var_decl(&mut self, decl: &VarDecl) -> Result<(), TypeError> {
@@ -746,6 +902,34 @@ impl TypeChecker {
                         span: span.clone(),
                     }),
                 }
+            }
+
+            Expr::FieldAssign {
+                target,
+                value,
+                span,
+            } => {
+                // `obj.field := v`: the field's declared type must accept `v`, and the
+                // root binding of the path must be mutable (`:=`-bound) — writing a
+                // field of an immutable (`=`) instance is a compile error.
+                //
+                // Infer the target first so an undefined root variable / unknown field
+                // surfaces its own diagnostic, rather than being misreported as an
+                // immutable write (an unknown name reads as "not mutable").
+                let field_type = self.infer_expr(target)?;
+
+                if let Some(name) = self.immutable_mutation_root(target) {
+                    return Err(TypeError::ImmutableFieldWrite {
+                        name,
+                        span: span.clone(),
+                    });
+                }
+
+                let value_type = self.infer_expr(value)?;
+                self.check_type_compatibility(&field_type, &value_type, span)?;
+
+                // A field write is an effect; its value is the unit type `$`.
+                Ok(Type::Unit)
             }
 
             Expr::Index { expr, index, span } => {
@@ -1043,6 +1227,22 @@ impl TypeChecker {
                     .cloned()
                 {
                     let (method_params, method_return_type, _body) = method_sig;
+
+                    // A mutating (setter) method requires a mutable (`:=`) receiver.
+                    // The receiver is args[0]; `it` (a method calling a sibling
+                    // setter on its own receiver) is allowed — its mutability is
+                    // already enforced at the *outer* call site.
+                    if self
+                        .setter_methods
+                        .contains(&(type_name.clone(), name.clone()))
+                        && let Some(recv_name) = self.immutable_mutation_root(&args[0])
+                    {
+                        return Err(TypeError::MutatingMethodOnImmutable {
+                            method: name.clone(),
+                            receiver: recv_name,
+                            span: span.clone(),
+                        });
+                    }
 
                     // Method parameters don't include the implicit receiver
                     // But args[0] is the receiver, so we need args[1..] to match method_params
