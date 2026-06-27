@@ -55,6 +55,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("sum_types.ql", 42),
     ("use_module.ql", 5),
     ("unit.ql", 0),
+    ("closures.ql", 42),
 ];
 
 fn ql_files() -> Vec<PathBuf> {

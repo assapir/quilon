@@ -229,6 +229,47 @@ factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.ql`, `examples/fibonacci.ql`.)
 
+### Closures — capture by `=` (value) vs `:=` (reference)
+
+A function written **inside** another function's body is a **closure**: it can read the
+enclosing locals it refers to. How each captured name is captured is decided **by the
+operator that bound it** — there is no capture list and no marker, mirroring the
+mutability rule for [variables](#variables) and [records](#mutation-in-place-field-writes--setters):
+
+- a name bound with **`=`** is captured **by value** — a frozen, read-only snapshot taken
+  when the closure is created;
+- a name bound with **`:=`** is captured **by reference** — a single shared, mutable cell.
+  Writes through it (from inside the closure or from the enclosing code) are visible to
+  everyone sharing it, and the cell survives even if the closure outlives the frame that
+  created it.
+
+```quilon
+^ = () -> Num => <
+  total := 0                 ~ `:=` -> captured BY REFERENCE
+  bump = n => <
+    total := total + n       ~ writes the SHARED cell; the effect persists across calls
+    total
+  >
+  bump(10)                   ~ total -> 10
+  bump(20)                   ~ total -> 30  (same cell)
+
+  base = 7                   ~ `=`  -> captured BY VALUE (a frozen copy)
+  addBase = x => x + base
+
+  total + addBase(5)         ~ 30 + 12 = 42
+>
+```
+
+A non-capturing nested function may **recurse** (`fact = n => … fact(n-1) …`); nested
+closures may capture from any enclosing frame (the shared `:=` cell is threaded through
+every level), and a closure value may itself be captured by another closure and called.
+
+Closures are **monomorphic** in this milestone: parameters and captured values are
+concrete-typed (the capture rule needs no type variables). Capturing a polymorphic value,
+generic closures, passing a closure as a function **parameter**, and returning a closure
+from a function (higher-order across frames) are deferred — see
+[Known limitations](#known-limitations). (See `examples/closures.ql`.)
+
 ---
 
 ## Expressions
@@ -396,6 +437,7 @@ message instead. Any compile error exits with status 1.
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
+| Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
@@ -407,7 +449,7 @@ message instead. Any compile error exits with status 1.
 | Conservative GC (Boehm) | ✅ |
 | `Text` in records/arrays, or as a sum-type payload (`Ok(text)`) | 🚧 |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
-| Generics, closures, `while` loops | ❌ |
+| Generics, `while` loops; generic / closure-returning closures | ❌ |
 | Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
 
 ---
@@ -419,7 +461,8 @@ message instead. Any compile error exits with status 1.
 - **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
-- **No generics, closures, or `while` loops.** The module system is minimal (`core.io` built-in + file-path imports).
+- **No generics or `while` loops.** The module system is minimal (`core.io` built-in + file-path imports).
+- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across multiple nesting levels, and capturing-then-calling another closure. Deferred to a later milestone (they need the closure's type threaded through inference / defunctionalization): capturing a *polymorphic* value, *generic* closures, passing a closure **as a function parameter**, and **returning a closure from a function**. A closure used in an unsupported position is rejected at compile time (e.g. an unannotated function parameter that is called reports `Not a function`), never miscompiled.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
 - `argv` is a placeholder (0); full `[]Text` conversion is planned.
 

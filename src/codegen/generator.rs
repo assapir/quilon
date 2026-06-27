@@ -26,6 +26,29 @@ fn zeroed(ty: BasicTypeEnum<'_>) -> BasicValueEnum<'_> {
     }
 }
 
+/// A closure's call ABI: its source-parameter LLVM types and its return type. The
+/// implicit trailing environment pointer is NOT included (every closure call appends it).
+/// Recovered at a call site because a closure value (`{ ptr fn, ptr env }`) does not
+/// encode its callee signature.
+type ClosureSig<'ctx> = (Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>);
+
+/// One captured free variable of a closure, resolved at the lambda site.
+/// `slot` is the variable's storage in the enclosing frame — for a by-value (`=`)
+/// capture it is the source slot we snapshot from; for a by-reference (`:=`) capture it
+/// IS the shared GC cell pointer we store into the environment. `value_ty` is the
+/// captured value's LLVM type.
+struct Capture<'ctx> {
+    name: String,
+    slot: PointerValue<'ctx>,
+    value_ty: BasicTypeEnum<'ctx>,
+    by_ref: bool,
+    /// If the captured value is itself a closure, its recorded signature
+    /// (param types, return type) so the lifted body can re-register it and call it. A
+    /// closure value is an opaque `{ ptr, ptr }` struct that does not encode its callee
+    /// signature, and the lifted body starts with a cleared `closure_sigs`.
+    closure_sig: Option<ClosureSig<'ctx>>,
+}
+
 pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -51,6 +74,23 @@ pub struct CodeGenerator<'ctx> {
     // payloads are sized per-value at construction — see `register_builtin_sum_types`).
     sum_layouts: HashMap<String, Vec<BasicTypeEnum<'ctx>>>,
     current_function: Option<FunctionValue<'ctx>>,
+    // Names of `:=` (mutable) locals in the CURRENT function that are captured by
+    // reference by some nested closure. These are allocated as heap GC cells (boxes)
+    // rather than plain stack allocas, so a closure capturing one shares the very same
+    // cell — writes from either side are visible to the other and survive the closure
+    // escaping its defining frame. Their `variables` entry stores the cell pointer
+    // directly; since a load/store of `value_type` works through any pointer, ordinary
+    // reads/writes need no special-casing. Recomputed on entry to each function body.
+    boxed_vars: std::collections::HashSet<String>,
+    // Monotonic counter for naming the lifted top-level function of each lambda
+    // (`__lambda_0`, `__lambda_1`, …). Lambdas have no source name of their own.
+    lambda_counter: usize,
+    // Signature of each local variable currently bound to a closure value:
+    // (source-parameter LLVM types, return LLVM type). A closure value is an opaque
+    // `{ ptr fn, ptr env }` struct that does not encode its callee signature, so calling
+    // one needs the signature recovered here (recorded when the lambda is bound). The
+    // trailing env-pointer parameter is implicit and not stored. Cleared per function.
+    closure_sigs: HashMap<String, ClosureSig<'ctx>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -69,6 +109,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             sum_variants: HashMap::new(),
             sum_layouts: HashMap::new(),
             current_function: None,
+            boxed_vars: std::collections::HashSet::new(),
+            lambda_counter: 0,
+            closure_sigs: HashMap::new(),
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -109,8 +152,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Generate code for all top-level items
+        // Generate code for all top-level items. Reset the current-function context
+        // before each one: a top-level item is never nested, so codegen must not see a
+        // stale function left over from the previous top-level decl (which would make it
+        // look like a nested/local declaration).
         for item in &program.items {
+            self.current_function = None;
             self.generate_item(item)?;
         }
 
@@ -285,11 +332,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 // Unannotated return type defaults to Num, except a setter body whose
                 // tail is an in-place field write (`it.field := v`) yields `$` (i8).
-                let inferred_ret = match &method.return_type {
-                    Some(t) => t.clone(),
-                    None if self.expr_is_unit(&method.body) => Type::Unit,
-                    None => Type::Num,
-                };
+                let inferred_ret =
+                    self.default_return_type(method.return_type.as_ref(), &method.body);
                 let return_type = self.type_to_llvm(&inferred_ret)?;
                 let fn_type = return_type.fn_type(&param_types, false);
                 let method_fn = self.module.add_function(&mangled, fn_type, None);
@@ -328,6 +372,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         self.variables.clear();
+        self.closure_sigs.clear();
+        self.boxed_vars = self.compute_boxed_vars(&method.body);
 
         // Param 0 is the implicit receiver `it` (a pointer to the record struct).
         let it_param = function.get_nth_param(0).unwrap();
@@ -387,17 +433,51 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.var_named_types
                 .insert(decl.name.clone(), type_name.clone());
         }
+        // Binding a function literal: remember its signature so a later `name(args)` can
+        // recover the callee type for the indirect closure call (the closure value itself
+        // does not encode it).
+        if let Expr::Lambda {
+            params,
+            return_type,
+            body,
+            ..
+        } = &decl.value
+        {
+            let sig = self.closure_signature(params, return_type.as_ref(), body)?;
+            self.closure_sigs.insert(decl.name.clone(), sig);
+        }
 
         let value = self.generate_expr(&decl.value)?;
 
         if self.current_function.is_some() {
-            // Local variable - use alloca
             let var_type = value.get_type();
-            let alloca = self.create_entry_block_alloca(&decl.name, var_type)?;
+
+            // Reassignment of an already-bound mutable local (`counter := counter + 1`):
+            // store THROUGH the existing slot rather than allocating a fresh one. This is
+            // what makes a `:=` capture escape-safe — the cell a closure shares is the
+            // very cell later writes target — and it is equivalent to the old realloc for
+            // ordinary straight-line code (reads always go through the latest slot).
+            if decl.mutable
+                && let Some((slot, _)) = self.variables.get(&decl.name).copied()
+            {
+                self.builder
+                    .build_store(slot, value)
+                    .map_err(|e| format!("Failed to build store: {:?}", e))?;
+                return Ok(());
+            }
+
+            // A `:=` local captured by reference by some nested closure lives in a heap
+            // GC cell (a "box"), so the closure and this frame share one mutable cell. Its
+            // `variables` slot is the cell pointer; loads/stores work through it unchanged.
+            let slot = if decl.mutable && self.boxed_vars.contains(&decl.name) {
+                self.alloc_box(var_type)?
+            } else {
+                self.create_entry_block_alloca(&decl.name, var_type)?
+            };
             self.builder
-                .build_store(alloca, value)
+                .build_store(slot, value)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
-            self.variables.insert(decl.name.clone(), (alloca, var_type));
+            self.variables.insert(decl.name.clone(), (slot, var_type));
         } else {
             // Global variable
             let global =
@@ -410,6 +490,50 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), String> {
+        // A function declared INSIDE another function (we are mid-emitting a body) is a
+        // local declaration. If its body references enclosing locals it is a capturing
+        // CLOSURE (lowered via the lambda machinery); otherwise it is a self-contained
+        // local function, which we emit as a plain module function — that preserves
+        // recursion (`fact = n => … fact(n-1) …`), since a closure value cannot refer to
+        // itself before it exists. The choice is by ACTUAL captures, not syntax.
+        if self.current_function.is_some() {
+            let param_names: Vec<String> = decl.params.iter().map(|p| p.name.clone()).collect();
+            let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
+            let captures =
+                crate::ast::captures::lambda_free_idents(&param_names, &decl.body, &outer);
+            if !captures.is_empty() {
+                return self.generate_local_closure(decl);
+            }
+            // No captures: emit a plain module function, but save/restore the enclosing
+            // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/builder state)
+            // around it, since `emit_module_function` clears and repopulates them.
+            let saved_block = self.builder.get_insert_block();
+            let saved_function = self.current_function;
+            let saved_vars = std::mem::take(&mut self.variables);
+            let saved_boxed = std::mem::take(&mut self.boxed_vars);
+            let saved_sigs = std::mem::take(&mut self.closure_sigs);
+
+            let result = self.emit_module_function(decl);
+
+            self.variables = saved_vars;
+            self.boxed_vars = saved_boxed;
+            self.closure_sigs = saved_sigs;
+            self.current_function = saved_function;
+            if let Some(block) = saved_block {
+                self.builder.position_at_end(block);
+            }
+            return result;
+        }
+
+        self.emit_module_function(decl)
+    }
+
+    /// Emit `decl` as a top-level/module function (internal linkage). Clears and
+    /// repopulates the per-function emission state (`variables`, `closure_sigs`,
+    /// `boxed_vars`); the entry point `^` gets the special f64-return / implicit-0
+    /// treatment. Used for true top-level functions and for non-capturing nested
+    /// functions (which can recurse, unlike a closure value).
+    fn emit_module_function(&mut self, decl: &FunctionDecl) -> Result<(), String> {
         // Convert parameter types to LLVM types
         let param_types: Vec<BasicTypeEnum> = decl
             .params
@@ -426,11 +550,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // An unannotated body defaults to `Num`, except a Unit (`$`) tail — e.g.
             // `log = m => print(m)` — which must be `i8`, not f64, or `build_return`
             // would emit `ret i8` into an f64 function and fail module verification.
-            let inferred = match &decl.return_type {
-                Some(t) => t.clone(),
-                None if self.expr_is_unit(&decl.body) => Type::Unit,
-                None => Type::Num,
-            };
+            let inferred = self.default_return_type(decl.return_type.as_ref(), &decl.body);
             self.type_to_llvm(&inferred)?
         };
 
@@ -458,6 +578,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Store parameters in variables map
         self.variables.clear();
+        self.closure_sigs.clear();
+        // Which `:=` locals must be heap-boxed because a nested closure captures them.
+        self.boxed_vars = self.compute_boxed_vars(&decl.body);
         for (i, param) in decl.params.iter().enumerate() {
             let llvm_param = function.get_nth_param(i as u32).unwrap();
             llvm_param.set_name(&param.name);
@@ -493,6 +616,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Bind a capturing nested function as a local closure value: lower it via the lambda
+    /// machinery (capturing enclosing locals per the `=`/`:=` rule) and store the
+    /// resulting `{ ptr fn, ptr env }` in a local slot, recording its signature so
+    /// `name(args)` resolves to an indirect closure call.
+    fn generate_local_closure(&mut self, decl: &FunctionDecl) -> Result<(), String> {
+        let sig = self.closure_signature(&decl.params, decl.return_type.as_ref(), &decl.body)?;
+        self.closure_sigs.insert(decl.name.clone(), sig);
+
+        let closure = self.generate_lambda(&decl.params, decl.return_type.as_ref(), &decl.body)?;
+        let slot = self.create_entry_block_alloca(&decl.name, closure.get_type())?;
+        self.builder
+            .build_store(slot, closure)
+            .map_err(|e| format!("Failed to store closure: {:?}", e))?;
+        self.variables
+            .insert(decl.name.clone(), (slot, closure.get_type()));
+        Ok(())
+    }
+
     fn create_entry_block_alloca(
         &self,
         name: &str,
@@ -513,6 +654,510 @@ impl<'ctx> CodeGenerator<'ctx> {
         builder
             .build_alloca(ty, name)
             .map_err(|e| format!("Failed to build alloca: {:?}", e))
+    }
+
+    // ---- Closures (M3) -----------------------------------------------------------------
+    //
+    // A closure value is a flat `{ ptr fn, ptr env }` struct: a pointer to the lifted
+    // top-level function, and a pointer to its heap-allocated environment of captured
+    // values. The lifted function takes the captured environment as an extra TRAILING
+    // pointer parameter (after the source parameters), so calling through a closure is a
+    // plain indirect call passing `env` last. Closures are monomorphic (M3): captured
+    // values and parameters are concrete-typed; generic closures are M4.
+
+    /// The uniform closure representation: `{ ptr fn, ptr env }`.
+    fn closure_struct_type(&self) -> inkwell::types::StructType<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        self.context.struct_type(&[ptr.into(), ptr.into()], false)
+    }
+
+    /// Allocate a GC-managed heap cell large enough to hold one `ty` value and return the
+    /// pointer to it. Used to "box" a `:=` local captured by reference, so the cell
+    /// outlives the defining frame and is shared with the closure.
+    fn alloc_box(&self, ty: BasicTypeEnum<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let size = ty
+            .size_of()
+            .ok_or_else(|| format!("cannot size box for type {:?}", ty))?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        Ok(self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "box")
+            .map_err(|e| format!("Failed to call __alloc for box: {:?}", e))?
+            .as_any_value_enum()
+            .into_pointer_value())
+    }
+
+    /// The `:=` (mutable) locals of the function body `body` that some nested closure
+    /// captures by reference, and so must be heap-boxed. A captured `=` local is copied
+    /// by value into the closure's environment and needs no box; only a captured mutable
+    /// local must share a single cell with the closure. Computed by collecting the
+    /// function's `:=` binding names and intersecting with the union of every nested
+    /// lambda's free variables.
+    fn compute_boxed_vars(&self, body: &Expr) -> std::collections::HashSet<String> {
+        let mut mutable_locals = std::collections::HashSet::new();
+        Self::collect_mutable_locals(body, &mut mutable_locals);
+
+        // Find which of those mutable locals a nested closure captures. Passing the
+        // mutable-local set as the lambdas' `outer` scope means a closure's captures are
+        // already restricted to (and recognize reassignments of) exactly these names.
+        let mut captured = std::collections::HashSet::new();
+        Self::collect_lambda_captures(body, &mutable_locals, &mut captured);
+        captured
+    }
+
+    /// Collect the names of all `:=` (mutable) `VarDecl`s bound in THIS function frame —
+    /// i.e. in `expr` and its nested control-flow, but NOT inside a nested lambda body (a
+    /// lambda's own `:=` locals live in the lambda's frame, not ours).
+    fn collect_mutable_locals(expr: &Expr, out: &mut std::collections::HashSet<String>) {
+        match expr {
+            // A nested function literal opens its own frame — do not descend.
+            Expr::Lambda { .. } => {}
+            Expr::Block { stmts, .. } => {
+                for stmt in stmts {
+                    match stmt {
+                        crate::ast::Statement::Expr(e) => Self::collect_mutable_locals(e, out),
+                        crate::ast::Statement::Item(Item::VarDecl(decl)) => {
+                            if decl.mutable {
+                                out.insert(decl.name.clone());
+                            }
+                            Self::collect_mutable_locals(&decl.value, out);
+                        }
+                        crate::ast::Statement::Item(_) => {}
+                    }
+                }
+            }
+            Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
+                Self::collect_mutable_locals(left, out);
+                Self::collect_mutable_locals(right, out);
+            }
+            Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
+                Self::collect_mutable_locals(expr, out)
+            }
+            Expr::Call { func, args, .. } => {
+                Self::collect_mutable_locals(func, out);
+                for a in args {
+                    Self::collect_mutable_locals(a, out);
+                }
+            }
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                Self::collect_mutable_locals(cond, out);
+                Self::collect_mutable_locals(then, out);
+                Self::collect_mutable_locals(else_, out);
+            }
+            Expr::Match { expr, arms, .. } => {
+                Self::collect_mutable_locals(expr, out);
+                for arm in arms {
+                    Self::collect_mutable_locals(&arm.body, out);
+                }
+            }
+            Expr::FieldAssign { target, value, .. } => {
+                Self::collect_mutable_locals(target, out);
+                Self::collect_mutable_locals(value, out);
+            }
+            Expr::Index { expr, index, .. } => {
+                Self::collect_mutable_locals(expr, out);
+                Self::collect_mutable_locals(index, out);
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::collect_mutable_locals(e, out);
+                }
+            }
+            Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+                for (_, e) in fields {
+                    Self::collect_mutable_locals(e, out);
+                }
+            }
+            Expr::SumConstructor { args, .. } => {
+                for a in args {
+                    Self::collect_mutable_locals(a, out);
+                }
+            }
+            Expr::ForLoop {
+                collection, body, ..
+            } => {
+                Self::collect_mutable_locals(collection, out);
+                Self::collect_mutable_locals(body, out);
+            }
+            Expr::Number { .. }
+            | Expr::String { .. }
+            | Expr::Bool { .. }
+            | Expr::Unit { .. }
+            | Expr::Ident { .. } => {}
+        }
+    }
+
+    /// Union, over every lambda appearing (at any depth) in `expr`, of the names it
+    /// captures from `outer`. Used to find which of the enclosing frame's mutable locals
+    /// a closure shares (and so must be heap-boxed).
+    fn collect_lambda_captures(
+        expr: &Expr,
+        outer: &std::collections::HashSet<String>,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        Self::for_each_closure(expr, &mut |params, body| {
+            let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            for name in crate::ast::captures::lambda_free_idents(&names, body, outer) {
+                out.insert(name);
+            }
+        });
+    }
+
+    /// Invoke `f(params, body)` for every closure appearing (at any depth) in `expr` — a
+    /// `Expr::Lambda` OR a nested `Item::FunctionDecl` (both are closures; the latter is
+    /// only resolved to a plain function at codegen when it captures nothing). Used to
+    /// gather captures across all closures in a frame.
+    fn for_each_closure(expr: &Expr, f: &mut impl FnMut(&[crate::ast::Param], &Expr)) {
+        Self::walk_exprs(expr, &mut |e| match e {
+            Expr::Lambda { params, body, .. } => f(params, body),
+            Expr::Block { stmts, .. } => {
+                for stmt in stmts {
+                    if let crate::ast::Statement::Item(Item::FunctionDecl(decl)) = stmt {
+                        f(&decl.params, &decl.body);
+                        // The function body is an expression position `walk_exprs` does
+                        // not enter (it only descends VarDecl initializers), so recurse to
+                        // find closures nested inside this nested function too.
+                        Self::for_each_closure(&decl.body, f);
+                    }
+                }
+            }
+            _ => {}
+        });
+    }
+
+    /// Pre-order walk over every sub-expression of `expr`, invoking `f` on each. Used by
+    /// the closure pre-passes above. Does not descend into nested item declarations'
+    /// signatures (only expression positions), which is all closure analysis needs.
+    fn walk_exprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+        f(expr);
+        match expr {
+            Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
+                Self::walk_exprs(left, f);
+                Self::walk_exprs(right, f);
+            }
+            Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
+                Self::walk_exprs(expr, f)
+            }
+            Expr::Call { func, args, .. } => {
+                Self::walk_exprs(func, f);
+                for a in args {
+                    Self::walk_exprs(a, f);
+                }
+            }
+            Expr::Lambda { body, .. } => Self::walk_exprs(body, f),
+            Expr::Block { stmts, .. } => {
+                for stmt in stmts {
+                    match stmt {
+                        crate::ast::Statement::Expr(e) => Self::walk_exprs(e, f),
+                        crate::ast::Statement::Item(Item::VarDecl(d)) => {
+                            Self::walk_exprs(&d.value, f)
+                        }
+                        crate::ast::Statement::Item(_) => {}
+                    }
+                }
+            }
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                Self::walk_exprs(cond, f);
+                Self::walk_exprs(then, f);
+                Self::walk_exprs(else_, f);
+            }
+            Expr::Match { expr, arms, .. } => {
+                Self::walk_exprs(expr, f);
+                for arm in arms {
+                    Self::walk_exprs(&arm.body, f);
+                }
+            }
+            Expr::FieldAssign { target, value, .. } => {
+                Self::walk_exprs(target, f);
+                Self::walk_exprs(value, f);
+            }
+            Expr::Index { expr, index, .. } => {
+                Self::walk_exprs(expr, f);
+                Self::walk_exprs(index, f);
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::walk_exprs(e, f);
+                }
+            }
+            Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+                for (_, e) in fields {
+                    Self::walk_exprs(e, f);
+                }
+            }
+            Expr::SumConstructor { args, .. } => {
+                for a in args {
+                    Self::walk_exprs(a, f);
+                }
+            }
+            Expr::ForLoop {
+                collection, body, ..
+            } => {
+                Self::walk_exprs(collection, f);
+                Self::walk_exprs(body, f);
+            }
+            Expr::Number { .. }
+            | Expr::String { .. }
+            | Expr::Bool { .. }
+            | Expr::Unit { .. }
+            | Expr::Ident { .. } => {}
+        }
+    }
+
+    /// The default return TYPE codegen assigns a function with the given (possibly
+    /// missing) return annotation and body: the annotation if present, else `$` (Unit)
+    /// for a Unit-tailed body, else `Num`. Codegen lacks the checker's full inference, so
+    /// this picks the LLVM-level return type for an unannotated function/lambda/method.
+    /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
+    fn default_return_type(&self, return_type: Option<&Type>, body: &Expr) -> Type {
+        match return_type {
+            Some(t) => t.clone(),
+            None if self.expr_is_unit(body) => Type::Unit,
+            None => Type::Num,
+        }
+    }
+
+    /// The LLVM signature of a function literal: (source-parameter types, return type).
+    /// Mirrors the type rules used when emitting the lifted function, but without the
+    /// trailing env pointer (which is implicit to every closure call).
+    fn closure_signature(
+        &self,
+        params: &[crate::ast::Param],
+        return_type: Option<&Type>,
+        body: &Expr,
+    ) -> Result<ClosureSig<'ctx>, String> {
+        let param_types: Vec<BasicTypeEnum> = params
+            .iter()
+            .map(|p| self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = self.default_return_type(return_type, body);
+        Ok((param_types, self.type_to_llvm(&ret)?))
+    }
+
+    /// Lower a function literal to a value: lift its body into a fresh top-level function
+    /// taking the captured environment as a trailing `ptr` parameter, build and populate
+    /// that environment on the heap, and return the `{ ptr fn, ptr env }` closure struct.
+    ///
+    /// Capture rule, inferred from each captured name's binding operator:
+    ///   `=`  binding -> captured BY VALUE: a snapshot is copied into the env (read-only).
+    ///   `:=` binding -> captured BY REFERENCE: the env holds the pointer to the shared
+    ///                   GC cell (the box), so reads see — and writes escape to — the one
+    ///                   cell, surviving the closure outliving its defining frame.
+    fn generate_lambda(
+        &mut self,
+        params: &[crate::ast::Param],
+        return_type: Option<&Type>,
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // 1. Determine the captured names: a lambda free variable that is actually a
+        //    binding in the current frame. A by-reference capture is one whose name is in
+        //    the current `boxed_vars` (its storage is a shared cell); the rest are by-value.
+        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
+        let free = crate::ast::captures::lambda_free_idents(&param_names, body, &outer);
+        let mut captures: Vec<Capture<'ctx>> = Vec::new();
+        for name in free {
+            // Only names with a live local slot are captured; a free name that resolves to
+            // a top-level function/global is referenced directly inside the lifted body
+            // (it has module scope) and needs no capture.
+            if let Some((slot, value_ty)) = self.variables.get(&name).copied() {
+                let by_ref = self.boxed_vars.contains(&name);
+                let closure_sig = self.closure_sigs.get(&name).cloned();
+                captures.push(Capture {
+                    name,
+                    slot,
+                    value_ty,
+                    by_ref,
+                    closure_sig,
+                });
+            }
+        }
+
+        // 2. Build the environment struct type. A by-value capture stores the value; a
+        //    by-reference capture stores the cell pointer (`ptr`).
+        let env_field_types: Vec<BasicTypeEnum> = captures
+            .iter()
+            .map(|c| if c.by_ref { ptr_ty.into() } else { c.value_ty })
+            .collect();
+        let env_struct_ty = self.context.struct_type(&env_field_types, false);
+
+        // 3. Allocate and populate the environment on the GC heap (so it survives the
+        //    closure escaping). For a by-value capture, snapshot the current value; for a
+        //    by-reference capture, store the shared cell pointer itself.
+        let env_ptr = if captures.is_empty() {
+            ptr_ty.const_null()
+        } else {
+            let env = self.alloc_box(env_struct_ty.into())?;
+            for (i, cap) in captures.iter().enumerate() {
+                let field = self
+                    .builder
+                    .build_struct_gep(env_struct_ty, env, i as u32, "env_field")
+                    .map_err(|e| format!("Failed to GEP env field: {:?}", e))?;
+                let stored: BasicValueEnum = if cap.by_ref {
+                    cap.slot.into()
+                } else {
+                    self.builder
+                        .build_load(cap.value_ty, cap.slot, &cap.name)
+                        .map_err(|e| format!("Failed to load capture: {:?}", e))?
+                };
+                self.builder
+                    .build_store(field, stored)
+                    .map_err(|e| format!("Failed to store capture: {:?}", e))?;
+            }
+            env
+        };
+
+        // 4. Emit the lifted top-level function `__lambda_N(params..., ptr env)`.
+        let fn_value =
+            self.emit_lambda_function(params, return_type, body, &captures, env_struct_ty)?;
+
+        // 5. Assemble the closure value `{ fn_ptr, env_ptr }`.
+        let closure_ty = self.closure_struct_type();
+        let fn_ptr = fn_value.as_global_value().as_pointer_value();
+        let with_fn = self
+            .builder
+            .build_insert_value(closure_ty.get_undef(), fn_ptr, 0, "clo_fn")
+            .map_err(|e| format!("Failed to insert closure fn: {:?}", e))?
+            .into_struct_value();
+        let closure = self
+            .builder
+            .build_insert_value(with_fn, env_ptr, 1, "clo_env")
+            .map_err(|e| format!("Failed to insert closure env: {:?}", e))?
+            .into_struct_value();
+        Ok(closure.into())
+    }
+
+    /// Emit the lifted top-level function for a lambda: its source parameters followed by
+    /// a trailing `ptr env`. Inside, parameters are bound normally and each captured name
+    /// is re-bound from the environment — a by-value capture is copied into a local slot,
+    /// a by-reference capture re-uses the shared cell pointer directly (so writes escape).
+    /// Saves and restores the enclosing codegen state (current function, variable scope,
+    /// boxed set, builder position) around the nested emission.
+    fn emit_lambda_function(
+        &mut self,
+        params: &[crate::ast::Param],
+        return_type: Option<&Type>,
+        body: &Expr,
+        captures: &[Capture<'ctx>],
+        env_struct_ty: inkwell::types::StructType<'ctx>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // Same (param types, return type) the call site reconstructs, plus the trailing
+        // env pointer — keeping the emitted function and the indirect-call type in lockstep.
+        let (mut param_types, ret_ty) = self.closure_signature(params, return_type, body)?;
+        param_types.push(ptr_ty.into()); // trailing env pointer
+
+        let fn_type = ret_ty.fn_type(
+            &param_types
+                .iter()
+                .map(|t| (*t).into())
+                .collect::<Vec<inkwell::types::BasicMetadataTypeEnum>>(),
+            false,
+        );
+
+        let name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+        let function = self.module.add_function(&name, fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
+
+        // Save enclosing emission state — we are about to emit a DIFFERENT function body.
+        let saved_block = self.builder.get_insert_block();
+        let saved_function = self.current_function;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_boxed = std::mem::take(&mut self.boxed_vars);
+        let saved_sigs = std::mem::take(&mut self.closure_sigs);
+        // The lifted body has its own frame: recompute which of ITS `:=` locals are boxed.
+        self.boxed_vars = self.compute_boxed_vars(body);
+        // A by-reference capture is ALSO a shared cell in this frame: mark it boxed so a
+        // FURTHER nested closure capturing the same name captures it by reference too
+        // (sharing the one cell across all nesting levels). Without this, a `:=` value
+        // mutated through two levels of closures would be silently snapshotted by value.
+        for cap in captures.iter().filter(|c| c.by_ref) {
+            self.boxed_vars.insert(cap.name.clone());
+        }
+        self.current_function = Some(function);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Bind source parameters (indices 0..n); the env pointer is the last parameter.
+        for (i, param) in params.iter().enumerate() {
+            let llvm_param = function.get_nth_param(i as u32).unwrap();
+            llvm_param.set_name(&param.name);
+            let pty = llvm_param.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&param.name, pty)?;
+            self.builder
+                .build_store(alloca, llvm_param)
+                .map_err(|e| format!("Failed to store param: {:?}", e))?;
+            self.variables.insert(param.name.clone(), (alloca, pty));
+        }
+
+        // Re-bind captures from the environment pointer (the trailing parameter).
+        if !captures.is_empty() {
+            let env_ptr = function
+                .get_nth_param(params.len() as u32)
+                .unwrap()
+                .into_pointer_value();
+            for (i, cap) in captures.iter().enumerate() {
+                let field = self
+                    .builder
+                    .build_struct_gep(env_struct_ty, env_ptr, i as u32, "cap_field")
+                    .map_err(|e| format!("Failed to GEP capture field: {:?}", e))?;
+                if cap.by_ref {
+                    // The field holds the shared cell pointer; load it and bind the name
+                    // to that cell so reads/writes inside the closure hit the one cell.
+                    let cell = self
+                        .builder
+                        .build_load(ptr_ty, field, &cap.name)
+                        .map_err(|e| format!("Failed to load cell ptr: {:?}", e))?
+                        .into_pointer_value();
+                    self.variables
+                        .insert(cap.name.clone(), (cell, cap.value_ty));
+                } else {
+                    // By-value capture: copy the snapshot into a fresh local slot.
+                    let val = self
+                        .builder
+                        .build_load(cap.value_ty, field, &cap.name)
+                        .map_err(|e| format!("Failed to load capture value: {:?}", e))?;
+                    let alloca = self.create_entry_block_alloca(&cap.name, cap.value_ty)?;
+                    self.builder
+                        .build_store(alloca, val)
+                        .map_err(|e| format!("Failed to store capture value: {:?}", e))?;
+                    self.variables
+                        .insert(cap.name.clone(), (alloca, cap.value_ty));
+                }
+                // If the captured value is itself a closure, re-register its signature so
+                // a `name(args)` inside this lifted body resolves to an indirect call (the
+                // lifted body began with a cleared `closure_sigs`).
+                if let Some(sig) = &cap.closure_sig {
+                    self.closure_sigs.insert(cap.name.clone(), sig.clone());
+                }
+            }
+        }
+
+        let body_value = self.generate_expr(body)?;
+        self.builder
+            .build_return(Some(&body_value))
+            .map_err(|e| format!("Failed to build closure return: {:?}", e))?;
+
+        // Restore the enclosing emission state.
+        self.variables = saved_vars;
+        self.boxed_vars = saved_boxed;
+        self.closure_sigs = saved_sigs;
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+
+        Ok(function)
     }
 
     fn generate_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
@@ -594,6 +1239,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::UnaryOp { op, expr, .. } => self.generate_unary_op(*op, expr),
 
             Expr::Call { func, args, .. } => self.generate_call(func, args),
+
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => self.generate_lambda(params, return_type.as_ref(), body),
 
             Expr::If {
                 cond, then, else_, ..
@@ -1049,6 +1701,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_sum_constructor(tag, &type_name, args);
         }
 
+        // A local variable bound to a closure value: call it indirectly, passing the
+        // captured environment as the trailing argument. Recognized by the variable's
+        // recorded closure signature (see `closure_sigs`).
+        if let Some((param_tys, ret_ty)) = self.closure_sigs.get(func_name.as_str()).cloned()
+            && self.variables.contains_key(func_name.as_str())
+        {
+            return self.generate_closure_call(func_name, &param_tys, ret_ty, args);
+        }
+
         // Get the function from the module. If there is no plain top-level function with this
         // name, it may be a method call: the parser desugars `recv.method(a, b)` to
         // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
@@ -1082,22 +1743,86 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(function, &arg_metadata, "calltmp")
             .map_err(|e| format!("Failed to build call: {:?}", e))?;
 
-        // In Inkwell 0.8, try_as_basic_value returns a special ValueKind enum
-        // We need to pattern match on it, but since it's an opaque type,
-        // let's just use into_basic_value which works for functions that return values
-        // For now, we'll unsafely assume all functions return values
-        use inkwell::values::AnyValue;
-        let any_val = call_site.as_any_value_enum();
+        Self::call_result_to_basic(call_site)
+    }
 
-        // Convert AnyValueEnum to BasicValueEnum
-        match any_val {
+    /// Call a closure value held in local variable `var_name`: extract the function and
+    /// environment pointers from its `{ ptr fn, ptr env }` struct and emit an indirect
+    /// call passing the source arguments followed by the environment pointer. `param_tys`
+    /// / `ret_ty` are the closure's recorded signature (excluding the implicit env param).
+    fn generate_closure_call(
+        &mut self,
+        var_name: &str,
+        param_tys: &[BasicTypeEnum<'ctx>],
+        ret_ty: BasicTypeEnum<'ctx>,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != param_tys.len() {
+            return Err(format!(
+                "closure `{}` expects {} argument(s), got {}",
+                var_name,
+                param_tys.len(),
+                args.len()
+            ));
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let closure_ty = self.closure_struct_type();
+
+        // Load the closure struct from its slot, then split out fn and env pointers.
+        let (slot, _) = *self.variables.get(var_name).expect("closure var bound");
+        let closure_val = self
+            .builder
+            .build_load(closure_ty, slot, var_name)
+            .map_err(|e| format!("Failed to load closure: {:?}", e))?
+            .into_struct_value();
+        let fn_ptr = self
+            .builder
+            .build_extract_value(closure_val, 0, "clo_fn")
+            .map_err(|e| format!("Failed to extract closure fn: {:?}", e))?
+            .into_pointer_value();
+        let env_ptr = self
+            .builder
+            .build_extract_value(closure_val, 1, "clo_env")
+            .map_err(|e| format!("Failed to extract closure env: {:?}", e))?
+            .into_pointer_value();
+
+        // Evaluate arguments, then append the environment pointer.
+        let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+            Vec::with_capacity(args.len() + 1);
+        for arg in args {
+            call_args.push(self.generate_expr(arg)?.into());
+        }
+        call_args.push(env_ptr.into());
+
+        // Reconstruct the callee function type: source params + trailing env ptr -> ret.
+        let mut metadata_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            param_tys.iter().map(|t| (*t).into()).collect();
+        metadata_params.push(ptr_ty.into());
+        let fn_type = ret_ty.fn_type(&metadata_params, false);
+
+        let call = self
+            .builder
+            .build_indirect_call(fn_type, fn_ptr, &call_args, "clo_call")
+            .map_err(|e| format!("Failed to build indirect call: {:?}", e))?;
+
+        Self::call_result_to_basic(call)
+    }
+
+    /// Convert a call site's result to a `BasicValueEnum`, erroring if the callee returns
+    /// a non-basic (e.g. void) value. Shared by the direct (`generate_call`) and indirect
+    /// closure (`generate_closure_call`) call paths so both handle return kinds identically.
+    fn call_result_to_basic(
+        call: inkwell::values::CallSiteValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        match call.as_any_value_enum() {
             inkwell::values::AnyValueEnum::IntValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::FloatValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::PointerValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::ArrayValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::StructValue(v) => Ok(v.into()),
             inkwell::values::AnyValueEnum::VectorValue(v) => Ok(v.into()),
-            _ => Err("Function does not return a basic value".to_string()),
+            _ => Err("call did not return a basic value".to_string()),
         }
     }
 
