@@ -7,23 +7,23 @@
 // output cannot be reliably mapped to editor ranges with a problem matcher.
 // See README.md ("Diagnostics & debugging").
 
-const vscode = require("vscode");
+import * as vscode from "vscode";
 
-/** @param {string} subcommand */
-function runOnActiveFile(subcommand) {
+function runOnActiveFile(subcommand: string): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "quilon") {
-    vscode.window.showErrorMessage("Quilon: no active .ql file.");
+    void vscode.window.showErrorMessage("Quilon: no active .ql file.");
     return;
   }
+  const document = editor.document;
   // Save first so the compiler sees the latest content.
-  editor.document.save().then(() => {
+  void document.save().then(() => {
     const cmd = vscode.workspace
       .getConfiguration("quilon")
-      .get("command", "quilon");
-    const file = editor.document.fileName;
+      .get<string>("command", "quilon");
+    const file = document.fileName;
     const term =
-      vscode.window.terminals.find((t) => t.name === "Quilon") ||
+      vscode.window.terminals.find((t) => t.name === "Quilon") ??
       vscode.window.createTerminal("Quilon");
     term.show();
     // Quote the path to tolerate spaces.
@@ -31,7 +31,7 @@ function runOnActiveFile(subcommand) {
   });
 }
 
-function activate(context) {
+export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("quilon.check", () =>
       runOnActiveFile("check")
@@ -40,6 +40,4 @@ function activate(context) {
   );
 }
 
-function deactivate() {}
-
-module.exports = { activate, deactivate };
+export function deactivate(): void {}

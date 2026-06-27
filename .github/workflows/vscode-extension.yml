@@ -1,0 +1,137 @@
+name: VS Code Extension
+
+# Build/publish automation for the Quilon VS Code extension (editors/vscode).
+#
+#   validate  — PR gate. Runs on pull requests and pushes that touch
+#               editors/vscode/**. Type-checks the TypeScript, validates the
+#               JSON, and proves the extension still compiles + packages into a
+#               .vsix, so the extension can't silently rot.
+#
+#   publish   — Runs when a tag matching `vscode-v*` is pushed (e.g.
+#               vscode-v0.1.0). Compiles + packages the .vsix, attaches it to a
+#               GitHub Release, and OPTIONALLY publishes to the VS Code
+#               Marketplace and Open VSX. Marketplace/Open VSX publishing only
+#               happens when the corresponding secret (VSCE_PAT / OVSX_PAT) is
+#               configured — when they are absent the job still succeeds
+#               (release-only).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "editors/vscode/**"
+      - ".github/workflows/vscode-extension.yml"
+    tags:
+      - "vscode-v*"
+  pull_request:
+    paths:
+      - "editors/vscode/**"
+      - ".github/workflows/vscode-extension.yml"
+
+# Default to read-only; the publish job opts into contents: write to create the
+# GitHub Release.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: editors/vscode
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # PR gate: type-check, validate JSON, prove the extension compiles + packages.
+  # ---------------------------------------------------------------------------
+  validate:
+    # Skip on tag pushes — those are handled by the publish job, which compiles
+    # and packages anyway. Run for PRs and for branch pushes touching the extension.
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate JSON (manifest, language config, grammar)
+        run: |
+          for f in package.json language-configuration.json syntaxes/quilon.tmLanguage.json; do
+            echo "Validating $f"
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
+          done
+
+      - name: Compile TypeScript (type-check + emit)
+        run: npm run compile
+
+      - name: Package extension (.vsix)
+        run: npx @vscode/vsce package
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quilon-vsix
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release + (optional) marketplace publish, on `vscode-v*` tags.
+  # ---------------------------------------------------------------------------
+  publish:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'vscode-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release / upload the .vsix asset
+    # Surface the secrets as env vars so the guard steps can gate on them. The
+    # `secrets` context is NOT allowed in `if:` expressions, but `env` is — so
+    # we copy them here and test `env.*` below. When a secret is unset it becomes
+    # an empty string, the matching publish step is skipped, and the job still
+    # succeeds (release-only).
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `vsce package` compiles first via the `vscode:prepublish` hook
+      # (`npm run compile`), so no separate compile step is needed here.
+      - name: Package extension (.vsix)
+        run: npx @vscode/vsce package
+
+      # Always: attach the built .vsix to a GitHub Release for this tag.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: editors/vscode/*.vsix
+          generate_release_notes: true
+
+      # Guarded: only publish to the VS Code Marketplace when a PAT is set, so
+      # the workflow still succeeds for maintainers who haven't configured creds.
+      - name: Publish to VS Code Marketplace
+        if: ${{ env.VSCE_PAT != '' }}
+        run: npx @vscode/vsce publish --packagePath *.vsix
+
+      # Guarded: only publish to Open VSX when an Open VSX PAT is set.
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_PAT != '' }}
+        run: npx ovsx publish *.vsix --pat "$OVSX_PAT"
