@@ -7,46 +7,60 @@
 
 use std::path::Path;
 
+use crate::diagnostic::{self, Severity};
+use crate::lexer::Span;
 use crate::{ast, lexer, modules, parser, typechecker};
 
-/// A failure from any stage of the front-end. Its `Display` is the exact message
-/// the CLI prints to stderr before exiting.
-pub enum FrontEndError {
-    Read(std::io::Error),
-    Lex(String),
-    Parse(String),
-    Import(String),
-    Type(String),
+/// A failure from any stage of the front-end. Its `Display` is the exact
+/// diagnostic the CLI prints to stderr before exiting: for stages that know a
+/// source location (`lex`, `parse`, `type`) it is a rustc-style
+/// `path:line:col: error: …` report with the offending source line and a caret;
+/// for location-less failures (`read`, `import`) it is a one-line message.
+pub struct FrontEndError {
+    /// The diagnostic, fully rendered against the source at construction time.
+    rendered: String,
 }
 
 impl std::fmt::Display for FrontEndError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FrontEndError::Read(e) => write!(f, "❌ Error reading file: {}", e),
-            FrontEndError::Lex(e) => write!(f, "❌ Lexer error: {}", e),
-            FrontEndError::Parse(e) => write!(f, "❌ Parse error: {}", e),
-            FrontEndError::Import(e) => write!(f, "❌ Import error: {}", e),
-            FrontEndError::Type(e) => write!(f, "❌ Type error: {}", e),
+        write!(f, "{}", self.rendered)
+    }
+}
+
+impl FrontEndError {
+    /// A source-located error: render it rustc-style with the caret context.
+    fn at(path: &str, source: &str, span: &Span, message: &str) -> Self {
+        Self {
+            rendered: diagnostic::render(path, source, span, Severity::Error, message),
         }
+    }
+
+    /// An error with no source location (file read failure, import resolution).
+    fn plain(message: String) -> Self {
+        Self { rendered: message }
     }
 }
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, returning the import-linked, checked program.
 pub fn front_end(file: &Path) -> Result<ast::Program, FrontEndError> {
-    let source = std::fs::read_to_string(file).map_err(FrontEndError::Read)?;
+    let path = file.display().to_string();
 
-    let tokens = lexer::Lexer::tokenize(&source).map_err(|e| FrontEndError::Lex(e.to_string()))?;
+    let source = std::fs::read_to_string(file)
+        .map_err(|e| FrontEndError::plain(format!("error reading {}: {}", path, e)))?;
 
-    let program = parser::parse(&tokens).map_err(|e| FrontEndError::Parse(e.to_string()))?;
+    let tokens = lexer::Lexer::tokenize(&source)
+        .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
+
+    let program = parser::parse(&tokens)
+        .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
 
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
-    let program =
-        modules::link(program, base_dir).map_err(|e| FrontEndError::Import(e.to_string()))?;
+    let program = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
 
     typechecker::TypeChecker::new()
         .check_program(&program)
-        .map_err(|e| FrontEndError::Type(e.to_string()))?;
+        .map_err(|e| FrontEndError::at(&path, &source, e.span(), &e.to_string()))?;
 
     Ok(program)
 }

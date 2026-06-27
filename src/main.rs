@@ -1,6 +1,7 @@
 mod ast;
 mod build;
 mod codegen;
+mod diagnostic;
 mod driver;
 mod jit;
 mod lexer;
