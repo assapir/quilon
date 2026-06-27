@@ -79,10 +79,12 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests cover two things, both kept free of any `vscode` import so they run
-under plain Node (`npm test`):
+Unit tests (`pnpm test`) cover three things, all kept free of any `vscode`
+import so they run under plain Node:
 
 - the diagnostic-output parser (`src/diagnostics.ts` ↔ `src/diagnostics.test.ts`);
+- the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
+  `src/entryPoints.test.ts`);
 - **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
   `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
   (`=>`, `->`, `:=`, `|>`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
