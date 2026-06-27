@@ -52,6 +52,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("methods.ql", 35),
     ("mutation.ql", 42),
     ("result.ql", 84),
+    ("sum_types.ql", 42),
     ("use_module.ql", 5),
     ("unit.ql", 0),
 ];

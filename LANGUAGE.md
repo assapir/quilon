@@ -128,7 +128,7 @@ area = (s :: Shape) -> Num => s ?
   | Rect(w, h) => w * h          ~ binds both payload fields
 ```
 A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
-(or a lowercase binding) wildcard.
+(or a lowercase binding) wildcard. (See `examples/sum_types.ql`.)
 
 #### `Result` is a normal sum type
 `Result` is just a predefined sum type — there is no special case:
