@@ -52,63 +52,60 @@ pub enum TypeError {
     },
 }
 
+impl TypeError {
+    /// The source span this error refers to, for diagnostic rendering.
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeError::UndefinedVariable { span, .. }
+            | TypeError::TypeMismatch { span, .. }
+            | TypeError::NotAFunction { span, .. }
+            | TypeError::WrongNumberOfArguments { span, .. }
+            | TypeError::CannotInfer { span, .. }
+            | TypeError::ImmutableAssignment { span, .. }
+            | TypeError::DuplicateDefinition { span, .. }
+            | TypeError::PatternTypeMismatch { span, .. }
+            | TypeError::NonExhaustiveMatch { span } => span,
+        }
+    }
+}
+
 impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TypeError::UndefinedVariable { name, span } => {
-                write!(f, "Undefined variable '{}' at {:?}", name, span)
+            TypeError::UndefinedVariable { name, .. } => {
+                write!(f, "Undefined variable '{}'", name)
             }
-            TypeError::TypeMismatch {
-                expected,
-                got,
-                span,
-            } => {
+            TypeError::TypeMismatch { expected, got, .. } => {
+                write!(f, "Type mismatch: expected {:?}, got {:?}", expected, got)
+            }
+            TypeError::NotAFunction { got, .. } => {
+                write!(f, "Not a function: got {:?}", got)
+            }
+            TypeError::WrongNumberOfArguments { expected, got, .. } => {
                 write!(
                     f,
-                    "Type mismatch at {:?}: expected {:?}, got {:?}",
-                    span, expected, got
+                    "Wrong number of arguments: expected {}, got {}",
+                    expected, got
                 )
             }
-            TypeError::NotAFunction { got, span } => {
-                write!(f, "Not a function at {:?}: got {:?}", span, got)
+            TypeError::CannotInfer { expr, .. } => {
+                write!(f, "Cannot infer type for '{}'", expr)
             }
-            TypeError::WrongNumberOfArguments {
-                expected,
-                got,
-                span,
-            } => {
+            TypeError::ImmutableAssignment { name, .. } => {
+                write!(f, "Cannot assign to immutable variable '{}'", name)
+            }
+            TypeError::DuplicateDefinition { name, .. } => {
+                write!(f, "Duplicate definition of '{}'", name)
+            }
+            TypeError::PatternTypeMismatch { expected, got, .. } => {
                 write!(
                     f,
-                    "Wrong number of arguments at {:?}: expected {}, got {}",
-                    span, expected, got
+                    "Pattern type mismatch: expected {:?}, got {:?}",
+                    expected, got
                 )
             }
-            TypeError::CannotInfer { expr, span } => {
-                write!(f, "Cannot infer type for '{}' at {:?}", expr, span)
-            }
-            TypeError::ImmutableAssignment { name, span } => {
-                write!(
-                    f,
-                    "Cannot assign to immutable variable '{}' at {:?}",
-                    name, span
-                )
-            }
-            TypeError::DuplicateDefinition { name, span } => {
-                write!(f, "Duplicate definition of '{}' at {:?}", name, span)
-            }
-            TypeError::PatternTypeMismatch {
-                expected,
-                got,
-                span,
-            } => {
-                write!(
-                    f,
-                    "Pattern type mismatch at {:?}: expected {:?}, got {:?}",
-                    span, expected, got
-                )
-            }
-            TypeError::NonExhaustiveMatch { span } => {
-                write!(f, "Non-exhaustive pattern match at {:?}", span)
+            TypeError::NonExhaustiveMatch { .. } => {
+                write!(f, "Non-exhaustive pattern match")
             }
         }
     }

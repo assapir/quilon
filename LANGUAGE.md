@@ -256,6 +256,31 @@ quilon build program.ql --linker gcc      # gcc also supported (CI checks both)
 ```
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 
+### Error messages
+
+Compile errors — from the lexer, parser, and type checker — are reported in a
+rustc-style format: a `path:line:col: error: <message>` header, followed by the
+offending source line and a caret (`^`) underline beneath the exact span. Line
+and column are **1-based**, and the column counts characters (not bytes), so it
+is correct in the presence of multi-byte characters. For example, the program
+
+```
+add = (a :: Num) -> Num => a + true
+```
+
+reports:
+
+```
+program.ql:1:28: error: Type mismatch: expected Num, got Bool
+  |
+1 | add = (a :: Num) -> Num => a + true
+  |                            ^^^^^^^^
+```
+
+A span covering multiple lines underlines its first line. Failures with no
+source location (a missing file, an unresolved import) print a plain one-line
+message instead. Any compile error exits with status 1.
+
 ---
 
 ## Feature matrix
@@ -300,7 +325,7 @@ quilon build program.ql --linker gcc      # gcc also supported (CI checks both)
 
 ## Compiler architecture
 
-A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs` runs the shared front-end (read → lex → parse → resolve imports → typecheck) for all CLI commands.
+A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs` runs the shared front-end (read → lex → parse → resolve imports → typecheck) for all CLI commands and renders any failure through `src/diagnostic.rs` (the rustc-style `path:line:col` reporter described under [Error messages](#error-messages)).
 
 1. **Lexer** — `src/lexer/` (`logos`), `Lexer::tokenize(&str)`.
 2. **Parser** — `src/parser/ast_parser.rs`, hand-written recursive descent, `parse(&tokens)`.

@@ -14,6 +14,30 @@ impl Span {
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+
+    /// Translate a byte `offset` into `source` into a 1-based `(line, column)`.
+    ///
+    /// Columns count Unicode scalar values (chars), not bytes, so multi-byte
+    /// characters before the offset advance the column by one each. An offset
+    /// that lands inside a multi-byte char is rounded down to that char's start.
+    /// An offset at or past the end of the source clamps to the final position.
+    pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
+        let offset = offset.min(source.len());
+        let mut line = 1;
+        let mut col = 1;
+        for (idx, ch) in source.char_indices() {
+            if idx >= offset {
+                return (line, col);
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
 }
 
 impl fmt::Display for Span {
