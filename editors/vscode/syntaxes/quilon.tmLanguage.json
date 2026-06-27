@@ -9,6 +9,7 @@
     { "include": "#constants" },
     { "include": "#module-lines" },
     { "include": "#entry-point" },
+    { "include": "#unit" },
     { "include": "#builtin-types" },
     { "include": "#type-names" },
     { "include": "#function-calls" },
@@ -80,6 +81,11 @@
     "entry-point": {
       "name": "keyword.control.entrypoint.quilon",
       "match": "\\^"
+    },
+    "unit": {
+      "comment": "The unit type and its sole value are both written `$` (analogous to () in Rust/ML). Highlighted like the other built-in types.",
+      "name": "support.type.builtin.unit.quilon",
+      "match": "\\$"
     },
     "builtin-types": {
       "name": "support.type.builtin.quilon",

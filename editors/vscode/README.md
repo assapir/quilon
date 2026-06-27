@@ -13,10 +13,14 @@ compiles to native code via LLVM. Files use the `.ql` extension.
     `=>` (function body / match arm), `->` (return type), `<-` (loop iterate),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,
     logical `&& || !`.
-  - Built-in types `Num` / `Text` / `Bool`.
+  - Built-in types `Num` / `Text` / `Bool`, and the unit type/value `$` (`$` is
+    both the type, as in `-> $`, and its sole value — highlighted like the other
+    built-in types).
   - **Capitalized identifiers** are highlighted as types / sum-type constructors
     (`Ok`, `NotOk`, `Color`, `Circle`); **lowercase** names followed by `(` as function calls.
 - **Bracket matching & auto-closing** for `< >`, `{ }`, `[ ]`, `( )`, and `"`.
+- **Inline diagnostics** — type/parse/lex errors from the compiler appear as
+  editor squiggles (see [Diagnostics & debugging](#diagnostics--debugging)).
 - **Editor tasks & commands** to run the compiler on the active file.
 
 ## Install / run locally
@@ -50,6 +54,41 @@ npm run package               # compiles + produces quilon-0.1.0.vsix (via vsce)
 code --install-extension quilon-0.1.0.vsix
 ```
 
+## Development
+
+The extension is TypeScript (strict). It is linted with **oxlint** and formatted
+with **oxfmt** (the [Oxc](https://oxc.rs) toolchain) — not ESLint/Prettier:
+
+```bash
+npm run compile     # tsc: type-check + emit out/extension.js
+npm test            # compile, then run the unit tests (node --test)
+npm run lint        # oxlint (fails on any finding)
+npm run lint:fix    # oxlint --fix (auto-fix what it can)
+npm run fmt         # oxfmt --write (format in place)
+npm run fmt:check   # oxfmt --check (verify formatting; CI gate)
+```
+
+CI runs `lint`, `fmt:check`, `compile`, `test`, and `package` on every PR that
+touches `editors/vscode/**` (see [Publishing](#publishing)).
+
+### Tests & manual verification
+
+Unit tests cover the diagnostic-output parser (`src/diagnostics.ts`), which is
+kept free of any `vscode` import so it runs under plain Node. To verify the
+**inline diagnostics** end-to-end manually:
+
+1. Set `quilon.command` to a working compiler (e.g. `"cargo run --"` from a
+   checkout, or `"quilon"` if it's on your `PATH`).
+2. Launch the Extension Development Host (`F5`) and open a `.ql` file with a
+   type error (e.g. `examples/type_error.ql`) — a red squiggle should appear at
+   the reported span, with the message in the Problems panel.
+3. Fix the error and save — the squiggle clears.
+4. Point `quilon.command` at a non-existent binary and reopen a `.ql` file — a
+   single warning notification appears (it does not repeat).
+
+To verify **`$` highlighting**, open `examples/unit.ql`: both the `-> $` return
+type and the `$` value are colored like the built-in types (`Num`/`Text`/`Bool`).
+
 ## Running the compiler from the editor
 
 Two commands are contributed (open the Command Palette, `Ctrl/Cmd+Shift+P`):
@@ -75,13 +114,16 @@ and **quilon: run current file** tasks (`Terminal → Run Task…`).
 
 ## Diagnostics & debugging
 
-- **No inline diagnostics (squiggles) yet.** The compiler currently reports
-  errors using **byte offsets**, e.g.
-  `❌ Type error: Type mismatch at Span { start: 42, end: 47 }`, not
-  `file:line:column`. A VS Code problem matcher needs line/column to place a
-  diagnostic, so errors are surfaced in the terminal output instead of as
-  editor squiggles. Mapping byte spans → ranges is a natural future enhancement
-  (e.g. via a small language server).
+- **Inline diagnostics (squiggles).** When you open or save a `.ql` file, the
+  extension runs `<quilon.command> check <file>` in the background and surfaces
+  any compile errors as editor squiggles in the Problems panel. The compiler
+  reports errors as `path:line:col: error: <message>` with a caret underline;
+  the extension parses those, converts the 1-based line/column to a VS Code
+  range (using the caret run for the span width, falling back to the token at
+  the column), and publishes them against the file. Diagnostics clear when the
+  file checks clean. If the configured command can't be found, the extension
+  warns **once** (set `quilon.command`, e.g. to `cargo run --`) and stays quiet
+  thereafter.
 - **No step debugging.** Real breakpoint/step debugging requires DWARF debug
   info, which the Quilon compiler does not emit yet — so this extension does
   **not** ship a debug adapter. The `.vscode/launch.json` contains only a

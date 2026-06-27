@@ -4,6 +4,9 @@
 src/**
 **/*.ts
 **/*.map
+out/**/*.test.js
 tsconfig.json
+.oxlintrc.json
+.oxfmtrc.json
 node_modules/**
 package-lock.json

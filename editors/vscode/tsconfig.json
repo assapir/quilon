@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node", "vscode"],
     "lib": ["ES2022"],
     "outDir": "out",
     "rootDir": "src",

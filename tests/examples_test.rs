@@ -53,6 +53,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("mutation.ql", 42),
     ("result.ql", 84),
     ("use_module.ql", 5),
+    ("unit.ql", 0),
 ];
 
 fn ql_files() -> Vec<PathBuf> {
