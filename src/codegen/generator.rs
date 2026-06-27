@@ -1204,11 +1204,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_unsigned_int_to_float(i, slot_ty.into_float_type(), "inttofloat")
                 .map_err(|e| format!("Failed to convert payload to float: {:?}", e))?
                 .into()),
-            // A unit value into a same-typed `i8` slot, or any value already matching the
-            // slot, passes through; a value whose type differs from a non-numeric slot
-            // falls back to a zero of the slot (only reachable for a `$` payload).
+            // A value already matching the slot type passes through unchanged.
             other if other.get_type() == slot_ty => Ok(other),
-            _ => Ok(zeroed(slot_ty)),
+            // A `$` (Unit) value — the zero `i8` — carries no information; stored into a
+            // differently-typed slot it becomes that slot's zero (e.g. a `$` payload in a
+            // `Done($) / Pending(Text)` Text slot). The type checker guarantees concrete
+            // payload types agree per position, so ANY other mismatch is an internal bug,
+            // surfaced rather than silently zeroed.
+            BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() == 8 => Ok(zeroed(slot_ty)),
+            other => Err(format!(
+                "internal error: sum-type payload of type {:?} does not fit slot {:?}",
+                other.get_type(),
+                slot_ty
+            )),
         }
     }
 

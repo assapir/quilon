@@ -273,6 +273,48 @@ impl TypeChecker {
         );
     }
 
+    /// Type-check a constructor application `variant(args...)` against the registered
+    /// sum types. Returns `Ok(Some(sum_type))` if `variant` is a known constructor (after
+    /// validating arity and payload types), `Ok(None)` if no sum type has that variant
+    /// (so the caller can fall through to other interpretations), or `Err` on a mismatch.
+    ///
+    /// Only the matched variant's field types are cloned (a small Vec), not the whole
+    /// registry — this runs on every call/constructor expression, so a full-map clone
+    /// here would scale with program size x declared sum types.
+    fn check_constructor_call(
+        &mut self,
+        variant: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Option<Type>, TypeError> {
+        // Find the owning sum type and clone just what we need to drop the borrow.
+        let found = self.sum_types.values().find_map(|sum_type| {
+            if let Type::Sum { variants, .. } = sum_type
+                && let Some(v) = variants.iter().find(|v| v.name == variant)
+            {
+                Some((sum_type.clone(), v.fields.clone()))
+            } else {
+                None
+            }
+        });
+        let Some((sum_type, field_types)) = found else {
+            return Ok(None);
+        };
+
+        if field_types.len() != args.len() {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: field_types.len(),
+                got: args.len(),
+                span: span.clone(),
+            });
+        }
+        for (field_type, arg) in field_types.iter().zip(args.iter()) {
+            let arg_type = self.infer_expr(arg)?;
+            self.check_type_compatibility(field_type, &arg_type, span)?;
+        }
+        Ok(Some(sum_type))
+    }
+
     /// If `variant` names a constructor of some registered sum type, return that
     /// sum type's name. Used to enforce globally-unique variant names.
     fn sum_variant_owner(&self, variant: &str) -> Option<String> {
@@ -844,35 +886,13 @@ impl TypeChecker {
                 // so in practice constructors are type-checked in `check_call`;
                 // this arm makes a direct `SumConstructor` node type-check the same
                 // way (variant lookup + arity + payload type) instead of erroring.
-                let sum_types = self.sum_types.clone();
-                for (_type_name, sum_type) in sum_types.iter() {
-                    if let Type::Sum {
-                        name: sum_name,
-                        variants,
-                    } = sum_type
-                        && let Some(v) = variants.iter().find(|v| &v.name == variant)
-                    {
-                        if v.fields.len() != args.len() {
-                            return Err(TypeError::WrongNumberOfArguments {
-                                expected: v.fields.len(),
-                                got: args.len(),
-                                span: span.clone(),
-                            });
-                        }
-                        for (field_type, arg) in v.fields.iter().zip(args.iter()) {
-                            let arg_type = self.infer_expr(arg)?;
-                            self.check_type_compatibility(field_type, &arg_type, span)?;
-                        }
-                        return Ok(Type::Sum {
-                            name: sum_name.clone(),
-                            variants: variants.clone(),
-                        });
-                    }
+                match self.check_constructor_call(variant, args, span)? {
+                    Some(sum_type) => Ok(sum_type),
+                    None => Err(TypeError::UndefinedVariable {
+                        name: format!("Unknown sum-type constructor: {}", variant),
+                        span: span.clone(),
+                    }),
                 }
-                Err(TypeError::UndefinedVariable {
-                    name: format!("Unknown sum-type constructor: {}", variant),
-                    span: span.clone(),
-                })
             }
 
             Expr::ForLoop {
@@ -993,47 +1013,14 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, func: &Expr, args: &[Expr], span: &Span) -> Result<Type, TypeError> {
-        // Check if this is a sum type constructor call: Ok(42), NotOk, etc.
+        // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.
         if let Expr::Ident {
             name: constructor_name,
             ..
         } = func
+            && let Some(sum_type) = self.check_constructor_call(constructor_name, args, span)?
         {
-            // Clone sum_types to avoid borrow conflicts
-            let sum_types = self.sum_types.clone();
-
-            // Look for a sum type that has this constructor
-            for (_type_name, sum_type) in sum_types.iter() {
-                if let Type::Sum {
-                    name: sum_name,
-                    variants,
-                } = sum_type
-                {
-                    // Check if any variant matches the constructor name
-                    if let Some(variant) = variants.iter().find(|v| &v.name == constructor_name) {
-                        // Validate argument count
-                        if variant.fields.len() != args.len() {
-                            return Err(TypeError::WrongNumberOfArguments {
-                                expected: variant.fields.len(),
-                                got: args.len(),
-                                span: span.clone(),
-                            });
-                        }
-
-                        // Type check each argument
-                        for (field_type, arg) in variant.fields.iter().zip(args.iter()) {
-                            let arg_type = self.infer_expr(arg)?;
-                            self.check_type_compatibility(field_type, &arg_type, span)?;
-                        }
-
-                        // Return the sum type
-                        return Ok(Type::Sum {
-                            name: sum_name.clone(),
-                            variants: variants.clone(),
-                        });
-                    }
-                }
-            }
+            return Ok(sum_type);
         }
 
         // Check if this is a method call: func is Ident and first arg is a Named type
