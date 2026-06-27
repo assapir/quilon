@@ -168,6 +168,16 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Check if it's a sum-type declaration: `Name = VariantA / VariantB(Num) / ...`.
+        // Disambiguation (LOCKED): `/` is a sum-type separator (not division) only when
+        // the declared name and every operand are Capitalized type/constructor names. We
+        // require the type name to be Capitalized and the RHS to be a `/`-separated list
+        // of Capitalized constructors (each optionally taking a parenthesized payload list).
+        // A single bare `Red` (no `/`) is a normal value binding, not a one-variant sum.
+        if type_annotation.is_none() && is_capitalized(&name) && self.looks_like_sum_decl() {
+            return self.parse_sum_type_decl(name, start, exported);
+        }
+
         // Check if it's a function:
         // - name = => ...  (no params)
         // - name = (params) => ...
@@ -439,6 +449,115 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Lookahead from the current position (just past `Name =`) to decide whether the
+    /// RHS is a sum-type declaration rather than an ordinary value expression.
+    ///
+    /// A sum-type RHS is a `/`-separated list of variants, each a Capitalized
+    /// constructor name optionally followed by a parenthesized payload-type list, with
+    /// at least one top-level `/`. Disambiguation from division (LOCKED): a sum type
+    /// requires that BOTH operands around the first top-level `/` are Capitalized
+    /// constructor names. So `Red / Green` is a sum type, but `Min / 2` and `Min / x`
+    /// are division (right operand isn't a Capitalized name), and `a / b` never matches
+    /// (left operand isn't Capitalized either). A single `A` alone (no `/`) is a value
+    /// binding, not a one-variant sum type.
+    fn looks_like_sum_decl(&self) -> bool {
+        // The first token must be a Capitalized identifier (the first variant).
+        if self.peek().kind != TokenKind::Ident || !is_capitalized(&self.peek().text) {
+            return false;
+        }
+
+        let mut idx = 1; // we've conceptually consumed the first variant name
+        // Optionally skip a balanced payload list `( ... )` after the first variant.
+        if self.peek_ahead(idx).kind == TokenKind::ParenOpen {
+            let mut depth = 0usize;
+            loop {
+                match self.peek_ahead(idx).kind {
+                    TokenKind::ParenOpen => depth += 1,
+                    TokenKind::ParenClose => {
+                        depth -= 1;
+                        if depth == 0 {
+                            idx += 1;
+                            break;
+                        }
+                    }
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                idx += 1;
+            }
+        }
+        // Decisive signal: a top-level `/` whose right operand is ALSO a Capitalized
+        // constructor name. Requiring both sides Capitalized is what keeps `Min / 2`
+        // and `Total / count` as division rather than a misparsed sum type.
+        if self.peek_ahead(idx).kind != TokenKind::Slash {
+            return false;
+        }
+        let after_slash = self.peek_ahead(idx + 1);
+        after_slash.kind == TokenKind::Ident && is_capitalized(&after_slash.text)
+    }
+
+    /// Parse a sum-type declaration: `Name = VariantA / VariantB(Num, Text) / ...`.
+    /// Each variant is a Capitalized constructor name with an optional parenthesized
+    /// list of payload types (built-in types only — enforced by the type checker).
+    fn parse_sum_type_decl(
+        &mut self,
+        name: String,
+        start: Span,
+        exported: bool,
+    ) -> Result<Item, ParseError> {
+        use crate::ast::{SumVariant, TypeDef};
+
+        let mut variants = Vec::new();
+        loop {
+            let variant_name = self.expect_ident()?;
+            if !is_capitalized(&variant_name) {
+                return Err(ParseError {
+                    message: format!(
+                        "Sum-type variant '{}' must start with an uppercase letter",
+                        variant_name
+                    ),
+                    span: self.previous_span(),
+                });
+            }
+
+            // Optional payload-type list: `(Num)` or `(Num, Text)`.
+            let mut fields = Vec::new();
+            if self.check(&TokenKind::ParenOpen) {
+                self.advance();
+                if !self.check(&TokenKind::ParenClose) {
+                    loop {
+                        fields.push(self.parse_type()?);
+                        if !self.check(&TokenKind::Comma) {
+                            break;
+                        }
+                        self.advance();
+                    }
+                }
+                self.expect(&TokenKind::ParenClose)?;
+            }
+
+            variants.push(SumVariant {
+                name: variant_name,
+                fields,
+            });
+
+            // Variants are separated by `/`; stop when the next token isn't one.
+            if self.check(&TokenKind::Slash) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let end = self.previous_span();
+        Ok(Item::TypeDecl(TypeDecl {
+            name,
+            type_def: TypeDef::Sum(variants),
+            exported,
+            span: Span::new(start.start, end.end),
+        }))
+    }
+
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
         use crate::ast::Statement;
 
@@ -636,8 +755,16 @@ impl<'a> Parser<'a> {
                         args,
                         span: Span::new(span.start, end),
                     })
+                } else if is_capitalized(&name) {
+                    // A bare Capitalized name in pattern position is a nullary constructor
+                    // (e.g. `| Red =>`), not a binding. Lowercase names bind a value.
+                    Ok(Pattern::Constructor {
+                        name,
+                        args: vec![],
+                        span,
+                    })
                 } else {
-                    // Just an identifier pattern
+                    // Just an identifier pattern (binds the scrutinee value)
                     Ok(Pattern::Ident { name, span })
                 }
             }
@@ -1157,6 +1284,19 @@ impl<'a> Parser<'a> {
                     ],
                 })
             }
+            // Any other Capitalized identifier is a reference to a user-defined type
+            // (e.g. a sum type `Color`/`Shape`). The type checker resolves it by name
+            // against the registered types. Emitted as a `Named` reference with no
+            // fields; the checker replaces it with the concrete definition.
+            other if is_capitalized(other) => {
+                let name = other.to_string();
+                self.advance();
+                Ok(crate::ast::Type::Named {
+                    name,
+                    fields: vec![],
+                    methods: vec![],
+                })
+            }
             _ => Err(ParseError {
                 message: format!("Expected type, got {:?}", token.kind),
                 span: token.span.clone(),
@@ -1230,6 +1370,13 @@ impl<'a> Parser<'a> {
 /// Parse a Quilon program from tokens
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
     Parser::parse(tokens)
+}
+
+/// Whether `name` is a Capitalized identifier (first char uppercase). Quilon's
+/// convention is Capitalized = type/constructor, lowercase = value; this backs the
+/// `/`-as-sum-separator-vs-division disambiguation and sum-variant name validation.
+fn is_capitalized(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_uppercase())
 }
 
 #[cfg(test)]

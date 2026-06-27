@@ -12,6 +12,20 @@ use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
+/// A zero/`undef`-free constant of any basic LLVM type, used to fill a payload slot that
+/// carries no information (a `$` Unit payload stored into a sized slot).
+fn zeroed(ty: BasicTypeEnum<'_>) -> BasicValueEnum<'_> {
+    match ty {
+        BasicTypeEnum::IntType(t) => t.const_zero().into(),
+        BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+        BasicTypeEnum::PointerType(t) => t.const_zero().into(),
+        BasicTypeEnum::StructType(t) => t.const_zero().into(),
+        BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+        BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+        BasicTypeEnum::ScalableVectorType(t) => t.const_zero().into(),
+    }
+}
+
 pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -23,6 +37,19 @@ pub struct CodeGenerator<'ctx> {
     named_type_fields: HashMap<String, Vec<String>>,
     // Track which named type a variable was constructed from: var name -> type name
     var_named_types: HashMap<String, String>,
+    // Sum-type variant registry: variant (constructor) name -> (tag, owning type name).
+    // Built from user `TypeDef::Sum` declarations plus the built-in Result. The tag is
+    // the variant's declaration index. Drives constructor codegen and tag-based pattern
+    // dispatch (generalizing the old hardcoded Ok=0/NotOk=1).
+    sum_variants: HashMap<String, (u8, String)>,
+    // Per-sum-type canonical payload layout (one LLVM type per payload slot), sized to
+    // the widest variant so EVERY value of the type has the same struct shape
+    // `{ i8 tag, slot0, slot1, ... }`. This lets a match arm extract any variant's
+    // payload slots without going out of range, even when the runtime value was built
+    // from a narrower variant. Keyed by sum-type name. Only USER sum types are entered
+    // here; the predefined `Result` is intentionally absent (its generic, heterogeneous
+    // payloads are sized per-value at construction — see `register_builtin_sum_types`).
+    sum_layouts: HashMap<String, Vec<BasicTypeEnum<'ctx>>>,
     current_function: Option<FunctionValue<'ctx>>,
 }
 
@@ -31,7 +58,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
 
-        CodeGenerator {
+        let mut codegen = CodeGenerator {
             context,
             module,
             builder,
@@ -39,8 +66,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             record_types: HashMap::new(),
             named_type_fields: HashMap::new(),
             var_named_types: HashMap::new(),
+            sum_variants: HashMap::new(),
+            sum_layouts: HashMap::new(),
             current_function: None,
-        }
+        };
+        codegen.register_builtin_sum_types();
+        codegen
+    }
+
+    /// Register the predefined `Result` variants: `Ok` is tag 0, `NotOk` is tag 1.
+    /// Unlike user sum types, Result is NOT given a fixed payload layout: its variants
+    /// have generic payloads (`Ok(T)` / `NotOk(E)`) whose concrete type is only known at
+    /// each construction site, and the two variants routinely carry DIFFERENT payload
+    /// types (e.g. `Ok(num)` vs `NotOk(text)`). So a Result value is sized to its
+    /// actual payload at construction (`generate_sum_constructor`'s no-registered-layout
+    /// path), preserving the historical per-value representation
+    /// (`Ok(42) -> { i8, double }`, `NotOk("e") -> { i8, ptr }`).
+    fn register_builtin_sum_types(&mut self) {
+        self.sum_variants
+            .insert("Ok".to_string(), (0u8, "Result".to_string()));
+        self.sum_variants
+            .insert("NotOk".to_string(), (1u8, "Result".to_string()));
     }
 
     /// Access the underlying LLVM module after `generate` has populated it.
@@ -50,6 +96,19 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
+        // Pre-pass: register all user sum-type variants so constructors and pattern
+        // dispatch resolve regardless of declaration order relative to their uses.
+        for item in &program.items {
+            if let Item::TypeDecl(TypeDecl {
+                name,
+                type_def: TypeDef::Sum(variants),
+                ..
+            }) = item
+            {
+                self.register_sum_variants(name, variants)?;
+            }
+        }
+
         // Generate code for all top-level items
         for item in &program.items {
             self.generate_item(item)?;
@@ -161,12 +220,48 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Generate code for a named type declaration.
-    ///
-    /// Sum types carry no code. Record types register their field layout and emit each
-    /// method as a top-level function `"{TypeName}_{method}"` whose first parameter is the
-    /// implicit receiver `it` (passed as a pointer to the record struct). Dispatch is static
-    /// (monomorphic) — `recv.method(args)` resolves to that mangled function at the call site.
+    /// Register a sum type: map each variant to `(tag, type_name)` (tag = declaration
+    /// index) and compute the type's canonical payload layout — one LLVM slot per
+    /// payload position, sized to the widest variant. Per position, the slot type is the
+    /// first NON-Unit field at that position (the type checker has validated that all
+    /// concrete fields at a position agree). `$` (Unit) payload fields are zero-sized and
+    /// contribute no slot, so a position that is `$` in every variant is dropped; a
+    /// position mixing `$` with a concrete type uses the concrete type.
+    fn register_sum_variants(
+        &mut self,
+        type_name: &str,
+        variants: &[crate::ast::SumVariant],
+    ) -> Result<(), String> {
+        for (tag, variant) in variants.iter().enumerate() {
+            self.sum_variants
+                .insert(variant.name.clone(), (tag as u8, type_name.to_string()));
+        }
+
+        let max_arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+        let mut layout: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(max_arity);
+        for pos in 0..max_arity {
+            // Slot type = the first NON-Unit field at this position (all concrete fields
+            // here agree, per the checker). If every variant has `$` (or nothing) here,
+            // the slot is a zero `i8` Unit placeholder — keeps the struct shape uniform
+            // (one field per position) while storing nothing meaningful.
+            let concrete = variants
+                .iter()
+                .find_map(|v| v.fields.get(pos).filter(|f| **f != Type::Unit));
+            let slot = match concrete {
+                Some(ty) => self.type_to_llvm(ty)?,
+                None => self.context.i8_type().into(),
+            };
+            layout.push(slot);
+        }
+        // A purely nullary enum still needs a payload slot so its `{ i8, .. }` value has
+        // a uniform shape; use a single `double` placeholder (matches constructor codegen).
+        if layout.is_empty() {
+            layout.push(self.context.f64_type().into());
+        }
+        self.sum_layouts.insert(type_name.to_string(), layout);
+        Ok(())
+    }
+
     fn generate_type_decl(&mut self, decl: &TypeDecl) -> Result<(), String> {
         if let TypeDef::Record { fields, methods } = &decl.type_def {
             let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
@@ -456,6 +551,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Unit { .. } => Ok(self.unit_value().into()),
 
             Expr::Ident { name, .. } => {
+                // A bare nullary sum-type constructor (e.g. `Red`) builds its tagged
+                // struct here. Payload-carrying constructors are calls, handled above.
+                // (We only treat it as a constructor when it isn't a bound variable.)
+                if !self.variables.contains_key(name)
+                    && let Some((tag, type_name)) = self.sum_variants.get(name).cloned()
+                {
+                    return self.generate_sum_constructor(tag, &type_name, &[]);
+                }
                 // Local binding (function-scoped alloca) first.
                 if let Some((ptr, ty)) = self.variables.get(name) {
                     return self
@@ -931,12 +1034,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => {}
         }
 
-        // Check if this is a sum type constructor (Ok, NotOk, etc.)
-        // For now, hardcode the builtin Result constructors
-        match func_name.as_str() {
-            "Ok" => return self.generate_sum_constructor(0, args), // Tag 0 for Ok
-            "NotOk" => return self.generate_sum_constructor(1, args), // Tag 1 for NotOk
-            _ => {}
+        // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
+        // resolved from the variant registry built from the predefined Result and all
+        // user `TypeDef::Sum` declarations.
+        if let Some((tag, type_name)) = self.sum_variants.get(func_name.as_str()).cloned() {
+            return self.generate_sum_constructor(tag, &type_name, args);
         }
 
         // Get the function from the module. If there is no plain top-level function with this
@@ -1004,62 +1106,110 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_sum_constructor(
         &mut self,
         tag: u8,
+        type_name: &str,
         args: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // Tagged-union layout: { i8 tag, <payload> }.
-        // The payload field is typed as the actual payload value's LLVM type:
-        //   Ok(42)        -> { i8 0, double 42.0 }
-        //   NotOk("err")  -> { i8 1, ptr <str> }
-        // Numeric payloads are normalized to f64 so the canonical Result type
-        // (see `type_to_llvm` for `Type::Sum`) is { i8, double }. Non-numeric
-        // payloads (pointers, structs) are stored at their real type without
-        // coercion. This fixes the previous bug where every payload was forced
-        // to f64, so `NotOk("error")` silently became `{ i8 1, double 0.0 }`.
+        // Tagged-union value: { i8 tag, slot0, slot1, ... }.
         //
-        // NOTE: a single Result *value* therefore carries one concrete payload
-        // type. Unifying different payload types behind one value (e.g. a
-        // branch yielding `Ok(num)` or `NotOk(text)`, or a function returning a
-        // non-numeric Result) needs a sized union and is deferred — the
-        // canonical return-position representation here is numeric.
+        // The slot types come from one of two sources:
+        //  - USER sum types have a registered canonical layout (`sum_layouts`), sized to
+        //    the widest variant, so EVERY value of the type shares one struct shape and a
+        //    match arm can extract any variant's slots without going out of range:
+        //      Rect(3, 4) -> { i8 1, double 3.0, double 4.0 }
+        //      Circle(9)  -> { i8 0, double 9.0, double <undef> }   (slot 1 unused)
+        //  - `Result` has NO registered layout: it's sized to the actual payload value,
+        //    preserving the historical per-value representation across its generic,
+        //    possibly-heterogeneous variants:
+        //      Ok(42)       -> { i8 0, double 42.0 }
+        //      NotOk("err") -> { i8 1, ptr <str> }
+        //
+        // Num/Bool payloads are normalized to f64. A `$` (Unit) payload is zero-sized; it
+        // is stored as a zero of the slot type so the value still matches the slot/return
+        // shape (e.g. `Ok($)` -> { i8 0, double 0.0 }) — the bits are never read.
         let i8_type = self.context.i8_type();
         let f64_type = self.context.f64_type();
+        let registered_layout = self.sum_layouts.get(type_name).cloned();
 
-        // Create the tag value
         let tag_val = i8_type.const_int(tag as u64, false);
 
-        // Generate the payload value at its real type (first argument, or 0.0
-        // if the variant has no payload), normalizing integers to f64.
-        let payload_val: BasicValueEnum = if let Some(arg) = args.first() {
+        // Determine each payload slot's value and type. For a registered layout, the slot
+        // type is fixed by position; otherwise (Result) it follows the value, with a `$`
+        // payload defaulting to the canonical `double` slot.
+        let mut payload_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
+        for (pos, arg) in args.iter().enumerate() {
             let arg_val = self.generate_expr(arg)?;
-            match arg_val {
-                BasicValueEnum::IntValue(i) => self
-                    .builder
-                    .build_unsigned_int_to_float(i, f64_type, "inttofloat")
-                    .map_err(|e| format!("Failed to convert int to float: {:?}", e))?
-                    .into(),
-                other => other,
-            }
-        } else {
-            f64_type.const_float(0.0).into()
-        };
+            // With a registered layout (user type), the slot type is fixed by position.
+            // Without one (Result), the slot follows the value's own type so a Text/Bool
+            // payload keeps its real representation — except a `$` (Unit) value, which is
+            // zero-sized and defaults to the canonical `double` slot.
+            let slot_ty = match registered_layout.as_ref().and_then(|l| l.get(pos).copied()) {
+                Some(ty) => ty,
+                None if self.expr_is_unit(arg) => f64_type.into(),
+                None => self.payload_slot_type(arg_val),
+            };
+            payload_vals.push(self.coerce_payload(arg_val, slot_ty)?);
+        }
 
-        // Build the Result struct sized to the payload's real LLVM type.
-        let result_struct = self
-            .context
-            .struct_type(&[i8_type.into(), payload_val.get_type()], false);
-        let undef = result_struct.get_undef();
-        let with_tag = self
+        // Build the struct type: tag + (registered layout, or the actual payload types).
+        let mut field_types: Vec<BasicTypeEnum> = vec![i8_type.into()];
+        match &registered_layout {
+            Some(layout) => field_types.extend(layout.iter().copied()),
+            None => field_types.extend(payload_vals.iter().map(|v| v.get_type())),
+        }
+        let sum_struct = self.context.struct_type(&field_types, false);
+
+        let mut agg = sum_struct.get_undef();
+        agg = self
             .builder
-            .build_insert_value(undef, tag_val, 0, "with_tag")
+            .build_insert_value(agg, tag_val, 0, "with_tag")
             .map_err(|e| format!("Failed to insert tag: {:?}", e))?
             .into_struct_value();
-        let with_payload = self
-            .builder
-            .build_insert_value(with_tag, payload_val, 1, "with_payload")
-            .map_err(|e| format!("Failed to insert payload: {:?}", e))?
-            .into_struct_value();
+        // Fill the leading slots with this variant's payloads; trailing slots (unused by
+        // this variant, in a wider registered layout) stay `undef` — they're only read by
+        // an arm matching a different, wider variant, which never runs for this value.
+        for (i, payload) in payload_vals.iter().enumerate() {
+            agg = self
+                .builder
+                .build_insert_value(agg, *payload, (i + 1) as u32, "with_payload")
+                .map_err(|e| format!("Failed to insert payload: {:?}", e))?
+                .into_struct_value();
+        }
 
-        Ok(with_payload.into())
+        Ok(agg.into())
+    }
+
+    /// The slot type for a Result payload sized to its actual value: a non-`i1` integer
+    /// widens to f64 (the canonical numeric payload), everything else keeps its own type.
+    fn payload_slot_type(&self, value: BasicValueEnum<'ctx>) -> BasicTypeEnum<'ctx> {
+        match value {
+            BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() != 1 => {
+                self.context.f64_type().into()
+            }
+            other => other.get_type(),
+        }
+    }
+
+    /// Coerce a payload argument value to its target slot type. Integers (incl. the unit
+    /// `i8`) widen to f64 for a numeric slot; a `$` (Unit) value targeting a non-`i8` slot
+    /// becomes a zero of that slot type (it carries no information). Otherwise the value
+    /// is stored as-is (e.g. a Text struct into a Text slot).
+    fn coerce_payload(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        slot_ty: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match value {
+            BasicValueEnum::IntValue(i) if slot_ty.is_float_type() => Ok(self
+                .builder
+                .build_unsigned_int_to_float(i, slot_ty.into_float_type(), "inttofloat")
+                .map_err(|e| format!("Failed to convert payload to float: {:?}", e))?
+                .into()),
+            // A unit value into a same-typed `i8` slot, or any value already matching the
+            // slot, passes through; a value whose type differs from a non-numeric slot
+            // falls back to a zero of the slot (only reachable for a `$` payload).
+            other if other.get_type() == slot_ty => Ok(other),
+            _ => Ok(zeroed(slot_ty)),
+        }
     }
 
     fn generate_if(
@@ -1702,15 +1852,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Pattern::Constructor { name, args: _, .. } => {
-                // For constructors, we need to check the discriminant
-                // Result is represented as { i8 tag, f64 payload }
-                // Ok = tag 0, NotOk = tag 1
-
-                let expected_tag = match name.as_str() {
-                    "Ok" => 0u8,
-                    "NotOk" => 1u8,
-                    _ => return Err(format!("Unknown constructor: {}", name)),
-                };
+                // Tagged-union dispatch: a value is `{ i8 tag, <payload> }`; the tag is
+                // the variant's declaration index, looked up from the sum-variant
+                // registry (generalizes the old hardcoded Ok=0/NotOk=1).
+                let expected_tag = self
+                    .sum_variants
+                    .get(name.as_str())
+                    .map(|(tag, _)| *tag)
+                    .ok_or_else(|| format!("Unknown constructor: {}", name))?;
 
                 // Extract tag from struct (field 0)
                 if let BasicValueEnum::StructValue(struct_val) = value {
@@ -1757,26 +1906,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Pattern::Constructor { name: _, args, .. } => {
-                // For constructors with arguments, extract the payload
-                // Result is { i8 tag, f64 payload }
-                if let Some(first_arg) = args.first()
-                    && let Pattern::Ident { name: arg_name, .. } = first_arg
-                {
-                    // Extract payload (field 1) from the struct
-                    if let BasicValueEnum::StructValue(struct_val) = value {
-                        let payload = self
-                            .builder
-                            .build_extract_value(struct_val, 1, "payload")
-                            .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
-
-                        // Bind the payload value
-                        let alloca =
-                            self.create_entry_block_alloca(arg_name, payload.get_type())?;
-                        self.builder
-                            .build_store(alloca, payload)
-                            .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
-                        self.variables
-                            .insert(arg_name.clone(), (alloca, payload.get_type()));
+                // Extract each payload field and bind it to the corresponding sub-pattern.
+                // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
+                // struct field `i + 1`. Only identifier sub-patterns bind a name; others
+                // (wildcards, nested constructors) are matched structurally elsewhere.
+                if let BasicValueEnum::StructValue(struct_val) = value {
+                    for (i, arg) in args.iter().enumerate() {
+                        if let Pattern::Ident { name: arg_name, .. } = arg {
+                            let payload = self
+                                .builder
+                                .build_extract_value(struct_val, (i + 1) as u32, "payload")
+                                .map_err(|e| format!("Failed to extract payload: {:?}", e))?;
+                            let alloca =
+                                self.create_entry_block_alloca(arg_name, payload.get_type())?;
+                            self.builder
+                                .build_store(alloca, payload)
+                                .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
+                            self.variables
+                                .insert(arg_name.clone(), (alloca, payload.get_type()));
+                        }
                     }
                 }
                 Ok(())
@@ -1974,6 +2122,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         )
     }
 
+    /// The tagged-union LLVM struct for a sum type: `{ i8 tag, slot0, slot1, ... }`,
+    /// where the slots come from the registered canonical payload layout. Falls back to
+    /// the Result-style `{ i8, double }` for an unregistered name (e.g. a `-> Result`
+    /// annotation reached before any user declaration), keeping the historical shape.
+    fn sum_struct_type(&self, name: &str) -> inkwell::types::StructType<'ctx> {
+        let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
+        match self.sum_layouts.get(name) {
+            Some(layout) => field_types.extend(layout.iter().copied()),
+            None => field_types.push(self.context.f64_type().into()),
+        }
+        self.context.struct_type(&field_types, false)
+    }
+
     /// The single value of the Unit type (`$`), lowered as a zero `i8`. Its bits are
     /// never observed; the entry-point wrapper coerces a non-Num body to exit code 0.
     fn unit_value(&self) -> inkwell::values::IntValue<'ctx> {
@@ -2022,21 +2183,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.context.struct_type(&field_types, false).into())
             }
-            Type::Sum { .. } => {
-                // Canonical Result representation: { i8 tag, double payload }.
-                // Matches the numeric payload built by `generate_sum_constructor`,
-                // which lets functions declare `-> Result`. Non-numeric payloads
-                // in return position are not yet unified (see the note there).
-                Ok(self
-                    .context
-                    .struct_type(
-                        &[
-                            self.context.i8_type().into(),
-                            self.context.f64_type().into(),
-                        ],
-                        false,
-                    )
-                    .into())
+            Type::Sum { name, .. } => Ok(self.sum_struct_type(name).into()),
+            // A `Named` reference with no fields is a parsed type annotation (e.g. a
+            // function param `s :: Shape`). If it names a registered sum type, lower it
+            // to that type's tagged-union struct.
+            Type::Named { name, fields, .. }
+                if fields.is_empty() && self.sum_layouts.contains_key(name) =>
+            {
+                Ok(self.sum_struct_type(name).into())
             }
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }

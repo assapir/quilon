@@ -45,8 +45,8 @@ pub struct TypeDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDef {
-    // Reserved for user-defined sum types and type aliases (not yet parsed in 0.9).
-    #[allow(dead_code)]
+    /// A user-defined sum type: `Color = Red / Green / Blue`,
+    /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`.
     Sum(Vec<SumVariant>),
     Record {
         fields: Vec<(String, Type)>,
