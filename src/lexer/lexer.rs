@@ -23,6 +23,17 @@ impl Lexer {
                 Some(Ok(kind)) => {
                     let span = lexer.span();
                     let text = source[span.clone()].to_string();
+                    // `>` reclassification: a `>` is the block-close delimiter only when
+                    // it is the last token on its line — `>` followed by optional
+                    // horizontal whitespace and then a newline or end-of-file. Any other
+                    // `>` (something non-blank follows on the same line) is the
+                    // greater-than operator `Gt`, so `a > b` works everywhere.
+                    let kind = if kind == TokenKind::BlockClose && !is_line_final(source, span.end)
+                    {
+                        TokenKind::Gt
+                    } else {
+                        kind
+                    };
                     tokens.push(Token::new(kind, Span::new(span.start, span.end), text));
                 }
                 Some(Err(_)) => {
@@ -47,6 +58,24 @@ impl Lexer {
 
         Ok(tokens)
     }
+}
+
+/// Whether the position `at` in `source` is at the end of its line: only horizontal
+/// whitespace (spaces/tabs) remains before a newline or the end of file. Used to tell a
+/// block-closing `>` (line-final) from the greater-than operator `>` (followed by more
+/// on the same line). A trailing `~` comment does NOT count as line-final — content
+/// follows on the line — so a `>` immediately before a comment reads as `Gt`.
+fn is_line_final(source: &str, at: usize) -> bool {
+    for b in source.as_bytes()[at..].iter() {
+        match b {
+            b' ' | b'\t' => continue,
+            b'\n' | b'\r' => return true,
+            _ => return false,
+        }
+    }
+    // Reached end of file with only horizontal whitespace: treat EOF as a line end so a
+    // file whose final token is a block-closing `>` (no trailing newline) still parses.
+    true
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,13 +173,40 @@ mod tests {
 
     #[test]
     fn test_delimiters() {
+        // A `>` followed by more on the same line lexes as the greater-than operator
+        // (`Gt`), not the block-close delimiter — the block close is the line-final form.
         let tokens = Lexer::tokenize("< > { } ( ) [ ]").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::BlockOpen);
-        assert_eq!(tokens[1].kind, TokenKind::BlockClose);
+        assert_eq!(tokens[1].kind, TokenKind::Gt);
         assert_eq!(tokens[2].kind, TokenKind::BraceOpen);
         assert_eq!(tokens[3].kind, TokenKind::BraceClose);
         assert_eq!(tokens[4].kind, TokenKind::ParenOpen);
         assert_eq!(tokens[5].kind, TokenKind::ParenClose);
+    }
+
+    #[test]
+    fn test_block_close_is_line_final_gt() {
+        // `>` at end of a line (only whitespace/newline after) closes a block.
+        let nl = Lexer::tokenize("<\n  x\n>").unwrap();
+        assert_eq!(nl[0].kind, TokenKind::BlockOpen);
+        assert_eq!(nl.last().unwrap().kind, TokenKind::Eof);
+        assert!(nl.iter().any(|t| t.kind == TokenKind::BlockClose));
+        assert!(!nl.iter().any(|t| t.kind == TokenKind::Gt));
+
+        // A `>` at end of file (no trailing newline) still closes the block.
+        let eof = Lexer::tokenize("< x >").unwrap();
+        // `>` is line-final (EOF after the trailing space) -> BlockClose.
+        assert!(eof.iter().any(|t| t.kind == TokenKind::BlockClose));
+
+        // A `>` with an operand after it on the same line is the greater-than operator.
+        let gt = Lexer::tokenize("a > b").unwrap();
+        assert_eq!(gt[1].kind, TokenKind::Gt);
+
+        // `>=` and `>>` are independent tokens, unaffected by the `>` rule.
+        let ge = Lexer::tokenize("a >= b").unwrap();
+        assert_eq!(ge[1].kind, TokenKind::Ge);
+        let export = Lexer::tokenize(">> x = 1").unwrap();
+        assert_eq!(export[0].kind, TokenKind::Export);
     }
 
     #[test]
@@ -168,8 +224,9 @@ mod tests {
         let tokens = Lexer::tokenize("== != < > <= >=").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Eq);
         assert_eq!(tokens[1].kind, TokenKind::Ne);
-        assert_eq!(tokens[2].kind, TokenKind::BlockOpen); // < is block open
-        assert_eq!(tokens[3].kind, TokenKind::BlockClose); // > is block close
+        assert_eq!(tokens[2].kind, TokenKind::BlockOpen); // `<` is always block-open
+        // `>` here is followed by ` <= >=` on the same line, so it's the operator.
+        assert_eq!(tokens[3].kind, TokenKind::Gt);
         assert_eq!(tokens[4].kind, TokenKind::Le);
         assert_eq!(tokens[5].kind, TokenKind::Ge);
     }

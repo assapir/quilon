@@ -345,16 +345,48 @@ pub enum BinOp {
     Mod,
     Eq,
     Ne,
-    // `<` and `>` are block delimiters in Quilon, so bare less/greater-than are not
-    // parsed as operators yet; reserved for when the grammar disambiguates them.
-    #[allow(dead_code)]
+    // `<` and `>` double as block delimiters; the parser disambiguates them as
+    // comparison operators in operand position (a bare `>` only outside a `< >`
+    // block — see `match_comparison`).
     Lt,
     Le,
-    #[allow(dead_code)]
     Gt,
     Ge,
     And,
     Or,
+}
+
+impl BinOp {
+    /// The operator's source symbol, which doubles as its overload-set name (an
+    /// operator is just a named overload set under the hood). Shared by the type
+    /// checker and codegen so a user operator overload is keyed identically in both.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Mod => "%",
+            BinOp::Eq => "==",
+            BinOp::Ne => "!=",
+            BinOp::Lt => "<",
+            BinOp::Le => "<=",
+            BinOp::Gt => ">",
+            BinOp::Ge => ">=",
+            BinOp::And => "&&",
+            BinOp::Or => "||",
+        }
+    }
+}
+
+/// Whether `name` is an operator symbol — and thus always an overload set, never a
+/// plain value binding. Shared by the type checker and the code generator so both
+/// agree on exactly which names are operators (the binary operator symbols).
+pub fn is_operator_symbol(name: &str) -> bool {
+    matches!(
+        name,
+        "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

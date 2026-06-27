@@ -55,6 +55,7 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
                 "__text_length",
                 intrinsics::__text_length as *const () as usize,
             ),
+            ("__text_cmp", intrinsics::__text_cmp as *const () as usize),
             (
                 "__write_bytes",
                 intrinsics::__write_bytes as *const () as usize,

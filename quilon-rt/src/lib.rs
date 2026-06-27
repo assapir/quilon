@@ -66,6 +66,33 @@ pub extern "C" fn __text_length(ptr: *const u8, len: i64) -> i64 {
     }
 }
 
+/// Lexicographically compare two UTF-8 byte strings, returning -1, 0, or 1 (like
+/// `memcmp`/Rust's `Ord` on byte slices: a common prefix orders by length). Backs the
+/// `Text` comparison operators (`==`/`!=`/`<`/`<=`/`>`/`>=`).
+///
+/// # Safety contract (upheld by the compiler)
+/// `a`/`b` are null or point to at least `alen`/`blen` readable bytes.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_cmp(a: *const u8, alen: i64, b: *const u8, blen: i64) -> i32 {
+    let lhs = byte_slice(a, alen);
+    let rhs = byte_slice(b, blen);
+    match lhs.cmp(rhs) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+/// View `len` bytes at `ptr` as a slice (empty for null/non-positive `len`).
+fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
+    if ptr.is_null() || len <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+    }
+}
+
 /// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
 /// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin.
 ///

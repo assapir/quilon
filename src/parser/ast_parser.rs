@@ -92,6 +92,15 @@ impl<'a> Parser<'a> {
             false
         };
 
+        // A top-level definition may be named by an operator symbol — this is how a
+        // user declares an operator overload, e.g. `+ = (a :: Point, b :: Point) ...`.
+        // An operator name is always a function definition (operators take operands).
+        if let Some(op_name) = self.operator_def_name() {
+            self.advance();
+            self.expect(&TokenKind::Assign)?;
+            return self.parse_function_decl(op_name, start, None, exported);
+        }
+
         let name = self.expect_ident()?;
 
         // Check for type annotation
@@ -1058,7 +1067,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the current operator token actually begins a top-level operator
+    /// DEFINITION (`op = ...`) rather than continuing the current expression. The
+    /// grammar is newline-insensitive, so without this an expression-bodied item
+    /// followed by an operator overload — `x = 5` then `+ = (a, b) => …` — would let
+    /// the additive parser swallow the `+` as `5 + …`. An operator immediately
+    /// followed by `=` (Assign) is never a binary use (its right operand would be
+    /// `=`), so we stop and let `parse_item` pick up the operator definition.
+    fn at_operator_definition(&self) -> bool {
+        matches!(
+            self.peek().kind,
+            TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::Eq
+                | TokenKind::Ne
+                | TokenKind::Le
+                | TokenKind::Ge
+        ) && self.peek_ahead(1).kind == TokenKind::Assign
+    }
+
     fn match_comparison(&mut self) -> Option<BinOp> {
+        if self.at_operator_definition() {
+            return None;
+        }
         match &self.peek().kind {
             TokenKind::Le => {
                 self.advance();
@@ -1068,11 +1102,28 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(BinOp::Ge)
             }
+            // `<` doubles as the block-open delimiter, but in comparison position
+            // (after a complete left operand) a block can never start, so a bare
+            // `<` here is unambiguously the less-than operator.
+            TokenKind::BlockOpen => {
+                self.advance();
+                Some(BinOp::Lt)
+            }
+            // The lexer already distinguished a greater-than `>` (token `Gt`) from a
+            // block-closing `>` (token `BlockClose`, only when line-final), so a `Gt`
+            // here is unambiguously the operator.
+            TokenKind::Gt => {
+                self.advance();
+                Some(BinOp::Gt)
+            }
             _ => None,
         }
     }
 
     fn match_additive(&mut self) -> Option<BinOp> {
+        if self.at_operator_definition() {
+            return None;
+        }
         if self.check(&TokenKind::Plus) {
             self.advance();
             Some(BinOp::Add)
@@ -1085,6 +1136,9 @@ impl<'a> Parser<'a> {
     }
 
     fn match_multiplicative(&mut self) -> Option<BinOp> {
+        if self.at_operator_definition() {
+            return None;
+        }
         match &self.peek().kind {
             TokenKind::Star => {
                 self.advance();
@@ -1328,6 +1382,33 @@ impl<'a> Parser<'a> {
 
     // Helper methods
 
+    /// If the current token is an operator usable as an overload-set name AND it is
+    /// being *defined* (followed by `=`), return its symbol. This is how a user
+    /// declares an operator overload, e.g. `== = (a :: P, b :: P) -> Bool => ...`.
+    /// Requiring the following `=` keeps a stray leading operator from being mistaken
+    /// for a definition. `<`/`>` (block delimiters) are intentionally excluded here —
+    /// a top-level `< ... >` would be a block, never an operator name.
+    fn operator_def_name(&self) -> Option<String> {
+        let sym = match self.peek().kind {
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            TokenKind::Star => "*",
+            TokenKind::Slash => "/",
+            TokenKind::Percent => "%",
+            TokenKind::Eq => "==",
+            TokenKind::Ne => "!=",
+            TokenKind::Le => "<=",
+            TokenKind::Ge => ">=",
+            _ => return None,
+        };
+        // Only a definition (`op = ...`); otherwise leave it for expression parsing.
+        if self.peek_ahead(1).kind == TokenKind::Assign {
+            Some(sym.to_string())
+        } else {
+            None
+        }
+    }
+
     fn peek(&self) -> &Token {
         &self.tokens[self.pos]
     }
@@ -1510,6 +1591,39 @@ mod tests {
         let tokens = Lexer::tokenize("flag = x >= 5").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_bare_less_and_greater_than() {
+        // `<` after a complete operand is `Lt`; a non-line-final `>` is `Gt`.
+        let lt = parse(&Lexer::tokenize("flag = a < b").unwrap()).unwrap();
+        if let Item::VarDecl(d) = &lt.items[0] {
+            assert!(matches!(d.value, Expr::BinOp { op: BinOp::Lt, .. }));
+        } else {
+            panic!("expected a var decl");
+        }
+        let gt = parse(&Lexer::tokenize("flag = a > b").unwrap()).unwrap();
+        if let Item::VarDecl(d) = &gt.items[0] {
+            assert!(matches!(d.value, Expr::BinOp { op: BinOp::Gt, .. }));
+        } else {
+            panic!("expected a var decl");
+        }
+    }
+
+    #[test]
+    fn test_parse_operator_definition() {
+        // An operator symbol can name a top-level definition (an operator overload).
+        let tokens =
+            Lexer::tokenize("P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x")
+                .unwrap();
+        let program = parse(&tokens).unwrap();
+        // Items: the type decl and the `==` operator function.
+        let op = program.items.iter().find_map(|i| match i {
+            Item::FunctionDecl(f) if f.name == "==" => Some(f),
+            _ => None,
+        });
+        let op = op.expect("expected an `==` operator definition");
+        assert_eq!(op.params.len(), 2);
     }
 
     #[test]

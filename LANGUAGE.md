@@ -15,7 +15,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `::` | Type annotation | `x :: Num` |
 | `=>` | Function body / match arm | `f = x => x + 1` |
 | `->` | Return type | `f = x -> Num => x` |
-| `< >` | Block delimiters | `< a b a + b >` |
+| `< >` | Block delimiters · also `<`/`>` comparison ([rule](#expressions)) | `< a b a + b >` · `a < b` · `a > b` |
 | `^` | Entry point (main) | `^ = () -> Num => 0` |
 | `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
@@ -231,11 +231,75 @@ factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 
 ---
 
+## Overloading
+
+Quilon has **explicit ad-hoc overloading** — the *only* form of polymorphism (there
+are no generics / type variables). Multiple top-level definitions that **share a name
+and each carry full parameter type annotations** simply *are* an overload set — there is
+no marker symbol or keyword:
+
+```quilon
+score = (n :: Num)  -> Num => n + 1       ~ the Num member
+score = (s :: Text) -> Num => s.size      ~ the Text member
+
+a = score(41)       ~ 42  — picks the Num member
+b = score("abcd")   ~ 4   — picks the Text member
+```
+
+**Dispatch is by exact static argument type, with NO implicit coercion.** At each call
+site the compiler picks the member whose parameter types match exactly. If none matches,
+or (with exact matching) two members share a parameter-type list, it is a clear compile
+error that lists the candidates:
+
+```
+error: No overload of 'score' matches argument types (Bool). Candidates: (Num), (Text)
+```
+
+- Every member of an overload set must annotate **all** its parameters (exact dispatch
+  can't choose between unannotated members).
+- A single, ordinary `name = …` definition is **not** an overload set — it keeps full
+  type inference (unannotated params default to `Num`, the return type is inferred).
+- Dispatch is resolved at **direct call sites** by static argument types. Passing an
+  overloaded name as a value (higher-order use) is not yet supported.
+
+### Operator overloading
+
+Operators are user-overloadable — `+ - * / %`, `== != < <= > >=` — because **an operator
+is just a named overload set** under the hood. The standard operators are *visible*
+overloads (e.g. `+` on `Num` and `+` on `Text`), not compiler magic, and a user
+definition adds a member for a user type. Define one by naming it with the operator
+symbol:
+
+```quilon
+Vec = { x :: Num, y :: Num }
++ = (a :: Vec, b :: Vec) -> Vec => Vec { x = a.x + b.x, y = a.y + b.y }
+
+v = Vec { x = 1, y = 2 } + Vec { x = 3, y = 4 }   ~ resolves to the user `+`
+```
+
+A user operator overload is resolved exactly like a function overload (by argument
+types) and lowers to a direct call. `==` over `Text` (equality) and `<`/`>`/`<=`/`>=`
+over `Text` (lexicographic order) are built-in overloads, so text comparisons work out
+of the box: `"abc" < "abd"`, `"hi" == "hi"`. (Defining `<`/`>` is reserved — a top-level
+`<`/`>` would read as a block; overload the others, or use `<=`/`>=`.)
+
+(See `examples/overloading.ql`.)
+
+---
+
 ## Expressions
 
-- **Arithmetic:** `+ - * / %` (and `-x`). `+` is overloaded for `Text` concatenation.
-- **Comparison:** `== != < <= > >=`.
+- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](#overloading): `Num + Num` adds, `Text + Text` concatenates.
+- **Comparison:** `== != < <= > >=`. Over `Num` and (lexicographically) `Text`; all return `Bool`. Each is a [user-overloadable operator](#operator-overloading).
 - **Logical:** `&& || !` (short-circuit).
+
+> **`<` and `>` vs. `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
+> after a complete operand is always less-than (a block can't start mid-expression). A
+> `>` is the **block close** only when it is the **last token on its line** (`>`
+> followed by only spaces/tabs then a newline or end-of-file); any other `>` — one with
+> more on the same line, like `a > b` — is the greater-than operator. So `a > b` works
+> everywhere; the only rule is *don't end a line with a comparison `>`* (write the right
+> operand on the same line). `<=`/`>=`/`>>` are distinct tokens and unaffected.
 - **Ternary:** `cond ? then : else`.
 - **Blocks:** `< stmt… last >` are expressions that evaluate to their last expression — usable anywhere a value is, not just as a function body:
 ```quilon
@@ -299,7 +363,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 | Function | Effect |
 |----------|--------|
-| `print(x) -> $` | Write `x` to stdout, **with a trailing newline**. Polymorphic over `Num`/`Text`/`Bool` (`Bool` prints `true`/`false`). Returns `$` (Unit). |
+| `print(x) -> $` | Write `x` to stdout, **with a trailing newline**. An [overload set](#overloading) over `Num`/`Text`/`Bool` (`Bool` prints `true`/`false`). Returns `$` (Unit). A user `print` definition *adds* an overload. |
 | `eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
 | `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. |
 | `stdout`, `stderr` | The standard file descriptors. |
@@ -365,10 +429,10 @@ is correct in the presence of multi-byte characters. For example, the program
 add = (a :: Num) -> Num => a + true
 ```
 
-reports:
+reports (since `+` is an [overload set](#overloading), a `Num + Bool` matches no member):
 
 ```
-program.ql:1:28: error: Type mismatch: expected Num, got Bool
+program.ql:1:28: error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, Num), (Text, Text)
   |
 1 | add = (a :: Num) -> Num => a + true
   |                            ^^^^^^^^
@@ -389,6 +453,9 @@ message instead. Any compile error exits with status 1.
 | `^` entry point, native compile + JIT `run` | ✅ |
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
+| `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
+| Ad-hoc overloading: same-named typed defs, exact-type dispatch | ✅ |
+| Operator overloading (`+`, comparisons, … on user types); built-ins as overloads | ✅ |
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
@@ -407,7 +474,8 @@ message instead. Any compile error exits with status 1.
 | Conservative GC (Boehm) | ✅ |
 | `Text` in records/arrays, or as a sum-type payload (`Ok(text)`) | 🚧 |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
-| Generics, closures, `while` loops | ❌ |
+| Generics / type variables (overloading is the only polymorphism), closures, `while` loops | ❌ |
+| Overloaded name passed as a value (higher-order); only direct call sites resolve | ❌ |
 | Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
 
 ---
@@ -416,10 +484,13 @@ message instead. Any compile error exits with status 1.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release.
+- **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release. A corollary for [overloading](#overloading): a `Result` payload is generic, so binding it (`Ok(x) => …`) and passing it to an [overload set](#overloading) resolves to the **`Num`** member (numeric payloads work end-to-end); a non-numeric `Result` payload (`Ok("x")`) routed through an overload is part of this same non-numeric-payload gap. A **user** sum type's payloads are concrete (`Circle(Num)`, `On(Bool)`), so they dispatch overloads correctly by their declared type.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
-- A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
-- **No generics, closures, or `while` loops.** The module system is minimal (`core.io` built-in + file-path imports).
+- **No generics, closures, or `while` loops.** Overloading (ad-hoc, exact-type
+  dispatch) is the only polymorphism; there are no type variables. The module system is
+  minimal (`core.io` built-in + file-path imports).
+- **Overloads resolve at direct call sites only.** Passing an overloaded name as a value
+  (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
 - `argv` is a placeholder (0); full `[]Text` conversion is planned.
 
