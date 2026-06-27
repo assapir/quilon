@@ -58,6 +58,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("use_module.ql", 5),
     ("unit.ql", 0),
     ("overloading.ql", 161),
+    ("closures.ql", 42),
 ];
 
 fn ql_files() -> Vec<PathBuf> {
