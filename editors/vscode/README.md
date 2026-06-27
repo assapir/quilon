@@ -26,12 +26,14 @@ compiles to native code via LLVM. Files use the `.ql` extension.
 ## Install / run locally
 
 The extension is written in **TypeScript** (`src/extension.ts`), compiled to
-`out/extension.js` by `tsc`. Install dependencies once before building or
-debugging:
+`out/extension.js` by `tsc`. It uses [**pnpm**](https://pnpm.io) as its package
+manager (the pinned version lives in the `packageManager` field of
+`package.json`; `corepack enable` will provision it automatically). Install
+dependencies once before building or debugging:
 
 ```bash
 cd editors/vscode
-npm install
+pnpm install
 ```
 
 This extension is not published to the Marketplace. To try it from this checkout:
@@ -43,14 +45,14 @@ This extension is not published to the Marketplace. To try it from this checkout
    TypeScript, then a new "Extension Development Host" window opens.
 3. Open any `.ql` file (e.g. one from `examples/`) — highlighting is active.
 
-Use `npm run watch` for incremental recompiles while iterating.
+Use `pnpm run watch` for incremental recompiles while iterating.
 
 ### Option B — install as a `.vsix`
 
 ```bash
 cd editors/vscode
-npm install                   # if you haven't already
-npm run package               # compiles + produces quilon-0.1.0.vsix (via vsce)
+pnpm install                  # if you haven't already
+pnpm run package              # compiles + produces quilon-0.1.0.vsix (via vsce)
 code --install-extension quilon-0.1.0.vsix
 ```
 
@@ -60,12 +62,12 @@ The extension is TypeScript (strict). It is linted with **oxlint** and formatted
 with **oxfmt** (the [Oxc](https://oxc.rs) toolchain) — not ESLint/Prettier:
 
 ```bash
-npm run compile     # tsc: type-check + emit out/extension.js
-npm test            # compile, then run the unit tests (node --test)
-npm run lint        # oxlint (fails on any finding)
-npm run lint:fix    # oxlint --fix (auto-fix what it can)
-npm run fmt         # oxfmt --write (format in place)
-npm run fmt:check   # oxfmt --check (verify formatting; CI gate)
+pnpm run compile    # tsc: type-check + emit out/extension.js
+pnpm test           # compile, then run the unit tests (node --test)
+pnpm run lint       # oxlint (fails on any finding)
+pnpm run lint:fix   # oxlint --fix (auto-fix what it can)
+pnpm run fmt        # oxfmt --write (format in place)
+pnpm run fmt:check  # oxfmt --check (verify formatting; CI gate)
 ```
 
 CI runs `lint`, `fmt:check`, `compile`, `test`, and `package` on every PR that
@@ -136,8 +138,8 @@ CI/CD for this extension lives in
 
 - **PR gate (`validate`).** Every pull request and `main` push that touches
   `editors/vscode/**` validates the manifest/grammar/config JSON, type-checks
-  and compiles the TypeScript (`npm run compile`), and runs
-  `npx @vscode/vsce package` to prove the extension still builds into a `.vsix`.
+  and compiles the TypeScript (`pnpm run compile`), and runs
+  `pnpm exec vsce package` to prove the extension still builds into a `.vsix`.
 - **Release (`publish`).** Pushing a tag matching `vscode-v*` packages the
   `.vsix`, attaches it to a GitHub Release for that tag, and — *if the
   maintainer secrets are set* — publishes to the VS Code Marketplace and
@@ -172,7 +174,7 @@ workflow succeeds for forks/contributors without credentials:
 - **Open VSX** — set an `OVSX_PAT` repository secret
   ([Open VSX access token](https://github.com/eclipse/openvsx/wiki/Publishing-Extensions#3-create-an-access-token)).
   Before the first publish, create the namespace once (otherwise `ovsx publish`
-  fails): `npx ovsx create-namespace quilon -p "$OVSX_PAT"` (use your real
+  fails): `pnpm dlx ovsx create-namespace quilon -p "$OVSX_PAT"` (use your real
   publisher id).
 
 If a secret is absent the matching publish step is skipped and the run still

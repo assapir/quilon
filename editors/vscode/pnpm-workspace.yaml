@@ -1,0 +1,12 @@
+# pnpm settings for the extension package.
+#
+# @vscode/vsce-sign and keytar ship native postinstall build scripts that
+# pnpm 10+ blocks by default (ERR_PNPM_IGNORED_BUILDS), turning every install
+# into a prompt. Neither is needed to *package* the extension (they back
+# vsce's optional code-signing and OS-keychain credential storage, used only
+# when publishing with a PAT, which CI supplies via env vars), so we record an
+# explicit "do not build" decision to keep installs non-interactive and
+# deterministic in CI.
+allowBuilds:
+  "@vscode/vsce-sign": false
+  keytar: false

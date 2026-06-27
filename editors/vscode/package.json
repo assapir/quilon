@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "quilon",
   "license": "GPL-2.0-only",
+  "packageManager": "pnpm@11.9.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/assapir/quilon.git",
@@ -23,10 +24,10 @@
   ],
   "main": "./out/extension.js",
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test \"out/**/*.test.js\"",
+    "test": "pnpm run compile && node --test \"out/**/*.test.js\"",
     "lint": "oxlint src",
     "lint:fix": "oxlint --fix src",
     "fmt": "oxfmt --write src",
