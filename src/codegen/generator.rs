@@ -322,7 +322,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_type = if decl.name == "^" {
             self.context.f64_type().into()
         } else {
-            self.type_to_llvm(&decl.return_type.clone().unwrap_or(Type::Num))?
+            // An unannotated body defaults to `Num`, except a Unit (`$`) tail — e.g.
+            // `log = m => print(m)` — which must be `i8`, not f64, or `build_return`
+            // would emit `ret i8` into an f64 function and fail module verification.
+            let inferred = match &decl.return_type {
+                Some(t) => t.clone(),
+                None if self.expr_is_unit(&decl.body) => Type::Unit,
+                None => Type::Num,
+            };
+            self.type_to_llvm(&inferred)?
         };
 
         // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
@@ -442,6 +450,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .bool_type()
                 .const_int(*value as u64, false)
                 .into()),
+
+            // The unit value `$`: a zero `i8` placeholder. The value is never
+            // inspected; it just needs a concrete, single-inhabitant representation.
+            Expr::Unit { .. } => Ok(self.unit_value().into()),
 
             Expr::Ident { name, .. } => {
                 // Local binding (function-scoped alloca) first.
@@ -832,7 +844,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_call(print_fn, &[fd_val.into(), arg], "")
             .map_err(|e| format!("Failed to build print call: {:?}", e))?;
-        Ok(self.context.f64_type().const_float(0.0).into())
+        // `print`/`eprint` yield Unit (`$`); their result is meaningless.
+        Ok(self.unit_value().into())
     }
 
     /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
@@ -1961,10 +1974,39 @@ impl<'ctx> CodeGenerator<'ctx> {
         )
     }
 
+    /// The single value of the Unit type (`$`), lowered as a zero `i8`. Its bits are
+    /// never observed; the entry-point wrapper coerces a non-Num body to exit code 0.
+    fn unit_value(&self) -> inkwell::values::IntValue<'ctx> {
+        self.context.i8_type().const_int(0, false)
+    }
+
+    /// Whether `expr`'s value has type Unit (`$`). Codegen lacks the checker's full
+    /// inference, so for an *unannotated* function we look at the body's tail to pick
+    /// the LLVM return type: a Unit tail must be `i8`, not the `Num`/f64 default. The
+    /// only Unit-producing expressions are the `$` literal and `print`/`eprint` calls
+    /// (which return `$`); a block/ternary is Unit when its tail is. Other unannotated
+    /// non-Num bodies (Text, Bool, ...) keep the pre-existing `Num`-default behavior.
+    fn expr_is_unit(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Unit { .. } => true,
+            Expr::Call { func, .. } => {
+                matches!(func.as_ref(), Expr::Ident { name, .. } if name == "print" || name == "eprint")
+            }
+            Expr::Block { stmts, .. } => match stmts.last() {
+                Some(crate::ast::Statement::Expr(tail)) => self.expr_is_unit(tail),
+                _ => false,
+            },
+            Expr::If { then, else_, .. } => self.expr_is_unit(then) && self.expr_is_unit(else_),
+            _ => false,
+        }
+    }
+
     fn type_to_llvm(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Num => Ok(self.context.f64_type().into()),
             Type::Bool => Ok(self.context.bool_type().into()),
+            // Unit (`$`) is a zero `i8` — a concrete one-inhabitant placeholder.
+            Type::Unit => Ok(self.context.i8_type().into()),
             // Text is { ptr data, i64 byte_len } (same shape as an array).
             Type::Text => Ok(self.ptr_len_struct_type().into()),
             Type::Array(elem_type) => {

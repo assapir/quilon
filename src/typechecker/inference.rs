@@ -218,6 +218,7 @@ pub fn from_concrete(ty: &Type) -> InferType {
         Type::Num => InferType::Concrete(Type::Num),
         Type::Text => InferType::Concrete(Type::Text),
         Type::Bool => InferType::Concrete(Type::Bool),
+        Type::Unit => InferType::Concrete(Type::Unit),
         Type::Array(elem) => InferType::Array(Box::new(from_concrete(elem))),
         Type::Record(fields) => InferType::Concrete(Type::Record(fields.clone())),
         Type::Named { .. } => {

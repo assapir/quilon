@@ -229,3 +229,69 @@ fn reassigning_immutable_binding_is_a_type_error() {
         "expected reassigning an immutable binding to be a type error"
     );
 }
+
+// --- Unit type (`$`): the type and its sole value share the symbol `$`. ---
+
+#[test]
+fn run_entry_returns_unit_exits_zero() {
+    // `^` typed `-> $` with the unit value `$` as its body: a non-Num body, so
+    // the entry-point wrapper coerces it to exit code 0.
+    assert_exit("^ = () -> $ => $", 0);
+}
+
+#[test]
+fn run_function_returning_unit() {
+    // A non-entry function may be typed `-> $`; calling it then exiting with a
+    // Num keeps the program's exit code under control.
+    assert_exit(
+        "noop = () -> $ => $\n^ = () -> Num => <\n  noop()\n  7\n>",
+        7,
+    );
+}
+
+#[test]
+fn run_print_yields_unit_usable_where_unit_expected() {
+    // `print(...)` returns `$`, so it type-checks as the body of a `-> $` function.
+    assert_exit_linked(
+        "<< core.io\nlog = (m :: Text) -> $ => print(m)\n^ = () -> Num => <\n  log(\"hi\")\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn run_eprint_returns_unit_as_last_expr() {
+    // `eprint` returns `$`; as the entry point's last expression (no trailing 0)
+    // the non-Num body coerces to exit 0.
+    assert_exit_linked("<< core.io\n^ = () => eprint(\"oops\")", 0);
+}
+
+#[test]
+fn run_unannotated_print_wrapper_compiles_and_runs() {
+    // Regression: `log = m => print(m)` has no return annotation; its body is a
+    // `print` call, which returns `$` (Unit). Codegen must infer the `$` return
+    // type (i8) rather than defaulting to Num (f64), or the generated function
+    // would `ret i8` into an f64 signature and fail LLVM module verification.
+    assert_exit_linked(
+        "<< core.io
+log = m => print(m)
+^ = () -> Num => <
+  log(5)
+  0
+>",
+        0,
+    );
+}
+
+#[test]
+fn unit_is_incompatible_with_num() {
+    // `$` has type Unit, which is not Num — annotating a Num return with a `$`
+    // body must fail type checking.
+    let src = "^ = () -> Num => $";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected `$` (Unit) body for a `-> Num` function to be a type error"
+    );
+}

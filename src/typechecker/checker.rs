@@ -465,6 +465,7 @@ impl TypeChecker {
             Expr::Number { .. } => Ok(Type::Num),
             Expr::String { .. } => Ok(Type::Text),
             Expr::Bool { .. } => Ok(Type::Bool),
+            Expr::Unit { .. } => Ok(Type::Unit),
 
             Expr::Ident { name, span } => {
                 self.env
@@ -1017,12 +1018,13 @@ impl TypeChecker {
                     None => Ok(*return_type),
                     // Builtin print/eprint fallback: accept a single Num/Text/Bool
                     // when the resolved signature (e.g. core.io's placeholder) rejects it.
+                    // `print`/`eprint` yield Unit (`$`) — their result is meaningless.
                     Some(_)
                         if is_print_builtin
                             && arg_types.len() == 1
                             && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool) =>
                     {
-                        Ok(Type::Num)
+                        Ok(Type::Unit)
                     }
                     Some(e) => Err(e),
                 }

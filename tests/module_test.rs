@@ -24,10 +24,10 @@ fn check_with_base(source: &str, base_dir: &Path) -> Result<(), String> {
 
 #[test]
 fn test_builtin_import_resolves_and_exports_usable() {
-    // `core.io` exports `print`; using it should type-check.
+    // `core.io` exports `print`; using it should type-check. `print` returns `$`.
     let source = r#"
         << core.io
-        ^ = () -> Num => print(5)
+        ^ = () -> $ => print(5)
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -56,9 +56,10 @@ fn test_core_text_is_not_a_module() {
 #[test]
 fn test_print_accepts_text() {
     // print is polymorphic over Num/Text; printing a Text must type-check.
+    // `print` returns `$` (Unit), so the entry point is annotated `-> $`.
     let source = r#"
         << core.io
-        ^ = () -> Num => print("hello, " + "world")
+        ^ = () -> $ => print("hello, " + "world")
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
