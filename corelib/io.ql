@@ -29,10 +29,12 @@
 
 ~ Write a value to stdout followed by a newline. Polymorphic over Num / Text / Bool.
 ~ `print(x)` is the ergonomic form of `x |> write(stdout)` (plus the newline).
->> print = x => 0
+~ Returns Unit (`$`) — the printed value's "result" is meaningless.
+>> print = x -> $ => $
 
 ~ Write a value to stderr followed by a newline. Polymorphic over Num / Text / Bool.
->> eprint = x => 0
+~ Returns Unit (`$`).
+>> eprint = x -> $ => $
 
 ~ Write a Text's raw bytes to a file descriptor (no trailing newline).
 ~ Returns the number of bytes written. e.g. `"hi" |> write(stdout)`.

@@ -116,6 +116,11 @@ pub enum Expr {
         span: Span,
     },
 
+    // The unit value `$` — the sole inhabitant of the `Unit` type.
+    Unit {
+        span: Span,
+    },
+
     // Variables
     Ident {
         name: String,
@@ -230,6 +235,7 @@ impl Expr {
             Expr::Number { span, .. } => span,
             Expr::String { span, .. } => span,
             Expr::Bool { span, .. } => span,
+            Expr::Unit { span, .. } => span,
             Expr::Ident { span, .. } => span,
             Expr::BinOp { span, .. } => span,
             Expr::UnaryOp { span, .. } => span,
@@ -350,6 +356,9 @@ pub enum Type {
     Num,
     Text,
     Bool,
+    // The unit type, written `$`. Has exactly one value (also `$`). Used for
+    // side-effecting expressions/functions whose result is meaningless.
+    Unit,
     Array(Box<Type>),
     Record(Vec<(String, Type)>), // For anonymous records
     Named {

@@ -205,9 +205,12 @@ impl<'a> Parser<'a> {
             }
             found_arrow
         } else if self.check(&TokenKind::Ident) {
-            // Single param without parens: check if followed by => or ::
+            // Single param without parens: followed by `=>` (body), `::` (param type),
+            // or `->` (return type, e.g. `print = x -> $ => $`).
             let ahead = self.peek_ahead(1);
-            ahead.kind == TokenKind::Arrow || ahead.kind == TokenKind::TypeAnnotation
+            ahead.kind == TokenKind::Arrow
+                || ahead.kind == TokenKind::TypeAnnotation
+                || ahead.kind == TokenKind::ReturnArrow
         } else {
             false
         };
@@ -976,6 +979,12 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expr::Bool { value: false, span })
             }
+            TokenKind::Unit => {
+                // `$` is the unit value — sole inhabitant of the `$` (Unit) type.
+                let span = token.span.clone();
+                self.advance();
+                Ok(Expr::Unit { span })
+            }
             TokenKind::Ident => {
                 let span = token.span.clone();
                 let name = token.text.clone();
@@ -1081,6 +1090,13 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self) -> Result<crate::ast::Type, ParseError> {
         let token = self.peek();
+
+        // `$` in type position is the Unit type (e.g. `-> $`). Matched on the token
+        // kind rather than its text since `$` is a dedicated token, not an identifier.
+        if token.kind == TokenKind::Unit {
+            self.advance();
+            return Ok(crate::ast::Type::Unit);
+        }
 
         match token.text.as_str() {
             "Num" => {

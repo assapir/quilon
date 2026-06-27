@@ -124,6 +124,11 @@ pub enum TokenKind {
     #[token("^")]
     EntryPoint,
 
+    // The unit type and its sole value, written `$` (analogous to `()` in Rust/ML).
+    // Same symbol in type position (`-> $`) and value position (`$`).
+    #[token("$")]
+    Unit,
+
     #[token(">>")]
     Export,
 
@@ -260,6 +265,7 @@ impl fmt::Display for TokenKind {
             TokenKind::TypeAnnotation => write!(f, "::"),
             TokenKind::Pipeline => write!(f, "|>"),
             TokenKind::EntryPoint => write!(f, "^"),
+            TokenKind::Unit => write!(f, "$"),
             TokenKind::Export => write!(f, ">>"),
             TokenKind::Import => write!(f, "<<"),
             TokenKind::Question => write!(f, "?"),

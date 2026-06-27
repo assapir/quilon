@@ -17,6 +17,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `->` | Return type | `f = x -> Num => x` |
 | `< >` | Block delimiters | `< a b a + b >` |
 | `^` | Entry point (main) | `^ = () -> Num => 0` |
+| `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
 | `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
@@ -54,6 +55,16 @@ c = greeting.length          ~ grapheme count   → 7
 
 ### `Bool`
 `true` / `false`.
+
+### `Unit` — `$`
+The **unit type**, written `$`. It has exactly one value, also written `$` — so `$` is
+both the type (in type position, e.g. `-> $`) and its sole value (in value position),
+analogous to `()` in Rust/ML. Use it for side-effecting expressions and functions whose
+result is meaningless. `print` and `eprint` return `$`. `$` is compatible only with `$`.
+```quilon
+log = (m :: Text) -> $ => print(m)   ~ a function whose result is meaningless
+^ = () -> $ => log("started")        ~ a `$` body exits 0 (it is not a Num)
+```
 
 ### Arrays — `[]T`
 ```quilon
@@ -202,8 +213,8 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 | Function | Effect |
 |----------|--------|
-| `print(x)` | Write `x` to stdout, **with a trailing newline**. Polymorphic over `Num`/`Text`/`Bool` (`Bool` prints `true`/`false`). |
-| `eprint(x)` | Same, to stderr. |
+| `print(x) -> $` | Write `x` to stdout, **with a trailing newline**. Polymorphic over `Num`/`Text`/`Bool` (`Bool` prints `true`/`false`). Returns `$` (Unit). |
+| `eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
 | `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. |
 | `stdout`, `stderr` | The standard file descriptors. |
 
@@ -293,6 +304,7 @@ message instead. Any compile error exits with status 1.
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Bool` | ✅ |
+| `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
