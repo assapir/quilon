@@ -12,7 +12,9 @@ compiles to native code via LLVM. Files use the `.ql` extension.
   - Operators: `|>` (pipe), `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
     `=>` (function body / match arm), `->` (return type), `<-` (loop iterate),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,
-    logical `&& || !`.
+    logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`, `|>`,
+    `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`) is highlighted as a **single**
+    token — never split into its first character colored separately from the rest.
   - Built-in types `Num` / `Text` / `Bool`, and the unit type/value `$` (`$` is
     both the type, as in `-> $`, and its sole value — highlighted like the other
     built-in types).
@@ -22,16 +24,20 @@ compiles to native code via LLVM. Files use the `.ql` extension.
 - **Inline diagnostics** — type/parse/lex errors from the compiler appear as
   editor squiggles (see [Diagnostics & debugging](#diagnostics--debugging)).
 - **Editor tasks & commands** to run the compiler on the active file.
+- **CodeLens** — **▶ Run** and **Check** actions appear above each `^`
+  entry-point definition (see [Running the compiler](#running-the-compiler-from-the-editor)).
 
 ## Install / run locally
 
 The extension is written in **TypeScript** (`src/extension.ts`), compiled to
-`out/extension.js` by `tsc`. Install dependencies once before building or
-debugging:
+`out/extension.js` by `tsc`. It uses [**pnpm**](https://pnpm.io) as its package
+manager (the pinned version lives in the `packageManager` field of
+`package.json`; `corepack enable` will provision it automatically). Install
+dependencies once before building or debugging:
 
 ```bash
 cd editors/vscode
-npm install
+pnpm install
 ```
 
 This extension is not published to the Marketplace. To try it from this checkout:
@@ -43,14 +49,14 @@ This extension is not published to the Marketplace. To try it from this checkout
    TypeScript, then a new "Extension Development Host" window opens.
 3. Open any `.ql` file (e.g. one from `examples/`) — highlighting is active.
 
-Use `npm run watch` for incremental recompiles while iterating.
+Use `pnpm run watch` for incremental recompiles while iterating.
 
 ### Option B — install as a `.vsix`
 
 ```bash
 cd editors/vscode
-npm install                   # if you haven't already
-npm run package               # compiles + produces quilon-0.1.0.vsix (via vsce)
+pnpm install                  # if you haven't already
+pnpm run package              # compiles + produces quilon-0.1.0.vsix (via vsce)
 code --install-extension quilon-0.1.0.vsix
 ```
 
@@ -60,12 +66,12 @@ The extension is TypeScript (strict). It is linted with **oxlint** and formatted
 with **oxfmt** (the [Oxc](https://oxc.rs) toolchain) — not ESLint/Prettier:
 
 ```bash
-npm run compile     # tsc: type-check + emit out/extension.js
-npm test            # compile, then run the unit tests (node --test)
-npm run lint        # oxlint (fails on any finding)
-npm run lint:fix    # oxlint --fix (auto-fix what it can)
-npm run fmt         # oxfmt --write (format in place)
-npm run fmt:check   # oxfmt --check (verify formatting; CI gate)
+pnpm run compile    # tsc: type-check + emit out/extension.js
+pnpm test           # compile, then run the unit tests (node --test)
+pnpm run lint       # oxlint (fails on any finding)
+pnpm run lint:fix   # oxlint --fix (auto-fix what it can)
+pnpm run fmt        # oxfmt --write (format in place)
+pnpm run fmt:check  # oxfmt --check (verify formatting; CI gate)
 ```
 
 CI runs `lint`, `fmt:check`, `compile`, `test`, and `package` on every PR that
@@ -73,9 +79,21 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests cover the diagnostic-output parser (`src/diagnostics.ts`), which is
-kept free of any `vscode` import so it runs under plain Node. To verify the
-**inline diagnostics** end-to-end manually:
+Unit tests (`pnpm test`) cover three things, all kept free of any `vscode`
+import so they run under plain Node:
+
+- the diagnostic-output parser (`src/diagnostics.ts` ↔ `src/diagnostics.test.ts`);
+- the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
+  `src/entryPoints.test.ts`);
+- **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
+  `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
+  (`=>`, `->`, `:=`, `|>`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
+  tokenizes to a **single** scope, plus regression guards for `<` / `>`, `=`,
+  `$`, comments, strings, and numbers. `src/grammar.ts` is a tiny dependency-free
+  re-implementation of TextMate's ordered first-match-wins rule (the behaviour
+  the operator ordering relies on), so no native engine is needed.
+
+To verify the **inline diagnostics** end-to-end manually:
 
 1. Set `quilon.command` to a working compiler (e.g. `"cargo run --"` from a
    checkout, or `"quilon"` if it's on your `PATH`).
@@ -108,6 +126,20 @@ compiler instead, set:
 The bundled `.vscode/tasks.json` also provides **quilon: check current file**
 and **quilon: run current file** tasks (`Terminal → Run Task…`).
 
+### CodeLens above the entry point
+
+Every executable Quilon program defines a top-level `^` entry point (its
+`main`). Above each `^` definition the extension shows two clickable CodeLens
+actions:
+
+- **▶ Run** — invokes **Quilon: Run Current File** (`quilon run <file>`).
+- **Check** — invokes **Quilon: Check Current File** (`quilon check <file>`).
+
+Both act on the file containing the lens. There is intentionally **no "Debug"
+lens**: Quilon has no debugger yet (step debugging needs DWARF debug info the
+compiler does not emit), so a dead button would only mislead — see
+[Diagnostics & debugging](#diagnostics--debugging).
+
 > The `quilon run` subcommand must exist in your toolchain. Depending on your
 > build it may instead be `compile` + manual `llc`/link — see the repo's
 > `CLAUDE.md` / `LANGUAGE.md`.
@@ -136,8 +168,8 @@ CI/CD for this extension lives in
 
 - **PR gate (`validate`).** Every pull request and `main` push that touches
   `editors/vscode/**` validates the manifest/grammar/config JSON, type-checks
-  and compiles the TypeScript (`npm run compile`), and runs
-  `npx @vscode/vsce package` to prove the extension still builds into a `.vsix`.
+  and compiles the TypeScript (`pnpm run compile`), and runs
+  `pnpm exec vsce package` to prove the extension still builds into a `.vsix`.
 - **Release (`publish`).** Pushing a tag matching `vscode-v*` packages the
   `.vsix`, attaches it to a GitHub Release for that tag, and — *if the
   maintainer secrets are set* — publishes to the VS Code Marketplace and
@@ -172,7 +204,7 @@ workflow succeeds for forks/contributors without credentials:
 - **Open VSX** — set an `OVSX_PAT` repository secret
   ([Open VSX access token](https://github.com/eclipse/openvsx/wiki/Publishing-Extensions#3-create-an-access-token)).
   Before the first publish, create the namespace once (otherwise `ovsx publish`
-  fails): `npx ovsx create-namespace quilon -p "$OVSX_PAT"` (use your real
+  fails): `pnpm dlx ovsx create-namespace quilon -p "$OVSX_PAT"` (use your real
   publisher id).
 
 If a secret is absent the matching publish step is skipped and the run still

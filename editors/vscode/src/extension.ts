@@ -10,6 +10,7 @@
 import { execFile } from "node:child_process";
 import * as vscode from "vscode";
 import { parseDiagnostics, type ParsedDiagnostic } from "./diagnostics";
+import { findEntryPoints } from "./entryPoints";
 
 /** Read the configured compiler invocation (default `quilon`). */
 function quilonCommand(): string {
@@ -195,6 +196,37 @@ function unparsedFailureDiagnostic(output: string): vscode.Diagnostic {
   return diagnostic;
 }
 
+// --- CodeLens: Run / Check above each `^` entry point ----------------------
+
+/**
+ * Places "▶ Run" and "Check" actions above every top-level `^` entry-point
+ * definition. Both invoke the existing `quilon.run` / `quilon.check` commands,
+ * which act on the active editor — and since the lens lives in that document,
+ * clicking it (which focuses the doc) targets the right file without needing to
+ * thread the URI through.
+ */
+class EntryPointCodeLensProvider implements vscode.CodeLensProvider {
+  provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+    const lenses: vscode.CodeLens[] = [];
+    for (const entry of findEntryPoints(document.getText())) {
+      const range = new vscode.Range(entry.line, entry.column, entry.line, entry.column + 1);
+      lenses.push(
+        new vscode.CodeLens(range, {
+          title: "▶ Run",
+          command: "quilon.run",
+          tooltip: "Run this Quilon program",
+        }),
+        new vscode.CodeLens(range, {
+          title: "Check",
+          command: "quilon.check",
+          tooltip: "Type-check this Quilon program",
+        }),
+      );
+    }
+    return lenses;
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const diagnostics = vscode.languages.createDiagnosticCollection("quilon");
   context.subscriptions.push(diagnostics);
@@ -204,6 +236,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("quilon.check", () => runOnActiveFile("check")),
     vscode.commands.registerCommand("quilon.run", () => runOnActiveFile("run")),
+    vscode.languages.registerCodeLensProvider(
+      { language: "quilon" },
+      new EntryPointCodeLensProvider(),
+    ),
     vscode.workspace.onDidOpenTextDocument(check),
     vscode.workspace.onDidSaveTextDocument(check),
     // Re-check when focus lands on a file (e.g. switching to an already-open tab

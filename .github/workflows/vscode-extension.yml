@@ -53,15 +53,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Install pnpm before setup-node so `cache: pnpm` can find it. The pnpm
+      # version comes from the `packageManager` field in the extension's
+      # package.json; this repo has no root package.json, so point the action
+      # at it explicitly (action-setup defaults to the repo-root cwd).
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.0.9
+        with:
+          package_json_file: editors/vscode/package.json
+
       - name: Set up Node.js (LTS)
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: editors/vscode/package-lock.json
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Validate JSON (manifest, language config, grammar)
         run: |
@@ -71,18 +80,18 @@ jobs:
           done
 
       - name: Lint (oxlint)
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Check formatting (oxfmt)
-        run: npm run fmt:check
+        run: pnpm run fmt:check
 
-      # `npm test` compiles (type-check + emit) and then runs the unit tests, so
+      # `pnpm test` compiles (type-check + emit) and then runs the unit tests, so
       # it doubles as the TypeScript compile gate.
       - name: Compile + test
-        run: npm test
+        run: pnpm test
 
       - name: Package extension (.vsix)
-        run: npx @vscode/vsce package
+        run: pnpm exec vsce package
 
       - name: Upload .vsix artifact
         uses: actions/upload-artifact@v4
@@ -112,20 +121,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Install pnpm before setup-node so `cache: pnpm` can find it. The pnpm
+      # version comes from the `packageManager` field in the extension's
+      # package.json; this repo has no root package.json, so point the action
+      # at it explicitly (action-setup defaults to the repo-root cwd).
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.0.9
+        with:
+          package_json_file: editors/vscode/package.json
+
       - name: Set up Node.js (LTS)
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: editors/vscode/package-lock.json
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # `vsce package` compiles first via the `vscode:prepublish` hook
-      # (`npm run compile`), so no separate compile step is needed here.
+      # (`pnpm run compile`), so no separate compile step is needed here.
       - name: Package extension (.vsix)
-        run: npx @vscode/vsce package
+        run: pnpm exec vsce package
 
       # Always: attach the built .vsix to a GitHub Release for this tag.
       - name: Publish GitHub Release
@@ -138,9 +156,10 @@ jobs:
       # the workflow still succeeds for maintainers who haven't configured creds.
       - name: Publish to VS Code Marketplace
         if: ${{ env.VSCE_PAT != '' }}
-        run: npx @vscode/vsce publish --packagePath *.vsix
+        run: pnpm exec vsce publish --packagePath *.vsix
 
-      # Guarded: only publish to Open VSX when an Open VSX PAT is set.
+      # Guarded: only publish to Open VSX when an Open VSX PAT is set. ovsx is
+      # not a project dependency, so fetch it on demand (pnpm's npx equivalent).
       - name: Publish to Open VSX
         if: ${{ env.OVSX_PAT != '' }}
-        run: npx ovsx publish *.vsix --pat "$OVSX_PAT"
+        run: pnpm dlx ovsx publish *.vsix --pat "$OVSX_PAT"
