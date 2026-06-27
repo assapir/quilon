@@ -93,6 +93,21 @@ pub struct FunctionDecl {
     pub span: Span,
 }
 
+impl FunctionDecl {
+    /// Whether this is the inert `core.io` `print`/`eprint` placeholder: a single
+    /// UNannotated parameter with an inert body. The compiler fully provides
+    /// `print`/`eprint` as built-in overloads (lowered to runtime intrinsics), so the
+    /// placeholder is ignored everywhere — neither registered as a user overload nor
+    /// type-checked / emitted. A genuine user `print`/`eprint` overload has fully
+    /// annotated parameters and is therefore NOT a placeholder. Shared by the type
+    /// checker and codegen so the two never disagree on what to skip.
+    pub fn is_inert_io_placeholder(&self) -> bool {
+        (self.name == "print" || self.name == "eprint")
+            && self.params.len() == 1
+            && self.params[0].type_annotation.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: String,
@@ -345,16 +360,48 @@ pub enum BinOp {
     Mod,
     Eq,
     Ne,
-    // `<` and `>` are block delimiters in Quilon, so bare less/greater-than are not
-    // parsed as operators yet; reserved for when the grammar disambiguates them.
-    #[allow(dead_code)]
+    // `<` and `>` double as block delimiters; the parser disambiguates them as
+    // comparison operators in operand position (a bare `>` only outside a `< >`
+    // block — see `match_comparison`).
     Lt,
     Le,
-    #[allow(dead_code)]
     Gt,
     Ge,
     And,
     Or,
+}
+
+impl BinOp {
+    /// The operator's source symbol, which doubles as its overload-set name (an
+    /// operator is just a named overload set under the hood). Shared by the type
+    /// checker and codegen so a user operator overload is keyed identically in both.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Mod => "%",
+            BinOp::Eq => "==",
+            BinOp::Ne => "!=",
+            BinOp::Lt => "<",
+            BinOp::Le => "<=",
+            BinOp::Gt => ">",
+            BinOp::Ge => ">=",
+            BinOp::And => "&&",
+            BinOp::Or => "||",
+        }
+    }
+}
+
+/// Whether `name` is an operator symbol — and thus always an overload set, never a
+/// plain value binding. Shared by the type checker and the code generator so both
+/// agree on exactly which names are operators (the binary operator symbols).
+pub fn is_operator_symbol(name: &str) -> bool {
+    matches!(
+        name,
+        "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
