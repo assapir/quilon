@@ -23,6 +23,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `for n <- xs => body` | Loop over a collection | `for n <- [1,2,3] => print(n)` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
+| `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `~` | Comment (to end of line) | `~ a note` |
 
@@ -102,14 +103,58 @@ A method is a **setter** (mutating) iff its body writes `it.field := …` (or ca
 another setter on `it`); there is no marker — the visible `:=` *is* the signal.
 Calling a setter requires a mutable (`:=`) receiver (see [Mutation](#mutation-in-place-field-writes--setters)).
 
-### Sum types — `Ok` / `NotOk`
-The built-in result type for success/failure. Construct with `Ok(value)` / `NotOk(value)`, consume with pattern matching:
+### Sum types — `/`
+A sum type (tagged union / enum) is a set of named **variants**, declared with `/`
+as the separator. Variants may be **nullary** or carry a payload:
+```quilon
+Color = Red / Green / Blue                 ~ three nullary variants
+Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
+```
+- **Payloads are built-in types only** — `Num`, `Text`, `Bool`, or `$` (Unit). There are
+  no type variables (no generics), but a variant may take several payload fields
+  (e.g. `Rect(Num, Num)`). A `$` payload carries no value — it's the "this variant has
+  no data" case (see `Ok($)` below).
+- At a given payload position, every variant with a concrete (non-`$`) field there must
+  agree on its type; `$` may coexist with a concrete type at the same position
+  (`Done($) / Pending(Num)` is fine, `A(Num) / B(Text)` is rejected).
+- **Variant (constructor) names are unique per scope** — two sum types can't share a
+  variant name.
+
+**Construct** a value by naming the variant (with payload arguments if it has any), and
+**consume** it with `?`/`|` pattern matching, which binds the payload:
+```quilon
+area = (s :: Shape) -> Num => s ?
+  | Circle(r)  => 3 * r * r
+  | Rect(w, h) => w * h          ~ binds both payload fields
+```
+A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
+(or a lowercase binding) wildcard. (See `examples/sum_types.ql`.)
+
+#### `Result` is a normal sum type
+`Result` is just a predefined sum type — there is no special case:
+```quilon
+Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
+```
+Use it exactly like any other sum type:
 ```quilon
 classify = v => v ?
   | Ok(x)    => x * 2
   | NotOk(e) => 0
 ```
-Numeric payloads work end-to-end. (See `examples/result.ql`. Non-numeric payloads: see [Known limitations](#known-limitations).)
+Numeric payloads work end-to-end. (See `examples/result.ql`. Non-numeric payloads in
+some positions: see [Known limitations](#known-limitations).)
+
+#### `/` — sum-type separator vs. division
+`/` is the division operator **and** the sum-type variant separator. They are told apart
+by Quilon's **Capitalized-type / lowercase-value** convention: `/` is a variant separator
+**only** in a type-declaration context — i.e. when the binding name and every operand are
+Capitalized type/constructor names:
+```quilon
+Color = Red / Green / Blue       ~ sum type: name + operands are Capitalized
+half  = a / b                    ~ division: lowercase operands are values
+```
+A single bare Capitalized name with no `/` (e.g. `x = Red`) is an ordinary value binding
+(here, of an existing nullary variant), not a one-variant sum-type declaration.
 
 ---
 
@@ -353,14 +398,16 @@ message instead. Any compile error exits with status 1.
 | Functions, recursion, blocks, type inference | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
-| Pattern matching (numbers, wildcard, identifiers, `Ok`/`NotOk`) | ✅ |
-| `Ok`/`NotOk` with **numeric** payloads | ✅ |
+| Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
+| User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
+| `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
+| Sum-type payloads: `Num` / `Bool` (and `Text`, see limitations) | ✅ |
 | Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` in records/arrays, or as a sum-type payload (`Ok(text)`) | 🚧 |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
-| Generics, closures, `while` loops, custom sum types | ❌ |
+| Generics, closures, `while` loops | ❌ |
 | Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
 
 ---
@@ -372,7 +419,8 @@ message instead. Any compile error exits with status 1.
 - **Non-numeric data in composites isn't sound yet.** `Text` inside a record or an array, and non-numeric sum-type payloads such as `Ok("x")` / `NotOk("error")`, do not type-check correctly in 0.9 — numeric payloads and numeric records/arrays work. Planned for a later release.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
-- **No generics, closures, `while` loops, or user-defined (custom) sum types.** The module system is minimal (`core.io` built-in + file-path imports).
+- **No generics, closures, or `while` loops.** The module system is minimal (`core.io` built-in + file-path imports).
+- **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
 - `argv` is a placeholder (0); full `[]Text` conversion is planned.
 
 ---

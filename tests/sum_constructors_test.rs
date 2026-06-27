@@ -107,30 +107,57 @@ fn test_sum_constructor_as_return_value() {
 
 #[test]
 fn test_custom_sum_type_constructor() {
-    // Custom sum type syntax not yet supported in parser
+    // User-defined nullary sum type with the `/` separator (LOCKED design).
     let tokens = Lexer::tokenize(
         r#"
-        Color = Red | Green | Blue
+        Color = Red / Green / Blue
         test = Red
     "#,
-    );
-    // Parser doesn't support sum type declarations yet (pipe syntax)
-    assert!(tokens.is_ok());
-    let result = parse(&tokens.unwrap());
-    assert!(result.is_err()); // Parse error expected
+    )
+    .unwrap();
+    let program = parse(&tokens).unwrap();
+    let mut checker = TypeChecker::new();
+    assert!(checker.check_program(&program).is_ok());
 }
 
 #[test]
 fn test_custom_sum_type_with_fields() {
-    // Custom sum type syntax not yet supported in parser
+    // User-defined sum type with payload variants, separated by `/`.
     let tokens = Lexer::tokenize(
         r#"
-        Point = Cartesian(Num, Num) | Polar(Num, Num)
+        Point = Cartesian(Num, Num) / Polar(Num, Num)
         test = Cartesian(3, 4)
     "#,
-    );
-    // Parser doesn't support sum type declarations yet (pipe syntax)
-    assert!(tokens.is_ok());
-    let result = parse(&tokens.unwrap());
-    assert!(result.is_err()); // Parse error expected
+    )
+    .unwrap();
+    let program = parse(&tokens).unwrap();
+    let mut checker = TypeChecker::new();
+    assert!(checker.check_program(&program).is_ok());
+}
+
+#[test]
+fn test_slash_remains_division_for_values() {
+    // Disambiguation: `/` between lowercase values is division, NOT a sum type.
+    let tokens = Lexer::tokenize("half = a / b").unwrap();
+    let program = parse(&tokens).unwrap();
+    // Parses as a value binding (division), so it's a VarDecl, not a TypeDecl.
+    assert!(matches!(
+        program.items.first(),
+        Some(quilon::ast::Item::VarDecl(_))
+    ));
+}
+
+#[test]
+fn test_slash_with_capitalized_left_but_nonconstructor_right_is_division() {
+    // A sum type requires BOTH operands to be Capitalized constructor names. A
+    // Capitalized left operand divided by a number/lowercase value is still division,
+    // not a misparsed one-variant sum type.
+    for src in ["Max = Min / 2", "Max = Min / count"] {
+        let tokens = Lexer::tokenize(src).unwrap();
+        let program = parse(&tokens).unwrap();
+        assert!(
+            matches!(program.items.first(), Some(quilon::ast::Item::VarDecl(_))),
+            "`{src}` should parse as division (a VarDecl), not a sum type"
+        );
+    }
 }
