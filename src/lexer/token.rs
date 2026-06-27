@@ -144,8 +144,17 @@ pub enum TokenKind {
     #[token("<")]
     BlockOpen,
 
+    // `>` is reclassified after lexing (see `Lexer::tokenize`): it stays `BlockClose`
+    // when it is the last token on its line (`>` + optional `[ \t]*` + newline/EOF),
+    // and becomes the greater-than operator `Gt` otherwise. This lets a bare `a > b`
+    // work everywhere while a block still closes on a line-final `>`.
     #[token(">")]
     BlockClose,
+
+    /// The greater-than comparison operator. Produced from a `>` that is NOT the last
+    /// token on its line (see `BlockClose`). `<` is always `BlockOpen`; less-than is
+    /// recovered in the parser, where a `<` after a complete operand can only be `Lt`.
+    Gt,
 
     #[token("{")]
     BraceOpen,
@@ -272,6 +281,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Pipe => write!(f, "|"),
             TokenKind::BlockOpen => write!(f, "<"),
             TokenKind::BlockClose => write!(f, ">"),
+            TokenKind::Gt => write!(f, ">"),
             TokenKind::BraceOpen => write!(f, "{{"),
             TokenKind::BraceClose => write!(f, "}}"),
             TokenKind::ParenOpen => write!(f, "("),

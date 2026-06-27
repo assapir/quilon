@@ -52,6 +52,38 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// No overload of `name` accepts the given argument types (exact-match dispatch,
+    /// no implicit coercion). Lists the available candidate signatures.
+    NoMatchingOverload {
+        name: String,
+        arg_types: Vec<Type>,
+        candidates: Vec<Vec<Type>>,
+        span: Span,
+    },
+    /// More than one overload of `name` matches the given argument types. (With
+    /// exact-match dispatch this means two overloads share a parameter-type list —
+    /// a duplicate definition.) Lists the colliding candidate signatures.
+    AmbiguousOverload {
+        name: String,
+        arg_types: Vec<Type>,
+        candidates: Vec<Vec<Type>>,
+        span: Span,
+    },
+    /// An overloaded definition (operator-named, or one of several same-named defs)
+    /// left a parameter unannotated. Exact-type dispatch needs every member's
+    /// parameter types spelled out.
+    OverloadMissingAnnotation {
+        name: String,
+        param: String,
+        span: Span,
+    },
+    /// A comparison/equality operator overload (`== != < <= > >=`) declared a non-`Bool`
+    /// return type. These operators are predicates and must yield `Bool`.
+    ComparisonOverloadNotBool {
+        operator: String,
+        got: Box<Type>,
+        span: Span,
+    },
     #[allow(dead_code)]
     PatternTypeMismatch {
         expected: Box<Type>,
@@ -76,6 +108,10 @@ impl TypeError {
             | TypeError::ImmutableFieldWrite { span, .. }
             | TypeError::MutatingMethodOnImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
+            | TypeError::NoMatchingOverload { span, .. }
+            | TypeError::AmbiguousOverload { span, .. }
+            | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
             | TypeError::NonExhaustiveMatch { span } => span,
         }
@@ -126,6 +162,49 @@ impl std::fmt::Display for TypeError {
             TypeError::DuplicateDefinition { name, .. } => {
                 write!(f, "Duplicate definition of '{}'", name)
             }
+            TypeError::NoMatchingOverload {
+                name,
+                arg_types,
+                candidates,
+                ..
+            } => {
+                write!(
+                    f,
+                    "No overload of '{}' matches argument types ({}). Candidates: {}",
+                    name,
+                    fmt_type_list(arg_types),
+                    fmt_candidates(candidates),
+                )
+            }
+            TypeError::AmbiguousOverload {
+                name,
+                arg_types,
+                candidates,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Ambiguous call to '{}' with argument types ({}); multiple overloads match: {}",
+                    name,
+                    fmt_type_list(arg_types),
+                    fmt_candidates(candidates),
+                )
+            }
+            TypeError::OverloadMissingAnnotation { name, param, .. } => {
+                write!(
+                    f,
+                    "Overloaded definition '{}' must annotate every parameter; '{}' has no type annotation",
+                    name, param
+                )
+            }
+            TypeError::ComparisonOverloadNotBool { operator, got, .. } => {
+                write!(
+                    f,
+                    "comparison operator '{}' overload must return Bool, found {}",
+                    operator,
+                    type_label(got)
+                )
+            }
             TypeError::PatternTypeMismatch { expected, got, .. } => {
                 write!(
                     f,
@@ -141,6 +220,76 @@ impl std::fmt::Display for TypeError {
 }
 
 impl std::error::Error for TypeError {}
+
+/// A short, user-facing label for a type in overload diagnostics (`Num`, `Text`,
+/// `Bool`, `$`, a user type's name, etc.).
+fn type_label(ty: &Type) -> String {
+    match ty {
+        Type::Num => "Num".to_string(),
+        Type::Text => "Text".to_string(),
+        Type::Bool => "Bool".to_string(),
+        Type::Unit => "$".to_string(),
+        Type::Array(elem) => format!("[]{}", type_label(elem)),
+        Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
+        // A not-yet-concrete type (an unresolved sum payload such as the `T` in `Ok(T)`).
+        Type::Generic { .. } => "<unknown>".to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
+/// Render a comma-separated parameter/argument type list (`Num, Text`).
+fn fmt_type_list(types: &[Type]) -> String {
+    types.iter().map(type_label).collect::<Vec<_>>().join(", ")
+}
+
+/// Whether `name` is a comparison/equality operator — these overloads are predicates
+/// and are required to return `Bool` (arithmetic operators are unconstrained).
+fn is_comparison_operator(name: &str) -> bool {
+    matches!(name, "==" | "!=" | "<" | "<=" | ">" | ">=")
+}
+
+/// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
+/// match by identity; a user type matches by NAME (so a `Named`/`Sum` annotation and
+/// the inferred instance line up regardless of carried fields); a `Generic` payload
+/// slot (only Result's `Ok(T)`/`NotOk(E)`) matches anything, preserving the existing
+/// generic-Result behavior.
+fn types_match(param: &Type, arg: &Type) -> bool {
+    match (param, arg) {
+        // `Generic` is a not-yet-concrete type — only a sum payload binding (the `T` in
+        // `Ok(T)`) produces one, since concrete sum-payload typing is a deferred 0.9
+        // feature. For overload dispatch a `Generic` resolves as `Num`, the canonical
+        // working payload (numeric payloads are sound end-to-end), so `Ok(x) => x * 2`
+        // dispatches `*` to its `(Num, Num)` member. This means an overloaded call on a
+        // generic value resolves DETERMINISTICALLY to the Num member rather than
+        // matching every member (a spurious ambiguity) — and it never wildcard-matches a
+        // user record/sum type. (A Text/Bool payload routed through an overload thus
+        // picks the Num member — the documented non-numeric-payload limitation, not a
+        // new behavior; true concrete-payload dispatch awaits that feature.)
+        (Type::Generic { .. }, other) | (other, Type::Generic { .. }) => {
+            matches!(other, Type::Num | Type::Generic { .. })
+        }
+        (Type::Num, Type::Num)
+        | (Type::Text, Type::Text)
+        | (Type::Bool, Type::Bool)
+        | (Type::Unit, Type::Unit) => true,
+        (Type::Array(a), Type::Array(b)) => types_match(a, b),
+        // User record / sum types are identified by name.
+        (
+            Type::Named { name: a, .. } | Type::Sum { name: a, .. },
+            Type::Named { name: b, .. } | Type::Sum { name: b, .. },
+        ) => a == b,
+        _ => false,
+    }
+}
+
+/// Render candidate signatures for an overload diagnostic (`(Num, Num), (Text, Text)`).
+fn fmt_candidates(candidates: &[Vec<Type>]) -> String {
+    candidates
+        .iter()
+        .map(|params| format!("({})", fmt_type_list(params)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[derive(Debug, Clone)]
 // `pub` so it doesn't leak through the public `Environment::lookup` signature.
@@ -246,6 +395,17 @@ type MethodDef = (Vec<Param>, Option<Type>, Expr);
 /// wrapper `codegen::TypeOracle`.
 pub type TypeTable = std::collections::HashMap<Span, Type>;
 
+/// One member of an overload set: an exact parameter-type list and the result type.
+/// Both named functions and operators (keyed by their symbol, e.g. `"+"`) live in the
+/// same registry. `builtin` members are the compiler-lowered defaults (`+` on Num/Text,
+/// the comparisons, `print`, …); user members come from top-level definitions.
+#[derive(Debug, Clone)]
+pub struct Overload {
+    pub params: Vec<Type>,
+    pub ret: Type,
+    pub builtin: bool,
+}
+
 pub struct TypeChecker {
     env: Environment,
     // Registry of methods: (TypeName, MethodName) -> method definition
@@ -259,6 +419,16 @@ pub struct TypeChecker {
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expr` and returned by `check_program`.
     type_table: TypeTable,
+    // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
+    // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use
+    // resolves to the one whose parameter types EXACTLY match the argument types (no
+    // implicit coercion). Built-in operator/`print` behavior lives here as `builtin`
+    // members, so the standard operators are visible overloads, not compiler magic.
+    overloads: std::collections::HashMap<String, Vec<Overload>>,
+    // Top-level names that form a user overload set (operator-named, or 2+ defs).
+    // A call to one of these resolves by exact argument type via `overloads` rather
+    // than through a single `env` function binding. Computed in `check_program`.
+    overloaded_names: std::collections::HashSet<String>,
 }
 
 impl Default for TypeChecker {
@@ -275,10 +445,15 @@ impl TypeChecker {
             sum_types: std::collections::HashMap::new(),
             setter_methods: std::collections::HashSet::new(),
             type_table: TypeTable::new(),
+            overloads: std::collections::HashMap::new(),
+            overloaded_names: std::collections::HashSet::new(),
         };
 
         // Add built-in sum types to the environment
         checker.add_builtins();
+        // Register the built-in operator/`print` overloads (the standard operators
+        // are visible overloads, not compiler magic).
+        checker.add_builtin_overloads();
 
         checker
     }
@@ -318,6 +493,148 @@ impl TypeChecker {
             false,
             Span::new(0, 0),
         );
+    }
+
+    /// Register the built-in operator overloads so the standard operators dispatch
+    /// through the SAME exact-match mechanism as user overloads — `+` on `Num` and
+    /// `+` on `Text` (concat) are just two members of the `+` overload set, etc.
+    /// `print`/`eprint` get a member per printable built-in (`Num`/`Text`/`Bool`).
+    fn add_builtin_overloads(&mut self) {
+        let arith = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod];
+        for op in arith {
+            // Num op Num -> Num.
+            self.add_overload(
+                op.symbol(),
+                Overload {
+                    params: vec![Type::Num, Type::Num],
+                    ret: Type::Num,
+                    builtin: true,
+                },
+            );
+        }
+        // `+` also concatenates Text.
+        self.add_overload(
+            BinOp::Add.symbol(),
+            Overload {
+                params: vec![Type::Text, Type::Text],
+                ret: Type::Text,
+                builtin: true,
+            },
+        );
+
+        // Comparisons. Equality (`==`/`!=`) over every built-in scalar; ordering
+        // (`<`/`<=`/`>`/`>=`) over Num and Text (Text is lexicographic — the
+        // concrete deliverable). All yield Bool.
+        let eq_ops = [BinOp::Eq, BinOp::Ne];
+        let ord_ops = [BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge];
+        for op in eq_ops {
+            for ty in [Type::Num, Type::Text, Type::Bool] {
+                self.add_overload(
+                    op.symbol(),
+                    Overload {
+                        params: vec![ty.clone(), ty],
+                        ret: Type::Bool,
+                        builtin: true,
+                    },
+                );
+            }
+        }
+        for op in ord_ops {
+            for ty in [Type::Num, Type::Text] {
+                self.add_overload(
+                    op.symbol(),
+                    Overload {
+                        params: vec![ty.clone(), ty],
+                        ret: Type::Bool,
+                        builtin: true,
+                    },
+                );
+            }
+        }
+
+        // Logical `&&`/`||`: Bool op Bool -> Bool.
+        for op in [BinOp::And, BinOp::Or] {
+            self.add_overload(
+                op.symbol(),
+                Overload {
+                    params: vec![Type::Bool, Type::Bool],
+                    ret: Type::Bool,
+                    builtin: true,
+                },
+            );
+        }
+
+        // `print`/`eprint`: one member per printable built-in; all return `$` (Unit).
+        for name in ["print", "eprint"] {
+            for ty in [Type::Num, Type::Text, Type::Bool] {
+                self.add_overload(
+                    name,
+                    Overload {
+                        params: vec![ty],
+                        ret: Type::Unit,
+                        builtin: true,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Add one member to the overload set `name`.
+    fn add_overload(&mut self, name: &str, overload: Overload) {
+        self.overloads
+            .entry(name.to_string())
+            .or_default()
+            .push(overload);
+    }
+
+    /// Resolve a call to overload set `name` by EXACT argument-type match (no implicit
+    /// coercion). Returns the matched overload's return type. Errors on no match or
+    /// (with exact matching, a duplicate-signature) ambiguity, listing the candidates.
+    fn resolve_overload(
+        &self,
+        name: &str,
+        arg_types: &[Type],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let set = self.overloads.get(name);
+        let matches: Vec<&Overload> = set
+            .map(|s| {
+                s.iter()
+                    .filter(|o| {
+                        o.params.len() == arg_types.len()
+                            && o.params
+                                .iter()
+                                .zip(arg_types.iter())
+                                .all(|(p, a)| types_match(p, a))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Candidate signatures are only needed to render an error, so build them lazily.
+        let candidates = || -> Vec<Vec<Type>> {
+            set.map(|s| s.iter().map(|o| o.params.clone()).collect())
+                .unwrap_or_default()
+        };
+
+        match matches.as_slice() {
+            [] => Err(TypeError::NoMatchingOverload {
+                name: name.to_string(),
+                arg_types: arg_types.to_vec(),
+                candidates: candidates(),
+                span: span.clone(),
+            }),
+            // Re-resolve the result type: an overloaded member's return annotation may
+            // have been registered (pre-pass) before its named type existed, so a bare
+            // `Named{T, fields:[]}` is filled in to its full definition here.
+            [only] => Ok(self.resolve_type(&only.ret)),
+            _ => Err(TypeError::AmbiguousOverload {
+                name: name.to_string(),
+                arg_types: arg_types.to_vec(),
+                candidates: candidates(),
+                span: span.clone(),
+            }),
+        }
     }
 
     /// Type-check a constructor application `variant(args...)` against the registered
@@ -413,11 +730,19 @@ impl TypeChecker {
     /// (`check_type_compatibility`) lines up with inferred constructor results.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
-            Type::Named { name, fields, .. } if fields.is_empty() => self
-                .sum_types
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| ty.clone()),
+            Type::Named { name, fields, .. } if fields.is_empty() => {
+                // A registered sum type wins; otherwise a registered named RECORD type
+                // (stored in `env` as its full `Named { fields, methods }`), so a
+                // function/operator parameter typed `:: SomeRecord` carries its fields
+                // and methods (field access / method dispatch in the body resolve).
+                if let Some(sum) = self.sum_types.get(name) {
+                    sum.clone()
+                } else if let Some(named @ Type::Named { .. }) = self.env.get_type(name) {
+                    named
+                } else {
+                    ty.clone()
+                }
+            }
             _ => ty.clone(),
         }
     }
@@ -427,10 +752,109 @@ impl TypeChecker {
     /// to recover precise element/field/match-result types at read sites. The table is
     /// taken (moved) out of the checker, so a checker is single-use per program.
     pub fn check_program(&mut self, program: &Program) -> Result<TypeTable, TypeError> {
+        // Pre-pass: find the names that form an overload set — operator-named
+        // definitions, or any name with 2+ top-level function definitions. These
+        // dispatch by exact argument type instead of through a single `env` binding.
+        let mut fn_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && !decl.is_inert_io_placeholder()
+            {
+                *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
+            }
+        }
+        // A name forms an overload set if it is operator-named, has 2+ definitions, OR
+        // already has a built-in overload set (e.g. `print`/`eprint` — a user
+        // definition of one ADDS an overload, it does not shadow the builtins).
+        // `^` (entry point) is never an overload set, even if (erroneously) repeated.
+        self.overloaded_names = fn_counts
+            .iter()
+            .filter(|(name, count)| {
+                (crate::ast::is_operator_symbol(name)
+                    || **count > 1
+                    || self.overloads.contains_key(**name))
+                    && **name != "^"
+            })
+            .map(|(name, _)| name.to_string())
+            .collect();
+
+        // Register every overloaded definition's signature up front, so a call to any
+        // member resolves regardless of definition order (and recursion works).
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && self.overloaded_names.contains(&decl.name)
+                && !decl.is_inert_io_placeholder()
+            {
+                self.register_overload_decl(decl)?;
+            }
+        }
+
         for item in &program.items {
             self.check_item(item)?;
         }
         Ok(std::mem::take(&mut self.type_table))
+    }
+
+    /// Register a top-level function definition as a member of its overload set. Each
+    /// overloaded member must annotate all its parameter types (exact-type dispatch
+    /// can't pick between unannotated members). The result type is the annotation, or
+    /// `Num` as the provisional default (refined when its body is checked).
+    fn register_overload_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
+        let mut params = Vec::with_capacity(decl.params.len());
+        for p in &decl.params {
+            match &p.type_annotation {
+                Some(t) => params.push(self.resolve_type(t)),
+                // Exact-type dispatch needs every overloaded member's params annotated.
+                None => {
+                    return Err(TypeError::OverloadMissingAnnotation {
+                        name: decl.name.clone(),
+                        param: p.name.clone(),
+                        span: p.span.clone(),
+                    });
+                }
+            }
+        }
+        let ret = decl
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type(t))
+            .unwrap_or(Type::Num);
+
+        // A comparison/equality operator overload (`== != < <= > >=`) must return `Bool`:
+        // these are predicates that feed `?`/`|` matching and conditionals. (Arithmetic
+        // operators are unconstrained — e.g. `Vec * Num -> Vec` is fine.)
+        if is_comparison_operator(&decl.name) && ret != Type::Bool {
+            return Err(TypeError::ComparisonOverloadNotBool {
+                operator: decl.name.clone(),
+                got: Box::new(ret),
+                span: decl.span.clone(),
+            });
+        }
+
+        // Reject an exact-duplicate signature (same parameter types) up front — it
+        // would make every call to it ambiguous.
+        if let Some(set) = self.overloads.get(&decl.name)
+            && set.iter().any(|o| {
+                o.params.len() == params.len()
+                    && o.params.iter().zip(&params).all(|(a, b)| types_match(a, b))
+            })
+        {
+            return Err(TypeError::DuplicateDefinition {
+                name: decl.name.clone(),
+                span: decl.span.clone(),
+            });
+        }
+
+        self.add_overload(
+            &decl.name,
+            Overload {
+                params,
+                ret,
+                builtin: false,
+            },
+        );
+        Ok(())
     }
 
     fn check_item(&mut self, item: &Item) -> Result<(), TypeError> {
@@ -753,6 +1177,12 @@ impl TypeChecker {
     }
 
     fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
+        // The inert core.io `print`/`eprint` placeholder is fully provided by the
+        // compiler as a built-in overload; ignore its declaration entirely.
+        if decl.is_inert_io_placeholder() {
+            return Ok(());
+        }
+
         // Build function type from parameters and return type
         let param_types: Vec<Type> = decl
             .params
@@ -774,14 +1204,21 @@ impl TypeChecker {
             .map(|t| self.resolve_type(t))
             .unwrap_or(Type::Num);
 
-        let func_type = Type::Function {
-            params: param_types.clone(),
-            return_type: Box::new(preliminary_return_type.clone()),
-        };
+        // An overloaded member (operator-named, or one of 2+ same-named defs) is NOT
+        // a single `env` binding — its signature already lives in the overload set
+        // (registered in the pre-pass). We only type-check its body here, then refine
+        // that member's return type from the inferred body when it wasn't annotated.
+        let is_overloaded = self.overloaded_names.contains(&decl.name);
 
-        // Define the function in current scope BEFORE checking body (enables recursion)
-        self.env
-            .define(decl.name.clone(), func_type, false, decl.span.clone())?;
+        if !is_overloaded {
+            let func_type = Type::Function {
+                params: param_types.clone(),
+                return_type: Box::new(preliminary_return_type.clone()),
+            };
+            // Define the function in current scope BEFORE checking body (enables recursion)
+            self.env
+                .define(decl.name.clone(), func_type, false, decl.span.clone())?;
+        }
 
         // Push scope for body type checking
         self.env.push_scope();
@@ -805,18 +1242,33 @@ impl TypeChecker {
         if let Some(ref annotated_type) = decl.return_type {
             let annotated_type = self.resolve_type(annotated_type);
             self.check_type_compatibility(&annotated_type, &body_type, &decl.span)?;
-        } else {
+        } else if is_overloaded {
+            // Refine this overload member's (provisional Num) return type to the body's.
+            self.update_overload_return(&decl.name, &param_types, body_type);
+        } else if body_type != preliminary_return_type {
             // Update the function type with the inferred return type
-            if body_type != preliminary_return_type {
-                let correct_func_type = Type::Function {
-                    params: param_types,
-                    return_type: Box::new(body_type.clone()),
-                };
-                let _ = self.env.update_type(&decl.name, correct_func_type);
-            }
+            let correct_func_type = Type::Function {
+                params: param_types,
+                return_type: Box::new(body_type.clone()),
+            };
+            let _ = self.env.update_type(&decl.name, correct_func_type);
         }
 
         Ok(())
+    }
+
+    /// Refine the return type of the overload member of `name` whose parameter types
+    /// are `params` (set during body inference for an unannotated overloaded def).
+    fn update_overload_return(&mut self, name: &str, params: &[Type], ret: Type) {
+        if let Some(set) = self.overloads.get_mut(name)
+            && let Some(member) = set.iter_mut().find(|o| {
+                !o.builtin
+                    && o.params.len() == params.len()
+                    && o.params.iter().zip(params).all(|(a, b)| types_match(a, b))
+            })
+        {
+            member.ret = ret;
+        }
     }
 
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
@@ -1140,6 +1592,15 @@ impl TypeChecker {
                 }
             }
 
+            Expr::Range { start, end, span } => {
+                // `lo <- hi` materializes an inclusive `[]Num`; both ends must be Num.
+                let start_type = self.infer_expr(start)?;
+                self.check_type_compatibility(&Type::Num, &start_type, span)?;
+                let end_type = self.infer_expr(end)?;
+                self.check_type_compatibility(&Type::Num, &end_type, span)?;
+                Ok(Type::Array(Box::new(Type::Num)))
+            }
+
             Expr::ForLoop {
                 collection,
                 pattern,
@@ -1218,28 +1679,11 @@ impl TypeChecker {
         let left_type = self.infer_expr(left)?;
         let right_type = self.infer_expr(right)?;
 
-        match op {
-            // `+` is overloaded: Text + Text concatenates, otherwise it is numeric.
-            BinOp::Add if left_type == Type::Text || right_type == Type::Text => {
-                self.check_type_compatibility(&Type::Text, &left_type, span)?;
-                self.check_type_compatibility(&Type::Text, &right_type, span)?;
-                Ok(Type::Text)
-            }
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                self.check_type_compatibility(&Type::Num, &left_type, span)?;
-                self.check_type_compatibility(&Type::Num, &right_type, span)?;
-                Ok(Type::Num)
-            }
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                self.check_type_compatibility(&left_type, &right_type, span)?;
-                Ok(Type::Bool)
-            }
-            BinOp::And | BinOp::Or => {
-                self.check_type_compatibility(&Type::Bool, &left_type, span)?;
-                self.check_type_compatibility(&Type::Bool, &right_type, span)?;
-                Ok(Type::Bool)
-            }
-        }
+        // An operator is just a named overload set. Resolve it by exact operand types
+        // against the operator's overload set, which holds the built-in members
+        // (Num/Text `+`, the comparisons, …) PLUS any user-defined operator overloads
+        // — so built-ins and user operators dispatch through the same mechanism.
+        self.resolve_overload(op.symbol(), &[left_type, right_type], span)
     }
 
     fn check_unary_op(&mut self, op: UnaryOp, expr: &Expr, span: &Span) -> Result<Type, TypeError> {
@@ -1333,19 +1777,22 @@ impl TypeChecker {
             }
         }
 
+        // Overload-set dispatch: if `func` names an overload set (a user overload set
+        // OR a built-in like `print`/`eprint`), resolve it by EXACT argument types.
+        // This is the general mechanism that replaces the old `print` special-casing —
+        // `print` is now just an overload set over Num/Text/Bool returning `$`.
+        if let Expr::Ident { name, .. } = func
+            && self.overloads.contains_key(name)
+        {
+            let mut arg_types = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_types.push(self.infer_expr(arg)?);
+            }
+            return self.resolve_overload(name, &arg_types, span);
+        }
+
         // Fall back to regular function call
         let func_type = self.infer_expr(func)?;
-
-        // `print`/`eprint` are compiler-lowered (see CodeGenerator::generate_print)
-        // and polymorphic over Num / Text / Bool — which a single placeholder param
-        // can't express. They are applied as a FALLBACK: a user-defined/registered
-        // `print`/`eprint` whose signature accepts the args is resolved normally
-        // below and takes precedence; only when that resolution would reject the call
-        // (the core.io placeholder's untyped param defaulting to Num, given a Text)
-        // does the polymorphic builtin kick in. (`write` needs no fallback — its
-        // core.io placeholder is typed `(Text, Num) -> Num`.)
-        let is_print_builtin = matches!(func, Expr::Ident { name, .. }
-            if name == "print" || name == "eprint");
 
         match func_type {
             Type::Function {
@@ -1360,34 +1807,12 @@ impl TypeChecker {
                     });
                 }
 
-                // Type the arguments once.
-                let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_types.push(self.infer_expr(arg)?);
+                // Type the arguments once, then check against the resolved signature.
+                for (param_type, arg) in params.iter().zip(args.iter()) {
+                    let arg_type = self.infer_expr(arg)?;
+                    self.check_type_compatibility(param_type, &arg_type, span)?;
                 }
-
-                // Check the resolved signature, remembering the first mismatch.
-                let mut first_err = None;
-                for (param_type, arg_type) in params.iter().zip(arg_types.iter()) {
-                    if let Err(e) = self.check_type_compatibility(param_type, arg_type, span) {
-                        first_err = Some(e);
-                        break;
-                    }
-                }
-                match first_err {
-                    None => Ok(*return_type),
-                    // Builtin print/eprint fallback: accept a single Num/Text/Bool
-                    // when the resolved signature (e.g. core.io's placeholder) rejects it.
-                    // `print`/`eprint` yield Unit (`$`) — their result is meaningless.
-                    Some(_)
-                        if is_print_builtin
-                            && arg_types.len() == 1
-                            && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool) =>
-                    {
-                        Ok(Type::Unit)
-                    }
-                    Some(e) => Err(e),
-                }
+                Ok(*return_type)
             }
             _ => Err(TypeError::NotAFunction {
                 got: func_type,
@@ -1838,6 +2263,118 @@ result = val ? | OK(x, y) => x | NotOK => 0",
 
         // Check Result is defined
         assert!(checker.env.get_type("Result").is_some());
+    }
+
+    fn check_ok(src: &str) -> Result<(), TypeError> {
+        let tokens = Lexer::tokenize(src).unwrap();
+        let program = parse(&tokens).unwrap();
+        TypeChecker::new().check_program(&program).map(|_| ())
+    }
+
+    #[test]
+    fn test_overload_set_resolves_by_type() {
+        // Two `f` definitions; each call resolves by exact argument type.
+        assert!(
+            check_ok(
+                "f = (n :: Num) -> Num => n\nf = (s :: Text) -> Num => s.size\n^ = () -> Num => f(1) + f(\"x\")"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_overload_no_match_is_error() {
+        // No `f` overload accepts a Bool (no implicit coercion).
+        let err = check_ok(
+            "f = (n :: Num) -> Num => n\nf = (s :: Text) -> Num => s.size\n^ = () -> Num => f(true)",
+        )
+        .unwrap_err();
+        assert!(matches!(err, TypeError::NoMatchingOverload { .. }));
+    }
+
+    #[test]
+    fn test_duplicate_overload_signature_is_error() {
+        let err = check_ok("f = (n :: Num) -> Num => n\nf = (m :: Num) -> Num => m").unwrap_err();
+        assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+    }
+
+    #[test]
+    fn test_comparison_operator_overload_must_return_bool() {
+        // A `==` overload returning a non-Bool is rejected with a clear diagnostic.
+        let err = check_ok("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0")
+            .unwrap_err();
+        assert!(matches!(err, TypeError::ComparisonOverloadNotBool { .. }));
+        // `<=` too (a definable comparison operator).
+        assert!(
+            check_ok("V = { x :: Num }\n<= = (a :: V, b :: V) -> Num => 1\n^ = () -> Num => 0")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_bool_returning_comparison_overload_is_accepted() {
+        assert!(
+            check_ok(
+                "V = { x :: Num }\n== = (a :: V, b :: V) -> Bool => a.x == b.x\n^ = () -> Num => V { x = 1 } == V { x = 1 } ? 1 : 0"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
+        // No homogeneity rule on arithmetic operators: `V * Num -> V` is fine.
+        assert!(
+            check_ok(
+                "V = { x :: Num }\n* = (a :: V, k :: Num) -> V => V { x = a.x }\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_user_operator_overload_typechecks() {
+        assert!(
+            check_ok(
+                "P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x\n^ = () -> Num => P { x = 1 } == P { x = 1 } ? 1 : 0"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_text_ordering_typechecks() {
+        assert!(check_ok("^ = () -> Num => \"a\" < \"b\" ? 1 : 0").is_ok());
+        assert!(check_ok("^ = () -> Num => \"a\" == \"a\" ? 1 : 0").is_ok());
+    }
+
+    #[test]
+    fn test_operator_no_overload_for_operands_is_error() {
+        // `+` has no Num/Bool member.
+        assert!(check_ok("^ = () -> Num => 1 + true").is_err());
+    }
+
+    #[test]
+    fn test_generic_payload_resolves_as_num_for_operators() {
+        // A (generic) sum payload used with an operator resolves as Num — so
+        // `Ok(x) => x * 2` type-checks against `*`'s (Num, Num) member. This pins the
+        // documented Generic-as-Num overload behavior (concrete sum-payload typing is a
+        // separate deferred feature); a future change here would be a visible regression.
+        assert!(
+            check_ok("^ = () -> Num => <\n  r = Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_ok_dispatch_over_builtin_payloads() {
+        // Ok over Num/Text/Bool/$ all type-check.
+        assert!(
+            check_ok(
+                "^ = () -> Num => <\n  a = Ok(1)\n  b = Ok(\"s\")\n  c = Ok(true)\n  d = Ok($)\n  0\n>"
+            )
+            .is_ok()
+        );
     }
 
     #[test]

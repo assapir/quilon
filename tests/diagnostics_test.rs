@@ -30,7 +30,7 @@ fn check(name: &str, source: &str) -> (bool, String) {
 
 #[test]
 fn type_error_reports_line_col_and_caret() {
-    // `a + true` is a Num/Bool mismatch on line 2.
+    // `a + true` has no `+` overload for (Num, Bool) — a clear no-match error on line 2.
     let src = "~ comment\nadd = (a :: Num) -> Num => a + true\n^ = () -> Num => add(1)\n";
     let (ok, stderr) = check("type", src);
 
@@ -40,7 +40,11 @@ fn type_error_reports_line_col_and_caret() {
         stderr.contains(":2:28: error:"),
         "no line:col header: {stderr}"
     );
-    assert!(stderr.contains("Type mismatch"), "no message: {stderr}");
+    // `+` is now a visible overload set; a Num/Bool mix matches no member.
+    assert!(
+        stderr.contains("No overload of '+'"),
+        "no message: {stderr}"
+    );
     // The offending source line is echoed...
     assert!(
         stderr.contains("add = (a :: Num) -> Num => a + true"),

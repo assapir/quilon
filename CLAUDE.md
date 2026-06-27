@@ -62,7 +62,8 @@ Classic multi-pass pipeline; `src/driver.rs::front_end` wires the passes for the
 - Arrays and `Text` are both `{ ptr, i64 }` structs in LLVM (`Text` = `{ data, byte_len }`; arrays = `{ data, size }`). `Text` is a built-in type, no import.
 - Sum types (`Ok`/`NotOk`) are tagged unions (i8 tag + payload). **Numeric payloads work; non-numeric data in composites — `Text` as a payload (`Ok(text)`), or `Text` inside a record/array — doesn't type-check yet** — check `LANGUAGE.md` "Known limitations" and `tests/sum_*.rs` before assuming.
 - **No keywords** — symbol-based: `^` entry point, `<<` import, `>>` export, `|>` pipe (first-arg injection: `x |> f(a)` ≡ `f(x, a)`), `for n <- collection => body` loops, `?`/`|`/`_` pattern matching, `? :` ternary, `~` comments. Consult the symbol table in `LANGUAGE.md`.
-- I/O lives in the `core.io` module (`<< core.io`): `print`/`eprint`/`write`/`stdout`/`stderr`. There is no `println`. `print`/`eprint` are compiler-lowered builtins (polymorphic over Num/Text/Bool).
+- I/O lives in the `core.io` module (`<< core.io`): `print`/`eprint`/`write`/`stdout`/`stderr`. There is no `println`. `print`/`eprint` are built-in **overload sets** over Num/Text/Bool (lowered to runtime intrinsics); a user definition adds an overload member.
+- **Overloading is ad-hoc and explicit** (the only polymorphism — no generics): 2+ same-named top-level defs with full param annotations, or an operator-symbol-named def, form an overload set; calls/operators resolve by **exact** static argument types (no coercion). Built-in operators (`+`, comparisons incl. `Text`) and `print` go through this same mechanism. Codegen mangles each member to a distinct symbol. `>` lexes as block-close only when line-final; otherwise it's the greater-than operator.
 
 ## Reference docs
 

@@ -381,3 +381,250 @@ fn unit_is_incompatible_with_num() {
         "expected `$` (Unit) body for a `-> Num` function to be a type error"
     );
 }
+
+/// Assert `src` is rejected by the type checker (front-end, no run).
+fn assert_check_err(src: &str) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    assert!(
+        checker.check_program(&program).is_err(),
+        "expected a type error for source:\n{src}"
+    );
+}
+
+// --- Ad-hoc overloading: exact-type dispatch over an overload set. ---
+
+#[test]
+fn run_overload_set_resolves_by_argument_type() {
+    // Two `pick` definitions form an overload set; each call resolves to the member
+    // whose parameter type matches exactly. The Num and Text members do different
+    // things, so the exit code proves the right one ran for each call.
+    assert_exit(
+        "pick = (n :: Num) -> Num => n + 1\npick = (s :: Text) -> Num => s.size\n^ = () -> Num => pick(40) + pick(\"ab\")",
+        43,
+    );
+}
+
+#[test]
+fn run_operator_overload_on_user_type() {
+    // A user `==` overload on a record type; resolved like any operator overload and
+    // lowered to a direct call. Returns Bool, used in a ternary.
+    assert_exit(
+        "P = { x :: Num, y :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x && a.y == b.y\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? 42 : 0",
+        42,
+    );
+}
+
+#[test]
+fn comparison_operator_overload_must_return_bool() {
+    // A comparison/equality operator overload is a predicate — a non-Bool return type
+    // is a compile error. (Arithmetic operators have no such constraint.)
+    assert_check_err("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0");
+}
+
+#[test]
+fn run_operator_overload_returning_record_survives_frame() {
+    // A user `+` overload that RETURNS a record: the record is GC-allocated, so its
+    // fields are still readable after the operator call returns (would dangle if it
+    // were a stack alloca). Subsequent expressions must not corrupt it.
+    assert_exit(
+        "V = { x :: Num, y :: Num }\n+ = (a :: V, b :: V) -> V => V { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  v = V { x = 1, y = 2 } + V { x = 30, y = 9 }\n  pad = 5 > 1 ? 0 : 99\n  v.x + v.y + pad\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_overloaded_operator_dispatch_uses_callee_return_type() {
+    // Regression (review BUG1): codegen must infer a call's result from the callee's
+    // declared return type, not default to Num — so `mkv(..) + mkv(..)` resolves the
+    // user `(V, V)` `+` overload (it would otherwise fall to the numeric `+` and fail).
+    assert_exit(
+        "V = { x :: Num, y :: Num }\nmkv = (n :: Num) -> V => V { x = n, y = n }\n+ = (a :: V, b :: V) -> V => V { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  w = mkv(1) + mkv(20)\n  w.x + w.y\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_operator_definition_after_expression_bodied_item_parses() {
+    // Regression (review BUG2): an operator definition on its own line must NOT be
+    // absorbed as a binary operator continuing the previous expression-bodied item.
+    // Here `k = 5` is followed by a top-level `+` overload; both must parse and run.
+    assert_exit(
+        "P = { x :: Num, y :: Num }\nk = 5\n+ = (a :: P, b :: P) -> P => P { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  p = P { x = 1, y = 2 } + P { x = 30, y = 9 }\n  p.x + p.y + k\n>",
+        47,
+    );
+}
+
+#[test]
+fn run_overloaded_call_on_loop_variable_dispatches_by_element_type() {
+    // Regression (review BUG4): an overloaded call on a `for` loop variable must
+    // dispatch by the element type (Num here) — codegen tracks the loop var's type.
+    // The Text member would mis-handle a Num; resolving to the Num member yields
+    // inc(11) = 12 for the final element.
+    assert_exit(
+        "inc = (n :: Num) -> Num => n + 1\ninc = (t :: Text) -> Num => t.size\n^ = () -> Num => <\n  last := 0\n  for n <- [10, 20, 11] => <\n    last := inc(n)\n  >\n  last\n>",
+        12,
+    );
+}
+
+#[test]
+fn run_numeric_sum_payload_through_operator_overload() {
+    // A numeric sum payload flows through an operator overload set: `Ok(x) => x * 2`
+    // — `x` is a (generic) Result payload that resolves as Num for `*`, so it picks the
+    // `(Num, Num)` member. (Guards the Generic-resolves-as-Num overload behavior.)
+    assert_exit(
+        "^ = () -> Num => <\n  r = Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_user_sum_payload_dispatches_overload_by_concrete_type() {
+    // A user sum type's payloads carry CONCRETE types (unlike Result's generic ones), so
+    // a match arm's payload binding dispatches an overloaded call by that concrete type.
+    assert_exit(
+        "Shape = Circle(Num) / Rect(Num, Num)\narea = (n :: Num) -> Num => n * 3\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(w, h) => w * h\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
+    // Regression (review BUG3 family): a Bool payload binding must dispatch to the
+    // `(Bool)` overload member — codegen tracks the binding's concrete type — not the
+    // `(Num)` member (which previously produced an LLVM i1-into-f64 type mismatch).
+    assert_exit(
+        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => n + 1\nclassify = (b :: Bool) -> Num => b ? 100 : 7\n^ = () -> Num => <\n  s = On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
+        100,
+    );
+}
+
+#[test]
+fn run_text_equality_and_ordering_overloads() {
+    // Built-in Text comparison overloads: `==` (equality) and `<`/`>` (lexicographic).
+    assert_exit(
+        "^ = () -> Num => <\n  eq = \"hi\" == \"hi\" ? 10 : 0\n  lt = \"abc\" < \"abd\" ? 20 : 0\n  gt = \"b\" > \"a\" ? 12 : 0\n  eq + lt + gt\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_text_inequality_is_false_when_equal() {
+    // `!=` on Text is the negation of `==`.
+    assert_exit("^ = () -> Num => \"x\" != \"x\" ? 1 : 42", 42);
+}
+
+#[test]
+fn run_bool_equality_compares_values() {
+    // `Bool == Bool` (i1 operands) is a built-in `==` overload; it must codegen to an
+    // integer compare, not error or miscompile.
+    assert_exit("^ = () -> Num => true == true ? 42 : 0", 42);
+    assert_exit("^ = () -> Num => true != false ? 42 : 0", 42);
+}
+
+#[test]
+fn run_ok_dispatch_over_every_builtin_payload() {
+    // `Ok` constructs over every built-in payload type, including `$` (zero-payload).
+    // All four construct; the matched `Ok(Num)` extracts its payload as the exit code.
+    assert_exit(
+        "^ = () -> Num => <\n  n = Ok(42)\n  t = Ok(\"hello\")\n  b = Ok(true)\n  u = Ok($)\n  n ? | Ok(x) => x | NotOk(e) => 0\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_ok_text_payload_constructs_and_dispatches() {
+    // `Ok(Text)` constructs and the match dispatches to the `Ok` arm by tag. (Using a
+    // bound Text payload's fields is the separate, documented non-numeric-payload
+    // limitation; here we only require construction + tag dispatch to work.)
+    assert_exit(
+        "^ = () -> Num => <\n  r = Ok(\"abcd\")\n  r ? | Ok(s) => 42 | NotOk(e) => 0\n>",
+        42,
+    );
+}
+
+#[test]
+fn print_remains_an_overload_over_builtins() {
+    // `print` is now a visible overload set over Num/Text/Bool (returning `$`), not a
+    // compiler special case. Each printable type type-checks and runs.
+    assert_exit_linked(
+        "<< core.io\n^ = () -> Num => <\n  print(1)\n  print(\"two\")\n  print(true)\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn user_print_overload_is_added_not_shadowed() {
+    // A user `print` overload with its own signature is ADDED to the overload set; the
+    // built-in single-arg print/eprint still work, and the user 2-arg form dispatches.
+    assert_exit_linked(
+        "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  print(\"hi\")\n  print(40, 2)\n>",
+        42,
+    );
+}
+
+// --- Negative overload cases: ambiguous / no-match are clear compile errors. ---
+
+#[test]
+fn no_matching_overload_is_a_compile_error() {
+    // No `pick` overload accepts a Bool (exact-match, no coercion).
+    assert_check_err(
+        "pick = (n :: Num) -> Num => n\npick = (s :: Text) -> Num => s.size\n^ = () -> Num => pick(true)",
+    );
+}
+
+#[test]
+fn duplicate_overload_signature_is_a_compile_error() {
+    // Two definitions with the SAME parameter types make every call ambiguous.
+    assert_check_err(
+        "pick = (n :: Num) -> Num => n\npick = (m :: Num) -> Num => m + 1\n^ = () -> Num => pick(1)",
+    );
+}
+
+#[test]
+fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
+    // `+` has Num/Num and Text/Text overloads but none for Num + Bool.
+    assert_check_err("^ = () -> Num => 1 + true");
+}
+
+// --- The `>` lexing rule: line-final `>` closes a block; otherwise it is `Gt`. ---
+
+#[test]
+fn run_bare_greater_than_works_on_one_line() {
+    // `a > b` on a single line is the greater-than operator everywhere (no parens).
+    assert_exit("^ = () -> Num => 5 > 3 ? 42 : 0", 42);
+}
+
+#[test]
+fn run_greater_than_inside_block_closing_line_final() {
+    // A `>` comparison used inside a `< >` block whose closing `>` is line-final.
+    assert_exit(
+        "^ = () -> Num => <\n  ok = 10 > 2 ? 1 : 0\n  ok == 1 ? 42 : 0\n>",
+        42,
+    );
+}
+
+#[test]
+fn dangling_comparison_at_line_end_is_an_error() {
+    // A `>` placed as the LAST token on its line is lexed as block-close, so using it
+    // as a comparison there must fail to parse (never silently miscompile).
+    let src = "^ = () -> Num => <\n  x = 5\n  x >\n  3\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    assert!(
+        parser::parse(&tokens).is_err(),
+        "a line-final `>` used as comparison must be a parse error"
+    );
+}
+
+#[test]
+fn unterminated_block_with_only_midline_gt_is_an_error() {
+    // A block whose `>` is mid-line (a `Gt`) never gets its line-final closing `>`,
+    // so the block is unterminated -> a clear parse error (unexpected EOF).
+    let src = "^ = () -> Num => < x > 5";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    assert!(
+        parser::parse(&tokens).is_err(),
+        "an unterminated block must be a parse error"
+    );
+}

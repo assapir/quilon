@@ -66,6 +66,33 @@ pub extern "C" fn __text_length(ptr: *const u8, len: i64) -> i64 {
     }
 }
 
+/// Lexicographically compare two UTF-8 byte strings, returning -1, 0, or 1 (like
+/// `memcmp`/Rust's `Ord` on byte slices: a common prefix orders by length). Backs the
+/// `Text` comparison operators (`==`/`!=`/`<`/`<=`/`>`/`>=`).
+///
+/// # Safety contract (upheld by the compiler)
+/// `a`/`b` are null or point to at least `alen`/`blen` readable bytes.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_cmp(a: *const u8, alen: i64, b: *const u8, blen: i64) -> i32 {
+    let lhs = byte_slice(a, alen);
+    let rhs = byte_slice(b, blen);
+    match lhs.cmp(rhs) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+/// View `len` bytes at `ptr` as a slice (empty for null/non-positive `len`).
+fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
+    if ptr.is_null() || len <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+    }
+}
+
 /// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
 /// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin.
 ///
@@ -155,6 +182,39 @@ fn format_num(x: f64) -> String {
         format!("{}", x)
     }
 }
+
+/// Force every runtime intrinsic to be RETAINED in the `staticlib` archive, even
+/// though nothing in this crate calls them (they are only ever called from the
+/// LLVM IR the code generator emits, which rustc never sees). Without an in-crate
+/// reference, the staticlib's link step can dead-strip an intrinsic — observed in
+/// CI as `undefined reference to __text_cmp` during AOT linking while the JIT (which
+/// maps symbols by address) was unaffected. The `#[used]` table is a reachability
+/// root that pins all of them deterministically, independent of codegen-unit layout
+/// or linker GC. (The AOT link also wraps the archive in `--whole-archive`; this
+/// guarantees the symbols are present to be pulled in the first place.)
+// Function pointers transmuted to a common fn-pointer type — `Sync`,
+// const-constructible, and each entry pins its intrinsic. Kept as a `#[used]`
+// reachability root so the staticlib link never dead-strips an intrinsic that is
+// only ever called from generated LLVM IR (never from Rust). All entries are plain
+// `extern "C"` fn items; the transmute only erases their (ABI-compatible) parameter
+// lists for storage — the pointers are never called through this array.
+type RtFn = unsafe extern "C" fn();
+// Each `transmute` only erases an (ABI-irrelevant) parameter list to a common
+// fn-pointer type for storage; the entries are never called through this array.
+#[allow(clippy::missing_transmute_annotations)]
+#[used]
+static QUILON_RT_INTRINSICS: [RtFn; 8] = unsafe {
+    [
+        core::mem::transmute(__gc_init as extern "C" fn()),
+        core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
+        core::mem::transmute(__text_length as extern "C" fn(*const u8, i64) -> i64),
+        core::mem::transmute(__text_cmp as extern "C" fn(*const u8, i64, *const u8, i64) -> i32),
+        core::mem::transmute(__write_bytes as extern "C" fn(i64, *const u8, i64) -> i64),
+        core::mem::transmute(__print_num_fd as extern "C" fn(i64, f64)),
+        core::mem::transmute(__print_bool_fd as extern "C" fn(i64, i64)),
+        core::mem::transmute(__print_text_fd as extern "C" fn(i64, *const c_char)),
+    ]
+};
 
 #[cfg(test)]
 mod tests {
