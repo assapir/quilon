@@ -179,6 +179,24 @@ fn all_if_arms_recurse_verifies() {
     );
 }
 
+/// A tail-recursive OUTER function whose body block declares a NESTED tail-recursive
+/// function. Emitting the nested function re-enters function emission (which installs and
+/// tears down its own TCO context); the outer function's TCO context must survive that so
+/// the outer tail self-call still lowers correctly. Regression test: previously the nested
+/// emission cleared the shared context and the outer tail call panicked in codegen.
+/// outer(5,0) counts 5 (acc 0->5) then adds inner(3,0)=3, so 8.
+#[test]
+fn nested_tail_recursive_function_does_not_clobber_outer_tco() {
+    assert_exit(
+        "outer = (n :: Num, acc :: Num) -> Num => <\n\
+           inner = (m :: Num, s :: Num) -> Num => m == 0 ? s : inner(m - 1, s + 1)\n\
+           n == 0 ? acc + inner(3, 0) : outer(n - 1, acc + 1)\n\
+         >\n\
+         ^ = () -> Num => outer(5, 0)",
+        8,
+    );
+}
+
 /// A tail self-call evaluates ALL its arguments against the CURRENT iteration's params
 /// before overwriting any slot. Here the second arg reads `n`, which the first arg also
 /// rebinds — a naive in-order overwrite would corrupt it. Sum 1..5 with a swap-style

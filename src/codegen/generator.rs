@@ -204,9 +204,9 @@ struct Tco<'ctx> {
     /// The LLVM symbol of the function being optimized (mangled if overloaded). A `Call`
     /// is a self-tail-call only if it resolves to exactly this symbol with matching arity.
     self_symbol: String,
-    /// The function's parameter names, in declaration order, paired with the alloca slot
-    /// each is stored in. A tail self-call recomputes the args and rewrites these slots.
-    param_slots: Vec<(String, PointerValue<'ctx>)>,
+    /// The function's parameter alloca slots, in declaration order. A tail self-call
+    /// recomputes the args and rewrites these slots (its length is the arity).
+    param_slots: Vec<PointerValue<'ctx>>,
     /// The loop header — the block a tail self-call branches back to. Positioned right
     /// after the parameter slots are (re)loaded into the `variables` map for the body.
     header: inkwell::basic_block::BasicBlock<'ctx>,
@@ -783,33 +783,42 @@ impl<'ctx> CodeGenerator<'ctx> {
         // recursion (`fact = n => … fact(n-1) …`), since a closure value cannot refer to
         // itself before it exists. The choice is by ACTUAL captures, not syntax.
         if self.current_function.is_some() {
+            // Emitting a nested function re-enters function emission, which sets and then
+            // clears the outer function's TCO context (`self.tco`). Snapshot and restore
+            // it so a nested tail-recursive function does not clobber the OUTER function's
+            // active context — otherwise the outer tail walk resuming after this nested
+            // decl would panic ("generate_tail_expr without a TCO context").
+            let saved_tco = self.tco.take();
             let param_names: Vec<String> = decl.params.iter().map(|p| p.name.clone()).collect();
             let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
             let captures =
                 crate::ast::captures::lambda_free_idents(&param_names, &decl.body, &outer);
-            if !captures.is_empty() {
-                return self.generate_local_closure(decl);
-            }
-            // No captures: emit a plain module function, but save/restore the enclosing
-            // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
-            // state) around it, since `emit_module_function` clears and repopulates them.
-            let saved_block = self.builder.get_insert_block();
-            let saved_function = self.current_function;
-            let saved_vars = std::mem::take(&mut self.variables);
-            let saved_boxed = std::mem::take(&mut self.boxed_vars);
-            let saved_sigs = std::mem::take(&mut self.closure_sigs);
-            let saved_var_types = std::mem::take(&mut self.var_types);
+            let result = if !captures.is_empty() {
+                self.generate_local_closure(decl)
+            } else {
+                // No captures: emit a plain module function, but save/restore the enclosing
+                // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
+                // state) around it, since `emit_module_function` clears and repopulates them.
+                let saved_block = self.builder.get_insert_block();
+                let saved_function = self.current_function;
+                let saved_vars = std::mem::take(&mut self.variables);
+                let saved_boxed = std::mem::take(&mut self.boxed_vars);
+                let saved_sigs = std::mem::take(&mut self.closure_sigs);
+                let saved_var_types = std::mem::take(&mut self.var_types);
 
-            let result = self.emit_module_function(decl);
+                let result = self.emit_module_function(decl);
 
-            self.variables = saved_vars;
-            self.boxed_vars = saved_boxed;
-            self.closure_sigs = saved_sigs;
-            self.var_types = saved_var_types;
-            self.current_function = saved_function;
-            if let Some(block) = saved_block {
-                self.builder.position_at_end(block);
-            }
+                self.variables = saved_vars;
+                self.boxed_vars = saved_boxed;
+                self.closure_sigs = saved_sigs;
+                self.var_types = saved_var_types;
+                self.current_function = saved_function;
+                if let Some(block) = saved_block {
+                    self.builder.position_at_end(block);
+                }
+                result
+            };
+            self.tco = saved_tco;
             return result;
         }
 
@@ -917,11 +926,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // then rewrites the param slots and `br`s back here. The param allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(decl) {
-            let param_slots: Vec<(String, PointerValue<'ctx>)> = decl
+        let body_value = if self.body_has_self_tail_call(decl, &symbol) {
+            let param_slots: Vec<PointerValue<'ctx>> = decl
                 .params
                 .iter()
-                .map(|p| (p.name.clone(), self.variables[&p.name].0))
+                .map(|p| self.variables[&p.name].0)
                 .collect();
             let header = self.context.append_basic_block(function, "tco_loop");
             self.builder
@@ -982,21 +991,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     // through the ordinary `generate_expr`. The two must agree on what "tail position" is.
 
     /// Does `decl`'s body contain a self-call in tail position? Pure (emits no IR).
-    fn body_has_self_tail_call(&self, decl: &FunctionDecl) -> bool {
-        // Determine the symbol this function is/will be emitted under, so a tail call can
-        // be recognized as a SELF-call (matching name + arity, and — when overloaded — the
-        // exact mangled member). This mirrors the symbol chosen in `generate_function_decl`.
-        let self_symbol = if self.overloads.contains_key(&decl.name) {
-            let params: Vec<Type> = decl
-                .params
-                .iter()
-                .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                .collect();
-            mangle_overload(&decl.name, &params)
-        } else {
-            decl.name.clone()
-        };
-        self.expr_has_self_tail_call(&decl.body, &self_symbol, decl.params.len())
+    /// `self_symbol` is the LLVM symbol the function is emitted under (mangled if
+    /// overloaded) — passed in from `emit_module_function` so the "which symbol?" rule
+    /// lives in one place, and a tail call is recognized as a SELF-call by matching it.
+    fn body_has_self_tail_call(&self, decl: &FunctionDecl, self_symbol: &str) -> bool {
+        self.expr_has_self_tail_call(&decl.body, self_symbol, decl.params.len())
     }
 
     /// Whether `expr`, evaluated in tail position, contains a self-call (to `self_symbol`
@@ -1069,12 +1068,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// structure as `expr_has_self_tail_call`; any non-tail node falls through to
     /// `generate_expr` (always `Some`).
     fn generate_tail_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let tco = self
+        let arity = self
             .tco
             .as_ref()
-            .expect("generate_tail_expr without a TCO context");
-        let self_symbol = tco.self_symbol.clone();
-        let arity = tco.param_slots.len();
+            .expect("generate_tail_expr without a TCO context")
+            .param_slots
+            .len();
 
         match expr {
             // A pipeline in tail position is its desugared call; lower that.
@@ -1083,9 +1082,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.generate_tail_expr(&call)
             }
 
-            Expr::Call { args, .. } if self.is_self_tail_call(expr, &self_symbol, arity) => {
-                self.emit_tail_self_call(args)?;
-                Ok(None)
+            // A call in tail position: if it resolves to THIS function, lower it to the
+            // loop back-edge; otherwise it is an ordinary value. Clone `self_symbol` only
+            // here (a call leaf), not on every tail node.
+            Expr::Call { args, .. } => {
+                let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
+                if self.is_self_tail_call(expr, &self_symbol, arity) {
+                    self.emit_tail_self_call(args)?;
+                    Ok(None)
+                } else {
+                    Ok(Some(self.generate_expr(expr)?))
+                }
             }
 
             Expr::Block { stmts, .. } => {
@@ -1139,7 +1146,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .tco
             .as_ref()
             .expect("emit_tail_self_call without a TCO context");
-        let slots: Vec<PointerValue<'ctx>> = tco.param_slots.iter().map(|(_, ptr)| *ptr).collect();
+        let slots: Vec<PointerValue<'ctx>> = tco.param_slots.clone();
         let header = tco.header;
         for (slot, val) in slots.iter().zip(new_vals) {
             self.builder
@@ -3722,7 +3729,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Pattern::Constructor { name, args: _, .. } => {
+            Pattern::Constructor { name, .. } => {
                 // Tagged-union dispatch: a value is `{ i8 tag, <payload> }`; the tag is
                 // the variant's declaration index, looked up from the sum-variant
                 // registry (generalizes the old hardcoded Ok=0/NotOk=1).
