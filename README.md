@@ -31,7 +31,7 @@ See **[LANGUAGE.md](./LANGUAGE.md)** for the full reference (types, modules, pat
 
 ```bash
 cargo build --release                        # binary at target/release/quilon
-./target/release/quilon run   program.ql     # JIT-compile and execute (exit code = the program's result)
+./target/release/quilon run   program.ql [args...]   # JIT-compile & execute (args pass through to the program, mirroring ./program args...)
 ./target/release/quilon build program.ql     # build a native executable (links libquilon_rt + libgc)
 ./target/release/quilon check program.ql     # typecheck only
 ```

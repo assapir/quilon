@@ -27,6 +27,12 @@ enum Commands {
     Run {
         /// Path to the .ql file
         file: PathBuf,
+        /// Arguments passed through to the program itself (available via `^`'s
+        /// `args`). Everything after the file path is forwarded verbatim, so
+        /// `quilon run f.ql --flag x` gives the program `[f.ql, --flag, x]` and
+        /// behaves like `./f --flag x`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Compile a Quilon program
     Compile {
@@ -81,13 +87,23 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file } => {
+        Commands::Run { file, args } => {
             let program = checked_program(&file);
             require_entry_point(&program);
 
+            // Mirror the argv a native build receives: `argv[0]` is the program
+            // (here, the `.ql` file path as typed), followed by the user's
+            // trailing args. This keeps `quilon run f.ql a b c` and `./f a b c`
+            // in agreement on `^`'s `args` — same `args.size` and same trailing
+            // arguments (argv[0] is the `.ql` path rather than the binary path).
+            // Fixes the JIT leaking the `quilon run` CLI prefix (issue #44).
+            let mut argv = Vec::with_capacity(args.len() + 1);
+            argv.push(file.to_string_lossy().into_owned());
+            argv.extend(args);
+
             // JIT-compile and execute in-process; the entry point's value
             // becomes the program's exit code.
-            match jit::run_program(&program) {
+            match jit::run_program(&program, &argv) {
                 Ok(code) => std::process::exit(code),
                 Err(e) => {
                     eprintln!("❌ Runtime error: {}", e);
