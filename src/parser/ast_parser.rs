@@ -9,6 +9,11 @@ use crate::lexer::{Span, Token, TokenKind};
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// While true, a bare `ident =>` / `(params) =>` is NOT taken as a function literal.
+    /// Set only while parsing a `for`-loop's collection, where the `=>` that follows the
+    /// collection introduces the loop BODY (`for n <- xs => body`) and must not be
+    /// swallowed by a lambda. Lambdas in such positions can still be written parenthesized.
+    no_lambda: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,7 +32,11 @@ impl std::error::Error for ParseError {}
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            no_lambda: false,
+        }
     }
 
     pub fn parse(tokens: &'a [Token]) -> Result<Program, ParseError> {
@@ -258,52 +267,8 @@ impl<'a> Parser<'a> {
         return_type: Option<crate::ast::Type>,
         exported: bool,
     ) -> Result<Item, ParseError> {
-        let mut params = Vec::new();
-
         // Parse parameters: (a, b) or (a :: Type, b :: Type) or single param or just =>
-        if self.check(&TokenKind::ParenOpen) {
-            self.advance();
-
-            if !self.check(&TokenKind::ParenClose) {
-                loop {
-                    let param_name = self.expect_ident()?;
-                    let param_type = if self.check(&TokenKind::TypeAnnotation) {
-                        self.advance();
-                        Some(self.parse_type()?)
-                    } else {
-                        None
-                    };
-
-                    params.push(Param {
-                        name: param_name,
-                        type_annotation: param_type,
-                        span: self.previous_span(),
-                    });
-
-                    if !self.check(&TokenKind::Comma) {
-                        break;
-                    }
-                    self.advance();
-                }
-            }
-
-            self.expect(&TokenKind::ParenClose)?;
-        } else if self.check(&TokenKind::Ident) {
-            // Single parameter without parentheses
-            let param_name = self.expect_ident()?;
-            let param_type = if self.check(&TokenKind::TypeAnnotation) {
-                self.advance();
-                Some(self.parse_type()?)
-            } else {
-                None
-            };
-
-            params.push(Param {
-                name: param_name,
-                type_annotation: param_type,
-                span: self.previous_span(),
-            });
-        }
+        let params = self.parse_param_list()?;
 
         // Optional return type annotation with ->
         let return_type = if self.check(&TokenKind::ReturnArrow) {
@@ -584,7 +549,10 @@ impl<'a> Parser<'a> {
                     TokenKind::Assign | TokenKind::MutAssign
                 )
             {
-                // This looks like a declaration
+                // This looks like a declaration. A nested `name = params => body` stays an
+                // `Item::FunctionDecl`; codegen decides per-decl whether it is a capturing
+                // CLOSURE or a plain (recursion-capable) local function, based on whether
+                // it actually references enclosing locals.
                 let item = self.parse_item()?;
                 stmts.push(Statement::Item(item));
             } else {
@@ -665,8 +633,11 @@ impl<'a> Parser<'a> {
         };
 
         // `<- collection`. The collection is a full expression (may itself be a
-        // pipeline); it stops at the `=>` that introduces the body.
+        // pipeline); it stops at the `=>` that introduces the body. Suppress bare-lambda
+        // detection here so `for n <- xs => body` reads `xs` as the collection and the
+        // `=>` as the loop arrow, not as a `xs => body` lambda.
         self.expect(&TokenKind::LeftArrow)?;
+        self.no_lambda = true;
         let collection = self.parse_ternary()?;
 
         // `=> body` — a single expression or a `< ... >` block.
@@ -1178,6 +1149,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        // `no_lambda` is a ONE-SHOT guard: it suppresses a function-literal only at this
+        // leading primary (the for-loop collection), not in any deeper sub-expression, so
+        // nested parenthesized lambdas still parse. Consume it here.
+        let allow_lambda = !std::mem::replace(&mut self.no_lambda, false);
         let token = self.peek();
 
         match &token.kind {
@@ -1210,6 +1185,13 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Unit { span })
             }
             TokenKind::Ident => {
+                // A bare single-parameter lambda: `x => body` or `x :: Type => body`.
+                // Detected before consuming the ident as a plain reference: an ident
+                // followed by `=>` (or `:: Type =>`) is a function literal, not a value.
+                if allow_lambda && self.looks_like_bare_lambda() {
+                    return self.parse_lambda_expr();
+                }
+
                 let span = token.span.clone();
                 let name = token.text.clone();
                 self.advance();
@@ -1250,6 +1232,13 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::ParenOpen => {
+                // A parenthesized parameter list introducing a lambda — `() => body`,
+                // `(a, b) => body`, `(n :: Num) => body` — vs. an ordinary parenthesized
+                // expression `(a + b)`. Distinguished by scanning to the matching `)`
+                // and checking whether `=>` / `->` follows.
+                if allow_lambda && self.paren_starts_lambda() {
+                    return self.parse_lambda_expr();
+                }
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&TokenKind::ParenClose)?;
@@ -1262,6 +1251,144 @@ impl<'a> Parser<'a> {
                 span: token.span.clone(),
             }),
         }
+    }
+
+    /// At a bare identifier in primary position, is this the start of a single-parameter
+    /// lambda (`x => …` or `x :: Type => …`) rather than a plain value reference? We peek
+    /// past the ident: a directly-following `=>` is a lambda; an `::` introduces a typed
+    /// parameter, so we scan the (single) type annotation and require a `=>` after it.
+    fn looks_like_bare_lambda(&self) -> bool {
+        debug_assert!(self.check(&TokenKind::Ident));
+        match &self.peek_ahead(1).kind {
+            TokenKind::Arrow => true,
+            TokenKind::TypeAnnotation => {
+                // `name :: <type> =>` — find the `=>` that closes the annotation. Types
+                // here are simple (a name with optional `{ … }` generic args); the first
+                // top-level `=>` after the `::` ends the param list of a lambda. A `<`
+                // block or anything else means it was not a lambda parameter.
+                let mut idx = 2;
+                let mut brace_depth = 0i32;
+                while idx < 40 {
+                    match &self.peek_ahead(idx).kind {
+                        TokenKind::BraceOpen => brace_depth += 1,
+                        TokenKind::BraceClose => brace_depth -= 1,
+                        TokenKind::Arrow if brace_depth == 0 => return true,
+                        TokenKind::Eof => return false,
+                        // A return-arrow, block, comma, etc. at depth 0 means this `::`
+                        // was a binding annotation, not a lambda param — bail out.
+                        TokenKind::BlockOpen | TokenKind::Comma if brace_depth == 0 => {
+                            return false;
+                        }
+                        _ => {}
+                    }
+                    idx += 1;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// At `(` in primary position, does a parenthesized parameter list (`(a, b) =>` /
+    /// `() =>`) follow — making this a lambda — rather than a parenthesized expression?
+    /// Scans to the matching `)` and checks for a following `=>` or `->` (return type).
+    fn paren_starts_lambda(&self) -> bool {
+        debug_assert!(self.check(&TokenKind::ParenOpen));
+        let mut depth = 1;
+        let mut idx = 1;
+        while idx < 80 && depth > 0 {
+            match &self.peek_ahead(idx).kind {
+                TokenKind::ParenOpen => depth += 1,
+                TokenKind::ParenClose => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let next = &self.peek_ahead(idx + 1).kind;
+                        return *next == TokenKind::Arrow || *next == TokenKind::ReturnArrow;
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            idx += 1;
+        }
+        false
+    }
+
+    /// Parse a function-literal (lambda) expression: `params => body`, where `params` is
+    /// `()`, a parenthesized list, or a single bare identifier — optionally with a `->`
+    /// return type. The body is a single expression or a `< >` block. Shares its
+    /// parameter grammar with `parse_function_decl`.
+    fn parse_lambda_expr(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        let params = self.parse_param_list()?;
+
+        let return_type = if self.check(&TokenKind::ReturnArrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::Arrow)?;
+
+        let body = if self.check(&TokenKind::BlockOpen) {
+            self.parse_block()?
+        } else {
+            self.parse_expr()?
+        };
+
+        let span = Span::new(start.start, self.previous_span().end);
+        Ok(Expr::Lambda {
+            params,
+            return_type,
+            body: Box::new(body),
+            span,
+        })
+    }
+
+    /// Parse a parameter list: `(a, b)`, `(a :: T, b :: T)`, `()`, or a single bare
+    /// `name` / `name :: T` without parentheses. Stops before the `=>` / `->`.
+    /// Shared by lambdas and (via the existing inline logic) function declarations.
+    fn parse_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut params = Vec::new();
+        if self.check(&TokenKind::ParenOpen) {
+            self.advance();
+            if !self.check(&TokenKind::ParenClose) {
+                loop {
+                    let param_name = self.expect_ident()?;
+                    let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                        self.advance();
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    params.push(Param {
+                        name: param_name,
+                        type_annotation: param_type,
+                        span: self.previous_span(),
+                    });
+                    if !self.check(&TokenKind::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            self.expect(&TokenKind::ParenClose)?;
+        } else if self.check(&TokenKind::Ident) {
+            let param_name = self.expect_ident()?;
+            let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            params.push(Param {
+                name: param_name,
+                type_annotation: param_type,
+                span: self.previous_span(),
+            });
+        }
+        Ok(params)
     }
 
     fn parse_record(&mut self) -> Result<Expr, ParseError> {
