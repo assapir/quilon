@@ -1185,8 +1185,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             return false;
         }
         // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
+        // The intrinsic names here MUST stay in sync with those intercepted in
+        // `generate_call` (`print`/`eprint`/`write`/`__exit`).
         if self.sum_variants.contains_key(name.as_str())
-            || matches!(name.as_str(), "print" | "eprint" | "write")
+            || matches!(name.as_str(), "print" | "eprint" | "write" | "__exit")
         {
             return false;
         }
@@ -2448,6 +2450,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__alloc" => ptr.fn_type(&[i64t.into()], false),
             // void __gc_init() — initialize the Boehm GC.
             "__gc_init" => void.fn_type(&[], false),
+            // void __exit(i32 code) — terminate the process with `code`. Backs the
+            // `__exit(n)` primitive that `core.test`'s `assert` calls to fail. Never
+            // returns (the runtime calls libc `exit`).
+            "__exit" => void.fn_type(&[ctx.i32_type().into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
@@ -2539,6 +2545,37 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(print_fn, &[fd_val.into(), arg], "")
             .map_err(|e| format!("Failed to build print call: {:?}", e))?;
         // `print`/`eprint` yield Unit (`$`); their result is meaningless.
+        Ok(self.unit_value().into())
+    }
+
+    /// Lower the `__exit(code)` primitive: convert the `Num` `code` to an `i32` and
+    /// call the `__exit` runtime intrinsic, which terminates the process. This is the
+    /// single native primitive `core.test` builds on (its `assert` calls `__exit(101)`
+    /// on failure). The intrinsic never returns, but the call is left as ordinary
+    /// (non-`unreachable`) flow so it composes wherever an expression is expected —
+    /// e.g. a `< >` block statement or a ternary arm inside `assert` — without
+    /// clashing with the surrounding construct's own terminator. The code after it is
+    /// dead at runtime (the process has exited). Yields `$` (Unit).
+    fn generate_exit(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "__exit expects exactly 1 argument, got {}",
+                args.len()
+            ));
+        }
+        let code = self.generate_expr(&args[0])?;
+        let BasicValueEnum::FloatValue(code_f) = code else {
+            return Err("__exit expects a Num exit code".to_string());
+        };
+        let code_i32 = self
+            .builder
+            .build_float_to_signed_int(code_f, self.context.i32_type(), "exit_code")
+            .map_err(|e| format!("Failed to convert __exit code: {:?}", e))?;
+        let exit_fn = self.get_intrinsic("__exit")?;
+        self.builder
+            .build_call(exit_fn, &[code_i32.into()], "")
+            .map_err(|e| format!("Failed to build __exit call: {:?}", e))?;
+        // `__exit` never returns; yield Unit so the call composes in expression position.
         Ok(self.unit_value().into())
     }
 
@@ -2636,6 +2673,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             "write" => return self.generate_write(args),
+            // `__exit(code)` — the single native primitive `core.test` builds on,
+            // lowered to the `__exit` runtime intrinsic (terminates the process).
+            "__exit" => return self.generate_exit(args),
             _ => {}
         }
 

@@ -80,6 +80,26 @@ fn test_user_defined_print_not_shadowed() {
 }
 
 #[test]
+fn test_core_test_module_resolves_and_type_checks() {
+    // `<< core.test` is a registered built-in module; `assert` and its wrappers
+    // (over Num / Text / Bool / Result) must all resolve and type-check.
+    let source = r#"
+        << core.test
+        ^ = () -> $ => <
+          assert(1 == 1)
+          assertEq(6 * 7, 42)
+          assertEq("a" + "b", "ab")
+          assertEq(1 < 2, true)
+          assertNotEq(1, 2)
+          assertOk([1, 2].at(0))
+          assertNotOk([1, 2].at(9))
+        >
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
 fn test_file_path_import_exported_item_usable() {
     let source = r#"
         << "mathlib.ql"
