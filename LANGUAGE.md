@@ -6,6 +6,14 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 ---
 
+## Design principles
+
+- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value), it is a **compile error**; otherwise it is a **runtime error with a clear message** (printed to stderr, non-zero exit). Silent behavior is undebuggable, so Quilon refuses it. This is the reason for, e.g., `Text.indexOf` returning `Ok(Num)/NotOk` rather than a `-1` sentinel, and for `Text.replace`'s count/empty-argument checks failing rather than clamping.
+- **No magic.** Behavior is explicit and visible in the code — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
+- **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (e.g. `print(x)`, never `print(show(x))`).
+
+---
+
 ## Symbols
 
 | Symbol | Meaning | Example |
