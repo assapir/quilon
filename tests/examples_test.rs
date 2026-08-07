@@ -48,6 +48,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("iteration.ql", 42),
     ("ranges.ql", 14),
     ("spread.ql", 56),
+    ("array_concat.ql", 38),
     ("pipeline.ql", 25),
     ("text.ql", 7),
     ("io.ql", 0),

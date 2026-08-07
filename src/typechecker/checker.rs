@@ -276,7 +276,7 @@ fn result_of(elem: Type) -> Type {
 /// the inferred instance line up regardless of carried fields); a `Generic` payload
 /// slot (only Result's `Ok(T)`/`NotOk(E)`) matches anything, preserving the existing
 /// generic-Result behavior.
-fn types_match(param: &Type, arg: &Type) -> bool {
+pub(crate) fn types_match(param: &Type, arg: &Type) -> bool {
     match (param, arg) {
         // `Generic` is a not-yet-concrete type — only a sum payload binding (the `T` in
         // `Ok(T)`) produces one, since concrete sum-payload typing is a deferred 0.9
@@ -1826,6 +1826,43 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let left_type = self.infer_expr(left)?;
         let right_type = self.infer_expr(right)?;
+
+        // `+` on arrays always builds a NEW array (neither operand is mutated), in three
+        // exact-type-dispatched forms — polymorphic over the element type `T`, so they
+        // can't be fixed builtin overload members and are resolved here, before overload
+        // dispatch:
+        //   concat:  `[]T + []T -> []T`   (both sides arrays of the SAME element type)
+        //   append:  `[]T + T   -> []T`   (right matches the left array's element type)
+        //   prepend: `T   + []T -> []T`   (left matches the right array's element type)
+        // The forms are mutually exclusive (`[]T` can never equal its own element `T`),
+        // so there is no ambiguity — including the nested case `[][]Num + []Num`, where
+        // the right (`[]Num`) equals the element type and so binds as APPEND (a single
+        // element), yielding `[][]Num`. Anything else involving an array operand (e.g.
+        // mismatched element types) is a clear type error.
+        if op == BinOp::Add
+            && (matches!(left_type, Type::Array(_)) || matches!(right_type, Type::Array(_)))
+        {
+            match (&left_type, &right_type) {
+                // concat: `[]T + []T` — same element type on both sides.
+                (Type::Array(l_elem), Type::Array(r_elem)) if types_match(l_elem, r_elem) => {
+                    return Ok(left_type.clone());
+                }
+                // append: `[]T + T` — right is a single element of the left array's type.
+                (Type::Array(l_elem), r) if types_match(l_elem, r) => {
+                    return Ok(left_type.clone());
+                }
+                // prepend: `T + []T` — left is a single element of the right array's type.
+                (l, Type::Array(r_elem)) if types_match(r_elem, l) => {
+                    return Ok(right_type.clone());
+                }
+                _ => {}
+            }
+            return Err(TypeError::TypeMismatch {
+                expected: Box::new(left_type),
+                got: Box::new(right_type),
+                span: span.clone(),
+            });
+        }
 
         // An operator is just a named overload set. Resolve it by exact operand types
         // against the operator's overload set, which holds the built-in members

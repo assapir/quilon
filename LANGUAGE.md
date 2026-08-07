@@ -117,6 +117,32 @@ These methods are **reserved on arrays**: a user can define a same-named functio
 resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
 (e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.ql`.)
 
+#### Array concatenation — `+`
+
+`+` on arrays builds a **new** array (it never mutates an operand), in three forms — each
+selected by the **exact** operand types, so there is never any ambiguity:
+
+```quilon
+~ concat:  []T + []T -> []T
+[1, 2] + [3, 4]          ~ [1, 2, 3, 4]
+["a"] + ["b", "c"]       ~ ["a", "b", "c"]
+
+~ append:  []T + T   -> []T   (add one element at the end)
+[1, 2] + 3               ~ [1, 2, 3]
+["a"] + "b"              ~ ["a", "b"]
+
+~ prepend: T   + []T -> []T   (add one element at the front)
+0 + [1, 2]               ~ [0, 1, 2]
+```
+
+Both sides must agree on the element type — `[]Num + []Text` (or `[]Num + Text`) is a
+type error. The forms are mutually exclusive (an array `[]T` can never equal its own
+element `T`), so even nested arrays disambiguate cleanly: `[][]Num + []Num` is an
+**append** (the `[]Num` is a single new row → `[][]Num`), while `[][]Num + [][]Num` is a
+**concat**. `[]T + []T` is the same as the spread `[<-a, <-b]` and shares its element-copy
+lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays alike.
+(See `examples/array_concat.ql`.)
+
 ### Records
 Anonymous structs with named fields:
 ```quilon
@@ -399,7 +425,7 @@ returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `V
 
 ## Expressions
 
-- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](#overloading): `Num + Num` adds, `Text + Text` concatenates.
+- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](#overloading): `Num + Num` adds, `Text + Text` concatenates, and on arrays it concatenates / appends / prepends (`[]T + []T`, `[]T + T`, `T + []T`, all yielding a new `[]T` — see [Array concatenation](#array-concatenation--)).
 - **Comparison:** `== != < <= > >=`. Over `Num` and (lexicographically) `Text`; all return `Bool`. Each is a [user-overloadable operator](#operator-overloading).
 - **Logical:** `&& || !` (short-circuit).
 
@@ -652,6 +678,7 @@ message instead. Any compile error exits with status 1.
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
+| Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
