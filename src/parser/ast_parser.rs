@@ -1005,7 +1005,7 @@ impl<'a> Parser<'a> {
 
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
-                            args.push(self.parse_expr()?);
+                            args.push(self.parse_call_arg()?);
                             if !self.check(&TokenKind::Comma) {
                                 break;
                             }
@@ -1052,7 +1052,7 @@ impl<'a> Parser<'a> {
 
                 if !self.check(&TokenKind::ParenClose) {
                     loop {
-                        args.push(self.parse_expr()?);
+                        args.push(self.parse_call_arg()?);
                         if !self.check(&TokenKind::Comma) {
                             break;
                         }
@@ -1175,6 +1175,114 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Parse one call argument. A lambda (`params => body`) is only valid in argument
+    /// position (it feeds a built-in array method, which the compiler inlines), so it
+    /// is recognized here rather than in `parse_primary` — keeping it out of contexts
+    /// like a `for` collection (`for n <- xs => body`) where `ident =>` is not a lambda.
+    fn parse_call_arg(&mut self) -> Result<Expr, ParseError> {
+        if self.at_lambda() {
+            self.parse_lambda()
+        } else {
+            self.parse_expr()
+        }
+    }
+
+    /// Is the parser positioned at a lambda literal (`params => body`)? Lambdas are
+    /// only meaningful as arguments to built-in array methods (the compiler inlines
+    /// them); recognizing them here lets `arr.map(x => x * 2)` parse. Two forms:
+    ///
+    /// - `ident =>` — a single bare parameter.
+    /// - `( ... ) =>` — a parenthesized parameter list (possibly empty or
+    ///   type-annotated), with `=>` immediately after the `)`.
+    ///
+    /// The parenthesized form is told apart from a plain `( expr )` by scanning to the
+    /// matching close paren and checking whether `=>` follows.
+    fn at_lambda(&self) -> bool {
+        match &self.peek().kind {
+            // `ident =>`
+            TokenKind::Ident => self.peek_ahead(1).kind == TokenKind::Arrow,
+            // `( ... ) =>` — find the matching ')', then look for '=>' after it.
+            TokenKind::ParenOpen => {
+                let mut depth = 0usize;
+                let mut i = 0usize;
+                loop {
+                    match &self.peek_ahead(i).kind {
+                        TokenKind::ParenOpen => depth += 1,
+                        TokenKind::ParenClose => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return self.peek_ahead(i + 1).kind == TokenKind::Arrow;
+                            }
+                        }
+                        TokenKind::Eof => return false,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Parse a lambda `params => body`. `params` is either a single bare identifier
+    /// or a parenthesized (possibly type-annotated) list; `body` is one expression or
+    /// a `< >` block. Mirrors the parameter grammar of `parse_function_decl`.
+    fn parse_lambda(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        let mut params = Vec::new();
+
+        if self.check(&TokenKind::ParenOpen) {
+            self.advance();
+            if !self.check(&TokenKind::ParenClose) {
+                loop {
+                    let param_name = self.expect_ident()?;
+                    let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                        self.advance();
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    params.push(Param {
+                        name: param_name,
+                        type_annotation: param_type,
+                        span: self.previous_span(),
+                    });
+                    if !self.check(&TokenKind::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            self.expect(&TokenKind::ParenClose)?;
+        } else {
+            let param_name = self.expect_ident()?;
+            let param_type = if self.check(&TokenKind::TypeAnnotation) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            params.push(Param {
+                name: param_name,
+                type_annotation: param_type,
+                span: self.previous_span(),
+            });
+        }
+
+        self.expect(&TokenKind::Arrow)?;
+        let body = if self.check(&TokenKind::BlockOpen) {
+            self.parse_block()?
+        } else {
+            self.parse_expr()?
+        };
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::Lambda {
+            params,
+            body: Box::new(body),
+            span,
+        })
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {

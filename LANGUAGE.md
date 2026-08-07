@@ -76,6 +76,45 @@ first = nums[0]        ~ → 1
 ```
 Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 
+#### Array methods
+
+Arrays carry a set of **built-in, compiler-provided methods**, called with method
+syntax (`arr.method(...)`) and freely chainable. The higher-order ones take a **lambda**
+(`x => …`, `(a, b) => …`) — an anonymous function literal valid **only** as a direct
+argument to one of these methods. Quilon has no first-class closures, so the compiler
+**inlines** the lambda body per element rather than passing a function value.
+
+| Method | Result | Notes |
+|--------|--------|-------|
+| `map(f)` | new `[]R` | element type `R` is `f`'s return type (so `map` may change the element type, e.g. `[]Num → []Text`) |
+| `filter(pred)` | new `[]elem` | keeps the elements where `pred` returns `Bool` `true`, in order; `pred` **must** return `Bool` |
+| `reduce(init, (acc, x) => …)` | the accumulator | fold-left from `init`; the reducer's result type must match `init`'s type |
+| `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains |
+| `find(pred)` | `Ok(elem)` / `NotOk` | the first element satisfying `pred`, absent-safe; `pred` returns `Bool` |
+| `at(n :: Num)` | `Ok(elem)` / `NotOk` | safe index — `Ok` in bounds, `NotOk` otherwise (raw `arr[n]` stays for unchecked indexing) |
+
+```quilon
+nums = [1, 2, 3, 4, 5, 6]
+
+total = nums
+  .map(x => x * 2)              ~ [2, 4, 6, 8, 10, 12]
+  .filter(x => x > 4)           ~ [6, 8, 10, 12]
+  .reduce(0, (acc, x) => acc + x)   ~ 36
+
+first = nums.find(x => x > 3) ?  ~ Ok(4)
+  | Ok(v)    => v
+  | NotOk(_) => 0
+
+third = nums.at(2) ?             ~ Ok(3)
+  | Ok(v)    => v
+  | NotOk(_) => 0
+```
+
+These methods are **reserved on arrays**: a user can define a same-named function/overload
+(e.g. a `map` on a `Num`), but on an *array receiver* the built-in always wins — it is
+resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
+(e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.ql`.)
+
 ### Records
 Anonymous structs with named fields:
 ```quilon
@@ -491,6 +530,7 @@ message instead. Any compile error exits with status 1.
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
+| Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
@@ -507,9 +547,10 @@ message instead. Any compile error exits with status 1.
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | Command-line `argv` (argc works; argv is a placeholder) | 🚧 |
-| Generics / type variables (overloading is the only polymorphism), closures, `while` loops | ❌ |
+| Generics / type variables (overloading is the only polymorphism), first-class closures, `while` loops | ❌ |
+| Lambdas (`x => …`) as **array-method arguments only** (inlined; not a value) | ✅ |
 | Overloaded name passed as a value (higher-order); only direct call sites resolve | ❌ |
-| Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
+| String interpolation | ❌ |
 
 ---
 

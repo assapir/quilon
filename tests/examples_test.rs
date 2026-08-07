@@ -44,6 +44,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("fibonacci.ql", 55),
     ("pattern_match.ql", 50),
     ("arrays.ql", 5),
+    ("array_methods.ql", 52),
     ("for_loop.ql", 0),
     ("ranges.ql", 14),
     ("pipeline.ql", 25),

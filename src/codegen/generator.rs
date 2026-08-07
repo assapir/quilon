@@ -19,6 +19,22 @@ fn is_builtin_overload_name(name: &str) -> bool {
     matches!(name, "print" | "eprint")
 }
 
+/// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
+/// restore whatever a lambda parameter shadowed: its `variables` entry (alloca + LLVM
+/// type) and its `var_types` entry (Quilon type for overload mangling).
+type SavedBinding<'ctx> = (
+    String,
+    Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    Option<Type>,
+);
+
+/// The reserved built-in array methods. Mirrors the type checker's identical predicate
+/// (kept in lockstep across passes; a divergence would be a bug). On an array receiver
+/// these resolve to compiler-inlined loops, ahead of sum constructors and user overloads.
+fn is_array_method(name: &str) -> bool {
+    matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
+}
+
 /// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
 /// deterministic and identical at definition and call sites (built from the declared
 /// parameter type and from the inferred argument type respectively).
@@ -1391,6 +1407,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => {}
         }
 
+        // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) — RESERVED
+        // on arrays, dispatched before sum constructors / overloads (mirrors the type
+        // checker). The method applies only when the receiver (`args[0]`) is an array;
+        // the oracle confirms its element type, so this never diverts a same-named user
+        // overload on a non-array receiver.
+        if is_array_method(func_name)
+            && !args.is_empty()
+            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Array(_)))
+        {
+            return self.generate_array_method(func_name, args);
+        }
+
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDef::Sum` declarations.
@@ -1948,6 +1976,609 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(array_struct_type, array_struct, "range_array")
             .map_err(|e| format!("Failed to load range struct: {:?}", e))
+    }
+
+    /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
+    /// `args[0]` is the receiver array; the rest are the method's arguments (a lambda
+    /// for the higher-order forms, a `Num` index for `at`). Quilon has no first-class
+    /// closures, so a lambda argument is INLINED into the generated loop body rather than
+    /// emitted as a callable value (`inline_lambda`). The element LLVM type comes from the
+    /// type oracle (the receiver's `[]elem` element type), so `[]Text`/`[]Num`/... all work.
+    fn generate_array_method(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = &args[0];
+        // Element type of the receiver array, from the oracle: `[]elem`.
+        let elem_qty = match self.oracle.expr_type(recv) {
+            Some(Type::Array(e)) => (**e).clone(),
+            _ => return Err(format!("array method `{method}` on a non-array receiver")),
+        };
+        let elem_llvm = self.value_repr_type(&elem_qty)?;
+        let (array_val, data_ptr, size) = self.extract_array(recv)?;
+
+        match method {
+            "map" => self.array_map(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "filter" => self.array_filter(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "reduce" => self.array_reduce(&args[1], &args[2], &elem_qty, elem_llvm, data_ptr, size),
+            "each" => {
+                self.array_each(&args[1], &elem_qty, elem_llvm, data_ptr, size)?;
+                // Decision 19: a Unit-bodied method returns its receiver — `.each` yields
+                // the array itself so it chains. Re-emit the (already-evaluated) struct.
+                Ok(array_val)
+            }
+            "find" => self.array_find(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "at" => self.array_at(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            other => Err(format!("unknown array method `{other}`")),
+        }
+    }
+
+    /// Evaluate an array expression and break it into `(struct_value, data_ptr, size_i64)`.
+    /// The array ABI is the shared `{ ptr data, i64 size }` struct; this stores it to a
+    /// temporary alloca to GEP out the two fields, matching `generate_for_loop`.
+    fn extract_array(
+        &mut self,
+        array_expr: &Expr,
+    ) -> Result<
+        (
+            BasicValueEnum<'ctx>,
+            PointerValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let array_val = self.generate_expr(array_expr)?;
+        let struct_ty = self.ptr_len_struct_type();
+        let alloca = self.create_entry_block_alloca("am_array", struct_ty.into())?;
+        self.builder
+            .build_store(alloca, array_val)
+            .map_err(|e| format!("Failed to store array: {:?}", e))?;
+        let data_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 0, "am_data_field")
+            .map_err(|e| format!("Failed to GEP data field: {:?}", e))?;
+        let data_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                data_field,
+                "am_data",
+            )
+            .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+            .into_pointer_value();
+        let size_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 1, "am_size_field")
+            .map_err(|e| format!("Failed to GEP size field: {:?}", e))?;
+        let size = self
+            .builder
+            .build_load(self.context.i64_type(), size_field, "am_size")
+            .map_err(|e| format!("Failed to load size: {:?}", e))?
+            .into_int_value();
+        Ok((array_val, data_ptr, size))
+    }
+
+    /// GC-allocate a `{ ptr, size }` array of `count` elements of `elem_llvm`, returning
+    /// the data pointer. The caller fills it, then builds the struct via `array_struct`.
+    fn alloc_array_data(
+        &mut self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let elem_size = elem_llvm
+            .size_of()
+            .ok_or_else(|| "array element type has no compile-time size".to_string())?;
+        let bytes = self
+            .builder
+            .build_int_mul(count, elem_size, "am_bytes")
+            .map_err(|e| format!("Failed to size array alloc: {:?}", e))?;
+        let alloc = self.get_intrinsic("__alloc")?;
+        use inkwell::values::AnyValue;
+        Ok(self
+            .builder
+            .build_call(alloc, &[bytes.into()], "am_alloc")
+            .map_err(|e| format!("Failed to allocate array: {:?}", e))?
+            .as_any_value_enum()
+            .into_pointer_value())
+    }
+
+    /// Build the `{ ptr, i64 }` array struct value from a data pointer and element count.
+    fn array_struct(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let struct_ty = self.ptr_len_struct_type();
+        let alloca = self.create_entry_block_alloca("am_out", struct_ty.into())?;
+        let ptr_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 0, "am_out_ptr")
+            .map_err(|e| format!("Failed to GEP out ptr: {:?}", e))?;
+        self.builder
+            .build_store(ptr_field, data_ptr)
+            .map_err(|e| format!("Failed to store out ptr: {:?}", e))?;
+        let size_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 1, "am_out_size")
+            .map_err(|e| format!("Failed to GEP out size: {:?}", e))?;
+        self.builder
+            .build_store(size_field, count)
+            .map_err(|e| format!("Failed to store out size: {:?}", e))?;
+        self.builder
+            .build_load(struct_ty, alloca, "am_out")
+            .map_err(|e| format!("Failed to load out struct: {:?}", e))
+    }
+
+    /// Load `data_ptr[i]` as a value of `elem_llvm` (the array element representation).
+    fn load_element(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr = unsafe {
+            self.builder
+                .build_gep(elem_llvm, data_ptr, &[i], "am_elem_ptr")
+                .map_err(|e| format!("Failed to GEP element: {:?}", e))?
+        };
+        self.builder
+            .build_load(elem_llvm, ptr, "am_elem")
+            .map_err(|e| format!("Failed to load element: {:?}", e))
+    }
+
+    /// Inline a lambda body with its parameters bound to `arg_values`. Quilon has no
+    /// first-class closures: a method's lambda is lowered by binding each parameter to a
+    /// freshly-stored value (an alloca, like a loop variable) and emitting the body in the
+    /// current block. Saves/restores any shadowed bindings of the same names, so an inline
+    /// never leaks the parameter binding past its use (and nesting is safe). `param_qtys`
+    /// supplies each parameter's Quilon type for overload mangling inside the body.
+    fn inline_lambda(
+        &mut self,
+        lambda: &Expr,
+        arg_values: &[(BasicValueEnum<'ctx>, Type)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Expr::Lambda { params, body, .. } = lambda else {
+            return Err("array method expects a lambda argument".to_string());
+        };
+        if params.len() != arg_values.len() {
+            return Err(format!(
+                "lambda expects {} parameter(s), got {} argument(s)",
+                params.len(),
+                arg_values.len()
+            ));
+        }
+        // Save shadowed bindings to restore after inlining.
+        let mut saved: Vec<SavedBinding<'ctx>> = Vec::with_capacity(params.len());
+        for (param, (value, qty)) in params.iter().zip(arg_values) {
+            let alloca = self.create_entry_block_alloca(&param.name, value.get_type())?;
+            self.builder
+                .build_store(alloca, *value)
+                .map_err(|e| format!("Failed to store lambda param: {:?}", e))?;
+            saved.push((
+                param.name.clone(),
+                self.variables.get(&param.name).copied(),
+                self.var_types.get(&param.name).cloned(),
+            ));
+            self.variables
+                .insert(param.name.clone(), (alloca, value.get_type()));
+            self.var_types.insert(param.name.clone(), qty.clone());
+        }
+        let result = self.generate_expr(body);
+        // Restore shadowed bindings.
+        for (name, prev_var, prev_ty) in saved {
+            match prev_var {
+                Some(v) => {
+                    self.variables.insert(name.clone(), v);
+                }
+                None => {
+                    self.variables.remove(&name);
+                }
+            }
+            match prev_ty {
+                Some(t) => {
+                    self.var_types.insert(name, t);
+                }
+                None => {
+                    self.var_types.remove(&name);
+                }
+            }
+        }
+        result
+    }
+
+    /// `arr.map(f)` — a new array whose element `i` is `f(arr[i])`. The result element
+    /// type is the lambda body's type (from the oracle), so `map` may change the element
+    /// type (e.g. `[]Num -> []Text`).
+    fn array_map(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_llvm = match self.lambda_body_repr(lambda) {
+            Some(r) => r?,
+            None => elem_llvm,
+        };
+        let out_ptr = self.alloc_array_data(result_llvm, size)?;
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let mapped = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let dst = unsafe {
+                this.builder
+                    .build_gep(result_llvm, out_ptr, &[i], "map_dst")
+                    .map_err(|e| format!("Failed to GEP map dst: {:?}", e))?
+            };
+            this.builder
+                .build_store(dst, mapped)
+                .map_err(|e| format!("Failed to store mapped: {:?}", e))?;
+            Ok(())
+        })?;
+        self.array_struct(out_ptr, size)
+    }
+
+    /// `arr.filter(pred)` — a new array of the elements for which `pred(elem)` is true,
+    /// in order. The output buffer is sized to the input (worst case, all kept); the
+    /// result struct reports the actual kept count.
+    fn array_filter(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64t = self.context.i64_type();
+        let out_ptr = self.alloc_array_data(elem_llvm, size)?;
+        let count_ptr = self.create_entry_block_alloca("filter_count", i64t.into())?;
+        self.builder
+            .build_store(count_ptr, i64t.const_zero())
+            .map_err(|e| format!("Failed to init filter count: {:?}", e))?;
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let keep = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let keep_bool = this.value_to_boolean(keep)?;
+            let function = this.current_function.unwrap();
+            let keep_bb = this.context.append_basic_block(function, "filter_keep");
+            let cont_bb = this.context.append_basic_block(function, "filter_cont");
+            this.builder
+                .build_conditional_branch(keep_bool, keep_bb, cont_bb)
+                .map_err(|e| format!("Failed to branch filter: {:?}", e))?;
+            this.builder.position_at_end(keep_bb);
+            let count = this
+                .builder
+                .build_load(i64t, count_ptr, "filter_n")
+                .map_err(|e| format!("Failed to load filter count: {:?}", e))?
+                .into_int_value();
+            let dst = unsafe {
+                this.builder
+                    .build_gep(elem_llvm, out_ptr, &[count], "filter_dst")
+                    .map_err(|e| format!("Failed to GEP filter dst: {:?}", e))?
+            };
+            this.builder
+                .build_store(dst, elem)
+                .map_err(|e| format!("Failed to store kept: {:?}", e))?;
+            let next = this
+                .builder
+                .build_int_add(count, i64t.const_int(1, false), "filter_next")
+                .map_err(|e| format!("Failed to inc filter count: {:?}", e))?;
+            this.builder
+                .build_store(count_ptr, next)
+                .map_err(|e| format!("Failed to store filter count: {:?}", e))?;
+            this.builder
+                .build_unconditional_branch(cont_bb)
+                .map_err(|e| format!("Failed to branch filter cont: {:?}", e))?;
+            this.builder.position_at_end(cont_bb);
+            Ok(())
+        })?;
+        let count = self
+            .builder
+            .build_load(i64t, count_ptr, "filter_total")
+            .map_err(|e| format!("Failed to load filter total: {:?}", e))?
+            .into_int_value();
+        self.array_struct(out_ptr, count)
+    }
+
+    /// `arr.reduce(init, (acc, x) => ...)` — fold left, threading `acc` (initialized to
+    /// `init`) through the lambda for each element. The result is the final accumulator.
+    fn array_reduce(
+        &mut self,
+        init: &Expr,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let init_val = self.generate_expr(init)?;
+        let acc_qty = self.infer_type(init);
+        let acc_ptr = self.create_entry_block_alloca("reduce_acc", init_val.get_type())?;
+        self.builder
+            .build_store(acc_ptr, init_val)
+            .map_err(|e| format!("Failed to init acc: {:?}", e))?;
+        let acc_llvm = init_val.get_type();
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let acc = this
+                .builder
+                .build_load(acc_llvm, acc_ptr, "reduce_load")
+                .map_err(|e| format!("Failed to load acc: {:?}", e))?;
+            let next =
+                this.inline_lambda(lambda, &[(acc, acc_qty.clone()), (elem, elem_qty.clone())])?;
+            this.builder
+                .build_store(acc_ptr, next)
+                .map_err(|e| format!("Failed to store acc: {:?}", e))?;
+            Ok(())
+        })?;
+        self.builder
+            .build_load(acc_llvm, acc_ptr, "reduce_result")
+            .map_err(|e| format!("Failed to load reduce result: {:?}", e))
+    }
+
+    /// `arr.each(f)` — run `f` on every element for side effects; the result is ignored
+    /// (the receiver is returned by the caller).
+    fn array_each(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<(), String> {
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// `arr.find(pred)` — `Ok(elem)` for the first element satisfying `pred`, else
+    /// `NotOk($)`. Both arms produce the SAME `{ i8 tag, elem }` struct so the result
+    /// has one type; the `NotOk` payload slot is zeroed (never read).
+    fn array_find(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_ty = self.result_struct_type(elem_llvm);
+        let result_ptr = self.create_entry_block_alloca("find_result", result_ty.into())?;
+        // Default: NotOk (tag 1, zeroed payload).
+        let not_ok = self.build_result(elem_llvm, 1, zeroed(elem_llvm));
+        self.builder
+            .build_store(result_ptr, not_ok)
+            .map_err(|e| format!("Failed to init find result: {:?}", e))?;
+
+        let function = self.current_function.unwrap();
+        let done_bb = self.context.append_basic_block(function, "find_done");
+
+        // Loop with an early exit to `done_bb` on the first match.
+        let i64t = self.context.i64_type();
+        let counter = self.create_entry_block_alloca("find_i", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(|e| format!("Failed to init find counter: {:?}", e))?;
+        let header = self.context.append_basic_block(function, "find_header");
+        let body = self.context.append_basic_block(function, "find_body");
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch find header: {:?}", e))?;
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64t, counter, "find_iv")
+            .map_err(|e| format!("Failed to load find counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, size, "find_cond")
+            .map_err(|e| format!("Failed to compare find counter: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body, done_bb)
+            .map_err(|e| format!("Failed to branch find body: {:?}", e))?;
+        self.builder.position_at_end(body);
+        let elem = self.load_element(data_ptr, elem_llvm, i)?;
+        let matched = self.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+        let matched_bool = self.value_to_boolean(matched)?;
+        let found_bb = self.context.append_basic_block(function, "find_found");
+        let next_bb = self.context.append_basic_block(function, "find_next");
+        self.builder
+            .build_conditional_branch(matched_bool, found_bb, next_bb)
+            .map_err(|e| format!("Failed to branch find match: {:?}", e))?;
+        // Found: store Ok(elem) and jump to done.
+        self.builder.position_at_end(found_bb);
+        let elem_again = self.load_element(data_ptr, elem_llvm, i)?;
+        let ok = self.build_result(elem_llvm, 0, elem_again);
+        self.builder
+            .build_store(result_ptr, ok)
+            .map_err(|e| format!("Failed to store find Ok: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("Failed to branch find done: {:?}", e))?;
+        // Next iteration.
+        self.builder.position_at_end(next_bb);
+        let inc = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "find_inc")
+            .map_err(|e| format!("Failed to inc find counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, inc)
+            .map_err(|e| format!("Failed to store find counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop find: {:?}", e))?;
+
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_load(result_ty, result_ptr, "find_value")
+            .map_err(|e| format!("Failed to load find result: {:?}", e))
+    }
+
+    /// `arr.at(n)` — `Ok(arr[n])` if `0 <= n < size`, else `NotOk($)` (safe index).
+    fn array_at(
+        &mut self,
+        index: &Expr,
+        _elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64t = self.context.i64_type();
+        let idx_f = self.generate_expr(index)?.into_float_value();
+        let idx = self
+            .builder
+            .build_float_to_signed_int(idx_f, i64t, "at_idx")
+            .map_err(|e| format!("Failed to convert at index: {:?}", e))?;
+        // In bounds iff 0 <= idx < size.
+        let ge0 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, idx, i64t.const_zero(), "at_ge0")
+            .map_err(|e| format!("Failed to compare at lower bound: {:?}", e))?;
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, idx, size, "at_lt")
+            .map_err(|e| format!("Failed to compare at upper bound: {:?}", e))?;
+        let in_bounds = self
+            .builder
+            .build_and(ge0, lt, "at_in_bounds")
+            .map_err(|e| format!("Failed to and at bounds: {:?}", e))?;
+
+        let result_ty = self.result_struct_type(elem_llvm);
+        let result_ptr = self.create_entry_block_alloca("at_result", result_ty.into())?;
+        let function = self.current_function.unwrap();
+        let ok_bb = self.context.append_basic_block(function, "at_ok");
+        let no_bb = self.context.append_basic_block(function, "at_no");
+        let cont_bb = self.context.append_basic_block(function, "at_cont");
+        self.builder
+            .build_conditional_branch(in_bounds, ok_bb, no_bb)
+            .map_err(|e| format!("Failed to branch at bounds: {:?}", e))?;
+        self.builder.position_at_end(ok_bb);
+        let elem = self.load_element(data_ptr, elem_llvm, idx)?;
+        let ok = self.build_result(elem_llvm, 0, elem);
+        self.builder
+            .build_store(result_ptr, ok)
+            .map_err(|e| format!("Failed to store at Ok: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("Failed to branch at ok cont: {:?}", e))?;
+        self.builder.position_at_end(no_bb);
+        let no = self.build_result(elem_llvm, 1, zeroed(elem_llvm));
+        self.builder
+            .build_store(result_ptr, no)
+            .map_err(|e| format!("Failed to store at NotOk: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("Failed to branch at no cont: {:?}", e))?;
+        self.builder.position_at_end(cont_bb);
+        self.builder
+            .build_load(result_ty, result_ptr, "at_value")
+            .map_err(|e| format!("Failed to load at result: {:?}", e))
+    }
+
+    /// The `{ i8 tag, elem }` struct that `find`/`at` return — a per-element-typed
+    /// `Result` whose single payload slot holds the element (matching the Result-style
+    /// per-value layout the pattern-match consumer extracts from field 1).
+    fn result_struct_type(
+        &self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+    ) -> inkwell::types::StructType<'ctx> {
+        self.context
+            .struct_type(&[self.context.i8_type().into(), elem_llvm], false)
+    }
+
+    /// Build a `{ i8 tag, payload }` Result value (`tag` 0 = `Ok`, 1 = `NotOk`).
+    fn build_result(
+        &mut self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        tag: u8,
+        payload: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let struct_ty = self.result_struct_type(elem_llvm);
+        let tag_val = self.context.i8_type().const_int(tag as u64, false);
+        let mut agg = struct_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, tag_val, 0, "res_tag")
+            .expect("insert result tag")
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, payload, 1, "res_payload")
+            .expect("insert result payload")
+            .into_struct_value();
+        agg.into()
+    }
+
+    /// The LLVM value-representation type of a lambda's body (its inferred result type,
+    /// from the oracle), if known — used by `map` to size the output array. `None` when
+    /// the oracle has no entry (IR-only tests), so the caller falls back.
+    fn lambda_body_repr(&self, lambda: &Expr) -> Option<Result<BasicTypeEnum<'ctx>, String>> {
+        let Expr::Lambda { body, .. } = lambda else {
+            return None;
+        };
+        self.oracle.expr_type(body).map(|t| self.value_repr_type(t))
+    }
+
+    /// Emit a counted `for i in 0..size` loop, calling `body(self, i)` in the loop body
+    /// (the builder is positioned in the body block). On return the builder sits in the
+    /// loop's exit block. Shared scaffolding for the array methods that visit every
+    /// element in order (`map`/`filter`/`reduce`/`each`). `find` rolls its own loop (it
+    /// needs an early exit).
+    fn array_loop(
+        &mut self,
+        size: inkwell::values::IntValue<'ctx>,
+        mut body: impl FnMut(&mut Self, inkwell::values::IntValue<'ctx>) -> Result<(), String>,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        ),
+        String,
+    > {
+        let i64t = self.context.i64_type();
+        let function = self.current_function.unwrap();
+        let counter = self.create_entry_block_alloca("am_i", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(|e| format!("Failed to init loop counter: {:?}", e))?;
+        let header = self.context.append_basic_block(function, "am_header");
+        let body_bb = self.context.append_basic_block(function, "am_body");
+        let exit = self.context.append_basic_block(function, "am_exit");
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch loop header: {:?}", e))?;
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64t, counter, "am_iv")
+            .map_err(|e| format!("Failed to load loop counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, size, "am_cond")
+            .map_err(|e| format!("Failed to compare loop counter: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit)
+            .map_err(|e| format!("Failed to branch loop body: {:?}", e))?;
+        self.builder.position_at_end(body_bb);
+        body(self, i)?;
+        let inc = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "am_inc")
+            .map_err(|e| format!("Failed to inc loop counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, inc)
+            .map_err(|e| format!("Failed to store loop counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop: {:?}", e))?;
+        self.builder.position_at_end(exit);
+        Ok((i, exit))
     }
 
     fn generate_record(
