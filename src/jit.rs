@@ -19,12 +19,19 @@ type MainFn = unsafe extern "C" fn(i32, *const *const c_char, *const *const c_ch
 
 /// JIT-compile and execute a type-checked program in-process.
 ///
+/// `args` is the exact argument vector the program's `^` entry point should see
+/// as `args :: []Text` — `argv[0]` first, then any trailing arguments. Callers
+/// are responsible for building it the same way the OS builds a native binary's
+/// argv: for `quilon run <file> [user args...]`, `main.rs` passes
+/// `[<file>, <user args...>]` so the JIT mirrors `./<file> <user args...>` and
+/// never leaks the `quilon run` CLI prefix (issue #44).
+///
 /// Returns the value the program's `^` entry point yields, as an `i32` exit
 /// code. Libc symbols the generated code may reference (e.g. `printf`,
 /// `malloc`, `memcpy`) resolve automatically from the host process. Custom
 /// runtime intrinsics added by later workstreams (e.g. `__text_length`,
 /// Boehm GC) are registered at the extension point noted below.
-pub fn run_program(program: &Program) -> Result<i32, String> {
+pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
     // LLVM requires the native target to be initialized before a JIT engine
     // can be created.
     Target::initialize_native(&InitializationConfig::default())
@@ -126,8 +133,14 @@ pub fn run_program(program: &Program) -> Result<i32, String> {
     // native `main` receives: NULL-terminated arrays of NUL-terminated C strings. The
     // owning `CString`/pointer `Vec`s must outlive the `main.call` below (the runtime
     // copies their bytes into GC memory during the call), so they are bound here.
-    let arg_cstrings: Vec<CString> = std::env::args()
-        .map(|a| CString::new(a).unwrap_or_default())
+    //
+    // `argv` comes from the caller-supplied `args` (not `std::env::args()`), so a
+    // JIT'd program sees exactly the argument vector a native build would — with no
+    // `quilon run` CLI prefix leaked in (issue #44). `envp` still comes from the
+    // process environment, matching what the OS hands a native binary.
+    let arg_cstrings: Vec<CString> = args
+        .iter()
+        .map(|a| CString::new(a.as_str()).unwrap_or_default())
         .collect();
     let mut argv: Vec<*const c_char> = arg_cstrings.iter().map(|c| c.as_ptr()).collect();
     argv.push(std::ptr::null()); // argv is conventionally NULL-terminated

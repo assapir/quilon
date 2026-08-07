@@ -98,6 +98,56 @@ fn native_args_size_reflects_passed_argv() {
 }
 
 #[test]
+fn jit_and_aot_argv_agree() {
+    // Regression for issue #44: `quilon run f.ql a b c` must give `^`'s `args` the same
+    // shape a native `./f a b c` gets — `[<file>, a, b, c]` — instead of leaking the
+    // `quilon run` CLI prefix. Drive BOTH paths through the actual binary and assert
+    // they agree on `args.size` for the same trailing user args, including a leading
+    // `--flag` (which must pass THROUGH to the program, not be parsed by quilon).
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let bin = std::env::temp_dir().join(format!("quilon_argv_parity_{}", std::process::id()));
+    let src = "^ = (args :: []Text) -> Num => args.size";
+    if !build_native(quilon, src, &bin) {
+        return;
+    }
+    let ql_src = bin.with_extension("ql"); // build_native wrote the source here.
+
+    // Each case: the trailing user args. Expected `args.size` is 1 (argv[0]) + len.
+    let cases: &[&[&str]] = &[&[], &["a", "b", "c"], &["--flag", "x"]];
+    for user_args in cases {
+        let expected = Some(1 + user_args.len() as i32);
+
+        let jit = Command::new(quilon)
+            .arg("run")
+            .arg(&ql_src)
+            .args(*user_args)
+            .output()
+            .expect("run quilon run");
+        assert_eq!(
+            jit.status.code(),
+            expected,
+            "JIT `quilon run` args.size wrong for user args {user_args:?}: {}",
+            String::from_utf8_lossy(&jit.stderr)
+        );
+
+        let aot = Command::new(&bin)
+            .args(*user_args)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            aot.status.code(),
+            expected,
+            "AOT native args.size wrong for user args {user_args:?}"
+        );
+        // Both sides are pinned to `expected` above, which is exactly the JIT/AOT
+        // parity this test guards: same trailing args -> same `args.size`.
+    }
+
+    let _ = std::fs::remove_file(&bin);
+    let _ = std::fs::remove_file(&ql_src);
+}
+
+#[test]
 fn native_env_pairs_split_on_first_equals() {
     // The env is `[][]Text` of `[key, value]` pairs split on the FIRST `=`. Print the
     // first pair's key and value, then exit on the env size. Run with a controlled env

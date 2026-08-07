@@ -24,7 +24,7 @@ fn assert_exit(src: &str, expected: i32) {
         .check_program(&program)
         .expect("type checking failed");
 
-    let code = jit::run_program(&program).expect("execution failed");
+    let code = jit::run_program(&program, &["program".to_string()]).expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{}", src);
 }
 
@@ -41,7 +41,7 @@ fn assert_exit_linked(src: &str, expected: i32) {
         .check_program(&program)
         .expect("type checking failed");
 
-    let code = jit::run_program(&program).expect("execution failed");
+    let code = jit::run_program(&program, &["program".to_string()]).expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{}", src);
 }
 
@@ -594,11 +594,13 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
 }
 
 // --- Entry-point `^` receiving `args :: []Text` and `env :: [][]Text`. ---
-// Under the JIT, `args`/`env` come from this test process's real argv/environment,
-// which is not deterministic — so JIT tests assert only invocation-INDEPENDENT facts
-// (argv[0] is always present, env size is non-negative). Argv-DEPENDENT behavior is
-// pinned by `run_test_native` below, which runs a freshly built native binary with an
-// explicit argv.
+// Under the JIT, `args` is the exact slice the caller hands `run_program` (here the
+// helpers pass a single-element argv, mirroring a native binary invoked with no extra
+// args); `env` still comes from this process's real environment, which is not
+// deterministic — so these tests assert only invocation-INDEPENDENT facts (argv[0] is
+// always present, env size is non-negative). Caller-controlled argv parity is pinned
+// directly by `jit_uses_caller_supplied_argv` below, and full JIT/AOT parity by the
+// native tests in `tests/args_native_test.rs`.
 
 #[test]
 fn run_entry_with_args_param_typechecks_and_runs() {
@@ -628,6 +630,40 @@ fn run_entry_indexes_into_args() {
 }
 
 #[test]
+fn jit_uses_caller_supplied_argv() {
+    // The JIT must thread the caller-supplied argv into `^`'s `args` verbatim — no
+    // `quilon run <file>` CLI prefix leaked in (issue #44). A program returning
+    // `args.size` therefore returns exactly the length of the slice we pass, so this
+    // is the JIT-side anchor for JIT/AOT argv parity: `run_program(&p, &[file, a, b, c])`
+    // must equal a native `./file a b c` (which sees `args.size == 4`).
+    let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let src = "^ = (args :: []Text) -> Num => args.size";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .expect("type checking failed");
+
+    // `[<file>, a, b, c]` — exactly what `main.rs` builds for `quilon run f.ql a b c`.
+    let argv = [
+        "f.ql".to_string(),
+        "a".to_string(),
+        "b".to_string(),
+        "c".to_string(),
+    ];
+    let code = jit::run_program(&program, &argv).expect("execution failed");
+    assert_eq!(
+        code, 4,
+        "JIT `args.size` must equal the caller-supplied argv length (file + 3 user args)"
+    );
+
+    // A bare argv (`argv[0]` only) mirrors a native binary run with no extra args.
+    let code = jit::run_program(&program, &["f.ql".to_string()]).expect("execution failed");
+    assert_eq!(code, 1, "bare argv -> args.size == 1 (argv[0] only)");
+}
+
+#[test]
 fn legacy_numeric_argc_argv_entry_still_runs() {
     // Backward compatibility: the legacy `(argc :: Num, argv :: Num)` entry signature
     // still compiles and runs (argv is a `0` placeholder), exiting on `argc`'s value.
@@ -641,7 +677,8 @@ fn legacy_numeric_argc_argv_entry_still_runs() {
         .check_program(&program)
         .expect("legacy numeric entry should type-check");
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let code = jit::run_program(&program).expect("legacy numeric entry should run");
+    let code = jit::run_program(&program, &["program".to_string()])
+        .expect("legacy numeric entry should run");
     assert_eq!(code, 3, "legacy (Num, Num) entry should still run");
 }
 

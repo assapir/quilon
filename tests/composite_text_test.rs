@@ -23,7 +23,7 @@ fn assert_exit(src: &str, expected: i32) {
     TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
-    let code = jit::run_program(&program).expect("execution failed");
+    let code = jit::run_program(&program, &["program".to_string()]).expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{src}");
 }
 
