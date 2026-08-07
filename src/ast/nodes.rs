@@ -164,6 +164,20 @@ pub enum Expr {
         span: Span,
     },
 
+    // Function literal (lambda / closure): `x => x + 1`, `(a, b) => a + b`, `() => 0`.
+    // A first-class value, distinct from a top-level `FunctionDecl`. When its body
+    // references names bound in an enclosing scope, those are *captured*: a name bound
+    // with `=` is captured by value (read-only copy), one bound with `:=` is captured
+    // by reference (a shared, mutable GC cell). Capture is inferred entirely from the
+    // binding operator — there is no capture list. Closures are monomorphic in M3:
+    // params/captures are concrete-typed; generic closures are deferred to M4.
+    Lambda {
+        params: Vec<Param>,
+        return_type: Option<Type>,
+        body: Box<Expr>,
+        span: Span,
+    },
+
     // Pipeline
     Pipeline {
         left: Box<Expr>,
@@ -277,6 +291,7 @@ impl Expr {
             Expr::BinOp { span, .. } => span,
             Expr::UnaryOp { span, .. } => span,
             Expr::Call { span, .. } => span,
+            Expr::Lambda { span, .. } => span,
             Expr::Pipeline { span, .. } => span,
             Expr::Block { span, .. } => span,
             Expr::If { span, .. } => span,
