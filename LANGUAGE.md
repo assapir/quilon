@@ -8,9 +8,17 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 ## Design principles
 
-- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value), it is a **compile error**; otherwise it is a **runtime error with a clear message** (printed to stderr, non-zero exit). Silent behavior is undebuggable, so Quilon refuses it. This is the reason for, e.g., `Text.indexOf` returning `Ok(Num)/NotOk` rather than a `-1` sentinel, and for `Text.replace`'s count/empty-argument checks failing rather than clamping.
-- **No magic.** Behavior is explicit and visible in the code — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
-- **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (e.g. `print(x)`, never `print(show(x))`).
+Quilon's identity, and the rules that guide its design:
+
+- **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. (`for` is the lone surviving word — a known wart, slated for removal.)
+- **Symbols mirror notation that already exists.** A symbol should reuse a notation the world already has rather than invent one: `/` separates sum-type alternatives the way you already write "red / green / blue". The symbol is both the shorthand and its own justification.
+- **The playful choice wins.** When a design decision is a genuine toss-up, the more delightful option is picked — characterful, memorable symbols (`^` for the entry point, `$` for Unit) over bland ones. Syntax is allowed to have a sense of humor.
+- **Deliberate simplicity — reject complexity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
+- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value) it is a **compile error**; otherwise a **clear runtime error** (stderr, non-zero exit). Silent behavior is undebuggable, so Quilon refuses it. (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
+- **No magic.** Behavior is explicit and visible — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
+- **Immutable by default.** `=` binds immutably, `:=` binds mutably; because `:=` is visible wherever mutation happens, a method is a setter exactly when its body writes `it.field := …`.
+- **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
+- **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (`print(x)`, never `print(show(x))`).
 
 ---
 
