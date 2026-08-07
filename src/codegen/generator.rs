@@ -19,6 +19,15 @@ fn is_builtin_overload_name(name: &str) -> bool {
     matches!(name, "print" | "eprint")
 }
 
+/// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
+/// restore whatever a lambda parameter shadowed: its `variables` entry (alloca + LLVM
+/// type) and its `var_types` entry (Quilon type for overload mangling).
+type SavedBinding<'ctx> = (
+    String,
+    Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    Option<Type>,
+);
+
 /// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
 /// deterministic and identical at definition and call sites (built from the declared
 /// parameter type and from the inferred argument type respectively).
@@ -199,6 +208,29 @@ pub struct CodeGenerator<'ctx> {
     // an argument to an overloaded call/operator — keeping codegen dispatch in sync
     // with the type checker. (Overloaded callees' returns come from `overloads`.)
     fn_return_types: HashMap<String, Type>,
+    // Active self-tail-call optimization context for the function currently being
+    // emitted, set up by `generate_function_decl` only when the body has a self-call in
+    // tail position. A tail self-call then overwrites the param slots and branches back
+    // to `loop_header` instead of emitting a stack-growing `call` + `ret` — guaranteeing
+    // self-tail-recursion runs in constant stack (see `Tco` / `generate_tail_expr`).
+    tco: Option<Tco<'ctx>>,
+}
+
+/// The loop-lowering context for self-tail-call optimization of one function. Present
+/// (in `CodeGenerator::tco`) only while emitting a function whose body has at least one
+/// self-call in tail position. Classic TCO transform: the body's parameter `=`-bindings
+/// become mutable slots (`param_slots`), and a tail self-call stores its argument values
+/// into those slots and `br`s back to `header` — turning the recursion into a loop.
+struct Tco<'ctx> {
+    /// The LLVM symbol of the function being optimized (mangled if overloaded). A `Call`
+    /// is a self-tail-call only if it resolves to exactly this symbol with matching arity.
+    self_symbol: String,
+    /// The function's parameter alloca slots, in declaration order. A tail self-call
+    /// recomputes the args and rewrites these slots (its length is the arity).
+    param_slots: Vec<PointerValue<'ctx>>,
+    /// The loop header — the block a tail self-call branches back to. Positioned right
+    /// after the parameter slots are (re)loaded into the `variables` map for the body.
+    header: inkwell::basic_block::BasicBlock<'ctx>,
 }
 // (merge note) `boxed_vars`/`lambda_counter`/`closure_sigs` (closures, M3) coexist with
 // `oracle`/`overloads`/`var_types`/`fn_return_types` (overloads + Text-in-composite oracle).
@@ -272,6 +304,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             overloads: HashMap::new(),
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
+            tco: None,
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -854,33 +887,42 @@ impl<'ctx> CodeGenerator<'ctx> {
         // recursion (`fact = n => … fact(n-1) …`), since a closure value cannot refer to
         // itself before it exists. The choice is by ACTUAL captures, not syntax.
         if self.current_function.is_some() {
+            // Emitting a nested function re-enters function emission, which sets and then
+            // clears the outer function's TCO context (`self.tco`). Snapshot and restore
+            // it so a nested tail-recursive function does not clobber the OUTER function's
+            // active context — otherwise the outer tail walk resuming after this nested
+            // decl would panic ("generate_tail_expr without a TCO context").
+            let saved_tco = self.tco.take();
             let param_names: Vec<String> = decl.params.iter().map(|p| p.name.clone()).collect();
             let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
             let captures =
                 crate::ast::captures::lambda_free_idents(&param_names, &decl.body, &outer);
-            if !captures.is_empty() {
-                return self.generate_local_closure(decl);
-            }
-            // No captures: emit a plain module function, but save/restore the enclosing
-            // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
-            // state) around it, since `emit_module_function` clears and repopulates them.
-            let saved_block = self.builder.get_insert_block();
-            let saved_function = self.current_function;
-            let saved_vars = std::mem::take(&mut self.variables);
-            let saved_boxed = std::mem::take(&mut self.boxed_vars);
-            let saved_sigs = std::mem::take(&mut self.closure_sigs);
-            let saved_var_types = std::mem::take(&mut self.var_types);
+            let result = if !captures.is_empty() {
+                self.generate_local_closure(decl)
+            } else {
+                // No captures: emit a plain module function, but save/restore the enclosing
+                // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
+                // state) around it, since `emit_module_function` clears and repopulates them.
+                let saved_block = self.builder.get_insert_block();
+                let saved_function = self.current_function;
+                let saved_vars = std::mem::take(&mut self.variables);
+                let saved_boxed = std::mem::take(&mut self.boxed_vars);
+                let saved_sigs = std::mem::take(&mut self.closure_sigs);
+                let saved_var_types = std::mem::take(&mut self.var_types);
 
-            let result = self.emit_module_function(decl);
+                let result = self.emit_module_function(decl);
 
-            self.variables = saved_vars;
-            self.boxed_vars = saved_boxed;
-            self.closure_sigs = saved_sigs;
-            self.var_types = saved_var_types;
-            self.current_function = saved_function;
-            if let Some(block) = saved_block {
-                self.builder.position_at_end(block);
-            }
+                self.variables = saved_vars;
+                self.boxed_vars = saved_boxed;
+                self.closure_sigs = saved_sigs;
+                self.var_types = saved_var_types;
+                self.current_function = saved_function;
+                if let Some(block) = saved_block {
+                    self.builder.position_at_end(block);
+                }
+                result
+            };
+            self.tco = saved_tco;
             return result;
         }
 
@@ -991,8 +1033,43 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.var_types.insert(param.name.clone(), qty);
         }
 
-        // Generate function body
-        let body_value = self.generate_expr(&decl.body)?;
+        // Guaranteed self-tail-call optimization: if the body returns a call to THIS
+        // function in tail position, lower the recursion to a loop instead of a
+        // stack-growing `call` + `ret`. Set up a loop header (branched to from the entry
+        // block, after the param slots are populated) and a TCO context; a tail self-call
+        // then rewrites the param slots and `br`s back here. The param allocas created
+        // above are reused as the loop's mutable slots — there is no separate IR shape for
+        // recursive vs. non-recursive functions beyond this header + the back-edge.
+        let body_value = if self.body_has_self_tail_call(decl, &symbol) {
+            let param_slots: Vec<PointerValue<'ctx>> = decl
+                .params
+                .iter()
+                .map(|p| self.variables[&p.name].0)
+                .collect();
+            let header = self.context.append_basic_block(function, "tco_loop");
+            self.builder
+                .build_unconditional_branch(header)
+                .map_err(|e| format!("Failed to build branch to loop header: {:?}", e))?;
+            self.builder.position_at_end(header);
+            self.tco = Some(Tco {
+                self_symbol: symbol.clone(),
+                param_slots,
+                header,
+            });
+            // Emit the body in tail-aware mode. A `None` result means every tail exit was a
+            // self-call (e.g. an unconditional `f(...)` body, or a match all of whose arms
+            // tail-recurse): the function never falls through to a normal return, and
+            // `generate_tail_expr` has already terminated the current block (with the
+            // back-edge `br`, or an `unreachable`). In that case there is no `ret` to emit.
+            let result = self.generate_tail_expr(&decl.body)?;
+            self.tco = None;
+            match result {
+                Some(v) => v,
+                None => return Ok(()),
+            }
+        } else {
+            self.generate_expr(&decl.body)?
+        };
 
         // Entry point `^`: if the body's value isn't a Num (f64) — e.g. a side-effecting
         // main ending in a Text/Bool/record expression — discard it and implicitly
@@ -1009,6 +1086,348 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
         Ok(())
+    }
+
+    // ---- Self-tail-call optimization (loop lowering) --------------------------------
+    //
+    // A call is in **tail position** when it is the value the enclosing function returns
+    // directly — i.e. nothing happens to its result before the `ret`. Tail position flows
+    // through exactly the constructs that yield a value as their tail without further
+    // computation: a block's last expression, both arms of an `if`/ternary, every arm of a
+    // `?`/`|` match, a parenthesizing pipeline's desugaring, and the function body itself.
+    // It does NOT flow into the operand of a `+`/`*`/comparison, a call argument, an array
+    // element, etc. — those consume the value, so a call there is not in tail position.
+    //
+    // `body_has_self_tail_call` is the pure analysis (no IR), used once to decide whether
+    // to set up the loop. `generate_tail_expr` is the codegen counterpart: it walks the
+    // SAME tail-position structure and, at a tail self-call, rewrites the param slots and
+    // branches to the loop header; everything else (and every non-tail subexpression) goes
+    // through the ordinary `generate_expr`. The two must agree on what "tail position" is.
+
+    /// Does `decl`'s body contain a self-call in tail position? Pure (emits no IR).
+    /// `self_symbol` is the LLVM symbol the function is emitted under (mangled if
+    /// overloaded) — passed in from `emit_module_function` so the "which symbol?" rule
+    /// lives in one place, and a tail call is recognized as a SELF-call by matching it.
+    fn body_has_self_tail_call(&self, decl: &FunctionDecl, self_symbol: &str) -> bool {
+        self.expr_has_self_tail_call(&decl.body, self_symbol, decl.params.len())
+    }
+
+    /// Whether `expr`, evaluated in tail position, contains a self-call (to `self_symbol`
+    /// with `arity` args). Recurses only through tail-position sub-expressions.
+    fn expr_has_self_tail_call(&self, expr: &Expr, self_symbol: &str, arity: usize) -> bool {
+        match expr {
+            Expr::Call { .. } => self.is_self_tail_call(expr, self_symbol, arity),
+            Expr::Block { stmts, .. } => match stmts.last() {
+                Some(crate::ast::Statement::Expr(tail)) => {
+                    self.expr_has_self_tail_call(tail, self_symbol, arity)
+                }
+                _ => false,
+            },
+            Expr::If { then, else_, .. } => {
+                self.expr_has_self_tail_call(then, self_symbol, arity)
+                    || self.expr_has_self_tail_call(else_, self_symbol, arity)
+            }
+            Expr::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| self.expr_has_self_tail_call(&arm.body, self_symbol, arity)),
+            // A pipeline desugars to a call; check the call it becomes.
+            Expr::Pipeline { left, right, span } => {
+                let call = Expr::desugar_pipeline(left, right, span);
+                self.is_self_tail_call(&call, self_symbol, arity)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `expr` is a direct call that resolves to `self_symbol` with `arity` args —
+    /// i.e. the function calling itself. Resolution mirrors `generate_call`'s: a plain
+    /// name maps to itself, an overloaded name to its exact mangled member by argument
+    /// types. A constructor/method/intrinsic call (which `generate_call` routes elsewhere)
+    /// is never a self-call. NB only the *callee identity* matters here; the arguments are
+    /// generated normally by `generate_tail_expr`.
+    fn is_self_tail_call(&self, expr: &Expr, self_symbol: &str, arity: usize) -> bool {
+        let Expr::Call { func, args, .. } = expr else {
+            return false;
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            return false;
+        };
+        if args.len() != arity {
+            return false;
+        }
+        // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
+        if self.sum_variants.contains_key(name.as_str())
+            || matches!(name.as_str(), "print" | "eprint" | "write")
+        {
+            return false;
+        }
+        let symbol = if self.overloads.contains_key(name.as_str()) {
+            let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+            match self.resolve_overload_symbol(name, &arg_types) {
+                Some(s) => s,
+                None => return false,
+            }
+        } else {
+            name.clone()
+        };
+        symbol == self_symbol
+    }
+
+    /// Emit `expr` in tail position under an active [`Tco`] context. Returns `Some(value)`
+    /// for an ordinary tail (the caller `ret`s it) or `None` when this path does not fall
+    /// through to a normal return — every tail exit was a self-call. **Invariant:** on
+    /// `None`, the current insert block is already TERMINATED (by the back-edge `br` of a
+    /// tail self-call, or an `unreachable` for an if/match all of whose arms recurse), so
+    /// the caller must not emit anything more into it. Walks the same tail-position
+    /// structure as `expr_has_self_tail_call`; any non-tail node falls through to
+    /// `generate_expr` (always `Some`).
+    fn generate_tail_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let arity = self
+            .tco
+            .as_ref()
+            .expect("generate_tail_expr without a TCO context")
+            .param_slots
+            .len();
+
+        match expr {
+            // A pipeline in tail position is its desugared call; lower that.
+            Expr::Pipeline { left, right, span } => {
+                let call = Expr::desugar_pipeline(left, right, span);
+                self.generate_tail_expr(&call)
+            }
+
+            // A call in tail position: if it resolves to THIS function, lower it to the
+            // loop back-edge; otherwise it is an ordinary value. Clone `self_symbol` only
+            // here (a call leaf), not on every tail node.
+            Expr::Call { args, .. } => {
+                let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
+                if self.is_self_tail_call(expr, &self_symbol, arity) {
+                    self.emit_tail_self_call(args)?;
+                    Ok(None)
+                } else {
+                    Ok(Some(self.generate_expr(expr)?))
+                }
+            }
+
+            Expr::Block { stmts, .. } => {
+                // Emit every statement normally except the tail expression, which stays in
+                // tail position. A non-`Expr`-tail block (ends in an item) has no tail call
+                // (the analysis returned false), so generating it whole is correct.
+                match stmts.split_last() {
+                    Some((crate::ast::Statement::Expr(tail), init)) => {
+                        for stmt in init {
+                            match stmt {
+                                crate::ast::Statement::Item(item) => self.generate_item(item)?,
+                                crate::ast::Statement::Expr(e) => {
+                                    self.generate_expr(e)?;
+                                }
+                            }
+                        }
+                        self.generate_tail_expr(tail)
+                    }
+                    _ => Ok(Some(self.generate_block(stmts)?)),
+                }
+            }
+
+            Expr::If {
+                cond, then, else_, ..
+            } => self.generate_tail_if(cond, then, else_),
+
+            Expr::Match {
+                expr: scrutinee,
+                arms,
+                ..
+            } => self.generate_tail_match(expr, scrutinee, arms),
+
+            // Anything else in tail position is an ordinary value.
+            other => Ok(Some(self.generate_expr(other)?)),
+        }
+    }
+
+    /// Lower a tail self-call: evaluate the argument expressions, write them into the
+    /// parameter slots, then `br` back to the loop header. All args are evaluated into
+    /// temporaries BEFORE any slot is overwritten, so an argument that reads a parameter
+    /// (e.g. `f(n - 1, acc + n)` reading `n` for `acc`) sees the current iteration's
+    /// values, not a half-updated set.
+    fn emit_tail_self_call(&mut self, args: &[Expr]) -> Result<(), String> {
+        let new_vals: Vec<BasicValueEnum<'ctx>> = args
+            .iter()
+            .map(|a| self.generate_expr(a))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Snapshot slots + header before the mutable stores (releases the `self.tco`
+        // borrow so the `&mut self` builder calls below are allowed).
+        let tco = self
+            .tco
+            .as_ref()
+            .expect("emit_tail_self_call without a TCO context");
+        let slots: Vec<PointerValue<'ctx>> = tco.param_slots.clone();
+        let header = tco.header;
+        for (slot, val) in slots.iter().zip(new_vals) {
+            self.builder
+                .build_store(*slot, val)
+                .map_err(|e| format!("Failed to store tail-call arg: {:?}", e))?;
+        }
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch to loop header: {:?}", e))?;
+        Ok(())
+    }
+
+    /// Tail-position `if`/ternary: emit each arm in tail position. An arm that tail-recurses
+    /// branches to the loop header (yields no value); an arm that produces a value branches
+    /// to a merge block. We `phi` only over the value-producing arms — if both arms tail
+    /// self-call, there is no merge value and we return `None`.
+    fn generate_tail_if(
+        &mut self,
+        cond: &Expr,
+        then_expr: &Expr,
+        else_expr: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let cond_val = self.generate_expr(cond)?;
+        let BasicValueEnum::IntValue(cond_bool) = cond_val else {
+            return Err("Condition must be a boolean".to_string());
+        };
+        let function = self
+            .current_function
+            .ok_or_else(|| "If expression outside of function".to_string())?;
+
+        let then_bb = self.context.append_basic_block(function, "then");
+        let else_bb = self.context.append_basic_block(function, "else");
+        let merge_bb = self.context.append_basic_block(function, "ifcont");
+
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
+
+        // Collect each non-tail-recursing arm's (value, originating block) for the phi.
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
+
+        self.builder.position_at_end(then_bb);
+        if let Some(v) = self.generate_tail_expr(then_expr)? {
+            let bb = self.builder.get_insert_block().unwrap();
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+            incoming.push((v, bb));
+        }
+
+        self.builder.position_at_end(else_bb);
+        if let Some(v) = self.generate_tail_expr(else_expr)? {
+            let bb = self.builder.get_insert_block().unwrap();
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+            incoming.push((v, bb));
+        }
+
+        self.builder.position_at_end(merge_bb);
+        match incoming.as_slice() {
+            // Both arms tail-recursed: control never reaches the merge block. Terminate it
+            // as `unreachable` (it has no value-producing predecessors) and report `None`
+            // — every `None` from a tail node leaves the current block already terminated.
+            [] => {
+                self.builder
+                    .build_unreachable()
+                    .map_err(|e| format!("Failed to build unreachable: {:?}", e))?;
+                Ok(None)
+            }
+            _ => {
+                let phi = self
+                    .builder
+                    .build_phi(incoming[0].0.get_type(), "iftmp")
+                    .map_err(|e| format!("Failed to build phi: {:?}", e))?;
+                for (v, bb) in &incoming {
+                    phi.add_incoming(&[(v as &dyn BasicValue, *bb)]);
+                }
+                Ok(Some(phi.as_basic_value()))
+            }
+        }
+    }
+
+    /// Tail-position `?`/`|` match: same shape as `generate_match`, but each arm body is
+    /// emitted in tail position. An arm that tail-recurses branches to the loop header and
+    /// stores nothing; an arm that yields a value stores it into the shared result slot and
+    /// falls through to the continuation. If EVERY arm tail-recurses, the continuation is
+    /// unreachable and we return `None` (no result to load).
+    fn generate_tail_match(
+        &mut self,
+        match_expr: &Expr,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let match_val = self.generate_expr(scrutinee)?;
+        let function = self
+            .current_function
+            .ok_or_else(|| "Match expression must be in a function".to_string())?;
+
+        let mut arm_blocks = vec![];
+        let mut check_blocks = vec![];
+        for i in 0..arms.len() {
+            check_blocks.push(
+                self.context
+                    .append_basic_block(function, &format!("check_{}", i)),
+            );
+            arm_blocks.push(
+                self.context
+                    .append_basic_block(function, &format!("arm_{}", i)),
+            );
+        }
+        let cont_block = self.context.append_basic_block(function, "match_cont");
+
+        // Result slot for the value-producing (non-tail-recursing) arms, sized from the
+        // oracle exactly as `generate_match` does. Only written by arms that yield a value.
+        let result_llvm = self.oracle_value_type(match_expr)?;
+        let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
+
+        self.builder
+            .build_unconditional_branch(check_blocks[0])
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+
+        let mut any_value_arm = false;
+        for (i, arm) in arms.iter().enumerate() {
+            self.builder.position_at_end(check_blocks[i]);
+            let matches = self.check_pattern(&arm.pattern, match_val)?;
+            let next_block = if i + 1 < check_blocks.len() {
+                check_blocks[i + 1]
+            } else {
+                cont_block
+            };
+            self.builder
+                .build_conditional_branch(matches, arm_blocks[i], next_block)
+                .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
+
+            self.builder.position_at_end(arm_blocks[i]);
+            self.bind_pattern(&arm.pattern, match_val)?;
+            if let Some(arm_val) = self.generate_tail_expr(&arm.body)? {
+                any_value_arm = true;
+                self.builder
+                    .build_store(result_alloca, arm_val)
+                    .map_err(|e| format!("Failed to store result: {:?}", e))?;
+                self.builder
+                    .build_unconditional_branch(cont_block)
+                    .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+            }
+            // Else: the arm tail-recursed and already branched to the loop header.
+        }
+
+        self.builder.position_at_end(cont_block);
+        if any_value_arm {
+            Ok(Some(
+                self.builder
+                    .build_load(result_llvm, result_alloca, "match_result")
+                    .map_err(|e| format!("Failed to load result: {:?}", e))?,
+            ))
+        } else {
+            // Every arm tail-recursed: control never produces a value here (the only edge
+            // into `cont_block` is the last check's no-match fallthrough, which an
+            // exhaustive match never takes). Terminate it as `unreachable` and report
+            // `None` — keeping the "a `None` leaves the block terminated" invariant.
+            self.builder
+                .build_unreachable()
+                .map_err(|e| format!("Failed to build unreachable: {:?}", e))?;
+            Ok(None)
+        }
     }
 
     /// Bind a capturing nested function as a local closure value: lower it via the lambda
@@ -2173,6 +2592,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => {}
         }
 
+        // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) — RESERVED
+        // on arrays. The method applies only when the receiver (`args[0]`) is an array;
+        // the oracle confirms its element type, so this never diverts a same-named user
+        // overload on a non-array receiver. Method names are lowercase and so can never
+        // collide with a (Capitalized) sum-constructor name — the relative order of this
+        // check and the sum-constructor block below is therefore immaterial.
+        if crate::ast::is_array_method(func_name)
+            && !args.is_empty()
+            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Array(_)))
+        {
+            return self.generate_array_method(func_name, args);
+        }
+
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDef::Sum` declarations.
@@ -2804,6 +3236,612 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(array_struct_type, array_struct, "range_array")
             .map_err(|e| format!("Failed to load range struct: {:?}", e))
+    }
+
+    /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
+    /// `args[0]` is the receiver array; the rest are the method's arguments (a lambda
+    /// for the higher-order forms, a `Num` index for `at`). A method's lambda argument is
+    /// a deliberate inline specialization of the general lambda lowering: rather than
+    /// emitting a closure value, its body is INLINED into the generated loop body per
+    /// element (`inline_lambda`) — cheaper, and it sidesteps the unsupported
+    /// higher-order-value path. The element LLVM type comes from the type oracle (the
+    /// receiver's `[]elem` element type), so `[]Text`/`[]Num`/... all work.
+    fn generate_array_method(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = &args[0];
+        // Element type of the receiver array, from the oracle: `[]elem`.
+        let elem_qty = match self.oracle.expr_type(recv) {
+            Some(Type::Array(e)) => (**e).clone(),
+            _ => return Err(format!("array method `{method}` on a non-array receiver")),
+        };
+        let elem_llvm = self.value_repr_type(&elem_qty)?;
+        let (array_val, data_ptr, size) = self.extract_array(recv)?;
+
+        match method {
+            "map" => self.array_map(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "filter" => self.array_filter(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "reduce" => self.array_reduce(&args[1], &args[2], &elem_qty, elem_llvm, data_ptr, size),
+            "each" => {
+                self.array_each(&args[1], &elem_qty, elem_llvm, data_ptr, size)?;
+                // Decision 19: a Unit-bodied method returns its receiver — `.each` yields
+                // the array itself so it chains. Re-emit the (already-evaluated) struct.
+                Ok(array_val)
+            }
+            "find" => self.array_find(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "at" => self.array_at(&args[1], elem_llvm, data_ptr, size),
+            other => Err(format!("unknown array method `{other}`")),
+        }
+    }
+
+    /// Evaluate an array expression and break it into `(struct_value, data_ptr, size_i64)`.
+    /// The array ABI is the shared `{ ptr data, i64 size }` struct; this stores it to a
+    /// temporary alloca to GEP out the two fields, matching `generate_for_loop`.
+    fn extract_array(
+        &mut self,
+        array_expr: &Expr,
+    ) -> Result<
+        (
+            BasicValueEnum<'ctx>,
+            PointerValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let array_val = self.generate_expr(array_expr)?;
+        let struct_ty = self.ptr_len_struct_type();
+        let alloca = self.create_entry_block_alloca("am_array", struct_ty.into())?;
+        self.builder
+            .build_store(alloca, array_val)
+            .map_err(|e| format!("Failed to store array: {:?}", e))?;
+        let data_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 0, "am_data_field")
+            .map_err(|e| format!("Failed to GEP data field: {:?}", e))?;
+        let data_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                data_field,
+                "am_data",
+            )
+            .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
+            .into_pointer_value();
+        let size_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 1, "am_size_field")
+            .map_err(|e| format!("Failed to GEP size field: {:?}", e))?;
+        let size = self
+            .builder
+            .build_load(self.context.i64_type(), size_field, "am_size")
+            .map_err(|e| format!("Failed to load size: {:?}", e))?
+            .into_int_value();
+        Ok((array_val, data_ptr, size))
+    }
+
+    /// GC-allocate a `{ ptr, size }` array of `count` elements of `elem_llvm`, returning
+    /// the data pointer. The caller fills it, then builds the struct via `array_struct`.
+    fn alloc_array_data(
+        &mut self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let elem_size = elem_llvm
+            .size_of()
+            .ok_or_else(|| "array element type has no compile-time size".to_string())?;
+        let bytes = self
+            .builder
+            .build_int_mul(count, elem_size, "am_bytes")
+            .map_err(|e| format!("Failed to size array alloc: {:?}", e))?;
+        let alloc = self.get_intrinsic("__alloc")?;
+        use inkwell::values::AnyValue;
+        Ok(self
+            .builder
+            .build_call(alloc, &[bytes.into()], "am_alloc")
+            .map_err(|e| format!("Failed to allocate array: {:?}", e))?
+            .as_any_value_enum()
+            .into_pointer_value())
+    }
+
+    /// Build the `{ ptr, i64 }` array struct value from a data pointer and element count.
+    fn array_struct(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let struct_ty = self.ptr_len_struct_type();
+        let alloca = self.create_entry_block_alloca("am_out", struct_ty.into())?;
+        let ptr_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 0, "am_out_ptr")
+            .map_err(|e| format!("Failed to GEP out ptr: {:?}", e))?;
+        self.builder
+            .build_store(ptr_field, data_ptr)
+            .map_err(|e| format!("Failed to store out ptr: {:?}", e))?;
+        let size_field = self
+            .builder
+            .build_struct_gep(struct_ty, alloca, 1, "am_out_size")
+            .map_err(|e| format!("Failed to GEP out size: {:?}", e))?;
+        self.builder
+            .build_store(size_field, count)
+            .map_err(|e| format!("Failed to store out size: {:?}", e))?;
+        self.builder
+            .build_load(struct_ty, alloca, "am_out")
+            .map_err(|e| format!("Failed to load out struct: {:?}", e))
+    }
+
+    /// Load `data_ptr[i]` as a value of `elem_llvm` (the array element representation).
+    fn load_element(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr = unsafe {
+            self.builder
+                .build_gep(elem_llvm, data_ptr, &[i], "am_elem_ptr")
+                .map_err(|e| format!("Failed to GEP element: {:?}", e))?
+        };
+        self.builder
+            .build_load(elem_llvm, ptr, "am_elem")
+            .map_err(|e| format!("Failed to load element: {:?}", e))
+    }
+
+    /// Inline a lambda body with its parameters bound to `arg_values`. An array method's
+    /// lambda is lowered inline (not as a closure value): each parameter is bound to a
+    /// freshly-stored value (an alloca, like a loop variable) and the body is emitted in
+    /// the current block. Saves/restores any shadowed bindings of the same names, so an
+    /// inline never leaks the parameter binding past its use (and nesting is safe).
+    /// `arg_values` carries each argument's Quilon type for overload mangling in the body.
+    fn inline_lambda(
+        &mut self,
+        lambda: &Expr,
+        arg_values: &[(BasicValueEnum<'ctx>, Type)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Expr::Lambda { params, body, .. } = lambda else {
+            return Err("array method expects a lambda argument".to_string());
+        };
+        if params.len() != arg_values.len() {
+            return Err(format!(
+                "lambda expects {} parameter(s), got {} argument(s)",
+                params.len(),
+                arg_values.len()
+            ));
+        }
+        // Save shadowed bindings to restore after inlining.
+        let mut saved: Vec<SavedBinding<'ctx>> = Vec::with_capacity(params.len());
+        for (param, (value, qty)) in params.iter().zip(arg_values) {
+            let alloca = self.create_entry_block_alloca(&param.name, value.get_type())?;
+            self.builder
+                .build_store(alloca, *value)
+                .map_err(|e| format!("Failed to store lambda param: {:?}", e))?;
+            saved.push((
+                param.name.clone(),
+                self.variables.get(&param.name).copied(),
+                self.var_types.get(&param.name).cloned(),
+            ));
+            self.variables
+                .insert(param.name.clone(), (alloca, value.get_type()));
+            self.var_types.insert(param.name.clone(), qty.clone());
+        }
+        let result = self.generate_expr(body);
+        // Restore shadowed bindings.
+        for (name, prev_var, prev_ty) in saved {
+            match prev_var {
+                Some(v) => {
+                    self.variables.insert(name.clone(), v);
+                }
+                None => {
+                    self.variables.remove(&name);
+                }
+            }
+            match prev_ty {
+                Some(t) => {
+                    self.var_types.insert(name, t);
+                }
+                None => {
+                    self.var_types.remove(&name);
+                }
+            }
+        }
+        result
+    }
+
+    /// `arr.map(f)` — a new array whose element `i` is `f(arr[i])`. The result element
+    /// type is the lambda body's type (from the oracle), so `map` may change the element
+    /// type (e.g. `[]Num -> []Text`).
+    fn array_map(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_llvm = match self.lambda_body_repr(lambda) {
+            Some(r) => r?,
+            None => elem_llvm,
+        };
+        let out_ptr = self.alloc_array_data(result_llvm, size)?;
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let mapped = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let dst = unsafe {
+                this.builder
+                    .build_gep(result_llvm, out_ptr, &[i], "map_dst")
+                    .map_err(|e| format!("Failed to GEP map dst: {:?}", e))?
+            };
+            this.builder
+                .build_store(dst, mapped)
+                .map_err(|e| format!("Failed to store mapped: {:?}", e))?;
+            Ok(())
+        })?;
+        self.array_struct(out_ptr, size)
+    }
+
+    /// `arr.filter(pred)` — a new array of the elements for which `pred(elem)` is true,
+    /// in order. The output buffer is sized to the input (worst case, all kept); the
+    /// result struct reports the actual kept count.
+    fn array_filter(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64t = self.context.i64_type();
+        let out_ptr = self.alloc_array_data(elem_llvm, size)?;
+        let count_ptr = self.create_entry_block_alloca("filter_count", i64t.into())?;
+        self.builder
+            .build_store(count_ptr, i64t.const_zero())
+            .map_err(|e| format!("Failed to init filter count: {:?}", e))?;
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let keep = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let keep_bool = this.value_to_boolean(keep)?;
+            let function = this.current_function.unwrap();
+            let keep_bb = this.context.append_basic_block(function, "filter_keep");
+            let cont_bb = this.context.append_basic_block(function, "filter_cont");
+            this.builder
+                .build_conditional_branch(keep_bool, keep_bb, cont_bb)
+                .map_err(|e| format!("Failed to branch filter: {:?}", e))?;
+            this.builder.position_at_end(keep_bb);
+            let count = this
+                .builder
+                .build_load(i64t, count_ptr, "filter_n")
+                .map_err(|e| format!("Failed to load filter count: {:?}", e))?
+                .into_int_value();
+            let dst = unsafe {
+                this.builder
+                    .build_gep(elem_llvm, out_ptr, &[count], "filter_dst")
+                    .map_err(|e| format!("Failed to GEP filter dst: {:?}", e))?
+            };
+            this.builder
+                .build_store(dst, elem)
+                .map_err(|e| format!("Failed to store kept: {:?}", e))?;
+            let next = this
+                .builder
+                .build_int_add(count, i64t.const_int(1, false), "filter_next")
+                .map_err(|e| format!("Failed to inc filter count: {:?}", e))?;
+            this.builder
+                .build_store(count_ptr, next)
+                .map_err(|e| format!("Failed to store filter count: {:?}", e))?;
+            this.builder
+                .build_unconditional_branch(cont_bb)
+                .map_err(|e| format!("Failed to branch filter cont: {:?}", e))?;
+            this.builder.position_at_end(cont_bb);
+            Ok(())
+        })?;
+        let count = self
+            .builder
+            .build_load(i64t, count_ptr, "filter_total")
+            .map_err(|e| format!("Failed to load filter total: {:?}", e))?
+            .into_int_value();
+        self.array_struct(out_ptr, count)
+    }
+
+    /// `arr.reduce(init, (acc, x) => ...)` — fold left, threading `acc` (initialized to
+    /// `init`) through the lambda for each element. The result is the final accumulator.
+    fn array_reduce(
+        &mut self,
+        init: &Expr,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let init_val = self.generate_expr(init)?;
+        let acc_qty = self.infer_type(init);
+        let acc_ptr = self.create_entry_block_alloca("reduce_acc", init_val.get_type())?;
+        self.builder
+            .build_store(acc_ptr, init_val)
+            .map_err(|e| format!("Failed to init acc: {:?}", e))?;
+        let acc_llvm = init_val.get_type();
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let acc = this
+                .builder
+                .build_load(acc_llvm, acc_ptr, "reduce_load")
+                .map_err(|e| format!("Failed to load acc: {:?}", e))?;
+            let next =
+                this.inline_lambda(lambda, &[(acc, acc_qty.clone()), (elem, elem_qty.clone())])?;
+            this.builder
+                .build_store(acc_ptr, next)
+                .map_err(|e| format!("Failed to store acc: {:?}", e))?;
+            Ok(())
+        })?;
+        self.builder
+            .build_load(acc_llvm, acc_ptr, "reduce_result")
+            .map_err(|e| format!("Failed to load reduce result: {:?}", e))
+    }
+
+    /// `arr.each(f)` — run `f` on every element for side effects; the result is ignored
+    /// (the receiver is returned by the caller).
+    fn array_each(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<(), String> {
+        self.array_loop(size, |this, i| {
+            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// `arr.find(pred)` — `Ok(elem)` for the first element satisfying `pred`, else
+    /// `NotOk($)`. Both arms produce the SAME `{ i8 tag, elem }` struct so the result
+    /// has one type; the `NotOk` payload slot is zeroed (never read).
+    fn array_find(
+        &mut self,
+        lambda: &Expr,
+        elem_qty: &Type,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_ty = self.result_struct_type(elem_llvm);
+        let result_ptr = self.create_entry_block_alloca("find_result", result_ty.into())?;
+        // Default: NotOk (tag 1, zeroed payload).
+        let not_ok = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm));
+        self.builder
+            .build_store(result_ptr, not_ok)
+            .map_err(|e| format!("Failed to init find result: {:?}", e))?;
+
+        let function = self.current_function.unwrap();
+        let done_bb = self.context.append_basic_block(function, "find_done");
+
+        // Loop with an early exit to `done_bb` on the first match.
+        let i64t = self.context.i64_type();
+        let counter = self.create_entry_block_alloca("find_i", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(|e| format!("Failed to init find counter: {:?}", e))?;
+        let header = self.context.append_basic_block(function, "find_header");
+        let body = self.context.append_basic_block(function, "find_body");
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch find header: {:?}", e))?;
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64t, counter, "find_iv")
+            .map_err(|e| format!("Failed to load find counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, size, "find_cond")
+            .map_err(|e| format!("Failed to compare find counter: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body, done_bb)
+            .map_err(|e| format!("Failed to branch find body: {:?}", e))?;
+        self.builder.position_at_end(body);
+        let elem = self.load_element(data_ptr, elem_llvm, i)?;
+        let matched = self.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+        let matched_bool = self.value_to_boolean(matched)?;
+        let found_bb = self.context.append_basic_block(function, "find_found");
+        let next_bb = self.context.append_basic_block(function, "find_next");
+        self.builder
+            .build_conditional_branch(matched_bool, found_bb, next_bb)
+            .map_err(|e| format!("Failed to branch find match: {:?}", e))?;
+        // Found: store Ok(elem) and jump to done. `body` dominates `found_bb`, so the
+        // `elem` already loaded above is in scope here — no need to reload it.
+        self.builder.position_at_end(found_bb);
+        let ok = self.build_result(elem_llvm, "Ok", elem);
+        self.builder
+            .build_store(result_ptr, ok)
+            .map_err(|e| format!("Failed to store find Ok: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("Failed to branch find done: {:?}", e))?;
+        // Next iteration.
+        self.builder.position_at_end(next_bb);
+        let inc = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "find_inc")
+            .map_err(|e| format!("Failed to inc find counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, inc)
+            .map_err(|e| format!("Failed to store find counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop find: {:?}", e))?;
+
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_load(result_ty, result_ptr, "find_value")
+            .map_err(|e| format!("Failed to load find result: {:?}", e))
+    }
+
+    /// `arr.at(n)` — `Ok(arr[n])` if `0 <= n < size`, else `NotOk($)` (safe index).
+    fn array_at(
+        &mut self,
+        index: &Expr,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64t = self.context.i64_type();
+        let idx_f = self.generate_expr(index)?.into_float_value();
+        let idx = self
+            .builder
+            .build_float_to_signed_int(idx_f, i64t, "at_idx")
+            .map_err(|e| format!("Failed to convert at index: {:?}", e))?;
+        // In bounds iff 0 <= idx < size.
+        let ge0 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, idx, i64t.const_zero(), "at_ge0")
+            .map_err(|e| format!("Failed to compare at lower bound: {:?}", e))?;
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, idx, size, "at_lt")
+            .map_err(|e| format!("Failed to compare at upper bound: {:?}", e))?;
+        let in_bounds = self
+            .builder
+            .build_and(ge0, lt, "at_in_bounds")
+            .map_err(|e| format!("Failed to and at bounds: {:?}", e))?;
+
+        let result_ty = self.result_struct_type(elem_llvm);
+        let result_ptr = self.create_entry_block_alloca("at_result", result_ty.into())?;
+        let function = self.current_function.unwrap();
+        let ok_bb = self.context.append_basic_block(function, "at_ok");
+        let no_bb = self.context.append_basic_block(function, "at_no");
+        let cont_bb = self.context.append_basic_block(function, "at_cont");
+        self.builder
+            .build_conditional_branch(in_bounds, ok_bb, no_bb)
+            .map_err(|e| format!("Failed to branch at bounds: {:?}", e))?;
+        self.builder.position_at_end(ok_bb);
+        let elem = self.load_element(data_ptr, elem_llvm, idx)?;
+        let ok = self.build_result(elem_llvm, "Ok", elem);
+        self.builder
+            .build_store(result_ptr, ok)
+            .map_err(|e| format!("Failed to store at Ok: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("Failed to branch at ok cont: {:?}", e))?;
+        self.builder.position_at_end(no_bb);
+        let no = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm));
+        self.builder
+            .build_store(result_ptr, no)
+            .map_err(|e| format!("Failed to store at NotOk: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("Failed to branch at no cont: {:?}", e))?;
+        self.builder.position_at_end(cont_bb);
+        self.builder
+            .build_load(result_ty, result_ptr, "at_value")
+            .map_err(|e| format!("Failed to load at result: {:?}", e))
+    }
+
+    /// The `{ i8 tag, elem }` struct that `find`/`at` return — a per-element-typed
+    /// `Result` whose single payload slot holds the element (matching the Result-style
+    /// per-value layout the pattern-match consumer extracts from field 1).
+    fn result_struct_type(
+        &self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+    ) -> inkwell::types::StructType<'ctx> {
+        self.context
+            .struct_type(&[self.context.i8_type().into(), elem_llvm], false)
+    }
+
+    /// Build the `{ i8 tag, payload }` value that `find`/`at` return, tagged as Result
+    /// variant `variant` (`"Ok"` / `"NotOk"`). The tag number is read from the shared
+    /// sum-variant registry (`register_builtin_sum_types`) — the same source the
+    /// pattern-match consumer uses — so construction and matching can never drift apart.
+    fn build_result(
+        &mut self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        variant: &str,
+        payload: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let tag = self
+            .sum_variants
+            .get(variant)
+            .map(|(t, _)| *t)
+            .unwrap_or_else(|| panic!("Result variant `{variant}` is not registered"));
+        let struct_ty = self.result_struct_type(elem_llvm);
+        let tag_val = self.context.i8_type().const_int(tag as u64, false);
+        let mut agg = struct_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, tag_val, 0, "res_tag")
+            .expect("insert result tag")
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, payload, 1, "res_payload")
+            .expect("insert result payload")
+            .into_struct_value();
+        agg.into()
+    }
+
+    /// The LLVM value-representation type of a lambda's body (its inferred result type,
+    /// from the oracle), if known — used by `map` to size the output array. `None` when
+    /// the oracle has no entry (IR-only tests), so the caller falls back.
+    fn lambda_body_repr(&self, lambda: &Expr) -> Option<Result<BasicTypeEnum<'ctx>, String>> {
+        let Expr::Lambda { body, .. } = lambda else {
+            return None;
+        };
+        self.oracle.expr_type(body).map(|t| self.value_repr_type(t))
+    }
+
+    /// Emit a counted `for i in 0..size` loop, calling `body(self, i)` in the loop body
+    /// (the builder is positioned in the body block). On return the builder sits in the
+    /// loop's exit block. Shared scaffolding for the array methods that visit every
+    /// element in order (`map`/`filter`/`reduce`/`each`). `find` rolls its own loop (it
+    /// needs an early exit).
+    fn array_loop(
+        &mut self,
+        size: inkwell::values::IntValue<'ctx>,
+        mut body: impl FnMut(&mut Self, inkwell::values::IntValue<'ctx>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let i64t = self.context.i64_type();
+        let function = self.current_function.unwrap();
+        let counter = self.create_entry_block_alloca("am_i", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(|e| format!("Failed to init loop counter: {:?}", e))?;
+        let header = self.context.append_basic_block(function, "am_header");
+        let body_bb = self.context.append_basic_block(function, "am_body");
+        let exit = self.context.append_basic_block(function, "am_exit");
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to branch loop header: {:?}", e))?;
+        self.builder.position_at_end(header);
+        let i = self
+            .builder
+            .build_load(i64t, counter, "am_iv")
+            .map_err(|e| format!("Failed to load loop counter: {:?}", e))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, size, "am_cond")
+            .map_err(|e| format!("Failed to compare loop counter: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit)
+            .map_err(|e| format!("Failed to branch loop body: {:?}", e))?;
+        self.builder.position_at_end(body_bb);
+        body(self, i)?;
+        let inc = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "am_inc")
+            .map_err(|e| format!("Failed to inc loop counter: {:?}", e))?;
+        self.builder
+            .build_store(counter, inc)
+            .map_err(|e| format!("Failed to store loop counter: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(|e| format!("Failed to loop: {:?}", e))?;
+        self.builder.position_at_end(exit);
+        Ok(())
     }
 
     fn generate_record(

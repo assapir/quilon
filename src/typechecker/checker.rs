@@ -251,6 +251,26 @@ fn is_comparison_operator(name: &str) -> bool {
     matches!(name, "==" | "!=" | "<" | "<=" | ">" | ">=")
 }
 
+/// The `Result` type with a CONCRETE `Ok` payload of `elem` (and a `$`/Unit `NotOk`
+/// for the "absent" case). `find`/`at` return this so a downstream match binds the
+/// element at its real type and exhaustiveness/codegen size it correctly.
+fn result_of(elem: Type) -> Type {
+    use crate::ast::SumVariant;
+    Type::Sum {
+        name: "Result".to_string(),
+        variants: vec![
+            SumVariant {
+                name: "Ok".to_string(),
+                fields: vec![elem],
+            },
+            SumVariant {
+                name: "NotOk".to_string(),
+                fields: vec![Type::Unit],
+            },
+        ],
+    }
+}
+
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
 /// match by identity; a user type matches by NAME (so a `Named`/`Sum` annotation and
 /// the inferred instance line up regardless of carried fields); a `Generic` payload
@@ -1823,6 +1843,19 @@ impl TypeChecker {
             return Ok(sum_type);
         }
 
+        // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) take
+        // precedence over any user overload of the same name: when the receiver
+        // (`args[0]`) is an array, the method is RESERVED and resolved here, before
+        // overload dispatch. (A user can still define e.g. `map` on a non-array type;
+        // dispatch only diverts to the built-in when the receiver is an array.)
+        if let Expr::Ident { name, .. } = func
+            && !args.is_empty()
+            && crate::ast::is_array_method(name)
+            && let Type::Array(elem_type) = self.infer_expr(&args[0])?
+        {
+            return self.check_array_method(name, *elem_type, args, span);
+        }
+
         // Check if this is a method call: func is Ident and first arg is a Named type
         if let Expr::Ident { name, .. } = func
             && !args.is_empty()
@@ -1930,6 +1963,123 @@ impl TypeChecker {
                 span: span.clone(),
             }),
         }
+    }
+
+    /// Type-check a built-in array method call. `args[0]` is the receiver array (already
+    /// known to be `Array(_)`); the remaining args are the method's own arguments,
+    /// typically a lambda whose parameters bind to the element (or accumulator) type:
+    ///   - `map(f: elem => R)`            -> `[]R`
+    ///   - `filter(pred: elem => Bool)`   -> `[]elem`  (same element type)
+    ///   - `reduce(init: A, f: (A, elem) => A)` -> `A`
+    ///   - `each(f: elem => _)`           -> the receiver array itself (`[]elem`)
+    ///   - `find(pred: elem => Bool)`     -> `Result` with `Ok(elem)` / `NotOk`
+    ///   - `at(n: Num)`                   -> `Result` with `Ok(elem)` / `NotOk`
+    fn check_array_method(
+        &mut self,
+        method: &str,
+        elem_type: Type,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        // `args[0]` (the receiver array) was already inferred by the dispatch guard in
+        // `check_call`, which passes its element type in — no need to re-infer it here.
+        let method_args = &args[1..];
+
+        // Arity check for every method (the lambda/value argument count).
+        let expected = match method {
+            "reduce" => 2,
+            _ => 1,
+        };
+        if method_args.len() != expected {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected,
+                got: method_args.len(),
+                span: span.clone(),
+            });
+        }
+
+        match method {
+            "map" => {
+                let ret = self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
+                Ok(Type::Array(Box::new(ret)))
+            }
+            "filter" => {
+                let ret =
+                    self.check_lambda_arg(&method_args[0], std::slice::from_ref(&elem_type), span)?;
+                self.check_type_compatibility(&Type::Bool, &ret, span)?;
+                Ok(Type::Array(Box::new(elem_type)))
+            }
+            "reduce" => {
+                let init_type = self.infer_expr(&method_args[0])?;
+                let ret =
+                    self.check_lambda_arg(&method_args[1], &[init_type.clone(), elem_type], span)?;
+                // The accumulator/result type is the init's type; the reducer must agree.
+                self.check_type_compatibility(&init_type, &ret, span)?;
+                Ok(init_type)
+            }
+            "each" => {
+                // Side-effecting; result is ignored. Returns the receiver array (decision
+                // 19: a Unit-bodied method yields `it`, here the array), so `.each` chains.
+                self.check_lambda_arg(&method_args[0], std::slice::from_ref(&elem_type), span)?;
+                Ok(Type::Array(Box::new(elem_type)))
+            }
+            "find" => {
+                let ret =
+                    self.check_lambda_arg(&method_args[0], std::slice::from_ref(&elem_type), span)?;
+                self.check_type_compatibility(&Type::Bool, &ret, span)?;
+                Ok(result_of(elem_type))
+            }
+            "at" => {
+                let idx_type = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&Type::Num, &idx_type, span)?;
+                Ok(result_of(elem_type))
+            }
+            other => unreachable!("unhandled array method {other}"),
+        }
+    }
+
+    /// Type-check a lambda argument to an array method by binding its parameters to the
+    /// given types and inferring the body. Records the lambda body's type in the type
+    /// table (so codegen's oracle can size the inlined result). The lambda must declare
+    /// exactly `param_types.len()` parameters; any parameter type annotation it carries
+    /// must agree with the expected type. Returns the inferred body type.
+    fn check_lambda_arg(
+        &mut self,
+        arg: &Expr,
+        param_types: &[Type],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let Expr::Lambda { params, body, .. } = arg else {
+            // An array method expects a *literal* lambda here, which it inlines per
+            // element. Passing anything else (e.g. a bare name or a closure value) is
+            // not supported in this position — higher-order values aren't accepted.
+            return Err(TypeError::NotAFunction {
+                got: self.infer_expr(arg)?,
+                span: arg.span().clone(),
+            });
+        };
+        if params.len() != param_types.len() {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: param_types.len(),
+                got: params.len(),
+                span: span.clone(),
+            });
+        }
+        self.env.push_scope();
+        for (param, ty) in params.iter().zip(param_types) {
+            if let Some(ann) = &param.type_annotation {
+                self.check_type_compatibility(ann, ty, &param.span)?;
+            }
+            self.env
+                .define(param.name.clone(), ty.clone(), false, param.span.clone())?;
+        }
+        let body_type = self.infer_expr(body);
+        self.env.pop_scope();
+        let body_type = body_type?;
+        // Record the lambda node's own type as its body type, for completeness.
+        self.type_table
+            .insert(arg.span().clone(), body_type.clone());
+        Ok(body_type)
     }
 
     fn check_match(

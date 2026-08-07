@@ -76,6 +76,46 @@ first = nums[0]        ~ → 1
 ```
 Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 
+#### Array methods
+
+Arrays carry a set of **built-in, compiler-provided methods**, called with method
+syntax (`arr.method(...)`) and freely chainable. The higher-order ones take a **lambda**
+(`x => …`, `(a, b) => …`) — an anonymous function literal valid **only** as a direct
+argument to one of these methods. The compiler **inlines** the lambda body per element
+rather than passing it as a function value (a deliberate specialization — Quilon's
+closures are not accepted as higher-order arguments here).
+
+| Method | Result | Notes |
+|--------|--------|-------|
+| `map(f)` | new `[]R` | element type `R` is `f`'s return type (so `map` may change the element type, e.g. `[]Num → []Text`) |
+| `filter(pred)` | new `[]elem` | keeps the elements where `pred` returns `Bool` `true`, in order; `pred` **must** return `Bool` |
+| `reduce(init, (acc, x) => …)` | the accumulator | fold-left from `init`; the reducer's result type must match `init`'s type |
+| `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains |
+| `find(pred)` | `Ok(elem)` / `NotOk` | the first element satisfying `pred`, absent-safe; `pred` returns `Bool` |
+| `at(n :: Num)` | `Ok(elem)` / `NotOk` | safe index — `Ok` in bounds, `NotOk` otherwise (raw `arr[n]` stays for unchecked indexing) |
+
+```quilon
+nums = [1, 2, 3, 4, 5, 6]
+
+total = nums
+  .map(x => x * 2)              ~ [2, 4, 6, 8, 10, 12]
+  .filter(x => x > 4)           ~ [6, 8, 10, 12]
+  .reduce(0, (acc, x) => acc + x)   ~ 36
+
+first = nums.find(x => x > 3) ?  ~ Ok(4)
+  | Ok(v)    => v
+  | NotOk(_) => 0
+
+third = nums.at(2) ?             ~ Ok(3)
+  | Ok(v)    => v
+  | NotOk(_) => 0
+```
+
+These methods are **reserved on arrays**: a user can define a same-named function/overload
+(e.g. a `map` on a `Num`), but on an *array receiver* the built-in always wins — it is
+resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
+(e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.ql`.)
+
 ### Records
 Anonymous structs with named fields:
 ```quilon
@@ -232,6 +272,24 @@ Functions may recurse; a recursive function needs a `-> Type` annotation:
 factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.ql`, `examples/fibonacci.ql`.)
+
+### Tail self-recursion is optimized to a loop (guaranteed)
+
+When a function returns a call **to itself in tail position** — i.e. the self-call is
+the function's whole result, with nothing left to do to it — the compiler **guarantees**
+it is lowered to a loop (the parameters become loop-carried slots and the call becomes a
+back-edge jump) instead of a stack-pushing call. So a tail-recursive function runs in
+**constant stack** and will not overflow, however deep the recursion:
+```quilon
+count = (n :: Num, acc :: Num) -> Num =>
+  n == 0 ? acc : count(n - 1, acc + n)   ~ the self-call IS the `:` branch → tail position
+```
+Tail position flows through the constructs that yield a value directly: `?`/`|` match
+arms, `if`/ternary branches, the tail of a `< >` block, and a `|>` pipeline. A self-call
+**not** in tail position (e.g. `n * fact(n - 1)`, whose result is multiplied first) stays
+ordinary recursion, as does a tail call to a *different* function (general/mutual tail
+calls are a later follow-up). This is codegen-only — there is no surface syntax for it.
+(See `examples/tail_recursion.ql`, which recurses 1,000,000 deep.)
 
 ### Closures — capture by `=` (value) vs `:=` (reference)
 
@@ -548,10 +606,12 @@ message instead. Any compile error exits with status 1.
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
+| Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
+| Guaranteed self-tail-call optimization (tail self-recursion → loop, constant stack) | ✅ |
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | `for n <- collection => body` loops | ✅ |
@@ -565,10 +625,11 @@ message instead. Any compile error exits with status 1.
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
+| Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | Generics / type variables (overloading is the only polymorphism), `while` loops | ❌ |
 | Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
-| Array methods (`map`/`filter`/`reduce`), string interpolation | ❌ |
+| String interpolation | ❌ |
 
 ---
 

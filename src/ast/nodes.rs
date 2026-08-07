@@ -115,6 +115,16 @@ pub struct Param {
     pub span: Span,
 }
 
+/// The reserved built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`).
+/// When the receiver of one of these is an array, both the type checker and codegen
+/// resolve the compiler-provided built-in ahead of any user overload or sum
+/// constructor — so this predicate is the single source of truth shared by both passes
+/// (a divergence would be a bug). Method names are lowercase, so they never collide with
+/// (Capitalized) sum-constructor names.
+pub fn is_array_method(name: &str) -> bool {
+    matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals

@@ -44,6 +44,7 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("fibonacci.ql", 55),
     ("pattern_match.ql", 50),
     ("arrays.ql", 5),
+    ("array_methods.ql", 52),
     ("for_loop.ql", 0),
     ("ranges.ql", 14),
     ("pipeline.ql", 25),
@@ -58,6 +59,9 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("use_module.ql", 5),
     ("unit.ql", 0),
     ("overloading.ql", 161),
+    // Recurses 1_000_000 deep; only terminates because self-tail-recursion is lowered
+    // to a loop (guaranteed TCO). 1_000_000 mod 251 = 16.
+    ("tail_recursion.ql", 16),
     ("closures.ql", 42),
     // `^(args :: []Text, env :: [][]Text)`. Exit is invocation-independent (argv[0] is
     // always present, env size is always non-negative), so the JIT and native AOT — run
