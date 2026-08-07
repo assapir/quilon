@@ -352,9 +352,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.generate_item(item)?;
         }
 
-        // Check if entry point function (^) exists and generate C main wrapper
+        // Check if entry point function (^) exists and generate C main wrapper.
+        // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
+        // real types (`[]Text` / `[][]Text` / legacy `Num`) — the lowered LLVM types are
+        // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
+        // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
-            self.generate_main_wrapper()?;
+            let entry_params: Vec<Type> = program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::FunctionDecl(decl) if decl.name == "^" => Some(
+                        decl.params
+                            .iter()
+                            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            self.generate_main_wrapper(&entry_params)?;
         }
 
         // Verify the module
@@ -366,7 +383,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.module.print_to_string().to_string())
     }
 
-    fn generate_main_wrapper(&mut self) -> Result<(), String> {
+    fn generate_main_wrapper(&mut self, entry_params: &[Type]) -> Result<(), String> {
         // Create C-compatible main: `int main(int argc, char** argv, char** envp)`.
         // The third (`envp`) parameter is the POSIX/glibc extension to C `main`; passing
         // it is harmless even for a program that only declares `args`, and it is how we
@@ -398,18 +415,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             .get_function("^")
             .ok_or_else(|| "Entry point function ^ not found".to_string())?;
 
-        // Dispatch on `^`'s declared parameter shape. The supported signatures are
-        // `^()`, `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)`. An
-        // array param lowers to a `{ ptr, i64 }` struct (see `generate_function_decl`),
-        // so a struct-typed first param means the modern args/env forms; a float-typed
-        // first param is the legacy `(argc :: Num, argv :: Num)` form (argc as a number,
-        // argv a placeholder `0`), kept working for backward compatibility.
-        let user_entry_type = user_entry.get_type();
-        let param_types = user_entry_type.get_param_types();
-        let first_is_array = matches!(
-            param_types.first(),
-            Some(inkwell::types::BasicMetadataTypeEnum::StructType(_))
-        );
+        // Dispatch on `^`'s DECLARED Quilon parameter types (not the lowered LLVM types:
+        // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
+        // can't tell them apart — dispatching on it would silently call a `Text` param
+        // with the argv array). The supported signatures are `^()`,
+        // `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)` (plus the legacy
+        // `^(argc :: Num, argv :: Num)`). `[]T` is `Type::Array`; a legacy numeric param
+        // is `Type::Num`.
+        let is_array = |t: &Type| matches!(t, Type::Array(_));
+        // The valid modern signatures all take `[]Text`-shaped params; we only require the
+        // ARRAY shape here (the type checker has already verified the element types).
+        let shape: Vec<bool> = entry_params.iter().map(is_array).collect();
 
         // `argc` arrives as the C `int` (i32); widen it to the i64 the runtime expects.
         let argc_i64 = self
@@ -442,21 +458,31 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .into())
         };
 
-        let result = match (param_types.len(), first_is_array) {
+        let unsupported = || -> String {
+            format!(
+                "Entry point ^ has an unsupported signature ({}). \
+                 Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
+                 '(args :: []Text, env :: [][]Text) -> Num' \
+                 (or legacy '(argc :: Num, argv :: Num) -> Num').",
+                fmt_param_types(entry_params)
+            )
+        };
+
+        let result = match shape.as_slice() {
             // `^() -> Num`
-            (0, _) => self
+            [] => self
                 .builder
                 .build_call(user_entry, &[], "entry_result")
                 .map_err(|e| format!("Failed to call entry point: {:?}", e))?,
             // `^(args :: []Text) -> Num`
-            (1, true) => {
+            [true] => {
                 let args = build_args(self)?;
                 self.builder
                     .build_call(user_entry, &[args.into()], "entry_result")
                     .map_err(|e| format!("Failed to call entry point: {:?}", e))?
             }
             // `^(args :: []Text, env :: [][]Text) -> Num`
-            (2, true) => {
+            [true, true] => {
                 let args = build_args(self)?;
                 let env = build_env(self)?;
                 self.builder
@@ -465,7 +491,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // Legacy `^(argc :: Num, argv :: Num) -> Num`: argc as a Num, argv a `0`
             // placeholder. Deprecated in favour of `^(args :: []Text)`.
-            (2, false) => {
+            [false, false] if entry_params.iter().all(|t| *t == Type::Num) => {
                 let argc_as_f64 = self
                     .builder
                     .build_signed_int_to_float(argc, self.context.f64_type(), "argc_f64")
@@ -479,14 +505,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     )
                     .map_err(|e| format!("Failed to call entry point: {:?}", e))?
             }
-            (n, _) => {
-                return Err(format!(
-                    "Entry point ^ has an unsupported signature ({n} parameter(s)). \
-                     Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
-                     '(args :: []Text, env :: [][]Text) -> Num' \
-                     (or legacy '(argc :: Num, argv :: Num) -> Num')."
-                ));
-            }
+            // Any other shape (e.g. `^(x :: Text)`, `^(a :: Num, b :: Text)`,
+            // `^(env :: [][]Text)` without args, 3+ params) is rejected with a clear
+            // diagnostic instead of a silent miscompile or an LLVM verification crash.
+            _ => return Err(unsupported()),
         };
 
         // Convert result to i32
