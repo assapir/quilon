@@ -45,6 +45,21 @@
   up = "abc".toUpper() == "ABC" ? 1 : 0    ~ 1
   lo = "ABC".toLower() == "abc" ? 1 : 0    ~ 1
 
+  ~ --- Unicode correctness: multibyte content, grapheme-based indices ---
+  ~ split on a 4-byte emoji separator -> ["a","b","c"].
+  usplit = "a🌍b🌍c".split("🌍").size      ~ 3
+  ~ indexOf returns a GRAPHEME index: "b" is grapheme 2 (past the 4-byte 🌍), not byte 5.
+  uidx = "a🌍b".indexOf("b") ?
+    | Ok(i)    => i                         ~ 2
+    | NotOk(_) => 99
+  ~ slice over graphemes never splits a multibyte codepoint mid-byte.
+  uslice = "héllo".slice(1, 3) == "él" ? 1 : 0   ~ 1
+  ~ contains matches a multibyte substring.
+  ucont = "a🌍b".contains("🌍") ? 1 : 0    ~ 1
+  ~ Unicode-aware case mapping, incl. the 1->N mapping "ß" -> "SS".
+  usharp = "ß".toUpper() == "SS" ? 1 : 0   ~ 1
+
   nparts + first + tlen + ra + rf + chit + cmiss + idx + nidx + sl1 + sl2 + sl3 + up + lo
-  ~ 2 + 1 + 2 + 8 + 6 + 1 + 0 + 2 + 3 + 3 + 5 + 0 + 1 + 1 = 35
+    + usplit + uidx + uslice + ucont + usharp
+  ~ 35 (ASCII block) + 3 + 2 + 1 + 1 + 1 = 43
 >

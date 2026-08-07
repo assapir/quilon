@@ -19,7 +19,7 @@ fn assert_exit(src: &str, expected: i32) {
     TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
-    let code = jit::run_program(&program).expect("execution failed");
+    let code = jit::run_program(&program, &["program".to_string()]).expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{}", src);
 }
 
@@ -173,6 +173,76 @@ fn text_method_wins_over_user_overload_on_text_receiver() {
     // A user `contains` on Num coexists; the Text receiver still resolves the built-in.
     assert_exit(
         "contains = (n :: Num) -> Bool => n > 0\n^ = () -> Num => <\n  a = \"Hello\".contains(\"ell\") ? 1 : 0\n  b = contains(5) ? 1 : 0\n  a * 10 + b\n>",
+        11,
+    );
+}
+
+// ---- Unicode correctness (end-to-end) ------------------------------------
+
+#[test]
+fn split_on_multibyte_separator() {
+    // "a🌍b🌍c".split("🌍") -> ["a","b","c"], size 3 (4-byte emoji separator).
+    assert_exit("^ = () -> Num => \"a🌍b🌍c\".split(\"🌍\").size", 3);
+}
+
+#[test]
+fn split_empty_separator_keeps_multi_codepoint_cluster_whole() {
+    // A ZWJ family emoji is ONE grapheme -> empty-sep split yields a single element.
+    assert_exit("^ = () -> Num => \"👨‍👩‍👧\".split(\"\").size", 1);
+}
+
+#[test]
+fn index_of_is_grapheme_index_across_emoji() {
+    // "a🌍b": 🌍 is 4 bytes / 1 grapheme, so "b" is at grapheme index 2 (not byte 5).
+    assert_exit(
+        "^ = () -> Num => \"a🌍b\".indexOf(\"b\") ? | Ok(i) => i | NotOk(_) => 99",
+        2,
+    );
+}
+
+#[test]
+fn contains_matches_multibyte_and_rejects_byte_overlap() {
+    // 🌎 shares its first 3 UTF-8 bytes with 🌍 but is a different grapheme: no false hit.
+    assert_exit(
+        "^ = () -> Num => <\n  hit  = \"a🌍b\".contains(\"🌍\") ? 1 : 0\n  miss = \"a🌍b\".contains(\"🌎\") ? 1 : 0\n  hit * 10 + miss\n>",
+        10,
+    );
+}
+
+#[test]
+fn slice_does_not_split_a_multibyte_codepoint() {
+    // "héllo".slice(1, 3) -> "él" (graphemes 1..3), never a half-encoded "é".
+    assert_exit(
+        "^ = () -> Num => \"héllo\".slice(1, 3) == \"él\" ? 1 : 0",
+        1,
+    );
+    // The sliced text is valid: "él" is 3 bytes (é=2, l=1).
+    assert_exit("^ = () -> Num => \"héllo\".slice(1, 3).size", 3);
+}
+
+#[test]
+fn case_mapping_is_unicode_aware() {
+    // Non-ASCII round-trips, and the 1->N mapping "ß".toUpper() == "SS".
+    assert_exit(
+        "^ = () -> Num => <\n  up   = \"é\".toUpper() == \"É\" ? 1 : 0\n  lo   = \"Ä\".toLower() == \"ä\" ? 1 : 0\n  sharp = \"ß\".toUpper() == \"SS\" ? 1 : 0\n  up * 100 + lo * 10 + sharp\n>",
+        111,
+    );
+}
+
+#[test]
+fn trim_strips_unicode_whitespace() {
+    // Leading/trailing NBSP (U+00A0) is Unicode whitespace and must be trimmed.
+    assert_exit(
+        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trim() == \"héllo\" ? 1 : 0",
+        1,
+    );
+}
+
+#[test]
+fn replace_with_multibyte_from_and_to() {
+    // Replace a 4-byte emoji with a 2-byte "é": all vs first.
+    assert_exit(
+        "^ = () -> Num => <\n  all   = \"a🌍b🌍c\".replace(\"🌍\", \"é\", true) == \"aébéc\" ? 1 : 0\n  first = \"a🌍b🌍c\".replace(\"🌍\", \"é\", false) == \"aéb🌍c\" ? 1 : 0\n  all * 10 + first\n>",
         11,
     );
 }

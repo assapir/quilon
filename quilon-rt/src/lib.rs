@@ -668,6 +668,104 @@ mod tests {
         );
     }
 
+    /// A single collect helper shared by the Unicode split tests below.
+    fn split_parts(s: &QlSlice) -> Vec<String> {
+        let parts = unsafe { std::slice::from_raw_parts(s.data as *const QlSlice, s.len as usize) };
+        parts
+            .iter()
+            .map(|p| unsafe { slice_str(*p) }.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn text_slice_does_not_split_multi_codepoint_graphemes() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // "e" + combining acute (U+0301) is ONE grapheme but 3 bytes; slicing grapheme
+        // [0,1) must return the whole cluster, never half of it.
+        let combining = "e\u{0301}llo"; // "éllo" in NFD: 5 graphemes, 6 bytes
+        let (p, l) = text_of(combining);
+        assert_eq!(unsafe { slice_str(__text_slice(p, l, 0, 1)) }, "e\u{0301}");
+        assert_eq!(unsafe { slice_str(__text_slice(p, l, 0, 1)) }.len(), 3);
+        // A ZWJ family emoji is one grapheme; slice [0,1) keeps it intact.
+        let (fp, fl) = text_of("👨‍👩‍👧x");
+        assert_eq!(unsafe { slice_str(__text_slice(fp, fl, 0, 1)) }, "👨‍👩‍👧");
+        // An emoji mid-string: "a🌍b" graphemes a(0) 🌍(1) b(2).
+        let (ep, el) = text_of("a🌍b");
+        assert_eq!(unsafe { slice_str(__text_slice(ep, el, 1, 2)) }, "🌍");
+    }
+
+    #[test]
+    fn text_index_of_and_contains_are_grapheme_correct_on_multibyte() {
+        // "a🌍b": 🌍 is 4 bytes / 1 grapheme; "b" is at grapheme index 2, byte offset 5.
+        let (hp, hl) = text_of("a🌍b");
+        let (bp, bl) = text_of("b");
+        assert_eq!(__text_index_of(hp, hl, bp, bl), 2);
+        let (ep, el) = text_of("🌍");
+        assert_eq!(__text_index_of(hp, hl, ep, el), 1);
+        assert_eq!(__text_contains(hp, hl, ep, el), 1);
+        // 🌎 (U+1F30E) shares its first 3 UTF-8 bytes with 🌍 (U+1F30D) but differs in the
+        // last — a byte-overlapping-but-different substring must NOT falsely match.
+        let (fp, fl) = text_of("🌎");
+        assert_eq!(__text_contains(hp, hl, fp, fl), 0);
+        assert_eq!(__text_index_of(hp, hl, fp, fl), -1);
+    }
+
+    #[test]
+    fn text_split_on_multibyte_separator_and_cluster_stays_whole() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // Split on a 4-byte emoji separator.
+        let (hp, hl) = text_of("a🌍b🌍c");
+        let (sp, sl) = text_of("🌍");
+        assert_eq!(split_parts(&__text_split(hp, hl, sp, sl)), ["a", "b", "c"]);
+        // Empty-separator split of a multi-codepoint grapheme keeps it as ONE element.
+        let (fp, fl) = text_of("👨‍👩‍👧");
+        let (esp, esl) = text_of("");
+        assert_eq!(split_parts(&__text_split(fp, fl, esp, esl)), ["👨‍👩‍👧"]);
+    }
+
+    #[test]
+    fn text_case_mapping_non_ascii_and_one_to_many() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (p, l) = text_of("é");
+        assert_eq!(unsafe { slice_str(__text_to_upper(p, l)) }, "É");
+        let (p, l) = text_of("Ä");
+        assert_eq!(unsafe { slice_str(__text_to_lower(p, l)) }, "ä");
+        // 1->N case mapping: German sharp-s uppercases to "SS" (documented Rust behavior).
+        let (p, l) = text_of("ß");
+        assert_eq!(unsafe { slice_str(__text_to_upper(p, l)) }, "SS");
+        let (p, l) = text_of("İ"); // U+0130 LATIN CAPITAL I WITH DOT ABOVE
+        assert_eq!(unsafe { slice_str(__text_to_lower(p, l)) }, "i\u{307}");
+    }
+
+    #[test]
+    fn text_trim_strips_unicode_whitespace() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // NBSP (U+00A0) and EM SPACE (U+2003) are Unicode whitespace and must be trimmed.
+        let (p, l) = text_of("\u{00A0}\u{2003}héllo\u{2003}\u{00A0}");
+        assert_eq!(unsafe { slice_str(__text_trim(p, l)) }, "héllo");
+    }
+
+    #[test]
+    fn text_replace_with_multibyte_from_and_to() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (hp, hl) = text_of("a🌍b🌍c");
+        let (fp, fl) = text_of("🌍");
+        let (tp, tl) = text_of("é");
+        assert_eq!(
+            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 1)) },
+            "aébéc"
+        );
+        assert_eq!(
+            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 0)) },
+            "aéb🌍c"
+        );
+    }
+
     #[test]
     fn alloc_returns_usable_memory() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
