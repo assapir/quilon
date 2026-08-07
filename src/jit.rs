@@ -91,7 +91,6 @@ pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
                 "__envp_to_pairs",
                 intrinsics::__envp_to_pairs as *const () as usize,
             ),
-            ("__text_trim", intrinsics::__text_trim as *const () as usize),
             (
                 "__text_trim_start",
                 intrinsics::__text_trim_start as *const () as usize,

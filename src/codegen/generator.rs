@@ -2476,9 +2476,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
             // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
-            // { ptr, i64 } trim / trimStart / trimEnd / toUpper / toLower (i8*, i64).
-            "__text_trim" | "__text_trim_start" | "__text_trim_end" | "__text_to_upper"
-            | "__text_to_lower" => self
+            // { ptr, i64 } trimStart / trimEnd / toUpper / toLower (i8*, i64). `trim` is
+            // composed from trimStart+trimEnd in codegen, so it has no own intrinsic.
+            "__text_trim_start" | "__text_trim_end" | "__text_to_upper" | "__text_to_lower" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into()], false),
             // i64 __text_contains / __text_index_of (i8* hay, i64, i8* sub, i64).
@@ -3600,7 +3600,28 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         match method {
-            "trim" => call_struct(self, "__text_trim", &[recv_ptr.into(), recv_len.into()]),
+            "trim" => {
+                // `trim` = `trimStart` then `trimEnd` (order-independent, identical to a
+                // direct both-sides trim) — composed from the two intrinsics so there is
+                // no separate `__text_trim`. The extra pass/allocation is fine for trim.
+                let started = call_struct(
+                    self,
+                    "__text_trim_start",
+                    &[recv_ptr.into(), recv_len.into()],
+                )?
+                .into_struct_value();
+                let sp = self
+                    .builder
+                    .build_extract_value(started, 0, "trim_mid_ptr")
+                    .map_err(|e| format!("Failed to extract trimStart ptr: {:?}", e))?
+                    .into_pointer_value();
+                let sl = self
+                    .builder
+                    .build_extract_value(started, 1, "trim_mid_len")
+                    .map_err(|e| format!("Failed to extract trimStart len: {:?}", e))?
+                    .into_int_value();
+                call_struct(self, "__text_trim_end", &[sp.into(), sl.into()])
+            }
             "trimStart" => call_struct(
                 self,
                 "__text_trim_start",
