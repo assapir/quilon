@@ -2200,13 +2200,16 @@ impl TypeChecker {
         // drives both the arity check and the per-argument type check below. `indexOf`
         // returns `Ok(Num)`/`NotOk` (no -1 sentinel); `split` returns `[]Text`.
         use Type::{Bool, Num, Text};
+        // `replace`'s 3rd argument is an options record `{ all :: Bool }` (an anonymous
+        // record); `all == true` replaces all occurrences, `false` only the first.
+        let replace_opts = Type::Record(vec![("all".to_string(), Bool)]);
         let (params, result): (Vec<Type>, Type) = match method {
-            "trim" | "toUpper" | "toLower" => (vec![], Text),
+            "trim" | "trimStart" | "trimEnd" | "toUpper" | "toLower" => (vec![], Text),
             "split" => (vec![Text], Type::Array(Box::new(Text))),
             "contains" => (vec![Text], Bool),
             "indexOf" => (vec![Text], result_of(Num)),
             "slice" => (vec![Num, Num], Text),
-            "replace" => (vec![Text, Text, Bool], Text),
+            "replace" => (vec![Text, Text, replace_opts], Text),
             other => unreachable!("unhandled text method {other}"),
         };
 

@@ -93,6 +93,14 @@ pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
             ),
             ("__text_trim", intrinsics::__text_trim as *const () as usize),
             (
+                "__text_trim_start",
+                intrinsics::__text_trim_start as *const () as usize,
+            ),
+            (
+                "__text_trim_end",
+                intrinsics::__text_trim_end as *const () as usize,
+            ),
+            (
                 "__text_to_upper",
                 intrinsics::__text_to_upper as *const () as usize,
             ),

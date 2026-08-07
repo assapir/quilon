@@ -1,8 +1,8 @@
 ~ Built-in `Text` methods (compiler-provided, chainable), each backed by a runtime
 ~ intrinsic. UTF-8 correct; grapheme-based where an index/length is user-visible.
 ~   split(sep)                -> []Text   (empty sep -> graphemes; empties preserved)
-~   trim()                    -> Text     (strip leading/trailing whitespace)
-~   replace(from, to, all)    -> Text     (all=true replaces every match, false the first)
+~   trim() / trimStart() / trimEnd() -> Text   (strip both / leading / trailing whitespace)
+~   replace(from, to, { all = Bool }) -> Text  (all=true replaces every match, false the first)
 ~   contains(sub)             -> Bool
 ~   indexOf(sub)              -> Ok(Num) grapheme index / NotOk   (no -1 sentinel)
 ~   slice(start, end)         -> Text     (grapheme indices, clamped; end exclusive)
@@ -17,12 +17,15 @@
     | Ok(w)    => w == "Hello" ? 1 : 0     ~ 1  (split pieces are genuine Text)
     | NotOk(_) => 0
 
-  ~ trim strips surrounding whitespace.
+  ~ trim strips both sides; trimStart / trimEnd strip one side only.
   tlen = "  hi  ".trim().size              ~ 2
+  ts = "  hi  ".trimStart().size           ~ "hi  " -> 4
+  te = "  hi  ".trimEnd().size             ~ "  hi" -> 4
 
-  ~ replace: all occurrences vs only the first (different lengths make it observable).
-  ra = "a-a-a".replace("a", "xx", true).size    ~ "xx-xx-xx" -> 8
-  rf = "a-a-a".replace("a", "xx", false).size    ~ "xx-a-a"   -> 6
+  ~ replace takes an options record { all :: Bool }: all occurrences vs only the first
+  ~ (different from/to lengths make the choice observable).
+  ra = "a-a-a".replace("a", "xx", { all = true }).size     ~ "xx-xx-xx" -> 8
+  rf = "a-a-a".replace("a", "xx", { all = false }).size    ~ "xx-a-a"   -> 6
 
   ~ contains: a hit contributes, a miss must contribute nothing.
   chit  = s.contains("World") ? 1 : 0      ~ 1
@@ -59,7 +62,7 @@
   ~ Unicode-aware case mapping, incl. the 1->N mapping "ß" -> "SS".
   usharp = "ß".toUpper() == "SS" ? 1 : 0   ~ 1
 
-  nparts + first + tlen + ra + rf + chit + cmiss + idx + nidx + sl1 + sl2 + sl3 + up + lo
-    + usplit + uidx + uslice + ucont + usharp
-  ~ 35 (ASCII block) + 3 + 2 + 1 + 1 + 1 = 43
+  nparts + first + tlen + ts + te + ra + rf + chit + cmiss + idx + nidx + sl1 + sl2 + sl3
+    + up + lo + usplit + uidx + uslice + ucont + usharp
+  ~ 43 (prior block) + ts 4 + te 4 = 51
 >

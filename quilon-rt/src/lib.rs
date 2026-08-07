@@ -323,6 +323,20 @@ pub extern "C" fn __text_trim(ptr: *const u8, len: i64) -> QlSlice {
     alloc_text(text_str(ptr, len).trim().as_bytes())
 }
 
+/// Strip leading-only (Unicode) whitespace. Backs `Text.trimStart()`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_trim_start(ptr: *const u8, len: i64) -> QlSlice {
+    alloc_text(text_str(ptr, len).trim_start().as_bytes())
+}
+
+/// Strip trailing-only (Unicode) whitespace. Backs `Text.trimEnd()`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_trim_end(ptr: *const u8, len: i64) -> QlSlice {
+    alloc_text(text_str(ptr, len).trim_end().as_bytes())
+}
+
 /// Unicode-aware uppercase. Backs `Text.toUpper()`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
@@ -487,7 +501,7 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 18] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 20] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
@@ -502,6 +516,8 @@ static QUILON_RT_INTRINSICS: [RtFn; 18] = unsafe {
         ),
         core::mem::transmute(__envp_to_pairs as extern "C" fn(*const *const c_char) -> QlSlice),
         core::mem::transmute(__text_trim as extern "C" fn(*const u8, i64) -> QlSlice),
+        core::mem::transmute(__text_trim_start as extern "C" fn(*const u8, i64) -> QlSlice),
+        core::mem::transmute(__text_trim_end as extern "C" fn(*const u8, i64) -> QlSlice),
         core::mem::transmute(__text_to_upper as extern "C" fn(*const u8, i64) -> QlSlice),
         core::mem::transmute(__text_to_lower as extern "C" fn(*const u8, i64) -> QlSlice),
         core::mem::transmute(
@@ -581,6 +597,22 @@ mod tests {
         __gc_init();
         let (p, l) = text_of("  héllo \t\n");
         assert_eq!(unsafe { slice_str(__text_trim(p, l)) }, "héllo");
+    }
+
+    #[test]
+    fn text_trim_start_and_end() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // Unicode whitespace (NBSP U+00A0, EM SPACE U+2003) on both ends.
+        let (p, l) = text_of("\u{00A0}\u{2003}héllo\u{2003}\u{00A0}");
+        assert_eq!(
+            unsafe { slice_str(__text_trim_start(p, l)) },
+            "héllo\u{2003}\u{00A0}"
+        );
+        assert_eq!(
+            unsafe { slice_str(__text_trim_end(p, l)) },
+            "\u{00A0}\u{2003}héllo"
+        );
     }
 
     #[test]

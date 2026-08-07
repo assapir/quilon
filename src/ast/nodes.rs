@@ -134,7 +134,16 @@ pub fn is_array_method(name: &str) -> bool {
 pub fn is_text_method(name: &str) -> bool {
     matches!(
         name,
-        "split" | "trim" | "replace" | "contains" | "indexOf" | "slice" | "toUpper" | "toLower"
+        "split"
+            | "trim"
+            | "trimStart"
+            | "trimEnd"
+            | "replace"
+            | "contains"
+            | "indexOf"
+            | "slice"
+            | "toUpper"
+            | "toLower"
     )
 }
 

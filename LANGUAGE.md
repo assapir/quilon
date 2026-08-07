@@ -64,8 +64,9 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 | Method | Result | Notes |
 |--------|--------|-------|
 | `split(sep :: Text)` | `[]Text` | split on `sep`; consecutive separators keep empty pieces (`"a,,b".split(",")` → `["a","","b"]`), an empty haystack yields `[""]`, and an **empty** `sep` splits into individual graphemes (`"abc".split("")` → `["a","b","c"]`) |
-| `trim()` | `Text` | strip leading/trailing whitespace |
-| `replace(from :: Text, to :: Text, all :: Bool)` | `Text` | replace every occurrence when `all` is `true`, only the **first** when `false`; an empty `from` is a no-op |
+| `trim()` | `Text` | strip leading **and** trailing whitespace |
+| `trimStart()` / `trimEnd()` | `Text` | strip leading-only / trailing-only whitespace |
+| `replace(from :: Text, to :: Text, { all :: Bool })` | `Text` | 3rd arg is an options record; `all = true` replaces every occurrence, `all = false` only the **first**; an empty `from` is a no-op |
 | `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
 | `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` if absent — **no `-1` sentinel** |
 | `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds (never an error), and `end ≤ start` yields `""` |
@@ -74,8 +75,10 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 ```quilon
 "a,b,c".split(",")                       ~ ["a", "b", "c"]
 "  hi  ".trim()                          ~ "hi"
-"a-a-a".replace("a", "x", true)          ~ "x-x-x"   (all)
-"a-a-a".replace("a", "x", false)         ~ "x-a-a"   (first only)
+"  hi  ".trimStart()                     ~ "hi  "
+"  hi  ".trimEnd()                       ~ "  hi"
+"a-a-a".replace("a", "x", { all = true })   ~ "x-x-x"   (all)
+"a-a-a".replace("a", "x", { all = false })  ~ "x-a-a"   (first only)
 "Hello".contains("ell")                  ~ true
 "héllo".indexOf("llo") ?                 ~ Ok(2)  (grapheme index)
   | Ok(i)    => i
@@ -719,7 +722,7 @@ message instead. Any compile error exits with status 1.
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
-| `Text` methods: `split`/`trim`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | Ad-hoc overloading: same-named typed defs, exact-type dispatch | ✅ |
 | Operator overloading (`+`, comparisons, … on user types); built-ins as overloads | ✅ |
 | `Bool` | ✅ |

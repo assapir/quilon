@@ -2476,8 +2476,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
             // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
-            // { ptr, i64 } __text_trim / __text_to_upper / __text_to_lower (i8*, i64).
-            "__text_trim" | "__text_to_upper" | "__text_to_lower" => self
+            // { ptr, i64 } trim / trimStart / trimEnd / toUpper / toLower (i8*, i64).
+            "__text_trim" | "__text_trim_start" | "__text_trim_end" | "__text_to_upper"
+            | "__text_to_lower" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into()], false),
             // i64 __text_contains / __text_index_of (i8* hay, i64, i8* sub, i64).
@@ -3600,6 +3601,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match method {
             "trim" => call_struct(self, "__text_trim", &[recv_ptr.into(), recv_len.into()]),
+            "trimStart" => call_struct(
+                self,
+                "__text_trim_start",
+                &[recv_ptr.into(), recv_len.into()],
+            ),
+            "trimEnd" => call_struct(self, "__text_trim_end", &[recv_ptr.into(), recv_len.into()]),
             "toUpper" => call_struct(self, "__text_to_upper", &[recv_ptr.into(), recv_len.into()]),
             "toLower" => call_struct(self, "__text_to_lower", &[recv_ptr.into(), recv_len.into()]),
             "split" => {
@@ -3613,8 +3620,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             "replace" => {
                 let (fp, fl) = self.extract_text(&args[1])?;
                 let (tp, tl) = self.extract_text(&args[2])?;
-                // `all` is a Bool (i1); widen to the i64 flag the intrinsic expects.
-                let all_i1 = self.generate_expr(&args[3])?.into_int_value();
+                // The 3rd arg is the options record `{ all :: Bool }`; read its `all`
+                // field (an i1) and widen to the i64 flag the intrinsic expects.
+                let all_i1 = self.read_record_bool_field(&args[3], "all")?;
                 let all = self
                     .builder
                     .build_int_z_extend(all_i1, self.context.i64_type(), "all_flag")
@@ -3694,6 +3702,46 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to extract text len: {:?}", e))?
             .into_int_value();
         Ok((ptr, len))
+    }
+
+    /// Read a `Bool` (`i1`) field out of a record-typed argument expression — used by
+    /// `replace` to read `all` from its options record `{ all :: Bool }`. Works for both
+    /// an inline record literal and a record-bound variable: a record VALUE is a pointer
+    /// to its struct, so evaluate the expr, then GEP+load the field. The field index and
+    /// struct layout come from the record's oracle type (declared field order), matching
+    /// how `generate_record` stored it.
+    fn read_record_bool_field(
+        &mut self,
+        expr: &Expr,
+        field: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let fields = match self.oracle.expr_type(expr) {
+            Some(Type::Record(fs)) => fs.clone(),
+            Some(Type::Named { fields, .. }) => fields.clone(),
+            other => {
+                return Err(format!(
+                    "expected an options record for `.{field}`, got {other:?}"
+                ));
+            }
+        };
+        let idx = fields
+            .iter()
+            .position(|(n, _)| n == field)
+            .ok_or_else(|| format!("options record has no `{field}` field"))?;
+        let struct_ty = self.record_struct_type(&fields)?;
+        let field_llvm = struct_ty
+            .get_field_type_at_index(idx as u32)
+            .ok_or_else(|| format!("options record field `{field}` index out of range"))?;
+        let rec_ptr = self.generate_expr(expr)?.into_pointer_value();
+        let field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, rec_ptr, idx as u32, "opts_field_ptr")
+            .map_err(|e| format!("Failed to GEP options field: {:?}", e))?;
+        Ok(self
+            .builder
+            .build_load(field_llvm, field_ptr, "opts_field")
+            .map_err(|e| format!("Failed to load options field: {:?}", e))?
+            .into_int_value())
     }
 
     /// Evaluate a `Num` index argument (an `f64`) and convert it to the `i64` the Text

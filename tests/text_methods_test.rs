@@ -97,7 +97,7 @@ fn trim_chains() {
 fn replace_all_vs_first() {
     // all -> "xx-xx-xx" (8), first -> "xx-a-a" (6).
     assert_exit(
-        "^ = () -> Num => <\n  a = \"a-a-a\".replace(\"a\", \"xx\", true).size\n  f = \"a-a-a\".replace(\"a\", \"xx\", false).size\n  a * 10 + f\n>",
+        "^ = () -> Num => <\n  a = \"a-a-a\".replace(\"a\", \"xx\", { all = true }).size\n  f = \"a-a-a\".replace(\"a\", \"xx\", { all = false }).size\n  a * 10 + f\n>",
         86,
     );
 }
@@ -105,7 +105,7 @@ fn replace_all_vs_first() {
 #[test]
 fn replace_empty_from_is_noop() {
     assert_exit(
-        "^ = () -> Num => \"abc\".replace(\"\", \"x\", true) == \"abc\" ? 1 : 0",
+        "^ = () -> Num => \"abc\".replace(\"\", \"x\", { all = true }) == \"abc\" ? 1 : 0",
         1,
     );
 }
@@ -238,11 +238,45 @@ fn trim_strips_unicode_whitespace() {
     );
 }
 
+// ---- trimStart / trimEnd --------------------------------------------------
+
+#[test]
+fn trim_start_and_end_strip_one_side_only() {
+    // "  hi  ".trimStart() -> "hi  " (4); .trimEnd() -> "  hi" (4).
+    assert_exit(
+        "^ = () -> Num => <\n  s = \"  hi  \".trimStart().size\n  e = \"  hi  \".trimEnd().size\n  s * 10 + e\n>",
+        44,
+    );
+    // Content check: only the intended side is stripped.
+    assert_exit(
+        "^ = () -> Num => \"  hi  \".trimStart() == \"hi  \" ? 1 : 0",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => \"  hi  \".trimEnd() == \"  hi\" ? 1 : 0",
+        1,
+    );
+}
+
+#[test]
+fn trim_start_and_end_are_unicode_whitespace_aware() {
+    // NBSP (U+00A0) on both ends; trimStart removes the leading one only, trimEnd the
+    // trailing one only.
+    assert_exit(
+        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trimStart() == \"héllo\u{00A0}\" ? 1 : 0",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trimEnd() == \"\u{00A0}héllo\" ? 1 : 0",
+        1,
+    );
+}
+
 #[test]
 fn replace_with_multibyte_from_and_to() {
     // Replace a 4-byte emoji with a 2-byte "é": all vs first.
     assert_exit(
-        "^ = () -> Num => <\n  all   = \"a🌍b🌍c\".replace(\"🌍\", \"é\", true) == \"aébéc\" ? 1 : 0\n  first = \"a🌍b🌍c\".replace(\"🌍\", \"é\", false) == \"aéb🌍c\" ? 1 : 0\n  all * 10 + first\n>",
+        "^ = () -> Num => <\n  all   = \"a🌍b🌍c\".replace(\"🌍\", \"é\", { all = true }) == \"aébéc\" ? 1 : 0\n  first = \"a🌍b🌍c\".replace(\"🌍\", \"é\", { all = false }) == \"aéb🌍c\" ? 1 : 0\n  all * 10 + first\n>",
         11,
     );
 }
@@ -253,6 +287,18 @@ fn slice_rejects_non_num_indices() {
 }
 
 #[test]
-fn replace_rejects_non_bool_flag() {
-    assert_type_error("^ = () -> Num => \"a\".replace(\"a\", \"b\", 1).size");
+fn replace_requires_an_options_record() {
+    // The 3rd arg must be the `{ all :: Bool }` options record — a bare Bool is rejected.
+    assert_type_error("^ = () -> Num => \"a\".replace(\"a\", \"b\", true).size");
+    // A record with the wrong field type is rejected too.
+    assert_type_error("^ = () -> Num => \"a\".replace(\"a\", \"b\", { all = 1 }).size");
+}
+
+#[test]
+fn replace_reads_the_all_field_from_a_bound_record() {
+    // The options record need not be an inline literal — a bound variable works.
+    assert_exit(
+        "^ = () -> Num => <\n  opts = { all = true }\n  \"a-a-a\".replace(\"a\", \"b\", opts) == \"b-b-b\" ? 1 : 0\n>",
+        1,
+    );
 }
