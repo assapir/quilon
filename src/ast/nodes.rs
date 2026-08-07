@@ -139,6 +139,7 @@ pub fn is_text_method(name: &str) -> bool {
             | "trimStart"
             | "trimEnd"
             | "replace"
+            | "replaceAll"
             | "contains"
             | "indexOf"
             | "slice"

@@ -6,10 +6,47 @@ use quilon::jit;
 use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::typechecker::TypeChecker;
+use std::process::Command;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // LLVM JIT / native-target init isn't thread-safe; serialize execution.
 static JIT_LOCK: Mutex<()> = Mutex::new(());
+
+// Unique suffix for temp files across parallel subprocess crash tests.
+static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Run `src` via `quilon run` in a SUBPROCESS and assert it aborts with exit code 101
+/// and prints `expect_stderr` to stderr. Used for the fail-loud runtime paths (an invalid
+/// `replace` argument) — the abort exits the process, so these must NOT run in-process
+/// (that would kill the test runner). Needs only the JIT (no C toolchain).
+///
+/// NOTE: the runtime abort is wired to core.test's `__exit` intrinsic (issue #63); until
+/// that merges the runtime only prints and returns unchanged, so the callers below are
+/// `#[ignore]`d.
+fn assert_run_aborts(src: &str, expect_stderr: &str) {
+    let seq = CRASH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("quilon_replace_abort_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let file = dir.join("prog.ql");
+    std::fs::write(&file, src).expect("write temp program");
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["run", file.to_str().unwrap()])
+        .output()
+        .expect("run quilon run");
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        code, 101,
+        "expected abort exit 101 for source:\n{src}\ngot {code}; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(expect_stderr),
+        "stderr {stderr:?} missing {expect_stderr:?} for source:\n{src}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 /// Compile and run `src`, asserting the entry point yields `expected`.
 fn assert_exit(src: &str, expected: i32) {
@@ -91,22 +128,92 @@ fn trim_chains() {
     );
 }
 
-// ---- replace --------------------------------------------------------------
+// ---- replaceAll / replace(count) ------------------------------------------
 
 #[test]
-fn replace_all_vs_first() {
-    // all -> "xx-xx-xx" (8), first -> "xx-a-a" (6).
+fn replace_all_replaces_every_occurrence() {
+    // "a-a-a".replaceAll("a","xx") -> "xx-xx-xx" (size 8).
     assert_exit(
-        "^ = () -> Num => <\n  a = \"a-a-a\".replace(\"a\", \"xx\", { all = true }).size\n  f = \"a-a-a\".replace(\"a\", \"xx\", { all = false }).size\n  a * 10 + f\n>",
-        86,
+        "^ = () -> Num => \"a-a-a\".replaceAll(\"a\", \"xx\").size",
+        8,
     );
 }
 
 #[test]
-fn replace_empty_from_is_noop() {
+fn replace_exact_count_left_to_right() {
+    // count 1 -> "xx-a-a" (6), 2 -> "xx-xx-a" (7), 3 (== occurrences) -> "xx-xx-xx" (8).
     assert_exit(
-        "^ = () -> Num => \"abc\".replace(\"\", \"x\", { all = true }) == \"abc\" ? 1 : 0",
-        1,
+        "^ = () -> Num => <\n  a = \"a-a-a\".replace(\"a\", \"xx\", 1).size\n  b = \"a-a-a\".replace(\"a\", \"xx\", 2).size\n  c = \"a-a-a\".replace(\"a\", \"xx\", 3).size\n  a * 100 + b * 10 + c\n>",
+        678,
+    );
+}
+
+#[test]
+fn replace_count_truncates_toward_zero() {
+    // 2.9 truncates to 2 -> "xx-xx-a" (size 7).
+    assert_exit(
+        "^ = () -> Num => \"a-a-a\".replace(\"a\", \"xx\", 2.9).size",
+        7,
+    );
+}
+
+// Compile-time rejections (literal-determinable).
+#[test]
+fn replace_literal_count_zero_or_negative_is_a_compile_error() {
+    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", 0).size");
+    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", -2).size");
+}
+
+#[test]
+fn replace_literal_empty_from_is_a_compile_error() {
+    assert_type_error("^ = () -> Num => \"abc\".replace(\"\", \"x\", 1).size");
+}
+
+#[test]
+fn replace_all_literal_empty_from_is_a_compile_error() {
+    assert_type_error("^ = () -> Num => \"abc\".replaceAll(\"\", \"x\").size");
+}
+
+#[test]
+fn replace_literal_count_over_occurrences_is_a_compile_error() {
+    // "a-a-a" has 3 "a"; asking for 5 is a compile error (all operands literal).
+    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", 5).size");
+}
+
+// Runtime fail-loud (non-literal, so not caught at compile time) — abort, no silent no-op.
+#[test]
+#[ignore = "runtime abort pending core.test __exit (#63)"]
+fn replace_runtime_count_zero_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  n = 3 - 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
+        "count must be positive",
+    );
+}
+
+#[test]
+#[ignore = "runtime abort pending core.test __exit (#63)"]
+fn replace_runtime_count_over_occurrences_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
+        "exceeds",
+    );
+}
+
+#[test]
+#[ignore = "runtime abort pending core.test __exit (#63)"]
+fn replace_runtime_empty_from_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replace(f, \"x\", 1).size\n>",
+        "must not be empty",
+    );
+}
+
+#[test]
+#[ignore = "runtime abort pending core.test __exit (#63)"]
+fn replace_all_runtime_empty_from_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replaceAll(f, \"x\").size\n>",
+        "must not be empty",
     );
 }
 
@@ -347,9 +454,9 @@ fn trim_start_and_end_are_unicode_whitespace_aware() {
 
 #[test]
 fn replace_with_multibyte_from_and_to() {
-    // Replace a 4-byte emoji with a 2-byte "é": all vs first.
+    // Replace a 4-byte emoji separator with a 2-byte "é": replaceAll vs first (count 1).
     assert_exit(
-        "^ = () -> Num => <\n  all   = \"a🌍b🌍c\".replace(\"🌍\", \"é\", { all = true }) == \"aébéc\" ? 1 : 0\n  first = \"a🌍b🌍c\".replace(\"🌍\", \"é\", { all = false }) == \"aéb🌍c\" ? 1 : 0\n  all * 10 + first\n>",
+        "^ = () -> Num => <\n  all   = \"a🌍b🌍c\".replaceAll(\"🌍\", \"é\") == \"aébéc\" ? 1 : 0\n  first = \"a🌍b🌍c\".replace(\"🌍\", \"é\", 1) == \"aéb🌍c\" ? 1 : 0\n  all * 10 + first\n>",
         11,
     );
 }
@@ -360,18 +467,7 @@ fn slice_rejects_non_num_indices() {
 }
 
 #[test]
-fn replace_requires_an_options_record() {
-    // The 3rd arg must be the `{ all :: Bool }` options record — a bare Bool is rejected.
-    assert_type_error("^ = () -> Num => \"a\".replace(\"a\", \"b\", true).size");
-    // A record with the wrong field type is rejected too.
-    assert_type_error("^ = () -> Num => \"a\".replace(\"a\", \"b\", { all = 1 }).size");
-}
-
-#[test]
-fn replace_reads_the_all_field_from_a_bound_record() {
-    // The options record need not be an inline literal — a bound variable works.
-    assert_exit(
-        "^ = () -> Num => <\n  opts = { all = true }\n  \"a-a-a\".replace(\"a\", \"b\", opts) == \"b-b-b\" ? 1 : 0\n>",
-        1,
-    );
+fn replace_count_must_be_a_num() {
+    // The 3rd arg is a Num count — a non-Num is a type error.
+    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", true).size");
 }

@@ -66,7 +66,8 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 | `split(sep :: Text)` | `[]Text` | split on `sep`; consecutive separators keep empty pieces (`"a,,b".split(",")` → `["a","","b"]`), an empty haystack yields `[""]`, and an **empty** `sep` splits into individual graphemes (`"abc".split("")` → `["a","b","c"]`) |
 | `trim()` | `Text` | strip leading **and** trailing whitespace |
 | `trimStart()` / `trimEnd()` | `Text` | strip leading-only / trailing-only whitespace |
-| `replace(from :: Text, to :: Text, { all :: Bool })` | `Text` | 3rd arg is an options record; `all = true` replaces every occurrence, `all = false` only the **first**; an empty `from` is a no-op |
+| `replaceAll(from :: Text, to :: Text)` | `Text` | replace **every** occurrence of `from` with `to` |
+| `replace(from :: Text, to :: Text, count :: Num)` | `Text` | replace **exactly** the first `count` occurrences (left→right); `count` truncates toward zero |
 | `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
 | `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` if absent — **no `-1` sentinel** |
 | `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds (never an error), and `end ≤ start` yields `""` |
@@ -77,8 +78,8 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 "  hi  ".trim()                          ~ "hi"
 "  hi  ".trimStart()                     ~ "hi  "
 "  hi  ".trimEnd()                       ~ "  hi"
-"a-a-a".replace("a", "x", { all = true })   ~ "x-x-x"   (all)
-"a-a-a".replace("a", "x", { all = false })  ~ "x-a-a"   (first only)
+"a-a-a".replaceAll("a", "x")             ~ "x-x-x"   (every occurrence)
+"a-a-a".replace("a", "x", 1)             ~ "x-a-a"   (exactly the first)
 "Hello".contains("ell")                  ~ true
 "héllo".indexOf("llo") ?                 ~ Ok(2)  (grapheme index)
   | Ok(i)    => i
@@ -94,6 +95,14 @@ built-in always wins. `split`'s result is a **plain generic array** — `[]Text`
 `[]T` with `T = Text` (like `[]Num`), so it composes with `.size`, indexing `[i]`, the
 [array methods](#array-methods), and array `+` concatenation. There is **no `join`** —
 collapse a `[]Text` with `reduce` + `+`.
+
+`replace`/`replaceAll` **fail loudly** — an invalid request is never a silent no-op. An
+empty `from` (for either method), and a `replace` `count` that is `<= 0` or greater than
+the number of occurrences actually present, are rejected: at **compile time** when the
+values are literals (e.g. `"a".replace("a", "b", 0)` or `"aa".replace("a", "b", 5)`), and
+otherwise at **run time** — the program prints a diagnostic to stderr and exits `101`. Use
+`replaceAll` for "replace everything"; `replace(count)` is a precise "replace exactly this
+many" contract.
 
 (See `examples/text.ql` and `examples/text_methods.ql`.)
 
@@ -725,7 +734,7 @@ message instead. Any compile error exits with status 1.
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
-| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | Ad-hoc overloading: same-named typed defs, exact-type dispatch | ✅ |
 | Operator overloading (`+`, comparisons, … on user types); built-ins as overloads | ✅ |
 | `Bool` | ✅ |

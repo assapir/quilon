@@ -2,7 +2,8 @@
 ~ intrinsic. UTF-8 correct; grapheme-based where an index/length is user-visible.
 ~   split(sep)                        -> []Text  (empty sep -> graphemes; empties preserved)
 ~   trim() / trimStart() / trimEnd()  -> Text    (strip both / leading / trailing whitespace)
-~   replace(from, to, { all = Bool }) -> Text    (all=true replaces every match, false the first)
+~   replaceAll(from, to)              -> Text    (replace every occurrence)
+~   replace(from, to, count)          -> Text    (replace exactly the first `count`; count > 0)
 ~   contains(sub)                     -> Bool
 ~   indexOf(sub)                      -> Ok(Num) grapheme index / NotOk   (no -1 sentinel)
 ~   slice(start, end)                 -> Text    (grapheme indices, clamped; end exclusive)
@@ -23,9 +24,10 @@
   ts :: Num = "  hi  ".trimStart().size      ~ "hi  " -> 4
   te :: Num = "  hi  ".trimEnd().size        ~ "  hi" -> 4
 
-  ~ replace with { all = true } rewrites every match; { all = false } only the first.
-  ra :: Num = "a-a-a".replace("a", "xx", { all = true }).size     ~ "xx-xx-xx" -> 8
-  rf :: Num = "a-a-a".replace("a", "xx", { all = false }).size    ~ "xx-a-a"   -> 6
+  ~ replaceAll rewrites every match; replace(count) rewrites exactly the first `count`
+  ~ (a literal count <= 0, an over-count, or an empty `from` is a compile error).
+  ra :: Num = "a-a-a".replaceAll("a", "xx").size       ~ "xx-xx-xx" -> 8
+  rf :: Num = "a-a-a".replace("a", "xx", 1).size       ~ "xx-a-a"   -> 6
 
   ~ contains: "Hello, World" contains "World" but not "zzz".
   hasWorld :: Bool = s.contains("World")     ~ true

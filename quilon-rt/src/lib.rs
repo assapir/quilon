@@ -168,6 +168,21 @@ fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
     total as i64
 }
 
+/// Report an invalid `replace`/`replaceAll` request (empty `from`, non-positive `count`,
+/// or a `count` exceeding the occurrences present) by writing `msg` + newline to stderr.
+///
+/// TODO(#52/#63): this must ABORT the process with exit code 101 once core.test's single
+/// native `__exit` intrinsic lands on `main` (`__exit(101)`), matching an assertion
+/// failure — the fail-loud contract. Until #63 merges we do NOT emit our own exit
+/// primitive; this only prints, the caller returns the text unchanged, and the
+/// runtime-abort tests are `#[ignore]`d. The runtime detection lives here (not in codegen)
+/// because the `count > occurrences` case needs the occurrence count.
+fn replace_misuse(msg: &str) {
+    write_to_fd(2, msg.as_bytes());
+    write_to_fd(2, b"\n");
+    // TODO(#63): call `__exit(101)` here (never returns) instead of falling through.
+}
+
 /// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
 /// matching the code generator's `ptr_len_struct_type` (`{ i8*, i64 }`). For a `Text`,
 /// `data` points to `len` UTF-8 bytes; for an array, `data` points to `len` contiguous
@@ -371,32 +386,67 @@ pub extern "C" fn __text_index_of(hptr: *const u8, hlen: i64, sptr: *const u8, s
     }
 }
 
-/// Replace occurrences of `from` with `to`: ALL of them when `all != 0`, else only
-/// the FIRST. Backs `Text.replace(from, to, all)`. An empty `from` is a no-op (the
-/// string is returned unchanged) — there is no well-defined occurrence to replace.
+/// Replace EVERY occurrence of `from` with `to`. Backs `Text.replaceAll(from, to)`.
+/// An empty `from` is an ill-defined request and ABORTS the process (see `abort_101`).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_replace(
+pub extern "C" fn __text_replace_all(
     hptr: *const u8,
     hlen: i64,
     fptr: *const u8,
     flen: i64,
     tptr: *const u8,
     tlen: i64,
-    all: i64,
 ) -> QlSlice {
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
     if from.is_empty() {
+        replace_misuse("replace: `from` must not be empty");
+        return alloc_text(hay.as_bytes()); // TODO(#63): unreachable once `__exit` aborts.
+    }
+    let to = text_str(tptr, tlen);
+    alloc_text(hay.replace(&*from, &to).as_bytes())
+}
+
+/// Replace EXACTLY the first `count` occurrences of `from` with `to`, left→right. Backs
+/// `Text.replace(from, to, count)`. Fails loudly (aborts the process, exit 101) on any
+/// invalid input — an empty `from`, a non-positive `count`, or a `count` greater than the
+/// number of occurrences actually present (no clamping, no no-op). The checker rejects
+/// these at compile time when they are determinable from literals; this is the runtime
+/// backstop for computed values.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_replace_n(
+    hptr: *const u8,
+    hlen: i64,
+    fptr: *const u8,
+    flen: i64,
+    tptr: *const u8,
+    tlen: i64,
+    count: i64,
+) -> QlSlice {
+    let hay = text_str(hptr, hlen);
+    let from = text_str(fptr, flen);
+    // Fail-loud on invalid input. TODO(#63): `replace_misuse` must abort (exit 101) via
+    // core.test's `__exit`; until it does, we print and return the text unchanged.
+    if from.is_empty() {
+        replace_misuse("replace: `from` must not be empty");
+        return alloc_text(hay.as_bytes());
+    }
+    if count <= 0 {
+        replace_misuse(&format!("replace: count must be positive, got {count}"));
+        return alloc_text(hay.as_bytes());
+    }
+    // Non-overlapping, left→right occurrences — exactly what `replacen` consumes.
+    let occurrences = hay.matches(&*from).count() as i64;
+    if count > occurrences {
+        replace_misuse(&format!(
+            "replace: count {count} exceeds {occurrences} occurrences"
+        ));
         return alloc_text(hay.as_bytes());
     }
     let to = text_str(tptr, tlen);
-    let out = if all != 0 {
-        hay.replace(&*from, &to)
-    } else {
-        hay.replacen(&*from, &to, 1)
-    };
-    alloc_text(out.as_bytes())
+    alloc_text(hay.replacen(&*from, &to, count as usize).as_bytes())
 }
 
 /// The substring from grapheme `start` (inclusive) to grapheme `end` (exclusive).
@@ -495,7 +545,7 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 19] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 20] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
@@ -520,7 +570,11 @@ static QUILON_RT_INTRINSICS: [RtFn; 19] = unsafe {
             __text_index_of as extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
         ),
         core::mem::transmute(
-            __text_replace
+            __text_replace_all
+                as extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64) -> QlSlice,
+        ),
+        core::mem::transmute(
+            __text_replace_n
                 as extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, i64) -> QlSlice,
         ),
         core::mem::transmute(__text_slice as extern "C" fn(*const u8, i64, i64, i64) -> QlSlice),
@@ -625,26 +679,45 @@ mod tests {
         assert_eq!(__text_index_of(hp, hl, ep, el), 0);
     }
 
+    // NOTE: the fail-loud paths (empty `from`, count <= 0, count > occurrences) abort the
+    // process via `abort_101`, so they CANNOT be exercised from an in-process unit test —
+    // they would exit the test runner. They are covered by subprocess tests in
+    // tests/text_methods_test.rs (which run `quilon run` and assert exit 101). Here we only
+    // test the valid inputs.
     #[test]
-    fn text_replace_all_vs_first_and_empty_from() {
+    fn text_replace_n_valid_counts() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (hp, hl) = text_of("a-a-a");
+        let (fp, fl) = text_of("a");
+        let (tp, tl) = text_of("xx");
+        // count = 1 -> first only.
+        assert_eq!(
+            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 1)) },
+            "xx-a-a"
+        );
+        // count = 2 -> first two.
+        assert_eq!(
+            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 2)) },
+            "xx-xx-a"
+        );
+        // count == exact number of occurrences -> all three.
+        assert_eq!(
+            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 3)) },
+            "xx-xx-xx"
+        );
+    }
+
+    #[test]
+    fn text_replace_all_replaces_every_occurrence() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
         let (hp, hl) = text_of("a-a-a");
         let (fp, fl) = text_of("a");
         let (tp, tl) = text_of("xx");
         assert_eq!(
-            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 1)) },
+            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl)) },
             "xx-xx-xx"
-        );
-        assert_eq!(
-            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 0)) },
-            "xx-a-a"
-        );
-        // Empty `from` is a no-op.
-        let (ep, el) = text_of("");
-        assert_eq!(
-            unsafe { slice_str(__text_replace(hp, hl, ep, el, tp, tl, 1)) },
-            "a-a-a"
         );
     }
 
@@ -776,12 +849,14 @@ mod tests {
         let (hp, hl) = text_of("a🌍b🌍c");
         let (fp, fl) = text_of("🌍");
         let (tp, tl) = text_of("é");
+        // replaceAll: both 4-byte emoji separators become the 2-byte "é".
         assert_eq!(
-            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 1)) },
+            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl)) },
             "aébéc"
         );
+        // replace count = 1: only the first.
         assert_eq!(
-            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 0)) },
+            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 1)) },
             "aéb🌍c"
         );
     }

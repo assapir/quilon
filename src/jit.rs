@@ -116,8 +116,12 @@ pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
                 intrinsics::__text_index_of as *const () as usize,
             ),
             (
-                "__text_replace",
-                intrinsics::__text_replace as *const () as usize,
+                "__text_replace_all",
+                intrinsics::__text_replace_all as *const () as usize,
+            ),
+            (
+                "__text_replace_n",
+                intrinsics::__text_replace_n as *const () as usize,
             ),
             (
                 "__text_slice",
