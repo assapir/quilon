@@ -1,8 +1,13 @@
 ~ core.test — assertions for self-verifying programs and examples.
 ~ Import with `<< core.test`. Exposes:
-~   assert(cond)          ~ the PRIMITIVE: on a false condition, print a failure
+~   assert(cond)          ~ the PRIMITIVE: on a false condition, print a default
 ~                           message to stderr and exit with code 101 (so CI fails);
 ~                           on true, do nothing. Returns `$` (Unit).
+~   assert(cond, opts)    ~ same, but print opts.message instead of the default.
+~                           `opts :: AssertOpts` — construct it named, e.g.
+~                           `assert(x == 5, AssertOpts { message = "x should be 5" })`.
+~   AssertOpts            ~ options record for `assert`: { message :: Text }. The
+~                           extensible knob — more options may be added later.
 ~   assertEq(actual, expected)  ~ assert actual == expected; on failure prints both.
 ~   assertNotEq(a, b)     ~ assert a != b; on failure prints the (equal) value.
 ~   assertOk(r)           ~ assert a Result is Ok.
@@ -12,6 +17,7 @@
 ~   << core.test
 ~   ^ = () -> $ => <
 ~     assert(1 + 1 == 2)
+~     assert(1 + 1 == 2, AssertOpts { message = "math is broken" })
 ~     assertEq(6 * 7, 42)
 ~     assertNotEq("a", "b")
 ~     assertOk([1, 2].at(0))
@@ -40,10 +46,22 @@
 ~   result codes examples use as their normal exit status.
 << core.io
 
+~ Options record for `assert`. Records are nominal, so construct it by name:
+~ `AssertOpts { message = "..." }`. `message` is the text printed on failure.
+>> AssertOpts = { message :: Text }
+
 ~ The primitive. `cond :: Bool`; a false condition prints "assertion failed" to stderr
 ~ and exits 101 (so CI fails). On true it does nothing. Everything else is built on it.
 >> assert = (cond :: Bool) -> $ => <
   cond ? $ : eprint("assertion failed")
+  cond ? $ : __exit(101)
+  $
+>
+
+~ Same, but with a caller-supplied message via the options record. `assert(cond)` is
+~ this with the default "assertion failed" text.
+>> assert = (cond :: Bool, opts :: AssertOpts) -> $ => <
+  cond ? $ : eprint(opts.message)
   cond ? $ : __exit(101)
   $
 >

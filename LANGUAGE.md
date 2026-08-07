@@ -601,6 +601,8 @@ fails loudly in CI.
 | Function | Effect |
 |----------|--------|
 | `assert(cond :: Bool) -> $` | The primitive. If `cond` is false, print `assertion failed` to stderr and exit `101`; otherwise do nothing. Returns `$` (Unit). |
+| `assert(cond :: Bool, opts :: AssertOpts) -> $` | Same, but on failure print `opts.message` instead of the default. An [overload](#overloading) of `assert`. |
+| `AssertOpts` | Options record for `assert`: `{ message :: Text }`. The extensible knob (more options may be added later). Records are nominal, so construct it by name: `AssertOpts { message = "..." }`. |
 | `assertEq(actual, expected) -> $` | Assert `actual == expected`; on failure prints **expected** then **actual** to stderr before failing. An [overload set](#overloading) over `Num`/`Text`/`Bool`. |
 | `assertNotEq(a, b) -> $` | Assert `a != b`; prints the (equal) value on failure. Overloaded over `Num`/`Text`/`Bool`. |
 | `assertOk(r :: Result) -> $` | Assert `r` is `Ok`; fail on `NotOk`. |
@@ -610,6 +612,7 @@ fails loudly in CI.
 << core.test
 ^ = () -> $ => <
   assert(1 + 1 == 2)
+  assert(1 + 1 == 2, AssertOpts { message = "math is broken" })
   assertEq(6 * 7, 42)
   assertNotEq("a", "b")
   assertOk([10, 20].at(0))       ~ Ok in bounds
@@ -742,7 +745,7 @@ message instead. Any compile error exits with status 1.
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Modules: `<< core.io`, `<< core.test`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
-| Assertions: `<< core.test` (`assert` / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk`; fail → exit 101) | ✅ |
+| Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk`; fail → exit 101) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |

@@ -2,6 +2,7 @@
 ~ completion and exits 0. A failing assertion prints a message to stderr and exits 101.
 ~
 ~   assert(cond)                ~ fail (exit 101) if cond is false
+~   assert(cond, opts)          ~ same, with a custom message via AssertOpts
 ~   assertEq(actual, expected)  ~ fail unless actual == expected (prints both on failure)
 ~   assertNotEq(a, b)           ~ fail unless a != b
 ~   assertOk(r) / assertNotOk(r)~ fail unless the Result is Ok / NotOk
@@ -12,6 +13,9 @@
 ^ = () -> $ => <
   ~ The primitive, over a plain Bool.
   assert(1 + 1 == 2)
+
+  ~ With a custom failure message (options record, constructed by name).
+  assert(2 * 2 == 4, AssertOpts { message = "arithmetic is broken" })
 
   ~ Equality across each scalar type.
   assertEq(6 * 7, 42)

@@ -121,7 +121,39 @@ fn failing_assert_exits_101_with_stderr_message() {
     assert_eq!(code, FAIL_CODE, "a failing assert must exit {FAIL_CODE}");
     assert!(
         stderr.contains("assertion failed"),
-        "failing assert must print a message to stderr, got: {stderr:?}"
+        "failing assert must print the default message to stderr, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn passing_assert_with_message_exits_zero() {
+    // The `AssertOpts` message overload: a holding condition still does nothing.
+    let (code, _) = run_jit(
+        "assert_msg_pass",
+        "<< core.test\n^ = () -> $ => assert(1 + 1 == 2, AssertOpts { message = \"unused\" })\n",
+    );
+    assert_eq!(code, 0, "a passing assert(cond, opts) must exit 0");
+}
+
+#[test]
+fn failing_assert_with_message_prints_that_message() {
+    // The `AssertOpts` message overload prints opts.message (not the default) and
+    // still exits 101.
+    let (code, stderr) = run_jit(
+        "assert_msg_fail",
+        "<< core.test\n^ = () -> $ => assert(1 + 1 == 3, AssertOpts { message = \"custom boom\" })\n",
+    );
+    assert_eq!(
+        code, FAIL_CODE,
+        "a failing assert(cond, opts) must exit {FAIL_CODE}"
+    );
+    assert!(
+        stderr.contains("custom boom"),
+        "the message overload must print opts.message to stderr, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("assertion failed"),
+        "the message overload must NOT print the default message, got: {stderr:?}"
     );
 }
 
@@ -250,6 +282,21 @@ fn native_aot_assert_exit_codes() {
         assert!(
             stderr.contains("assertion failed"),
             "native AOT ({linker}): failing assert must print to stderr, got: {stderr:?}"
+        );
+
+        // Message overload (AssertOpts) across the native path: prints opts.message.
+        let (code, stderr) = run_aot(
+            &format!("aot_msg_{linker}"),
+            "<< core.test\n^ = () -> $ => assert(1 == 2, AssertOpts { message = \"aot boom\" })\n",
+            linker,
+        );
+        assert_eq!(
+            code, FAIL_CODE,
+            "native AOT ({linker}): failing assert(cond, opts) must exit {FAIL_CODE}"
+        );
+        assert!(
+            stderr.contains("aot boom"),
+            "native AOT ({linker}): message overload must print opts.message, got: {stderr:?}"
         );
     }
 }

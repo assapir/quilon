@@ -5268,6 +5268,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expr::If { then, .. } => self.infer_type(then),
+            // A `?`/`|` match's result type is whatever its arms yield. Codegen can't
+            // easily unify the arms, so take the checker's recorded type from the oracle
+            // (as record/spread do); this lets a local bound to a match — e.g.
+            // `ok = r ? | Ok(_) => true | NotOk(_) => false` — mangle correctly when it
+            // later feeds an overloaded call such as `assert(ok)`.
+            Expr::Match { .. } => self.oracle.expr_type(expr).cloned().unwrap_or(Type::Num),
+            // Unary `!` is logical-not (Bool); unary `-` is numeric negation (Num). So a
+            // local bound to `!ok` mangles as Bool when it feeds an overloaded call.
+            Expr::UnaryOp { op, .. } => match op {
+                crate::ast::UnaryOp::Not => Type::Bool,
+                crate::ast::UnaryOp::Neg => Type::Num,
+            },
             Expr::Block { stmts, .. } => match stmts.last() {
                 Some(crate::ast::Statement::Expr(tail)) => self.infer_type(tail),
                 _ => Type::Num,

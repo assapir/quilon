@@ -87,6 +87,7 @@ fn test_core_test_module_resolves_and_type_checks() {
         << core.test
         ^ = () -> $ => <
           assert(1 == 1)
+          assert(1 == 1, AssertOpts { message = "should hold" })
           assertEq(6 * 7, 42)
           assertEq("a" + "b", "ab")
           assertEq(1 < 2, true)
