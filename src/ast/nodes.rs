@@ -466,6 +466,23 @@ pub enum Type {
     },
 }
 
+impl Type {
+    /// Whether this type carries an unresolved payload type variable (`Type::Generic`)
+    /// anywhere — in practice only the built-in `Result`'s `Ok(T)`/`NotOk(E)`. Used by
+    /// the type checker (to refine a generic return annotation) and codegen (to defer a
+    /// generic return to the oracle's concrete body type).
+    pub fn contains_generic(&self) -> bool {
+        match self {
+            Type::Generic { .. } => true,
+            Type::Array(inner) => inner.contains_generic(),
+            Type::Sum { variants, .. } => variants
+                .iter()
+                .any(|v| v.fields.iter().any(Type::contains_generic)),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SumVariant {
     pub name: String,

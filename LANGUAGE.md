@@ -187,7 +187,14 @@ classify = v => v ?
   | NotOk(e) => 0
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
-`NotOk("error")`). (See `examples/result.ql` and `examples/composites.ql`.)
+`NotOk("error")`), and a **pattern-bound payload carries its concrete type**, so it is
+*usable* at the match site — `Ok("x") ? Ok(s) => s.size` binds `s : Text`, and passing
+`s` to an [overload set](#overloading) dispatches to the `Text` member (not a generic
+fallback). This holds across a function boundary too: a function returning `Ok("x")`
+(whether its return type is inferred or annotated `-> Result`) hands the caller a usable
+`Text` payload, and a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the
+`getEnv`/`getOpt` shape — carries **both** arms' payloads. (See `examples/result.ql` and
+`examples/result_payload.ql`.)
 
 #### `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. They are told apart
@@ -670,6 +677,7 @@ message instead. Any compile error exits with status 1.
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
+| Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
@@ -687,7 +695,6 @@ message instead. Any compile error exits with status 1.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **A generic `Result` payload routed through an overload set resolves to the `Num` member.** `Text`/array fields and `Ok("x")`/`NotOk("e")` payloads now type-check and round-trip end-to-end (see [records](#records), [`Result`](#result-is-a-normal-sum-type)). But a `Result` payload is *generic*, so binding it (`Ok(x) => …`) and passing `x` to an [overload set](#overloading) still resolves to the **`Num`** member; a user sum type's payloads are concrete (`Circle(Num)`, `On(Bool)`), so they dispatch overloads correctly by their declared type.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
 - **No generics or `while` loops.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io` built-in + file-path imports).
@@ -695,8 +702,8 @@ message instead. Any compile error exits with status 1.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
 - A `Text` value bound from an `args`/`env` element supports the full `Text` API
-  (`.size`/`.length`/`+`/comparison); the only remaining limitation is the general one
-  above — a value routed through a *generic* overload still resolves to the `Num` member.
+  (`.size`/`.length`/`+`/comparison), and — like a bound `Result` payload — dispatches an
+  [overload set](#overloading) by its concrete `Text` type.
 
 ---
 

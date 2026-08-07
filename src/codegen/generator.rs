@@ -1418,7 +1418,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
 
             self.builder.position_at_end(arm_blocks[i]);
-            self.bind_pattern(&arm.pattern, match_val)?;
+            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
             if let Some(arm_val) = self.generate_tail_expr(&arm.body)? {
                 any_value_arm = true;
                 self.builder
@@ -1752,9 +1752,25 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
     fn default_return_type(&self, return_type: Option<&Type>, body: &Expr) -> Type {
         match return_type {
+            // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
+            // slots are type variables the language can't otherwise name — is refined to
+            // the body's concrete type from the oracle, so the LLVM return matches the
+            // value the body actually produces (`Ok("x")` => `{ i8, Text }`, not the
+            // generic `{ i8, double }`). Mirrors the checker refining a generic return.
+            Some(t) if t.contains_generic() => self
+                .oracle
+                .expr_type(body)
+                .cloned()
+                .unwrap_or_else(|| t.clone()),
+            // A concrete annotation is authoritative.
             Some(t) => t.clone(),
             None if self.expr_is_unit(body) => Type::Unit,
-            None => Type::Num,
+            // Unannotated: the oracle holds the checker's inferred body type (concrete,
+            // including a specialized Result payload such as `Result[Ok(Text)]`), so a
+            // function returning `Ok("x")` lowers its return to the payload's real shape
+            // and a downstream match binds it usably. Fall back to `Num` for the IR-only
+            // codegen tests that run without a type-check pass.
+            None => self.oracle.expr_type(body).cloned().unwrap_or(Type::Num),
         }
     }
 
@@ -4721,7 +4737,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(arm_blocks[i]);
 
             // Bind pattern variables
-            self.bind_pattern(&arm.pattern, match_val)?;
+            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
             let arm_val = self.generate_expr(&arm.body)?;
             self.builder
@@ -4812,10 +4828,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Concrete per-value payload types for the matched constructor `variant`, read from
+    /// the SCRUTINEE's oracle type. A scrutinee inferred as `Result[Ok(Text)]` (from
+    /// `Ok("x")`) yields `[Text]` for `Ok`, so a payload binding can record its REAL type
+    /// for overload mangling — unlike the declared `variant_payloads`, whose `Result`
+    /// slots are `Generic` (which would mis-mangle to the `Num` member). `None` when the
+    /// oracle has no concrete `Sum` type for the scrutinee.
+    fn scrutinee_payload_types(&self, scrutinee: &Expr, variant: &str) -> Option<Vec<Type>> {
+        match self.oracle.expr_type(scrutinee)? {
+            Type::Sum { variants, .. } => variants
+                .iter()
+                .find(|v| v.name == variant)
+                .map(|v| v.fields.clone()),
+            _ => None,
+        }
+    }
+
     fn bind_pattern(
         &mut self,
         pattern: &Pattern,
         value: BasicValueEnum<'ctx>,
+        scrutinee: &Expr,
     ) -> Result<(), String> {
         match pattern {
             Pattern::Ident { name, .. } => {
@@ -4834,8 +4867,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
                 // struct field `i + 1`. Only identifier sub-patterns bind a name; others
                 // (wildcards, nested constructors) are matched structurally elsewhere.
-                let payload_types = self.variant_payloads.get(name).cloned();
+                //
+                // Each payload binding records its Quilon type in `var_types` (the map
+                // that mangles an overloaded call on the binding, e.g.
+                // `Ok(s) => describe(s)`), taken from the first NON-generic of two ordered
+                // sources:
+                //  - the SCRUTINEE's oracle type, whose `Result` payload was specialized
+                //    per value (`Ok("x")` => `Result[Ok(Text)]`), so `s` binds as `Text`;
+                //  - else the variant's declared payloads (`variant_payloads`), concrete
+                //    for a USER sum type (`Circle(Num)`) but `Generic` for `Result`.
+                // A still-`Generic` payload is left untracked — an untracked binding
+                // defaults to `Num` (the historical behavior), rather than mis-mangling.
                 if let BasicValueEnum::StructValue(struct_val) = value {
+                    let concrete = self.scrutinee_payload_types(scrutinee, name);
+                    let declared = self.variant_payloads.get(name).cloned();
                     for (i, arg) in args.iter().enumerate() {
                         if let Pattern::Ident { name: arg_name, .. } = arg {
                             let payload = self
@@ -4849,10 +4894,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
                             self.variables
                                 .insert(arg_name.clone(), (alloca, payload.get_type()));
-                            // Track the payload binding's declared Quilon type so an
-                            // overloaded call on it (`Circle(n) => area(n)`) mangles by
-                            // the concrete payload type, agreeing with the type checker.
-                            if let Some(ty) = payload_types.as_ref().and_then(|t| t.get(i)) {
+                            let payload_ty = [&concrete, &declared]
+                                .into_iter()
+                                .filter_map(|src| src.as_ref()?.get(i))
+                                .find(|t| !matches!(t, Type::Generic { .. }));
+                            if let Some(ty) = payload_ty {
                                 self.var_types.insert(arg_name.clone(), ty.clone());
                             }
                         }
@@ -4904,6 +4950,45 @@ impl<'ctx> CodeGenerator<'ctx> {
             None => field_types.push(self.context.f64_type().into()),
         }
         self.context.struct_type(&field_types, false)
+    }
+
+    /// The tagged-union LLVM struct for a sum-typed *value* of type `Type::Sum`. A USER
+    /// sum type has a registered canonical layout, so this defers to [`sum_struct_type`].
+    /// The built-in `Result` has NONE (its payload is sized per value across its generic,
+    /// heterogeneous variants), so its slot types are recovered from the CONCRETE
+    /// (specialized) variant payloads this `Type::Sum` carries: `Result[Ok(Text)]` =>
+    /// `{ i8, Text }`, so a function returning `Ok("x")` gets a return type matching the
+    /// value the body actually produces.
+    ///
+    /// This MUST agree with `generate_sum_constructor`'s per-value Result shape: there a
+    /// `Generic` slot has no value and a `$` (Unit) payload is stored into the canonical
+    /// numeric `double` slot (a Unit carries no bits). So per slot we take the first field
+    /// that is neither `Generic` NOR `Unit` (the checker guarantees concrete fields at a
+    /// position agree) and lower it via [`value_repr_type`]; a slot that is only
+    /// generic/unit/absent falls back to `double`, preserving the historical
+    /// `{ i8, double }` shape for a still-generic or unit-only `Result`.
+    fn sum_value_struct_type(
+        &self,
+        name: &str,
+        variants: &[crate::ast::SumVariant],
+    ) -> Result<inkwell::types::StructType<'ctx>, String> {
+        if self.sum_layouts.contains_key(name) || variants.is_empty() {
+            return Ok(self.sum_struct_type(name));
+        }
+        let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
+        let max_fields = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+        for i in 0..max_fields {
+            let concrete = variants
+                .iter()
+                .filter_map(|v| v.fields.get(i))
+                .find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
+            let slot = match concrete {
+                Some(f) => self.value_repr_type(f)?,
+                None => self.context.f64_type().into(),
+            };
+            field_types.push(slot);
+        }
+        Ok(self.context.struct_type(&field_types, false))
     }
 
     /// The single value of the Unit type (`$`), lowered as a zero `i8`. Its bits are
@@ -5136,7 +5221,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.context.struct_type(&field_types, false).into())
             }
-            Type::Sum { name, .. } => Ok(self.sum_struct_type(name).into()),
+            Type::Sum { name, variants } => Ok(self.sum_value_struct_type(name, variants)?.into()),
             // A `Named` reference with no fields is a parsed type annotation (e.g. a
             // function param `s :: Shape`). If it names a registered sum type, lower it
             // to that type's tagged-union struct.

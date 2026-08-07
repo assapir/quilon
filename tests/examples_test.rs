@@ -56,6 +56,9 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("methods.ql", 35),
     ("mutation.ql", 42),
     ("result.ql", 84),
+    // Concrete Result payloads: bind+use a Text `Ok`/`NotOk` payload, overload-dispatch
+    // on it, plus numeric/`$` payloads. 9 + 5 + 2 + 10 + 1 = 27.
+    ("result_payload.ql", 27),
     ("sum_types.ql", 42),
     ("use_module.ql", 5),
     ("unit.ql", 0),

@@ -734,6 +734,57 @@ impl TypeChecker {
         specialized
     }
 
+    /// Merge two already-compatible inferred types, preferring the more concrete payload
+    /// at each sum-variant slot. For two `Type::Sum` of the same name and shape, each
+    /// variant's payload fields become the concrete (non-`Generic`) side whenever either
+    /// side is concrete — so a `?`/`if` whose branches are `Ok("x")` (its `NotOk` still
+    /// generic) and `NotOk("e")` (its `Ok` still generic) yields
+    /// `Result[Ok(Text), NotOk(Text)]`, letting BOTH arms bind their payload at the real
+    /// type (the `getEnv`/`getOpt` shape). Any non-sum or differently-shaped pair returns
+    /// `a` unchanged — the historical "take the first branch's type" behavior.
+    fn merge_types(a: Type, b: &Type) -> Type {
+        use crate::ast::SumVariant;
+        if let (
+            Type::Sum {
+                name: na,
+                variants: va,
+            },
+            Type::Sum {
+                name: nb,
+                variants: vb,
+            },
+        ) = (&a, b)
+            && na == nb
+            && va.len() == vb.len()
+            && va.iter().zip(vb).all(|(x, y)| x.name == y.name)
+        {
+            let variants = va
+                .iter()
+                .zip(vb)
+                .map(|(x, y)| {
+                    let fields = x
+                        .fields
+                        .iter()
+                        .zip(&y.fields)
+                        .map(|(fx, fy)| match fx {
+                            Type::Generic { .. } => fy.clone(),
+                            _ => fx.clone(),
+                        })
+                        .collect();
+                    SumVariant {
+                        name: x.name.clone(),
+                        fields,
+                    }
+                })
+                .collect();
+            return Type::Sum {
+                name: na.clone(),
+                variants,
+            };
+        }
+        a
+    }
+
     /// If `variant` names a constructor of some registered sum type, return that
     /// sum type's name. Used to enforce globally-unique variant names.
     fn sum_variant_owner(&self, variant: &str) -> Option<String> {
@@ -1304,6 +1355,25 @@ impl TypeChecker {
         if let Some(ref annotated_type) = decl.return_type {
             let annotated_type = self.resolve_type(annotated_type);
             self.check_type_compatibility(&annotated_type, &body_type, &decl.span)?;
+            // A GENERIC return annotation — in practice only `-> Result`, whose
+            // `Ok(T)`/`NotOk(E)` payload slots are type variables the language cannot
+            // otherwise name — is refined to the inferred body type, so a caller of
+            // `f() -> Result` that binds the payload sees its real type (`Ok("x")` =>
+            // `Text`) instead of the opaque `Generic`. The body type is the ground
+            // truth and is never less concrete than a generic annotation (an
+            // unconstructed variant may keep a `Generic` slot, e.g. the `NotOk` of a
+            // function that only returns `Ok(text)` — still strictly more informative).
+            // This mirrors `check_match` preferring a concrete arm type over a generic
+            // one and introduces no generics (the annotation still stands as the
+            // compatibility check). A concrete annotation is left exactly as written,
+            // and an overloaded member keeps its per-member registered return.
+            if !is_overloaded && annotated_type.contains_generic() {
+                let refined = Type::Function {
+                    params: param_types.clone(),
+                    return_type: Box::new(body_type.clone()),
+                };
+                let _ = self.env.update_type(&decl.name, refined);
+            }
         } else if is_overloaded {
             // Refine this overload member's (provisional Num) return type to the body's.
             self.update_overload_return(&decl.name, &param_types, body_type);
@@ -1478,7 +1548,10 @@ impl TypeChecker {
                 let else_type = self.infer_expr(else_)?;
 
                 self.check_type_compatibility(&then_type, &else_type, span)?;
-                Ok(then_type)
+                // Merge the branch types so a `Result` gets the concrete payload from
+                // whichever branch specialized each variant (`Ok("x") : NotOk("e")` =>
+                // `Result[Ok(Text), NotOk(Text)]`), letting both match arms bind usably.
+                Ok(Self::merge_types(then_type, &else_type))
             }
 
             Expr::Match { expr, arms, span } => self.check_match(expr, arms, span),
@@ -2136,14 +2209,20 @@ impl TypeChecker {
             // type generic when another arm yields a concrete type — codegen needs a
             // concrete result type to size the match value. So when the running result is
             // `Generic` and this arm is concrete, upgrade to the concrete type.
-            match result_type {
-                Some(ref expected_type) => {
-                    self.check_type_compatibility(expected_type, &body_type, &arm.span)?;
-                    if matches!(expected_type, Type::Generic { .. })
-                        && !matches!(body_type, Type::Generic { .. })
-                    {
-                        result_type = Some(body_type);
-                    }
+            match result_type.take() {
+                Some(expected_type) => {
+                    self.check_type_compatibility(&expected_type, &body_type, &arm.span)?;
+                    // A wholly-generic running result (e.g. a leading `NotOk(e) => e`
+                    // arm) is replaced by this arm's type; otherwise merge so a
+                    // `Result`-valued match keeps the concrete payload from whichever
+                    // arm specialized each variant (`merge_types` prefers concrete
+                    // per slot and leaves a non-sum type unchanged).
+                    let next = if matches!(expected_type, Type::Generic { .. }) {
+                        body_type
+                    } else {
+                        Self::merge_types(expected_type, &body_type)
+                    };
+                    result_type = Some(next);
                 }
                 None => result_type = Some(body_type),
             }

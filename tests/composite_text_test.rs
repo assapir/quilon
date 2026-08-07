@@ -222,3 +222,199 @@ fn match_returning_text_then_measured() {
         6,
     );
 }
+
+// --- Concrete Result payload typing (task #34) ----------------------------------
+//
+// A pattern-bound `Ok`/`NotOk` payload must carry its CONCRETE type so it is usable at
+// the match site — not just readable via `.size`/`.length` (already covered above) but
+// also as an overloaded-call argument and across function boundaries. These assert the
+// bind-and-USE behavior for every payload kind and the three flows that previously
+// failed (overload misdispatch, inferred-return, generic `-> Result` annotation).
+
+/// Assert `src` is REJECTED by the type checker (a negative/edge case).
+fn assert_type_error(src: &str) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let result = TypeChecker::new().check_program(&program);
+    assert!(
+        result.is_err(),
+        "expected a type error but checking succeeded for source:\n{src}"
+    );
+}
+
+#[test]
+fn ok_text_payload_dispatches_overload_by_concrete_type() {
+    // The bound `Ok` payload `s : Text` must dispatch the overload set to its TEXT
+    // member (the old generic-Result behavior wrongly picked the Num member and
+    // miscompiled). "quilon".size = 6, via the Text member.
+    assert_exit(
+        r#"
+        describe = (s :: Text) -> Num => s.size
+        describe = (n :: Num)  -> Num => n + 100
+        ^ = () -> Num => <
+          r = Ok("quilon")
+          r ? | Ok(s) => describe(s) | NotOk(_) => 0
+        >
+        "#,
+        6,
+    );
+}
+
+#[test]
+fn ok_num_payload_dispatches_overload_by_concrete_type() {
+    // The numeric payload picks the Num member: 5 + 100 = 105.
+    assert_exit(
+        r#"
+        describe = (s :: Text) -> Num => s.size
+        describe = (n :: Num)  -> Num => n + 100
+        ^ = () -> Num => <
+          r = Ok(5)
+          r ? | Ok(n) => describe(n) | NotOk(_) => 0
+        >
+        "#,
+        105,
+    );
+}
+
+#[test]
+fn ok_unit_payload_still_matches() {
+    // `Ok($)` (unit payload) carries no value; matching `Ok(_)` still works.
+    assert_exit(
+        r#"
+        ^ = () -> Num => <
+          r = Ok($)
+          r ? | Ok(_) => 7 | NotOk(_) => 0
+        >
+        "#,
+        7,
+    );
+}
+
+#[test]
+fn ok_bool_payload_binds_and_is_usable() {
+    // A `Bool` payload binds at `Bool` and drives a ternary. Ok(true) -> 1.
+    assert_exit(
+        r#"
+        ^ = () -> Num => <
+          r = Ok(true)
+          r ? | Ok(b) => (b ? 1 : 2) | NotOk(_) => 0
+        >
+        "#,
+        1,
+    );
+}
+
+#[test]
+fn notok_text_payload_dispatches_overload() {
+    // The error payload is Text too and dispatches by its concrete type. "oops".size = 4.
+    assert_exit(
+        r#"
+        len = (s :: Text) -> Num => s.size
+        len = (n :: Num)  -> Num => n
+        ^ = () -> Num => <
+          r = NotOk("oops")
+          r ? | Ok(_) => 0 | NotOk(e) => len(e)
+        >
+        "#,
+        4,
+    );
+}
+
+#[test]
+fn inferred_return_result_payload_is_usable() {
+    // Case C: an UNANNOTATED function returning `Ok("...")`. Codegen must lower its
+    // return to the payload's real shape (not the historical `Num` default) so a
+    // downstream match binds the Text payload usably. "hello".size = 5.
+    assert_exit(
+        r#"
+        make = () => Ok("hello")
+        ^ = () -> Num => <
+          r = make()
+          r ? | Ok(s) => s.size | NotOk(_) => 0
+        >
+        "#,
+        5,
+    );
+}
+
+#[test]
+fn annotated_result_return_carries_concrete_payload() {
+    // Case A: a `-> Result` annotated function whose body pins `Ok(Text)`. The generic
+    // annotation is refined to the concrete body type, so the caller's `Ok(s)` binds
+    // `s : Text`. "world".size = 5.
+    assert_exit(
+        r#"
+        make = () -> Result => Ok("world")
+        ^ = () -> Num => <
+          r = make()
+          r ? | Ok(s) => s.size | NotOk(_) => 0
+        >
+        "#,
+        5,
+    );
+}
+
+#[test]
+fn getenv_shaped_result_both_arms_text() {
+    // The `getEnv`/`getOpt` shape: `-> Result` returning `Ok(Text)` in one branch and
+    // `NotOk(Text)` in the other. Both branch payloads must survive to the caller so
+    // EITHER arm can use its Text. Looking up a missing key -> NotOk("unset").size = 5.
+    assert_exit(
+        r#"
+        lookup = (key :: Text) -> Result => key == "home"
+          ? Ok("/usr/home")
+          : NotOk("unset")
+        ^ = () -> Num => lookup("nope") ?
+          | Ok(path)   => path.size
+          | NotOk(err) => err.size
+        "#,
+        5,
+    );
+}
+
+#[test]
+fn getenv_shaped_result_ok_branch_uses_text() {
+    // Same helper, the Ok branch: "/usr/home".size = 9.
+    assert_exit(
+        r#"
+        lookup = (key :: Text) -> Result => key == "home"
+          ? Ok("/usr/home")
+          : NotOk("unset")
+        ^ = () -> Num => lookup("home") ?
+          | Ok(path)   => path.size
+          | NotOk(err) => err.size
+        "#,
+        9,
+    );
+}
+
+#[test]
+fn heterogeneous_result_payload_across_branches_still_compiles() {
+    // Regression: a `Result` whose payload TYPE differs across branches — `Ok($)` (unit)
+    // vs `NotOk(Num)`. The unit payload shares the canonical numeric slot, so both
+    // branches keep one struct shape. check(142) -> NotOk(142) -> 142.
+    assert_exit(
+        r#"
+        check = (n :: Num) -> Result => n <= 100 ? Ok($) : NotOk(n)
+        ^ = () -> Num => check(142) ? | Ok(_) => 0 | NotOk(c) => c
+        "#,
+        142,
+    );
+}
+
+#[test]
+fn overload_with_no_matching_member_for_payload_is_rejected() {
+    // Negative: the bound payload is `Text`, but no overload member takes `Text`.
+    // With concrete payload typing this is a clean "no matching overload" error, not a
+    // silent fallback to the Num member (the old generic-Result behavior).
+    assert_type_error(
+        r#"
+        only = (n :: Num)  -> Num => n
+        only = (b :: Bool) -> Num => 1
+        ^ = () -> Num => <
+          r = Ok("x")
+          r ? | Ok(s) => only(s) | NotOk(_) => 0
+        >
+        "#,
+    );
+}
