@@ -55,6 +55,13 @@ A feature/change is not done until **all** of these are true:
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
+**`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
+add items, not to restructure, not even to mark their own item done. When a workstream merges, the
+**orchestrator** flips that item's status in the roadmap. (Agents still update `LANGUAGE.md`, tests,
+and their example — just never the roadmap.) The roadmap's structure and the locked design decisions
+are the user's/orchestrator's domain; specific bugs, tasks, and detailed specs go to **GitHub issues**,
+never into the roadmap.
+
 Library APIs hide internals — never force callers to do the library's own conversion/desugaring
 (e.g. `print(x)`, never `print(show(x))`). Keep dependencies and toolchain on the latest versions;
 bump proactively.
