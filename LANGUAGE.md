@@ -152,6 +152,32 @@ These methods are **reserved on arrays**: a user can define a same-named functio
 resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
 (e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.ql`.)
 
+#### Array concatenation — `+`
+
+`+` on arrays builds a **new** array (it never mutates an operand), in three forms — each
+selected by the **exact** operand types, so there is never any ambiguity:
+
+```quilon
+~ concat:  []T + []T -> []T
+[1, 2] + [3, 4]          ~ [1, 2, 3, 4]
+["a"] + ["b", "c"]       ~ ["a", "b", "c"]
+
+~ append:  []T + T   -> []T   (add one element at the end)
+[1, 2] + 3               ~ [1, 2, 3]
+["a"] + "b"              ~ ["a", "b"]
+
+~ prepend: T   + []T -> []T   (add one element at the front)
+0 + [1, 2]               ~ [0, 1, 2]
+```
+
+Both sides must agree on the element type — `[]Num + []Text` (or `[]Num + Text`) is a
+type error. The forms are mutually exclusive (an array `[]T` can never equal its own
+element `T`), so even nested arrays disambiguate cleanly: `[][]Num + []Num` is an
+**append** (the `[]Num` is a single new row → `[][]Num`), while `[][]Num + [][]Num` is a
+**concat**. `[]T + []T` is the same as the spread `[<-a, <-b]` and shares its element-copy
+lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays alike.
+(See `examples/array_concat.ql`.)
+
 ### Records
 Anonymous structs with named fields:
 ```quilon
@@ -222,7 +248,14 @@ classify = v => v ?
   | NotOk(e) => 0
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
-`NotOk("error")`). (See `examples/result.ql` and `examples/composites.ql`.)
+`NotOk("error")`), and a **pattern-bound payload carries its concrete type**, so it is
+*usable* at the match site — `Ok("x") ? Ok(s) => s.size` binds `s : Text`, and passing
+`s` to an [overload set](#overloading) dispatches to the `Text` member (not a generic
+fallback). This holds across a function boundary too: a function returning `Ok("x")`
+(whether its return type is inferred or annotated `-> Result`) hands the caller a usable
+`Text` payload, and a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the
+`getEnv`/`getOpt` shape — carries **both** arms' payloads. (See `examples/result.ql` and
+`examples/result_payload.ql`.)
 
 #### `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. They are told apart
@@ -434,7 +467,7 @@ returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `V
 
 ## Expressions
 
-- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](#overloading): `Num + Num` adds, `Text + Text` concatenates.
+- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](#overloading): `Num + Num` adds, `Text + Text` concatenates, and on arrays it concatenates / appends / prepends (`[]T + []T`, `[]T + T`, `T + []T`, all yielding a new `[]T` — see [Array concatenation](#array-concatenation--)).
 - **Comparison:** `== != < <= > >=`. Over `Num` and (lexicographically) `Text`; all return `Bool`. Each is a [user-overloadable operator](#operator-overloading).
 - **Logical:** `&& || !` (short-circuit).
 
@@ -693,6 +726,7 @@ message instead. Any compile error exits with status 1.
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
+| Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
@@ -706,6 +740,7 @@ message instead. Any compile error exits with status 1.
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
+| Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Conservative GC (Boehm) | ✅ |
@@ -723,7 +758,6 @@ message instead. Any compile error exits with status 1.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **A generic `Result` payload routed through an overload set resolves to the `Num` member.** `Text`/array fields and `Ok("x")`/`NotOk("e")` payloads now type-check and round-trip end-to-end (see [records](#records), [`Result`](#result-is-a-normal-sum-type)). But a `Result` payload is *generic*, so binding it (`Ok(x) => …`) and passing `x` to an [overload set](#overloading) still resolves to the **`Num`** member; a user sum type's payloads are concrete (`Circle(Num)`, `On(Bool)`), so they dispatch overloads correctly by their declared type.
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
 - **No generics or `while` loops.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io` built-in + file-path imports).
@@ -731,8 +765,8 @@ message instead. Any compile error exits with status 1.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
 - A `Text` value bound from an `args`/`env` element supports the full `Text` API
-  (`.size`/`.length`/`+`/comparison); the only remaining limitation is the general one
-  above — a value routed through a *generic* overload still resolves to the `Num` member.
+  (`.size`/`.length`/`+`/comparison), and — like a bound `Result` payload — dispatches an
+  [overload set](#overloading) by its concrete `Text` type.
 
 ---
 

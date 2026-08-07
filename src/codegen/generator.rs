@@ -269,6 +269,15 @@ struct TypeOracle {
     table: crate::typechecker::TypeTable,
 }
 
+/// A piece to be laid into a freshly GC-allocated array by `build_array_from_parts`:
+/// an `Inline` single element (stored at the running offset), or a `Spread` whole
+/// `{ptr,size}` array whose elements are memcpy'd in bulk. Shared by the `<-` spread
+/// lowering (`[<-a, 4, <-b]`) and `+` array concatenation (`a + b`).
+enum ArrayPart<'v> {
+    Inline(BasicValueEnum<'v>),
+    Spread(BasicValueEnum<'v>),
+}
+
 impl TypeOracle {
     fn new(table: crate::typechecker::TypeTable) -> Self {
         Self { table }
@@ -1418,7 +1427,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(|e| format!("Failed to build conditional branch: {:?}", e))?;
 
             self.builder.position_at_end(arm_blocks[i]);
-            self.bind_pattern(&arm.pattern, match_val)?;
+            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
             if let Some(arm_val) = self.generate_tail_expr(&arm.body)? {
                 any_value_arm = true;
                 self.builder
@@ -1752,9 +1761,25 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
     fn default_return_type(&self, return_type: Option<&Type>, body: &Expr) -> Type {
         match return_type {
+            // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
+            // slots are type variables the language can't otherwise name — is refined to
+            // the body's concrete type from the oracle, so the LLVM return matches the
+            // value the body actually produces (`Ok("x")` => `{ i8, Text }`, not the
+            // generic `{ i8, double }`). Mirrors the checker refining a generic return.
+            Some(t) if t.contains_generic() => self
+                .oracle
+                .expr_type(body)
+                .cloned()
+                .unwrap_or_else(|| t.clone()),
+            // A concrete annotation is authoritative.
             Some(t) => t.clone(),
             None if self.expr_is_unit(body) => Type::Unit,
-            None => Type::Num,
+            // Unannotated: the oracle holds the checker's inferred body type (concrete,
+            // including a specialized Result payload such as `Result[Ok(Text)]`), so a
+            // function returning `Ok("x")` lowers its return to the payload's real shape
+            // and a downstream match binds it usably. Fall back to `Num` for the IR-only
+            // codegen tests that run without a type-check pass.
+            None => self.oracle.expr_type(body).cloned().unwrap_or(Type::Num),
         }
     }
 
@@ -2158,6 +2183,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let r = self.generate_expr(right)?;
                 return self.build_direct_call(&symbol, &[l, r]);
             }
+        }
+
+        // `+` on arrays is concatenation / append / prepend — all produce a NEW array.
+        // Arrays and Text both lower to `{ptr,size}` structs, so distinguish by the
+        // oracle's Quilon type and route BEFORE the generic StructValue path below (which
+        // is Text concat). Triggered when either operand is an array: `[]T + []T`,
+        // `[]T + T` (append), or `T + []T` (prepend).
+        if op == BinOp::Add
+            && (matches!(self.oracle.expr_type(left), Some(Type::Array(_)))
+                || matches!(self.oracle.expr_type(right), Some(Type::Array(_))))
+        {
+            return self.generate_array_concat(left, right);
         }
 
         let lhs = self.generate_expr(left)?;
@@ -3130,46 +3167,115 @@ impl<'ctx> CodeGenerator<'ctx> {
         array_expr: &Expr,
         elements: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        use inkwell::types::BasicType;
-        let i64_type = self.context.i64_type();
-
         // Element repr type from the oracle (`[]elem`); fall back to f64 if the oracle
-        // has no entry (IR-only codegen tests that skip type-checking). Its byte size is
-        // the stride for `memcpy`-ing a spread source's block of elements.
+        // has no entry (IR-only codegen tests that skip type-checking).
         let elem_llvm = match self.oracle.expr_type(array_expr) {
             Some(Type::Array(elem)) => self.value_repr_type(elem)?,
             _ => self.context.f64_type().into(),
         };
-        let elem_size = elem_llvm
-            .size_of()
-            .ok_or_else(|| "spread element type has no compile-time size".to_string())?;
 
         // Generate each part once, tagged spread-or-inline. A spread source lowers to a
         // `{ptr, size}` array struct; an inline element lowers to an `elem` value.
-        enum Part<'v> {
-            Inline(BasicValueEnum<'v>),
-            Spread(BasicValueEnum<'v>),
-        }
-        let mut parts: Vec<Part<'ctx>> = Vec::with_capacity(elements.len());
+        let mut parts: Vec<ArrayPart<'ctx>> = Vec::with_capacity(elements.len());
         for elem in elements {
             if let Expr::Spread { expr: src, .. } = elem {
-                parts.push(Part::Spread(self.generate_expr(src)?));
+                parts.push(ArrayPart::Spread(self.generate_expr(src)?));
             } else {
-                parts.push(Part::Inline(self.generate_expr(elem)?));
+                parts.push(ArrayPart::Inline(self.generate_expr(elem)?));
             }
         }
 
+        self.build_array_from_parts(elem_llvm, &parts)
+    }
+
+    /// Lower `+` on arrays to a NEW GC-allocated array (neither operand mutated), in the
+    /// three exact-type forms the checker dispatches (see `check_binop`):
+    ///   concat:  `[]T + []T` — every element of `left` then of `right`.
+    ///   append:  `[]T + T`   — every element of `left` then the single `right`.
+    ///   prepend: `T + []T`   — the single `left` then every element of `right`.
+    /// Each is `[<-left, <-right]` with the single-element side `Inline` instead of
+    /// `Spread`, so it reuses the spread machinery (`build_array_from_parts`) — element-repr
+    /// correct for `[]Num`, `[]Text`, and nested arrays via the type oracle. The
+    /// concat-vs-append form is re-derived from the operands' oracle types using the SAME
+    /// `types_match` the checker used (see `check_binop`), so the two sites cannot drift on
+    /// what counts as "the same element type"; `[][]Num + []Num` is thus an append (`right`
+    /// is one element), matching the checker.
+    fn generate_array_concat(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use crate::typechecker::types_match;
+
+        // Classify the form (which side is the whole array to splice vs. a single element)
+        // and derive the element repr, all from borrowed oracle types — no `Type` clones.
+        // This borrow is scoped so it ends before the `&mut self` `generate_expr` calls.
+        let (elem_llvm, left_is_array, right_is_array) = {
+            let (elem, left_is_array, right_is_array) =
+                match (self.oracle.expr_type(left), self.oracle.expr_type(right)) {
+                    // concat `[]T + []T`: both arrays of the SAME element type.
+                    (Some(Type::Array(le)), Some(Type::Array(re))) if types_match(le, re) => {
+                        (Some(&**le), true, true)
+                    }
+                    // append `[]T + T`: left is the array, right a single element.
+                    (Some(Type::Array(le)), _) => (Some(&**le), true, false),
+                    // prepend `T + []T`: right is the array, left a single element.
+                    (_, Some(Type::Array(re))) => (Some(&**re), false, true),
+                    // Unreachable via the routing guard in `generate_binop` (it only calls
+                    // here when an operand's oracle type is `Array`). Defensive default.
+                    _ => (None, true, true),
+                };
+            let elem_llvm = match elem {
+                Some(t) => self.value_repr_type(t)?,
+                None => self.context.f64_type().into(),
+            };
+            (elem_llvm, left_is_array, right_is_array)
+        };
+
+        let l = self.generate_expr(left)?;
+        let r = self.generate_expr(right)?;
+        let part = |is_array, v| {
+            if is_array {
+                ArrayPart::Spread(v)
+            } else {
+                ArrayPart::Inline(v)
+            }
+        };
+        self.build_array_from_parts(
+            elem_llvm,
+            &[part(left_is_array, l), part(right_is_array, r)],
+        )
+    }
+
+    /// Build a fresh `{ptr, size}` array by laying `parts` into a GC-allocated block:
+    /// sum the parts' element counts (inline = 1, spread = its `.size`), allocate the
+    /// exact backing store, then fill left-to-right — an inline element is stored at the
+    /// running offset, a spread source is a flat `memcpy` of its data block. Works for
+    /// any element repr (`[]Num`, `[]Text`, nested arrays) since element storage is POD
+    /// in every case; `elem_llvm` supplies the stride. Shared by `<-` spread literals
+    /// and `+` array concatenation.
+    fn build_array_from_parts(
+        &mut self,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        parts: &[ArrayPart<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::types::BasicType;
+        let i64_type = self.context.i64_type();
+        let elem_size = elem_llvm
+            .size_of()
+            .ok_or_else(|| "array element type has no compile-time size".to_string())?;
+
         // Total element count: inline elements count 1 each, a spread counts its `.size`.
         let mut count = i64_type.const_zero();
-        for part in &parts {
+        for part in parts {
             let add = match part {
-                Part::Inline(_) => i64_type.const_int(1, false),
-                Part::Spread(v) => self.array_size_field(*v)?,
+                ArrayPart::Inline(_) => i64_type.const_int(1, false),
+                ArrayPart::Spread(v) => self.array_size_field(*v)?,
             };
             count = self
                 .builder
-                .build_int_add(count, add, "spread_count")
-                .map_err(|e| format!("Failed to sum spread count: {:?}", e))?;
+                .build_int_add(count, add, "concat_count")
+                .map_err(|e| format!("Failed to sum array part count: {:?}", e))?;
         }
 
         // GC-allocate the exact `{ptr,size}` backing store (shared array helper).
@@ -3178,41 +3284,41 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Fill left-to-right, threading a running element offset.
         let memcpy_fn = self.get_intrinsic("memcpy")?;
         let mut offset = i64_type.const_zero();
-        for part in &parts {
+        for part in parts {
             match part {
-                Part::Inline(value) => {
+                ArrayPart::Inline(value) => {
                     let slot = unsafe {
                         self.builder
-                            .build_gep(elem_llvm, data_ptr, &[offset], "spread_slot")
-                            .map_err(|e| format!("Failed to index spread slot: {:?}", e))?
+                            .build_gep(elem_llvm, data_ptr, &[offset], "concat_slot")
+                            .map_err(|e| format!("Failed to index array slot: {:?}", e))?
                     };
                     self.builder
                         .build_store(slot, *value)
-                        .map_err(|e| format!("Failed to store spread element: {:?}", e))?;
+                        .map_err(|e| format!("Failed to store array element: {:?}", e))?;
                     offset = self
                         .builder
-                        .build_int_add(offset, i64_type.const_int(1, false), "spread_off")
-                        .map_err(|e| format!("Failed to advance spread offset: {:?}", e))?;
+                        .build_int_add(offset, i64_type.const_int(1, false), "concat_off")
+                        .map_err(|e| format!("Failed to advance array offset: {:?}", e))?;
                 }
-                Part::Spread(value) => {
+                ArrayPart::Spread(value) => {
                     let src_ptr = self.array_data_field(*value)?;
                     let src_size = self.array_size_field(*value)?;
                     let dest = unsafe {
                         self.builder
-                            .build_gep(elem_llvm, data_ptr, &[offset], "spread_dest")
-                            .map_err(|e| format!("Failed to index spread dest: {:?}", e))?
+                            .build_gep(elem_llvm, data_ptr, &[offset], "concat_dest")
+                            .map_err(|e| format!("Failed to index array dest: {:?}", e))?
                     };
                     let bytes = self
                         .builder
-                        .build_int_mul(src_size, elem_size, "spread_src_bytes")
-                        .map_err(|e| format!("Failed to size spread copy: {:?}", e))?;
+                        .build_int_mul(src_size, elem_size, "concat_src_bytes")
+                        .map_err(|e| format!("Failed to size array copy: {:?}", e))?;
                     self.builder
                         .build_call(memcpy_fn, &[dest.into(), src_ptr.into(), bytes.into()], "")
-                        .map_err(|e| format!("Failed to memcpy spread source: {:?}", e))?;
+                        .map_err(|e| format!("Failed to memcpy array source: {:?}", e))?;
                     offset = self
                         .builder
-                        .build_int_add(offset, src_size, "spread_off")
-                        .map_err(|e| format!("Failed to advance spread offset: {:?}", e))?;
+                        .build_int_add(offset, src_size, "concat_off")
+                        .map_err(|e| format!("Failed to advance array offset: {:?}", e))?;
                 }
             }
         }
@@ -4948,7 +5054,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(arm_blocks[i]);
 
             // Bind pattern variables
-            self.bind_pattern(&arm.pattern, match_val)?;
+            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
             let arm_val = self.generate_expr(&arm.body)?;
             self.builder
@@ -5039,10 +5145,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Concrete per-value payload types for the matched constructor `variant`, read from
+    /// the SCRUTINEE's oracle type. A scrutinee inferred as `Result[Ok(Text)]` (from
+    /// `Ok("x")`) yields `[Text]` for `Ok`, so a payload binding can record its REAL type
+    /// for overload mangling — unlike the declared `variant_payloads`, whose `Result`
+    /// slots are `Generic` (which would mis-mangle to the `Num` member). `None` when the
+    /// oracle has no concrete `Sum` type for the scrutinee.
+    fn scrutinee_payload_types(&self, scrutinee: &Expr, variant: &str) -> Option<Vec<Type>> {
+        match self.oracle.expr_type(scrutinee)? {
+            Type::Sum { variants, .. } => variants
+                .iter()
+                .find(|v| v.name == variant)
+                .map(|v| v.fields.clone()),
+            _ => None,
+        }
+    }
+
     fn bind_pattern(
         &mut self,
         pattern: &Pattern,
         value: BasicValueEnum<'ctx>,
+        scrutinee: &Expr,
     ) -> Result<(), String> {
         match pattern {
             Pattern::Ident { name, .. } => {
@@ -5061,8 +5184,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
                 // struct field `i + 1`. Only identifier sub-patterns bind a name; others
                 // (wildcards, nested constructors) are matched structurally elsewhere.
-                let payload_types = self.variant_payloads.get(name).cloned();
+                //
+                // Each payload binding records its Quilon type in `var_types` (the map
+                // that mangles an overloaded call on the binding, e.g.
+                // `Ok(s) => describe(s)`), taken from the first NON-generic of two ordered
+                // sources:
+                //  - the SCRUTINEE's oracle type, whose `Result` payload was specialized
+                //    per value (`Ok("x")` => `Result[Ok(Text)]`), so `s` binds as `Text`;
+                //  - else the variant's declared payloads (`variant_payloads`), concrete
+                //    for a USER sum type (`Circle(Num)`) but `Generic` for `Result`.
+                // A still-`Generic` payload is left untracked — an untracked binding
+                // defaults to `Num` (the historical behavior), rather than mis-mangling.
                 if let BasicValueEnum::StructValue(struct_val) = value {
+                    let concrete = self.scrutinee_payload_types(scrutinee, name);
+                    let declared = self.variant_payloads.get(name).cloned();
                     for (i, arg) in args.iter().enumerate() {
                         if let Pattern::Ident { name: arg_name, .. } = arg {
                             let payload = self
@@ -5076,10 +5211,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 .map_err(|e| format!("Failed to store constructor arg: {:?}", e))?;
                             self.variables
                                 .insert(arg_name.clone(), (alloca, payload.get_type()));
-                            // Track the payload binding's declared Quilon type so an
-                            // overloaded call on it (`Circle(n) => area(n)`) mangles by
-                            // the concrete payload type, agreeing with the type checker.
-                            if let Some(ty) = payload_types.as_ref().and_then(|t| t.get(i)) {
+                            let payload_ty = [&concrete, &declared]
+                                .into_iter()
+                                .filter_map(|src| src.as_ref()?.get(i))
+                                .find(|t| !matches!(t, Type::Generic { .. }));
+                            if let Some(ty) = payload_ty {
                                 self.var_types.insert(arg_name.clone(), ty.clone());
                             }
                         }
@@ -5131,6 +5267,45 @@ impl<'ctx> CodeGenerator<'ctx> {
             None => field_types.push(self.context.f64_type().into()),
         }
         self.context.struct_type(&field_types, false)
+    }
+
+    /// The tagged-union LLVM struct for a sum-typed *value* of type `Type::Sum`. A USER
+    /// sum type has a registered canonical layout, so this defers to [`sum_struct_type`].
+    /// The built-in `Result` has NONE (its payload is sized per value across its generic,
+    /// heterogeneous variants), so its slot types are recovered from the CONCRETE
+    /// (specialized) variant payloads this `Type::Sum` carries: `Result[Ok(Text)]` =>
+    /// `{ i8, Text }`, so a function returning `Ok("x")` gets a return type matching the
+    /// value the body actually produces.
+    ///
+    /// This MUST agree with `generate_sum_constructor`'s per-value Result shape: there a
+    /// `Generic` slot has no value and a `$` (Unit) payload is stored into the canonical
+    /// numeric `double` slot (a Unit carries no bits). So per slot we take the first field
+    /// that is neither `Generic` NOR `Unit` (the checker guarantees concrete fields at a
+    /// position agree) and lower it via [`value_repr_type`]; a slot that is only
+    /// generic/unit/absent falls back to `double`, preserving the historical
+    /// `{ i8, double }` shape for a still-generic or unit-only `Result`.
+    fn sum_value_struct_type(
+        &self,
+        name: &str,
+        variants: &[crate::ast::SumVariant],
+    ) -> Result<inkwell::types::StructType<'ctx>, String> {
+        if self.sum_layouts.contains_key(name) || variants.is_empty() {
+            return Ok(self.sum_struct_type(name));
+        }
+        let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
+        let max_fields = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+        for i in 0..max_fields {
+            let concrete = variants
+                .iter()
+                .filter_map(|v| v.fields.get(i))
+                .find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
+            let slot = match concrete {
+                Some(f) => self.value_repr_type(f)?,
+                None => self.context.f64_type().into(),
+            };
+            field_types.push(slot);
+        }
+        Ok(self.context.struct_type(&field_types, false))
     }
 
     /// The single value of the Unit type (`$`), lowered as a zero `i8`. Its bits are
@@ -5363,7 +5538,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.context.struct_type(&field_types, false).into())
             }
-            Type::Sum { name, .. } => Ok(self.sum_struct_type(name).into()),
+            Type::Sum { name, variants } => Ok(self.sum_value_struct_type(name, variants)?.into()),
             // A `Named` reference with no fields is a parsed type annotation (e.g. a
             // function param `s :: Shape`). If it names a registered sum type, lower it
             // to that type's tagged-union struct.
