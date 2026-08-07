@@ -1331,10 +1331,18 @@ impl<'a> Parser<'a> {
 
         if !self.check(&TokenKind::BraceClose) {
             loop {
-                let field_name = self.expect_ident()?;
-                self.expect(&TokenKind::Assign)?;
-                let value = self.parse_expr()?;
-                fields.push((field_name, value));
+                // A field beginning with `<-` is a SPREAD (functional update):
+                // `{<-p, x = 9}` copies every field of `p`, then applies overrides. A
+                // spread field carries the empty-string name (never a valid identifier)
+                // as its sentinel — consumers discriminate on `Expr::Spread`, not the name.
+                if let Some(spread) = self.try_parse_spread()? {
+                    fields.push((String::new(), spread));
+                } else {
+                    let field_name = self.expect_ident()?;
+                    self.expect(&TokenKind::Assign)?;
+                    let value = self.parse_expr()?;
+                    fields.push((field_name, value));
+                }
 
                 if !self.check(&TokenKind::Comma) {
                     break;
@@ -1357,7 +1365,16 @@ impl<'a> Parser<'a> {
 
         if !self.check(&TokenKind::BracketClose) {
             loop {
-                elements.push(self.parse_expr()?);
+                // An element beginning with `<-` is a SPREAD: `[<-xs, 4]` splices every
+                // element of `xs` in, then appends `4`. Disambiguated from the infix
+                // range `lo <- hi` by position — a leading `<-` is a spread (see
+                // `try_parse_spread`), so `[1 <- 4]` is a one-element array holding the
+                // range `[1,2,3,4]`, while `[<-xs, 4]` splices xs.
+                if let Some(spread) = self.try_parse_spread()? {
+                    elements.push(spread);
+                } else {
+                    elements.push(self.parse_expr()?);
+                }
                 if !self.check(&TokenKind::Comma) {
                     break;
                 }
@@ -1369,6 +1386,27 @@ impl<'a> Parser<'a> {
         let span = Span::new(start.start, self.previous_span().end);
 
         Ok(Expr::Array { elements, span })
+    }
+
+    /// If the cursor is at a prefix `<-` (the FIRST token of an array element or record
+    /// field), consume it and parse the spread source, returning `Expr::Spread`. Otherwise
+    /// leave the cursor untouched and return `None` — the caller parses an ordinary
+    /// element/field. This is the single point that decides spread-vs-range by position:
+    /// a `<-` reached here begins an element, so it is a spread; a `<-` between two
+    /// complete expressions is handled by `parse_range` as the infix range operator. The
+    /// spread source is a full expression (so `[<-1 <- 4]` spreads the range `1 <- 4`).
+    fn try_parse_spread(&mut self) -> Result<Option<Expr>, ParseError> {
+        if !self.check(&TokenKind::LeftArrow) {
+            return Ok(None);
+        }
+        let start = self.current_span();
+        self.advance(); // consume `<-`
+        let source = self.parse_expr()?;
+        let span = Span::new(start.start, self.previous_span().end);
+        Ok(Some(Expr::Spread {
+            expr: Box::new(source),
+            span,
+        }))
     }
 
     fn parse_type(&mut self) -> Result<crate::ast::Type, ParseError> {

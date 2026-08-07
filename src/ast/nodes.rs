@@ -279,6 +279,17 @@ pub enum Expr {
         end: Box<Expr>,
         span: Span,
     },
+
+    // Prefix spread `<-source`, valid ONLY as an element of an array literal
+    // (`[<-xs, 4]`) or a field of a record literal (`{<-p, x = 9}`). It splices
+    // every element of a source array (array context), or every field of a source
+    // record (record functional-update), into the surrounding literal. Disambiguated
+    // from the infix range `lo <- hi` purely by position: a `<-` that BEGINS a literal
+    // element/field is a spread; a `<-` between two complete expressions is a range.
+    Spread {
+        expr: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -305,6 +316,7 @@ impl Expr {
             Expr::Constructor { span, .. } => span,
             Expr::SumConstructor { span, .. } => span,
             Expr::Range { span, .. } => span,
+            Expr::Spread { span, .. } => span,
         }
     }
 

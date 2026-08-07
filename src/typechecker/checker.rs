@@ -1600,25 +1600,45 @@ impl TypeChecker {
                     return Ok(Type::Array(Box::new(Type::Num)));
                 }
 
-                let first_type = self.infer_expr(&elements[0])?;
-
-                for elem in &elements[1..] {
-                    let elem_type = self.infer_expr(elem)?;
-                    self.check_type_compatibility(&first_type, &elem_type, span)?;
+                // The element type each element contributes: a plain element contributes
+                // its own type; a `<-source` spread contributes the ELEMENT type of the
+                // source array (which must itself be an array). All contributions must be
+                // mutually compatible, and the result is `[]elem`.
+                let mut elem_type: Option<Type> = None;
+                for elem in elements {
+                    let contributed = if let Expr::Spread { expr: src, .. } = elem {
+                        // Record the spread node's type (= the source array's type).
+                        let src_type = self.infer_expr(elem)?;
+                        match src_type {
+                            Type::Array(inner) => (*inner).clone(),
+                            other => {
+                                return Err(TypeError::TypeMismatch {
+                                    expected: Box::new(Type::Array(Box::new(Type::Num))),
+                                    got: Box::new(other),
+                                    span: src.span().clone(),
+                                });
+                            }
+                        }
+                    } else {
+                        self.infer_expr(elem)?
+                    };
+                    match &elem_type {
+                        None => elem_type = Some(contributed),
+                        Some(first) => self.check_type_compatibility(first, &contributed, span)?,
+                    }
                 }
 
-                Ok(Type::Array(Box::new(first_type)))
+                Ok(Type::Array(Box::new(elem_type.unwrap_or(Type::Num))))
             }
 
-            Expr::Record { fields, .. } => {
-                let mut field_types = Vec::new();
+            Expr::Record { fields, .. } => self.infer_record(fields),
 
-                for (name, value) in fields {
-                    let value_type = self.infer_expr(value)?;
-                    field_types.push((name.clone(), value_type));
-                }
-
-                Ok(Type::Record(field_types))
+            Expr::Spread { expr, .. } => {
+                // A spread's own type is the type of its source; the surrounding array /
+                // record literal interprets it (element splice / field merge). A bare
+                // spread outside a literal never reaches codegen (the parser only produces
+                // one inside `[ ]` / `{ }`), so recording the source type here suffices.
+                self.infer_expr(expr)
             }
 
             Expr::Constructor {
@@ -1726,6 +1746,75 @@ impl TypeChecker {
                 Ok(Type::Array(Box::new(Type::Num)))
             }
         }
+    }
+
+    /// Infer the type of a record literal, expanding any `<-source` spreads (functional
+    /// update). Fields merge left-to-right: a spread splices all of its source record's
+    /// fields; a later entry (from a spread or an explicit `name = v`) OVERRIDES an
+    /// earlier one of the same name, and a new name is appended. If the FIRST named-record
+    /// spread source's declared field set is reproduced exactly by the merged result (same
+    /// names, each type compatible, nothing added), the result KEEPS that named type — and
+    /// therefore its methods; otherwise it is an anonymous record.
+    fn infer_record(&mut self, fields: &[(String, Expr)]) -> Result<Type, TypeError> {
+        let mut merged: Vec<(String, Type)> = Vec::new();
+        // The named type of the FIRST named-record spread source, if any (holds its
+        // declared fields + methods) — the candidate the result may keep.
+        let mut named_identity: Option<Type> = None;
+
+        for (name, value) in fields {
+            if let Expr::Spread { expr: src, .. } = value {
+                let src_type = self.infer_expr(value)?;
+                let src_fields = match &src_type {
+                    Type::Record(fs) => fs.clone(),
+                    Type::Named { fields: fs, .. } => {
+                        if named_identity.is_none() {
+                            named_identity = Some(src_type.clone());
+                        }
+                        fs.clone()
+                    }
+                    other => {
+                        return Err(TypeError::TypeMismatch {
+                            expected: Box::new(Type::Record(vec![])),
+                            got: Box::new(other.clone()),
+                            span: src.span().clone(),
+                        });
+                    }
+                };
+                for (fname, fty) in src_fields {
+                    match merged.iter_mut().find(|(n, _)| *n == fname) {
+                        Some(slot) => slot.1 = fty,
+                        None => merged.push((fname, fty)),
+                    }
+                }
+            } else {
+                let value_type = self.infer_expr(value)?;
+                match merged.iter_mut().find(|(n, _)| *n == *name) {
+                    Some(slot) => slot.1 = value_type,
+                    None => merged.push((name.clone(), value_type)),
+                }
+            }
+        }
+
+        // Preserve the named type (and its methods) only if the merged field set is
+        // exactly the named type's declared fields, each with a compatible type.
+        if let Some(Type::Named {
+            fields: decl_fields,
+            ..
+        }) = &named_identity
+        {
+            let reproduces_named = merged.len() == decl_fields.len()
+                && decl_fields.iter().all(|(dn, dt)| {
+                    merged
+                        .iter()
+                        .find(|(mn, _)| mn == dn)
+                        .is_some_and(|(_, mt)| Self::types_compatible(dt, mt))
+                });
+            if reproduces_named {
+                return Ok(named_identity.unwrap());
+            }
+        }
+
+        Ok(Type::Record(merged))
     }
 
     fn check_binop(

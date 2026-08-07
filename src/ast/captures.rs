@@ -157,6 +157,7 @@ fn collect(
                 collect(a, local, outer, seen, out);
             }
         }
+        Expr::Spread { expr, .. } => collect(expr, local, outer, seen, out),
     }
 }
 

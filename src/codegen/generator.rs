@@ -785,10 +785,30 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
-        // Check if this is a record literal to track field names
+        // Check if this is a record literal to track field names. Prefer the oracle's
+        // inferred type (authoritative field names/order, and it expands `<-` spreads);
+        // a functional-update whose result is a NAMED type also tracks that name so
+        // method calls on the binding resolve. Fall back to the literal's own field names
+        // when the oracle has no entry (IR-only tests) — which never carry spreads.
         if let Expr::Record { fields, .. } = &decl.value {
-            let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
+            // Field names in slot order: prefer the oracle's (it expands spreads and is
+            // authoritative), else the literal's own names. Only a NAMED-type result also
+            // records `var_named_types` so method calls on the binding resolve.
+            let (field_names, named): (Vec<String>, Option<String>) =
+                match self.oracle.expr_type(&decl.value) {
+                    Some(Type::Named { name, fields, .. }) => (
+                        fields.iter().map(|(n, _)| n.clone()).collect(),
+                        Some(name.clone()),
+                    ),
+                    Some(Type::Record(fields)) => {
+                        (fields.iter().map(|(n, _)| n.clone()).collect(), None)
+                    }
+                    _ => (fields.iter().map(|(n, _)| n.clone()).collect(), None),
+                };
             self.record_types.insert(decl.name.clone(), field_names);
+            if let Some(name) = named {
+                self.var_named_types.insert(decl.name.clone(), name);
+            }
         }
         // A named-type instance (e.g. `u = User { ... }`) — remember its type so method calls
         // on `u` can resolve to the mangled `User_method` functions.
@@ -1596,6 +1616,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::collect_mutable_locals(a, out);
                 }
             }
+            Expr::Spread { expr, .. } => Self::collect_mutable_locals(expr, out),
             Expr::Number { .. }
             | Expr::String { .. }
             | Expr::Bool { .. }
@@ -1715,6 +1736,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::walk_exprs(a, f);
                 }
             }
+            Expr::Spread { expr, .. } => Self::walk_exprs(expr, f),
             Expr::Number { .. }
             | Expr::String { .. }
             | Expr::Bool { .. }
@@ -2067,9 +2089,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::Block { stmts, .. } => self.generate_block(stmts),
 
-            Expr::Array { elements, .. } => self.generate_array(elements),
+            Expr::Array { elements, .. } => self.generate_array(expr, elements),
 
-            Expr::Record { fields, .. } => self.generate_record(fields),
+            Expr::Record { fields, .. } => self.generate_record_expr(expr, fields),
+
+            // A bare spread never survives to codegen on its own — the parser only
+            // produces one as an element of an array literal or a field of a record
+            // literal, where `generate_array` / `generate_record_expr` consume it.
+            Expr::Spread { .. } => {
+                Err("spread `<-` is only valid inside an array or record literal".to_string())
+            }
 
             Expr::Constructor {
                 type_name, fields, ..
@@ -2936,12 +2965,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(result)
     }
 
-    fn generate_array(&mut self, elements: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_array(
+        &mut self,
+        array_expr: &Expr,
+        elements: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         // Arrays are represented as structs: { ptr data, i64 size }
         // This allows .size field access
 
         if self.current_function.is_none() {
             return Err("Global arrays not yet implemented".to_string());
+        }
+
+        // A literal containing a `<-` spread (`[<-xs, 4]`) has a runtime-determined size
+        // (each spread source contributes its own `.size` elements), so it takes a
+        // dedicated GC-allocating path that copies each part in order.
+        if elements.iter().any(|e| matches!(e, Expr::Spread { .. })) {
+            return self.generate_array_spread(array_expr, elements);
         }
 
         let size = elements.len();
@@ -3033,6 +3073,133 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(array_struct_type, array_struct, "array")
             .map_err(|e| format!("Failed to load array struct: {:?}", e))
+    }
+
+    /// Lower an array literal that contains one or more `<-` spreads (`[<-xs, 4, <-ys]`).
+    /// The result size is only known at runtime (each spread contributes its source's
+    /// `.size`), so the backing storage is GC-allocated to the exact total and filled
+    /// left-to-right: an inline element is stored at the running offset, a spread is a
+    /// flat `memcpy` of its source's data (works for any element repr — `[]Num`, `[]Text`,
+    /// nested arrays — since element storage is POD in every case). The element repr type
+    /// comes from the type oracle (`[]elem`), so `[]Text` spreads copy `{ptr,len}` slots
+    /// correctly, not a hardcoded `f64`.
+    fn generate_array_spread(
+        &mut self,
+        array_expr: &Expr,
+        elements: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::types::BasicType;
+        let i64_type = self.context.i64_type();
+
+        // Element repr type from the oracle (`[]elem`); fall back to f64 if the oracle
+        // has no entry (IR-only codegen tests that skip type-checking). Its byte size is
+        // the stride for `memcpy`-ing a spread source's block of elements.
+        let elem_llvm = match self.oracle.expr_type(array_expr) {
+            Some(Type::Array(elem)) => self.value_repr_type(elem)?,
+            _ => self.context.f64_type().into(),
+        };
+        let elem_size = elem_llvm
+            .size_of()
+            .ok_or_else(|| "spread element type has no compile-time size".to_string())?;
+
+        // Generate each part once, tagged spread-or-inline. A spread source lowers to a
+        // `{ptr, size}` array struct; an inline element lowers to an `elem` value.
+        enum Part<'v> {
+            Inline(BasicValueEnum<'v>),
+            Spread(BasicValueEnum<'v>),
+        }
+        let mut parts: Vec<Part<'ctx>> = Vec::with_capacity(elements.len());
+        for elem in elements {
+            if let Expr::Spread { expr: src, .. } = elem {
+                parts.push(Part::Spread(self.generate_expr(src)?));
+            } else {
+                parts.push(Part::Inline(self.generate_expr(elem)?));
+            }
+        }
+
+        // Total element count: inline elements count 1 each, a spread counts its `.size`.
+        let mut count = i64_type.const_zero();
+        for part in &parts {
+            let add = match part {
+                Part::Inline(_) => i64_type.const_int(1, false),
+                Part::Spread(v) => self.array_size_field(*v)?,
+            };
+            count = self
+                .builder
+                .build_int_add(count, add, "spread_count")
+                .map_err(|e| format!("Failed to sum spread count: {:?}", e))?;
+        }
+
+        // GC-allocate the exact `{ptr,size}` backing store (shared array helper).
+        let data_ptr = self.alloc_array_data(elem_llvm, count)?;
+
+        // Fill left-to-right, threading a running element offset.
+        let memcpy_fn = self.get_intrinsic("memcpy")?;
+        let mut offset = i64_type.const_zero();
+        for part in &parts {
+            match part {
+                Part::Inline(value) => {
+                    let slot = unsafe {
+                        self.builder
+                            .build_gep(elem_llvm, data_ptr, &[offset], "spread_slot")
+                            .map_err(|e| format!("Failed to index spread slot: {:?}", e))?
+                    };
+                    self.builder
+                        .build_store(slot, *value)
+                        .map_err(|e| format!("Failed to store spread element: {:?}", e))?;
+                    offset = self
+                        .builder
+                        .build_int_add(offset, i64_type.const_int(1, false), "spread_off")
+                        .map_err(|e| format!("Failed to advance spread offset: {:?}", e))?;
+                }
+                Part::Spread(value) => {
+                    let src_ptr = self.array_data_field(*value)?;
+                    let src_size = self.array_size_field(*value)?;
+                    let dest = unsafe {
+                        self.builder
+                            .build_gep(elem_llvm, data_ptr, &[offset], "spread_dest")
+                            .map_err(|e| format!("Failed to index spread dest: {:?}", e))?
+                    };
+                    let bytes = self
+                        .builder
+                        .build_int_mul(src_size, elem_size, "spread_src_bytes")
+                        .map_err(|e| format!("Failed to size spread copy: {:?}", e))?;
+                    self.builder
+                        .build_call(memcpy_fn, &[dest.into(), src_ptr.into(), bytes.into()], "")
+                        .map_err(|e| format!("Failed to memcpy spread source: {:?}", e))?;
+                    offset = self
+                        .builder
+                        .build_int_add(offset, src_size, "spread_off")
+                        .map_err(|e| format!("Failed to advance spread offset: {:?}", e))?;
+                }
+            }
+        }
+
+        // Build the { ptr, size } array struct (the shared array/Text shape).
+        self.array_struct(data_ptr, count)
+    }
+
+    /// Extract the data pointer (field 0) of an array `{ptr, size}` struct value.
+    fn array_data_field(&self, array: BasicValueEnum<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let s = array.into_struct_value();
+        Ok(self
+            .builder
+            .build_extract_value(s, 0, "arr_data")
+            .map_err(|e| format!("Failed to extract array data ptr: {:?}", e))?
+            .into_pointer_value())
+    }
+
+    /// Extract the size (field 1, an i64) of an array `{ptr, size}` struct value.
+    fn array_size_field(
+        &self,
+        array: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let s = array.into_struct_value();
+        Ok(self
+            .builder
+            .build_extract_value(s, 1, "arr_size")
+            .map_err(|e| format!("Failed to extract array size: {:?}", e))?
+            .into_int_value())
     }
 
     /// Reorder a constructor call's `fields` into the named type's DECLARATION order so
@@ -3825,6 +3992,158 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Lower a record literal, routing a functional-update literal (`{<-p, x = 9}`,
+    /// containing one or more `<-` spreads) to [`generate_record_update`] and an ordinary
+    /// literal to [`generate_record`].
+    fn generate_record_expr(
+        &mut self,
+        record_expr: &Expr,
+        fields: &[(String, Expr)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if fields.iter().any(|(_, v)| matches!(v, Expr::Spread { .. })) {
+            self.generate_record_update(record_expr, fields)
+        } else {
+            self.generate_record(fields)
+        }
+    }
+
+    /// Lower a record functional-update `{<-p, x = 9, ...}`: build a NEW record whose
+    /// field set / order / types come from the whole literal's oracle type (a `Named`
+    /// type keeps its declared layout and methods; otherwise it is an anonymous record).
+    /// Each result field's value is the explicit override if the literal supplies one
+    /// (`x = 9`), else the field copied from the LAST spread source that carries it —
+    /// so later entries override earlier ones, left-to-right.
+    fn generate_record_update(
+        &mut self,
+        record_expr: &Expr,
+        fields: &[(String, Expr)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if self.current_function.is_none() {
+            return Err("Global records not yet implemented".to_string());
+        }
+
+        // Result layout (ordered fields + types) from the oracle — authoritative for both
+        // the struct shape and which slot each name occupies.
+        let result_fields: Vec<(String, Type)> = match self.oracle.expr_type(record_expr) {
+            Some(Type::Named { fields, .. }) | Some(Type::Record(fields)) => fields.clone(),
+            _ => {
+                return Err(
+                    "record functional-update requires type information (missing oracle entry)"
+                        .to_string(),
+                );
+            }
+        };
+
+        // Evaluate the literal's parts in source order (left-to-right), recording for each
+        // field name its LATEST provider — so precedence follows source order exactly:
+        // a later entry (override OR spread) beats an earlier one, an override beats an
+        // earlier spread, and a later spread beats an earlier override. (Splitting on
+        // "override vs spread" instead would wrongly make an explicit field always win
+        // regardless of position, e.g. `{x = 9, <-p}` must yield `p.x`, not `9`.)
+        enum Provider<'v> {
+            Override(BasicValueEnum<'v>),
+            Spread(usize), // index into `sources`
+        }
+        struct Source<'v> {
+            ptr: PointerValue<'v>,
+            layout: Vec<(String, Type)>,
+            // The source record's LLVM struct type, reconstructed once here (not per
+            // field copied from it) so field GEPs just index it.
+            struct_type: inkwell::types::StructType<'v>,
+        }
+        let mut sources: Vec<Source<'ctx>> = Vec::new();
+        let mut provider: HashMap<String, Provider<'ctx>> = HashMap::new();
+
+        for (name, value) in fields {
+            if let Expr::Spread { expr: src, .. } = value {
+                let layout: Vec<(String, Type)> = match self.oracle.expr_type(src) {
+                    Some(Type::Named { fields, .. }) | Some(Type::Record(fields)) => fields.clone(),
+                    _ => {
+                        return Err("record spread source requires type information".to_string());
+                    }
+                };
+                let fnames: Vec<String> = layout.iter().map(|(n, _)| n.clone()).collect();
+                let struct_type = self.record_struct_type(&layout)?;
+                let ptr = self.generate_expr(src)?.into_pointer_value();
+                let idx = sources.len();
+                sources.push(Source {
+                    ptr,
+                    layout,
+                    struct_type,
+                });
+                for fname in fnames {
+                    provider.insert(fname, Provider::Spread(idx));
+                }
+            } else {
+                let v = self.generate_expr(value)?;
+                provider.insert(name.clone(), Provider::Override(v));
+            }
+        }
+
+        // Result field repr types, computed once — reused both to load copied fields and
+        // to build the result struct (matching how `record_field_pointer` reconstructs it
+        // later). The struct is GC-allocated so it may escape the frame.
+        let field_types: Vec<BasicTypeEnum> = result_fields
+            .iter()
+            .map(|(_, t)| self.value_repr_type(t))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Assemble each result field's value in result (slot) order.
+        let mut field_values: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(result_fields.len());
+        for (i, (fname, _)) in result_fields.iter().enumerate() {
+            let field_llvm = field_types[i];
+            match provider.get(fname) {
+                Some(Provider::Override(v)) => field_values.push(*v),
+                Some(Provider::Spread(si)) => {
+                    // Copy the field out of its providing spread source.
+                    let src = &sources[*si];
+                    let idx = src
+                        .layout
+                        .iter()
+                        .position(|(n, _)| n == fname)
+                        .ok_or_else(|| format!("spread source missing field {}", fname))?;
+                    let gep = self
+                        .builder
+                        .build_struct_gep(src.struct_type, src.ptr, idx as u32, "spread_field_ptr")
+                        .map_err(|e| format!("Failed to GEP spread field: {:?}", e))?;
+                    let loaded = self
+                        .builder
+                        .build_load(field_llvm, gep, fname)
+                        .map_err(|e| format!("Failed to load spread field: {:?}", e))?;
+                    field_values.push(loaded);
+                }
+                None => {
+                    return Err(format!(
+                        "record functional-update result field {fname} has no source"
+                    ));
+                }
+            }
+        }
+
+        let struct_type = self.context.struct_type(&field_types, false);
+        use inkwell::values::AnyValue;
+        let size = struct_type
+            .size_of()
+            .ok_or_else(|| "record struct type has no compile-time size".to_string())?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let record_ptr = self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "record")
+            .map_err(|e| format!("Failed to call __alloc for record: {:?}", e))?
+            .as_any_value_enum()
+            .into_pointer_value();
+        for (i, value) in field_values.iter().enumerate() {
+            let gep = self
+                .builder
+                .build_struct_gep(struct_type, record_ptr, i as u32, &format!("field_{}", i))
+                .map_err(|e| format!("Failed to build GEP: {:?}", e))?;
+            self.builder
+                .build_store(gep, *value)
+                .map_err(|e| format!("Failed to build store: {:?}", e))?;
+        }
+        Ok(record_ptr.into())
+    }
+
     fn generate_record(
         &mut self,
         fields: &[(String, Expr)],
@@ -4206,21 +4525,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(None);
         };
 
-        // Reconstruct the struct field types from the oracle (the record's declared
-        // field types), in declared order, so the GEP type matches construction. Fall
-        // back to all-`f64` only if the oracle has no record type for `base` (it always
-        // should for a tracked record) — preserving the historical numeric layout. The
-        // loaded field's own LLVM type is then just the indexed slot, computed once here.
-        let field_types: Vec<BasicTypeEnum> = match self.oracle.expr_type(base) {
-            Some(Type::Record(fields)) | Some(Type::Named { fields, .. }) => fields
-                .clone()
-                .iter()
-                .map(|(_, t)| self.value_repr_type(t))
-                .collect::<Result<Vec<_>, _>>()?,
-            _ => vec![self.context.f64_type().into(); field_names.len()],
+        // Reconstruct the record's struct type from the oracle (its declared field types,
+        // in declared order) via the shared `record_struct_type`, so the GEP type matches
+        // construction. Fall back to all-`f64` only if the oracle has no record type for
+        // `base` (it always should for a tracked record) — preserving the historical
+        // numeric layout. The loaded field's own LLVM type is then just the indexed slot.
+        let struct_type = match self.oracle.expr_type(base) {
+            Some(Type::Record(fields)) | Some(Type::Named { fields, .. }) => {
+                let fields = fields.clone();
+                self.record_struct_type(&fields)?
+            }
+            _ => {
+                let f64t: BasicTypeEnum = self.context.f64_type().into();
+                self.context
+                    .struct_type(&vec![f64t; field_names.len()], false)
+            }
         };
-        let field_llvm = field_types[field_idx];
-        let struct_type = self.context.struct_type(&field_types, false);
+        let field_llvm = struct_type
+            .get_field_type_at_index(field_idx as u32)
+            .ok_or_else(|| format!("record field index {field_idx} out of range"))?;
 
         // The variable's alloca holds a pointer to the struct; load it.
         let (var_ptr, _) = self
@@ -4542,6 +4865,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// The LLVM struct type for a record with the given (name, Quilon-type) fields, in
+    /// declared order — each slot lowered through [`value_repr_type`]. This is the single
+    /// definition of a record's memory layout, shared by record construction
+    /// (`generate_record_update`) and field reads (`record_field_pointer`), so the two
+    /// can never disagree on slot types.
+    fn record_struct_type(
+        &self,
+        fields: &[(String, Type)],
+    ) -> Result<inkwell::types::StructType<'ctx>, String> {
+        let field_types: Vec<BasicTypeEnum> = fields
+            .iter()
+            .map(|(_, t)| self.value_repr_type(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.context.struct_type(&field_types, false))
+    }
+
     /// The `{ ptr data, i64 len }` struct shared by arrays and `Text`. For `Text`,
     /// `data` is a NUL-terminated UTF-8 buffer and `len` is its byte length.
     fn ptr_len_struct_type(&self) -> inkwell::types::StructType<'ctx> {
@@ -4719,6 +5058,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 _ => Type::Num,
             },
             Expr::FieldAccess { field, .. } if field == "size" || field == "length" => Type::Num,
+            // A record literal / spread — including a functional-update — takes its type
+            // from the oracle (which resolves the named-vs-anonymous result of a `<-`
+            // spread), so a binding to it mangles / tracks correctly.
+            Expr::Record { .. } | Expr::Spread { .. } => {
+                self.oracle.expr_type(expr).cloned().unwrap_or(Type::Num)
+            }
             _ => Type::Num,
         }
     }

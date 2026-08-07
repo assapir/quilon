@@ -22,6 +22,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
+| `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
 | `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
@@ -463,6 +464,45 @@ r.each(x => print(x))   ~ a range iterates with `.each` like any array
 Both ends are full `Num` expressions (they may be dynamic, not just literals); the
 direction (ascending vs descending) is decided at runtime. (See `examples/ranges.ql`.)
 
+### Spread in literals
+The **prefix** `<-` splices a source's contents into an array or record literal:
+
+- **Array spread** `[<-xs, 4, 5]` builds a new array = every element of `xs`, then
+  `4, 5`. Multiple spreads are allowed and applied left-to-right: `[<-a, <-b]`, or
+  `[0, <-a, <-b, 9]`. The spread source must be an array with the same element type as
+  the rest of the literal; `[]Text`/`[]Num`/nested-array elements all splice correctly.
+  `[<-xs]` on its own is a copy of `xs`.
+- **Record functional-update** `{<-p, x = 9}` builds a new record copying every field of
+  `p`, then applying the overrides. Later entries override earlier ones (left-to-right),
+  and an entry naming a field not in `p` **adds** it. If `p` is a **named** record and the
+  result reproduces that type's fields exactly (only overriding existing fields, adding
+  nothing), the result keeps the **named type and its methods**; otherwise it is an
+  anonymous record.
+
+```quilon
+xs = [1, 2, 3]
+ys = [<-xs, 4, 5]        ~ [1, 2, 3, 4, 5]
+zs = [0, <-xs, <-ys]     ~ [0, 1,2,3, 1,2,3,4,5]
+
+Vec = { x :: Num, y :: Num, sum = => it.x + it.y }
+a = Vec { x = 10, y = 20 }
+b = { <-a, x = 5 }       ~ still a Vec: b.sum() → 25
+```
+
+**Range vs. spread — the disambiguation rule.** `<-` is now BOTH the infix inclusive
+range (`lo <- hi`, between two complete expressions) AND the prefix spread. They are told
+apart purely by **position**: a `<-` that is the **first token of a `[ ]` element or a
+`{ }` field** is a spread; a `<-` that follows a complete expression is the range
+operator. So:
+
+- `[1 <- 4]` is a **one-element** array whose sole element is the range `[1,2,3,4]`
+  (the `<-` follows the complete expression `1`).
+- `[<-xs, 4]` **spreads** `xs` (the `<-` begins the element).
+- Inside a spread the source is a full expression, so `[<-1 <- 4]` spreads the range
+  `1 <- 4` — i.e. `[1, 2, 3, 4]`.
+
+(See `examples/spread.ql`.)
+
 ---
 
 ## Pattern matching
@@ -620,6 +660,7 @@ message instead. Any compile error exits with status 1.
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
 | Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`) | ✅ |
+| Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
