@@ -18,10 +18,10 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M1** | Diagnostics & small wins (readable errors, `Unit` `$`, VS Code extension) | ✅ Complete |
 | **M2** | Type system (setters, user sum types `/`, ad-hoc overloading) | ✅ Complete |
 | **M3** | Closures & functional core | 🔨 In progress |
-| **M4** | Whole-program infra — monomorphization + defunctionalization; authoritative types in codegen | ⬜ Planned |
-| **M5** | Implicit parallelism (CPU) — inferred purity + `rayon`-backed parallel `map`/`filter` | ⬜ Planned |
-| **M6** | M:N green-thread runtime — non-blocking IO (`corosensei` + `mio` + Boehm), staged | ⬜ Planned |
-| **M7** | Polish — `quilon fmt`/linter, standard library, DWARF debug info | ⬜ Planned |
+| **M4** | Whole-program infra — monomorphization; authoritative types in codegen | ⬜ Planned |
+| **M5** | Implicit parallelism (CPU) — parallel array methods from inferred purity | ⬜ Planned |
+| **M6** | M:N green-thread runtime — transparent non-blocking IO | ⬜ Planned |
+| **M7** | Polish — formatter/linter, standard library, debug info | ⬜ Planned |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned. **Critical path:** M4 → M5 → M6 (M6 is the long pole).
 
@@ -58,11 +58,32 @@ Legend: ✅ complete · 🔨 in progress · ⬜ planned. **Critical path:** M4 �
 | Concrete `Result` payload typing | 🔨 |
 | `core.cli` module | ⬜ Planned (blocked on Text methods + Result-payload typing) |
 
-### M4–M7 (planned)
+### M4 — Whole-program infra ⬜
 
-| Stage | Delivers |
-|-------|----------|
-| M4 | Monomorphization + defunctionalization (function values statically visible); retire codegen's lossy `infer_type` in favor of the type-oracle. |
-| M5 | Inferred-purity analysis; parallel `map`/`filter` via `rayon` (GC-registered workers). |
-| M6 | 6a single-thread fibers (`corosensei`) + reactor (`mio`) + Boehm coroutine integration; 6b cross-thread work-stealing. |
-| M7 | `quilon fmt` / linter; standard library; DWARF debug info → real VS Code debugging. |
+| Item | Status |
+|------|--------|
+| Monomorphization + defunctionalization (function values statically visible) | ⬜ |
+| Authoritative types in codegen (retire the lossy `infer_type`; use the type-oracle) | ⬜ |
+
+### M5 — Implicit parallelism (CPU) ⬜
+
+| Item | Status |
+|------|--------|
+| Inferred-purity analysis | ⬜ |
+| Parallel `map` / `filter` | ⬜ |
+
+### M6 — M:N green-thread runtime ⬜
+
+| Item | Status |
+|------|--------|
+| Single-threaded fibers + reactor | ⬜ |
+| Coroutine ↔ GC integration | ⬜ |
+| Cross-thread work-stealing | ⬜ |
+
+### M7 — Polish ⬜
+
+| Item | Status |
+|------|--------|
+| `quilon fmt` / linter | ⬜ |
+| Standard library | ⬜ |
+| Debug info (→ real VS Code debugging) | ⬜ |
