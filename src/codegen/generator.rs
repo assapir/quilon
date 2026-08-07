@@ -3319,7 +3319,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Pattern::Constructor { name, args: _, .. } => {
+            Pattern::Constructor { name, .. } => {
                 // Tagged-union dispatch: a value is `{ i8 tag, <payload> }`; the tag is
                 // the variant's declaration index, looked up from the sum-variant
                 // registry (generalizes the old hardcoded Ok=0/NotOk=1).

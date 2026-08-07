@@ -53,21 +53,43 @@ fn emit_object(program: &Program, obj_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to emit object file: {e}"))
 }
 
-/// Directory holding the running `quilon` binary, where `libquilon_rt.a` is built
-/// alongside it (e.g. `target/debug`). That's the `-L` path the linker needs.
+/// The `-L` directory that holds `libquilon_rt.a` (the `quilon-rt` staticlib).
+///
+/// The crate's cargo build script (`/build.rs`) deterministically places the
+/// archive next to the `quilon` binary and bakes its canonical path into
+/// `QUILON_RT_LIB` (see that file for why the ordinary build doesn't uplift it —
+/// issue #38). We resolve, in order:
+///
+/// 1. `QUILON_RT_LIB` — the path baked at build time (authoritative).
+/// 2. `libquilon_rt.a` next to the running binary — covers relocated binaries and
+///    the test harness, which drops a fresh archive there itself.
 fn runtime_lib_dir() -> Result<PathBuf, String> {
+    // 1. The path baked by the build script, if the archive is still there.
+    if let Some(baked) = option_env!("QUILON_RT_LIB") {
+        let baked = Path::new(baked);
+        if baked.exists()
+            && let Some(dir) = baked.parent()
+        {
+            return Ok(dir.to_path_buf());
+        }
+    }
+
+    // 2. Fall back to looking next to the running binary.
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate quilon binary: {e}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "quilon binary has no parent directory".to_string())?
         .to_path_buf();
-    if !dir.join("libquilon_rt.a").exists() {
-        return Err(format!(
-            "libquilon_rt.a not found next to the quilon binary ({}). Build it with `cargo build`.",
-            dir.display()
-        ));
+    if dir.join("libquilon_rt.a").exists() {
+        return Ok(dir);
     }
-    Ok(dir)
+
+    Err(format!(
+        "libquilon_rt.a not found next to the quilon binary ({}). \
+         Rebuild the compiler with `cargo build --release` (the build script \
+         produces and places the runtime archive automatically).",
+        dir.display()
+    ))
 }
 
 /// Build `program` into a native executable at `out`, linking with `linker`
@@ -100,7 +122,15 @@ pub fn build_native(program: &Program, out: &Path, linker: &str) -> Result<(), S
         .arg("-o")
         .arg(out)
         .status()
-        .map_err(|e| format!("failed to invoke linker `{linker}`: {e}"));
+        .map_err(|e| match e.kind() {
+            // Name the missing binary instead of a bare "No such file or
+            // directory (os error 2)" (issue #38 bonus).
+            std::io::ErrorKind::NotFound => format!(
+                "linker `{linker}` not found on PATH. Install it, or pass \
+                 `--linker <name>` (e.g. `--linker gcc`)."
+            ),
+            _ => format!("failed to invoke linker `{linker}`: {e}"),
+        });
 
     // Drop the intermediate object whether or not linking succeeded.
     let _ = std::fs::remove_file(&obj);

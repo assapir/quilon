@@ -30,11 +30,16 @@ See **[LANGUAGE.md](./LANGUAGE.md)** for the full reference (types, modules, pat
 ## Build & run
 
 ```bash
-cargo build --release            # binary at target/release/quilon
-cargo run -- run   program.ql    # JIT-compile and execute (exit code = the program's result)
-cargo run -- build program.ql    # build a native executable (links libquilon_rt + libgc)
-cargo run -- check program.ql    # typecheck only
+cargo build --release                        # binary at target/release/quilon
+./target/release/quilon run   program.ql     # JIT-compile and execute (exit code = the program's result)
+./target/release/quilon build program.ql     # build a native executable (links libquilon_rt + libgc)
+./target/release/quilon check program.ql     # typecheck only
 ```
+
+`cargo build --release` is all you need: its build script also produces and places
+the runtime static library (`libquilon_rt.a`) next to the `quilon` binary, so
+`quilon build` links it automatically — no extra step. Native builds link with
+`clang` by default; pass `--linker gcc` to use gcc instead.
 
 Requires LLVM 22 and `libgc` (Boehm GC) installed. Contributor and architecture notes are in **[CLAUDE.md](./CLAUDE.md)**.
 
