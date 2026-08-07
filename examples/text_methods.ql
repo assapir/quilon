@@ -62,7 +62,14 @@
   ~ Unicode-aware case mapping, incl. the 1->N mapping "ß" -> "SS".
   usharp = "ß".toUpper() == "SS" ? 1 : 0   ~ 1
 
+  ~ --- []Text is a plain generic array ([]T with T = Text) ---
+  ~ It composes with the array methods (map/reduce over Text elements) ...
+  gmap = "aa,b,ccc".split(",").map(w => w.size).reduce(0, (a, x) => a + x)   ~ 2+1+3 = 6
+  ~ ... and with the array `+` operator: []Text + []Text -> []Text.
+  cat = "a,b".split(",") + "c,d".split(",")   ~ ["a","b","c","d"]
+  gcat = cat.size                              ~ 4
+
   nparts + first + tlen + ts + te + ra + rf + chit + cmiss + idx + nidx + sl1 + sl2 + sl3
-    + up + lo + usplit + uidx + uslice + ucont + usharp
-  ~ 43 (prior block) + ts 4 + te 4 = 51
+    + up + lo + usplit + uidx + uslice + ucont + usharp + gmap + gcat
+  ~ 51 (prior block) + gmap 6 + gcat 4 = 61
 >

@@ -166,6 +166,79 @@ fn to_upper_and_to_lower() {
     );
 }
 
+// ---- []Text is a plain generic array (composes with all array ops + `+`) --
+// `split` returns `[]Text` = the generic `[]T` with `T = Text` (like `[]Num`), NOT a
+// special-cased type. These prove it behaves like any other array.
+
+#[test]
+fn split_result_indexes_and_sizes_like_any_array() {
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"a,b,c\".split(\",\")\n  xs.size * 10 + (xs[1] == \"b\" ? 1 : 0)\n>",
+        31,
+    );
+}
+
+#[test]
+fn split_result_indexing_yields_a_text_element() {
+    // Indexing returns a real `Text` (full Text API works on the element).
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"aa,bbb,c\".split(\",\")\n  xs[1].size\n>",
+        3,
+    );
+}
+
+#[test]
+fn split_result_supports_map_and_reduce() {
+    // map over `[]Text` -> `[]Num` (element type Text from the oracle), then fold.
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"aa,b,ccc\".split(\",\")\n  xs.map(w => w.size).reduce(0, (a, x) => a + x)\n>",
+        6,
+    );
+}
+
+#[test]
+fn split_result_supports_filter() {
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"a,bb,c,dd\".split(\",\")\n  xs.filter(w => w.size == 2).size\n>",
+        2,
+    );
+}
+
+#[test]
+fn split_result_supports_find_and_at() {
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"a,bb,ccc\".split(\",\")\n  f = xs.find(w => w.size == 3) ? | Ok(v) => v.size | NotOk(_) => 0\n  a = xs.at(1) ? | Ok(v) => v.size | NotOk(_) => 0\n  oob = xs.at(9) ? | Ok(_) => 1 | NotOk(_) => 5\n  f * 100 + a * 10 + oob\n>",
+        325,
+    );
+}
+
+#[test]
+fn split_result_supports_each_and_chains() {
+    // `.each` returns the receiver array, so it chains (here back into `.size`).
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"a,b,c\".split(\",\")\n  ys = xs.each(w => w)\n  ys.size\n>",
+        3,
+    );
+}
+
+#[test]
+fn empty_separator_grapheme_split_composes_with_map() {
+    // A grapheme split is also a plain `[]Text`: map its one-grapheme pieces to sizes.
+    assert_exit(
+        "^ = () -> Num => <\n  xs = \"héllo\".split(\"\")\n  xs.map(g => g.size).reduce(0, (a, x) => a + x)\n>",
+        6, // "héllo" = 6 bytes total across 5 single-grapheme pieces
+    );
+}
+
+#[test]
+fn split_results_concatenate_via_array_plus() {
+    // `[]Text + []Text -> []Text` (the #51 array `+`): split(...) + split(...) composes.
+    assert_exit(
+        "^ = () -> Num => <\n  c = \"a,b\".split(\",\") + \"c,d,e\".split(\",\")\n  c.size * 10 + (c[3] == \"d\" ? 1 : 0)\n>",
+        51,
+    );
+}
+
 // ---- reservation / overloading -------------------------------------------
 
 #[test]

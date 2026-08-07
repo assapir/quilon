@@ -90,7 +90,10 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 
 Like the [array methods](#array-methods), these are **reserved on `Text`**: a user may
 define a same-named function/overload on another type, but on a `Text` receiver the
-built-in always wins. There is **no `join`** — collapse a `[]Text` with `reduce` + `+`.
+built-in always wins. `split`'s result is a **plain generic array** — `[]Text` is just
+`[]T` with `T = Text` (like `[]Num`), so it composes with `.size`, indexing `[i]`, the
+[array methods](#array-methods), and array `+` concatenation. There is **no `join`** —
+collapse a `[]Text` with `reduce` + `+`.
 
 (See `examples/text.ql` and `examples/text_methods.ql`.)
 
