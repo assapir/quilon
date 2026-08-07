@@ -398,6 +398,24 @@ fn assert_check_err(src: &str) {
     );
 }
 
+// --- Type-annotated bindings inside a `< >` block (parity with top-level). ---
+
+#[test]
+fn block_level_annotated_bindings_parse_and_run() {
+    // `name :: Type = expr` must work INSIDE a block exactly as at top level. Covers
+    // Num, Text, Bool, and an array (`[]Num`) annotation.
+    assert_exit(
+        "^ = () -> Num => <\n  n :: Num = 5\n  t :: Text = \"abcd\"\n  ok :: Bool = t.size == 4\n  xs :: []Num = [1, 2, 3]\n  ok ? n + t.size + xs.size : 0\n>",
+        12,
+    );
+}
+
+#[test]
+fn block_level_annotated_binding_wrong_type_is_a_type_error() {
+    // A block-level annotation must be enforced just like a top-level one.
+    assert_check_err("^ = () -> Num => <\n  x :: Text = 5\n  0\n>");
+}
+
 // --- Ad-hoc overloading: exact-type dispatch over an overload set. ---
 
 #[test]

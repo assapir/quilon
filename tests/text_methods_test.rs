@@ -232,7 +232,7 @@ fn empty_separator_grapheme_split_composes_with_map() {
 
 #[test]
 fn split_results_concatenate_via_array_plus() {
-    // `[]Text + []Text -> []Text` (the #51 array `+`): split(...) + split(...) composes.
+    // `[]Text + []Text -> []Text`: split(...) + split(...) concatenates like any array.
     assert_exit(
         "^ = () -> Num => <\n  c = \"a,b\".split(\",\") + \"c,d,e\".split(\",\")\n  c.size * 10 + (c[3] == \"d\" ? 1 : 0)\n>",
         51,

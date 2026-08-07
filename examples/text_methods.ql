@@ -1,75 +1,70 @@
 ~ Built-in `Text` methods (compiler-provided, chainable), each backed by a runtime
 ~ intrinsic. UTF-8 correct; grapheme-based where an index/length is user-visible.
-~   split(sep)                -> []Text   (empty sep -> graphemes; empties preserved)
-~   trim() / trimStart() / trimEnd() -> Text   (strip both / leading / trailing whitespace)
-~   replace(from, to, { all = Bool }) -> Text  (all=true replaces every match, false the first)
-~   contains(sub)             -> Bool
-~   indexOf(sub)              -> Ok(Num) grapheme index / NotOk   (no -1 sentinel)
-~   slice(start, end)         -> Text     (grapheme indices, clamped; end exclusive)
-~   toUpper() / toLower()     -> Text     (Unicode-aware case mapping)
+~   split(sep)                        -> []Text  (empty sep -> graphemes; empties preserved)
+~   trim() / trimStart() / trimEnd()  -> Text    (strip both / leading / trailing whitespace)
+~   replace(from, to, { all = Bool }) -> Text    (all=true replaces every match, false the first)
+~   contains(sub)                     -> Bool
+~   indexOf(sub)                      -> Ok(Num) grapheme index / NotOk   (no -1 sentinel)
+~   slice(start, end)                 -> Text    (grapheme indices, clamped; end exclusive)
+~   toUpper() / toLower()             -> Text    (Unicode-aware case mapping)
 ^ = () -> Num => <
-  s = "Hello, World"
+  s :: Text = "Hello, World"
 
-  ~ split on ", " -> ["Hello", "World"]; then read an element back as a real Text.
-  parts = s.split(", ")
-  nparts = parts.size                     ~ 2
-  first = parts.at(0) ?                    ~ Ok("Hello")
-    | Ok(w)    => w == "Hello" ? 1 : 0     ~ 1  (split pieces are genuine Text)
+  ~ "Hello, World" splits on ", " into ["Hello", "World"]; at(0) reads the first piece.
+  parts :: []Text = s.split(", ")
+  nparts :: Num = parts.size                ~ 2
+  first :: Num = parts.at(0) ?
+    | Ok(w)    => w == "Hello" ? 1 : 0       ~ the piece is a Text, equal to "Hello"
     | NotOk(_) => 0
 
   ~ trim strips both sides; trimStart / trimEnd strip one side only.
-  tlen = "  hi  ".trim().size              ~ 2
-  ts = "  hi  ".trimStart().size           ~ "hi  " -> 4
-  te = "  hi  ".trimEnd().size             ~ "  hi" -> 4
+  trimmed :: Text = "  hi  ".trim()          ~ "hi"
+  tlen :: Num = trimmed.size                 ~ 2
+  ts :: Num = "  hi  ".trimStart().size      ~ "hi  " -> 4
+  te :: Num = "  hi  ".trimEnd().size        ~ "  hi" -> 4
 
-  ~ replace takes an options record { all :: Bool }: all occurrences vs only the first
-  ~ (different from/to lengths make the choice observable).
-  ra = "a-a-a".replace("a", "xx", { all = true }).size     ~ "xx-xx-xx" -> 8
-  rf = "a-a-a".replace("a", "xx", { all = false }).size    ~ "xx-a-a"   -> 6
+  ~ replace with { all = true } rewrites every match; { all = false } only the first.
+  ra :: Num = "a-a-a".replace("a", "xx", { all = true }).size     ~ "xx-xx-xx" -> 8
+  rf :: Num = "a-a-a".replace("a", "xx", { all = false }).size    ~ "xx-a-a"   -> 6
 
-  ~ contains: a hit contributes, a miss must contribute nothing.
-  chit  = s.contains("World") ? 1 : 0      ~ 1
-  cmiss = s.contains("zzz") ? 10 : 0       ~ 0  (a false hit would add 10)
+  ~ contains: "Hello, World" contains "World" but not "zzz".
+  hasWorld :: Bool = s.contains("World")     ~ true
+  chit :: Num = hasWorld ? 1 : 0             ~ 1
+  cmiss :: Num = s.contains("zzz") ? 10 : 0  ~ 0
 
   ~ indexOf: Ok(grapheme index) when found, NotOk when absent.
-  idx = "Hello".indexOf("llo") ?           ~ Ok(2)
-    | Ok(i)    => i                         ~ 2
+  idx :: Num = "Hello".indexOf("llo") ?      ~ Ok(2)
+    | Ok(i)    => i                           ~ 2
     | NotOk(_) => 0
-  nidx = "Hello".indexOf("z") ?            ~ NotOk
-    | Ok(_)    => 50                        ~ a wrong Ok would add 50
-    | NotOk(_) => 3                         ~ 3
+  nidx :: Num = "Hello".indexOf("z") ?       ~ NotOk
+    | Ok(_)    => 50
+    | NotOk(_) => 3                           ~ 3
 
-  ~ slice: grapheme indices, clamped to bounds, end exclusive.
-  sl1 = "Hello".slice(1, 4).size           ~ "ell"  -> 3
-  sl2 = "Hello".slice(-5, 100).size        ~ clamp  -> 5
-  sl3 = "Hello".slice(3, 1).size           ~ empty  -> 0
+  ~ slice over grapheme indices, end exclusive; out-of-range indices clamp.
+  sl1 :: Num = "Hello".slice(1, 4).size      ~ "ell"  -> 3
+  sl2 :: Num = "Hello".slice(-5, 100).size   ~ clamps to the whole string -> 5
+  sl3 :: Num = "Hello".slice(3, 1).size      ~ empty (end <= start) -> 0
 
-  ~ case mapping, verified by content equality.
-  up = "abc".toUpper() == "ABC" ? 1 : 0    ~ 1
-  lo = "ABC".toLower() == "abc" ? 1 : 0    ~ 1
+  ~ toUpper / toLower map case; compared here by content equality.
+  up :: Num = "abc".toUpper() == "ABC" ? 1 : 0   ~ 1
+  lo :: Num = "ABC".toLower() == "abc" ? 1 : 0   ~ 1
 
-  ~ --- Unicode correctness: multibyte content, grapheme-based indices ---
-  ~ split on a 4-byte emoji separator -> ["a","b","c"].
-  usplit = "a🌍b🌍c".split("🌍").size      ~ 3
-  ~ indexOf returns a GRAPHEME index: "b" is grapheme 2 (past the 4-byte 🌍), not byte 5.
-  uidx = "a🌍b".indexOf("b") ?
-    | Ok(i)    => i                         ~ 2
+  ~ Multibyte content, with grapheme-based indices throughout:
+  usplit :: Num = "a🌍b🌍c".split("🌍").size      ~ splits on the 4-byte emoji -> ["a","b","c"], 3
+  uidx :: Num = "a🌍b".indexOf("b") ?          ~ "b" is grapheme 2 (past the 4-byte 🌍)
+    | Ok(i)    => i                             ~ 2
     | NotOk(_) => 99
-  ~ slice over graphemes never splits a multibyte codepoint mid-byte.
-  uslice = "héllo".slice(1, 3) == "él" ? 1 : 0   ~ 1
-  ~ contains matches a multibyte substring.
-  ucont = "a🌍b".contains("🌍") ? 1 : 0    ~ 1
-  ~ Unicode-aware case mapping, incl. the 1->N mapping "ß" -> "SS".
-  usharp = "ß".toUpper() == "SS" ? 1 : 0   ~ 1
+  uslice :: Num = "héllo".slice(1, 3) == "él" ? 1 : 0   ~ "él" — no codepoint is split mid-byte
+  ucont :: Num = "a🌍b".contains("🌍") ? 1 : 0          ~ matches the multibyte substring -> 1
+  usharp :: Num = "ß".toUpper() == "SS" ? 1 : 0         ~ "ß" uppercases to two characters "SS"
 
-  ~ --- []Text is a plain generic array ([]T with T = Text) ---
-  ~ It composes with the array methods (map/reduce over Text elements) ...
-  gmap = "aa,b,ccc".split(",").map(w => w.size).reduce(0, (a, x) => a + x)   ~ 2+1+3 = 6
-  ~ ... and with the array `+` operator: []Text + []Text -> []Text.
-  cat = "a,b".split(",") + "c,d".split(",")   ~ ["a","b","c","d"]
-  gcat = cat.size                              ~ 4
+  ~ []Text is a plain generic array: map/reduce over its Text elements ...
+  gmap :: Num = "aa,b,ccc".split(",").map(w => w.size).reduce(0, (a, x) => a + x)   ~ 2+1+3 = 6
+  ~ ... and `+` concatenates two []Text into one.
+  cat :: []Text = "a,b".split(",") + "c,d".split(",")   ~ ["a", "b", "c", "d"]
+  gcat :: Num = cat.size                     ~ 4
 
   nparts + first + tlen + ts + te + ra + rf + chit + cmiss + idx + nidx + sl1 + sl2 + sl3
     + up + lo + usplit + uidx + uslice + ucont + usharp + gmap + gcat
-  ~ 51 (prior block) + gmap 6 + gcat 4 = 61
+  ~ = 61
 >

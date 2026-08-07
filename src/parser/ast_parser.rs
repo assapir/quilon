@@ -533,11 +533,14 @@ impl<'a> Parser<'a> {
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
             // Try to parse as item first (for nested declarations / reassignments).
-            // `name = …` is an immutable binding; `name := …` is a mutable bind/reassign.
+            // `name = …` is an immutable binding; `name := …` is a mutable bind/reassign;
+            // `name :: Type = …` is an annotated binding. `::` at statement start is
+            // unambiguously a binding annotation (there is no expression-level `::`), so
+            // delegating to `parse_item` keeps block-level bindings identical to top-level.
             if self.check(&TokenKind::Ident)
                 && matches!(
                     self.peek_ahead(1).kind,
-                    TokenKind::Assign | TokenKind::MutAssign
+                    TokenKind::Assign | TokenKind::MutAssign | TokenKind::TypeAnnotation
                 )
             {
                 // This looks like a declaration. A nested `name = params => body` stays an
@@ -1702,6 +1705,27 @@ mod tests {
         let tokens = Lexer::tokenize("x :: Num = 42").unwrap();
         let result = parse(&tokens);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_block_level_annotated_binding() {
+        // A `name :: Type = expr` binding INSIDE a `< >` block must parse and carry its
+        // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression:
+        // the block parser used to only recognize `=`/`:=` bindings, choking on `::`.)
+        use crate::ast::{Expr, Statement};
+        let tokens = Lexer::tokenize("^ = () -> Num => <\n  n :: Num = 5\n  n\n>").unwrap();
+        let program = parse(&tokens).expect("block-level annotated binding should parse");
+        let Item::FunctionDecl(func) = &program.items[0] else {
+            panic!("expected the `^` function decl");
+        };
+        let Expr::Block { stmts, .. } = &func.body else {
+            panic!("expected a block body");
+        };
+        let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+            panic!("expected the first statement to be an annotated VarDecl");
+        };
+        assert_eq!(decl.name, "n");
+        assert_eq!(decl.type_annotation, Some(crate::ast::Type::Num));
     }
 
     #[test]
