@@ -61,6 +61,7 @@ pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
         use crate::runtime::intrinsics;
         let mappings: &[(&str, usize)] = &[
             ("__gc_init", intrinsics::__gc_init as *const () as usize),
+            ("__exit", intrinsics::__exit as *const () as usize),
             ("__alloc", intrinsics::__alloc as *const () as usize),
             (
                 "__text_length",

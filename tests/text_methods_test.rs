@@ -20,10 +20,6 @@ static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 /// and prints `expect_stderr` to stderr. Used for the fail-loud runtime paths (an invalid
 /// `replace` argument) — the abort exits the process, so these must NOT run in-process
 /// (that would kill the test runner). Needs only the JIT (no C toolchain).
-///
-/// NOTE: the runtime abort is wired to core.test's `__exit` intrinsic (issue #63); until
-/// that merges the runtime only prints and returns unchanged, so the callers below are
-/// `#[ignore]`d.
 fn assert_run_aborts(src: &str, expect_stderr: &str) {
     let seq = CRASH_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir =
@@ -182,7 +178,6 @@ fn replace_literal_count_over_occurrences_is_a_compile_error() {
 
 // Runtime fail-loud (non-literal, so not caught at compile time) — abort, no silent no-op.
 #[test]
-#[ignore = "runtime abort pending core.test __exit (#63)"]
 fn replace_runtime_count_zero_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  n = 3 - 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
@@ -191,7 +186,6 @@ fn replace_runtime_count_zero_aborts() {
 }
 
 #[test]
-#[ignore = "runtime abort pending core.test __exit (#63)"]
 fn replace_runtime_count_over_occurrences_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
@@ -200,7 +194,6 @@ fn replace_runtime_count_over_occurrences_aborts() {
 }
 
 #[test]
-#[ignore = "runtime abort pending core.test __exit (#63)"]
 fn replace_runtime_empty_from_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replace(f, \"x\", 1).size\n>",
@@ -209,7 +202,6 @@ fn replace_runtime_empty_from_aborts() {
 }
 
 #[test]
-#[ignore = "runtime abort pending core.test __exit (#63)"]
 fn replace_all_runtime_empty_from_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replaceAll(f, \"x\").size\n>",

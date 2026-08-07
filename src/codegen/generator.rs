@@ -1185,8 +1185,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             return false;
         }
         // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
+        // The intrinsic names here MUST stay in sync with those intercepted in
+        // `generate_call` (`print`/`eprint`/`write`/`__exit`).
         if self.sum_variants.contains_key(name.as_str())
-            || matches!(name.as_str(), "print" | "eprint" | "write")
+            || matches!(name.as_str(), "print" | "eprint" | "write" | "__exit")
         {
             return false;
         }
@@ -2448,6 +2450,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__alloc" => ptr.fn_type(&[i64t.into()], false),
             // void __gc_init() — initialize the Boehm GC.
             "__gc_init" => void.fn_type(&[], false),
+            // void __exit(i32 code) — terminate the process with `code`. Backs the
+            // `__exit(n)` primitive that `core.test`'s `assert` calls to fail. Never
+            // returns (the runtime calls libc `exit`).
+            "__exit" => void.fn_type(&[ctx.i32_type().into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
@@ -2586,6 +2592,37 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
+    /// Lower the `__exit(code)` primitive: convert the `Num` `code` to an `i32` and
+    /// call the `__exit` runtime intrinsic, which terminates the process. This is the
+    /// single native primitive `core.test` builds on (its `assert` calls `__exit(101)`
+    /// on failure). The intrinsic never returns, but the call is left as ordinary
+    /// (non-`unreachable`) flow so it composes wherever an expression is expected —
+    /// e.g. a `< >` block statement or a ternary arm inside `assert` — without
+    /// clashing with the surrounding construct's own terminator. The code after it is
+    /// dead at runtime (the process has exited). Yields `$` (Unit).
+    fn generate_exit(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "__exit expects exactly 1 argument, got {}",
+                args.len()
+            ));
+        }
+        let code = self.generate_expr(&args[0])?;
+        let BasicValueEnum::FloatValue(code_f) = code else {
+            return Err("__exit expects a Num exit code".to_string());
+        };
+        let code_i32 = self
+            .builder
+            .build_float_to_signed_int(code_f, self.context.i32_type(), "exit_code")
+            .map_err(|e| format!("Failed to convert __exit code: {:?}", e))?;
+        let exit_fn = self.get_intrinsic("__exit")?;
+        self.builder
+            .build_call(exit_fn, &[code_i32.into()], "")
+            .map_err(|e| format!("Failed to build __exit call: {:?}", e))?;
+        // `__exit` never returns; yield Unit so the call composes in expression position.
+        Ok(self.unit_value().into())
+    }
+
     /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
     /// `content` to file descriptor `fd` (a `Num`), with no trailing newline.
     /// Yields `Num` (bytes written).
@@ -2680,6 +2717,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             "write" => return self.generate_write(args),
+            // `__exit(code)` — the single native primitive `core.test` builds on,
+            // lowered to the `__exit` runtime intrinsic (terminates the process).
+            "__exit" => return self.generate_exit(args),
             _ => {}
         }
 
@@ -5442,6 +5482,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// default) when it can't tell — overloaded dispatch then simply won't match and a
     /// clear "function not found" surfaces, never a silent miscompile.
     fn infer_type(&self, expr: &Expr) -> Type {
+        // Prefer the type checker's authoritative type for this exact node (the oracle) —
+        // the same source codegen's read sites use. It knows shapes the structural fallback
+        // below can't (an `arr[i]` element, a `.split(…)`/`.replace(…)` result, a field
+        // read), so an overloaded call taking one of those (e.g. `assertEq(parts[0], …)`)
+        // mangles to the right member. Falls back to structural inference only when the
+        // oracle has no entry — the IR-only codegen tests that skip the type-check pass.
+        if let Some(ty) = self.oracle.expr_type(expr) {
+            return ty.clone();
+        }
         match expr {
             Expr::Number { .. } => Type::Num,
             Expr::String { .. } => Type::Text,
@@ -5513,6 +5562,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expr::If { then, .. } => self.infer_type(then),
+            // A `?`/`|` match's result type is whatever its arms yield. Codegen can't
+            // easily unify the arms, so take the checker's recorded type from the oracle
+            // (as record/spread do); this lets a local bound to a match — e.g.
+            // `ok = r ? | Ok(_) => true | NotOk(_) => false` — mangle correctly when it
+            // later feeds an overloaded call such as `assert(ok)`.
+            Expr::Match { .. } => self.oracle.expr_type(expr).cloned().unwrap_or(Type::Num),
+            // Unary `!` is logical-not (Bool); unary `-` is numeric negation (Num). So a
+            // local bound to `!ok` mangles as Bool when it feeds an overloaded call.
+            Expr::UnaryOp { op, .. } => match op {
+                crate::ast::UnaryOp::Not => Type::Bool,
+                crate::ast::UnaryOp::Neg => Type::Num,
+            },
             Expr::Block { stmts, .. } => match stmts.last() {
                 Some(crate::ast::Statement::Expr(tail)) => self.infer_type(tail),
                 _ => Type::Num,

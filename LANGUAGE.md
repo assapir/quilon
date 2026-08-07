@@ -6,6 +6,22 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 ---
 
+## Design principles
+
+Quilon's identity, and the rules that guide its design:
+
+- **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. (`for` is the lone surviving word — a known wart, slated for removal.)
+- **Symbols mirror notation that already exists.** A symbol should reuse a notation the world already has rather than invent one: `/` separates sum-type alternatives the way you already write "red / green / blue". The symbol is both the shorthand and its own justification.
+- **The playful choice wins.** When a design decision is a genuine toss-up, the more delightful option is picked — characterful, memorable symbols (`^` for the entry point, `$` for Unit) over bland ones. Syntax is allowed to have a sense of humor.
+- **Deliberate simplicity — reject complexity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
+- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value) it is a **compile error**; otherwise a **clear runtime error** (stderr, non-zero exit). Silent behavior is undebuggable, so Quilon refuses it. (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
+- **No magic.** Behavior is explicit and visible — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
+- **Immutable by default.** `=` binds immutably, `:=` binds mutably; because `:=` is visible wherever mutation happens, a method is a setter exactly when its body writes `it.field := …`.
+- **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
+- **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (`print(x)`, never `print(show(x))`).
+
+---
+
 ## Symbols
 
 | Symbol | Meaning | Example |
@@ -610,7 +626,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 >> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- `core.io` is the one built-in module (its members are real functions).
+- The built-in modules are `core.io` (I/O) and `core.test` (assertions); their members are real functions.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -637,6 +653,44 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 >
 ```
 There is no `println` — `print` owns the newline; `write` is the raw form. (See `examples/io.ql`.)
+
+---
+
+## Assertions — `<< core.test`
+
+In-language assertions for **self-verifying programs and examples**. A holding
+assertion does nothing; a **failing** one prints a message to **stderr** and exits
+the process with code **101** (the Rust-panic convention, deliberately distinct from
+the small result codes examples use as their normal exit status), so a broken program
+fails loudly in CI.
+
+| Function | Effect |
+|----------|--------|
+| `assert(cond :: Bool) -> $` | The primitive. If `cond` is false, print `assertion failed` to stderr and exit `101`; otherwise do nothing. Returns `$` (Unit). |
+| `assert(cond :: Bool, opts :: AssertOpts) -> $` | Same, but on failure print `opts.message` instead of the default. An [overload](#overloading) of `assert`. |
+| `AssertOpts` | Options record for `assert`: `{ message :: Text }`. The extensible knob (more options may be added later). Records are nominal, so construct it by name: `AssertOpts { message = "..." }`. |
+| `assertEq(actual, expected) -> $` | Assert `actual == expected`; on failure prints **expected** then **actual** to stderr before failing. An [overload set](#overloading) over `Num`/`Text`/`Bool`. |
+| `assertNotEq(a, b) -> $` | Assert `a != b`; prints the (equal) value on failure. Overloaded over `Num`/`Text`/`Bool`. |
+| `assertOk(r :: Result) -> $` | Assert `r` is `Ok`; fail on `NotOk`. |
+| `assertNotOk(r :: Result) -> $` | Assert `r` is `NotOk`; fail on `Ok`. |
+
+```quilon
+<< core.test
+^ = () -> $ => <
+  assert(1 + 1 == 2)
+  assert(1 + 1 == 2, AssertOpts { message = "math is broken" })
+  assertEq(6 * 7, 42)
+  assertNotEq("a", "b")
+  assertOk([10, 20].at(0))       ~ Ok in bounds
+  assertNotOk([10, 20].at(9))    ~ NotOk out of bounds
+>
+```
+
+`assertEq`/`assertNotEq` render values with `eprint`, so their failure messages are
+precise for `Num`/`Text`/`Bool`; other types (records, arrays, sum payloads) get only
+the generic `assertion failed` line until a `toText` exists. The whole module is
+pure Quilon (`corelib/test.ql`) built on `assert`, `==`/`!=`, and pattern-matching —
+its only native primitive is a process-exit intrinsic. (See `examples/assert_demo.ql`.)
 
 ---
 
@@ -756,8 +810,9 @@ message instead. Any compile error exits with status 1.
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
-| Modules: `<< core.io`, file-path imports, `>>` exports | ✅ |
+| Modules: `<< core.io`, `<< core.test`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
+| Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk`; fail → exit 101) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
@@ -775,7 +830,7 @@ message instead. Any compile error exits with status 1.
 
 - **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
 - A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
-- **No generics or `while` loops.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io` built-in + file-path imports).
+- **No generics or `while` loops.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across multiple nesting levels, and capturing-then-calling another closure. Deferred to a later milestone (they need the closure's type threaded through inference / defunctionalization): capturing a *polymorphic* value, *generic* closures, passing a closure **as a function parameter**, and **returning a closure from a function**. A closure used in an unsupported position is rejected at compile time (e.g. an unannotated function parameter that is called reports `Not a function`), never miscompiled.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.

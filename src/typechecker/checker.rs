@@ -611,6 +611,20 @@ impl TypeChecker {
                 );
             }
         }
+
+        // `__exit(code :: Num) -> $` — the internal process-exit primitive `core.test`
+        // builds on (its `assert` calls `__exit(101)` to fail). Codegen lowers it to the
+        // `__exit` runtime intrinsic. Registered as a builtin so a corelib `.ql` (and,
+        // by the same token, any program) can call it by name; it is deliberately
+        // `__`-prefixed to mark it internal — there is no user-facing `exit`.
+        self.add_overload(
+            "__exit",
+            Overload {
+                params: vec![Type::Num],
+                ret: Type::Unit,
+                builtin: true,
+            },
+        );
     }
 
     /// Add one member to the overload set `name`.

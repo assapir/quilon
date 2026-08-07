@@ -105,6 +105,9 @@ impl Loader {
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(include_str!("../corelib/io.ql")),
+        // core.test — assertions (`assert` + wrappers) for self-verifying programs.
+        // Depends transitively on core.io (its wrappers render values via `eprint`).
+        "core.test" => Some(include_str!("../corelib/test.ql")),
         // Text is a built-in primitive type (like Num/Bool/arrays): its operations
         // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
         // there is intentionally no `core.text` module.

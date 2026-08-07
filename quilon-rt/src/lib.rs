@@ -16,7 +16,7 @@
 //! directive below only drives rustc's own links, not a downstream gcc invocation).
 
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use unicode_segmentation::UnicodeSegmentation;
 
 // Link the Boehm GC and tie it to these symbol references so the linker keeps
@@ -136,6 +136,32 @@ pub extern "C" fn __print_text_fd(fd: i64, ptr: *const c_char) {
     write_to_fd(fd, s.as_bytes());
 }
 
+/// Terminate the running program with exit status `code`.
+///
+/// This is the ONLY native piece of `core.test`: Quilon cannot yet exit/abort
+/// mid-program in-language, so the exit primitive lives here as a generic
+/// `__exit(code)`. Everything else about assertions — `assert` and its
+/// `assertEq`/`assertNotEq`/`assertOk`/`assertNotOk` wrappers — is pure Quilon in
+/// `corelib/test.ql`, calling `eprint` for the message and `__exit(101)` to fail.
+/// (`101` is the Rust-panic convention `core.test` uses for a failed assertion,
+/// deliberately distinct from the small result codes examples use as their normal
+/// exit status.) Codegen lowers a `__exit(n)` call to a call of this symbol; see
+/// `CodeGenerator::generate_exit`.
+///
+/// Never returns. Uses libc `exit(3)` directly rather than `std::process::exit` for
+/// the same reason `write_to_fd` uses raw `write(2)`: an AOT-linked native binary
+/// enters through the LLVM-generated C `main`, so the Rust std runtime is never
+/// initialized.
+#[unsafe(no_mangle)]
+pub extern "C" fn __exit(code: c_int) -> ! {
+    // SAFETY: libc `exit` is always available in a linked C runtime; it terminates
+    // the process and never returns.
+    unsafe extern "C" {
+        fn exit(code: c_int) -> !;
+    }
+    unsafe { exit(code) }
+}
+
 /// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
 ///
 /// Uses libc `write(2)` directly rather than `std::fs::File`. AOT-linked native
@@ -168,19 +194,15 @@ fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
     total as i64
 }
 
-/// Report an invalid `replace`/`replaceAll` request (empty `from`, non-positive `count`,
-/// or a `count` exceeding the occurrences present) by writing `msg` + newline to stderr.
-///
-/// TODO(#52/#63): this must ABORT the process with exit code 101 once core.test's single
-/// native `__exit` intrinsic lands on `main` (`__exit(101)`), matching an assertion
-/// failure — the fail-loud contract. Until #63 merges we do NOT emit our own exit
-/// primitive; this only prints, the caller returns the text unchanged, and the
-/// runtime-abort tests are `#[ignore]`d. The runtime detection lives here (not in codegen)
-/// because the `count > occurrences` case needs the occurrence count.
-fn replace_misuse(msg: &str) {
+/// Abort on an invalid `replace`/`replaceAll` request (empty `from`, non-positive `count`,
+/// or a `count` exceeding the occurrences present): write `msg` + newline to stderr, then
+/// terminate the process with exit code 101 via the shared `__exit` intrinsic — the same
+/// fail-loud path an assertion failure takes. Never returns. The detection lives in the
+/// runtime (not codegen) because the `count > occurrences` case needs the occurrence count.
+fn replace_misuse(msg: &str) -> ! {
     write_to_fd(2, msg.as_bytes());
     write_to_fd(2, b"\n");
-    // TODO(#63): call `__exit(101)` here (never returns) instead of falling through.
+    __exit(101)
 }
 
 /// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
@@ -402,7 +424,6 @@ pub extern "C" fn __text_replace_all(
     let from = text_str(fptr, flen);
     if from.is_empty() {
         replace_misuse("replace: `from` must not be empty");
-        return alloc_text(hay.as_bytes()); // TODO(#63): unreachable once `__exit` aborts.
     }
     let to = text_str(tptr, tlen);
     alloc_text(hay.replace(&*from, &to).as_bytes())
@@ -427,15 +448,12 @@ pub extern "C" fn __text_replace_n(
 ) -> QlSlice {
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
-    // Fail-loud on invalid input. TODO(#63): `replace_misuse` must abort (exit 101) via
-    // core.test's `__exit`; until it does, we print and return the text unchanged.
+    // Fail loudly on invalid input — no clamp, no silent no-op (see `replace_misuse`).
     if from.is_empty() {
         replace_misuse("replace: `from` must not be empty");
-        return alloc_text(hay.as_bytes());
     }
     if count <= 0 {
         replace_misuse(&format!("replace: count must be positive, got {count}"));
-        return alloc_text(hay.as_bytes());
     }
     // Non-overlapping, left→right occurrences — exactly what `replacen` consumes.
     let occurrences = hay.matches(&*from).count() as i64;
@@ -443,7 +461,6 @@ pub extern "C" fn __text_replace_n(
         replace_misuse(&format!(
             "replace: count {count} exceeds {occurrences} occurrences"
         ));
-        return alloc_text(hay.as_bytes());
     }
     let to = text_str(tptr, tlen);
     alloc_text(hay.replacen(&*from, &to, count as usize).as_bytes())
@@ -545,9 +562,10 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 20] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 21] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
+        core::mem::transmute(__exit as extern "C" fn(c_int) -> !),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
         core::mem::transmute(__text_length as extern "C" fn(*const u8, i64) -> i64),
         core::mem::transmute(__text_cmp as extern "C" fn(*const u8, i64, *const u8, i64) -> i32),
