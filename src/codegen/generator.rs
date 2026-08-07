@@ -487,12 +487,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // can't tell them apart — dispatching on it would silently call a `Text` param
         // with the argv array). The supported signatures are `^()`,
         // `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)` (plus the legacy
-        // `^(argc :: Num, argv :: Num)`). `[]T` is `Type::Array`; a legacy numeric param
-        // is `Type::Num`.
-        let is_array = |t: &Type| matches!(t, Type::Array(_));
-        // The valid modern signatures all take `[]Text`-shaped params; we only require the
-        // ARRAY shape here (the type checker has already verified the element types).
-        let shape: Vec<bool> = entry_params.iter().map(is_array).collect();
+        // `^(argc :: Num, argv :: Num)`). We match on the EXACT element types — the
+        // runtime builds `Text`/`[]Text` elements, so a `[]Num` (or any other element)
+        // param must NOT reach the array arms, or it would receive mis-sized elements.
+        let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
+        let is_text_pairs = |t: &Type| matches!(t, Type::Array(e) if is_text_array(e.as_ref()));
 
         // `argc` arrives as the C `int` (i32); widen it to the i64 the runtime expects.
         let argc_i64 = self
@@ -535,21 +534,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             )
         };
 
-        let result = match shape.as_slice() {
+        let result = match entry_params {
             // `^() -> Num`
             [] => self
                 .builder
                 .build_call(user_entry, &[], "entry_result")
                 .map_err(|e| format!("Failed to call entry point: {:?}", e))?,
             // `^(args :: []Text) -> Num`
-            [true] => {
+            [a] if is_text_array(a) => {
                 let args = build_args(self)?;
                 self.builder
                     .build_call(user_entry, &[args.into()], "entry_result")
                     .map_err(|e| format!("Failed to call entry point: {:?}", e))?
             }
             // `^(args :: []Text, env :: [][]Text) -> Num`
-            [true, true] => {
+            [a, e] if is_text_array(a) && is_text_pairs(e) => {
                 let args = build_args(self)?;
                 let env = build_env(self)?;
                 self.builder
@@ -558,7 +557,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // Legacy `^(argc :: Num, argv :: Num) -> Num`: argc as a Num, argv a `0`
             // placeholder. Deprecated in favour of `^(args :: []Text)`.
-            [false, false] if entry_params.iter().all(|t| *t == Type::Num) => {
+            [Type::Num, Type::Num] => {
                 let argc_as_f64 = self
                     .builder
                     .build_signed_int_to_float(argc, self.context.f64_type(), "argc_f64")
@@ -572,9 +571,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     )
                     .map_err(|e| format!("Failed to call entry point: {:?}", e))?
             }
-            // Any other shape (e.g. `^(x :: Text)`, `^(a :: Num, b :: Text)`,
-            // `^(env :: [][]Text)` without args, 3+ params) is rejected with a clear
-            // diagnostic instead of a silent miscompile or an LLVM verification crash.
+            // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
+            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [][]Text)` without
+            // args, 3+ params) is rejected with a clear diagnostic instead of a silent
+            // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
         };
 
@@ -3439,7 +3439,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Pattern::Constructor { name, args: _, .. } => {
+            Pattern::Constructor { name, .. } => {
                 // Tagged-union dispatch: a value is `{ i8 tag, <payload> }`; the tag is
                 // the variant's declaration index, looked up from the sum-variant
                 // registry (generalizes the old hardcoded Ok=0/NotOk=1).
