@@ -50,10 +50,14 @@ A feature/change is not done until **all** of these are true:
 - **An example** — every new language feature ships a runnable `examples/*.ql`, wired into the
   examples gate (`tests/examples_test.rs`) so it compiles + runs + asserts an exit code under JIT and
   native AOT (clang **and** gcc), and referenced exactly once from `LANGUAGE.md`. (The user is
-  emphatic: examples are mandatory, never stripped.)
+  emphatic: examples are mandatory, never stripped.) Write examples **as explicitly as possible** —
+  explicit type annotations on bindings (`parts :: []Text = …`), full forms, no reliance on inference
+  — *unless the example's specific purpose is to demonstrate that something can be implicit*. Example
+  comments describe **what** the code does/demonstrates, **never** design decisions or rationale.
 - **`/code-review` + `/simplify`** run before committing, findings addressed. (When the review skill
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
+- **No issue/PR references in code.** No source, test, example, or corelib file (`.ql` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — `LANGUAGE.md`/`README`/`ROADMAP` — may reference issues; code files may not.)
 
 **`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
 add items, not to restructure, not even to mark their own item done. The **orchestrator** updates a

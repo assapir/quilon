@@ -58,12 +58,12 @@ jobs:
       # package.json; this repo has no root package.json, so point the action
       # at it explicitly (action-setup defaults to the repo-root cwd).
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.0.10
         with:
           package_json_file: editors/vscode/package.json
 
       - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: pnpm
@@ -94,7 +94,7 @@ jobs:
         run: pnpm exec vsce package
 
       - name: Upload .vsix artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quilon-vsix
           path: editors/vscode/*.vsix
@@ -126,12 +126,12 @@ jobs:
       # package.json; this repo has no root package.json, so point the action
       # at it explicitly (action-setup defaults to the repo-root cwd).
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.0.10
         with:
           package_json_file: editors/vscode/package.json
 
       - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: pnpm

@@ -13,4 +13,4 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 # Grapheme-cluster counting for `Text.length`.
-unicode-segmentation = "1"
+unicode-segmentation = "1.13"
