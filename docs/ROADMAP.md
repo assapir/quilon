@@ -88,3 +88,4 @@ Legend: ✅ complete · 🔨 in progress · ⬜ planned. **Critical path:** M4 �
 | Standard library | ⬜ |
 | Debug info (→ real VS Code debugging) | ⬜ |
 | Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
+| Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
