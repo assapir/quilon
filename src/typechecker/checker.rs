@@ -1286,6 +1286,62 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Type-check a function-literal (lambda) expression and return its
+    /// `Type::Function`. The lambda's body is checked in a fresh scope layered over the
+    /// enclosing environment, so it may reference (capture) outer bindings — `Environment`
+    /// scopes are a stack and `lookup` walks outward. Capture-by-value vs by-reference is
+    /// decided downstream (codegen) from each captured name's binding operator; the
+    /// checker only needs the outer binding to be visible and concrete.
+    ///
+    /// Closures are MONOMORPHIC in M3: parameters are concrete-typed (annotated, else the
+    /// `Num` default, matching top-level functions) and captured values are concrete. The
+    /// language has no type variables, so there is nothing polymorphic to capture; generic
+    /// closures + defunctionalization are deferred to M4.
+    fn check_lambda(
+        &mut self,
+        params: &[Param],
+        return_type: Option<&Type>,
+        body: &Expr,
+    ) -> Result<Type, TypeError> {
+        let param_types: Vec<Type> = params
+            .iter()
+            .map(|p| {
+                p.type_annotation
+                    .as_ref()
+                    .map(|t| self.resolve_type(t))
+                    .unwrap_or(Type::Num)
+            })
+            .collect();
+
+        self.env.push_scope();
+        for (param, param_type) in params.iter().zip(param_types.iter()) {
+            self.env.define(
+                param.name.clone(),
+                param_type.clone(),
+                false,
+                param.span.clone(),
+            )?;
+        }
+        let body_type = self.infer_expr(body)?;
+        self.env.pop_scope();
+
+        // Honor an explicit `-> Type` annotation; otherwise the body's inferred type is
+        // the return type.
+        let ret = match return_type {
+            Some(annotated) => {
+                let annotated = self.resolve_type(annotated);
+                self.check_type_compatibility(&annotated, &body_type, body.span())?;
+                annotated
+            }
+            None => body_type,
+        };
+
+        Ok(Type::Function {
+            params: param_types,
+            return_type: Box::new(ret),
+        })
+    }
+
     /// Refine the return type of the overload member of `name` whose parameter types
     /// are `params` (set during body inference for an unannotated overloaded def).
     fn update_overload_return(&mut self, name: &str, params: &[Type], ret: Type) {
@@ -1339,6 +1395,13 @@ impl TypeChecker {
 
             Expr::Call { func, args, span } => self.check_call(func, args, span),
 
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => self.check_lambda(params, return_type.as_ref(), body),
+
             Expr::Pipeline { left, right, span } => {
                 // `left |> right` injects `left` as the first argument of the
                 // right-hand call: `x |> f` => `f(x)`, `x |> f(a)` => `f(x, a)`.
@@ -1386,15 +1449,6 @@ impl TypeChecker {
             }
 
             Expr::Match { expr, arms, span } => self.check_match(expr, arms, span),
-
-            // A lambda is only valid as a direct argument to a built-in array method,
-            // where `check_array_method` types it via `check_lambda_arg`. Reaching it
-            // through general inference means it was used as a first-class value — which
-            // Quilon does not support (no closures). Surface a clear error.
-            Expr::Lambda { span, .. } => Err(TypeError::NotAFunction {
-                got: Type::Unit,
-                span: span.clone(),
-            }),
 
             Expr::FieldAccess { expr, field, span } => {
                 let expr_type = self.infer_expr(expr)?;
