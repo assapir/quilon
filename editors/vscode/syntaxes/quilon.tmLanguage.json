@@ -127,7 +127,7 @@
           "match": "->"
         },
         {
-          "name": "keyword.operator.arrow.iterate.quilon",
+          "name": "keyword.operator.arrow.range.quilon",
           "match": "<-"
         },
         {

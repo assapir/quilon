@@ -1,19 +1,14 @@
 // Parser implementation - simple recursive descent
 
 use crate::ast::{
-    BinOp, Expr, ForPattern, FunctionDecl, Import, Item, MethodDecl, ModulePath, Param, Program,
-    TypeDecl, TypeDef, UnaryOp, VarDecl,
+    BinOp, Expr, FunctionDecl, Import, Item, MethodDecl, ModulePath, Param, Program, TypeDecl,
+    TypeDef, UnaryOp, VarDecl,
 };
 use crate::lexer::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
-    /// While true, a bare `ident =>` / `(params) =>` is NOT taken as a function literal.
-    /// Set only while parsing a `for`-loop's collection, where the `=>` that follows the
-    /// collection introduces the loop BODY (`for n <- xs => body`) and must not be
-    /// swallowed by a lambda. Lambdas in such positions can still be written parenthesized.
-    no_lambda: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,11 +27,7 @@ impl std::error::Error for ParseError {}
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self {
-            tokens,
-            pos: 0,
-            no_lambda: false,
-        }
+        Self { tokens, pos: 0 }
     }
 
     pub fn parse(tokens: &'a [Token]) -> Result<Program, ParseError> {
@@ -579,9 +570,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        if self.check(&TokenKind::For) {
-            return self.parse_for_loop();
-        }
         self.parse_assignment()
     }
 
@@ -605,56 +593,6 @@ impl<'a> Parser<'a> {
         }
 
         Ok(expr)
-    }
-
-    /// Parse a for-loop: `for <pattern> <- <collection> => <body>`, where
-    /// `<pattern>` is `item` or `(item, index)`. Produces an `Expr::ForLoop`.
-    fn parse_for_loop(&mut self) -> Result<Expr, ParseError> {
-        let start = self.current_span();
-        self.expect(&TokenKind::For)?;
-
-        // Pattern: `item` or `(item, index)`.
-        let pattern = if self.check(&TokenKind::ParenOpen) {
-            self.advance(); // consume '('
-            let item = self.expect_ident()?;
-            self.expect(&TokenKind::Comma)?;
-            let index = self.expect_ident()?;
-            self.expect(&TokenKind::ParenClose)?;
-            let end = self.previous_span();
-            ForPattern::ItemIndex {
-                item,
-                index,
-                span: Span::new(start.start, end.end),
-            }
-        } else {
-            let item = self.expect_ident()?;
-            let span = self.previous_span();
-            ForPattern::Item { name: item, span }
-        };
-
-        // `<- collection`. The collection is a full expression (may itself be a
-        // pipeline); it stops at the `=>` that introduces the body. Suppress bare-lambda
-        // detection here so `for n <- xs => body` reads `xs` as the collection and the
-        // `=>` as the loop arrow, not as a `xs => body` lambda.
-        self.expect(&TokenKind::LeftArrow)?;
-        self.no_lambda = true;
-        let collection = self.parse_ternary()?;
-
-        // `=> body` — a single expression or a `< ... >` block.
-        self.expect(&TokenKind::Arrow)?;
-        let body = if self.check(&TokenKind::BlockOpen) {
-            self.parse_block()?
-        } else {
-            self.parse_expr()?
-        };
-
-        let span = Span::new(start.start, body.span().end);
-        Ok(Expr::ForLoop {
-            collection: Box::new(collection),
-            pattern,
-            body: Box::new(body),
-            span,
-        })
     }
 
     fn parse_ternary(&mut self) -> Result<Expr, ParseError> {
@@ -860,8 +798,6 @@ impl<'a> Parser<'a> {
 
     /// Infix range `lo <- hi` → inclusive `[]Num` (see the `Expr::Range` node).
     /// Non-associative: consumes at most one `<-`, so `a <- b <- c` is rejected.
-    /// Only general expression position reaches here; the `for` header consumes its
-    /// own `<-` in `parse_for_loop`, so `for n <- coll` never parses as a range.
     fn parse_range(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_pipeline()?;
 
@@ -1149,10 +1085,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        // `no_lambda` is a ONE-SHOT guard: it suppresses a function-literal only at this
-        // leading primary (the for-loop collection), not in any deeper sub-expression, so
-        // nested parenthesized lambdas still parse. Consume it here.
-        let allow_lambda = !std::mem::replace(&mut self.no_lambda, false);
         let token = self.peek();
 
         match &token.kind {
@@ -1188,7 +1120,7 @@ impl<'a> Parser<'a> {
                 // A bare single-parameter lambda: `x => body` or `x :: Type => body`.
                 // Detected before consuming the ident as a plain reference: an ident
                 // followed by `=>` (or `:: Type =>`) is a function literal, not a value.
-                if allow_lambda && self.looks_like_bare_lambda() {
+                if self.looks_like_bare_lambda() {
                     return self.parse_lambda_expr();
                 }
 
@@ -1236,7 +1168,7 @@ impl<'a> Parser<'a> {
                 // `(a, b) => body`, `(n :: Num) => body` — vs. an ordinary parenthesized
                 // expression `(a + b)`. Distinguished by scanning to the matching `)`
                 // and checking whether `=>` / `->` follows.
-                if allow_lambda && self.paren_starts_lambda() {
+                if self.paren_starts_lambda() {
                     return self.parse_lambda_expr();
                 }
                 self.advance();
@@ -2032,84 +1964,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_for_loop_simple() {
-        let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => print(n)").unwrap();
-        let result = parse(&tokens);
-        if let Err(e) = result.as_ref() {
-            eprintln!("Error: {:?}", e);
-        }
-        assert!(result.is_ok());
-
-        let program = result.unwrap();
-        if let Item::FunctionDecl(func) = &program.items[0] {
-            if let Expr::ForLoop { pattern, .. } = &func.body {
-                match pattern {
-                    crate::ast::ForPattern::Item { name, .. } => {
-                        assert_eq!(name, "n");
-                    }
-                    _ => panic!("Expected simple item pattern"),
-                }
-            } else {
-                panic!("Expected for loop expression");
-            }
-        }
-    }
-
-    #[test]
-    fn test_parse_for_loop_with_index() {
-        let tokens = Lexer::tokenize("test = => for (val, i) <- items => print(val)").unwrap();
-        let result = parse(&tokens);
-        if let Err(e) = result.as_ref() {
-            eprintln!("Error: {:?}", e);
-        }
-        assert!(result.is_ok());
-
-        let program = result.unwrap();
-        if let Item::FunctionDecl(func) = &program.items[0] {
-            if let Expr::ForLoop { pattern, .. } = &func.body {
-                match pattern {
-                    crate::ast::ForPattern::ItemIndex { item, index, .. } => {
-                        assert_eq!(item, "val");
-                        assert_eq!(index, "i");
-                    }
-                    _ => panic!("Expected item-index pattern"),
-                }
-            } else {
-                panic!("Expected for loop expression");
-            }
-        }
-    }
-
-    #[test]
-    fn test_parse_for_loop_with_block_body() {
-        let tokens =
-            Lexer::tokenize("test = => for n <- [1, 2, 3] => < doubled = n * 2 doubled >").unwrap();
-        let result = parse(&tokens);
-        if let Err(e) = result.as_ref() {
-            eprintln!("Error: {:?}", e);
-        }
-        assert!(result.is_ok());
-
-        let program = result.unwrap();
-        if let Item::FunctionDecl(func) = &program.items[0] {
-            if let Expr::ForLoop { body, .. } = &func.body {
-                // Body should be a block
-                match body.as_ref() {
-                    Expr::Block { .. } => {
-                        // Success - body is a block
-                    }
-                    _ => panic!("Expected block expression in for loop body"),
-                }
-            } else {
-                panic!("Expected for loop expression");
-            }
-        }
-    }
-
-    #[test]
     fn test_parse_infix_range() {
-        // `1 <- 4` in general expression position parses as an Expr::Range,
-        // NOT a for-loop (no `for` keyword precedes it).
+        // `1 <- 4` in general expression position parses as an Expr::Range.
         let tokens = Lexer::tokenize("r = 1 <- 4").unwrap();
         let program = parse(&tokens).expect("range should parse");
         if let Item::VarDecl(v) = &program.items[0] {
@@ -2124,30 +1980,18 @@ mod tests {
     }
 
     #[test]
-    fn test_infix_range_does_not_capture_for_header() {
-        // CRITICAL coexistence: the `for` header's `<-` must still parse as a
-        // for-loop, never as an infix range. `for n <- [1,2,3]` is a ForLoop.
-        let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => print(n)").unwrap();
-        let program = parse(&tokens).expect("for loop should still parse");
-        if let Item::FunctionDecl(func) = &program.items[0] {
-            assert!(
-                matches!(func.body, Expr::ForLoop { .. }),
-                "for header must parse as ForLoop, not Range"
-            );
+    fn test_for_is_now_a_plain_identifier() {
+        // The `for` loop was removed: `for` is no longer a keyword, so it lexes as
+        // an ordinary identifier and a `for n <- ...` header no longer forms a loop.
+        // Here `for` is just a bound name.
+        let tokens = Lexer::tokenize("for = 42").unwrap();
+        let program = parse(&tokens).expect("`for` should parse as a plain binding");
+        if let Item::VarDecl(v) = &program.items[0] {
+            assert_eq!(v.name, "for");
+            assert!(matches!(v.value, Expr::Number { .. }));
         } else {
-            panic!("expected a function decl");
+            panic!("expected a var decl binding the identifier `for`");
         }
-    }
-
-    #[test]
-    fn test_parse_nested_for_loops_with_blocks() {
-        let tokens =
-            Lexer::tokenize("test = => for row <- [[1, 2]] => < for val <- row => val >").unwrap();
-        let result = parse(&tokens);
-        if let Err(e) = result.as_ref() {
-            eprintln!("Error: {:?}", e);
-        }
-        assert!(result.is_ok());
     }
 
     #[test]

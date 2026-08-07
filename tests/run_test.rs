@@ -166,19 +166,24 @@ fn run_print_text_then_exit() {
     );
 }
 
-// --- Loop: `for <pattern> <- <collection> => <body>` (decoupled from `|>`) ---
+// --- Iteration via the `.each` array method (the `for`-loop replacement) ---
 
 #[test]
-fn run_for_loop_new_syntax_executes() {
-    // The for-loop is side-effecting and yields Num 0; this proves the new
-    // `for n <- coll => body` surface syntax parses, type-checks, and runs.
-    assert_exit("^ = () -> Num => for n <- [1, 2, 3] => n", 0);
+fn run_each_executes() {
+    // `.each` runs a body for its side effects and returns the receiver; this
+    // proves the array-method iteration path parses, type-checks, and runs.
+    assert_exit(
+        "^ = () -> Num => <\n  xs = [1, 2, 3]\n  xs.each(n => n)\n  0\n>",
+        0,
+    );
 }
 
 #[test]
-fn run_for_loop_with_index_in_block() {
+fn run_each_with_block_body() {
+    // The `.each` lambda body may be a `< ... >` block. The block-closing `>`
+    // must be the last token on its line, so the call's `)` goes on the next line.
     assert_exit(
-        "^ = () -> Num => <\n  for (val, i) <- [10, 20, 30] => <\n    x = val + i\n    x\n  >\n>",
+        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  xs.each(val => <\n    x = val + 1\n    x\n  >\n  )\n  0\n>",
         0,
     );
 }
@@ -457,13 +462,13 @@ fn run_operator_definition_after_expression_bodied_item_parses() {
 }
 
 #[test]
-fn run_overloaded_call_on_loop_variable_dispatches_by_element_type() {
-    // Regression (review BUG4): an overloaded call on a `for` loop variable must
-    // dispatch by the element type (Num here) — codegen tracks the loop var's type.
+fn run_overloaded_call_on_each_element_dispatches_by_element_type() {
+    // Regression (review BUG4): an overloaded call on a `.each` element must
+    // dispatch by the element type (Num here) — codegen tracks the element type.
     // The Text member would mis-handle a Num; resolving to the Num member yields
-    // inc(11) = 12 for the final element.
+    // inc(11) = 12 for the final element. `last` is captured by reference (`:=`).
     assert_exit(
-        "inc = (n :: Num) -> Num => n + 1\ninc = (t :: Text) -> Num => t.size\n^ = () -> Num => <\n  last := 0\n  for n <- [10, 20, 11] => <\n    last := inc(n)\n  >\n  last\n>",
+        "inc = (n :: Num) -> Num => n + 1\ninc = (t :: Text) -> Num => t.size\n^ = () -> Num => <\n  last := 0\n  xs = [10, 20, 11]\n  xs.each(n => <\n    last := inc(n)\n  >\n  )\n  last\n>",
         12,
     );
 }

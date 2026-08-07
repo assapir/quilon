@@ -1,5 +1,5 @@
 ~ Ranges: infix `<-` builds an inclusive `[]Num`. It is array sugar — the result
-~ IS a `[]Num`, so it has `.size`, indexes with `[i]`, and iterates with `for`.
+~ IS a `[]Num`, so it has `.size`, indexes with `[i]`, and iterates with `.each`.
 ~   `1 <- 4` -> [1, 2, 3, 4]   (inclusive endpoints)
 ~   `4 <- 1` -> [4, 3, 2, 1]   (descends when the left end is larger)
 << core.io
@@ -18,8 +18,8 @@
   top    = desc[0]              ~ 4
   bottom = desc[3]              ~ 1
 
-  ~ A range also drives a `for` loop, since it's just a `[]Num`.
-  for n <- asc => print(n)      ~ prints 1, 2, 3, 4
+  ~ A range iterates with `.each`, since it's just a `[]Num`.
+  asc.each(n => print(n))       ~ prints 1, 2, 3, 4
 
   count + lo + hi + top + bottom   ~ 4 + 1 + 4 + 4 + 1 = exit 14
 >

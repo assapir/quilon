@@ -2,7 +2,8 @@
 //   `1 <- 4` -> [1, 2, 3, 4]      (inclusive)
 //   `4 <- 1` -> [4, 3, 2, 1]      (descends when the left end is larger)
 // It is array sugar — no distinct Range type — so the result composes with
-// `.size`, indexing, and `for`. These tests drive the full pipeline (lex ->
+// `.size`, indexing, and the array methods (`.each`). These tests drive the
+// full pipeline (lex ->
 // parse -> typecheck -> codegen -> JIT) and assert the real exit code.
 
 use quilon::jit;
@@ -73,25 +74,13 @@ fn range_with_dynamic_ends() {
     );
 }
 
-/// A range is just a `[]Num`, so it drives a `for` loop like any array.
+/// A range is just a `[]Num`, so it iterates with `.each` like any array.
 #[test]
-fn range_drives_for_loop() {
-    // for over [1,2,3] yields Num 0 (loop result), then return the size to prove
-    // the range materialized.
+fn range_drives_each() {
+    // `.each` over [1,2,3] runs for side effects and returns the receiver; then
+    // return the size to prove the range materialized.
     assert_exit(
-        "^ = () -> Num => <\n  r = 1 <- 3\n  for n <- r => n\n  r.size\n>",
-        3,
-    );
-}
-
-/// CRITICAL coexistence: the new infix `<-` must NOT break the `for` header's
-/// own `<-`. `for n <- [...]` must still parse, type-check, and run end-to-end
-/// exactly as before. (Parse-shape coexistence — that the header parses as a
-/// `ForLoop`, not a `Range` — is asserted separately in the parser unit tests.)
-#[test]
-fn for_loop_over_literal_array_still_runs() {
-    assert_exit(
-        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  for n <- xs => n\n  xs.size\n>",
+        "^ = () -> Num => <\n  r = 1 <- 3\n  r.each(n => n)\n  r.size\n>",
         3,
     );
 }

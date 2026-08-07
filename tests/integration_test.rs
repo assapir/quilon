@@ -9,13 +9,10 @@ use quilon::typechecker::TypeChecker;
 fn test_all_features_integration() {
     let source = r#"
         ^ = () -> Num => <
-            ~ For loops with blocks
+            ~ Iteration via array methods (each runs a body for side effects)
             arr = [1, 2, 3]
-            for n <- arr => <
-                doubled = n * 2
-                doubled
-            >
-            
+            arr.each(n => n * 2)
+
             ~ Sum type constructors
             result = Ok(42)
             value = result ?
@@ -40,9 +37,11 @@ fn test_all_features_integration() {
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
 
-    // Generate code
+    // Generate code. Array methods (`.each`) need the type oracle populated, so
+    // build the generator via `with_oracle` (the real compilation path).
     let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "integration_test");
+    let mut generator = CodeGenerator::with_oracle(&context, "integration_test", &program)
+        .expect("oracle setup failed");
     let result = generator.generate(&program);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 }

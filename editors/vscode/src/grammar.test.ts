@@ -48,7 +48,7 @@ const MULTI_CHAR_OPERATORS: ReadonlyArray<readonly [op: string, scope: string]> 
   ["->", "keyword.operator.arrow.return.quilon"],
   [":=", "keyword.operator.assignment.mutable.quilon"],
   ["|>", "keyword.operator.pipeline.quilon"],
-  ["<-", "keyword.operator.arrow.iterate.quilon"],
+  ["<-", "keyword.operator.arrow.range.quilon"],
   ["::", "keyword.operator.type-annotation.quilon"],
   ["==", "keyword.operator.comparison.quilon"],
   ["!=", "keyword.operator.comparison.quilon"],

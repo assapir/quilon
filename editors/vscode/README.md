@@ -10,7 +10,7 @@ compiles to native code via LLVM. Files use the `.ql` extension.
   - Comments (`~ to end of line`), strings (`"…"` with escapes), numbers, `true`/`false`, wildcard `_`.
   - The entry point `^`, module import `<<` (with the imported path), and export marker `>>`.
   - Operators: `|>` (pipe), `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
-    `=>` (function body / match arm), `->` (return type), `<-` (loop iterate),
+    `=>` (function body / match arm), `->` (return type), `<-` (inclusive range),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,
     logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`, `|>`,
     `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`) is highlighted as a **single**

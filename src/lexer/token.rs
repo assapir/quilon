@@ -88,9 +88,6 @@ pub enum TokenKind {
     #[token("while")]
     While,
 
-    #[token("for")]
-    For,
-
     #[token("_")]
     Underscore,
 
@@ -263,7 +260,6 @@ impl fmt::Display for TokenKind {
             TokenKind::False => write!(f, "false"),
             TokenKind::If => write!(f, "if"),
             TokenKind::While => write!(f, "while"),
-            TokenKind::For => write!(f, "for"),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Ident => write!(f, "Ident"),
             TokenKind::Assign => write!(f, "="),

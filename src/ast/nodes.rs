@@ -270,19 +270,10 @@ pub enum Expr {
         span: Span,
     },
 
-    // For loop (for pattern <- collection => body)
-    ForLoop {
-        collection: Box<Expr>,
-        pattern: ForPattern,
-        body: Box<Expr>,
-        span: Span,
-    },
-
     // Inclusive range `lo <- hi`: materialized `[]Num` sugar. `1 <- 4` is
     // `[1, 2, 3, 4]`; when `lo > hi` it descends (`4 <- 1` is `[4, 3, 2, 1]`).
     // There is no distinct Range type — the result IS a `[]Num`, so it composes
-    // with array ops / `.size` / indexing. (The infix `<-`; the `for` header's
-    // `<-` is parsed separately and never produces this node.)
+    // with array ops / `.size` / indexing.
     Range {
         start: Box<Expr>,
         end: Box<Expr>,
@@ -313,7 +304,6 @@ impl Expr {
             Expr::Record { span, .. } => span,
             Expr::Constructor { span, .. } => span,
             Expr::SumConstructor { span, .. } => span,
-            Expr::ForLoop { span, .. } => span,
             Expr::Range { span, .. } => span,
         }
     }
@@ -360,19 +350,6 @@ pub enum Pattern {
         span: Span,
     },
     Wildcard {
-        span: Span,
-    },
-}
-
-/// Pattern for for loops - supports both `item` and `(item, index)`
-#[derive(Debug, Clone, PartialEq)]
-pub enum ForPattern {
-    /// Single binding: item
-    Item { name: String, span: Span },
-    /// Tuple binding: (item, index)
-    ItemIndex {
-        item: String,
-        index: String,
         span: Span,
     },
 }

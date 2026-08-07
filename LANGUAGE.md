@@ -21,14 +21,14 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 | `<<` | Import a module | `<< core.io` |
 | `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
-| `for n <- xs => body` | Loop over a collection | `for n <- [1,2,3] => print(n)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
 | `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `~` | Comment (to end of line) | `~ a note` |
 
-There are **no keywords**: `if`/`while`/`for`/`return` etc. are all expressed with symbols.
+There are **no keywords**: `if`/`return` etc. are all expressed with symbols, and there
+are no loop constructs at all — iteration is via [array methods and recursion](#iteration--array-methods--recursion).
 
 ---
 
@@ -428,13 +428,22 @@ x |> f(a)       ~ ≡ f(x, a)
 ```
 (See `examples/pipeline.ql`.)
 
-### Loops — `for n <- collection => body`
-Iterate a collection for side effects (returns `Num` 0):
+### Iteration — array methods + recursion
+Quilon has **no `for`/`while` loop**. A collection is iterated with the built-in
+[array methods](#array-methods): `.each` runs a body for its side effects (the direct
+replacement for a side-effecting loop), and `.map`/`.filter`/`.reduce` transform or fold
+without any mutable accumulator. Each takes a lambda the compiler inlines per element:
 ```quilon
-for n <- [1, 2, 3] => print(n)
-for (val, i) <- xs => print(i)   ~ with index
+nums = [1, 2, 3]
+nums.each(n => print(n))              ~ side effects; returns the receiver (chainable)
+
+sum = nums
+  .map(n => n * 2)                    ~ [2, 4, 6]
+  .reduce(0, (acc, n) => acc + n)     ~ 12
 ```
-The body may be a single expression or a `< >` block. (See `examples/for_loop.ql`.)
+When iteration doesn't fit a method, use **recursion**: a self-tail-call is
+[guaranteed to be lowered to a loop](#tail-self-recursion-is-optimized-to-a-loop-guaranteed),
+so even deep recursion runs in constant stack. (See `examples/iteration.ql`.)
 
 ### Ranges — infix `lo <- hi`
 The infix `<-` operator builds an **inclusive** `[]Num`:
@@ -444,19 +453,15 @@ The infix `<-` operator builds an **inclusive** `[]Num`:
 5 <- 5          ~ [5]            (single point)
 ```
 It is pure **array sugar** — there is no distinct `Range` type; the result *is* a
-`[]Num`, so it composes with `.size`, indexing `[i]`, and `for` loops:
+`[]Num`, so it composes with `.size`, indexing `[i]`, and the [array methods](#array-methods):
 ```quilon
 r = 2 <- 5      ~ [2, 3, 4, 5]
 n = r.size      ~ 4   (inclusive count = |hi - lo| + 1)
 first = r[0]    ~ 2
-for x <- 1 <- 3 => print(x)   ~ a range drives a loop like any array
+r.each(x => print(x))   ~ a range iterates with `.each` like any array
 ```
 Both ends are full `Num` expressions (they may be dynamic, not just literals); the
 direction (ascending vs descending) is decided at runtime. (See `examples/ranges.ql`.)
-
-> Note: the infix range `<-` is distinct from the `for` header's `<-`
-> (`for n <- collection => …`). The `for` form is the loop binder; the infix form,
-> *between two value expressions*, is the range constructor.
 
 ---
 
@@ -529,7 +534,7 @@ generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
   array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
   (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and `for` loops work on them. (The
+Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them. (The
 legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
 compiles for backward compatibility but is superseded by `args :: []Text`.) Any other
 `^` signature (e.g. a non-`Text` array element, or an unexpected parameter) is a
@@ -614,7 +619,6 @@ message instead. Any compile error exits with status 1.
 | Guaranteed self-tail-call optimization (tail self-recursion → loop, constant stack) | ✅ |
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Pipe `\|>` (first-arg injection) | ✅ |
-| `for n <- collection => body` loops | ✅ |
 | Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`) | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |

@@ -4,6 +4,16 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Removed
+
+- **Breaking:** removed the `for n <- collection => body` loop (and its
+  `for (item, index) <- …` form). Iteration is now expressed with the built-in
+  array methods — `.each` for side effects, `.map`/`.filter`/`.reduce` for
+  transforms/folds — and with recursion (a self-tail-call is guaranteed to lower
+  to a loop, so deep recursion runs in constant stack). `for` is no longer a
+  keyword; it lexes as an ordinary identifier. This also retires the `for`-body
+  `:=` accumulation bug. See `examples/iteration.ql`.
+
 ### Changed
 
 - **Breaking:** removed the `mut` keyword. Mutability is now the `:=` operator,

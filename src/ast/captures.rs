@@ -11,7 +11,7 @@
 //! the set of enclosing names (`outer`): a `:=` to an outer name is a use (capture), a
 //! `:=` to a new name is a local. It never needs to resolve types.
 
-use super::nodes::{Expr, ForPattern, Item, Pattern, Statement};
+use super::nodes::{Expr, Item, Pattern, Statement};
 use std::collections::HashSet;
 
 /// The ordered, de-duplicated names a lambda captures: references in its body to names in
@@ -156,25 +156,6 @@ fn collect(
             for a in args {
                 collect(a, local, outer, seen, out);
             }
-        }
-        Expr::ForLoop {
-            collection,
-            pattern,
-            body,
-            ..
-        } => {
-            collect(collection, local, outer, seen, out);
-            let mut inner = local.clone();
-            match pattern {
-                ForPattern::Item { name, .. } => {
-                    inner.insert(name.clone());
-                }
-                ForPattern::ItemIndex { item, index, .. } => {
-                    inner.insert(item.clone());
-                    inner.insert(index.clone());
-                }
-            }
-            collect(body, &mut inner, outer, seen, out);
         }
     }
 }
