@@ -2437,6 +2437,37 @@ impl<'ctx> CodeGenerator<'ctx> {
             // { ptr, i64 } __envp_to_pairs(i8** envp) — build a `[][]Text` (array of
             // 2-element `[]Text` `[key, value]` pairs) from the C envp.
             "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
+            // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
+            // { ptr, i64 } __text_trim / __text_to_upper / __text_to_lower (i8*, i64).
+            "__text_trim" | "__text_to_upper" | "__text_to_lower" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into()], false),
+            // i64 __text_contains / __text_index_of (i8* hay, i64, i8* sub, i64).
+            "__text_contains" | "__text_index_of" => {
+                i64t.fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false)
+            }
+            // { ptr, i64 } __text_split(i8* hay, i64, i8* sep, i64) -> `[]Text`.
+            "__text_split" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
+            // { ptr, i64 } __text_slice(i8*, i64, i64 start, i64 end).
+            "__text_slice" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
+            // { ptr, i64 } __text_replace(i8* hay,i64, i8* from,i64, i8* to,i64, i64 all).
+            "__text_replace" => self.ptr_len_struct_type().fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
             other => return Err(format!("Unknown runtime intrinsic: {}", other)),
         };
         Ok(self.module.add_function(name, fn_type, None))
@@ -2613,6 +2644,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             && matches!(self.oracle.expr_type(&args[0]), Some(Type::Array(_)))
         {
             return self.generate_array_method(func_name, args);
+        }
+
+        // Built-in Text methods — RESERVED on `Text`, mirroring the array-method block:
+        // dispatch only when the receiver (`args[0]`) is a `Text` (per the oracle), so a
+        // same-named user overload on another type is never diverted. Lowercase/camelCase
+        // names never collide with (Capitalized) sum constructors.
+        if crate::ast::is_text_method(func_name)
+            && !args.is_empty()
+            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Text))
+        {
+            return self.generate_text_method(func_name, args);
         }
 
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
@@ -3422,6 +3464,191 @@ impl<'ctx> CodeGenerator<'ctx> {
             "at" => self.array_at(&args[1], elem_llvm, data_ptr, size),
             other => Err(format!("unknown array method `{other}`")),
         }
+    }
+
+    /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver). Each is
+    /// lowered to its `quilon-rt` intrinsic; `split` yields the `[]Text` `{ptr,i64}`
+    /// struct the intrinsic builds, and `indexOf` builds an `Ok(Num)`/`NotOk` `Result`.
+    fn generate_text_method(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let (recv_ptr, recv_len) = self.extract_text(&args[0])?;
+
+        // Call a struct-returning ({ptr,i64}) Text intrinsic with the given metadata args.
+        let call_struct = |this: &mut Self,
+                           intr: &str,
+                           call_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>]|
+         -> Result<BasicValueEnum<'ctx>, String> {
+            let f = this.get_intrinsic(intr)?;
+            Ok(this
+                .builder
+                .build_call(f, call_args, "txt_m")
+                .map_err(|e| format!("Failed to call {intr}: {:?}", e))?
+                .as_any_value_enum()
+                .into_struct_value()
+                .into())
+        };
+
+        match method {
+            "trim" => call_struct(self, "__text_trim", &[recv_ptr.into(), recv_len.into()]),
+            "toUpper" => call_struct(self, "__text_to_upper", &[recv_ptr.into(), recv_len.into()]),
+            "toLower" => call_struct(self, "__text_to_lower", &[recv_ptr.into(), recv_len.into()]),
+            "split" => {
+                let (sp, sl) = self.extract_text(&args[1])?;
+                call_struct(
+                    self,
+                    "__text_split",
+                    &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
+                )
+            }
+            "replace" => {
+                let (fp, fl) = self.extract_text(&args[1])?;
+                let (tp, tl) = self.extract_text(&args[2])?;
+                // `all` is a Bool (i1); widen to the i64 flag the intrinsic expects.
+                let all_i1 = self.generate_expr(&args[3])?.into_int_value();
+                let all = self
+                    .builder
+                    .build_int_z_extend(all_i1, self.context.i64_type(), "all_flag")
+                    .map_err(|e| format!("Failed to widen replace flag: {:?}", e))?;
+                call_struct(
+                    self,
+                    "__text_replace",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        fp.into(),
+                        fl.into(),
+                        tp.into(),
+                        tl.into(),
+                        all.into(),
+                    ],
+                )
+            }
+            "slice" => {
+                let start = self.text_index_arg(&args[1], "slice_start")?;
+                let end = self.text_index_arg(&args[2], "slice_end")?;
+                call_struct(
+                    self,
+                    "__text_slice",
+                    &[recv_ptr.into(), recv_len.into(), start.into(), end.into()],
+                )
+            }
+            "contains" => {
+                let (sp, sl) = self.extract_text(&args[1])?;
+                let f = self.get_intrinsic("__text_contains")?;
+                let r = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
+                        "txt_contains",
+                    )
+                    .map_err(|e| format!("Failed to call __text_contains: {:?}", e))?
+                    .as_any_value_enum()
+                    .into_int_value();
+                // i64 0/1 -> i1 Bool.
+                Ok(self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        r,
+                        r.get_type().const_zero(),
+                        "contains_bool",
+                    )
+                    .map_err(|e| format!("Failed to build contains bool: {:?}", e))?
+                    .into())
+            }
+            "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
+            other => Err(format!("unknown text method `{other}`")),
+        }
+    }
+
+    /// Evaluate a `Text` expression and split it into its `(data_ptr, byte_len)` fields —
+    /// the shared primitive for lowering Text-method calls, whose intrinsics take a `Text`
+    /// as its two fields (mirrors the extraction in `generate_text_compare`).
+    fn extract_text(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let val = self.generate_expr(expr)?;
+        let BasicValueEnum::StructValue(s) = val else {
+            return Err("Text method receiver/argument must be a Text value".to_string());
+        };
+        let ptr = self
+            .builder
+            .build_extract_value(s, 0, "txt_ptr")
+            .map_err(|e| format!("Failed to extract text ptr: {:?}", e))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(s, 1, "txt_len")
+            .map_err(|e| format!("Failed to extract text len: {:?}", e))?
+            .into_int_value();
+        Ok((ptr, len))
+    }
+
+    /// Evaluate a `Num` index argument (an `f64`) and convert it to the `i64` the Text
+    /// intrinsics take (used by `slice`'s start/end).
+    fn text_index_arg(
+        &mut self,
+        expr: &Expr,
+        name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let f = self.generate_expr(expr)?.into_float_value();
+        self.builder
+            .build_float_to_signed_int(f, self.context.i64_type(), name)
+            .map_err(|e| format!("Failed to convert text index: {:?}", e))
+    }
+
+    /// Lower `Text.indexOf(sub)`: call `__text_index_of` (grapheme index or -1) and turn
+    /// the result into a `Result` — `Ok(Num idx)` when >= 0, else `NotOk` — using the
+    /// same `{ i8 tag, f64 }` shape `array_at`/`array_find` produce (no -1 sentinel).
+    fn generate_text_index_of(
+        &mut self,
+        recv_ptr: PointerValue<'ctx>,
+        recv_len: inkwell::values::IntValue<'ctx>,
+        sub: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let (sp, sl) = self.extract_text(sub)?;
+        let f = self.get_intrinsic("__text_index_of")?;
+        let idx = self
+            .builder
+            .build_call(
+                f,
+                &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
+                "txt_index_of",
+            )
+            .map_err(|e| format!("Failed to call __text_index_of: {:?}", e))?
+            .as_any_value_enum()
+            .into_int_value();
+
+        let i64t = self.context.i64_type();
+        let found = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGE,
+                idx,
+                i64t.const_zero(),
+                "idx_found",
+            )
+            .map_err(|e| format!("Failed to compare index: {:?}", e))?;
+
+        // No branch needed: the Ok payload (`idx` widened to f64) is safe to compute
+        // unconditionally, so build both Results eagerly and `select` on `found`.
+        let elem_llvm: BasicTypeEnum = self.context.f64_type().into();
+        let idx_f = self
+            .builder
+            .build_signed_int_to_float(idx, self.context.f64_type(), "idx_as_num")
+            .map_err(|e| format!("Failed to convert index to num: {:?}", e))?;
+        let ok = self.build_result(elem_llvm, "Ok", idx_f.into());
+        let no = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm));
+        self.builder
+            .build_select(found, ok, no, "idx_value")
+            .map_err(|e| format!("Failed to select indexOf result: {:?}", e))
     }
 
     /// Evaluate an array expression and break it into `(struct_value, data_ptr, size_i64)`.

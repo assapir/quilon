@@ -54,7 +54,42 @@ c = greeting.length          ~ grapheme count   → 7
 - `.length` = grapheme-cluster count (user-perceived characters, full UTF-8).
 - `+` = concatenation.
 
-(See `examples/text.ql`.)
+#### Text methods
+
+`Text` carries a set of **built-in, compiler-provided methods**, called with method
+syntax (`text.method(...)`) and freely chainable, each backed by a UTF-8-correct runtime
+intrinsic. Where an index or length is user-visible they are **grapheme-based** (matching
+`.length`), not byte-based.
+
+| Method | Result | Notes |
+|--------|--------|-------|
+| `split(sep :: Text)` | `[]Text` | split on `sep`; consecutive separators keep empty pieces (`"a,,b".split(",")` → `["a","","b"]`), an empty haystack yields `[""]`, and an **empty** `sep` splits into individual graphemes (`"abc".split("")` → `["a","b","c"]`) |
+| `trim()` | `Text` | strip leading/trailing whitespace |
+| `replace(from :: Text, to :: Text, all :: Bool)` | `Text` | replace every occurrence when `all` is `true`, only the **first** when `false`; an empty `from` is a no-op |
+| `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
+| `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` if absent — **no `-1` sentinel** |
+| `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds (never an error), and `end ≤ start` yields `""` |
+| `toUpper()` / `toLower()` | `Text` | Unicode-aware case mapping |
+
+```quilon
+"a,b,c".split(",")                       ~ ["a", "b", "c"]
+"  hi  ".trim()                          ~ "hi"
+"a-a-a".replace("a", "x", true)          ~ "x-x-x"   (all)
+"a-a-a".replace("a", "x", false)         ~ "x-a-a"   (first only)
+"Hello".contains("ell")                  ~ true
+"héllo".indexOf("llo") ?                 ~ Ok(2)  (grapheme index)
+  | Ok(i)    => i
+  | NotOk(_) => 0 - 1
+"Hello".slice(1, 4)                      ~ "ell"
+"Hello".slice(-5, 100)                   ~ "Hello"  (clamped)
+"héllo".toUpper()                        ~ "HÉLLO"
+```
+
+Like the [array methods](#array-methods), these are **reserved on `Text`**: a user may
+define a same-named function/overload on another type, but on a `Text` receiver the
+built-in always wins. There is **no `join`** — collapse a `[]Text` with `reduce` + `+`.
+
+(See `examples/text.ql` and `examples/text_methods.ql`.)
 
 ### `Bool`
 `true` / `false`.
@@ -646,6 +681,7 @@ message instead. Any compile error exits with status 1.
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
+| `Text` methods: `split`/`trim`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | Ad-hoc overloading: same-named typed defs, exact-type dispatch | ✅ |
 | Operator overloading (`+`, comparisons, … on user types); built-ins as overloads | ✅ |
 | `Bool` | ✅ |

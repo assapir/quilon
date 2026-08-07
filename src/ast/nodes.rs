@@ -125,6 +125,19 @@ pub fn is_array_method(name: &str) -> bool {
     matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
 }
 
+/// The reserved built-in `Text` methods (`split`/`trim`/`replace`/`contains`/
+/// `indexOf`/`slice`/`toUpper`/`toLower`). Like [`is_array_method`], these are
+/// resolved ahead of any user overload when the receiver is a `Text`, so this
+/// predicate is the single source of truth shared by the type checker and codegen.
+/// Method names are lowercase/camelCase, so they never collide with (Capitalized)
+/// sum-constructor names.
+pub fn is_text_method(name: &str) -> bool {
+    matches!(
+        name,
+        "split" | "trim" | "replace" | "contains" | "indexOf" | "slice" | "toUpper" | "toLower"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals

@@ -298,6 +298,151 @@ pub extern "C" fn __envp_to_pairs(envp: *const *const c_char) -> QlSlice {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Text methods — each backs a named, chainable `Text` method, mirroring
+// `__text_length` / `__text_cmp`. All are UTF-8 correct and grapheme-based where
+// an index/length is user-visible (matching `Text.length`). A `Text` argument
+// arrives as `(ptr, len)`; a `Text` / `[]Text` result is returned as a
+// GC-allocated `QlSlice` so it outlives this call and is collected like any heap
+// value. See `CodeGenerator::get_intrinsic` for the matching prototypes.
+// ---------------------------------------------------------------------------
+
+/// Decode `len` bytes at `ptr` as UTF-8 (lossily on invalid UTF-8, which a
+/// well-formed Quilon `Text` never is). Shared by all the Text-method intrinsics.
+///
+/// # Safety contract (upheld by the compiler)
+/// `ptr` is null or points to at least `len` readable bytes.
+fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
+    String::from_utf8_lossy(byte_slice(ptr, len))
+}
+
+/// Strip leading and trailing (Unicode) whitespace. Backs `Text.trim()`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_trim(ptr: *const u8, len: i64) -> QlSlice {
+    alloc_text(text_str(ptr, len).trim().as_bytes())
+}
+
+/// Unicode-aware uppercase. Backs `Text.toUpper()`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_to_upper(ptr: *const u8, len: i64) -> QlSlice {
+    alloc_text(text_str(ptr, len).to_uppercase().as_bytes())
+}
+
+/// Unicode-aware lowercase. Backs `Text.toLower()`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_to_lower(ptr: *const u8, len: i64) -> QlSlice {
+    alloc_text(text_str(ptr, len).to_lowercase().as_bytes())
+}
+
+/// Whether `sub` occurs in the haystack: 1 (true) / 0 (false). Backs
+/// `Text.contains(sub)`. (An empty `sub` is contained in every string.)
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_contains(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> i64 {
+    let hay = text_str(hptr, hlen);
+    let sub = text_str(sptr, slen);
+    i64::from(hay.contains(&*sub))
+}
+
+/// The GRAPHEME index of the first occurrence of `sub` in the haystack, or -1 if
+/// absent. Backs `Text.indexOf(sub)` — codegen turns -1 into `NotOk` and any other
+/// value into `Ok(idx)`. Grapheme-based to match `Text.length` / `Text.slice`; an
+/// empty `sub` is found at index 0.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_index_of(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> i64 {
+    let hay = text_str(hptr, hlen);
+    let sub = text_str(sptr, slen);
+    match hay.find(&*sub) {
+        // Byte offset -> grapheme index: count the graphemes in the prefix before it.
+        Some(byte_idx) => hay[..byte_idx].graphemes(true).count() as i64,
+        None => -1,
+    }
+}
+
+/// Replace occurrences of `from` with `to`: ALL of them when `all != 0`, else only
+/// the FIRST. Backs `Text.replace(from, to, all)`. An empty `from` is a no-op (the
+/// string is returned unchanged) — there is no well-defined occurrence to replace.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_replace(
+    hptr: *const u8,
+    hlen: i64,
+    fptr: *const u8,
+    flen: i64,
+    tptr: *const u8,
+    tlen: i64,
+    all: i64,
+) -> QlSlice {
+    let hay = text_str(hptr, hlen);
+    let from = text_str(fptr, flen);
+    if from.is_empty() {
+        return alloc_text(hay.as_bytes());
+    }
+    let to = text_str(tptr, tlen);
+    let out = if all != 0 {
+        hay.replace(&*from, &to)
+    } else {
+        hay.replacen(&*from, &to, 1)
+    };
+    alloc_text(out.as_bytes())
+}
+
+/// The substring from grapheme `start` (inclusive) to grapheme `end` (exclusive).
+/// Indices count graphemes (like `Text.length`); both are CLAMPED to `[0, length]`
+/// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -> QlSlice {
+    let s = text_str(ptr, len);
+    // Byte offset where each grapheme starts, plus a trailing sentinel of `s.len()`, so
+    // grapheme index `g` spans bytes `bounds[g]..bounds[g + 1]`. One pass, no String copy;
+    // the result is a zero-copy byte subslice that `alloc_text` copies exactly once.
+    let mut bounds: Vec<usize> = s.grapheme_indices(true).map(|(b, _)| b).collect();
+    bounds.push(s.len());
+    let n = (bounds.len() - 1) as i64;
+    let clamp = |i: i64| i.clamp(0, n) as usize;
+    let (lo, hi) = (clamp(start), clamp(end));
+    if hi <= lo {
+        return alloc_text(&[]);
+    }
+    alloc_text(s[bounds[lo]..bounds[hi]].as_bytes())
+}
+
+/// Split the haystack on `sep`, returning a `[]Text`. Consecutive separators yield
+/// empty pieces (`"a,,b"` -> `["a","","b"]`); an empty haystack yields `[""]`. An
+/// EMPTY separator splits into individual graphemes (`"abc"` -> `["a","b","c"]`).
+/// Backs `Text.split(sep)`. Returns the array as a `QlSlice` over `len` contiguous
+/// `Text` structs — exactly the `[]Text` layout codegen loads.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> QlSlice {
+    let hay = text_str(hptr, hlen);
+    let sep = text_str(sptr, slen);
+    let parts: Vec<&str> = if sep.is_empty() {
+        hay.graphemes(true).collect()
+    } else {
+        hay.split(&*sep).collect()
+    };
+    let n = parts.len();
+    if n == 0 {
+        return QlSlice::empty();
+    }
+    // Backing array of `n` Text structs (GC-owned), one per piece.
+    let elems = __alloc((n * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+    for (i, part) in parts.iter().enumerate() {
+        // SAFETY: `elems` has room for `n` `QlSlice`s and `i < n`.
+        unsafe { std::ptr::write(elems.add(i), alloc_text(part.as_bytes())) };
+    }
+    QlSlice {
+        data: elems as *const c_void,
+        len: n as i64,
+    }
+}
+
 /// The bytes of a NUL-terminated C string (empty for null). Used to copy `argv`/`envp`
 /// entries into GC-owned `Text`s.
 fn cstr_to_str_bytes(ptr: *const c_char) -> Vec<u8> {
@@ -342,7 +487,7 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 10] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 18] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
@@ -356,12 +501,35 @@ static QUILON_RT_INTRINSICS: [RtFn; 10] = unsafe {
             __argv_to_text_array as extern "C" fn(i64, *const *const c_char) -> QlSlice,
         ),
         core::mem::transmute(__envp_to_pairs as extern "C" fn(*const *const c_char) -> QlSlice),
+        core::mem::transmute(__text_trim as extern "C" fn(*const u8, i64) -> QlSlice),
+        core::mem::transmute(__text_to_upper as extern "C" fn(*const u8, i64) -> QlSlice),
+        core::mem::transmute(__text_to_lower as extern "C" fn(*const u8, i64) -> QlSlice),
+        core::mem::transmute(
+            __text_contains as extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
+        ),
+        core::mem::transmute(
+            __text_index_of as extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
+        ),
+        core::mem::transmute(
+            __text_replace
+                as extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, i64) -> QlSlice,
+        ),
+        core::mem::transmute(__text_slice as extern "C" fn(*const u8, i64, i64, i64) -> QlSlice),
+        core::mem::transmute(
+            __text_split as extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
+        ),
     ]
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // libgc's `GC_init`/`GC_malloc` are not safe to invoke from several threads at
+    // once; cargo runs tests in parallel, so every test that initializes/allocates
+    // through the GC takes this lock first (mirrors `jit`'s JIT_LOCK).
+    static GC_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn grapheme_count_handles_ascii_and_multibyte() {
@@ -395,8 +563,114 @@ mod tests {
         assert_eq!(format_num(3.5), "3.5");
     }
 
+    /// View a `QlSlice` `Text` result as a `&str` (its GC-owned bytes). Takes the
+    /// `QlSlice` by value (it is `Copy`) so the returned `&str` borrows the underlying
+    /// GC buffer, not the (temporary) struct.
+    unsafe fn slice_str<'a>(s: QlSlice) -> &'a str {
+        let bytes = unsafe { std::slice::from_raw_parts(s.data as *const u8, s.len as usize) };
+        std::str::from_utf8(bytes).unwrap()
+    }
+
+    fn text_of(s: &str) -> (*const u8, i64) {
+        (s.as_ptr(), s.len() as i64)
+    }
+
+    #[test]
+    fn text_trim_strips_whitespace() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (p, l) = text_of("  héllo \t\n");
+        assert_eq!(unsafe { slice_str(__text_trim(p, l)) }, "héllo");
+    }
+
+    #[test]
+    fn text_case_mapping_is_unicode() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (p, l) = text_of("Straße");
+        assert_eq!(unsafe { slice_str(__text_to_upper(p, l)) }, "STRASSE");
+        let (p, l) = text_of("HÉLLO");
+        assert_eq!(unsafe { slice_str(__text_to_lower(p, l)) }, "héllo");
+    }
+
+    #[test]
+    fn text_contains_and_index_of_are_grapheme_based() {
+        let (hp, hl) = text_of("héllo");
+        let (sp, sl) = text_of("llo");
+        assert_eq!(__text_contains(hp, hl, sp, sl), 1);
+        // "llo" starts after "hé" — 2 graphemes in, even though "é" is 2 bytes.
+        assert_eq!(__text_index_of(hp, hl, sp, sl), 2);
+        let (zp, zl) = text_of("z");
+        assert_eq!(__text_contains(hp, hl, zp, zl), 0);
+        assert_eq!(__text_index_of(hp, hl, zp, zl), -1);
+        // An empty needle is contained at index 0.
+        let (ep, el) = text_of("");
+        assert_eq!(__text_index_of(hp, hl, ep, el), 0);
+    }
+
+    #[test]
+    fn text_replace_all_vs_first_and_empty_from() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (hp, hl) = text_of("a-a-a");
+        let (fp, fl) = text_of("a");
+        let (tp, tl) = text_of("xx");
+        assert_eq!(
+            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 1)) },
+            "xx-xx-xx"
+        );
+        assert_eq!(
+            unsafe { slice_str(__text_replace(hp, hl, fp, fl, tp, tl, 0)) },
+            "xx-a-a"
+        );
+        // Empty `from` is a no-op.
+        let (ep, el) = text_of("");
+        assert_eq!(
+            unsafe { slice_str(__text_replace(hp, hl, ep, el, tp, tl, 1)) },
+            "a-a-a"
+        );
+    }
+
+    #[test]
+    fn text_slice_clamps_and_counts_graphemes() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (p, l) = text_of("héllo"); // 5 graphemes
+        assert_eq!(unsafe { slice_str(__text_slice(p, l, 1, 4)) }, "éll");
+        assert_eq!(unsafe { slice_str(__text_slice(p, l, -5, 100)) }, "héllo"); // clamp
+        assert_eq!(unsafe { slice_str(__text_slice(p, l, 3, 1)) }, ""); // end<=start
+    }
+
+    #[test]
+    fn text_split_variants() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let collect = |s: &QlSlice| -> Vec<String> {
+            let parts =
+                unsafe { std::slice::from_raw_parts(s.data as *const QlSlice, s.len as usize) };
+            parts
+                .iter()
+                .map(|p| unsafe { slice_str(*p) }.to_string())
+                .collect()
+        };
+        let (hp, hl) = text_of("a,,b");
+        let (sp, sl) = text_of(",");
+        assert_eq!(collect(&__text_split(hp, hl, sp, sl)), ["a", "", "b"]);
+        // Empty haystack -> a single empty piece.
+        let (ep, el) = text_of("");
+        assert_eq!(collect(&__text_split(ep, el, sp, sl)), [""]);
+        // Empty separator -> graphemes.
+        let (gp, gl) = text_of("héllo");
+        let (esp, esl) = text_of("");
+        assert_eq!(
+            collect(&__text_split(gp, gl, esp, esl)),
+            ["h", "é", "l", "l", "o"]
+        );
+    }
+
     #[test]
     fn alloc_returns_usable_memory() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
         let p = __alloc(16) as *mut u8;
         assert!(!p.is_null());
