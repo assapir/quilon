@@ -15,6 +15,10 @@ compiles to native code via LLVM. Files use the `.ql` extension.
     logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`, `|>`,
     `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`) is highlighted as a **single**
     token — never split into its first character colored separately from the rest.
+  - **`< >` block delimiters** — a line-final `<` (opens a block) and a line-final
+    `>` (the block close: the last token on its line) share one block-punctuation
+    scope, so both delimiters color identically; a `<`/`>` used mid-line stays the
+    less-than / greater-than comparison operator.
   - Built-in types `Num` / `Text` / `Bool`, and the unit type/value `$` (`$` is
     both the type, as in `-> $`, and its sole value — highlighted like the other
     built-in types).

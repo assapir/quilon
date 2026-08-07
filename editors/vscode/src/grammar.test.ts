@@ -124,11 +124,46 @@ test("a representative lambda + arrow-type line highlights each operator once", 
 
 // --- Regression guards for things the fix must NOT disturb -------------------
 
-test("single < and > stay comparison operators (and block delimiters)", () => {
+test("single < and > stay comparison operators when not line-final", () => {
   const lt = uniqueToken("a < b", "<");
   assert.equal(lt.scope, "keyword.operator.comparison.quilon");
   const gt = uniqueToken("a > b", ">");
   assert.equal(gt.scope, "keyword.operator.comparison.quilon");
+});
+
+// Issue #33: the block-closing `>` (a `>` that is the last token on its line)
+// was colored differently from the opening `<` — red, as if invalid. Both block
+// delimiters must be block punctuation and share one scope family, so a theme
+// colors them identically. The block-close rule mirrors the compiler
+// (`Lexer::is_line_final`): a `>` followed by only spaces/tabs to end-of-line.
+const BLOCK_PUNCT_FAMILY = "punctuation.definition.block";
+
+test("line-final < opens a block as block punctuation", () => {
+  // `compute = x => <` — the trailing `<` opens a multi-statement block.
+  const open = uniqueToken("compute = x => <", "<");
+  assert.ok(
+    open.scope?.startsWith(BLOCK_PUNCT_FAMILY),
+    `block-open < should be ${BLOCK_PUNCT_FAMILY}.*, got ${JSON.stringify(open.scope)}`,
+  );
+});
+
+test("line-final > closes a block as block punctuation (not error/invalid)", () => {
+  for (const line of [">", "  >", ">   "]) {
+    const close = uniqueToken(line, ">");
+    assert.ok(
+      close.scope?.startsWith(BLOCK_PUNCT_FAMILY),
+      `block-close > should be ${BLOCK_PUNCT_FAMILY}.*, got ${JSON.stringify(close.scope)} for ${JSON.stringify(line)}`,
+    );
+    assert.ok(
+      !close.scope?.includes("invalid"),
+      `block-close > must not be scoped invalid, got ${JSON.stringify(close.scope)}`,
+    );
+  }
+});
+
+test("a line-final >= is a comparison, not split into a block-close >", () => {
+  // The block-close lookahead must not steal the `>` from a line-final `>=`.
+  assert.equal(uniqueToken("a >=", ">=").scope, "keyword.operator.comparison.quilon");
 });
 
 test("single = stays an immutable-binding operator", () => {
