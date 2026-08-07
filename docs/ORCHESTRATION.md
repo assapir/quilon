@@ -56,11 +56,11 @@ A feature/change is not done until **all** of these are true:
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
 **`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
-add items, not to restructure, not even to mark their own item done. When a workstream merges, the
-**orchestrator** flips that item's status in the roadmap. (Agents still update `LANGUAGE.md`, tests,
-and their example — just never the roadmap.) The roadmap's structure and the locked design decisions
-are the user's/orchestrator's domain; specific bugs, tasks, and detailed specs go to **GitHub issues**,
-never into the roadmap.
+add items, not to restructure, not even to mark their own item done. The **orchestrator** updates a
+roadmap item's status when it judges that workstream's PR ready (the user owns the actual merge).
+(Agents still update `LANGUAGE.md`, tests, and their example — just never the roadmap.) The roadmap's
+structure is the orchestrator's domain and the **language semantics / design decisions live in
+`LANGUAGE.md`, not the roadmap**; specific bugs, tasks, and detailed specs go to **GitHub issues**.
 
 Library APIs hide internals — never force callers to do the library's own conversion/desugaring
 (e.g. `print(x)`, never `print(show(x))`). Keep dependencies and toolchain on the latest versions;
