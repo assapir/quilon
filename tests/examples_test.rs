@@ -110,8 +110,8 @@ fn runnable_examples_have_expected_exit_codes() {
     for (name, expected) in EXPECTED_EXIT {
         let path = examples_dir().join(name);
         let program = front_end(&path).unwrap_or_else(|e| panic!("{name} failed to compile: {e}"));
-        let code =
-            jit::run_program(&program).unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
+        let code = jit::run_program(&program, &["program".to_string()])
+            .unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
         assert_eq!(code, *expected, "{name}: wrong exit code");
     }
 }

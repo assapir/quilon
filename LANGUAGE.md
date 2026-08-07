@@ -600,7 +600,12 @@ generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
   array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
   (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them. (The
+Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them.
+`quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
+program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
+the `.ql` path becomes `argv[0]`), so `quilon run f.ql a b c` gives the same `args.size`
+and trailing arguments as a native `./f a b c` — `argv[0]` is the `.ql` path rather than
+the compiled binary's path, but everything the program indexes past it matches. (The
 legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
 compiles for backward compatibility but is superseded by `args :: []Text`.) Any other
 `^` signature (e.g. a non-`Text` array element, or an unexpected parameter) is a
