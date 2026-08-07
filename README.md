@@ -27,6 +27,14 @@ greet = name :: Text => "Hello, " + name
 
 See **[LANGUAGE.md](./LANGUAGE.md)** for the full reference (types, modules, pattern matching, I/O, the symbol table, and the feature matrix).
 
+## Prerequisites
+
+Install these **before** building or running Quilon:
+
+- **LLVM 22** — the compiler backend (via inkwell). Debian/Ubuntu: install from [apt.llvm.org](https://apt.llvm.org); Arch: `llvm`; macOS: `brew install llvm@22` (or the current `llvm`).
+- **libgc (Boehm GC)** — the runtime garbage collector, and a hard dependency: it is required to **build** the `quilon` compiler, to **`quilon run`** (the JIT resolves `GC_*` in-process), **and** it is **dynamically linked into the native executables** produced by `quilon build` — so libgc must also be present wherever those binaries run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
+- **A C toolchain** — `clang` (default) or `gcc`, plus `llc` (ships with LLVM). Used by `quilon build` to assemble and link native executables. Not needed for `quilon run` (JIT).
+
 ## Build & run
 
 ```bash
@@ -40,8 +48,6 @@ cargo build --release                        # binary at target/release/quilon
 the runtime static library (`libquilon_rt.a`) next to the `quilon` binary, so
 `quilon build` links it automatically — no extra step. Native builds link with
 `clang` by default; pass `--linker gcc` to use gcc instead.
-
-Requires LLVM 22 and `libgc` (Boehm GC) installed. Contributor and architecture notes are in **[CLAUDE.md](./CLAUDE.md)**.
 
 ## Vision (aspirational)
 
