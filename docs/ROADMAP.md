@@ -87,3 +87,4 @@ Legend: ✅ complete · 🔨 in progress · ⬜ planned. **Critical path:** M4 �
 | `quilon fmt` / linter | ⬜ |
 | Standard library | ⬜ |
 | Debug info (→ real VS Code debugging) | ⬜ |
+| Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
