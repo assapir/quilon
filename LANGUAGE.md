@@ -473,7 +473,9 @@ generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
 
 Both are real Quilon arrays — `.size`, `[index]`, and `for` loops work on them. (The
 legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
-compiles for backward compatibility but is superseded by `args :: []Text`.)
+compiles for backward compatibility but is superseded by `args :: []Text`.) Any other
+`^` signature (e.g. a non-`Text` array element, or an unexpected parameter) is a
+compile-time error, reported by `check` as well as `run`/`build`.
 
 **Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
 

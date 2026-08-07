@@ -644,20 +644,18 @@ fn legacy_numeric_argc_argv_entry_still_runs() {
 fn entry_with_non_text_array_param_is_rejected() {
     // The runtime builds `Text` elements for the argv array, so an `^` whose first
     // param is `[]Num` (an array of a NON-`Text` element) must NOT be routed to the
-    // argv arm — that would hand it mis-sized elements. Codegen rejects it with a clear
-    // diagnostic rather than silently miscompiling.
+    // argv arm — that would hand it mis-sized elements. The type checker rejects it up
+    // front (so `quilon check` and `quilon run`/`build` all report the same clear
+    // diagnostic) rather than silently miscompiling.
     let src = "^ = (args :: []Num) -> Num => args.size";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
-    checker
+    let err = checker
         .check_program(&program)
-        .expect("type checking failed");
-    let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let err = jit::run_program(&program)
         .expect_err("`^(args :: []Num)` must be rejected, not miscompiled");
     assert!(
-        err.contains("unsupported signature"),
+        err.to_string().contains("unsupported signature"),
         "expected an unsupported-signature diagnostic, got: {err}"
     );
 }

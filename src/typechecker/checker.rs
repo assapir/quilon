@@ -94,6 +94,14 @@ pub enum TypeError {
     NonExhaustiveMatch {
         span: Span,
     },
+    /// The `^` entry point declared an unsupported parameter signature. The only
+    /// accepted forms are `()`, `(args :: []Text)`, `(args :: []Text, env :: [][]Text)`,
+    /// and the legacy `(argc :: Num, argv :: Num)`. Rejected here (not in codegen) so
+    /// `quilon check` and `quilon run`/`build` all report the same clear diagnostic.
+    InvalidEntryPointSignature {
+        got: Vec<Type>,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -114,7 +122,8 @@ impl TypeError {
             | TypeError::OverloadMissingAnnotation { span, .. }
             | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
-            | TypeError::NonExhaustiveMatch { span } => span,
+            | TypeError::NonExhaustiveMatch { span }
+            | TypeError::InvalidEntryPointSignature { span, .. } => span,
         }
     }
 }
@@ -215,6 +224,15 @@ impl std::fmt::Display for TypeError {
             }
             TypeError::NonExhaustiveMatch { .. } => {
                 write!(f, "Non-exhaustive pattern match")
+            }
+            TypeError::InvalidEntryPointSignature { got, .. } => {
+                write!(
+                    f,
+                    "Entry point '^' has an unsupported signature ({}). Valid signatures: \
+                     '()', '(args :: []Text)', '(args :: []Text, env :: [][]Text)' \
+                     (or legacy '(argc :: Num, argv :: Num)').",
+                    fmt_type_list(got)
+                )
             }
         }
     }
@@ -778,7 +796,52 @@ impl TypeChecker {
         for item in &program.items {
             self.check_item(item)?;
         }
+
+        // Validate the `^` entry point's parameter signature up front, so `quilon check`
+        // and `quilon run`/`build` all reject an unsupported form with the SAME clear
+        // diagnostic (rather than passing the check and failing later in codegen).
+        for item in &program.items {
+            if let Item::FunctionDecl(decl) = item
+                && decl.name == "^"
+            {
+                Self::check_entry_point_signature(decl)?;
+            }
+        }
+
         Ok(std::mem::take(&mut self.type_table))
+    }
+
+    /// The `^` entry point may only take one of these parameter shapes (checked by
+    /// TYPE, not by parameter name): `()`, `(args :: []Text)`,
+    /// `(args :: []Text, env :: [][]Text)`, or the legacy `(argc :: Num, argv :: Num)`.
+    /// The runtime builds `Text`/`[]Text` elements for argv/env, so a differently-typed
+    /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
+    /// elements. An unannotated parameter defaults to `Num` (matching codegen), so
+    /// `^(x)` is the legacy shape only if it has exactly two such parameters.
+    fn check_entry_point_signature(decl: &FunctionDecl) -> Result<(), TypeError> {
+        let params: Vec<Type> = decl
+            .params
+            .iter()
+            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+            .collect();
+        let text_array = Type::Array(Box::new(Type::Text));
+        let text_pairs = Type::Array(Box::new(text_array.clone()));
+        let ok = match params.as_slice() {
+            [] => true,
+            [a] => *a == text_array,
+            [a, b] => {
+                (*a == text_array && *b == text_pairs) || (*a == Type::Num && *b == Type::Num)
+            }
+            _ => false,
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(TypeError::InvalidEntryPointSignature {
+                got: params,
+                span: decl.span.clone(),
+            })
+        }
     }
 
     /// Register a top-level function definition as a member of its overload set. Each
