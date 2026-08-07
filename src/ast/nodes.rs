@@ -472,3 +472,21 @@ pub struct SumVariant {
     pub name: String,
     pub fields: Vec<Type>,
 }
+
+/// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name).
+/// Shared by the type checker's overload diagnostics and codegen's entry-point
+/// signature diagnostic, so both render types the same way. A not-yet-concrete
+/// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
+/// `<unknown>`.
+pub fn type_label(ty: &Type) -> String {
+    match ty {
+        Type::Num => "Num".to_string(),
+        Type::Text => "Text".to_string(),
+        Type::Bool => "Bool".to_string(),
+        Type::Unit => "$".to_string(),
+        Type::Array(elem) => format!("[]{}", type_label(elem)),
+        Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
+        Type::Generic { .. } => "<unknown>".to_string(),
+        other => format!("{:?}", other),
+    }
+}

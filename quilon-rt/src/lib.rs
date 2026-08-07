@@ -180,6 +180,17 @@ pub struct QlSlice {
     len: i64,
 }
 
+impl QlSlice {
+    /// The empty slice (`{ null, 0 }`) — a zero-length `Text`/array. Returned when there
+    /// is nothing to build (null/empty `argv`/`envp`).
+    fn empty() -> QlSlice {
+        QlSlice {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+}
+
 /// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC
 /// (so it outlives the C `argv`/`envp` buffers, which the program may not keep), and is
 /// NUL-terminated past `len` so `print`/`eprint` (which expect a C string) work too.
@@ -212,10 +223,7 @@ fn alloc_text(bytes: &[u8]) -> QlSlice {
 #[unsafe(no_mangle)]
 pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) -> QlSlice {
     if argv.is_null() || argc <= 0 {
-        return QlSlice {
-            data: std::ptr::null(),
-            len: 0,
-        };
+        return QlSlice::empty();
     }
     let n = argc as usize;
     // Allocate the backing array of `n` Text structs (GC-owned).
@@ -249,10 +257,7 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
 #[unsafe(no_mangle)]
 pub extern "C" fn __envp_to_pairs(envp: *const *const c_char) -> QlSlice {
     if envp.is_null() {
-        return QlSlice {
-            data: std::ptr::null(),
-            len: 0,
-        };
+        return QlSlice::empty();
     }
     // First pass: count entries up to the NULL terminator.
     let mut count = 0usize;
@@ -260,10 +265,7 @@ pub extern "C" fn __envp_to_pairs(envp: *const *const c_char) -> QlSlice {
         count += 1;
     }
     if count == 0 {
-        return QlSlice {
-            data: std::ptr::null(),
-            len: 0,
-        };
+        return QlSlice::empty();
     }
     // Backing array of `count` inner `[]Text` structs (each itself a `QlSlice`).
     let pairs = __alloc((count * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;

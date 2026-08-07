@@ -1,5 +1,6 @@
 // Type checker implementation
 
+use crate::ast::type_label;
 use crate::ast::{BinOp, UnaryOp};
 use crate::ast::{Expr, FunctionDecl, Item, MatchArm, Param, Pattern, Program, Type, VarDecl};
 use crate::lexer::Span;
@@ -220,22 +221,6 @@ impl std::fmt::Display for TypeError {
 }
 
 impl std::error::Error for TypeError {}
-
-/// A short, user-facing label for a type in overload diagnostics (`Num`, `Text`,
-/// `Bool`, `$`, a user type's name, etc.).
-fn type_label(ty: &Type) -> String {
-    match ty {
-        Type::Num => "Num".to_string(),
-        Type::Text => "Text".to_string(),
-        Type::Bool => "Bool".to_string(),
-        Type::Unit => "$".to_string(),
-        Type::Array(elem) => format!("[]{}", type_label(elem)),
-        Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
-        // A not-yet-concrete type (an unresolved sum payload such as the `T` in `Ok(T)`).
-        Type::Generic { .. } => "<unknown>".to_string(),
-        other => format!("{:?}", other),
-    }
-}
 
 /// Render a comma-separated parameter/argument type list (`Num, Text`).
 fn fmt_type_list(types: &[Type]) -> String {

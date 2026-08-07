@@ -43,21 +43,15 @@ fn type_mangle(ty: &Type) -> String {
 }
 
 /// Render an entry point's declared parameter types as a readable signature fragment
-/// (`args :: []Text, env :: [][]Text`-style labels, comma-joined) for the unsupported-
-/// signature diagnostic. `()` renders as an empty string.
+/// (comma-joined `Num`/`Text`/`[]Text`-style labels) for the unsupported-signature
+/// diagnostic. `()` renders as an empty string. Uses the shared `ast::type_label` so
+/// codegen and the type checker render types identically.
 fn fmt_param_types(params: &[Type]) -> String {
-    fn label(ty: &Type) -> String {
-        match ty {
-            Type::Num => "Num".to_string(),
-            Type::Text => "Text".to_string(),
-            Type::Bool => "Bool".to_string(),
-            Type::Unit => "$".to_string(),
-            Type::Array(elem) => format!("[]{}", label(elem)),
-            Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
-            other => format!("{:?}", other),
-        }
-    }
-    params.iter().map(label).collect::<Vec<_>>().join(", ")
+    params
+        .iter()
+        .map(crate::ast::type_label)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The distinct LLVM symbol for one overload member: its name plus a per-parameter
