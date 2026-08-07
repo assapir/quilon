@@ -248,20 +248,6 @@ fn is_comparison_operator(name: &str) -> bool {
     matches!(name, "==" | "!=" | "<" | "<=" | ">" | ">=")
 }
 
-/// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
-/// match by identity; a user type matches by NAME (so a `Named`/`Sum` annotation and
-/// the inferred instance line up regardless of carried fields); a `Generic` payload
-/// slot (only Result's `Ok(T)`/`NotOk(E)`) matches anything, preserving the existing
-/// generic-Result behavior.
-/// The reserved built-in array methods. When the receiver of one of these is an array,
-/// the compiler resolves the built-in (it can't be shadowed by a user overload on
-/// arrays). Shared with codegen via [`crate::ast`]? No — kept local to the checker;
-/// codegen has its own identical predicate so the two passes agree (a divergence would
-/// be a bug, mirrored in the test suite).
-fn is_array_method(name: &str) -> bool {
-    matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
-}
-
 /// The `Result` type with a CONCRETE `Ok` payload of `elem` (and a `$`/Unit `NotOk`
 /// for the "absent" case). `find`/`at` return this so a downstream match binds the
 /// element at its real type and exhaustiveness/codegen size it correctly.
@@ -282,6 +268,11 @@ fn result_of(elem: Type) -> Type {
     }
 }
 
+/// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
+/// match by identity; a user type matches by NAME (so a `Named`/`Sum` annotation and
+/// the inferred instance line up regardless of carried fields); a `Generic` payload
+/// slot (only Result's `Ok(T)`/`NotOk(E)`) matches anything, preserving the existing
+/// generic-Result behavior.
 fn types_match(param: &Type, arg: &Type) -> bool {
     match (param, arg) {
         // `Generic` is a not-yet-concrete type — only a sum payload binding (the `T` in
@@ -1811,10 +1802,10 @@ impl TypeChecker {
         // dispatch only diverts to the built-in when the receiver is an array.)
         if let Expr::Ident { name, .. } = func
             && !args.is_empty()
-            && is_array_method(name)
-            && let Type::Array(_) = self.infer_expr(&args[0])?
+            && crate::ast::is_array_method(name)
+            && let Type::Array(elem_type) = self.infer_expr(&args[0])?
         {
-            return self.check_array_method(name, args, span);
+            return self.check_array_method(name, *elem_type, args, span);
         }
 
         // Check if this is a method call: func is Ident and first arg is a Named type
@@ -1938,14 +1929,12 @@ impl TypeChecker {
     fn check_array_method(
         &mut self,
         method: &str,
+        elem_type: Type,
         args: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let recv_type = self.infer_expr(&args[0])?;
-        let Type::Array(elem_type) = recv_type else {
-            unreachable!("check_array_method entered with a non-array receiver");
-        };
-        let elem_type = *elem_type;
+        // `args[0]` (the receiver array) was already inferred by the dispatch guard in
+        // `check_call`, which passes its element type in — no need to re-infer it here.
         let method_args = &args[1..];
 
         // Arity check for every method (the lambda/value argument count).
@@ -2013,9 +2002,9 @@ impl TypeChecker {
         span: &Span,
     ) -> Result<Type, TypeError> {
         let Expr::Lambda { params, body, .. } = arg else {
-            // A non-lambda where a function is required (e.g. a bare name): not supported
-            // — Quilon has no first-class function values, so the argument must be a
-            // literal lambda.
+            // An array method expects a *literal* lambda here, which it inlines per
+            // element. Passing anything else (e.g. a bare name or a closure value) is
+            // not supported in this position — higher-order values aren't accepted.
             return Err(TypeError::NotAFunction {
                 got: self.infer_expr(arg)?,
                 span: arg.span().clone(),

@@ -81,8 +81,9 @@ Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 Arrays carry a set of **built-in, compiler-provided methods**, called with method
 syntax (`arr.method(...)`) and freely chainable. The higher-order ones take a **lambda**
 (`x => …`, `(a, b) => …`) — an anonymous function literal valid **only** as a direct
-argument to one of these methods. Quilon has no first-class closures, so the compiler
-**inlines** the lambda body per element rather than passing a function value.
+argument to one of these methods. The compiler **inlines** the lambda body per element
+rather than passing it as a function value (a deliberate specialization — Quilon's
+closures are not accepted as higher-order arguments here).
 
 | Method | Result | Notes |
 |--------|--------|-------|

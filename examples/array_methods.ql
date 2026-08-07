@@ -1,5 +1,5 @@
 ~ Built-in array methods (compiler-provided, chainable). Each takes a lambda that the
-~ compiler INLINES (Quilon has no first-class closures):
+~ compiler INLINES per element (rather than passing it as a function value):
 ~   map(f)            -> new array, element = f's result type
 ~   filter(pred)      -> new array, same element type (pred must return Bool)
 ~   reduce(init, f)   -> fold-left accumulator

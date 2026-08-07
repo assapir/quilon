@@ -1,7 +1,7 @@
 // Built-in array methods: `map` / `filter` / `reduce` / `each` / `find` / `at`.
 // These are compiler-provided members on arrays, called with method syntax
 // (`arr.map(f)`) and chainable. The higher-order forms take a lambda the compiler
-// INLINES (Quilon has no first-class closures). `find`/`at` return a `Result`
+// INLINES per element (not passed as a function value). `find`/`at` return a `Result`
 // (`Ok(elem)` / `NotOk`). These tests drive the full pipeline (lex -> parse ->
 // typecheck -> codegen -> JIT) and assert the real exit code.
 
@@ -213,7 +213,8 @@ fn at_index_must_be_num() {
 }
 
 /// A lambda passed somewhere other than a built-in array method (here, to `print`)
-/// is rejected — Quilon has no first-class function values.
+/// is rejected — array-method lambdas are inlined in place and aren't accepted as
+/// higher-order arguments elsewhere (here `print` has no function-typed overload).
 #[test]
 fn bare_lambda_is_not_a_value() {
     assert_rejected("<< core.io\n^ = () -> Num => <\n  print(x => x)\n  0\n>");

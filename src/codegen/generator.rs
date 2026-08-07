@@ -28,13 +28,6 @@ type SavedBinding<'ctx> = (
     Option<Type>,
 );
 
-/// The reserved built-in array methods. Mirrors the type checker's identical predicate
-/// (kept in lockstep across passes; a divergence would be a bug). On an array receiver
-/// these resolve to compiler-inlined loops, ahead of sum constructors and user overloads.
-fn is_array_method(name: &str) -> bool {
-    matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
-}
-
 /// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
 /// deterministic and identical at definition and call sites (built from the declared
 /// parameter type and from the inferred argument type respectively).
@@ -2076,11 +2069,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) — RESERVED
-        // on arrays, dispatched before sum constructors / overloads (mirrors the type
-        // checker). The method applies only when the receiver (`args[0]`) is an array;
+        // on arrays. The method applies only when the receiver (`args[0]`) is an array;
         // the oracle confirms its element type, so this never diverts a same-named user
-        // overload on a non-array receiver.
-        if is_array_method(func_name)
+        // overload on a non-array receiver. Method names are lowercase and so can never
+        // collide with a (Capitalized) sum-constructor name — the relative order of this
+        // check and the sum-constructor block below is therefore immaterial.
+        if crate::ast::is_array_method(func_name)
             && !args.is_empty()
             && matches!(self.oracle.expr_type(&args[0]), Some(Type::Array(_)))
         {
@@ -2722,10 +2716,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
     /// `args[0]` is the receiver array; the rest are the method's arguments (a lambda
-    /// for the higher-order forms, a `Num` index for `at`). Quilon has no first-class
-    /// closures, so a lambda argument is INLINED into the generated loop body rather than
-    /// emitted as a callable value (`inline_lambda`). The element LLVM type comes from the
-    /// type oracle (the receiver's `[]elem` element type), so `[]Text`/`[]Num`/... all work.
+    /// for the higher-order forms, a `Num` index for `at`). A method's lambda argument is
+    /// a deliberate inline specialization of the general lambda lowering: rather than
+    /// emitting a closure value, its body is INLINED into the generated loop body per
+    /// element (`inline_lambda`) — cheaper, and it sidesteps the unsupported
+    /// higher-order-value path. The element LLVM type comes from the type oracle (the
+    /// receiver's `[]elem` element type), so `[]Text`/`[]Num`/... all work.
     fn generate_array_method(
         &mut self,
         method: &str,
@@ -2751,7 +2747,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(array_val)
             }
             "find" => self.array_find(&args[1], &elem_qty, elem_llvm, data_ptr, size),
-            "at" => self.array_at(&args[1], &elem_qty, elem_llvm, data_ptr, size),
+            "at" => self.array_at(&args[1], elem_llvm, data_ptr, size),
             other => Err(format!("unknown array method `{other}`")),
         }
     }
@@ -2869,12 +2865,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load element: {:?}", e))
     }
 
-    /// Inline a lambda body with its parameters bound to `arg_values`. Quilon has no
-    /// first-class closures: a method's lambda is lowered by binding each parameter to a
-    /// freshly-stored value (an alloca, like a loop variable) and emitting the body in the
-    /// current block. Saves/restores any shadowed bindings of the same names, so an inline
-    /// never leaks the parameter binding past its use (and nesting is safe). `param_qtys`
-    /// supplies each parameter's Quilon type for overload mangling inside the body.
+    /// Inline a lambda body with its parameters bound to `arg_values`. An array method's
+    /// lambda is lowered inline (not as a closure value): each parameter is bound to a
+    /// freshly-stored value (an alloca, like a loop variable) and the body is emitted in
+    /// the current block. Saves/restores any shadowed bindings of the same names, so an
+    /// inline never leaks the parameter binding past its use (and nesting is safe).
+    /// `arg_values` carries each argument's Quilon type for overload mangling in the body.
     fn inline_lambda(
         &mut self,
         lambda: &Expr,
@@ -3091,7 +3087,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let result_ty = self.result_struct_type(elem_llvm);
         let result_ptr = self.create_entry_block_alloca("find_result", result_ty.into())?;
         // Default: NotOk (tag 1, zeroed payload).
-        let not_ok = self.build_result(elem_llvm, 1, zeroed(elem_llvm));
+        let not_ok = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm));
         self.builder
             .build_store(result_ptr, not_ok)
             .map_err(|e| format!("Failed to init find result: {:?}", e))?;
@@ -3132,10 +3128,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_conditional_branch(matched_bool, found_bb, next_bb)
             .map_err(|e| format!("Failed to branch find match: {:?}", e))?;
-        // Found: store Ok(elem) and jump to done.
+        // Found: store Ok(elem) and jump to done. `body` dominates `found_bb`, so the
+        // `elem` already loaded above is in scope here — no need to reload it.
         self.builder.position_at_end(found_bb);
-        let elem_again = self.load_element(data_ptr, elem_llvm, i)?;
-        let ok = self.build_result(elem_llvm, 0, elem_again);
+        let ok = self.build_result(elem_llvm, "Ok", elem);
         self.builder
             .build_store(result_ptr, ok)
             .map_err(|e| format!("Failed to store find Ok: {:?}", e))?;
@@ -3165,7 +3161,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn array_at(
         &mut self,
         index: &Expr,
-        _elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
         data_ptr: PointerValue<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
@@ -3201,7 +3196,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to branch at bounds: {:?}", e))?;
         self.builder.position_at_end(ok_bb);
         let elem = self.load_element(data_ptr, elem_llvm, idx)?;
-        let ok = self.build_result(elem_llvm, 0, elem);
+        let ok = self.build_result(elem_llvm, "Ok", elem);
         self.builder
             .build_store(result_ptr, ok)
             .map_err(|e| format!("Failed to store at Ok: {:?}", e))?;
@@ -3209,7 +3204,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_unconditional_branch(cont_bb)
             .map_err(|e| format!("Failed to branch at ok cont: {:?}", e))?;
         self.builder.position_at_end(no_bb);
-        let no = self.build_result(elem_llvm, 1, zeroed(elem_llvm));
+        let no = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm));
         self.builder
             .build_store(result_ptr, no)
             .map_err(|e| format!("Failed to store at NotOk: {:?}", e))?;
@@ -3233,13 +3228,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             .struct_type(&[self.context.i8_type().into(), elem_llvm], false)
     }
 
-    /// Build a `{ i8 tag, payload }` Result value (`tag` 0 = `Ok`, 1 = `NotOk`).
+    /// Build the `{ i8 tag, payload }` value that `find`/`at` return, tagged as Result
+    /// variant `variant` (`"Ok"` / `"NotOk"`). The tag number is read from the shared
+    /// sum-variant registry (`register_builtin_sum_types`) — the same source the
+    /// pattern-match consumer uses — so construction and matching can never drift apart.
     fn build_result(
         &mut self,
         elem_llvm: BasicTypeEnum<'ctx>,
-        tag: u8,
+        variant: &str,
         payload: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        let tag = self
+            .sum_variants
+            .get(variant)
+            .map(|(t, _)| *t)
+            .unwrap_or_else(|| panic!("Result variant `{variant}` is not registered"));
         let struct_ty = self.result_struct_type(elem_llvm);
         let tag_val = self.context.i8_type().const_int(tag as u64, false);
         let mut agg = struct_ty.get_undef();
@@ -3275,13 +3278,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         size: inkwell::values::IntValue<'ctx>,
         mut body: impl FnMut(&mut Self, inkwell::values::IntValue<'ctx>) -> Result<(), String>,
-    ) -> Result<
-        (
-            inkwell::values::IntValue<'ctx>,
-            inkwell::basic_block::BasicBlock<'ctx>,
-        ),
-        String,
-    > {
+    ) -> Result<(), String> {
         let i64t = self.context.i64_type();
         let function = self.current_function.unwrap();
         let counter = self.create_entry_block_alloca("am_i", i64t.into())?;
@@ -3320,7 +3317,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_unconditional_branch(header)
             .map_err(|e| format!("Failed to loop: {:?}", e))?;
         self.builder.position_at_end(exit);
-        Ok((i, exit))
+        Ok(())
     }
 
     fn generate_record(
