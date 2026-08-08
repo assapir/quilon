@@ -760,3 +760,58 @@ fn unterminated_block_with_only_midline_gt_is_an_error() {
         "an unterminated block must be a parse error"
     );
 }
+
+#[test]
+fn run_function_returning_array_is_usable() {
+    // Regression: a user function whose declared return type is a bare array
+    // (`[]Text` / `[]Num`) must yield the `{ptr,i64}` array VALUE, so a caller can
+    // concatenate the result (`+`), take `.size`, and index it. Previously the return
+    // was lowered to a bare `ptr`, so feeding it to `+`/`.size` panicked codegen.
+    let src = r#"
+        pair = (a :: Text, b :: Text) -> []Text => [a, b]
+        nums = (n :: Num) -> []Num => [n, n + 1, n + 2]
+        ^ = () -> Num => <
+          xs :: []Text = pair("a", "bb") + pair("ccc", "d")
+          ys :: []Num = nums(10)
+          xs.size + xs[1].size + ys.size + ys[2]
+        >
+    "#;
+    // xs = ["a","bb","ccc","d"] (size 4); xs[1] = "bb" (size 2);
+    // ys = [10,11,12] (size 3); ys[2] = 12  ->  4 + 2 + 3 + 12 = 21.
+    assert_exit(src, 21);
+}
+
+#[test]
+fn run_closure_returning_array_is_usable() {
+    // Regression: a local closure with an array return type must yield the `{ptr,i64}`
+    // value (heap-backed), so its result concatenates and indexes — the SAME boundary
+    // rule as top-level functions (both funnel through `boundary_type`).
+    let src = r#"
+        ^ = () -> Num => <
+          mk := (n :: Num) -> []Num => [n, n + 1]
+          xs :: []Num = mk(10) + mk(20)
+          xs.size + xs[3]
+        >
+    "#;
+    // mk(10) = [10,11], mk(20) = [20,21]; xs = [10,11,20,21] (size 4); xs[3] = 21 -> 25.
+    assert_exit(src, 25);
+}
+
+#[test]
+fn run_method_returning_array_is_usable() {
+    // Regression: a record method with an array return type must yield the `{ptr,i64}`
+    // value (heap-backed), usable with `.size` / indexing after the call returns.
+    let src = r#"
+        Bag = {
+          tag :: Text,
+          pair = () -> []Text => [it.tag, it.tag]
+        }
+        ^ = () -> Num => <
+          b = Bag { tag = "hi" }
+          ps :: []Text = b.pair()
+          ps.size + ps[1].size
+        >
+    "#;
+    // pair() = ["hi","hi"] (size 2); ps[1] = "hi" (size 2) -> 4.
+    assert_exit(src, 4);
+}
