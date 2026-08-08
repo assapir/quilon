@@ -760,3 +760,29 @@ fn unterminated_block_with_only_midline_gt_is_an_error() {
         "an unterminated block must be a parse error"
     );
 }
+
+#[test]
+fn modulo_works_end_to_end() {
+    // Issue #73: `%` was documented and type-checked but had NO codegen arm — it
+    // passed `check` and died at run/build with an internal error. It now lowers to
+    // the f64 remainder (LLVM frem == C fmod).
+    assert_exit("^ = () -> Num => 7 % 3", 1);
+}
+
+#[test]
+fn modulo_sign_follows_dividend() {
+    // fmod semantics: the result takes the DIVIDEND's sign.
+    assert_exit(
+        "^ = () -> Num => ((0 - 7) % 3 == 0 - 1 ? 1 : 0) + (7 % (0 - 3) == 1 ? 2 : 0)",
+        3,
+    );
+}
+
+#[test]
+fn modulo_handles_fractional_operands() {
+    // One unified f64 Num: `%` must work on fractional operands too.
+    assert_exit(
+        "^ = () -> Num => (7.5 % 2 == 1.5 ? 1 : 0) + (10 % 2.5 == 0 ? 2 : 0)",
+        3,
+    );
+}

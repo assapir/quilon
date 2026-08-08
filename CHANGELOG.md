@@ -22,6 +22,13 @@ All notable changes to Quilon are documented here.
   reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
   immutability is now enforced by the checker.
 
+### Fixed
+
+- `%` (modulo) had no codegen: it was documented and type-checked, then failed
+  at `run`/`build` with an internal "Unsupported binary operation" error. It now
+  lowers to the f64 remainder (LLVM `frem`, i.e. C `fmod`): works on fractional
+  operands, and the result takes the dividend's sign. (#73)
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the
