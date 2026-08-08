@@ -22,6 +22,15 @@ All notable changes to Quilon are documented here.
   reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
   immutability is now enforced by the checker.
 
+### Fixed
+
+- A literal or nested constructor inside a constructor pattern (`Ok(1)`,
+  `Ok(Ok(x))`) was accepted by the checker but silently ignored by codegen —
+  the arm matched *any* payload of the variant, so the wrong arm could win with
+  no diagnostic. Such refutable sub-patterns are now a compile error (payload
+  sub-patterns must be a binding or `_`); bind the payload and compare it in the
+  arm body instead. (#70)
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the

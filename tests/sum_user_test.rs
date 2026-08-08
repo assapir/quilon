@@ -193,3 +193,38 @@ fn duplicate_variant_names_are_rejected() {
     // Variant (constructor) names must be unique per scope — `Red` twice fails.
     assert_type_error("A = Red / Green\nB = Red / Blue");
 }
+
+#[test]
+fn literal_payload_pattern_is_rejected() {
+    // Issue #70: codegen dispatches on the constructor TAG alone, so `Ok(1)` would
+    // silently match ANY `Ok` payload (the wrong arm wins with no diagnostic).
+    // Until payload tests are implemented, a refutable sub-pattern is a type error.
+    assert_type_error(
+        "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(1) => 10\n    | NotOk(e) => 20\n>",
+    );
+}
+
+#[test]
+fn nested_constructor_payload_pattern_is_rejected() {
+    // Issue #70 companion: a nested constructor sub-pattern is refutable too.
+    assert_type_error(
+        "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(Ok(x)) => 10\n    | _ => 20\n>",
+    );
+}
+
+#[test]
+fn literal_payload_pattern_in_user_sum_is_rejected() {
+    // Same rule for USER sum types, not just the built-in Result.
+    assert_type_error(
+        "Shape = Circle(Num) / Square(Num)\n^ = () -> Num => <\n  s = Circle(3)\n  s ?\n    | Circle(3) => 1\n    | Square(n) => 2\n>",
+    );
+}
+
+#[test]
+fn binding_and_wildcard_payload_patterns_still_accepted() {
+    // The irrefutable forms — a binding and `_` — keep working.
+    assert_exit(
+        "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(x) => x + 1\n    | NotOk(_) => 20\n>",
+        3,
+    );
+}
