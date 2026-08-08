@@ -22,6 +22,16 @@ All notable changes to Quilon are documented here.
   reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
   immutability is now enforced by the checker.
 
+### Fixed
+
+- Codegen kept per-function state (`record_types`, `var_named_types`, and — on the
+  method path — `var_types`) across function emissions, so a later function reusing
+  a variable name could be silently miscompiled (e.g. an array parameter `p`'s
+  `p.size` mis-routed to a record-field read after an earlier function bound a
+  record to `p`). Every function/method/lambda emission now starts from an empty
+  per-function frame, and closures carry their captured variables' type metadata
+  into the lifted frame explicitly. (#68)
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the

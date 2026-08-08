@@ -760,3 +760,37 @@ fn unterminated_block_with_only_midline_gt_is_an_error() {
         "an unterminated block must be a parse error"
     );
 }
+
+#[test]
+fn record_binding_name_reused_by_later_function_is_not_misrouted() {
+    // Issue #68: `record_types`/`var_named_types` accumulated across function
+    // emissions. After `first` bound a RECORD to `p`, a later function taking an
+    // ARRAY parameter `p` had its `p.size` diverted to the record-field path (a
+    // bogus GEP read the array's first element -> 1). Each function must start
+    // from an empty per-function frame.
+    assert_exit(
+        "first = () -> Num => <\n  p = { size = 5, other = 6 }\n  p.other\n>\nsecond = (p :: []Num) -> Num => p.size\n^ = () -> Num => <\n  x = first()\n  second([1, 2, 3])\n>",
+        3,
+    );
+}
+
+#[test]
+fn closure_capturing_record_reads_its_field() {
+    // Issue #68 companion: a captured variable's type metadata must travel into the
+    // lifted lambda frame WITH the capture (before the fix this only worked because
+    // the enclosing frame's maps leaked into the closure body's emission).
+    assert_exit(
+        "^ = () -> Num => <\n  r = { v = 7 }\n  f = () => r.v\n  f()\n>",
+        7,
+    );
+}
+
+#[test]
+fn closure_capturing_named_record_calls_its_method() {
+    // Issue #68 companion: method dispatch on a captured named-record value resolves
+    // through `var_named_types`, which must be carried into the closure's frame.
+    assert_exit(
+        "Counter = { v :: Num, get = () -> Num => it.v }\n^ = () -> Num => <\n  c = Counter { v = 4 }\n  f = () => c.get()\n  f()\n>",
+        4,
+    );
+}
