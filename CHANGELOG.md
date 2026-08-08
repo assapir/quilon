@@ -22,6 +22,14 @@ All notable changes to Quilon are documented here.
   reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
   immutability is now enforced by the checker.
 
+### Fixed
+
+- `&&` and `||` now actually short-circuit, as documented — the right operand
+  is evaluated only when the left does not already decide the result. They were
+  lowered as eager bitwise and/or, so `false && f(x)` ran `f`'s side effects and
+  the guard idiom `i < a.size && a[i] == k` always performed the (unchecked)
+  index. (#71)
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the
