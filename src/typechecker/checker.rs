@@ -91,6 +91,14 @@ pub enum TypeError {
         got: Box<Type>,
         span: Span,
     },
+    /// A constructor pattern's argument was itself refutable (a literal or a nested
+    /// constructor, e.g. `Ok(1)` or `Ok(Ok(x))`). Codegen dispatches on the constructor
+    /// tag alone and would silently ignore the sub-pattern — the arm would match ANY
+    /// payload — so this is rejected until payload tests are implemented.
+    RefutableConstructorArg {
+        constructor: String,
+        span: Span,
+    },
     NonExhaustiveMatch {
         span: Span,
     },
@@ -129,6 +137,7 @@ impl TypeError {
             | TypeError::OverloadMissingAnnotation { span, .. }
             | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
+            | TypeError::RefutableConstructorArg { span, .. }
             | TypeError::NonExhaustiveMatch { span }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. } => span,
@@ -228,6 +237,15 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Pattern type mismatch: expected {:?}, got {:?}",
                     expected, got
+                )
+            }
+            TypeError::RefutableConstructorArg { constructor, .. } => {
+                write!(
+                    f,
+                    "Unsupported pattern: an argument of '{}(…)' must be a binding or '_' \
+                     — a literal or nested constructor here would silently match ANY \
+                     payload. Bind the payload and compare it in the arm body instead.",
+                    constructor
                 )
             }
             TypeError::NonExhaustiveMatch { .. } => {
@@ -2496,10 +2514,22 @@ impl TypeChecker {
                                 });
                             }
 
-                            // Check each pattern argument against field type
-                            for (pattern_arg, field_type) in args.iter().zip(variant.fields.iter())
-                            {
-                                self.check_pattern(pattern_arg, field_type)?;
+                            // A payload sub-pattern must be IRREFUTABLE (a binding or
+                            // `_`). Codegen dispatches on the constructor tag alone, so
+                            // a refutable sub-pattern (`Ok(1)`, `Ok(Ok(x))`) would be
+                            // silently ignored — the arm would match ANY payload of the
+                            // variant, taking the wrong arm with no diagnostic. Reject
+                            // it here until codegen tests payloads.
+                            for pattern_arg in args {
+                                match pattern_arg {
+                                    Pattern::Ident { .. } | Pattern::Wildcard { .. } => {}
+                                    Pattern::Number { .. } | Pattern::Constructor { .. } => {
+                                        return Err(TypeError::RefutableConstructorArg {
+                                            constructor: name.clone(),
+                                            span: pattern_arg.span().clone(),
+                                        });
+                                    }
+                                }
                             }
 
                             Ok(())
