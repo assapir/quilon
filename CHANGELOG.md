@@ -24,6 +24,21 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- `quilon build` was unusable from a distributed binary (a GitHub-release
+  download or any machine other than the one that compiled the compiler): it
+  looked for `libquilon_rt.a` at a path baked in at compile time and next to
+  the binary, and releases ship the bare binary only. The runtime archive is
+  now **embedded, gzip-compressed, in the `quilon` binary itself** and
+  decompressed on first use into the per-user cache (`$XDG_CACHE_HOME/quilon`,
+  default `~/.cache/quilon`), keyed by content hash so a new compiler never
+  links a stale archive and later builds reuse the cached copy without
+  re-decompressing. A system-provided archive always wins over the embedded
+  one — lookup order: a `QUILON_RT_LIB` environment variable set at run time
+  (developer override) → `libquilon_rt.a` next to the binary (dev loop) → the
+  cached extraction → decompress the embedded copy. `quilon build` is now
+  fully self-contained; the system libgc requirement remains and is tracked
+  separately. (#78)
+
 - A literal or nested constructor inside a constructor pattern (`Ok(1)`,
   `Ok(Ok(x))`) was accepted by the checker but silently ignored by codegen —
   the arm matched *any* payload of the variant, so the wrong arm could win with

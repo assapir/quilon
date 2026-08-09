@@ -6,6 +6,7 @@
 //! (`clang` by default, or `gcc`). Backs the `quilon build` subcommand and
 //! supersedes the old `scripts/aot.sh`.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -53,43 +54,116 @@ fn emit_object(program: &Program, obj_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to emit object file: {e}"))
 }
 
-/// The `-L` directory that holds `libquilon_rt.a` (the `quilon-rt` staticlib).
+/// The `libquilon_rt.a` bytes, gzip-compressed and embedded into the compiler
+/// binary at compile time. The crate's cargo build script (`/build.rs`) builds
+/// the `quilon-rt` staticlib and bakes the compressed copy's path into
+/// `QUILON_RT_GZ`; embedding the archive makes a *distributed* `quilon` binary
+/// self-contained — `quilon build` works from a bare binary download, with no
+/// archive shipped alongside it (system libgc is still required, as documented
+/// in the README). Decompressed at most once per compiler version per machine:
+/// only when no system-provided archive exists and the cache misses.
+const QUILON_RT_ARCHIVE_GZ: &[u8] = include_bytes!(env!("QUILON_RT_GZ"));
+
+/// Content key of the embedded archive (64-bit FNV-1a, hashed by the cargo
+/// build script and baked in alongside the bytes) — names the extracted cache
+/// file so a new compiler never links a stale archive left by an older one,
+/// without rehashing the multi-megabyte blob on every `quilon build`.
+const QUILON_RT_KEY: &str = env!("QUILON_RT_KEY");
+
+/// The value of an environment variable, with empty treated as unset.
+fn env_non_empty(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// Per-user cache directory: `$XDG_CACHE_HOME/quilon`, else `~/.cache/quilon`,
+/// else the temp-dir fallback.
+fn cache_dir() -> PathBuf {
+    if let Some(xdg) = env_non_empty("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("quilon");
+    }
+    if let Some(home) = env_non_empty("HOME") {
+        return Path::new(&home).join(".cache").join("quilon");
+    }
+    temp_cache_dir()
+}
+
+/// Last-resort cache location, also used when the per-user cache is unwritable.
+fn temp_cache_dir() -> PathBuf {
+    std::env::temp_dir().join("quilon-cache")
+}
+
+/// Extract the embedded runtime archive into `dir` as `libquilon_rt-<key>.a`.
+/// If the keyed file already exists it is already this exact content — reuse it
+/// with no decompression. Otherwise decompress the embedded gzip bytes and
+/// write atomically: a process-unique temp file in the same directory, then a
+/// rename over the destination, so concurrent `quilon build` processes can race
+/// here without ever exposing a partially written archive.
+fn extract_archive_into(dir: &Path) -> std::io::Result<PathBuf> {
+    let dest = dir.join(format!("libquilon_rt-{QUILON_RT_KEY}.a"));
+    if dest.exists() {
+        return Ok(dest);
+    }
+
+    let mut archive = Vec::new();
+    flate2::read::GzDecoder::new(QUILON_RT_ARCHIVE_GZ).read_to_end(&mut archive)?;
+
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(
+        ".libquilon_rt-{QUILON_RT_KEY}.{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, &archive)?;
+    std::fs::rename(&tmp, &dest).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(dest)
+}
+
+/// The path of the `libquilon_rt.a` archive (the `quilon-rt` staticlib) to link.
+/// Resolved, in order:
 ///
-/// The crate's cargo build script (`/build.rs`) deterministically places the
-/// archive next to the `quilon` binary and bakes its canonical path into
-/// `QUILON_RT_LIB` (see that file for why the ordinary build doesn't uplift it —
-/// issue #38). We resolve, in order:
-///
-/// 1. `QUILON_RT_LIB` — the path baked at build time (authoritative).
-/// 2. `libquilon_rt.a` next to the running binary — covers relocated binaries and
-///    the test harness, which drops a fresh archive there itself.
-fn runtime_lib_dir() -> Result<PathBuf, String> {
-    // 1. The path baked by the build script, if the archive is still there.
-    if let Some(baked) = option_env!("QUILON_RT_LIB") {
-        let baked = Path::new(baked);
-        if baked.exists()
-            && let Some(dir) = baked.parent()
-        {
-            return Ok(dir.to_path_buf());
+/// 1. `QUILON_RT_LIB` set in the *runtime* environment — developer override.
+/// 2. `libquilon_rt.a` next to the running binary — the dev loop: the cargo
+///    build script places it there, and the test harness drops fresh ones in.
+/// 3. The per-user cache: an already-extracted copy keyed to this compiler's
+///    archive is reused as-is; only on a miss is the embedded (gzip) archive
+///    decompressed into it — the always-works path for a distributed binary.
+fn runtime_lib_path() -> Result<PathBuf, String> {
+    // 1. Explicit runtime override.
+    if let Some(over) = env_non_empty("QUILON_RT_LIB") {
+        let over = PathBuf::from(over);
+        return if over.exists() {
+            Ok(over)
+        } else {
+            Err(format!(
+                "QUILON_RT_LIB is set but points at a missing file: {}",
+                over.display()
+            ))
+        };
+    }
+
+    // 2. Next to the running binary (cheap; skips the extraction entirely).
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let local = dir.join("libquilon_rt.a");
+        if local.exists() {
+            return Ok(local);
         }
     }
 
-    // 2. Fall back to looking next to the running binary.
-    let exe = std::env::current_exe().map_err(|e| format!("cannot locate quilon binary: {e}"))?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| "quilon binary has no parent directory".to_string())?
-        .to_path_buf();
-    if dir.join("libquilon_rt.a").exists() {
-        return Ok(dir);
-    }
-
-    Err(format!(
-        "libquilon_rt.a not found next to the quilon binary ({}). \
-         Rebuild the compiler with `cargo build --release` (the build script \
-         produces and places the runtime archive automatically).",
-        dir.display()
-    ))
+    // 3. Extract the embedded archive to the cache (temp dir on cache failure).
+    let cache = cache_dir();
+    extract_archive_into(&cache)
+        .or_else(|e| {
+            let fallback = temp_cache_dir();
+            if fallback == cache {
+                Err(e) // cache_dir() already bottomed out at the temp dir
+            } else {
+                extract_archive_into(&fallback)
+            }
+        })
+        .map_err(|e| format!("failed to extract the embedded runtime archive: {e}"))
 }
 
 /// Build `program` into a native executable at `out`, linking with `linker`
@@ -97,26 +171,24 @@ fn runtime_lib_dir() -> Result<PathBuf, String> {
 pub fn build_native(program: &Program, out: &Path, linker: &str) -> Result<(), String> {
     let obj = out.with_extension("o");
     emit_object(program, &obj)?;
-    let lib_dir = runtime_lib_dir()?;
+    let rt_lib = runtime_lib_path()?;
 
     let status = Command::new(linker)
         .arg(&obj)
-        .arg("-L")
-        .arg(&lib_dir)
         // Pull EVERY object out of `libquilon_rt.a`, not just the members that resolve
         // an already-undefined symbol. The Rust staticlib splits the `#[no_mangle]`
         // runtime intrinsics across codegen-unit objects (and their order in the archive
-        // is unspecified), so a single linker pass over a plain `-lquilon_rt` can miss an
+        // is unspecified), so a single linker pass over the archive can miss an
         // intrinsic the program references (e.g. `__text_cmp`) when its defining object
         // sits earlier than the object that first pulled the archive in — manifesting as
         // an `undefined reference` only under whatever CU split CI happens to produce.
         // `--whole-archive` makes inclusion deterministic; `--no-whole-archive` restores
-        // normal (on-demand) linking for the system libs that follow.
-        .args([
-            "-Wl,--whole-archive",
-            "-lquilon_rt",
-            "-Wl,--no-whole-archive",
-        ])
+        // normal (on-demand) linking for the system libs that follow. The archive is
+        // passed by path (not `-L`/`-l`): the cache-extracted copy carries a content-hash
+        // suffix in its filename, which `-l` name lookup couldn't address.
+        .arg("-Wl,--whole-archive")
+        .arg(&rt_lib)
+        .arg("-Wl,--no-whole-archive")
         // System libs the Rust staticlib needs, alongside Boehm GC.
         .args(["-lgc", "-lpthread", "-ldl", "-lm"])
         .arg("-o")
