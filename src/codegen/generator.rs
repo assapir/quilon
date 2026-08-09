@@ -136,6 +136,22 @@ struct Capture<'ctx> {
     closure_sig: Option<ClosureSig<'ctx>>,
 }
 
+/// The per-function emission state: every map keyed by a *variable* name, valid only
+/// while emitting one function body. Function emission must start from an empty frame
+/// (`take_frame` and drop), and nested emission — lambdas, local functions — must
+/// restore the enclosing frame afterwards (`take_frame` … `restore_frame`). A stale
+/// entry left behind by a previously emitted function silently mis-routes field access,
+/// method dispatch, and overloaded-call mangling for any later variable that reuses the
+/// same name.
+struct FrameState<'ctx> {
+    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    record_types: HashMap<String, Vec<String>>,
+    var_named_types: HashMap<String, String>,
+    var_types: HashMap<String, Type>,
+    closure_sigs: HashMap<String, ClosureSig<'ctx>>,
+    boxed_vars: std::collections::HashSet<String>,
+}
+
 pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -690,6 +706,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Detach the current per-function frame (see `FrameState`), leaving an empty one.
+    /// Pair with `restore_frame` around nested function emission; when starting a fresh
+    /// top-level function the detached frame is dead and is simply dropped.
+    fn take_frame(&mut self) -> FrameState<'ctx> {
+        FrameState {
+            variables: std::mem::take(&mut self.variables),
+            record_types: std::mem::take(&mut self.record_types),
+            var_named_types: std::mem::take(&mut self.var_named_types),
+            var_types: std::mem::take(&mut self.var_types),
+            closure_sigs: std::mem::take(&mut self.closure_sigs),
+            boxed_vars: std::mem::take(&mut self.boxed_vars),
+        }
+    }
+
+    /// Reinstate a frame detached by `take_frame`.
+    fn restore_frame(&mut self, frame: FrameState<'ctx>) {
+        self.variables = frame.variables;
+        self.record_types = frame.record_types;
+        self.var_named_types = frame.var_named_types;
+        self.var_types = frame.var_types;
+        self.closure_sigs = frame.closure_sigs;
+        self.boxed_vars = frame.boxed_vars;
+    }
+
     fn generate_type_decl(&mut self, decl: &TypeDecl) -> Result<(), String> {
         if let TypeDef::Record { fields, methods } = &decl.type_def {
             let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
@@ -708,14 +748,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     vec![ptr_type.into()];
                 for p in &method.params {
-                    let pt = self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num))?;
+                    let pt = self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num))?;
                     param_types.push(pt.into());
                 }
                 // Unannotated return type defaults to Num, except a setter body whose
                 // tail is an in-place field write (`it.field := v`) yields `$` (i8).
                 let inferred_ret =
                     self.default_return_type(method.return_type.as_ref(), &method.body);
-                let return_type = self.type_to_llvm(&inferred_ret)?;
+                let return_type = self.boundary_type(&inferred_ret)?;
                 let fn_type = return_type.fn_type(&param_types, false);
                 let method_fn = self.module.add_function(&mangled, fn_type, None);
                 // Internal linkage: method symbols are module-private (see generate_function_decl).
@@ -752,8 +792,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
 
-        self.variables.clear();
-        self.closure_sigs.clear();
+        self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         self.boxed_vars = self.compute_boxed_vars(&method.body);
 
         // Param 0 is the implicit receiver `it` (a pointer to the record struct).
@@ -929,22 +968,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result = if !captures.is_empty() {
                 self.generate_local_closure(decl)
             } else {
-                // No captures: emit a plain module function, but save/restore the enclosing
-                // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
-                // state) around it, since `emit_module_function` clears and repopulates them.
+                // No captures: emit a plain module function, but save/restore the
+                // enclosing per-function frame and builder state around it, since
+                // `emit_module_function` starts from an empty frame.
                 let saved_block = self.builder.get_insert_block();
                 let saved_function = self.current_function;
-                let saved_vars = std::mem::take(&mut self.variables);
-                let saved_boxed = std::mem::take(&mut self.boxed_vars);
-                let saved_sigs = std::mem::take(&mut self.closure_sigs);
-                let saved_var_types = std::mem::take(&mut self.var_types);
+                let saved_frame = self.take_frame();
 
                 let result = self.emit_module_function(decl);
 
-                self.variables = saved_vars;
-                self.boxed_vars = saved_boxed;
-                self.closure_sigs = saved_sigs;
-                self.var_types = saved_var_types;
+                self.restore_frame(saved_frame);
                 self.current_function = saved_function;
                 if let Some(block) = saved_block {
                     self.builder.position_at_end(block);
@@ -964,21 +997,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// implicit-0 treatment. Used for true top-level functions and for non-capturing
     /// nested functions (which can recurse, unlike a closure value).
     fn emit_module_function(&mut self, decl: &FunctionDecl) -> Result<(), String> {
-        // Convert parameter types to LLVM types. An ARRAY parameter must use the VALUE
-        // representation — a `{ ptr, i64 }` struct — so `.size`/indexing on the param
-        // work (an array value flows as that struct, not a bare `ptr`, which is what
-        // `type_to_llvm` would give). Every other type keeps its `type_to_llvm` lowering
-        // (e.g. a record/sum param is passed by pointer/struct as before).
+        // Convert parameter types to LLVM types via the shared boundary rule: an ARRAY
+        // param crosses as the `{ ptr, i64 }` VALUE struct (so `.size`/indexing work),
+        // everything else via `type_to_llvm` (a record/sum param stays by pointer/struct).
         let param_types: Vec<BasicTypeEnum> = decl
             .params
             .iter()
-            .map(|p| {
-                let ty = p.type_annotation.clone().unwrap_or(Type::Num);
-                match ty {
-                    Type::Array(_) => self.value_repr_type(&ty),
-                    _ => self.type_to_llvm(&ty),
-                }
-            })
+            .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Convert return type. The entry point `^` always returns a Num exit code at
@@ -990,8 +1015,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // An unannotated body defaults to `Num`, except a Unit (`$`) tail — e.g.
             // `log = m => print(m)` — which must be `i8`, not f64, or `build_return`
             // would emit `ret i8` into an f64 function and fail module verification.
+            // The same boundary rule applies: an array return crosses as the value struct.
             let inferred = self.default_return_type(decl.return_type.as_ref(), &decl.body);
-            self.type_to_llvm(&inferred)?
+            self.boundary_type(&inferred)?
         };
 
         // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
@@ -1031,9 +1057,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         // Store parameters in variables map
-        self.variables.clear();
-        self.var_types.clear();
-        self.closure_sigs.clear();
+        self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
         self.boxed_vars = self.compute_boxed_vars(&decl.body);
         for (i, param) in decl.params.iter().enumerate() {
@@ -1796,10 +1820,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<ClosureSig<'ctx>, String> {
         let param_types: Vec<BasicTypeEnum> = params
             .iter()
-            .map(|p| self.type_to_llvm(&p.type_annotation.clone().unwrap_or(Type::Num)))
+            .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.default_return_type(return_type, body);
-        Ok((param_types, self.type_to_llvm(&ret)?))
+        Ok((param_types, self.boundary_type(&ret)?))
     }
 
     /// Lower a function literal to a value: lift its body into a fresh top-level function
@@ -1934,9 +1958,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Save enclosing emission state — we are about to emit a DIFFERENT function body.
         let saved_block = self.builder.get_insert_block();
         let saved_function = self.current_function;
-        let saved_vars = std::mem::take(&mut self.variables);
-        let saved_boxed = std::mem::take(&mut self.boxed_vars);
-        let saved_sigs = std::mem::take(&mut self.closure_sigs);
+        let saved_frame = self.take_frame();
         // The lifted body has its own frame: recompute which of ITS `:=` locals are boxed.
         self.boxed_vars = self.compute_boxed_vars(body);
         // A by-reference capture is ALSO a shared cell in this frame: mark it boxed so a
@@ -1945,6 +1967,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         // mutated through two levels of closures would be silently snapshotted by value.
         for cap in captures.iter().filter(|c| c.by_ref) {
             self.boxed_vars.insert(cap.name.clone());
+        }
+        // A captured variable's Quilon-type metadata must travel into the lifted frame
+        // with it: field access, method dispatch, and overloaded-call mangling on the
+        // captured name inside the closure body all resolve through these maps.
+        for cap in captures {
+            if let Some(qty) = saved_frame.var_types.get(&cap.name) {
+                self.var_types.insert(cap.name.clone(), qty.clone());
+            }
+            if let Some(fields) = saved_frame.record_types.get(&cap.name) {
+                self.record_types.insert(cap.name.clone(), fields.clone());
+            }
+            if let Some(type_name) = saved_frame.var_named_types.get(&cap.name) {
+                self.var_named_types
+                    .insert(cap.name.clone(), type_name.clone());
+            }
         }
         self.current_function = Some(function);
 
@@ -2012,9 +2049,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to build closure return: {:?}", e))?;
 
         // Restore the enclosing emission state.
-        self.variables = saved_vars;
-        self.boxed_vars = saved_boxed;
-        self.closure_sigs = saved_sigs;
+        self.restore_frame(saved_frame);
         self.current_function = saved_function;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
@@ -3140,71 +3175,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|e| self.generate_expr(e))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Get element type from first element
+        // Get element type from first element.
         let elem_type = values[0].get_type();
 
-        // Allocate array storage
-        let array_type = elem_type.array_type(size as u32);
-        let array_alloca = self
-            .builder
-            .build_alloca(array_type, "array_data")
-            .map_err(|e| format!("Failed to allocate array: {:?}", e))?;
-
-        // Store each element
-        for (i, value) in values.iter().enumerate() {
-            let index = self.context.i32_type().const_int(i as u64, false);
-            let gep = unsafe {
-                self.builder
-                    .build_gep(
-                        array_type,
-                        array_alloca,
-                        &[self.context.i32_type().const_zero(), index],
-                        &format!("elem_{}", i),
-                    )
-                    .map_err(|e| format!("Failed to build GEP: {:?}", e))?
-            };
-            self.builder
-                .build_store(gep, *value)
-                .map_err(|e| format!("Failed to store element: {:?}", e))?;
-        }
-
-        // Create the array struct { ptr, size }
-        let ptr_type = self.context.ptr_type(AddressSpace::default());
-        let i64_type = self.context.i64_type();
-        let array_struct_type = self
-            .context
-            .struct_type(&[ptr_type.into(), i64_type.into()], false);
-
-        let array_struct = self
-            .builder
-            .build_alloca(array_struct_type, "array")
-            .map_err(|e| format!("Failed to allocate array struct: {:?}", e))?;
-
-        // Store pointer to data in field 0
-        let ptr_field = self
-            .builder
-            .build_struct_gep(array_struct_type, array_struct, 0, "array_ptr_field")
-            .map_err(|e| format!("Failed to get ptr field: {:?}", e))?;
-
-        self.builder
-            .build_store(ptr_field, array_alloca)
-            .map_err(|e| format!("Failed to store ptr: {:?}", e))?;
-
-        // Store size in field 1
-        let size_field = self
-            .builder
-            .build_struct_gep(array_struct_type, array_struct, 1, "array_size_field")
-            .map_err(|e| format!("Failed to get size field: {:?}", e))?;
-
-        let size_value = i64_type.const_int(size as u64, false);
-        self.builder
-            .build_store(size_field, size_value)
-            .map_err(|e| format!("Failed to store size: {:?}", e))?;
-
-        // Load and return the struct
-        self.builder
-            .build_load(array_struct_type, array_struct, "array")
-            .map_err(|e| format!("Failed to load array struct: {:?}", e))
+        // Lay the elements into a GC-allocated buffer via the shared array builder — the
+        // SAME mechanism used by `+` concatenation and `<-` spread. Heap (not stack)
+        // allocation is essential: an array is a `{ ptr, i64 }` value whose data must
+        // outlive the current frame (e.g. when the literal is returned from a function),
+        // and `build_array_from_parts` already GC-allocates. Each literal element is an
+        // `Inline` part (contributing one slot).
+        let parts: Vec<ArrayPart<'ctx>> = values.into_iter().map(ArrayPart::Inline).collect();
+        self.build_array_from_parts(elem_type, &parts)
     }
 
     /// Lower an array literal that contains one or more `<-` spreads (`[<-xs, 4, <-ys]`).
@@ -5458,6 +5439,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.context.ptr_type(AddressSpace::default()).into())
             }
             Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            _ => self.type_to_llvm(ty),
+        }
+    }
+
+    /// The LLVM type a value of `ty` takes when it CROSSES a function boundary — a param
+    /// or a return, for top-level functions, methods, and closures alike. An array must
+    /// use its VALUE representation (the `{ ptr, i64 }` struct, so callers can `.size` /
+    /// index / concatenate the result), matching how array values flow everywhere else;
+    /// everything else keeps its `type_to_llvm` lowering. This is deliberately NOT the
+    /// whole of [`value_repr_type`]: a `Record`/`Named` argument keeps its by-pointer ABI
+    /// and a `Generic` keeps `type_to_llvm`, so only the array case diverges here. Every
+    /// signature site funnels through this one method so the boundary rule lives in a
+    /// single place.
+    fn boundary_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Type::Array(_) => self.value_repr_type(ty),
             _ => self.type_to_llvm(ty),
         }
     }

@@ -1,0 +1,65 @@
+~ core.cli — getEnv / hasFlag / getOpt over `args :: []Text` and `env :: [][]Text`.
+~ Verified with `core.test` assertions: every assertion holds, so the program runs
+~ to completion and exits 0. A failing assertion prints to stderr and exits 101.
+~ Fixtures stand in for the `^` entry point's real args/env so the run is deterministic.
+~   getEnv(env, key)    -> Ok(value) / NotOk        (env is [key, value] pairs)
+~   hasFlag(args, flag) -> Bool                      (flag name with or without `--`)
+~   getOpt(args, name)  -> Ok([]Text) / NotOk(name)  (--name value and --name=value)
+<< core.cli
+<< core.test
+
+^ = () -> $ => <
+  ~ getEnv: find a [key, value] pair by its key; Ok(value) when present, NotOk otherwise.
+  env :: [][]Text = [["HOME", "/home/quilon"], ["PATH", "/usr/bin"], ["EMPTY", ""]]
+  home :: Text = getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
+  assertEq(home, "/home/quilon")
+  empty :: Text = getEnv(env, "EMPTY") ? | Ok(v) => v | NotOk(_) => "?"
+  assertEq(empty, "")
+  pathPresent :: Bool = getEnv(env, "PATH") ? | Ok(_) => true | NotOk(_) => false
+  assert(pathPresent)
+  missingPresent :: Bool = getEnv(env, "MISSING") ? | Ok(_) => true | NotOk(_) => false
+  assert(!missingPresent)
+
+  ~ hasFlag: true when the bare flag appears; the name works with or without `--`.
+  args :: []Text = ["prog", "--out", "a.txt", "--out=b.txt", "-v", "--verbose", "--empty="]
+  assert(hasFlag(args, "verbose"))          ~ matches "--verbose" without the dashes
+  assert(hasFlag(args, "--verbose"))        ~ matches "--verbose" with the dashes
+  assert(hasFlag(args, "-v"))               ~ single-dash flag matched literally
+  assert(!hasFlag(args, "missing"))         ~ absent
+  assert(!hasFlag(args, "v"))               ~ "v" is not "-v" (double-dash form only)
+
+  ~ getOpt: collect an option's values; both `--name value` and `--name=value`.
+  none :: []Text = args.filter(x => false)  ~ an empty []Text for the NotOk fallback
+  outVals :: []Text = getOpt(args, "out") ? | Ok(vs) => vs | NotOk(_) => none
+  assertEq(outVals.size, 2)                 ~ "a.txt" (space form) then "b.txt" (= form)
+  assertEq(outVals[0], "a.txt")
+  assertEq(outVals[1], "b.txt")
+  ~ The name works with or without `--`.
+  dashedVals :: []Text = getOpt(args, "--out") ? | Ok(vs) => vs | NotOk(_) => none
+  assertEq(dashedVals.size, 2)
+  ~ `--empty=` yields a single empty value.
+  emptyVals :: []Text = getOpt(args, "empty") ? | Ok(vs) => vs | NotOk(_) => none
+  assertEq(emptyVals.size, 1)
+  assertEq(emptyVals[0], "")
+  ~ An absent option is NotOk, carrying the requested name.
+  missName :: Text = getOpt(args, "nope") ? | Ok(_) => "?" | NotOk(n) => n
+  assertEq(missName, "nope")
+  nopePresent :: Bool = getOpt(args, "nope") ? | Ok(_) => true | NotOk(_) => false
+  assert(!nopePresent)
+
+  ~ argv[0] is skipped: the leading "--out" and its value are ignored, so only "real"
+  ~ (the option after argv[0]) is collected.
+  skipArgs :: []Text = ["--out", "fromArgv0", "--out", "real"]
+  skipVals :: []Text = getOpt(skipArgs, "out") ? | Ok(vs) => vs | NotOk(_) => none
+  assertEq(skipVals.size, 1)
+  assertEq(skipVals[0], "real")
+
+  ~ A trailing option with no following value collects nothing, so it is NotOk(name).
+  trailArgs :: []Text = ["prog", "--out"]
+  trailNotOk :: Bool = getOpt(trailArgs, "out") ? | Ok(_) => false | NotOk(_) => true
+  assert(trailNotOk)
+  ~ The `--name=` form always supplies a value (the empty string), so it stays Ok([""]).
+  eqEmpty :: []Text = getOpt(["prog", "--tag="], "tag") ? | Ok(vs) => vs | NotOk(_) => none
+  assertEq(eqEmpty.size, 1)
+  assertEq(eqEmpty[0], "")
+>

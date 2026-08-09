@@ -632,7 +632,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 >> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io` (I/O) and `core.test` (assertions); their members are real functions.
+- The built-in modules are `core.io` (I/O), `core.test` (assertions), and `core.cli` (argv/env helpers); their members are real functions.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -734,6 +734,35 @@ compile-time error, reported by `check` as well as `run`/`build`.
 
 ---
 
+## CLI helpers — `<< core.cli`
+
+Thin, pipe-friendly helpers over the entry point's `args :: []Text` and
+`env :: [][]Text`. The data is always the **first** parameter, so
+`env |> getEnv("PATH")` and `args |> hasFlag("-v")` read naturally.
+
+| Function | Result |
+|----------|--------|
+| `getEnv(env :: [][]Text, key :: Text) -> Result` | Find the pair whose `[0]` equals `key`; `Ok(value)` (its `[1]`) if present, else `NotOk`. |
+| `hasFlag(args :: []Text, flag :: Text) -> Bool` | `true` when the bare flag appears in `args`. The name works **with or without** a leading `--` (so `"verbose"` and `"--verbose"` both match an arg `"--verbose"`). |
+| `getOpt(args :: []Text, name :: Text) -> Result` | Collect the option's values (argv[0] skipped), recognising both `--name value` and `--name=value`; the name works with or without `--`. Returns `Ok([]Text)` of the values in argv order (an option may repeat), or `NotOk(name)` when no value is found — the name never appears, or appears only as a trailing `--name` with nothing after it. (The `--name=value` form always supplies a value, even the empty one in `--name=`.) |
+
+```quilon
+<< core.cli
+^ = (args :: []Text, env :: [][]Text) -> Num => <
+  home :: Text = env |> getEnv("HOME") ? | Ok(v) => v | NotOk(_) => "?"
+  verbose :: Bool = args |> hasFlag("-v")
+  outputs :: []Text = args |> getOpt("--out") ? | Ok(vs) => vs | NotOk(_) => args.filter(x => false)
+  verbose ? 0 : outputs.size
+>
+```
+
+The whole module is pure Quilon (`corelib/cli.ql`) — built only from the array
+methods (`.find`/`.filter`/`.reduce`), array indexing, ranges (`<-`), and the `Text`
+methods (`.slice`/`.indexOf`/`.contains`/`==`/`+`); it adds no compiler intrinsics.
+(See `examples/cli.ql`.)
+
+---
+
 ## Memory
 
 Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, etc.) are GC-managed — there is no manual free. In 0.9 this is the system's **dynamic `libgc`** (a documented build- and run-time dependency); a statically-linked / vendored GC is a post-0.9 goal.
@@ -816,9 +845,10 @@ message instead. Any compile error exits with status 1.
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
-| Modules: `<< core.io`, `<< core.test`, file-path imports, `>>` exports | ✅ |
+| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk`; fail → exit 101) | ✅ |
+| CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
