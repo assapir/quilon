@@ -136,6 +136,22 @@ struct Capture<'ctx> {
     closure_sig: Option<ClosureSig<'ctx>>,
 }
 
+/// The per-function emission state: every map keyed by a *variable* name, valid only
+/// while emitting one function body. Function emission must start from an empty frame
+/// (`take_frame` and drop), and nested emission — lambdas, local functions — must
+/// restore the enclosing frame afterwards (`take_frame` … `restore_frame`). A stale
+/// entry left behind by a previously emitted function silently mis-routes field access,
+/// method dispatch, and overloaded-call mangling for any later variable that reuses the
+/// same name.
+struct FrameState<'ctx> {
+    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    record_types: HashMap<String, Vec<String>>,
+    var_named_types: HashMap<String, String>,
+    var_types: HashMap<String, Type>,
+    closure_sigs: HashMap<String, ClosureSig<'ctx>>,
+    boxed_vars: std::collections::HashSet<String>,
+}
+
 pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -690,6 +706,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Detach the current per-function frame (see `FrameState`), leaving an empty one.
+    /// Pair with `restore_frame` around nested function emission; when starting a fresh
+    /// top-level function the detached frame is dead and is simply dropped.
+    fn take_frame(&mut self) -> FrameState<'ctx> {
+        FrameState {
+            variables: std::mem::take(&mut self.variables),
+            record_types: std::mem::take(&mut self.record_types),
+            var_named_types: std::mem::take(&mut self.var_named_types),
+            var_types: std::mem::take(&mut self.var_types),
+            closure_sigs: std::mem::take(&mut self.closure_sigs),
+            boxed_vars: std::mem::take(&mut self.boxed_vars),
+        }
+    }
+
+    /// Reinstate a frame detached by `take_frame`.
+    fn restore_frame(&mut self, frame: FrameState<'ctx>) {
+        self.variables = frame.variables;
+        self.record_types = frame.record_types;
+        self.var_named_types = frame.var_named_types;
+        self.var_types = frame.var_types;
+        self.closure_sigs = frame.closure_sigs;
+        self.boxed_vars = frame.boxed_vars;
+    }
+
     fn generate_type_decl(&mut self, decl: &TypeDecl) -> Result<(), String> {
         if let TypeDef::Record { fields, methods } = &decl.type_def {
             let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
@@ -752,8 +792,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
 
-        self.variables.clear();
-        self.closure_sigs.clear();
+        self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         self.boxed_vars = self.compute_boxed_vars(&method.body);
 
         // Param 0 is the implicit receiver `it` (a pointer to the record struct).
@@ -929,22 +968,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result = if !captures.is_empty() {
                 self.generate_local_closure(decl)
             } else {
-                // No captures: emit a plain module function, but save/restore the enclosing
-                // frame (the shared `variables`/`closure_sigs`/`boxed_vars`/`var_types`/builder
-                // state) around it, since `emit_module_function` clears and repopulates them.
+                // No captures: emit a plain module function, but save/restore the
+                // enclosing per-function frame and builder state around it, since
+                // `emit_module_function` starts from an empty frame.
                 let saved_block = self.builder.get_insert_block();
                 let saved_function = self.current_function;
-                let saved_vars = std::mem::take(&mut self.variables);
-                let saved_boxed = std::mem::take(&mut self.boxed_vars);
-                let saved_sigs = std::mem::take(&mut self.closure_sigs);
-                let saved_var_types = std::mem::take(&mut self.var_types);
+                let saved_frame = self.take_frame();
 
                 let result = self.emit_module_function(decl);
 
-                self.variables = saved_vars;
-                self.boxed_vars = saved_boxed;
-                self.closure_sigs = saved_sigs;
-                self.var_types = saved_var_types;
+                self.restore_frame(saved_frame);
                 self.current_function = saved_function;
                 if let Some(block) = saved_block {
                     self.builder.position_at_end(block);
@@ -1024,9 +1057,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         // Store parameters in variables map
-        self.variables.clear();
-        self.var_types.clear();
-        self.closure_sigs.clear();
+        self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
         self.boxed_vars = self.compute_boxed_vars(&decl.body);
         for (i, param) in decl.params.iter().enumerate() {
@@ -1927,9 +1958,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Save enclosing emission state — we are about to emit a DIFFERENT function body.
         let saved_block = self.builder.get_insert_block();
         let saved_function = self.current_function;
-        let saved_vars = std::mem::take(&mut self.variables);
-        let saved_boxed = std::mem::take(&mut self.boxed_vars);
-        let saved_sigs = std::mem::take(&mut self.closure_sigs);
+        let saved_frame = self.take_frame();
         // The lifted body has its own frame: recompute which of ITS `:=` locals are boxed.
         self.boxed_vars = self.compute_boxed_vars(body);
         // A by-reference capture is ALSO a shared cell in this frame: mark it boxed so a
@@ -1938,6 +1967,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         // mutated through two levels of closures would be silently snapshotted by value.
         for cap in captures.iter().filter(|c| c.by_ref) {
             self.boxed_vars.insert(cap.name.clone());
+        }
+        // A captured variable's Quilon-type metadata must travel into the lifted frame
+        // with it: field access, method dispatch, and overloaded-call mangling on the
+        // captured name inside the closure body all resolve through these maps.
+        for cap in captures {
+            if let Some(qty) = saved_frame.var_types.get(&cap.name) {
+                self.var_types.insert(cap.name.clone(), qty.clone());
+            }
+            if let Some(fields) = saved_frame.record_types.get(&cap.name) {
+                self.record_types.insert(cap.name.clone(), fields.clone());
+            }
+            if let Some(type_name) = saved_frame.var_named_types.get(&cap.name) {
+                self.var_named_types
+                    .insert(cap.name.clone(), type_name.clone());
+            }
         }
         self.current_function = Some(function);
 
@@ -2005,9 +2049,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to build closure return: {:?}", e))?;
 
         // Restore the enclosing emission state.
-        self.variables = saved_vars;
-        self.boxed_vars = saved_boxed;
-        self.closure_sigs = saved_sigs;
+        self.restore_frame(saved_frame);
         self.current_function = saved_function;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
@@ -2367,17 +2409,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         let rhs_bb = self.context.append_basic_block(function, "sc_rhs");
         let merge_bb = self.context.append_basic_block(function, "sc_merge");
 
-        match op {
-            // `&&`: a true left falls through to the right; a false left decides.
-            BinOp::And => self
-                .builder
-                .build_conditional_branch(lhs_bool, rhs_bb, merge_bb),
-            // `||`: a false left falls through to the right; a true left decides.
-            _ => self
-                .builder
-                .build_conditional_branch(lhs_bool, merge_bb, rhs_bb),
-        }
-        .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        // `&&`: a true left falls through to the right, a false left decides.
+        // `||`: a false left falls through to the right, a true left decides.
+        let (true_bb, false_bb) = match op {
+            BinOp::And => (rhs_bb, merge_bb),
+            _ => (merge_bb, rhs_bb),
+        };
+        self.builder
+            .build_conditional_branch(lhs_bool, true_bb, false_bb)
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
 
         self.builder.position_at_end(rhs_bb);
         let rhs_val = self.generate_expr(right)?;
@@ -2391,14 +2431,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             .ok_or("Logical operator outside of a block")?;
 
         self.builder.position_at_end(merge_bb);
-        let bool_ty = self.context.bool_type();
-        // The value the skipped-right edge carries: `&&` decided false, `||` decided true.
-        let decided = bool_ty.const_int(matches!(op, BinOp::Or) as u64, false);
+        // On the skipped-right edge the left operand already decided the result, so the
+        // value it carries is exactly `lhs_bool` (`&&` took this edge only when it was
+        // false, `||` only when it was true). No separate deciding constant is needed.
         let phi = self
             .builder
-            .build_phi(bool_ty, "sctmp")
+            .build_phi(self.context.bool_type(), "sctmp")
             .map_err(|e| format!("Failed to build phi: {:?}", e))?;
-        phi.add_incoming(&[(&decided, lhs_end), (&rhs_bool, rhs_end)]);
+        phi.add_incoming(&[(&lhs_bool, lhs_end), (&rhs_bool, rhs_end)]);
         Ok(phi.as_basic_value())
     }
 

@@ -29,6 +29,19 @@ All notable changes to Quilon are documented here.
   lowered as eager bitwise and/or, so `false && f(x)` ran `f`'s side effects and
   the guard idiom `i < a.size && a[i] == k` always performed the (unchecked)
   index. (#71)
+- A literal or nested constructor inside a constructor pattern (`Ok(1)`,
+  `Ok(Ok(x))`) was accepted by the checker but silently ignored by codegen —
+  the arm matched *any* payload of the variant, so the wrong arm could win with
+  no diagnostic. Such refutable sub-patterns are now a compile error (payload
+  sub-patterns must be a binding or `_`); bind the payload and compare it in the
+  arm body instead. (#70)
+- Codegen kept per-function state (`record_types`, `var_named_types`, and — on the
+  method path — `var_types`) across function emissions, so a later function reusing
+  a variable name could be silently miscompiled (e.g. an array parameter `p`'s
+  `p.size` mis-routed to a record-field read after an earlier function bound a
+  record to `p`). Every function/method/lambda emission now starts from an empty
+  per-function frame, and closures carry their captured variables' type metadata
+  into the lifted frame explicitly. (#68)
 
 ## 0.9.0 — "Stable basics"
 

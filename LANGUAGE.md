@@ -288,6 +288,12 @@ fallback). This holds across a function boundary too: a function returning `Ok("
 `getEnv`/`getOpt` shape — carries **both** arms' payloads. (See `examples/result.ql` and
 `examples/result_payload.ql`.)
 
+A constructor pattern's argument must be **irrefutable** — a binding (`Ok(x)`) or the
+wildcard (`Ok(_)`). A literal or nested constructor there (`Ok(1)`, `Ok(Ok(x))`) is a
+compile error: match dispatch tests the constructor tag only, so such a pattern would
+silently match *any* payload of the variant. Bind the payload and compare it in the arm
+body instead (`Ok(n) => n == 1 ? … : …`).
+
 #### `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. They are told apart
 by Quilon's **Capitalized-type / lowercase-value** convention: `/` is a variant separator
