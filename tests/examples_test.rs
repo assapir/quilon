@@ -40,6 +40,7 @@ const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql"];
 const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("hello_world.ql", 42),
     ("arithmetic.ql", 12),
+    ("logic.ql", 0),
     ("factorial.ql", 120),
     ("fibonacci.ql", 55),
     ("pattern_match.ql", 50),

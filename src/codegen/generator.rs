@@ -2234,6 +2234,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_array_concat(left, right);
         }
 
+        // `&&`/`||` are SHORT-CIRCUIT (LANGUAGE.md "Logical: `&& || !` (short-circuit)"):
+        // the right operand must NOT be evaluated when the left already decides the
+        // result — `i < a.size && a[i] == k` must never index out of bounds, and a
+        // side-effecting right operand must not run. Lower with control flow BEFORE the
+        // eager operand evaluation below.
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.generate_short_circuit(op, left, right);
+        }
+
         let lhs = self.generate_expr(left)?;
         let rhs = self.generate_expr(right)?;
 
@@ -2367,34 +2376,70 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Ge operation requires float values".to_string())
                 }
             }
-            BinOp::And => {
-                // Logical AND with short-circuit evaluation
-                // Convert operands to boolean (i1)
-                let lhs_bool = self.value_to_boolean(lhs)?;
-                let rhs_bool = self.value_to_boolean(rhs)?;
-
-                // Use LLVM's 'and' instruction
-                Ok(self
-                    .builder
-                    .build_and(lhs_bool, rhs_bool, "andtmp")
-                    .map_err(|e| format!("Failed to build and: {:?}", e))?
-                    .into())
-            }
-            BinOp::Or => {
-                // Logical OR with short-circuit evaluation
-                // Convert operands to boolean (i1)
-                let lhs_bool = self.value_to_boolean(lhs)?;
-                let rhs_bool = self.value_to_boolean(rhs)?;
-
-                // Use LLVM's 'or' instruction
-                Ok(self
-                    .builder
-                    .build_or(lhs_bool, rhs_bool, "ortmp")
-                    .map_err(|e| format!("Failed to build or: {:?}", e))?
-                    .into())
-            }
+            // `&&`/`||` never reach here — `generate_binop` routes them to
+            // `generate_short_circuit` before operand evaluation.
             _ => Err(format!("Unsupported binary operation: {:?}", op)),
         }
+    }
+
+    /// Lower `&&`/`||` with SHORT-CIRCUIT control flow: evaluate the left operand, and
+    /// only branch into the right operand when the left does not already decide the
+    /// result (`false` decides `&&`; `true` decides `||`). The merged value is a phi of
+    /// the deciding constant and the right operand's boolean. Shape mirrors
+    /// `generate_if`.
+    fn generate_short_circuit(
+        &mut self,
+        op: BinOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| "Logical operator outside of function".to_string())?;
+
+        let lhs_val = self.generate_expr(left)?;
+        let lhs_bool = self.value_to_boolean(lhs_val)?;
+        // The left operand may itself have emitted branches; the phi's incoming edge is
+        // the block we END in, not the one we started in.
+        let lhs_end = self
+            .builder
+            .get_insert_block()
+            .ok_or("Logical operator outside of a block")?;
+
+        let rhs_bb = self.context.append_basic_block(function, "sc_rhs");
+        let merge_bb = self.context.append_basic_block(function, "sc_merge");
+
+        // `&&`: a true left falls through to the right, a false left decides.
+        // `||`: a false left falls through to the right, a true left decides.
+        let (true_bb, false_bb) = match op {
+            BinOp::And => (rhs_bb, merge_bb),
+            _ => (merge_bb, rhs_bb),
+        };
+        self.builder
+            .build_conditional_branch(lhs_bool, true_bb, false_bb)
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+
+        self.builder.position_at_end(rhs_bb);
+        let rhs_val = self.generate_expr(right)?;
+        let rhs_bool = self.value_to_boolean(rhs_val)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(|e| format!("Failed to build branch: {:?}", e))?;
+        let rhs_end = self
+            .builder
+            .get_insert_block()
+            .ok_or("Logical operator outside of a block")?;
+
+        self.builder.position_at_end(merge_bb);
+        // On the skipped-right edge the left operand already decided the result, so the
+        // value it carries is exactly `lhs_bool` (`&&` took this edge only when it was
+        // false, `||` only when it was true). No separate deciding constant is needed.
+        let phi = self
+            .builder
+            .build_phi(self.context.bool_type(), "sctmp")
+            .map_err(|e| format!("Failed to build phi: {:?}", e))?;
+        phi.add_incoming(&[(&lhs_bool, lhs_end), (&rhs_bool, rhs_end)]);
+        Ok(phi.as_basic_value())
     }
 
     // Helper to convert a value to boolean (i1)
