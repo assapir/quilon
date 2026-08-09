@@ -4,18 +4,6 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
-### Changed
-
-- All `examples/*.ql` programs are now **self-asserting**: each imports `<< core.test`
-  and verifies every result it demonstrates with `assert`/`assertEq`/`assertNotEq`/
-  `assertOk`/`assertNotOk`, exiting 0 on success (a failing assertion aborts with exit
-  101). This replaces the previous idiom of encoding a result in the process exit code
-  (e.g. `factorial(5)` → exit 120). The examples gate (`tests/examples_test.rs`) is
-  simplified to match: the bespoke per-example `EXPECTED_EXIT` table is gone, and the
-  uniform contract is now "every runnable example exits 0" under both the JIT
-  (`quilon run`) and native AOT (`quilon build`, `clang` + `gcc`), with the JIT/AOT
-  parity gate kept intact.
-
 ### Removed
 
 - **Breaking:** removed the `for n <- collection => body` loop (and its
@@ -33,9 +21,23 @@ All notable changes to Quilon are documented here.
   immutable binding; `counter := 0` declares a mutable binding; `counter := counter + 1`
   reassigns it. Reassigning an immutable binding (`x := …`) is a type error, and
   immutability is now enforced by the checker.
+- All `examples/*.ql` programs are now **self-asserting**: each imports `<< core.test`
+  and verifies every result it demonstrates with `assert`/`assertEq`/`assertNotEq`/
+  `assertOk`/`assertNotOk`, exiting 0 on success (a failing assertion aborts with exit
+  101). This replaces the previous idiom of encoding a result in the process exit code
+  (e.g. `factorial(5)` → exit 120). The examples gate (`tests/examples_test.rs`) is
+  simplified to match: the bespoke per-example `EXPECTED_EXIT` table is gone, and the
+  uniform contract is now "every runnable example exits 0" under both the JIT
+  (`quilon run`) and native AOT (`quilon build`, `clang` + `gcc`), with the JIT/AOT
+  parity gate kept intact.
 
 ### Fixed
 
+- `&&` and `||` now actually short-circuit, as documented — the right operand
+  is evaluated only when the left does not already decide the result. They were
+  lowered as eager bitwise and/or, so `false && f(x)` ran `f`'s side effects and
+  the guard idiom `i < a.size && a[i] == k` always performed the (unchecked)
+  index. (#71)
 - A literal or nested constructor inside a constructor pattern (`Ok(1)`,
   `Ok(Ok(x))`) was accepted by the checker but silently ignored by codegen —
   the arm matched *any* payload of the variant, so the wrong arm could win with
