@@ -69,14 +69,18 @@ All notable changes to Quilon are documented here.
   record to `p`). Every function/method/lambda emission now starts from an empty
   per-function frame, and closures carry their captured variables' type metadata
   into the lifted frame explicitly. (#68)
-
-### Fixed
-
 - Type checking deeply nested call chains was exponential in nesting depth —
   every call site inferred its first argument twice, so ~22 nested calls took
   seconds and ~26 hung the checker outright. Since `|>` desugars to first-arg
   nesting, long pipelines hit the same wall. Each argument is now inferred
   exactly once per call site; 60-deep chains check instantly.
+- Array indexing `arr[i]` is now **checked**: an out-of-bounds, negative, or NaN
+  index reports a clear runtime error to stderr and exits 1. Previously it was a
+  raw unchecked read — garbage values for OOB/negative indices and LLVM poison
+  (undefined behavior) for NaN. A fractional in-range index still truncates
+  toward zero (documented), and `.at(n)` remains the non-aborting `Ok`/`NotOk`
+  form — its bounds check now also runs before the float conversion, so
+  `at(0/0)` returns `NotOk` instead of branching on poison. (#74)
 
 ## 0.9.0 — "Stable basics"
 

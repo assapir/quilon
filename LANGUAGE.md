@@ -143,6 +143,13 @@ first = nums[0]        ~ → 1
 ```
 Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 
+Indexing is **checked** (fail loud, never silent): an out-of-bounds, negative, or NaN
+index is a clear runtime error — `runtime error: array index 10 out of bounds (size 3)`
+to stderr, exit status 1 — never a raw memory read. A **fractional** in-range index
+truncates toward zero (`nums[1.7]` reads `nums[1]`) — with one unified `Num`, index
+arithmetic like `size / 2` legitimately produces fractions. Use [`at(n)`](#array-methods)
+for the non-aborting form (`Ok`/`NotOk`).
+
 #### Array methods
 
 Arrays carry a set of **built-in, compiler-provided methods**, called with method
@@ -159,7 +166,7 @@ closures are not accepted as higher-order arguments here).
 | `reduce(init, (acc, x) => …)` | the accumulator | fold-left from `init`; the reducer's result type must match `init`'s type |
 | `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains |
 | `find(pred)` | `Ok(elem)` / `NotOk` | the first element satisfying `pred`, absent-safe; `pred` returns `Bool` |
-| `at(n :: Num)` | `Ok(elem)` / `NotOk` | safe index — `Ok` in bounds, `NotOk` otherwise (raw `arr[n]` stays for unchecked indexing) |
+| `at(n :: Num)` | `Ok(elem)` / `NotOk` | non-aborting index — `Ok` in bounds, `NotOk` otherwise (incl. NaN); raw `arr[n]` aborts with a runtime error instead |
 
 ```quilon
 nums = [1, 2, 3, 4, 5, 6]

@@ -2547,6 +2547,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // `__exit(n)` primitive that `core.test`'s `assert` calls to fail. Never
             // returns (the runtime calls libc `exit`).
             "__exit" => void.fn_type(&[ctx.i32_type().into()], false),
+            // void __index_fail(double index, i64 size) — report an invalid array index
+            // (out of bounds / negative / NaN) to stderr and terminate with status 1.
+            // Never returns; codegen emits `unreachable` after the call.
+            "__index_fail" => void.fn_type(&[f64t.into(), i64t.into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
@@ -4299,6 +4303,41 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to load find result: {:?}", e))
     }
 
+    /// `0.0 <= idx_f < (double)size` — the shared bounds primitive behind both raw
+    /// `arr[i]` and `arr.at(n)`. Computed entirely on the **f64** index, BEFORE any
+    /// `fptosi`, so an invalid index can never reach the poison-producing conversion.
+    /// Both compares are ORDERED (`OGE`/`OLT`), so a NaN index fails them and needs no
+    /// separate check. A fractional in-range index is deliberately valid: the conversion
+    /// truncates toward zero (documented — the language has no integer division, so index
+    /// arithmetic legitimately produces fractional values).
+    fn index_in_bounds(
+        &mut self,
+        idx_f: inkwell::values::FloatValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let f64t = self.context.f64_type();
+        let size_f = self
+            .builder
+            .build_signed_int_to_float(size, f64t, "size_f")
+            .map_err(|e| format!("Failed to convert size: {:?}", e))?;
+        let ge0 = self
+            .builder
+            .build_float_compare(
+                inkwell::FloatPredicate::OGE,
+                idx_f,
+                f64t.const_zero(),
+                "idx_ge0",
+            )
+            .map_err(|e| format!("Failed to compare index lower bound: {:?}", e))?;
+        let lt = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::OLT, idx_f, size_f, "idx_lt")
+            .map_err(|e| format!("Failed to compare index upper bound: {:?}", e))?;
+        self.builder
+            .build_and(ge0, lt, "idx_in_bounds")
+            .map_err(|e| format!("Failed to and index bounds: {:?}", e))
+    }
+
     /// `arr.at(n)` — `Ok(arr[n])` if `0 <= n < size`, else `NotOk($)` (safe index).
     fn array_at(
         &mut self,
@@ -4309,23 +4348,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64t = self.context.i64_type();
         let idx_f = self.generate_expr(index)?.into_float_value();
-        let idx = self
-            .builder
-            .build_float_to_signed_int(idx_f, i64t, "at_idx")
-            .map_err(|e| format!("Failed to convert at index: {:?}", e))?;
-        // In bounds iff 0 <= idx < size.
-        let ge0 = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGE, idx, i64t.const_zero(), "at_ge0")
-            .map_err(|e| format!("Failed to compare at lower bound: {:?}", e))?;
-        let lt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, idx, size, "at_lt")
-            .map_err(|e| format!("Failed to compare at upper bound: {:?}", e))?;
-        let in_bounds = self
-            .builder
-            .build_and(ge0, lt, "at_in_bounds")
-            .map_err(|e| format!("Failed to and at bounds: {:?}", e))?;
+        // Bounds-check on the f64 BEFORE converting: `fptosi` of a NaN or out-of-range
+        // value is poison, so the old convert-then-compare order branched on poison for
+        // `at(0/0)`. The conversion below only executes on the in-bounds path.
+        let in_bounds = self.index_in_bounds(idx_f, size)?;
 
         let result_ty = self.result_struct_type(elem_llvm);
         let result_ptr = self.create_entry_block_alloca("at_result", result_ty.into())?;
@@ -4337,6 +4363,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_conditional_branch(in_bounds, ok_bb, no_bb)
             .map_err(|e| format!("Failed to branch at bounds: {:?}", e))?;
         self.builder.position_at_end(ok_bb);
+        let idx = self
+            .builder
+            .build_float_to_signed_int(idx_f, i64t, "at_idx")
+            .map_err(|e| format!("Failed to convert at index: {:?}", e))?;
         let elem = self.load_element(data_ptr, elem_llvm, idx)?;
         let ok = self.build_result(elem_llvm, "Ok", elem);
         self.builder
@@ -5092,14 +5122,51 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
                 .into_pointer_value();
 
-            // Convert index from f64 to i64
-            let index_i64 = if let BasicValueEnum::FloatValue(f) = index_val {
-                self.builder
-                    .build_float_to_signed_int(f, self.context.i64_type(), "index_i64")
-                    .map_err(|e| format!("Failed to convert index: {:?}", e))?
+            // Get size (field 1) for the bounds check.
+            let size_field = self
+                .builder
+                .build_struct_gep(struct_type, alloca, 1, "size_field")
+                .map_err(|e| format!("Failed to get size field: {:?}", e))?;
+            let size = self
+                .builder
+                .build_load(self.context.i64_type(), size_field, "size")
+                .map_err(|e| format!("Failed to load size: {:?}", e))?
+                .into_int_value();
+
+            let idx_f = if let BasicValueEnum::FloatValue(f) = index_val {
+                f
             } else {
                 return Err("Index must be a number".to_string());
             };
+
+            // CHECKED indexing (fail loud, never silent): an out-of-bounds, negative,
+            // or NaN index is a clear runtime error (stderr + exit 1), never a raw read.
+            // The check runs on the f64 BEFORE `fptosi` — converting an invalid index
+            // is poison. A fractional in-range index truncates toward zero (documented).
+            let in_bounds = self.index_in_bounds(idx_f, size)?;
+            let function = self
+                .current_function
+                .ok_or_else(|| "Index expression outside of function".to_string())?;
+            let fail_bb = self.context.append_basic_block(function, "idx_fail");
+            let ok_bb = self.context.append_basic_block(function, "idx_ok");
+            self.builder
+                .build_conditional_branch(in_bounds, ok_bb, fail_bb)
+                .map_err(|e| format!("Failed to branch on index bounds: {:?}", e))?;
+
+            self.builder.position_at_end(fail_bb);
+            let fail_fn = self.get_intrinsic("__index_fail")?;
+            self.builder
+                .build_call(fail_fn, &[idx_f.into(), size.into()], "")
+                .map_err(|e| format!("Failed to call __index_fail: {:?}", e))?;
+            self.builder
+                .build_unreachable()
+                .map_err(|e| format!("Failed to build unreachable: {:?}", e))?;
+
+            self.builder.position_at_end(ok_bb);
+            let index_i64 = self
+                .builder
+                .build_float_to_signed_int(idx_f, self.context.i64_type(), "index_i64")
+                .map_err(|e| format!("Failed to convert index: {:?}", e))?;
 
             // Element LLVM type comes from the type oracle (the index expression's type
             // IS the element type), NOT from a hardcoded `f64` — so `Text`/array/record

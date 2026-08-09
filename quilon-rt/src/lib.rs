@@ -162,6 +162,22 @@ pub extern "C" fn __exit(code: c_int) -> ! {
     unsafe { exit(code) }
 }
 
+/// Report an invalid array index — out of bounds, negative, or NaN — to stderr and
+/// terminate with exit status 1: the fail-loud contract of checked `arr[i]` indexing.
+/// `index` is the ORIGINAL f64 the program computed (pre-truncation), so the message
+/// shows what the user actually asked for; `size` is the array's element count.
+/// Codegen calls this from the invalid branch of every `arr[i]` bounds check.
+#[unsafe(no_mangle)]
+pub extern "C" fn __index_fail(index: f64, size: i64) -> ! {
+    let msg = format!(
+        "runtime error: array index {} out of bounds (size {})\n",
+        format_num(index),
+        size
+    );
+    write_to_fd(2, msg.as_bytes());
+    __exit(1)
+}
+
 /// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
 ///
 /// Uses libc `write(2)` directly rather than `std::fs::File`. AOT-linked native
@@ -562,10 +578,11 @@ type RtFn = unsafe extern "C" fn();
 // fn-pointer type for storage; the entries are never called through this array.
 #[allow(clippy::missing_transmute_annotations)]
 #[used]
-static QUILON_RT_INTRINSICS: [RtFn; 21] = unsafe {
+static QUILON_RT_INTRINSICS: [RtFn; 22] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
         core::mem::transmute(__exit as extern "C" fn(c_int) -> !),
+        core::mem::transmute(__index_fail as extern "C" fn(f64, i64) -> !),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
         core::mem::transmute(__text_length as extern "C" fn(*const u8, i64) -> i64),
         core::mem::transmute(__text_cmp as extern "C" fn(*const u8, i64, *const u8, i64) -> i32),
