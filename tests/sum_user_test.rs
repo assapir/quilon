@@ -196,9 +196,9 @@ fn duplicate_variant_names_are_rejected() {
 
 #[test]
 fn literal_payload_pattern_is_rejected() {
-    // Issue #70: codegen dispatches on the constructor TAG alone, so `Ok(1)` would
-    // silently match ANY `Ok` payload (the wrong arm wins with no diagnostic).
-    // Until payload tests are implemented, a refutable sub-pattern is a type error.
+    // Codegen dispatches on the constructor TAG alone, so `Ok(1)` would silently
+    // match ANY `Ok` payload (the wrong arm wins with no diagnostic). Until payload
+    // tests are implemented, a refutable sub-pattern is a type error.
     assert_type_error(
         "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(1) => 10\n    | NotOk(e) => 20\n>",
     );
@@ -206,7 +206,7 @@ fn literal_payload_pattern_is_rejected() {
 
 #[test]
 fn nested_constructor_payload_pattern_is_rejected() {
-    // Issue #70 companion: a nested constructor sub-pattern is refutable too.
+    // A nested constructor sub-pattern is refutable too.
     assert_type_error(
         "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(Ok(x)) => 10\n    | _ => 20\n>",
     );
