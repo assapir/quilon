@@ -4,6 +4,18 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Changed
+
+- All `examples/*.ql` programs are now **self-asserting**: each imports `<< core.test`
+  and verifies every result it demonstrates with `assert`/`assertEq`/`assertNotEq`/
+  `assertOk`/`assertNotOk`, exiting 0 on success (a failing assertion aborts with exit
+  101). This replaces the previous idiom of encoding a result in the process exit code
+  (e.g. `factorial(5)` → exit 120). The examples gate (`tests/examples_test.rs`) is
+  simplified to match: the bespoke per-example `EXPECTED_EXIT` table is gone, and the
+  uniform contract is now "every runnable example exits 0" under both the JIT
+  (`quilon run`) and native AOT (`quilon build`, `clang` + `gcc`), with the JIT/AOT
+  parity gate kept intact.
+
 ### Removed
 
 - **Breaking:** removed the `for n <- collection => body` loop (and its

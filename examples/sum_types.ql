@@ -2,6 +2,8 @@
 ~ nullary (`Red`) or carry built-in-typed payloads (`Rect(Num, Num)`, `Ok($)`).
 ~ Pattern-match with `?`/`|` to dispatch on the variant and bind its payload; the
 ~ match must be exhaustive. `Result` (`Ok`/`NotOk`) is just a predefined sum type.
+~ `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
 
 ~ A nullary enum.
 Color = Red / Green / Blue
@@ -27,7 +29,9 @@ status = (n :: Num) -> Num => check(n) ?
   | Ok(_)    => 0
   | NotOk(c) => c
 
-^ = () -> Num => <
-  total = area(Rect(6, 7)) + rank(Green)   ~ 42 + 1 = 43
-  total + status(50) - rank(Green)          ~ 43 + 0 - 1 = 42
+^ = () -> $ => <
+  assertEq(area(Rect(6, 7)), 42)   ~ 6 * 7
+  assertEq(rank(Green), 1)
+  assertEq(status(50), 0)          ~ 50 <= 100 -> Ok($) -> 0
+  assertEq(status(200), 200)       ~ 200 > 100 -> NotOk(200) -> 200
 >

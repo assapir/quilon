@@ -4,9 +4,14 @@
 ~
 ~ `count` tail-recurses with an accumulator (the recursive call is the whole value of
 ~ the `:` branch — i.e. it is in tail position), counting `n` down to 0. `acc` cycles
-~ through 0..250 so the result stays a small, deterministic exit code without needing
-~ `%` on the result: it equals (number of steps) mod 251 = 1_000_000 mod 251 = 16.
+~ through 0..250 so the result stays small and deterministic: it equals (number of
+~ steps) mod 251 = 1_000_000 mod 251 = 16.
+~ `<< core.test` verifies the result; on success the program exits 0.
+<< core.test
+
 count = (n :: Num, acc :: Num) -> Num =>
   n == 0 ? acc : count(n - 1, acc == 250 ? 0 : acc + 1)
 
-^ = () -> Num => count(1000000, 0)   ~ 1_000_000 mod 251 = 16
+^ = () -> $ => <
+  assertEq(count(1000000, 0), 16)   ~ 1_000_000 mod 251 = 16
+>

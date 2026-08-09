@@ -15,18 +15,18 @@ recordP = () -> Num => <
 ~ ...while here `p` is an ARRAY parameter; `.size` is the array's length.
 arrayP = (p :: []Num) -> Num => p.size
 
-^ = () -> Num => <
+^ = () -> $ => <
   ~ Record with a Text field: read it back, count its graphemes.
   user = { name = "Quilon", n = 7 }
-  nameLen = user.name.length      ~ "Quilon" -> 6
+  assertEq(user.name.length, 6)   ~ "Quilon" -> 6
 
   ~ Array of Text: index it, then take the byte length of the element.
-  words = ["a", "cde"]
-  wordLen = words[1].size         ~ "cde" -> 3
+  words :: []Text = ["a", "cde"]
+  assertEq(words[1].size, 3)      ~ "cde" -> 3
 
   ~ Nested array (array of arrays): double-index it.
-  grid = [[1, 2], [3, 4]]
-  cell = grid[1][0]               ~ 3
+  grid :: [][]Num = [[1, 2], [3, 4]]
+  assertEq(grid[1][0], 3)
 
   ~ A binding NAME is per-function: `p` is a record in one function and an array
   ~ parameter in another, and each resolves against its own type.
@@ -35,10 +35,8 @@ arrayP = (p :: []Num) -> Num => p.size
 
   ~ A closure capture keeps its type too: field reads and method calls on a
   ~ captured record resolve inside the closure body.
-  c = Counter { v = 4 }
+  c :: Counter = Counter { v = 4 }
   readV = () => c.get()
   assertEq(readV(), 4)
-
-  nameLen + wordLen + cell        ~ exit 6 + 3 + 3 = 12
 >
 

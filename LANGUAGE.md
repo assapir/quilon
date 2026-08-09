@@ -2,7 +2,7 @@
 
 **Version:** 0.9.0 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test (it compiles, runs, and produces the documented exit code / output).
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.ql` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
 ---
 
@@ -666,9 +666,10 @@ There is no `println` — `print` owns the newline; `write` is the raw form. (Se
 
 In-language assertions for **self-verifying programs and examples**. A holding
 assertion does nothing; a **failing** one prints a message to **stderr** and exits
-the process with code **101** (the Rust-panic convention, deliberately distinct from
-the small result codes examples use as their normal exit status), so a broken program
-fails loudly in CI.
+the process with code **101** (the Rust-panic convention, distinct from the 0 a
+passing program exits with), so a broken program fails loudly in CI. Every example
+in `examples/` is written this way: it asserts each result it demonstrates and exits
+0 on success — the examples gate runs them all under the JIT and native AOT.
 
 | Function | Effect |
 |----------|--------|

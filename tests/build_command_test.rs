@@ -44,8 +44,8 @@ fn build_script_bakes_and_places_runtime_staticlib() {
 }
 
 /// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
-/// first, and assert the produced native binary runs to its documented exit code.
-/// This is the two-command README flow, exercised as written.
+/// first, and assert the produced native binary runs and exits 0 (examples are
+/// self-asserting). This is the two-command README flow, exercised as written.
 #[test]
 fn documented_build_flow_produces_running_binary() {
     let linker = ["clang", "gcc"].into_iter().find(|t| tool_available(t));
@@ -78,7 +78,7 @@ fn documented_build_flow_produces_running_binary() {
     let _ = std::fs::remove_file(&out);
     assert_eq!(
         run.status.code(),
-        Some(42),
+        Some(0),
         "hello_world native binary produced the wrong exit code"
     );
 }
