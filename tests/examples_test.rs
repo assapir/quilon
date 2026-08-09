@@ -77,6 +77,9 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     // always present, env size is always non-negative), so the JIT and native AOT — run
     // with different argv — must agree on 7.
     ("args.ql", 7),
+    // `<< core.cli` + `<< core.test`: getEnv/hasFlag/getOpt over fixed args/env fixtures.
+    // Every assertion holds, so it runs to completion (exit 0).
+    ("cli.ql", 0),
 ];
 
 fn ql_files() -> Vec<PathBuf> {

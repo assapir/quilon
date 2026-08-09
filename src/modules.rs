@@ -108,6 +108,9 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // core.test — assertions (`assert` + wrappers) for self-verifying programs.
         // Depends transitively on core.io (its wrappers render values via `eprint`).
         "core.test" => Some(include_str!("../corelib/test.ql")),
+        // core.cli — thin, pure-Quilon helpers over the `^` entry point's
+        // `args :: []Text` and `env :: [][]Text`.
+        "core.cli" => Some(include_str!("../corelib/cli.ql")),
         // Text is a built-in primitive type (like Num/Bool/arrays): its operations
         // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
         // there is intentionally no `core.text` module.
