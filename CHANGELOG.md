@@ -32,6 +32,14 @@ All notable changes to Quilon are documented here.
   per-function frame, and closures carry their captured variables' type metadata
   into the lifted frame explicitly. (#68)
 
+### Fixed
+
+- Type checking deeply nested call chains was exponential in nesting depth —
+  every call site inferred its first argument twice, so ~22 nested calls took
+  seconds and ~26 hung the checker outright. Since `|>` desugars to first-arg
+  nesting, long pipelines hit the same wall. Each argument is now inferred
+  exactly once per call site; 60-deep chains check instantly.
+
 ## 0.9.0 — "Stable basics"
 
 The first stabilized release: a small but **verified, runnable** core of the
