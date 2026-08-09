@@ -309,12 +309,9 @@ pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
     pub text: String,
-}
-
-impl Token {
-    pub fn new(kind: TokenKind, span: Span, text: String) -> Self {
-        Self { kind, span, text }
-    }
+    /// Whether this token is the first token on its source line. Feeds the parser's
+    /// line-first `(` / `[` statement-boundary rule (see `Parser::check_same_line`).
+    pub first_on_line: bool,
 }
 
 impl fmt::Display for Token {

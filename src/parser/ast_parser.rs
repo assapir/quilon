@@ -897,6 +897,9 @@ impl<'a> Parser<'a> {
         self.parse_postfix()
     }
 
+    /// Parse postfix continuations: `.field` / `.method(args)` / `[index]` / `(args)`.
+    /// The `(` / `[` continuations are gated by `check_same_line` — a line-first `(`
+    /// or `[` begins a new statement instead (a `.`-led line still chains).
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_primary()?;
 
@@ -905,8 +908,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let field = self.expect_ident()?;
 
-                // Check if this is a method call: obj.method(args)
-                if self.check(&TokenKind::ParenOpen) {
+                // A same-line `(` makes this a method call: obj.method(args). A
+                // line-first `(` leaves `.field` a plain field access and the `(...)`
+                // begins the next statement.
+                if self.check_same_line(&TokenKind::ParenOpen) {
                     // Method call: desugar obj.method(a, b) to method(obj, a, b)
                     self.advance(); // consume '('
 
@@ -944,7 +949,7 @@ impl<'a> Parser<'a> {
                         span,
                     };
                 }
-            } else if self.check(&TokenKind::BracketOpen) {
+            } else if self.check_same_line(&TokenKind::BracketOpen) {
                 // Array indexing
                 self.advance();
                 let index = self.parse_expr()?;
@@ -955,7 +960,7 @@ impl<'a> Parser<'a> {
                     index: Box::new(index),
                     span,
                 };
-            } else if self.check(&TokenKind::ParenOpen) {
+            } else if self.check_same_line(&TokenKind::ParenOpen) {
                 // Function call
                 self.advance();
                 let mut args = Vec::new();
@@ -1555,6 +1560,21 @@ impl<'a> Parser<'a> {
         &self.peek().kind == kind
     }
 
+    /// Like `check`, but false when the current token is the first token on its source
+    /// line. This is the statement-boundary rule (the grammar's second line-aware rule,
+    /// alongside the lexer's line-final `>`): a line-first `(` or `[` never continues
+    /// the previous expression as a call or index — it begins a NEW statement. Call
+    /// arguments and index brackets must open on the same line as the expression they
+    /// apply to. Without this, adjacent statements would fuse across the newline —
+    /// `x = f()` followed by a line `(1 + 2) |> print` would parse as the call
+    /// `f()(1 + 2)`, and `b = a` followed by `[3, 4].each(...)` as the index `a[3, 4]`.
+    /// A `.`, `|>`, or operator at the start of a line still continues the expression,
+    /// and an argument list opened on the callee's line may still span lines. Every
+    /// postfix consumption of `(` / `[` must go through this guard.
+    fn check_same_line(&self, kind: &TokenKind) -> bool {
+        self.check(kind) && !self.peek().first_on_line
+    }
+
     fn expect(&mut self, kind: &TokenKind) -> Result<(), ParseError> {
         if self.check(kind) {
             self.advance();
@@ -1616,7 +1636,7 @@ fn is_capitalized(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Type;
+    use crate::ast::{Statement, Type};
     use crate::lexer::Lexer;
 
     #[test]
@@ -2194,5 +2214,103 @@ mod tests {
             assert_eq!(methods[0].params.len(), 1);
             assert_eq!(methods[0].params[0].name, "amount");
         }
+    }
+
+    /// The body statements of the single `^` function in `src` (which must be a block).
+    fn entry_block_stmts(src: &str) -> Vec<Statement> {
+        let tokens = Lexer::tokenize(src).unwrap();
+        let program = parse(&tokens).expect("program should parse");
+        let Item::FunctionDecl(func) = &program.items[0] else {
+            panic!("expected the `^` function decl");
+        };
+        let Expr::Block { stmts, .. } = &func.body else {
+            panic!("expected a block body");
+        };
+        stmts.clone()
+    }
+
+    #[test]
+    fn test_line_first_paren_starts_new_statement() {
+        // Statement-boundary rule: a `(` that opens a line never continues the previous
+        // expression as a call. `x = f()` followed by a line `(1 + 2)` is TWO
+        // statements, not the fused call `f()(1 + 2)`.
+        let stmts = entry_block_stmts("^ = () -> Num => <\n  x = f()\n  (1 + 2)\n  x\n>");
+        assert_eq!(stmts.len(), 3);
+        let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+            panic!("expected `x = f()` as a VarDecl, got {:?}", stmts[0]);
+        };
+        let Expr::Call { args, .. } = &decl.value else {
+            panic!(
+                "expected `x`'s value to be the call `f()`, got {:?}",
+                decl.value
+            );
+        };
+        assert!(
+            args.is_empty(),
+            "the call must not swallow `(1 + 2)` as an argument"
+        );
+        assert!(
+            matches!(&stmts[1], Statement::Expr(Expr::BinOp { .. })),
+            "the line-first `(1 + 2)` must be its own statement, got {:?}",
+            stmts[1]
+        );
+    }
+
+    #[test]
+    fn test_line_first_bracket_starts_new_statement() {
+        // Same rule for `[`: `b = a` followed by a line `[3, 4].each(f)` is TWO
+        // statements, not the fused index `a[3, 4]`.
+        let stmts = entry_block_stmts("^ = () -> Num => <\n  b = a\n  [3, 4].each(f)\n  b\n>");
+        assert_eq!(stmts.len(), 3);
+        let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+            panic!("expected `b = a` as a VarDecl, got {:?}", stmts[0]);
+        };
+        assert!(
+            matches!(&decl.value, Expr::Ident { .. }),
+            "`b`'s value must stay the plain `a`, not become an index, got {:?}",
+            decl.value
+        );
+        assert!(
+            matches!(&stmts[1], Statement::Expr(Expr::Call { .. })),
+            "the line-first `[3, 4].each(f)` must be its own statement, got {:?}",
+            stmts[1]
+        );
+    }
+
+    #[test]
+    fn test_multiline_call_arguments_still_one_call() {
+        // The rule only gates a LINE-FIRST `(`. An argument list opened on the same
+        // line as the callee may still span lines: `add(40,` newline `2)`.
+        let tokens = Lexer::tokenize("x = add(40,\n  2)").unwrap();
+        let program = parse(&tokens).expect("multi-line argument list should parse");
+        assert_eq!(program.items.len(), 1);
+        let Item::VarDecl(decl) = &program.items[0] else {
+            panic!("expected a VarDecl");
+        };
+        let Expr::Call { args, .. } = &decl.value else {
+            panic!("expected a call, got {:?}", decl.value);
+        };
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn test_method_chain_across_lines_still_continues() {
+        // A continuation line that starts with `.` still chains: only line-first
+        // `(` / `[` end the expression.
+        let tokens = Lexer::tokenize("x = xs.map(f)\n  .filter(g)").unwrap();
+        let program = parse(&tokens).expect("a `.`-led continuation line should parse");
+        assert_eq!(program.items.len(), 1);
+        let Item::VarDecl(decl) = &program.items[0] else {
+            panic!("expected a VarDecl");
+        };
+        // `xs.map(f).filter(g)` desugars to `filter(map(xs, f), g)`.
+        let Expr::Call { func, args, .. } = &decl.value else {
+            panic!("expected the chained call, got {:?}", decl.value);
+        };
+        assert!(
+            matches!(func.as_ref(), Expr::Ident { name, .. } if name == "filter"),
+            "outermost call should be `filter`"
+        );
+        assert_eq!(args.len(), 2);
     }
 }

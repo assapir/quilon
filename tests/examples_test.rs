@@ -79,6 +79,9 @@ const EXPECTED_EXIT: &[(&str, i32)] = &[
     // `<< core.cli` + `<< core.test`: getEnv/hasFlag/getOpt over fixed args/env fixtures.
     // Every assertion holds, so it runs to completion (exit 0).
     ("cli.ql", 0),
+    // Statement boundaries: a line-first `(` / `[` begins a NEW statement (never a
+    // call/index continuation). Self-asserting via `<< core.test` (exit 0).
+    ("statements.ql", 0),
 ];
 
 fn ql_files() -> Vec<PathBuf> {

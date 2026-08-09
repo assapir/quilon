@@ -17,7 +17,12 @@ impl Lexer {
             match lexer.next() {
                 Some(Ok(kind)) if kind == TokenKind::Eof => {
                     let pos = source.len();
-                    tokens.push(Token::new(kind, Span::new(pos, pos), String::new()));
+                    tokens.push(Token {
+                        kind,
+                        span: Span::new(pos, pos),
+                        text: String::new(),
+                        first_on_line: is_first_on_line(source, pos),
+                    });
                     break;
                 }
                 Some(Ok(kind)) => {
@@ -34,7 +39,12 @@ impl Lexer {
                     } else {
                         kind
                     };
-                    tokens.push(Token::new(kind, Span::new(span.start, span.end), text));
+                    tokens.push(Token {
+                        kind,
+                        span: Span::new(span.start, span.end),
+                        text,
+                        first_on_line: is_first_on_line(source, span.start),
+                    });
                 }
                 Some(Err(_)) => {
                     let span = lexer.span();
@@ -46,11 +56,12 @@ impl Lexer {
                 }
                 None => {
                     let pos = source.len();
-                    tokens.push(Token::new(
-                        TokenKind::Eof,
-                        Span::new(pos, pos),
-                        String::new(),
-                    ));
+                    tokens.push(Token {
+                        kind: TokenKind::Eof,
+                        span: Span::new(pos, pos),
+                        text: String::new(),
+                        first_on_line: is_first_on_line(source, pos),
+                    });
                     break;
                 }
             }
@@ -58,6 +69,25 @@ impl Lexer {
 
         Ok(tokens)
     }
+}
+
+/// Whether the position `at` in `source` is at the start of its line: only horizontal
+/// whitespace (spaces/tabs) between it and the preceding newline or start of file. The
+/// mirror of `is_line_final` below, and exact for token starts: everything the lexer
+/// skips is whitespace or a `~` comment, and a comment always runs to end of line, so
+/// nothing but spaces/tabs can sit between a line's newline and its first token.
+/// Feeds `Token::first_on_line` (see `Parser::check_same_line` for the grammar rule).
+fn is_first_on_line(source: &str, at: usize) -> bool {
+    for b in source.as_bytes()[..at].iter().rev() {
+        match b {
+            b' ' | b'\t' => continue,
+            b'\n' | b'\r' => return true,
+            _ => return false,
+        }
+    }
+    // Reached the start of the file over only horizontal whitespace: the file's first
+    // token is the first on its line.
+    true
 }
 
 /// Whether the position `at` in `source` is at the end of its line: only horizontal
@@ -237,6 +267,9 @@ mod tests {
         assert_eq!(tokens.len(), 3); // x, y, EOF (comment skipped)
         assert_eq!(tokens[0].text, "x");
         assert_eq!(tokens[1].text, "y");
+        // The comment is transparent to line tracking: `y` opens ITS line (the
+        // comment's line ended at the newline).
+        assert!(tokens[1].first_on_line);
     }
 
     #[test]
@@ -273,6 +306,39 @@ mod tests {
 
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockOpen));
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockClose));
+    }
+
+    #[test]
+    fn test_first_on_line_tracking() {
+        // `first_on_line` marks the first token of each source line.
+        let tokens = Lexer::tokenize("a = f()\n(1 + 2)").unwrap();
+        let firsts: Vec<(&str, bool)> = tokens
+            .iter()
+            .filter(|t| t.kind != TokenKind::Eof)
+            .map(|t| (t.text.as_str(), t.first_on_line))
+            .collect();
+        assert_eq!(
+            firsts,
+            vec![
+                ("a", true),
+                ("=", false),
+                ("f", false),
+                ("(", false),
+                (")", false),
+                ("(", true), // opens line 2
+                ("1", false),
+                ("+", false),
+                ("2", false),
+                (")", false),
+            ]
+        );
+
+        // Indentation doesn't matter — the first NON-BLANK token opens the line.
+        let indented = Lexer::tokenize("x\n    [1]").unwrap();
+        assert!(
+            indented[1].first_on_line,
+            "indented `[` still opens its line"
+        );
     }
 
     #[test]
