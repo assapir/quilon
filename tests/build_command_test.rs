@@ -52,7 +52,7 @@ fn available_linker() -> Option<&'static str> {
 /// `quilon build examples/hello_world.ql -o out --linker <linker>` with
 /// `configure` applied to the command (env tweaks etc.), asserting the build
 /// succeeds; then run the produced binary and return its exit code
-/// (hello_world's documented code is 42).
+/// (hello_world is self-asserting, so on success it exits 0).
 fn build_hello_and_run(
     quilon: &Path,
     linker: &str,
@@ -80,8 +80,8 @@ fn build_hello_and_run(
 }
 
 /// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
-/// first, and assert the produced native binary runs to its documented exit code.
-/// This is the two-command README flow, exercised as written.
+/// first, and assert the produced native binary runs and exits 0 (examples are
+/// self-asserting). This is the two-command README flow, exercised as written.
 #[test]
 fn documented_build_flow_produces_running_binary() {
     let Some(linker) = available_linker() else {
@@ -97,7 +97,7 @@ fn documented_build_flow_produces_running_binary() {
     let _ = std::fs::remove_file(&out);
     assert_eq!(
         code,
-        Some(42),
+        Some(0),
         "hello_world native binary produced the wrong exit code"
     );
 }
@@ -137,7 +137,7 @@ fn distributed_binary_builds_via_embedded_runtime() {
     let code = build_hello_and_run(&quilon, linker, &out, "cold cache", staged_env);
     assert_eq!(
         code,
-        Some(42),
+        Some(0),
         "distributed-binary build produced the wrong exit code (cold cache)"
     );
 
@@ -172,7 +172,7 @@ fn distributed_binary_builds_via_embedded_runtime() {
     let code = build_hello_and_run(&quilon, linker, &out, "warm cache", staged_env);
     assert_eq!(
         code,
-        Some(42),
+        Some(0),
         "distributed-binary build produced the wrong exit code (warm cache)"
     );
     assert_eq!(cached_archive(), extracted, "cache file changed identity");

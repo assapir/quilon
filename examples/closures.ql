@@ -4,8 +4,10 @@
 ~        escape the closure and persist across calls.
 ~ There is no capture list and no marker: the operator that bound the name is the
 ~ signal. (Closures are monomorphic in M3 — concrete-typed params and captures.)
+~ `<< core.test` verifies each capture mode; on success the program exits 0.
+<< core.test
 
-^ = () -> Num => <
+^ = () -> $ => <
   ~ `total` is `:=` -> captured by reference. `bump` mutates the shared cell, so
   ~ its writes accumulate across separate calls (they escape the closure).
   total := 0
@@ -14,14 +16,15 @@
     total
   >
 
-  bump(10)            ~ total -> 10
-  bump(20)            ~ total -> 30  (the same cell, written again)
+  assertEq(bump(10), 10)   ~ total -> 10
+  assertEq(bump(20), 30)   ~ the same cell, written again
 
   ~ `base` is `=` -> captured by value. `addBase` sees a frozen copy; rebinding
   ~ `base` afterwards does NOT change what the closure already captured.
   base = 7
   addBase = x => x + base
+  assertEq(addBase(5), 12)   ~ 5 + the =-captured 7
 
-  ~ 30 (accumulated via the :=-captured cell) + 12 (5 + the =-captured 7) = 42.
-  total + addBase(5)
+  ~ The :=-captured cell still holds its accumulated value.
+  assertEq(total, 30)
 >

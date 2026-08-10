@@ -3,6 +3,9 @@
 ~   `:=` -> mutable: in-place field writes AND setter methods are allowed.
 ~ A method is a "setter" iff its body writes `it.field := …` (the visible `:=`
 ~ is the signal — there is no marker). Calling a setter needs a `:=` receiver.
+~ `<< core.test` verifies each mutation; on success the program exits 0.
+<< core.test
+
 Counter = {
   value :: Num,
 
@@ -13,9 +16,10 @@ Counter = {
   peek = => it.value
 }
 
-^ = () -> Num => <
+^ = () -> $ => <
   c := Counter { value = 30 }   ~ `:=` -> mutable instance
   c.bump(5)                      ~ setter mutates: value = 35
+  assertEq(c.peek(), 35)
   c.value := c.value + 7         ~ direct field write: value = 42
-  c.peek()                       ~ exit 42
+  assertEq(c.peek(), 42)
 >

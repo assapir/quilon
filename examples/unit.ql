@@ -1,9 +1,18 @@
 ~ The unit type `$` has exactly one value, also written `$` (like () in Rust/ML).
 ~ Use it for side-effecting functions whose result is meaningless. `print` -> $.
+~ `<< core.test` verifies the real result computed alongside the effects; a `$` body
+~ exits 0 (the value is not a Num), so main needs no trailing 0.
 << core.io
+<< core.test
 
-~ A function whose result is meaningless: it returns `$` after logging.
+~ A function whose result is meaningless: it returns `$` after logging. Callers use
+~ it for its effect, not for a value.
 log = (m :: Text) -> $ => print(m)
 
-~ A `$` body exits 0 (the value is not a Num), so main needs no trailing 0.
-^ = () -> $ => log("started")
+^ = () -> $ => <
+  log("started")              ~ called for effect; its result is `$`
+  log("done")
+  ~ A genuine, verifiable result computed alongside the `$`-typed effects.
+  total :: Num = "started".size + "done".size   ~ 7 + 4
+  assertEq(total, 11)
+>

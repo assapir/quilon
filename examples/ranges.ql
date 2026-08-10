@@ -2,24 +2,26 @@
 ~ IS a `[]Num`, so it has `.size`, indexes with `[i]`, and iterates with `.each`.
 ~   `1 <- 4` -> [1, 2, 3, 4]   (inclusive endpoints)
 ~   `4 <- 1` -> [4, 3, 2, 1]   (descends when the left end is larger)
+~ `<< core.test` verifies every result; on success the program exits 0.
 << core.io
+<< core.test
 
-^ = () -> Num => <
-  asc  = 1 <- 4                 ~ [1, 2, 3, 4]
-  desc = 4 <- 1                 ~ [4, 3, 2, 1]
+^ = () -> $ => <
+  asc  :: []Num = 1 <- 4                ~ [1, 2, 3, 4]
+  desc :: []Num = 4 <- 1                ~ [4, 3, 2, 1]
 
-  count = asc.size              ~ 4 (inclusive count = |hi - lo| + 1)
+  ~ Inclusive count = |hi - lo| + 1.
+  assertEq(asc.size, 4)
 
   ~ Ascending: first endpoint is the small end, last is the large end.
-  lo = asc[0]                   ~ 1
-  hi = asc[3]                   ~ 4
+  assertEq(asc[0], 1)
+  assertEq(asc[3], 4)
 
   ~ Descending: the order is reversed — desc[0] is the larger end.
-  top    = desc[0]              ~ 4
-  bottom = desc[3]              ~ 1
+  assertEq(desc[0], 4)
+  assertEq(desc[3], 1)
 
   ~ A range iterates with `.each`, since it's just a `[]Num`.
-  asc.each(n => print(n))       ~ prints 1, 2, 3, 4
-
-  count + lo + hi + top + bottom   ~ 4 + 1 + 4 + 4 + 1 = exit 14
+  asc.each(n => print(n))               ~ prints 1, 2, 3, 4
+  assertEq(asc[1], 2)
 >

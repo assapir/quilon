@@ -2,23 +2,25 @@
 ~ the built-in array methods (`.each`/`.map`/`.filter`/`.reduce`) and with
 ~ recursion (a self-tail-call is compiled to a loop, so even deep recursion runs
 ~ in constant stack). `.each` is the direct replacement for a side-effecting loop.
+~ `<< core.test` verifies the folded result; on success the program exits 0.
 << core.io
+<< core.test
 
-^ = () -> Num => <
-  nums = [1, 2, 3, 4, 5]
+^ = () -> $ => <
+  nums :: []Num = [1, 2, 3, 4, 5]
 
   ~ `.each` runs a body for its side effects and returns the receiver (chainable).
   ~ It is the direct replacement for a side-effecting loop over the elements.
   nums.each(n => print(n))              ~ prints 1, 2, 3, 4, 5
 
   ~ Fold without a mutable accumulator: double each element, then sum.
-  sum = nums
+  sum :: Num = nums
     .map(n => n * 2)                    ~ [2, 4, 6, 8, 10]
     .reduce(0, (acc, n) => acc + n)     ~ 30
+  assertEq(sum, 30)
 
   ~ A range `lo <- hi` is just a `[]Num`, so it iterates the same way.
-  digits = 1 <- 4
+  digits :: []Num = 1 <- 4
   digits.each(n => print(n))            ~ prints 1, 2, 3, 4
-
-  sum + 12                              ~ exit 42
+  assertEq(digits.size, 4)
 >

@@ -1,11 +1,14 @@
 ~ Named record types can declare methods. Inside a method, `it` is the instance.
+~ `<< core.test` verifies the method result; on success the program exits 0.
+<< core.test
+
 Counter = {
   value :: Num,
 
   bump = (by :: Num) -> Num => it.value + by
 }
 
-^ = () -> Num => <
-  c = Counter { value = 30 }
-  c.bump(5)        ~ it.value + 5 = 35
+^ = () -> $ => <
+  c :: Counter = Counter { value = 30 }
+  assertEq(c.bump(5), 35)   ~ it.value + 5
 >

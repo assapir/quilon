@@ -1,6 +1,10 @@
 ~ Records are anonymous structs with named fields; access fields with `.`.
 ~ (Fields can hold any type — Text, arrays, etc.; see examples/composites.ql.)
-^ = () -> Num => <
+~ `<< core.test` verifies the field reads; on success the program exits 0.
+<< core.test
+
+^ = () -> $ => <
   rect = { width = 4, height = 7 }
-  rect.width * rect.height      ~ exit 28
+  area :: Num = rect.width * rect.height
+  assertEq(area, 28)
 >

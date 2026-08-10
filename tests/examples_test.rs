@@ -1,6 +1,7 @@
-//! Examples gate: guarantees every file in `examples/` stays compilable (and, for
-//! runnable ones, keeps its documented exit code). Running under `cargo test`, this
-//! is the CI gate that stops examples from rotting as the language evolves.
+//! Examples gate: guarantees every file in `examples/` stays compilable, and that
+//! every runnable one is SELF-ASSERTING — it verifies its own results in-language
+//! (via `<< core.test`) and exits 0. Running under `cargo test`, this is the CI gate
+//! that stops examples from rotting as the language evolves.
 
 use quilon::ast::Program;
 use quilon::lexer::Lexer;
@@ -36,56 +37,6 @@ fn front_end(path: &Path) -> Result<Program, String> {
 /// Examples that are intentionally rejected by the compiler (negative examples).
 const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql"];
 
-/// Runnable examples (define `^`) and their documented exit codes.
-const EXPECTED_EXIT: &[(&str, i32)] = &[
-    ("hello_world.ql", 42),
-    ("arithmetic.ql", 0),
-    ("logic.ql", 0),
-    ("factorial.ql", 120),
-    ("fibonacci.ql", 55),
-    ("pattern_match.ql", 50),
-    ("arrays.ql", 5),
-    ("array_methods.ql", 52),
-    ("iteration.ql", 42),
-    ("ranges.ql", 14),
-    ("spread.ql", 56),
-    ("array_concat.ql", 38),
-    ("pipeline.ql", 25),
-    ("deep_calls.ql", 0),
-    ("text.ql", 7),
-    ("text_methods.ql", 0),
-    ("io.ql", 0),
-    ("records.ql", 28),
-    ("composites.ql", 12),
-    ("methods.ql", 35),
-    ("mutation.ql", 42),
-    ("result.ql", 84),
-    // Concrete Result payloads: bind+use a Text `Ok`/`NotOk` payload, overload-dispatch
-    // on it, plus numeric/`$` payloads. 9 + 5 + 2 + 10 + 1 = 27.
-    ("result_payload.ql", 27),
-    ("sum_types.ql", 42),
-    ("use_module.ql", 5),
-    ("unit.ql", 0),
-    // `<< core.test`: every assertion holds, so the program runs to completion (exit
-    // 0). A FAILING assertion instead exits 101 — see tests/assert_test.rs.
-    ("assert_demo.ql", 0),
-    ("overloading.ql", 161),
-    // Recurses 1_000_000 deep; only terminates because self-tail-recursion is lowered
-    // to a loop (guaranteed TCO). 1_000_000 mod 251 = 16.
-    ("tail_recursion.ql", 16),
-    ("closures.ql", 42),
-    // `^(args :: []Text, env :: [][]Text)`. Exit is invocation-independent (argv[0] is
-    // always present, env size is always non-negative), so the JIT and native AOT — run
-    // with different argv — must agree on 7.
-    ("args.ql", 7),
-    // `<< core.cli` + `<< core.test`: getEnv/hasFlag/getOpt over fixed args/env fixtures.
-    // Every assertion holds, so it runs to completion (exit 0).
-    ("cli.ql", 0),
-    // Statement boundaries: a line-first `(` / `[` begins a NEW statement (never a
-    // call/index continuation). Self-asserting via `<< core.test` (exit 0).
-    ("statements.ql", 0),
-];
-
 fn ql_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
         .expect("examples/ should exist")
@@ -94,6 +45,25 @@ fn ql_files() -> Vec<PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+/// A file defines an entry point (`^`) iff some line starts with `^`.
+fn defines_entry(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| src.lines().any(|l| l.trim_start().starts_with("^")))
+        .unwrap_or(false)
+}
+
+/// The runnable examples: every `.ql` that defines `^` and is not a negative example.
+/// A new runnable example is picked up automatically — no per-file registration.
+fn runnable_examples() -> Vec<PathBuf> {
+    ql_files()
+        .into_iter()
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            !EXPECT_COMPILE_ERROR.contains(&name.as_str()) && defines_entry(p)
+        })
+        .collect()
 }
 
 /// Every `.ql` in examples/ must either compile, or (if a known negative) fail to.
@@ -118,16 +88,37 @@ fn all_examples_compile() {
     }
 }
 
-/// Every runnable example produces its documented exit code via the JIT.
+/// The self-asserting contract, enforced statically: every runnable example must
+/// import `<< core.test` and actually call an `assert*` helper. Exiting 0 alone is a
+/// weak signal (a program with no checks trivially passes), so this keeps every
+/// example genuinely verifying its own results — the invariant the docs promise.
 #[test]
-fn runnable_examples_have_expected_exit_codes() {
+fn every_runnable_example_self_asserts() {
+    for path in runnable_examples() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            src.contains("<< core.test"),
+            "{name} is runnable but does not import `<< core.test` (not self-asserting)"
+        );
+        assert!(
+            src.contains("assert"),
+            "{name} imports core.test but never calls an `assert*` helper"
+        );
+    }
+}
+
+/// Every runnable example is self-asserting: it exits 0 under the in-process JIT.
+/// (A failed in-language assertion exits 101, so any regression fails here.)
+#[test]
+fn runnable_examples_exit_zero() {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    for (name, expected) in EXPECTED_EXIT {
-        let path = examples_dir().join(name);
+    for path in runnable_examples() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
         let program = front_end(&path).unwrap_or_else(|e| panic!("{name} failed to compile: {e}"));
         let code = jit::run_program(&program, &["program".to_string()])
             .unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
-        assert_eq!(code, *expected, "{name}: wrong exit code");
+        assert_eq!(code, 0, "{name}: self-asserting example did not exit 0");
     }
 }
 
@@ -177,11 +168,12 @@ fn ensure_runtime_lib(bin_dir: &Path) {
         .expect("copy fresh libquilon_rt.a next to the quilon binary");
 }
 
-/// Every runnable example must produce its documented exit code via the in-process
-/// JIT (`quilon run`) AND via native AOT (`quilon build`, which emits the object
-/// in-process and links) under BOTH linkers (`clang` and `gcc`) — and all paths
-/// must agree. This keeps the JIT and the two native link paths from silently
-/// diverging (e.g. an intrinsic only the JIT resolves, or a linker-specific break).
+/// Every runnable example must exit 0 via the in-process JIT (`quilon run`) AND via
+/// native AOT (`quilon build`, which emits the object in-process and links) under
+/// BOTH linkers (`clang` and `gcc`) — and all paths must agree. This keeps the JIT
+/// and the two native link paths from silently diverging (e.g. an intrinsic only the
+/// JIT resolves, or a linker-specific break). A failed in-language assertion exits
+/// 101, so a broken example fails the gate naturally.
 /// Skips a linker only if it's genuinely absent on PATH.
 #[test]
 fn runnable_examples_match_across_jit_and_aot() {
@@ -201,16 +193,16 @@ fn runnable_examples_match_across_jit_and_aot() {
     let tmp = std::env::temp_dir().join(format!("quilon_aot_gate_{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir");
 
-    for (name, expected) in EXPECTED_EXIT {
-        let src = examples_dir().join(name);
+    for src in runnable_examples() {
+        let name = src.file_name().unwrap().to_string_lossy().to_string();
 
-        // In-process JIT.
+        // In-process JIT: every self-asserting example exits 0.
         let jit = Command::new(quilon)
             .args(["run", src.to_str().unwrap()])
             .output()
             .expect("run quilon run");
         let jit_code = jit.status.code().unwrap_or(-1);
-        assert_eq!(jit_code, *expected, "{name}: JIT exit code wrong");
+        assert_eq!(jit_code, 0, "{name}: JIT exit code wrong (expected 0)");
 
         // Native AOT via each available linker (`quilon build --linker ...`).
         for linker in &linkers {
@@ -229,8 +221,8 @@ fn runnable_examples_match_across_jit_and_aot() {
             let native = Command::new(&bin).output().expect("run native binary");
             let native_code = native.status.code().unwrap_or(-1);
             assert_eq!(
-                native_code, *expected,
-                "{name}: native AOT ({linker}) exit code wrong"
+                native_code, 0,
+                "{name}: native AOT ({linker}) exit code wrong (expected 0)"
             );
             assert_eq!(
                 native_code, jit_code,
@@ -241,25 +233,4 @@ fn runnable_examples_match_across_jit_and_aot() {
 
     // Best-effort cleanup of this run's intermediates.
     let _ = std::fs::remove_dir_all(&tmp);
-}
-
-/// Keep the exit-code table honest: every runnable example (one defining `^`, and
-/// not a negative) must be listed in EXPECTED_EXIT, so none silently goes unrun.
-#[test]
-fn every_runnable_example_is_listed() {
-    for path in ql_files() {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        if EXPECT_COMPILE_ERROR.contains(&name.as_str()) {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).unwrap();
-        let defines_entry = src.lines().any(|l| l.trim_start().starts_with("^"));
-        let listed = EXPECTED_EXIT.iter().any(|(n, _)| *n == name);
-        if defines_entry {
-            assert!(
-                listed,
-                "{name} defines `^` but is missing from EXPECTED_EXIT"
-            );
-        }
-    }
 }

@@ -1,4 +1,8 @@
 ~ Import a local module by relative path and use its exported `add`.
+~ `<< core.test` verifies the imported function's result; on success the program exits 0.
 << "mathlib.ql"
+<< core.test
 
-^ = () -> Num => add(2, 3)   ~ exit 5
+^ = () -> $ => <
+  assertEq(add(2, 3), 5)
+>
