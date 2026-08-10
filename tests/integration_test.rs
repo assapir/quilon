@@ -122,3 +122,27 @@ fn test_inline_result_matching() {
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
 }
+
+#[test]
+fn deeply_nested_calls_check_in_linear_time() {
+    // Argument re-inference at call sites was once exponential in nesting depth
+    // (each level inferred its first argument twice -> 2^depth); 26 levels took
+    // minutes. 60 levels must check instantly. `|>` pipelines desugar to exactly
+    // this first-arg-nested shape, so this also covers long pipelines.
+    let n = 60;
+    let src = format!(
+        "g = (n :: Num) -> Num => n + 1\n^ = () -> Num => {}1{}",
+        "g(".repeat(n),
+        ")".repeat(n)
+    );
+    let tokens = Lexer::tokenize(&src).expect("lexing failed");
+    let program = parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let start = std::time::Instant::now();
+    checker.check_program(&program).expect("checking failed");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "deep call chain took {:?} — argument inference is super-linear again",
+        start.elapsed()
+    );
+}

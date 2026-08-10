@@ -35,6 +35,13 @@ Install these **before** building or running Quilon:
 - **libgc (Boehm GC)** — the runtime garbage collector, and a hard dependency: it is required to **build** the `quilon` compiler, to **`quilon run`** (the JIT resolves `GC_*` in-process), **and** it is **dynamically linked into the native executables** produced by `quilon build` — so libgc must also be present wherever those binaries run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
 - **A C toolchain** — `clang` (default) or `gcc`, plus `llc` (ships with LLVM). Used by `quilon build` to assemble and link native executables. Not needed for `quilon run` (JIT).
 
+A compiled `quilon` binary is otherwise **self-contained**: the runtime static
+library (`libquilon_rt.a`) is embedded, gzip-compressed, in the binary itself,
+so `quilon build` works from a bare binary download (e.g. a GitHub release)
+with no extra files — the first build decompresses the runtime into
+`$XDG_CACHE_HOME/quilon` (default `~/.cache/quilon`); later builds reuse that
+cached copy. Only the system libraries above (notably libgc) must be installed.
+
 ## Build & run
 
 ```bash
@@ -44,10 +51,12 @@ cargo build --release                        # binary at target/release/quilon
 ./target/release/quilon check program.ql     # typecheck only
 ```
 
-`cargo build --release` is all you need: its build script also produces and places
-the runtime static library (`libquilon_rt.a`) next to the `quilon` binary, so
-`quilon build` links it automatically — no extra step. Native builds link with
-`clang` by default; pass `--linker gcc` to use gcc instead.
+`cargo build --release` is all you need: `quilon build` locates the runtime
+static library (`libquilon_rt.a`) automatically — a `QUILON_RT_LIB` environment
+variable override, then a copy next to the `quilon` binary (the build script
+places one there), then the compressed copy embedded in the binary (see
+Prerequisites) — no extra step. Native builds link with `clang` by default;
+pass `--linker gcc` to use gcc instead.
 
 ## Vision (aspirational)
 

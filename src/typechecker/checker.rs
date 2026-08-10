@@ -2013,15 +2013,26 @@ impl TypeChecker {
             return Ok(sum_type);
         }
 
+        // Infer the FIRST argument exactly once and reuse the result in every probe
+        // and branch below. The receiver probes (array/Text/method dispatch) and the
+        // overload/fallback argument loops all need `args[0]`'s type; inferring it in
+        // each place made every nesting level infer its subtree twice — 2^depth work,
+        // which visibly hung the checker on ~25-deep call chains (and `|>` pipelines,
+        // which desugar to exactly that shape).
+        let first_ty = if let (Expr::Ident { .. }, false) = (func, args.is_empty()) {
+            Some(self.infer_expr(&args[0])?)
+        } else {
+            None
+        };
+
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) take
         // precedence over any user overload of the same name: when the receiver
         // (`args[0]`) is an array, the method is RESERVED and resolved here, before
         // overload dispatch. (A user can still define e.g. `map` on a non-array type;
         // dispatch only diverts to the built-in when the receiver is an array.)
         if let Expr::Ident { name, .. } = func
-            && !args.is_empty()
             && crate::ast::is_array_method(name)
-            && let Type::Array(elem_type) = self.infer_expr(&args[0])?
+            && let Some(Type::Array(elem_type)) = first_ty.clone()
         {
             return self.check_array_method(name, *elem_type, args, span);
         }
@@ -2032,25 +2043,22 @@ impl TypeChecker {
         // resolved here ahead of any same-named user overload. (A user may still define
         // e.g. `trim` on a non-Text type; dispatch only diverts on a Text receiver.)
         if let Expr::Ident { name, .. } = func
-            && !args.is_empty()
             && crate::ast::is_text_method(name)
-            && matches!(self.infer_expr(&args[0])?, Type::Text)
+            && matches!(first_ty, Some(Type::Text))
         {
             return self.check_text_method(name, args, span);
         }
 
         // Check if this is a method call: func is Ident and first arg is a Named type
         if let Expr::Ident { name, .. } = func
-            && !args.is_empty()
+            && let Some(first_arg_type) = &first_ty
         {
-            let first_arg_type = self.infer_expr(&args[0])?;
-
             // Check if first argument is a Named type with this method
             if let Type::Named {
                 name: type_name,
                 fields: _,
                 methods: _,
-            } = &first_arg_type
+            } = first_arg_type
             {
                 // Look up method in the type's method list
                 if let Some(method_sig) = self
@@ -2112,8 +2120,11 @@ impl TypeChecker {
             && self.overloads.contains_key(name)
         {
             let mut arg_types = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_types.push(self.infer_expr(arg)?);
+            for (i, arg) in args.iter().enumerate() {
+                arg_types.push(match (i, &first_ty) {
+                    (0, Some(ty)) => ty.clone(),
+                    _ => self.infer_expr(arg)?,
+                });
             }
             return self.resolve_overload(name, &arg_types, span);
         }
@@ -2135,8 +2146,11 @@ impl TypeChecker {
                 }
 
                 // Type the arguments once, then check against the resolved signature.
-                for (param_type, arg) in params.iter().zip(args.iter()) {
-                    let arg_type = self.infer_expr(arg)?;
+                for (i, (param_type, arg)) in params.iter().zip(args.iter()).enumerate() {
+                    let arg_type = match (i, &first_ty) {
+                        (0, Some(ty)) => ty.clone(),
+                        _ => self.infer_expr(arg)?,
+                    };
                     self.check_type_compatibility(param_type, &arg_type, span)?;
                 }
                 Ok(*return_type)

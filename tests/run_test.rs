@@ -52,6 +52,43 @@ fn run_simple_arithmetic() {
 }
 
 #[test]
+fn run_subtraction_and_multiplication() {
+    // Explicit end-to-end coverage for the `-` and `*` codegen arms. 1 + 2 = 3.
+    assert_exit(
+        "^ = () -> Num => (50 - 8 == 42 ? 1 : 0) + (6 * 7 == 42 ? 2 : 0)",
+        3,
+    );
+}
+
+#[test]
+fn run_unary_minus_and_double_negation() {
+    // `-x` negates; `-(-x)` round-trips back to the original value. 1 + 2 = 3.
+    assert_exit(
+        "^ = () -> Num => <\n  x = 5\n  y = (-x == -5 ? 1 : 0) + (-(-x) == 5 ? 2 : 0)\n  y\n>",
+        3,
+    );
+}
+
+#[test]
+fn run_division_and_mixed_fractional_arithmetic() {
+    // `/` produces fractions that keep working in further arithmetic, and
+    // integer/fractional literals mix freely. 1 + 2 + 4 + 8 = 15.
+    assert_exit(
+        "^ = () -> Num => (7 / 2 == 3.5 ? 1 : 0) + (7 / 2 + 7 / 2 == 7 ? 2 : 0) + (42 + 3.14 == 45.14 ? 4 : 0) + (2.5 * 4 == 10 ? 8 : 0)",
+        15,
+    );
+}
+
+#[test]
+fn run_arithmetic_precedence_and_parentheses() {
+    // `*` / `/` / `%` bind tighter than `+` / `-`; parentheses override. 1 + 2 + 4 + 8 = 15.
+    assert_exit(
+        "^ = () -> Num => (2 + 3 * 4 == 14 ? 1 : 0) + ((2 + 3) * 4 == 20 ? 2 : 0) + (10 - 6 / 2 == 7 ? 4 : 0) + (20 % 7 - 2 * 3 == 0 ? 8 : 0)",
+        15,
+    );
+}
+
+#[test]
 fn run_factorial() {
     // examples/factorial.ql -> factorial(5) = 120
     assert_exit(
@@ -758,6 +795,63 @@ fn unterminated_block_with_only_midline_gt_is_an_error() {
     assert!(
         parser::parse(&tokens).is_err(),
         "an unterminated block must be a parse error"
+    );
+}
+
+#[test]
+fn modulo_works_end_to_end() {
+    // `%` was once documented and type-checked but had NO codegen arm — it passed
+    // `check` and died at run/build with an internal error. It lowers to the f64
+    // remainder (LLVM frem == C fmod).
+    assert_exit("^ = () -> Num => 7 % 3", 1);
+}
+
+#[test]
+fn modulo_sign_follows_dividend() {
+    // fmod semantics: the result takes the DIVIDEND's sign.
+    assert_exit(
+        "^ = () -> Num => ((0 - 7) % 3 == 0 - 1 ? 1 : 0) + (7 % (0 - 3) == 1 ? 2 : 0)",
+        3,
+    );
+}
+
+#[test]
+fn modulo_handles_fractional_operands() {
+    // One unified f64 Num: `%` must work on fractional operands too.
+    assert_exit(
+        "^ = () -> Num => (7.5 % 2 == 1.5 ? 1 : 0) + (10 % 2.5 == 0 ? 2 : 0)",
+        3,
+    );
+}
+
+#[test]
+fn logical_operators_short_circuit() {
+    // `&&`/`||` were once lowered as EAGER bitwise and/or — both operands always
+    // ran. The side-effecting right operand must run only when the left does not
+    // already decide the result: here only bump(4) and bump(8) may run.
+    assert_exit(
+        "^ = () -> Num => <\n  hits := 0\n  bump = (x :: Num) -> Bool => <\n    hits := hits + x\n    x > 0\n  >\n  a = false && bump(1)\n  b = true || bump(2)\n  c = true && bump(4)\n  d = false || bump(8)\n  hits\n>",
+        12,
+    );
+}
+
+#[test]
+fn logical_operators_truth_table_unchanged() {
+    // Short-circuit lowering must not change the VALUES: full truth table for the
+    // decided and undecided paths of both operators. 1 + 8 + 32 = 41.
+    assert_exit(
+        "^ = () -> Num => <\n  t = (true && true ? 1 : 0) + (true && false ? 2 : 0) + (false && false ? 4 : 0) + (true || false ? 8 : 0) + (false || false ? 16 : 0) + (false || true ? 32 : 0)\n  t\n>",
+        41,
+    );
+}
+
+#[test]
+fn short_circuit_guards_unchecked_indexing() {
+    // The canonical guard idiom: with eager `&&` this performed an out-of-bounds read
+    // of a[5]; with short-circuit it must skip the index entirely and take the else.
+    assert_exit(
+        "^ = () -> Num => <\n  a = [10, 20, 30]\n  i = 5\n  ok = i < a.size && a[i] == 10\n  ok ? 1 : 2\n>",
+        2,
     );
 }
 

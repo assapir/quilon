@@ -38,6 +38,29 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- `quilon build` was unusable from a distributed binary (a GitHub-release
+  download or any machine other than the one that compiled the compiler): it
+  looked for `libquilon_rt.a` at a path baked in at compile time and next to
+  the binary, and releases ship the bare binary only. The runtime archive is
+  now **embedded, gzip-compressed, in the `quilon` binary itself** and
+  decompressed on first use into the per-user cache (`$XDG_CACHE_HOME/quilon`,
+  default `~/.cache/quilon`), keyed by content hash so a new compiler never
+  links a stale archive and later builds reuse the cached copy without
+  re-decompressing. A system-provided archive always wins over the embedded
+  one — lookup order: a `QUILON_RT_LIB` environment variable set at run time
+  (developer override) → `libquilon_rt.a` next to the binary (dev loop) → the
+  cached extraction → decompress the embedded copy. `quilon build` is now
+  fully self-contained; the system libgc requirement remains and is tracked
+  separately. (#78)
+- `%` (modulo) had no codegen: it was documented and type-checked, then failed
+  at `run`/`build` with an internal "Unsupported binary operation" error. It now
+  lowers to the f64 remainder (LLVM `frem`, i.e. C `fmod`): works on fractional
+  operands, and the result takes the dividend's sign. (#73)
+- `&&` and `||` now actually short-circuit, as documented — the right operand
+  is evaluated only when the left does not already decide the result. They were
+  lowered as eager bitwise and/or, so `false && f(x)` ran `f`'s side effects and
+  the guard idiom `i < a.size && a[i] == k` always performed the (unchecked)
+  index. (#71)
 - A literal or nested constructor inside a constructor pattern (`Ok(1)`,
   `Ok(Ok(x))`) was accepted by the checker but silently ignored by codegen —
   the arm matched *any* payload of the variant, so the wrong arm could win with
@@ -51,6 +74,14 @@ All notable changes to Quilon are documented here.
   record to `p`). Every function/method/lambda emission now starts from an empty
   per-function frame, and closures carry their captured variables' type metadata
   into the lifted frame explicitly. (#68)
+
+### Fixed
+
+- Type checking deeply nested call chains was exponential in nesting depth —
+  every call site inferred its first argument twice, so ~22 nested calls took
+  seconds and ~26 hung the checker outright. Since `|>` desugars to first-arg
+  nesting, long pipelines hit the same wall. Each argument is now inferred
+  exactly once per call site; 60-deep chains check instantly.
 
 ## 0.9.0 — "Stable basics"
 
