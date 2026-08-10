@@ -926,6 +926,30 @@ fn run_closure_returning_array_is_usable() {
 }
 
 #[test]
+fn run_array_literal_survives_escaping_its_frame() {
+    // Regression: an array literal stored in a record field and RETURNED must keep its
+    // backing store alive after the defining frame dies. Here `make` returns a record
+    // holding `[10,20,30]`; a later `clobber` call reuses the same stack region with a
+    // fresh `[77,77,77]`. If the literal were stack-allocated, `p.xs` would dangle and
+    // read `clobber`'s locals (observed exit 77); heap allocation makes it read 10.
+    let src = r#"
+        Pair = { xs :: []Num }
+        make = () -> Pair => Pair { xs = [10, 20, 30] }
+        clobber = (x :: Num) -> Num => <
+          c = [x, x, x]
+          c[0]
+        >
+        ^ = () -> Num => <
+          p = make()
+          z = clobber(77)
+          b = p.xs
+          b[0]
+        >
+    "#;
+    assert_exit(src, 10);
+}
+
+#[test]
 fn run_method_returning_array_is_usable() {
     // Regression: a record method with an array return type must yield the `{ptr,i64}`
     // value (heap-backed), usable with `.size` / indexing after the call returns.

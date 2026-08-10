@@ -209,3 +209,42 @@ fn tail_call_args_use_pre_update_param_values() {
         15,
     );
 }
+
+/// A tail self-call whose body builds AND indexes an array literal each iteration must
+/// still run in constant stack. Regression: array indexing used to `alloca` a temporary
+/// to read the `{ptr,size}` fields, and array literals used to `alloca` their backing
+/// store; either `alloca`, emitted at the loop's insert point, re-allocated every
+/// iteration and overflowed the stack at depth. Now the backing store is heap-allocated
+/// and the field reads use `extractvalue`, so no `alloca` lands in the loop body.
+/// f(1_000_000, 0) sums a[0]==1 a million times -> 1_000_000 (the in-process harness
+/// returns the full value; a real process would mask it to 8 bits -> 64). Reaching a
+/// deterministic value AT ALL is the guarantee — without the fix this overflows.
+#[test]
+fn deep_tail_recursion_with_array_literal_does_not_overflow() {
+    assert_exit(
+        "f = (n :: Num, acc :: Num) -> Num => <\n\
+           a = [1, 2, 3]\n\
+           n <= 0 ? acc : f(n - 1, acc + a[0])\n\
+         >\n\
+         ^ = () -> Num => f(1000000, 0)",
+        1000000,
+    );
+}
+
+/// The same guarantee for a RANGE literal (`lo <- hi`) — array sugar producing a
+/// `[]Num` — built and indexed each iteration of a tail-recursive loop. Regression:
+/// range lowering materialized its `{ptr,size}` struct through a raw `alloca` at the
+/// range's exit block, which re-allocated every TCO iteration and overflowed the stack;
+/// it now uses the shared entry-block `array_struct` helper. Sums r[0]==1 a million
+/// times -> 1_000_000 (constant stack).
+#[test]
+fn deep_tail_recursion_with_range_literal_does_not_overflow() {
+    assert_exit(
+        "f = (n :: Num, acc :: Num) -> Num => <\n\
+           r = 1 <- 3\n\
+           n <= 0 ? acc : f(n - 1, acc + r[0])\n\
+         >\n\
+         ^ = () -> Num => f(1000000, 0)",
+        1000000,
+    );
+}

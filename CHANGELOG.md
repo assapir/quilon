@@ -49,6 +49,20 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- Array and range literals used in a self-tail-recursive loop no longer overflow
+  the stack. Two codegen paths materialized an array's `{ptr, size}` struct
+  through a raw `alloca` at the current insert point — array indexing (`arr[i]`,
+  to read the fields) and range lowering (`lo <- hi`, to build the result). A
+  self-tail-call is lowered to a loop, so such an `alloca` re-ran every iteration
+  and grew the stack without bound; a loop that built and indexed an array or
+  range literal crashed at depth, violating the constant-stack guarantee. Index
+  field reads now use `extractvalue` (purely in registers) and range results go
+  through the shared entry-block `array_struct` helper, so no `alloca` lands in
+  the loop body. (The companion escape hazard — an array literal returned from a
+  function reading garbage after its frame died — was fixed earlier by
+  heap-allocating literal backing stores; all sub-cases now have regression
+  coverage, including a self-asserting `examples/array_literal_lifetime.ql`.)
+  (#67)
 - `quilon build` was unusable from a distributed binary (a GitHub-release
   download or any machine other than the one that compiled the compiler): it
   looked for `libquilon_rt.a` at a path baked in at compile time and next to

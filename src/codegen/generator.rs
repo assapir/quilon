@@ -3604,30 +3604,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_unconditional_branch(header)
             .map_err(|e| format!("Failed to loop range: {:?}", e))?;
 
-        // Build the { ptr, size } array struct (the shared array/Text shape).
+        // Build the `{ptr, size}` array struct via the shared helper (used by every other
+        // array producer). It allocates the struct slot in the function ENTRY block, not at
+        // this insert point: a range literal is an ordinary expression that can appear in a
+        // tail-recursive function body, and a raw `alloca` in this `exit` block would land
+        // inside the TCO-lowered loop and re-allocate every iteration, overflowing the stack.
         self.builder.position_at_end(exit);
-        let array_struct_type = self.ptr_len_struct_type();
-        let array_struct = self
-            .builder
-            .build_alloca(array_struct_type, "range_array")
-            .map_err(|e| format!("Failed to allocate range struct: {:?}", e))?;
-        let ptr_field = self
-            .builder
-            .build_struct_gep(array_struct_type, array_struct, 0, "range_ptr_field")
-            .map_err(|e| format!("Failed to get range ptr field: {:?}", e))?;
-        self.builder
-            .build_store(ptr_field, data_ptr)
-            .map_err(|e| format!("Failed to store range ptr: {:?}", e))?;
-        let size_field = self
-            .builder
-            .build_struct_gep(array_struct_type, array_struct, 1, "range_size_field")
-            .map_err(|e| format!("Failed to get range size field: {:?}", e))?;
-        self.builder
-            .build_store(size_field, count)
-            .map_err(|e| format!("Failed to store range size: {:?}", e))?;
-        self.builder
-            .build_load(array_struct_type, array_struct, "range_array")
-            .map_err(|e| format!("Failed to load range struct: {:?}", e))
+        self.array_struct(data_ptr, count)
     }
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
@@ -5087,51 +5070,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Generate the index expression
         let index_val = self.generate_expr(index_expr)?;
 
-        // Array is a struct { ptr data, i64 size }
-        // We need to:
-        // 1. Extract the data pointer (field 0)
-        // 2. Convert index from f64 to i64
-        // 3. Use GEP to get element pointer
-        // 4. Load the element
-
-        if let BasicValueEnum::StructValue(struct_val) = array_val {
-            // Store struct temporarily to access fields
-            let struct_type = struct_val.get_type();
-            let alloca = self
-                .builder
-                .build_alloca(struct_type, "temp_array")
-                .map_err(|e| format!("Failed to allocate temp: {:?}", e))?;
-
-            self.builder
-                .build_store(alloca, struct_val)
-                .map_err(|e| format!("Failed to store array: {:?}", e))?;
-
-            // Get data pointer (field 0)
-            let data_field = self
-                .builder
-                .build_struct_gep(struct_type, alloca, 0, "data_ptr_field")
-                .map_err(|e| format!("Failed to get data field: {:?}", e))?;
-
-            let data_ptr = self
-                .builder
-                .build_load(
-                    self.context.ptr_type(AddressSpace::default()),
-                    data_field,
-                    "data_ptr",
-                )
-                .map_err(|e| format!("Failed to load data ptr: {:?}", e))?
-                .into_pointer_value();
-
-            // Get size (field 1) for the bounds check.
-            let size_field = self
-                .builder
-                .build_struct_gep(struct_type, alloca, 1, "size_field")
-                .map_err(|e| format!("Failed to get size field: {:?}", e))?;
-            let size = self
-                .builder
-                .build_load(self.context.i64_type(), size_field, "size")
-                .map_err(|e| format!("Failed to load size: {:?}", e))?
-                .into_int_value();
+        // An array is a `{ ptr data, i64 size }` struct. To index it: read the data ptr and
+        // size fields, bounds-check the index, convert it f64->i64, then GEP + load the elem.
+        if let BasicValueEnum::StructValue(_) = array_val {
+            // Read the `{ptr, size}` fields straight out of the SSA struct value with
+            // `extractvalue` — no stack `alloca`/store round-trip. This is load-bearing for
+            // the constant-stack tail-call guarantee: `generate_index` emits at the current
+            // insert point, so any `alloca` here would land INSIDE a lowered tail-recursion
+            // loop and re-allocate on every iteration, growing the stack without bound until
+            // it overflows. Extraction keeps the field reads purely in registers.
+            let data_ptr = self.array_data_field(array_val)?;
+            let size = self.array_size_field(array_val)?;
 
             let idx_f = if let BasicValueEnum::FloatValue(f) = index_val {
                 f
