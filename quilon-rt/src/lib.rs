@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+//
+// Quilon runtime library (`quilon-rt`). Copyright (C) 2026 Assaf Sapir.
+//
+// This crate is free software licensed under version 2 of the GNU General
+// Public License (see LICENSE.md), WITH the Quilon runtime-library exception —
+// a Classpath-style linking exception (see LICENSE-EXCEPTION). The exception
+// means that programs you compile with Quilon, into which this runtime is
+// linked or embedded, are NOT placed under the GPL by that linking and may be
+// licensed under any terms. It frees only the compiled output: this crate's own
+// source remains GPLv2, so a fork of `quilon-rt` stays GPLv2.
+
 //! Quilon runtime intrinsics — linked into every compiled Quilon program.
 //!
 //! These are `#[unsafe(no_mangle)] extern "C"` symbols so they resolve identically

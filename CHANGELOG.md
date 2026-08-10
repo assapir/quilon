@@ -4,6 +4,22 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Runtime-library exception (licensing).** The Quilon runtime (`quilon-rt`),
+  which is statically linked and embedded into every binary `quilon build`
+  produces, now carries a Classpath-style linking exception on top of GPLv2 (see
+  `LICENSE-EXCEPTION.txt`). The exception also covers the runtime boilerplate the
+  compiler emits into its output (e.g. the generated C-compatible `main()`
+  wrapper). As a result, **programs you compile with Quilon are not brought under
+  the GPL by that linking and may be licensed under any terms**. The compiler and
+  the runtime *source* stay GPLv2 (forking either remains copyleft); the
+  exception is an additional grant that frees only the combined output. libgc
+  (Boehm GC), also linked in, is separately licensed under its own permissive
+  terms and needs no exception. `license` fields were added to the workspace
+  crates (`GPL-2.0-only`, and `GPL-2.0-only WITH Classpath-exception-2.0` for
+  `quilon-rt`) to make this machine-readable. (#93)
+
 ### Removed
 
 - **Breaking:** removed the `for n <- collection => body` loop (and its

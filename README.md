@@ -69,6 +69,26 @@ The longer-term goals that motivate the design — **not all implemented in 0.9*
 
 Today these are direction, not delivered features; the runtime is single-threaded and the parallel/non-blocking machinery is not built yet.
 
-## License
+## Licensing
 
-GPL-2.0.
+**Quilon the compiler is free software under the GNU GPL, version 2** (see
+[LICENSE.md](./LICENSE.md)). If you fork or modify the compiler — or the runtime
+library — that work stays GPLv2. The copyleft is intact.
+
+**Programs you compile with Quilon are yours to license however you want.** The
+Quilon runtime (`quilon-rt`) is statically linked and embedded into every binary
+`quilon build` produces, and normally GPL code linked into your program would
+pull the whole thing under the GPL. To prevent that, `quilon-rt` is
+**GPLv2 _with_ a Classpath-style runtime-library exception** (see
+[LICENSE-EXCEPTION.txt](./LICENSE-EXCEPTION.txt), the same model GCC and OpenJDK
+use). The exception also covers the runtime boilerplate the compiler emits into
+your output (such as the generated C-compatible `main()` wrapper). So the mere
+presence of these runtime bits does **not** place your compiled program under
+the GPL — you may release it under any license, including proprietary ones.
+
+The exception is an *additional grant on top of* GPLv2 and frees only the
+combined output. Forking `quilon-rt` itself remains GPLv2.
+
+Compiled programs also link **libgc (the Boehm GC)**, a separate third-party
+dependency under its own permissive, MIT-style license. It is not covered by,
+and does not need, the exception; its own license applies to it.
