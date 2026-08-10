@@ -4,10 +4,6 @@ version = "0.9.0"
 edition = "2024"
 authors = ["Assaf Sapir <assaf@sapir.io>"]
 description = "Quilon runtime intrinsics, linked into compiled programs (JIT and AOT)"
-# GPLv2 WITH the Quilon runtime-library exception (a Classpath-style linking
-# exception; SPDX `Classpath-exception-2.0`). See LICENSE.md and LICENSE-EXCEPTION.
-# The exception frees only the compiled output — programs built with Quilon may be
-# licensed however you like; this crate's own source stays GPLv2.
 license = "GPL-2.0-only WITH Classpath-exception-2.0"
 
 [lib]

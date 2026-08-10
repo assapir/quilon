@@ -1,3 +1,12 @@
+> **Runtime-library exception.** Quilon's runtime library (the `quilon-rt`
+> crate) and the code the compiler emits into compiled programs are
+> additionally covered by a runtime-library (Classpath-style) exception — see
+> [LICENSE-EXCEPTION.md](LICENSE-EXCEPTION.md). Programs you compile with Quilon
+> may be licensed however you wish. The exception is an additional grant on top
+> of the GPL below; it does not modify the GPL text that follows.
+
+---
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
 

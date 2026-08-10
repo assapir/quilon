@@ -1,5 +1,4 @@
-Quilon Runtime Library Exception
-================================
+# Quilon Runtime Library Exception
 
 This file states the special exception that applies to the Quilon runtime
 library (the `quilon-rt` crate) and to any runtime code that the Quilon

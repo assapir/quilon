@@ -80,7 +80,7 @@ Quilon runtime (`quilon-rt`) is statically linked and embedded into every binary
 `quilon build` produces, and normally GPL code linked into your program would
 pull the whole thing under the GPL. To prevent that, `quilon-rt` is
 **GPLv2 _with_ a Classpath-style runtime-library exception** (see
-[LICENSE-EXCEPTION.txt](./LICENSE-EXCEPTION.txt), the same model GCC and OpenJDK
+[LICENSE-EXCEPTION.md](./LICENSE-EXCEPTION.md), the same model GCC and OpenJDK
 use). The exception also covers the runtime boilerplate the compiler emits into
 your output (such as the generated C-compatible `main()` wrapper). So the mere
 presence of these runtime bits does **not** place your compiled program under

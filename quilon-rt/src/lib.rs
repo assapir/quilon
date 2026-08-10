@@ -4,7 +4,7 @@
 //
 // This crate is free software licensed under version 2 of the GNU General
 // Public License (see LICENSE.md), WITH the Quilon runtime-library exception —
-// a Classpath-style linking exception (see LICENSE-EXCEPTION). The exception
+// a Classpath-style linking exception (see LICENSE-EXCEPTION.md). The exception
 // means that programs you compile with Quilon, into which this runtime is
 // linked or embedded, are NOT placed under the GPL by that linking and may be
 // licensed under any terms. It frees only the compiled output: this crate's own
