@@ -79,6 +79,18 @@ All notable changes to Quilon are documented here.
   heap-allocating literal backing stores; all sub-cases now have regression
   coverage, including a self-asserting `examples/array_literal_lifetime.ql`.)
   (#67)
+- The recursive-descent parser had no recursion-depth limit, so deeply nested
+  input (e.g. ~2000 nested `(`, `[`, or `{`) overflowed the native stack and
+  aborted the compiler with a SIGABRT/core dump (exit 134) instead of producing
+  a diagnostic — any hostile or machine-generated file could crash `quilon`.
+  The parser now bounds nesting depth (max 128 levels) across every construct
+  that can nest unboundedly — parenthesized expressions, array/record literals,
+  block statements, `[]T` element types, nested constructor patterns
+  (`Ok(Ok(…))`), chained prefix operators (`---…x`), and `:=` chains — and
+  reports a clean, source-located
+  `path:line:col: error: expression nesting too deep …` diagnostic (exit 1) once
+  the limit is exceeded. Ordinary code nests only a handful of levels, so the
+  limit affects only pathological input. (#76)
 - `quilon build` was unusable from a distributed binary (a GitHub-release
   download or any machine other than the one that compiled the compiler): it
   looked for `libquilon_rt.a` at a path baked in at compile time and next to

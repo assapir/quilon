@@ -851,6 +851,14 @@ A span covering multiple lines underlines its first line. Failures with no
 source location (a missing file, an unresolved import) print a plain one-line
 message instead. Any compile error exits with status 1.
 
+To stay robust on hostile or machine-generated input, the parser also caps how
+deeply expressions may nest: nesting more than **128 levels** of parentheses,
+array/record literals, block statements, `[]T` element types, constructor
+patterns, or chained prefix operators is a parse error
+(`expression nesting too deep …`) rather than a crash.
+Ordinary code nests only a handful of levels, so this limit is reached only by
+pathological input.
+
 ---
 
 ## Feature matrix

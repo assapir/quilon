@@ -9,7 +9,25 @@ use crate::lexer::{Span, Token, TokenKind};
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// Current recursive-descent nesting depth, bounded by `MAX_NESTING_DEPTH`.
+    /// Incremented on entry to each unbounded-recursion funnel and decremented on
+    /// exit (see `nested`), so it always reflects the live parser stack. Guards
+    /// against a stack overflow on hostile or machine-generated deeply nested input.
+    depth: usize,
 }
+
+/// Maximum recursive-descent nesting depth the parser accepts before it reports a
+/// clean parse error instead of recursing until the native stack overflows.
+///
+/// Each source nesting level costs a full pass down the recursive grammar (for
+/// expressions, the ~14-function precedence chain), so the real stack-overflow
+/// threshold is a few hundred levels for expressions and higher for the lighter
+/// type/pattern recursions. 128 is a deliberately conservative ceiling: it keeps
+/// the deepest AST the parser will emit comfortably within reach of the *later*
+/// passes (the type checker and codegen recurse over that AST too, and overflow
+/// around a couple hundred levels), while remaining vastly deeper than any
+/// hand-written program legitimately nests.
+const MAX_NESTING_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
@@ -27,7 +45,36 @@ impl std::error::Error for ParseError {}
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    /// Run `f` one recursion level deeper, or fail loud if that would nest deeper
+    /// than `MAX_NESTING_DEPTH`. Every parser entry point that can re-enter itself
+    /// an unbounded number of times (`parse_expr`, `parse_type`, `parse_pattern`)
+    /// routes through here, which pairs the depth increment with its matching
+    /// decrement so no caller can leak or forget it. Returning a `ParseError`
+    /// instead of recursing is what turns a would-be native stack overflow (abort +
+    /// core dump) into an ordinary, source-located diagnostic.
+    fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(ParseError {
+                message: format!(
+                    "expression nesting too deep (exceeded the maximum depth of {MAX_NESTING_DEPTH}); simplify or split this deeply nested expression"
+                ),
+                span: self.current_span(),
+            });
+        }
+        self.depth += 1;
+        let result = f(self);
+        self.depth -= 1;
+        result
     }
 
     pub fn parse(tokens: &'a [Token]) -> Result<Program, ParseError> {
@@ -523,7 +570,16 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Depth-guarded entry point for `< … >` blocks. A block may hold nested named
+    /// function declarations whose bodies are themselves blocks
+    /// (`f = () => < g = () => < … > >`); that recursion runs through
+    /// `parse_item`/`parse_function_decl` rather than `parse_expr`, so blocks get
+    /// the `MAX_NESTING_DEPTH` bound here too.
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::parse_block_inner)
+    }
+
+    fn parse_block_inner(&mut self) -> Result<Expr, ParseError> {
         use crate::ast::Statement;
 
         let start = self.current_span();
@@ -573,7 +629,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_assignment()
+        // Single funnel for every nested expression: parens `(…)`, array elements,
+        // record/constructor field values, block statements, lambda/ternary/spread
+        // sub-expressions all re-enter here, so depth-guarding here bounds the whole
+        // expression grammar's recursion — deep nesting fails loud, never crashes.
+        self.nested(Self::parse_assignment)
     }
 
     /// Assignment is the lowest-precedence form. Parse a ternary; if it is a
@@ -586,7 +646,9 @@ impl<'a> Parser<'a> {
 
         if self.check(&TokenKind::MutAssign) && matches!(expr, Expr::FieldAccess { .. }) {
             self.advance(); // consume `:=`
-            let value = self.parse_assignment()?;
+            // Depth-guard the value: a `:=` chain (`a.x := b.y := …`) re-enters
+            // `parse_assignment` directly, bypassing the `parse_expr` funnel.
+            let value = self.nested(Self::parse_assignment)?;
             let span = Span::new(expr.span().start, value.span().end);
             return Ok(Expr::FieldAssign {
                 target: Box::new(expr),
@@ -664,7 +726,15 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Depth-guarded entry point for pattern parsing. A constructor pattern's
+    /// arguments recurse back into `parse_pattern` (`Ok(Ok(…))`), independently of
+    /// the expression grammar, so nested patterns get the same `MAX_NESTING_DEPTH`
+    /// bound to keep deeply nested patterns from overflowing the stack.
     fn parse_pattern(&mut self) -> Result<crate::ast::Pattern, ParseError> {
+        self.nested(Self::parse_pattern_inner)
+    }
+
+    fn parse_pattern_inner(&mut self) -> Result<crate::ast::Pattern, ParseError> {
         use crate::ast::Pattern;
 
         let token = self.peek();
@@ -873,7 +943,10 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::Minus) {
             let start = self.current_span();
             self.advance();
-            let expr = self.parse_unary()?;
+            // Depth-guard the operand: a chain of prefix operators (`---…x`,
+            // `!!!…x`) re-enters `parse_unary` without passing through `parse_expr`,
+            // so bound it here too to keep deep chains from overflowing the stack.
+            let expr = self.nested(Self::parse_unary)?;
             let span = Span::new(start.start, expr.span().end);
             return Ok(Expr::UnaryOp {
                 op: UnaryOp::Neg,
@@ -885,7 +958,7 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::Not) {
             let start = self.current_span();
             self.advance();
-            let expr = self.parse_unary()?;
+            let expr = self.nested(Self::parse_unary)?; // depth-guarded (see Neg branch)
             let span = Span::new(start.start, expr.span().end);
             return Ok(Expr::UnaryOp {
                 op: UnaryOp::Not,
@@ -1420,7 +1493,14 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Depth-guarded entry point for type parsing. Type syntax recurses independently
+    /// of the expression grammar (`[]T` element types), so it needs the same
+    /// `MAX_NESTING_DEPTH` bound to keep `[][]…[]T` from overflowing the stack.
     fn parse_type(&mut self) -> Result<crate::ast::Type, ParseError> {
+        self.nested(Self::parse_type_inner)
+    }
+
+    fn parse_type_inner(&mut self) -> Result<crate::ast::Type, ParseError> {
         let token = self.peek();
 
         // `$` in type position is the Unit type (e.g. `-> $`). Matched on the token
