@@ -980,6 +980,40 @@ fn run_line_first_bracket_is_new_statement() {
 }
 
 #[test]
+fn run_line_first_brace_is_new_statement() {
+    // Same for `{`: `b = a` followed by a line `{ x = 1 }` used to fuse into the record
+    // constructor `a { x = 1 }`. Now `b` stays bound to `a` and the brace line is its
+    // own record statement; the entry point exits with b.x = 5, not 1.
+    let src = r#"
+        Point = { x :: Num }
+        ^ = () -> Num => <
+          a = Point { x = 5 }
+          b = a
+          { x = 1 }
+          b.x
+        >
+    "#;
+    assert_exit(src, 5);
+}
+
+#[test]
+fn run_multiline_constructor_body_still_one_constructor() {
+    // The rule gates only a LINE-FIRST `{`: a `{` opened on the type's line is still a
+    // constructor, and its field body may span lines. Point { x=3, y=4 } -> 3 + 4 = 7.
+    let src = r#"
+        Point = { x :: Num, y :: Num }
+        ^ = () -> Num => <
+          p = Point {
+            x = 3,
+            y = 4
+          }
+          p.x + p.y
+        >
+    "#;
+    assert_exit(src, 7);
+}
+
+#[test]
 fn run_multiline_arguments_and_dot_chains_still_work() {
     // The rule gates only a LINE-FIRST `(` / `[`: an argument list opened on the
     // callee's line may span lines, and a continuation line starting with `.` still

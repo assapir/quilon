@@ -16,18 +16,20 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
-- **Breaking (layout rule):** a `(` or `[` that is the **first token on its
-  source line** no longer continues the previous expression as a call or index —
-  it begins a **new statement**. Call arguments and index brackets must open on
-  the same line as the expression they apply to; a continuation line may still
-  start with `.`, `|>`, or an operator, and an argument list opened on the
-  callee's line may still span lines. Previously, with no statement separator,
-  adjacent statements fused across the newline: `x = f()` followed by a line
-  `(1 + 2) |> print` parsed as the call `f()(1 + 2)` (a misleading "Not a
+- **Breaking (layout rule):** a `(`, `[`, or `{` that is the **first token on its
+  source line** no longer continues the previous expression as a call, index, or
+  record constructor — it begins a **new statement**. Call arguments, index
+  brackets, and constructor braces must open on the same line as the expression
+  they apply to; a continuation line may still start with `.`, `|>`, or an
+  operator, and an argument list (or a constructor body) opened on its
+  expression's line may still span lines. Previously, with no statement
+  separator, adjacent statements fused across the newline: `x = f()` followed by
+  a line `(1 + 2) |> print` parsed as the call `f()(1 + 2)` (a misleading "Not a
   function" error pointing at the wrong line), `b = a` followed by
-  `[3, 4].each(…)` parsed as the index `a[3, 4]`, and when arities/types lined
-  up the fused program compiled silently and did the wrong thing. This is the
-  grammar's second line-aware rule, alongside the line-final `>` block close.
+  `[3, 4].each(…)` parsed as the index `a[3, 4]`, `b = a` followed by
+  `{ x = 1 }` parsed as the constructor `a { x = 1 }`, and when arities/types
+  lined up the fused program compiled silently and did the wrong thing. This is
+  the grammar's second line-aware rule, alongside the line-final `>` block close.
   See `examples/statements.ql`.
 
 - **Breaking:** removed the `mut` keyword. Mutability is now the `:=` operator,

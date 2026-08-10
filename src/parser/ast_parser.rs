@@ -899,7 +899,8 @@ impl<'a> Parser<'a> {
 
     /// Parse postfix continuations: `.field` / `.method(args)` / `[index]` / `(args)`.
     /// The `(` / `[` continuations are gated by `check_same_line` — a line-first `(`
-    /// or `[` begins a new statement instead (a `.`-led line still chains).
+    /// or `[` begins a new statement instead (a `.`-led line still chains). The record
+    /// constructor `Ident { ... }` in `parse_primary` is gated by the same predicate.
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_primary()?;
 
@@ -1136,8 +1137,10 @@ impl<'a> Parser<'a> {
                 let name = token.text.clone();
                 self.advance();
 
-                // Check if this is a record constructor: Ident { ... }
-                if self.check(&TokenKind::BraceOpen) {
+                // A same-line `{` makes this a record constructor: Ident { ... }. A
+                // line-first `{` leaves the identifier a plain reference and the
+                // `{ ... }` begins the next statement (same rule as `(` / `[`).
+                if self.check_same_line(&TokenKind::BraceOpen) {
                     let start = span.start;
                     self.advance(); // consume '{'
 
@@ -1562,15 +1565,17 @@ impl<'a> Parser<'a> {
 
     /// Like `check`, but false when the current token is the first token on its source
     /// line. This is the statement-boundary rule (the grammar's second line-aware rule,
-    /// alongside the lexer's line-final `>`): a line-first `(` or `[` never continues
-    /// the previous expression as a call or index — it begins a NEW statement. Call
-    /// arguments and index brackets must open on the same line as the expression they
-    /// apply to. Without this, adjacent statements would fuse across the newline —
-    /// `x = f()` followed by a line `(1 + 2) |> print` would parse as the call
-    /// `f()(1 + 2)`, and `b = a` followed by `[3, 4].each(...)` as the index `a[3, 4]`.
-    /// A `.`, `|>`, or operator at the start of a line still continues the expression,
-    /// and an argument list opened on the callee's line may still span lines. Every
-    /// postfix consumption of `(` / `[` must go through this guard.
+    /// alongside the lexer's line-final `>`): a line-first `(`, `[`, or `{` never
+    /// continues the previous expression as a call, index, or record constructor — it
+    /// begins a NEW statement. Call arguments, index brackets, and constructor braces
+    /// must open on the same line as the expression they apply to. Without this,
+    /// adjacent statements would fuse across the newline — `x = f()` followed by a line
+    /// `(1 + 2) |> print` would parse as the call `f()(1 + 2)`, `b = a` followed by
+    /// `[3, 4].each(...)` as the index `a[3, 4]`, and `b = a` followed by `{ x = 1 }`
+    /// as the constructor `a { x = 1 }`. A `.`, `|>`, or operator at the start of a
+    /// line still continues the expression, and an argument list opened on the callee's
+    /// line may still span lines. Every postfix consumption of `(` / `[` / `{` must go
+    /// through this guard.
     fn check_same_line(&self, kind: &TokenKind) -> bool {
         self.check(kind) && !self.peek().first_on_line
     }
@@ -2275,6 +2280,53 @@ mod tests {
             "the line-first `[3, 4].each(f)` must be its own statement, got {:?}",
             stmts[1]
         );
+    }
+
+    #[test]
+    fn test_line_first_brace_starts_new_statement() {
+        // Same rule for `{`: `b = a` followed by a line `{ x = 1 }` is TWO statements,
+        // not the fused record constructor `a { x = 1 }`.
+        let stmts = entry_block_stmts("^ = () -> Num => <\n  b = a\n  { x = 1 }\n  b\n>");
+        assert_eq!(stmts.len(), 3);
+        let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+            panic!("expected `b = a` as a VarDecl, got {:?}", stmts[0]);
+        };
+        assert!(
+            matches!(&decl.value, Expr::Ident { .. }),
+            "`b`'s value must stay the plain `a`, not become a constructor, got {:?}",
+            decl.value
+        );
+        assert!(
+            matches!(&stmts[1], Statement::Expr(Expr::Record { .. })),
+            "the line-first `{{ x = 1 }}` must be its own record statement, got {:?}",
+            stmts[1]
+        );
+    }
+
+    #[test]
+    fn test_same_line_constructor_still_builds() {
+        // The rule only gates a LINE-FIRST `{`. A `{` on the type's own line is still a
+        // record constructor, and its field body may span lines.
+        let stmts = entry_block_stmts(
+            "^ = () -> Num => <\n  p = Point {\n    x = 3,\n    y = 4\n  }\n  p\n>",
+        );
+        let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+            panic!(
+                "expected `p = Point {{...}}` as a VarDecl, got {:?}",
+                stmts[0]
+            );
+        };
+        let Expr::Constructor {
+            type_name, fields, ..
+        } = &decl.value
+        else {
+            panic!(
+                "same-line `{{` must build a constructor, got {:?}",
+                decl.value
+            );
+        };
+        assert_eq!(type_name, "Point");
+        assert_eq!(fields.len(), 2, "both fields, across lines, belong to it");
     }
 
     #[test]
