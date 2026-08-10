@@ -2305,6 +2305,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Div operation requires float values".to_string())
                 }
             }
+            BinOp::Mod => {
+                // f64 remainder (LLVM `frem` == C `fmod`): the result takes the
+                // DIVIDEND's sign — `7 % 3` is 1, `-7 % 3` is -1, `7 % -3` is 1.
+                if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
+                    Ok(self
+                        .builder
+                        .build_float_rem(l, r, "modtmp")
+                        .map_err(|e| format!("Failed to build mod: {:?}", e))?
+                        .into())
+                } else {
+                    Err("Mod operation requires float values".to_string())
+                }
+            }
             BinOp::Eq => match (lhs, rhs) {
                 (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                     .builder

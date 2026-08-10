@@ -22,3 +22,11 @@ clap = { version = "4.6", features = ["derive"] }
 # the JIT resolves the same `#[no_mangle]` symbols it maps; also built as a
 # staticlib (`libquilon_rt.a`) for ahead-of-time-linked native binaries.
 quilon-rt = { path = "quilon-rt" }
+
+# Decompressing the embedded (gzip) `libquilon_rt.a` when `quilon build` runs
+# from a distributed binary. Pure-Rust backend (miniz_oxide) by default.
+flate2 = "1.1"
+
+[build-dependencies]
+# Compressing `libquilon_rt.a` before it is embedded into the compiler binary.
+flate2 = "1.1"

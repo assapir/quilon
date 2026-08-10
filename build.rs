@@ -31,8 +31,12 @@
 //!    script is *not* re-entered, so there is no recursion, and a dedicated
 //!    `--target-dir` avoids deadlocking on the outer build's `target/` lock),
 //!    then copy the freshly emitted `libquilon_rt.a` to the canonical location
-//!    next to where the `quilon` binary lands and bake that path into the binary
-//!    via `QUILON_RT_LIB`. `src/build.rs` reads `QUILON_RT_LIB` at runtime.
+//!    next to where the `quilon` binary lands (baked as `QUILON_RT_LIB` for the
+//!    dev loop), and embed a gzip-compressed copy (baked as `QUILON_RT_GZ`, with
+//!    a `QUILON_RT_KEY` content key) that `src/build.rs` `include_bytes!`s into
+//!    the compiler binary itself — so a *distributed* `quilon` (a bare binary
+//!    download, no archive alongside it) can extract and link the runtime from
+//!    its own embedded copy.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -117,9 +121,31 @@ fn place_runtime_staticlib() {
     std::fs::copy(&produced, &dest)
         .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", produced.display(), dest.display()));
 
-    // Bake the canonical path so `src/build.rs` resolves it deterministically at
-    // runtime, independent of the current working directory.
+    // Bake the canonical path so the copy next to the binary keeps serving the
+    // dev loop (`quilon build` looks there before touching the embedded copy).
     println!("cargo:rustc-env=QUILON_RT_LIB={}", dest.display());
+
+    // Embed support: `src/build.rs` `include_bytes!`s a *gzip-compressed* copy of
+    // the archive so a distributed binary is self-contained without carrying the
+    // full uncompressed staticlib in its image. Also bake a content key for the
+    // (uncompressed) archive (64-bit FNV-1a), so `quilon build` can name its
+    // cache-extracted copy without rehashing the blob on every invocation. Cargo
+    // reruns this script (and rustc re-embeds) whenever the archive can change,
+    // so key and bytes stay in sync.
+    let bytes = std::fs::read(&dest).unwrap_or_else(|e| panic!("read {}: {e}", dest.display()));
+    let key = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
+    println!("cargo:rustc-env=QUILON_RT_KEY={key:016x}");
+
+    let gz_path = out_dir.join("libquilon_rt.a.gz");
+    let gz_file = std::fs::File::create(&gz_path)
+        .unwrap_or_else(|e| panic!("create {}: {e}", gz_path.display()));
+    let mut encoder = flate2::write::GzEncoder::new(gz_file, flate2::Compression::best());
+    std::io::Write::write_all(&mut encoder, &bytes)
+        .and_then(|()| encoder.finish().map(drop))
+        .unwrap_or_else(|e| panic!("compress {}: {e}", gz_path.display()));
+    println!("cargo:rustc-env=QUILON_RT_GZ={}", gz_path.display());
 }
 
 fn env(key: &str) -> String {
