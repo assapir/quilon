@@ -38,6 +38,10 @@ All notable changes to Quilon are documented here.
   cached extraction → decompress the embedded copy. `quilon build` is now
   fully self-contained; the system libgc requirement remains and is tracked
   separately. (#78)
+- `%` (modulo) had no codegen: it was documented and type-checked, then failed
+  at `run`/`build` with an internal "Unsupported binary operation" error. It now
+  lowers to the f64 remainder (LLVM `frem`, i.e. C `fmod`): works on fractional
+  operands, and the result takes the dividend's sign. (#73)
 - `&&` and `||` now actually short-circuit, as documented — the right operand
   is evaluated only when the left does not already decide the result. They were
   lowered as eager bitwise and/or, so `false && f(x)` ran `f`'s side effects and

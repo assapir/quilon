@@ -39,7 +39,7 @@ const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql"];
 /// Runnable examples (define `^`) and their documented exit codes.
 const EXPECTED_EXIT: &[(&str, i32)] = &[
     ("hello_world.ql", 42),
-    ("arithmetic.ql", 12),
+    ("arithmetic.ql", 0),
     ("logic.ql", 0),
     ("factorial.ql", 120),
     ("fibonacci.ql", 55),
