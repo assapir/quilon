@@ -4,11 +4,21 @@ use crate::ast::{
     BinOp, Expr, FunctionDecl, Import, InterpPart, Item, MethodDecl, ModulePath, Param, Program,
     TypeDecl, TypeDef, UnaryOp, VarDecl,
 };
-use crate::lexer::{Lexer, Span, StrChunk, Token, TokenKind};
+use crate::lexer::{FileId, Lexer, ROOT_FILE, Span, StrChunk, Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// The source these tokens were lexed from, stamped onto every span this parser
+    /// builds (see `Parser::span`). All of a parse's tokens come from one file, so the
+    /// id is read off the first token and never changes.
+    file: FileId,
+    /// Byte offset, within `file`, of position 0 of THIS parser's token stream. Zero for
+    /// a whole-file parse; for a sub-parser re-lexing an interpolation hole it is the
+    /// hole's absolute position in the file, so a nested hole's recorded (hole-relative)
+    /// offset lifts back to a true file position — keeping every node's `(file, offset)`
+    /// oracle key unique even for interpolation nested inside interpolation.
+    span_base: usize,
     /// Current recursive-descent nesting depth, bounded by `MAX_NESTING_DEPTH`.
     /// Incremented on entry to each unbounded-recursion funnel and decremented on
     /// exit (see `nested`), so it always reflects the live parser stack. Guards
@@ -49,7 +59,16 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             depth: 0,
+            file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
+            span_base: 0,
         }
+    }
+
+    /// A span over `start..end` in the file being parsed. Every AST node's span is built
+    /// here (or cloned from a token), so a node from an imported module never keys the
+    /// type oracle under another file's byte range.
+    fn span(&self, start: u32, end: u32) -> Span {
+        Span::in_file(start, end, self.file)
     }
 
     /// Run `f` one recursion level deeper, or fail loud if that would nest deeper
@@ -129,7 +148,7 @@ impl<'a> Parser<'a> {
         let end = self.previous_span();
         Ok(Import {
             path,
-            span: Span::new(start.start, end.end),
+            span: self.span(start.start, end.end),
         })
     }
 
@@ -188,7 +207,7 @@ impl<'a> Parser<'a> {
                 type_annotation,
                 value,
                 exported,
-                span: Span::new(start.start, end.end),
+                span: self.span(start.start, end.end),
             }));
         }
 
@@ -303,7 +322,7 @@ impl<'a> Parser<'a> {
                 type_annotation,
                 value,
                 exported,
-                span: Span::new(start.start, end.end),
+                span: self.span(start.start, end.end),
             }))
         }
     }
@@ -344,7 +363,7 @@ impl<'a> Parser<'a> {
             return_type,
             body,
             exported,
-            span: Span::new(start.start, end.end),
+            span: self.span(start.start, end.end),
         }))
     }
 
@@ -452,7 +471,7 @@ impl<'a> Parser<'a> {
                     params,
                     return_type,
                     body,
-                    span: Span::new(method_start.start, method_end.end),
+                    span: self.span(method_start.start, method_end.end),
                 });
             } else {
                 return Err(ParseError {
@@ -474,7 +493,7 @@ impl<'a> Parser<'a> {
             name,
             type_def: TypeDef::Record { fields, methods },
             exported,
-            span: Span::new(start.start, end.end),
+            span: self.span(start.start, end.end),
         }))
     }
 
@@ -583,7 +602,7 @@ impl<'a> Parser<'a> {
             name,
             type_def: TypeDef::Sum(variants),
             exported,
-            span: Span::new(start.start, end.end),
+            span: self.span(start.start, end.end),
         }))
     }
 
@@ -631,7 +650,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(&TokenKind::BlockClose)?;
-        let span = Span::new(start.start, self.previous_span().end);
+        let span = self.span(start.start, self.previous_span().end);
 
         Ok(Expr::Block { stmts, span })
     }
@@ -666,7 +685,7 @@ impl<'a> Parser<'a> {
             // Depth-guard the value: a `:=` chain (`a.x := b.y := …`) re-enters
             // `parse_assignment` directly, bypassing the `parse_expr` funnel.
             let value = self.nested(Self::parse_assignment)?;
-            let span = Span::new(expr.span().start, value.span().end);
+            let span = self.span(expr.span().start, value.span().end);
             return Ok(Expr::FieldAssign {
                 target: Box::new(expr),
                 value: Box::new(value),
@@ -693,7 +712,7 @@ impl<'a> Parser<'a> {
                 let then_expr = self.parse_expr()?;
                 self.expect(&TokenKind::Colon)?;
                 let else_expr = self.parse_expr()?;
-                let span = Span::new(expr.span().start, else_expr.span().end);
+                let span = self.span(expr.span().start, else_expr.span().end);
 
                 return Ok(Expr::If {
                     cond: Box::new(expr),
@@ -718,7 +737,7 @@ impl<'a> Parser<'a> {
             let pattern = self.parse_pattern()?;
             self.expect(&TokenKind::Arrow)?;
             let body = self.parse_expr()?;
-            let arm_span = Span::new(pattern.span().start, body.span().end);
+            let arm_span = self.span(pattern.span().start, body.span().end);
 
             arms.push(crate::ast::MatchArm {
                 pattern,
@@ -730,7 +749,7 @@ impl<'a> Parser<'a> {
         if arms.is_empty() {
             return Err(ParseError {
                 message: "Match expression must have at least one arm".to_string(),
-                span: Span::new(start, start),
+                span: self.span(start, start),
             });
         }
 
@@ -739,7 +758,7 @@ impl<'a> Parser<'a> {
         Ok(Expr::Match {
             expr: Box::new(expr),
             arms,
-            span: Span::new(start, end),
+            span: self.span(start, end),
         })
     }
 
@@ -783,7 +802,7 @@ impl<'a> Parser<'a> {
                     Ok(Pattern::Constructor {
                         name,
                         args,
-                        span: Span::new(span.start, end),
+                        span: self.span(span.start, end),
                     })
                 } else if is_capitalized(&name) {
                     // A bare Capitalized name in pattern position is a nullary constructor
@@ -822,7 +841,7 @@ impl<'a> Parser<'a> {
         while self.check(&TokenKind::Or) {
             self.advance();
             let right = self.parse_logical_and()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op: BinOp::Or,
@@ -840,7 +859,7 @@ impl<'a> Parser<'a> {
         while self.check(&TokenKind::And) {
             self.advance();
             let right = self.parse_equality()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op: BinOp::And,
@@ -857,7 +876,7 @@ impl<'a> Parser<'a> {
 
         while let Some(op) = self.match_equality() {
             let right = self.parse_comparison()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op,
@@ -874,7 +893,7 @@ impl<'a> Parser<'a> {
 
         while let Some(op) = self.match_comparison() {
             let right = self.parse_range()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op,
@@ -894,7 +913,7 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::LeftArrow) {
             self.advance(); // consume `<-`
             let right = self.parse_pipeline()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             return Ok(Expr::Range {
                 start: Box::new(left),
                 end: Box::new(right),
@@ -911,7 +930,7 @@ impl<'a> Parser<'a> {
         while self.check(&TokenKind::Pipeline) {
             self.advance();
             let right = self.parse_additive()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::Pipeline {
                 left: Box::new(left),
                 right: Box::new(right),
@@ -927,7 +946,7 @@ impl<'a> Parser<'a> {
 
         while let Some(op) = self.match_additive() {
             let right = self.parse_multiplicative()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op,
@@ -944,7 +963,7 @@ impl<'a> Parser<'a> {
 
         while let Some(op) = self.match_multiplicative() {
             let right = self.parse_unary()?;
-            let span = Span::new(left.span().start, right.span().end);
+            let span = self.span(left.span().start, right.span().end);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op,
@@ -964,7 +983,7 @@ impl<'a> Parser<'a> {
             // `!!!…x`) re-enters `parse_unary` without passing through `parse_expr`,
             // so bound it here too to keep deep chains from overflowing the stack.
             let expr = self.nested(Self::parse_unary)?;
-            let span = Span::new(start.start, expr.span().end);
+            let span = self.span(start.start, expr.span().end);
             return Ok(Expr::UnaryOp {
                 op: UnaryOp::Neg,
                 expr: Box::new(expr),
@@ -976,7 +995,7 @@ impl<'a> Parser<'a> {
             let start = self.current_span();
             self.advance();
             let expr = self.nested(Self::parse_unary)?; // depth-guarded (see Neg branch)
-            let span = Span::new(start.start, expr.span().end);
+            let span = self.span(start.start, expr.span().end);
             return Ok(Expr::UnaryOp {
                 op: UnaryOp::Not,
                 expr: Box::new(expr),
@@ -1020,7 +1039,7 @@ impl<'a> Parser<'a> {
                     }
 
                     self.expect(&TokenKind::ParenClose)?;
-                    let span = Span::new(args[0].span().start, self.previous_span().end);
+                    let span = self.span(args[0].span().start, self.previous_span().end);
 
                     // Create function call with method name
                     expr = Expr::Call {
@@ -1033,7 +1052,7 @@ impl<'a> Parser<'a> {
                     };
                 } else {
                     // Regular field access
-                    let span = Span::new(expr.span().start, self.previous_span().end);
+                    let span = self.span(expr.span().start, self.previous_span().end);
                     expr = Expr::FieldAccess {
                         expr: Box::new(expr),
                         field,
@@ -1045,7 +1064,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let index = self.parse_expr()?;
                 self.expect(&TokenKind::BracketClose)?;
-                let span = Span::new(expr.span().start, self.previous_span().end);
+                let span = self.span(expr.span().start, self.previous_span().end);
                 expr = Expr::Index {
                     expr: Box::new(expr),
                     index: Box::new(index),
@@ -1067,7 +1086,7 @@ impl<'a> Parser<'a> {
                 }
 
                 self.expect(&TokenKind::ParenClose)?;
-                let span = Span::new(expr.span().start, self.previous_span().end);
+                let span = self.span(expr.span().start, self.previous_span().end);
                 expr = Expr::Call {
                     func: Box::new(expr),
                     args,
@@ -1198,20 +1217,27 @@ impl<'a> Parser<'a> {
             match chunk {
                 StrChunk::Lit(s) => parts.push(InterpPart::Lit(s)),
                 StrChunk::Hole { src, offset } => {
-                    parts.push(InterpPart::Hole(Self::parse_hole(&src, offset)?));
+                    // `offset` is relative to the source THIS parser lexed; `span_base`
+                    // lifts it to an absolute position in the file (0 for a whole-file
+                    // parse, the enclosing hole's position for a nested one).
+                    parts.push(InterpPart::Hole(
+                        self.parse_hole(&src, self.span_base + offset)?,
+                    ));
                 }
             }
         }
         Ok(Expr::Interpolation { parts, span })
     }
 
-    /// Re-lex and parse one interpolation hole's source into a single expression. Every
-    /// token span is shifted by `offset` so the hole's AST nodes carry their real position
-    /// in the whole source file — the type oracle keys expression types by span, and a
-    /// hole span left relative to `0` could collide with an unrelated top-level node.
-    fn parse_hole(src: &str, offset: usize) -> Result<Expr, ParseError> {
-        let shift = |s: &Span| Span::new(s.start + offset, s.end + offset);
-        let mut tokens = Lexer::tokenize(src).map_err(|e| ParseError {
+    /// Re-lex and parse one interpolation hole's source into a single expression, with the
+    /// hole sitting at absolute byte position `abs` in the enclosing file. Every re-lexed
+    /// token span is shifted to `abs` and stamped with this parser's file, and the
+    /// sub-parser inherits `abs` as its `span_base` so any hole nested inside this one lifts
+    /// to a true file position too. Keeping the `(file, offset)` oracle key accurate is what
+    /// stops a hole's nodes from colliding with an unrelated node near the file start.
+    fn parse_hole(&self, src: &str, abs: usize) -> Result<Expr, ParseError> {
+        let shift = |s: &Span| Span::in_file(s.start + abs as u32, s.end + abs as u32, self.file);
+        let mut tokens = Lexer::tokenize_in_file(src, self.file).map_err(|e| ParseError {
             message: format!("in interpolation hole: {}", e.message),
             span: shift(&e.span),
         })?;
@@ -1219,6 +1245,7 @@ impl<'a> Parser<'a> {
             t.span = shift(&t.span);
         }
         let mut parser = Parser::new(&tokens);
+        parser.span_base = abs;
         let expr = parser.parse_expr()?;
         if !parser.is_at_end() {
             return Err(ParseError {
@@ -1297,7 +1324,7 @@ impl<'a> Parser<'a> {
                     }
 
                     self.expect(&TokenKind::BraceClose)?;
-                    let span = Span::new(start, self.previous_span().end);
+                    let span = self.span(start, self.previous_span().end);
 
                     Ok(Expr::Constructor {
                         type_name: name,
@@ -1416,7 +1443,7 @@ impl<'a> Parser<'a> {
             self.parse_expr()?
         };
 
-        let span = Span::new(start.start, self.previous_span().end);
+        let span = self.span(start.start, self.previous_span().end);
         Ok(Expr::Lambda {
             params,
             return_type,
@@ -1499,7 +1526,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(&TokenKind::BraceClose)?;
-        let span = Span::new(start.start, self.previous_span().end);
+        let span = self.span(start.start, self.previous_span().end);
 
         Ok(Expr::Record { fields, span })
     }
@@ -1530,7 +1557,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(&TokenKind::BracketClose)?;
-        let span = Span::new(start.start, self.previous_span().end);
+        let span = self.span(start.start, self.previous_span().end);
 
         Ok(Expr::Array { elements, span })
     }
@@ -1549,7 +1576,7 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.advance(); // consume `<-`
         let source = self.parse_expr()?;
-        let span = Span::new(start.start, self.previous_span().end);
+        let span = self.span(start.start, self.previous_span().end);
         Ok(Some(Expr::Spread {
             expr: Box::new(source),
             span,
@@ -1764,7 +1791,7 @@ impl<'a> Parser<'a> {
         if self.pos > 0 {
             self.tokens[self.pos - 1].span.clone()
         } else {
-            Span::new(0, 0)
+            self.span(0, 0)
         }
     }
 }

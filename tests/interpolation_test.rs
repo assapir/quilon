@@ -216,6 +216,23 @@ fn renders_array_full_and_truncated() {
 }
 
 #[test]
+fn nested_interpolation_in_a_hole() {
+    // A hole may contain a string literal with its OWN interpolation; offsets/bounds must
+    // handle the nesting. `"inner `1`"` renders to "inner 1", so the outer is "outer inner 1".
+    assert_renders("\"outer `\"inner `1`\"`\"", "outer inner 1");
+}
+
+#[test]
+fn override_rendering_it_wholesale_terminates() {
+    // A `` ` `` override that renders `it` wholesale must NOT recurse forever: the wholesale
+    // `it` falls back to the built-in default (the type name). So U's `"U=`it`"` yields "U=U".
+    assert_exit(
+        "U = {\n  v :: Num,\n  ` = () -> Text => \"U=`it`\"\n}\n^ = () -> Num => <\n  u :: U = U { v = 1 }\n  \"`u`\" == \"U=U\" ? 1 : 0\n>",
+        1,
+    );
+}
+
+#[test]
 fn print_renders_any_type() {
     // `print` accepts any single value now (routed through `` ` ``); a record prints fine.
     assert_exit_linked(

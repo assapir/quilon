@@ -3,16 +3,53 @@
 use logos::Logos;
 use std::fmt;
 
-/// Source code position span
+/// Which source a [`Span`]'s byte offsets index into. `ROOT_FILE` is the file the
+/// compiler was invoked on; every `<<`-loaded module gets its own id from the module
+/// loader.
+pub type FileId = u32;
+
+/// The source the compiler was invoked on, as opposed to an imported module.
+pub const ROOT_FILE: FileId = 0;
+
+/// Source code position span: a byte range within ONE source file.
+///
+/// `file` says which source `start`/`end` index into. Every module is lexed on its own,
+/// so offsets restart at 0 in each one and a bare byte range is ambiguous across a
+/// program that imports anything: two expressions in two files routinely share a range.
+/// Spans are the key of the type checker's per-expression table (the type oracle codegen
+/// reads back), so that ambiguity would make one module's inferred type answer for
+/// another's expression — carrying the file id keeps every node's key unique.
+///
+/// Offsets are 32-bit (source files are far below 4 GiB, and a `Span` per AST node rides
+/// the parser's and checker's recursive frames, where every byte of width costs nesting
+/// headroom).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub start: usize,
-    pub end: usize,
+    pub start: u32,
+    pub end: u32,
+    pub file: FileId,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+    /// A span in the root file — named for the claim it makes, since claiming the wrong
+    /// file is exactly what collides in the type table. Anything built while processing
+    /// an imported module (or any other source) must use [`Span::in_file`].
+    pub fn in_root(start: u32, end: u32) -> Self {
+        Self {
+            start,
+            end,
+            file: ROOT_FILE,
+        }
+    }
+
+    /// A span in the source identified by `file`.
+    pub fn in_file(start: u32, end: u32, file: FileId) -> Self {
+        Self { start, end, file }
+    }
+
+    /// The span's byte range, for slicing the source it came from.
+    pub fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
     }
 
     /// Translate a byte `offset` into `source` into a 1-based `(line, column)`.
@@ -258,9 +295,10 @@ pub enum TokenKind {
 /// the close quote) via `lex.bump`. Returns `None` (a lexer error) on an unterminated
 /// string, an unterminated hole, an empty hole, or an invalid escape.
 ///
-/// Inside a hole the scanner walks over any nested string literal (respecting `\"`), so a
-/// hole may itself contain a string with its own interpolation (`"sum `f("a")`"`); the
-/// nested string's own holes are handled when the parser re-lexes the hole source.
+/// A hole's bounds are found by `scan_hole_end`, which skips nested string literals whole
+/// (and their own holes, recursively), so a hole may itself contain a string with its own
+/// interpolation (`"sum `f("a")`"`) at any nesting depth; each nested string's holes are
+/// handled when the parser re-lexes the hole source.
 fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
     // Absolute byte offset of the first content byte (just past the opening quote).
     let base = lex.span().end;
@@ -307,33 +345,7 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
                     }
                     i += 1; // consume the opening backtick
                     let hole_start = i;
-                    loop {
-                        if i >= bytes.len() {
-                            return None; // unterminated hole
-                        }
-                        match bytes[i] {
-                            b'`' => break, // closing backtick
-                            b'"' => {
-                                // Skip a nested string literal so its quotes/backticks
-                                // don't end the hole; escapes are honored.
-                                i += 1;
-                                loop {
-                                    if i >= bytes.len() {
-                                        return None;
-                                    }
-                                    match bytes[i] {
-                                        b'\\' => i += 2,
-                                        b'"' => {
-                                            i += 1;
-                                            break;
-                                        }
-                                        _ => i += 1,
-                                    }
-                                }
-                            }
-                            _ => i += 1,
-                        }
-                    }
+                    i = scan_hole_end(bytes, i)?; // -> index of the closing backtick
                     let src = rem[hole_start..i].to_string();
                     if src.trim().is_empty() {
                         return None; // empty hole `` `` `` is not an interpolation
@@ -360,6 +372,45 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
     }
     lex.bump(i);
     Some(chunks)
+}
+
+/// Scan from `i` (the first byte of a hole's content, just past its opening backtick) to
+/// the index of the hole's matching CLOSING backtick. A nested string literal inside the
+/// hole is skipped whole — including that string's own interpolation holes, recursively —
+/// so a `"` or `` ` `` within a nested string never ends the hole. `None` if unterminated.
+fn scan_hole_end(bytes: &[u8], mut i: usize) -> Option<usize> {
+    while i < bytes.len() {
+        match bytes[i] {
+            b'`' => return Some(i),
+            b'"' => i = scan_string_end(bytes, i)?,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Scan from `i` (at an opening `"`) to the index JUST PAST the matching closing `"`,
+/// honoring `\"` escapes, treating ` `` ` as a literal backtick, and recursing over any
+/// interpolation holes inside (whose contents may contain further strings). `None` if
+/// unterminated. Used only to find bounds while skipping — string CONTENT is decoded when
+/// the piece is actually lexed.
+fn scan_string_end(bytes: &[u8], mut i: usize) -> Option<usize> {
+    i += 1; // past the opening quote
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2, // escaped char (possibly the closing-quote-looking `\"`)
+            b'"' => return Some(i + 1),
+            b'`' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'`' {
+                    i += 2; // doubled backtick -> one literal backtick
+                } else {
+                    i = scan_hole_end(bytes, i + 1)? + 1; // skip the hole and its close backtick
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 impl fmt::Display for TokenKind {

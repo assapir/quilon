@@ -35,7 +35,7 @@ impl Severity {
 /// is its full text. `span` is the byte range the message refers to; for a
 /// multi-line span only the first line is underlined.
 pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message: &str) -> String {
-    let (line, col) = Span::line_col(source, span.start);
+    let (line, col) = Span::line_col(source, span.start as usize);
     let mut out = format!("{path}:{line}:{col}: {}: {message}", severity.label());
 
     // The text of the line the span starts on (without its trailing newline).
@@ -51,7 +51,7 @@ pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message
     // clamped to what is left on this line (multi-line spans stay on line one)
     // and to at least one caret so an empty/zero-width span is still pointed at.
     let lead = col - 1;
-    let span_chars = char_len(source, span.start, span.end);
+    let span_chars = char_len(source, span.range());
     let remaining = line_text.chars().count().saturating_sub(lead);
     let underline = span_chars.clamp(1, remaining.max(1));
 
@@ -65,11 +65,11 @@ pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message
     out
 }
 
-/// Number of `char`s in `source[start..end]`, clamped to the source bounds.
+/// Number of `char`s in the source over `range`, clamped to the source bounds.
 /// Used for the caret width so it counts scalar values, not bytes.
-fn char_len(source: &str, start: usize, end: usize) -> usize {
-    let start = start.min(source.len());
-    let end = end.min(source.len()).max(start);
+fn char_len(source: &str, range: std::ops::Range<usize>) -> usize {
+    let start = range.start.min(source.len());
+    let end = range.end.min(source.len()).max(start);
     source[start..end].chars().count()
 }
 
@@ -104,7 +104,7 @@ mod tests {
     fn render_points_at_the_span() {
         let src = "add = 1 + true";
         // Underline "true" (bytes 10..14).
-        let out = render("f.ql", src, &Span::new(10, 14), Severity::Error, "bad");
+        let out = render("f.ql", src, &Span::in_root(10, 14), Severity::Error, "bad");
         let expected = "\
 f.ql:1:11: error: bad
   |
@@ -116,7 +116,7 @@ f.ql:1:11: error: bad
     #[test]
     fn render_uses_the_spans_own_line() {
         let src = "line one\nx = oops\nline three";
-        let out = render("f.ql", src, &Span::new(13, 17), Severity::Error, "boom");
+        let out = render("f.ql", src, &Span::in_root(13, 17), Severity::Error, "boom");
         assert!(out.contains("f.ql:2:5: error: boom"), "{out}");
         assert!(out.contains("2 | x = oops"), "{out}");
         assert!(out.contains("    ^^^^"), "{out}");
@@ -126,7 +126,7 @@ f.ql:1:11: error: bad
     fn render_clamps_multiline_span_to_first_line() {
         // A span that runs off the end of its line only underlines line one.
         let src = "abc\ndef";
-        let out = render("f.ql", src, &Span::new(0, 7), Severity::Error, "x");
+        let out = render("f.ql", src, &Span::in_root(0, 7), Severity::Error, "x");
         // 3 carets under "abc", not 7.
         assert!(out.ends_with("| ^^^"), "{out}");
     }

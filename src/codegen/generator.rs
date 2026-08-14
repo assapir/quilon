@@ -4,9 +4,12 @@ use crate::ast::{
     BinOp, Expr, FunctionDecl, InterpPart, Item, MatchArm, MethodDecl, Pattern, Program, Type,
     TypeDecl, TypeDef, UnaryOp, VarDecl, is_operator_symbol,
 };
+use crate::codegen::debug::DebugInfo;
+use crate::lexer::Span;
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::debug_info::{AsDIScope, DIScope};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
@@ -255,10 +258,27 @@ pub struct CodeGenerator<'ctx> {
     // built-in default (type name). Populated once, in the type-declaration pre-pass.
     render_overrides: std::collections::HashSet<String>,
     // While emitting the body of a type's own `` ` `` override, this holds that type's
-    // name. Rendering a value of the SAME type (e.g. a hole that is `it` wholesale) then
+    // name. Rendering the receiver `it` wholesale (a hole that is literally `it`) then
     // falls back to the built-in default instead of re-invoking the override — breaking
     // what would otherwise be unbounded self-recursion at runtime.
     generating_backtick_for: Option<String>,
+    // DWARF line-number debug info, installed only for a `--debug` native build (via
+    // [`enable_debug`]). When present, each emitted function gets a `DISubprogram` and every
+    // expression sets a source location before lowering, so `llvm-dwarfdump` and debuggers
+    // can map machine code back to `.ql` lines. `None` on every other path (JIT, `compile`,
+    // IR-only tests), which keeps the non-debug output unchanged.
+    debug: Option<DebugInfo<'ctx>>,
+    // The `DISubprogram` scope of the function currently being emitted, as a `DIScope`.
+    // Saved/restored around nested function emission (closures, local fns) so a source
+    // location is always attributed to the right function. `None` unless `debug` is set.
+    di_scope: Option<DIScope<'ctx>>,
+    // Number of leading top-level items that came from imported modules. Their byte spans
+    // are relative to their own module source, which the single `.ql` line index cannot map,
+    // so debug info is suppressed while emitting them (see `di_suppressed`).
+    di_imported_boundary: usize,
+    // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`
+    // emit no debug info for it — only the user's own file gets DWARF line info.
+    di_suppressed: bool,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -270,6 +290,11 @@ struct Tco<'ctx> {
     /// The LLVM symbol of the function being optimized (mangled if overloaded). A `Call`
     /// is a self-tail-call only if it resolves to exactly this symbol with matching arity.
     self_symbol: String,
+    /// The function being optimized — the one a declined back-edge calls instead. Held as
+    /// a value so that path needs no lookup: the callee of a *self*-call is never in doubt.
+    /// Its parameter types are also the slot types (both come from the same declaration,
+    /// in order), which is what `emit_tail_self_call` checks its argument values against.
+    function: FunctionValue<'ctx>,
     /// The function's parameter alloca slots, in declaration order. A tail self-call
     /// recomputes the args and rewrites these slots (its length is the arity).
     param_slots: Vec<PointerValue<'ctx>>,
@@ -302,13 +327,13 @@ struct Tco<'ctx> {
 /// `None` means the span wasn't recorded (e.g. the IR-only codegen tests that skip the
 /// type-check pass); callers fall back to their historical `f64` assumption.
 ///
-/// LIMITATION (tracked for a later M-wave): a `Span` is a byte range with no file/module
-/// identity, and the `<<` import system lexes each module independently (offsets restart
-/// at 0) before merging items into one `Program`. Two expressions in different modules can
-/// therefore share a span and collide in the table (last-inferred wins). Today's imported
-/// modules are numeric helpers/intrinsics with no composite reads, so this is latent, not
-/// live; the robust fix is a stable per-node id (or a `(module, span)` key) assigned at
-/// parse time. Until then, the oracle is only fully sound for single-file programs.
+/// A `Span` is a byte range plus the identity of the file it indexes into, which is what
+/// makes it a sound key here: the `<<` import system lexes each module independently
+/// (offsets restart at 0) before merging items into one `Program`, so two expressions in
+/// different modules routinely share a byte range. Keyed on the range alone they would
+/// collide in the table (last-inferred wins) and codegen would read one module's type for
+/// another module's expression — a wrong overload member, a wrong element repr. The file
+/// id keeps every node's key distinct across the merge.
 #[derive(Default)]
 struct TypeOracle {
     table: crate::typechecker::TypeTable,
@@ -361,6 +386,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             tco: None,
             render_overrides: std::collections::HashSet::new(),
             generating_backtick_for: None,
+            debug: None,
+            di_scope: None,
+            di_imported_boundary: 0,
+            di_suppressed: false,
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -432,6 +461,72 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.oracle = TypeOracle::new(table);
     }
 
+    /// Turn on DWARF line-number debug-info emission for this module, using `source`
+    /// (the text compiled from `file_path`) to map span byte offsets to `(line, column)`.
+    /// Only the native `--debug` build path calls this; without it the generator emits no
+    /// debug info at all. `imported_item_count` is how many leading top-level items came from
+    /// imported modules (their spans can't be mapped to this file, so they get no debug
+    /// info). Must be called before [`generate`].
+    pub fn enable_debug(
+        &mut self,
+        file_path: &std::path::Path,
+        source: &str,
+        imported_item_count: usize,
+    ) {
+        self.debug = Some(DebugInfo::new(
+            &self.module,
+            self.context,
+            file_path,
+            source,
+        ));
+        self.di_imported_boundary = imported_item_count;
+    }
+
+    /// Point the builder's current debug location at `span` within the function currently
+    /// being emitted. A no-op unless debug info is on and a function scope is active — so
+    /// call sites need no `if debug` guard of their own.
+    fn set_debug_loc(&self, span: &Span) {
+        if self.di_suppressed {
+            return;
+        }
+        if let (Some(debug), Some(scope)) = (self.debug.as_ref(), self.di_scope) {
+            let loc = debug.location(self.context, span, scope);
+            self.builder.set_current_debug_location(loc);
+        }
+    }
+
+    /// Begin emitting the body of `function` (named `name`, starting at `span`) under debug
+    /// info: create its `DISubprogram`, attach it, and make it the active source scope.
+    /// Returns the previously active scope, which the caller restores via [`end_di_scope`]
+    /// once the body is emitted — so a nested function (closure/local fn) does not leave the
+    /// enclosing function attributed to the wrong subprogram. A no-op (returns `None`) when
+    /// debug info is off.
+    fn begin_di_function(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        name: &str,
+        span: &Span,
+    ) -> Option<DIScope<'ctx>> {
+        let saved = self.di_scope;
+        if self.di_suppressed {
+            return saved;
+        }
+        if let Some(debug) = self.debug.as_ref() {
+            let subprogram = debug.create_function(name, span);
+            function.set_subprogram(subprogram);
+            self.di_scope = Some(subprogram.as_debug_info_scope());
+            // Seed the body's leading instructions (parameter stores, TCO back-edge) with a
+            // location at the function header, before per-expression locations take over.
+            self.set_debug_loc(span);
+        }
+        saved
+    }
+
+    /// Restore the source scope saved by [`begin_di_function`] after a function body is done.
+    fn end_di_scope(&mut self, saved: Option<DIScope<'ctx>>) {
+        self.di_scope = saved;
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Pre-pass: register all user sum-type variants so constructors and pattern
         // dispatch resolve regardless of declaration order relative to their uses.
@@ -497,10 +592,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level decl (which would make it
         // look like a nested/local declaration — see `generate_function_decl`).
-        for item in &program.items {
+        for (idx, item) in program.items.iter().enumerate() {
             self.current_function = None;
+            // Imported-module items (the leading `di_imported_boundary` items) get no debug
+            // info: their byte spans are relative to their own module source, not this file.
+            self.di_suppressed = idx < self.di_imported_boundary;
             self.generate_item(item)?;
         }
+        self.di_suppressed = false;
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
@@ -534,6 +633,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .add_global_metadata("llvm.ident", &ident_node)
             .map_err(|e| format!("failed to embed watermark metadata: {e}"))?;
 
+        // Resolve all debug-info forward references before anything reads the metadata.
+        // The module verifier validates debug info, so this must precede `verify` (and any
+        // later object emission). A no-op when debug info was never enabled.
+        if let Some(debug) = self.debug.as_ref() {
+            debug.finalize();
+        }
+
         // Verify the module
         if let Err(e) = self.module.verify() {
             return Err(format!("Module verification failed: {}", e));
@@ -555,6 +661,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             i32_type.fn_type(&[i32_type.into(), ptr_type.into(), ptr_type.into()], false);
 
         let main_fn = self.module.add_function("main", main_type, None);
+        // The generated wrapper has no source of its own; attribute it to the file header so
+        // its instructions (GC init, the call into `^`) carry a valid debug location — the
+        // verifier requires one on a call to a function that itself has debug info.
+        let main_span = Span::in_root(0, 0);
+        let saved_scope = self.begin_di_function(main_fn, "main", &main_span);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
         let envp = main_fn.get_nth_param(2).unwrap().into_pointer_value();
@@ -690,6 +801,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&return_val))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -835,12 +947,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .get_function(&mangled)
             .ok_or_else(|| format!("Method function not declared: {}", mangled))?;
         self.current_function = Some(function);
-        // Rendering `it` (this type) wholesale inside the type's own `` ` `` override must
+        // Rendering the receiver `it` wholesale inside the type's own `` ` `` override must
         // use the built-in default, not re-invoke the override — else it recurses forever.
         let prev_backtick = self.generating_backtick_for.take();
         if method.name == "`" {
             self.generating_backtick_for = Some(type_name.to_string());
         }
+        let saved_scope = self.begin_di_function(function, &method.name, &method.span);
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -883,6 +996,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
         self.generating_backtick_for = prev_backtick;
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -1105,6 +1219,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let function = self.module.add_function(&symbol, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
         self.current_function = Some(function);
+        let saved_scope = self.begin_di_function(function, &decl.name, &decl.span);
 
         // Create entry block
         let entry = self.context.append_basic_block(function, "entry");
@@ -1160,6 +1275,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(header);
             self.tco = Some(Tco {
                 self_symbol: symbol.clone(),
+                function,
                 param_slots,
                 header,
             });
@@ -1172,7 +1288,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.tco = None;
             match result {
                 Some(v) => v,
-                None => return Ok(()),
+                None => {
+                    self.end_di_scope(saved_scope);
+                    return Ok(());
+                }
             }
         } else {
             self.generate_expr(&decl.body)?
@@ -1192,6 +1311,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&return_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -1307,12 +1427,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // A call in tail position: if it resolves to THIS function, lower it to the
             // loop back-edge; otherwise it is an ordinary value. Clone `self_symbol` only
-            // here (a call leaf), not on every tail node.
+            // here (a call leaf), not on every tail node. A `Some` from
+            // `emit_tail_self_call` means it declined the back-edge and emitted a plain
+            // call instead, whose value is an ordinary tail value.
             Expr::Call { args, .. } => {
                 let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
                 if self.is_self_tail_call(expr, &self_symbol, arity) {
-                    self.emit_tail_self_call(args)?;
-                    Ok(None)
+                    self.emit_tail_self_call(args)
                 } else {
                     Ok(Some(self.generate_expr(expr)?))
                 }
@@ -1354,21 +1475,46 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Lower a tail self-call: evaluate the argument expressions, write them into the
-    /// parameter slots, then `br` back to the loop header. All args are evaluated into
-    /// temporaries BEFORE any slot is overwritten, so an argument that reads a parameter
-    /// (e.g. `f(n - 1, acc + n)` reading `n` for `acc`) sees the current iteration's
-    /// values, not a half-updated set.
-    fn emit_tail_self_call(&mut self, args: &[Expr]) -> Result<(), String> {
+    /// parameter slots, then `br` back to the loop header — returning `None`, since this
+    /// path never falls through to a return. All args are evaluated into temporaries
+    /// BEFORE any slot is overwritten, so an argument that reads a parameter (e.g.
+    /// `f(n - 1, acc + n)` reading `n` for `acc`) sees the current iteration's values,
+    /// not a half-updated set.
+    ///
+    /// A slot only accepts a value of its parameter's type, and the values arrive here on
+    /// the strength of a call resolution made from *inferred* argument types. Should that
+    /// inference ever disagree with the declared type, storing anyway would write the
+    /// wrong-sized value into the frame — silent corruption. So the values are checked
+    /// against the function's own signature (the slots were built from the same
+    /// declaration, in order) and a mismatch declines the loop: the already-evaluated
+    /// values — each argument is evaluated exactly once, whichever way this goes — are
+    /// passed to an ordinary call to the same function, and its result becomes the tail
+    /// value. Recursion depth is then bounded by the stack again for that call, which is
+    /// the conservative half of the trade.
+    fn emit_tail_self_call(
+        &mut self,
+        args: &[Expr],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let new_vals: Vec<BasicValueEnum<'ctx>> = args
             .iter()
             .map(|a| self.generate_expr(a))
             .collect::<Result<Vec<_>, _>>()?;
-        // Snapshot slots + header before the mutable stores (releases the `self.tco`
-        // borrow so the `&mut self` builder calls below are allowed).
         let tco = self
             .tco
             .as_ref()
             .expect("emit_tail_self_call without a TCO context");
+        let slots_fit = tco
+            .function
+            .get_params()
+            .iter()
+            .zip(&new_vals)
+            .all(|(param, val)| val.get_type() == param.get_type());
+        if !slots_fit {
+            let function = tco.function;
+            return self.emit_call(function, &new_vals).map(Some);
+        }
+        // Snapshot slots + header before the mutable stores (releases the `self.tco`
+        // borrow so the `&mut self` builder calls below are allowed).
         let slots: Vec<PointerValue<'ctx>> = tco.param_slots.clone();
         let header = tco.header;
         for (slot, val) in slots.iter().zip(new_vals) {
@@ -1379,7 +1525,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_unconditional_branch(header)
             .map_err(|e| format!("Failed to branch to loop header: {:?}", e))?;
-        Ok(())
+        Ok(None)
+    }
+
+    /// Emit a call to `function` with argument values that are already generated, and
+    /// yield its result. The one place a direct call is built, shared by `generate_call`
+    /// (which resolves the callee from a name) and the tail-call lowering.
+    fn emit_call(
+        &mut self,
+        function: inkwell::values::FunctionValue<'ctx>,
+        arg_values: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> =
+            arg_values.iter().map(|v| (*v).into()).collect();
+        let call_site = self
+            .builder
+            .build_call(function, &arg_metadata, "calltmp")
+            .map_err(|e| format!("Failed to build call: {:?}", e))?;
+        Self::call_result_to_basic(call_site)
     }
 
     /// Tail-position `if`/ternary: emit each arm in tail position. An arm that tail-recurses
@@ -2052,6 +2215,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
         self.current_function = Some(function);
+        let saved_scope = self.begin_di_function(function, &name, body.span());
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -2119,14 +2283,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Restore the enclosing emission state.
         self.restore_frame(saved_frame);
         self.current_function = saved_function;
+        self.end_di_scope(saved_scope);
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
+            // Reactivate the enclosing function's source scope for whatever it emits next
+            // (the closure value assembly), now that this nested body is closed out.
+            if self.di_scope.is_some() {
+                self.set_debug_loc(body.span());
+            }
         }
 
         Ok(function)
     }
 
     fn generate_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        // Attribute the instructions this expression lowers to its source location, so the
+        // DWARF line table maps generated code back to the `.ql` line (no-op without debug).
+        self.set_debug_loc(expr.span());
         match expr {
             Expr::Number { value, .. } => {
                 // For now, use f64 for all numbers
@@ -2729,50 +2902,53 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn render_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         let ty = self.infer_type(expr);
         let value = self.generate_expr(expr)?;
+        // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
+        // own type's `` ` `` override would invoke that override forever. That one case
+        // renders via the built-in default (the type name); a DIFFERENT value of the same
+        // type — e.g. a child node `it.next` — still uses the override and terminates for
+        // any finite structure.
+        if let Expr::Ident { name, .. } = expr
+            && name == "it"
+            && let Type::Named { name: ty_name, .. } = &ty
+            && self.generating_backtick_for.as_deref() == Some(ty_name.as_str())
+        {
+            let ty_name = ty_name.clone();
+            return self.text_literal(&ty_name);
+        }
         self.render_value(&ty, value)
     }
 
     /// Render `value` (of Quilon type `ty`) to a `Text` `{ptr,i64}` value. A type with its
     /// own `` ` `` override renders through that method; every other type uses the built-in
-    /// default (see the rendering table in LANGUAGE.md).
-    ///
-    /// Scalars (Num, Bool) are dispatched by their UNAMBIGUOUS LLVM shape, not by `ty`, so
-    /// rendering stays correct even where the type oracle is unreliable: the oracle keys by
-    /// span and can collide across imported modules (see `TypeOracle`'s limitation), and
-    /// `print`/`eprint` inside `core.test`/`core.io` render exactly these scalars. Composite
-    /// values (Text, array, record, sum) only ever reach here from the MAIN file — where the
-    /// oracle is authoritative — so those cases trust `ty`.
+    /// default (see the rendering table in LANGUAGE.md). Dispatch is by the authoritative
+    /// oracle type `ty` — source positions carry file identity (issue #105), so the oracle
+    /// is reliable across imported modules and needs no shape-based hedge.
     fn render_value(
         &mut self,
         ty: &Type,
         value: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // A number (always f64) renders integer-valued without decimals, else shortest
-        // round-trip — dispatched by shape so a mis-keyed oracle type can't corrupt it.
-        if matches!(value, BasicValueEnum::FloatValue(_)) {
-            return self.render_scalar_intrinsic("__num_to_text", value.into());
-        }
-        // A bool (i1) renders as `True`/`False` (capitalized, unlike the literals).
-        if let BasicValueEnum::IntValue(i) = value
-            && i.get_type().get_bit_width() == 1
-        {
-            let b64 = self
-                .builder
-                .build_int_z_extend(i, self.context.i64_type(), "bool_ext")
-                .map_err(|e| format!("Failed to extend bool: {:?}", e))?;
-            return self.render_scalar_intrinsic("__bool_to_text", b64.into());
-        }
-
         match ty {
+            // A number: integer-valued without decimals, else shortest round-trip. A
+            // not-yet-concrete sum payload (`Generic`) is represented as a Num.
+            Type::Num | Type::Generic { .. } => {
+                self.render_scalar_intrinsic("__num_to_text", value.into())
+            }
+            // A bool renders as `True`/`False` (capitalized, unlike the literals).
+            Type::Bool => {
+                let b64 = self
+                    .builder
+                    .build_int_z_extend(value.into_int_value(), self.context.i64_type(), "bool_ext")
+                    .map_err(|e| format!("Failed to extend bool: {:?}", e))?;
+                self.render_scalar_intrinsic("__bool_to_text", b64.into())
+            }
             // A `Text` renders as itself.
             Type::Text => Ok(value),
             Type::Unit => self.text_literal("$"),
             // A record: its own `` ` `` override (called with the record pointer), else the
-            // type name. The recursion guard renders `it` wholesale via the default instead.
+            // type name.
             Type::Named { name, .. } => {
-                let overridden = self.render_overrides.contains(name)
-                    && self.generating_backtick_for.as_deref() != Some(name.as_str());
-                if overridden {
+                if self.render_overrides.contains(name) {
                     let sym = method_symbol(name, "`");
                     let f = self
                         .module
@@ -2794,20 +2970,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             // An array renders its elements (truncated past 10, see `render_array`).
             Type::Array(elem) => self.render_array(elem, value),
             Type::Function { .. } => self.text_literal("<function>"),
-            // Num / Bool / Generic: the scalar shapes above already handled the real cases.
-            // Reaching here means the oracle mislabeled a composite (a cross-module span
-            // collision): a struct is safely rendered as Text (identity, the historical
-            // `print` default); any stray integer widens to a number.
-            Type::Num | Type::Bool | Type::Generic { .. } => match value {
-                BasicValueEnum::IntValue(i) => {
-                    let f = self
-                        .builder
-                        .build_unsigned_int_to_float(i, self.context.f64_type(), "num")
-                        .map_err(|e| format!("Failed to widen int for render: {:?}", e))?;
-                    self.render_scalar_intrinsic("__num_to_text", f.into())
-                }
-                _ => Ok(value),
-            },
         }
     }
 
@@ -3235,7 +3397,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "print" | "eprint" => {
                 // Any single argument renders through its `` ` `` operator (built-in
                 // default or user override); only an EXACT user overload of `print`/`eprint`
-                // (a different signature) is dispatched as a mangled call below instead.
+                // (a different signature) is dispatched as a mangled call below instead. A
+                // function-typed argument is not a renderable value — the type checker
+                // already rejects `print(f)` (see `is_generic_print_call`), so it never
+                // reaches here and this gate needs no separate `Function` exclusion.
                 let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
                 let has_user_match = self
                     .resolve_overload_symbol(func_name, &arg_types)
@@ -3330,17 +3495,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|arg| self.generate_expr(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Convert to BasicMetadataValueEnum for the call
-        let arg_metadata: Vec<inkwell::values::BasicMetadataValueEnum> =
-            arg_values.iter().map(|v| (*v).into()).collect();
-
-        // Build the call
-        let call_site = self
-            .builder
-            .build_call(function, &arg_metadata, "calltmp")
-            .map_err(|e| format!("Failed to build call: {:?}", e))?;
-
-        Self::call_result_to_basic(call_site)
+        self.emit_call(function, &arg_values)
     }
 
     /// Call a closure value held in local variable `var_name`: extract the function and

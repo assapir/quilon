@@ -555,7 +555,8 @@ a compile error. **Arithmetic** operators (`+ - * / %`) are unconstrained: an ov
 returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `Vec * Vec
 -> Num` dot product are all legal).
 
-(See `examples/overloading.ql`.)
+(See `examples/overloading.ql`, and `examples/overload_dispatch.ql` for dispatch on
+argument types that come out of an array element, a match, a call, or a lambda.)
 
 ---
 
@@ -875,6 +876,23 @@ quilon build program.ql -o program       # default linker: clang
 quilon build program.ql --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
+
+Add `--debug` (or `-g`) to emit **DWARF line-number debug info** for source-level
+debugging — a debugger (`gdb`/`lldb`) can then set breakpoints, step, and show
+backtraces in terms of `.ql` lines:
+```bash
+quilon build program.ql --debug -o program
+llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
+gdb ./program                              # break/step by .ql line
+```
+Builds are already unoptimized, so `--debug` only *adds* the debug info; without
+it the binary carries none. This first phase covers line tables and per-function
+scopes only — local-variable and full-type debug info is planned for a later
+phase. Debug info is attributed to the program's own source file; functions
+pulled in from imported modules (`<<`) currently carry no line info, because a
+`Span` records only a byte offset and not which module file it came from (the
+same limitation noted for the type oracle). Multi-file line info is a follow-up.
+
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 
 ### Error messages
@@ -952,7 +970,7 @@ pathological input.
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
-| Generics / type variables (overloading is the only polymorphism), `while` loops | ❌ |
+| Generics / type variables (overloading is the only polymorphism) | ❌ |
 | Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
@@ -963,9 +981,7 @@ pathological input.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **Array `.size` works only on a named receiver** (`xs.size`), not on a literal/expression (`[1,2,3].size`).
-- A user-defined `print`/`eprint` is honored by the type checker but the code generator still lowers the built-in — overriding the runtime body is a follow-up.
-- **No generics or `while` loops.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
+- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across multiple nesting levels, and capturing-then-calling another closure. Deferred to a later milestone (they need the closure's type threaded through inference / defunctionalization): capturing a *polymorphic* value, *generic* closures, passing a closure **as a function parameter**, and **returning a closure from a function**. A closure used in an unsupported position is rejected at compile time (e.g. an unannotated function parameter that is called reports `Not a function`), never miscompiled.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
 - **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.

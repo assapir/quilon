@@ -16,7 +16,7 @@
 //! compiler intrinsics (`__print`, …), not private `.ql` helpers.
 
 use crate::ast::{Import, Item, ModulePath, Program};
-use crate::lexer::Lexer;
+use crate::lexer::{FileId, Lexer, ROOT_FILE};
 use crate::parser;
 use std::collections::HashSet;
 use std::path::Path;
@@ -28,6 +28,7 @@ pub fn resolve_imports(program: &Program, base_dir: &Path) -> Result<Vec<Item>, 
     let mut loader = Loader {
         visited: HashSet::new(),
         out: Vec::new(),
+        next_file: ROOT_FILE + 1,
     };
     loader.resolve_list(&program.imports, base_dir)?;
     Ok(loader.out)
@@ -36,6 +37,11 @@ pub fn resolve_imports(program: &Program, base_dir: &Path) -> Result<Vec<Item>, 
 struct Loader {
     visited: HashSet<String>,
     out: Vec<Item>,
+    /// The file id the next module lexed gets. Every module's byte offsets restart at 0,
+    /// so spans stay unique across the merged program only if each module carries its own
+    /// identity: the type oracle is keyed by span, and a collision there hands codegen
+    /// one module's inferred type for another module's expression.
+    next_file: FileId,
 }
 
 impl Loader {
@@ -85,7 +91,9 @@ impl Loader {
             return Ok(());
         }
 
-        let tokens = Lexer::tokenize(&source)
+        let file = self.next_file;
+        self.next_file += 1;
+        let tokens = Lexer::tokenize_in_file(&source, file)
             .map_err(|e| format!("lexer error in module `{}`: {}", canonical, e))?;
         let sub = parser::parse(&tokens)
             .map_err(|e| format!("parse error in module `{}`: {}", canonical, e))?;

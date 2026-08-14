@@ -1,10 +1,11 @@
 //! Integration tests for the `<<` module/import system (Workstream B1).
 
-use quilon::ast::Program;
-use quilon::lexer::Lexer;
+use quilon::ast::{Item, Program};
+use quilon::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use quilon::modules;
 use quilon::parser::parse;
 use quilon::typechecker::TypeChecker;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 fn fixtures_dir() -> PathBuf {
@@ -161,4 +162,35 @@ fn test_program_without_imports_still_works() {
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_each_module_gets_its_own_file_identity() {
+    // Every imported module is lexed on its own, so the loader hands each one a
+    // distinct, non-root id. That id is what makes two modules' identical byte
+    // ranges distinguishable downstream.
+    let source = r#"
+        << "mathlib.ql"
+        << "span_twin.ql"
+        ^ = () -> Num => add(2, 3)
+    "#;
+    let tokens = Lexer::tokenize(source).unwrap();
+    let program = parse(&tokens).unwrap();
+    let items = modules::resolve_imports(&program, &fixtures_dir()).unwrap();
+
+    let files: HashSet<FileId> = items.iter().map(|item| item_span(item).file).collect();
+    assert_eq!(files.len(), 2, "one id per module, got {:?}", files);
+    assert!(
+        !files.contains(&ROOT_FILE),
+        "no imported item may claim the root file's identity: {:?}",
+        files
+    );
+}
+
+fn item_span(item: &Item) -> &Span {
+    match item {
+        Item::VarDecl(d) => &d.span,
+        Item::FunctionDecl(d) => &d.span,
+        Item::TypeDecl(d) => &d.span,
+    }
 }

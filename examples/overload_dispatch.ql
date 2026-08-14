@@ -1,0 +1,42 @@
+~ Overload dispatch on argument types the compiler has to recover, not just read off
+~ a literal. Every call below picks its member from the STATIC type of an argument
+~ that is the result of something: an array element, a match, a call, a concatenation.
+~ Run: cargo run -- run examples/overload_dispatch.ql   (exits 0; assertions abort)
+
+<< core.test
+
+kind = (n :: Num) -> Num => 1
+kind = (t :: Text) -> Num => 2
+kind = (b :: Bool) -> Num => 3
+
+double = (x :: Num) -> Num => x * 2
+
+~ Two members of one set, one of them self-recursive in tail position. The recursive
+~ call must reach THIS member (and lower to a loop), never its Text sibling.
+countdown = (t :: Text) -> Num => 0
+countdown = (n :: Num) -> Num => n == 0 ? 7 : countdown(n - 1)
+
+^ = () -> $ => <
+  words :: []Text = ["alpha", "beta"]
+  nums :: []Num = [10, 20]
+
+  ~ An element read carries the array's element type, not a numeric default.
+  assertEq(kind(words[0]), 2)
+  assertEq(kind(nums[1]), 1)
+  assertEq(kind(words[1] + "!"), 2)
+
+  ~ A match result, a call result, and a negation each keep their own type.
+  found = [1, 2].at(0) ? | Ok(_) => true | NotOk(_) => false
+  assertEq(kind(found), 3)
+  assertEq(kind(!found), 3)
+  assertEq(kind(double(4)), 1)
+
+  ~ …including through a lambda and an array method.
+  lengths = words.map(w => w.size)
+  assertEq(kind(lengths[0]), 1)
+  assertEq(lengths[0], 5)
+
+  ~ Deep enough that a stack-growing recursion would abort: the self-call is a loop.
+  assertEq(countdown(1000000), 7)
+  assertEq(countdown("stop"), 0)
+>
