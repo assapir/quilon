@@ -31,11 +31,16 @@ fn assert_exit(src: &str, expected: i32) {
 /// Like `assert_exit`, but resolves `<<` imports (e.g. `<< core.io`) first, so
 /// programs that use core-lib functions can be run end-to-end.
 fn assert_exit_linked(src: &str, expected: i32) {
+    assert_exit_linked_from(src, Path::new("."), expected);
+}
+
+/// Like `assert_exit_linked`, but resolves file-path imports relative to `base_dir`.
+fn assert_exit_linked_from(src: &str, base_dir: &Path, expected: i32) {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let program = quilon::modules::link(program, Path::new(".")).expect("import linking failed");
+    let program = quilon::modules::link(program, base_dir).expect("import linking failed");
     let mut checker = TypeChecker::new();
     checker
         .check_program(&program)
@@ -1054,4 +1059,35 @@ fn run_multiline_arguments_and_dot_chains_still_work() {
         >
     "#;
     assert_exit(src, 56);
+}
+
+/// A module's byte offsets restart at 0, so an importer's expression can occupy the
+/// same byte range as one inside an imported module. Types are recorded per
+/// expression for codegen to read back, keyed by source position — so if that key
+/// ignores which file the position belongs to, the importer's `Num` answers for the
+/// module's `Text` and the module's overloaded call dispatches to the wrong member.
+///
+/// The importer here is padded so that its `n` sits exactly on the `v` inside the
+/// fixture's `kind(v)`. `classify("hi")` must still reach the Text member (2).
+#[test]
+fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let module_src = std::fs::read_to_string(fixtures.join("span_twin.ql")).unwrap();
+    // The `v` argument of the module's `kind(v)` — the span to collide with.
+    let target = module_src.find("kind(v)").expect("fixture shape changed") + "kind(".len();
+
+    let head = "<< \"span_twin.ql\"\n^ = () -> Num => <\n  n = 7\n";
+    let assign = "  q = ";
+    let pad_len = target - head.len() - assign.len() - "  ~ \n".len();
+    let src = format!(
+        "{head}  ~ {}\n{assign}n\n  classify(\"hi\") + q - 7\n>\n",
+        "p".repeat(pad_len)
+    );
+    assert_eq!(
+        src[target..].find('n'),
+        Some(0),
+        "the importer's `n` must land on the module's `v`"
+    );
+
+    assert_exit_linked_from(&src, &fixtures, 2);
 }

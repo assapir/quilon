@@ -1,0 +1,7 @@
+~ An exported helper whose body dispatches an overloaded call on its Text parameter.
+~ Byte offsets restart at 0 in every module, so an importer can place one of its own
+~ Num expressions on the exact range this module's `v` occupies. Codegen must still
+~ see a Text here and pick the Text member.
+>> kind = (n :: Num) -> Num => 1
+>> kind = (t :: Text) -> Num => 2
+>> classify = (v :: Text) -> Num => kind(v)

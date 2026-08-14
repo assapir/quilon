@@ -3,16 +3,51 @@
 use logos::Logos;
 use std::fmt;
 
-/// Source code position span
+/// Which source a [`Span`]'s byte offsets index into. `ROOT_FILE` is the file the
+/// compiler was invoked on; every `<<`-loaded module gets its own id from the module
+/// loader.
+pub type FileId = u32;
+
+/// The source the compiler was invoked on, as opposed to an imported module.
+pub const ROOT_FILE: FileId = 0;
+
+/// Source code position span: a byte range within ONE source file.
+///
+/// `file` says which source `start`/`end` index into. Every module is lexed on its own,
+/// so offsets restart at 0 in each one and a bare byte range is ambiguous across a
+/// program that imports anything: two expressions in two files routinely share a range.
+/// Spans are the key of the type checker's per-expression table (the type oracle codegen
+/// reads back), so that ambiguity would make one module's inferred type answer for
+/// another's expression — carrying the file id keeps every node's key unique.
+///
+/// Offsets are 32-bit (source files are far below 4 GiB, and a `Span` per AST node rides
+/// the parser's and checker's recursive frames, where every byte of width costs nesting
+/// headroom).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub start: usize,
-    pub end: usize,
+    pub start: u32,
+    pub end: u32,
+    pub file: FileId,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+    /// A span in the root file. Imported modules build spans with [`Span::in_file`].
+    pub fn new(start: u32, end: u32) -> Self {
+        Self {
+            start,
+            end,
+            file: ROOT_FILE,
+        }
+    }
+
+    /// A span in the source identified by `file`.
+    pub fn in_file(start: u32, end: u32, file: FileId) -> Self {
+        Self { start, end, file }
+    }
+
+    /// The span's byte range, for slicing the source it came from.
+    pub fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
     }
 
     /// Translate a byte `offset` into `source` into a 1-based `(line, column)`.

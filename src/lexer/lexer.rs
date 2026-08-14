@@ -1,6 +1,6 @@
 // Lexer implementation for Quilon
 
-use crate::lexer::{Span, Token, TokenKind};
+use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind};
 use logos::Logos;
 
 /// Namespace for the lexer's entry point. Tokenizing is a single batch call
@@ -8,20 +8,28 @@ use logos::Logos;
 pub struct Lexer;
 
 impl Lexer {
-    /// Tokenize the entire source and return all tokens
+    /// Tokenize the entire root source and return all tokens. An imported module is
+    /// tokenized with [`Lexer::tokenize_in_file`] so its spans carry its own identity.
     pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
+        Self::tokenize_in_file(source, ROOT_FILE)
+    }
+
+    /// Tokenize `source` as the file identified by `file`, tagging every token's span
+    /// with it. Offsets are relative to `source`, so only the pair `(file, offset)`
+    /// identifies a position in a multi-module program.
+    pub fn tokenize_in_file(source: &str, file: FileId) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
         let mut lexer = TokenKind::lexer(source);
 
         loop {
             match lexer.next() {
                 Some(Ok(kind)) if kind == TokenKind::Eof => {
-                    let pos = source.len();
+                    let pos = source.len() as u32;
                     tokens.push(Token {
                         kind,
-                        span: Span::new(pos, pos),
+                        span: Span::in_file(pos, pos, file),
                         text: String::new(),
-                        first_on_line: is_first_on_line(source, pos),
+                        first_on_line: is_first_on_line(source, pos as usize),
                     });
                     break;
                 }
@@ -41,7 +49,7 @@ impl Lexer {
                     };
                     tokens.push(Token {
                         kind,
-                        span: Span::new(span.start, span.end),
+                        span: Span::in_file(span.start as u32, span.end as u32, file),
                         text,
                         first_on_line: is_first_on_line(source, span.start),
                     });
@@ -51,16 +59,16 @@ impl Lexer {
                     let text = source[span.clone()].to_string();
                     return Err(LexerError {
                         message: format!("Invalid token: '{}'", text),
-                        span: Span::new(span.start, span.end),
+                        span: Span::in_file(span.start as u32, span.end as u32, file),
                     });
                 }
                 None => {
-                    let pos = source.len();
+                    let pos = source.len() as u32;
                     tokens.push(Token {
                         kind: TokenKind::Eof,
-                        span: Span::new(pos, pos),
+                        span: Span::in_file(pos, pos, file),
                         text: String::new(),
-                        first_on_line: is_first_on_line(source, pos),
+                        first_on_line: is_first_on_line(source, pos as usize),
                     });
                     break;
                 }

@@ -35,7 +35,7 @@ impl Severity {
 /// is its full text. `span` is the byte range the message refers to; for a
 /// multi-line span only the first line is underlined.
 pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message: &str) -> String {
-    let (line, col) = Span::line_col(source, span.start);
+    let (line, col) = Span::line_col(source, span.start as usize);
     let mut out = format!("{path}:{line}:{col}: {}: {message}", severity.label());
 
     // The text of the line the span starts on (without its trailing newline).
@@ -51,7 +51,7 @@ pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message
     // clamped to what is left on this line (multi-line spans stay on line one)
     // and to at least one caret so an empty/zero-width span is still pointed at.
     let lead = col - 1;
-    let span_chars = char_len(source, span.start, span.end);
+    let span_chars = char_len(source, span.range());
     let remaining = line_text.chars().count().saturating_sub(lead);
     let underline = span_chars.clamp(1, remaining.max(1));
 
@@ -65,11 +65,11 @@ pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message
     out
 }
 
-/// Number of `char`s in `source[start..end]`, clamped to the source bounds.
+/// Number of `char`s in the source over `range`, clamped to the source bounds.
 /// Used for the caret width so it counts scalar values, not bytes.
-fn char_len(source: &str, start: usize, end: usize) -> usize {
-    let start = start.min(source.len());
-    let end = end.min(source.len()).max(start);
+fn char_len(source: &str, range: std::ops::Range<usize>) -> usize {
+    let start = range.start.min(source.len());
+    let end = range.end.min(source.len()).max(start);
     source[start..end].chars().count()
 }
 

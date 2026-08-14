@@ -6,4 +6,4 @@ pub mod lexer;
 pub mod token;
 
 pub use lexer::Lexer;
-pub use token::{Span, Token, TokenKind};
+pub use token::{FileId, ROOT_FILE, Span, Token, TokenKind};

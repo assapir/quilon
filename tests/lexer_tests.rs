@@ -1,6 +1,8 @@
 // Integration tests for Quilon lexer
 
-use quilon::lexer::{Lexer, TokenKind};
+use quilon::ast::{Expr, Item};
+use quilon::lexer::{Lexer, ROOT_FILE, TokenKind};
+use quilon::parser::parse;
 
 #[test]
 fn test_hello_world() {
@@ -204,4 +206,43 @@ fn test_ternary_operator() {
 
     assert!(tokens.iter().any(|t| t.kind == TokenKind::Question));
     assert!(tokens.iter().any(|t| t.kind == TokenKind::Colon));
+}
+
+#[test]
+fn test_spans_carry_the_file_they_came_from() {
+    // `tokenize` is the root source; a module is tokenized under its own id. Offsets
+    // are per-file and restart at 0, so identical ranges in two files are only told
+    // apart by the id — that is what keeps per-expression types from colliding.
+    let source = "x = 1";
+    let root = Lexer::tokenize(source).unwrap();
+    let module = Lexer::tokenize_in_file(source, 3).unwrap();
+
+    assert!(root.iter().all(|t| t.span.file == ROOT_FILE));
+    assert!(module.iter().all(|t| t.span.file == 3));
+    assert_eq!(root[0].span.start, module[0].span.start);
+    assert_eq!(root[0].span.end, module[0].span.end);
+    assert_ne!(root[0].span, module[0].span);
+}
+
+#[test]
+fn test_parsed_nodes_inherit_their_files_id() {
+    // Composed spans (a BinOp over two operands, a call over its arguments) are built
+    // by the parser rather than copied from a token, so they have to inherit the id too.
+    let tokens = Lexer::tokenize_in_file("f = (a :: Num) -> Num => a + 1 * 2", 7).unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDecl(decl) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let mut spans = vec![decl.body.span().clone()];
+    if let Expr::BinOp { left, right, .. } = &decl.body {
+        spans.push(left.span().clone());
+        spans.push(right.span().clone());
+    } else {
+        panic!("expected the body to be a binary operation");
+    }
+    assert!(
+        spans.iter().all(|s| s.file == 7),
+        "every node's span keeps its file: {:?}",
+        spans
+    );
 }

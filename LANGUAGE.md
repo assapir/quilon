@@ -505,7 +505,8 @@ a compile error. **Arithmetic** operators (`+ - * / %`) are unconstrained: an ov
 returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `Vec * Vec
 -> Num` dot product are all legal).
 
-(See `examples/overloading.ql`.)
+(See `examples/overloading.ql`, and `examples/overload_dispatch.ql` for dispatch on
+argument types that come out of an array element, a match, a call, or a lambda.)
 
 ---
 
