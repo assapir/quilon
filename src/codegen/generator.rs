@@ -4,9 +4,12 @@ use crate::ast::{
     BinOp, Expr, FunctionDecl, Item, MatchArm, MethodDecl, Pattern, Program, Type, TypeDecl,
     TypeDef, UnaryOp, VarDecl, is_operator_symbol,
 };
+use crate::codegen::debug::DebugInfo;
+use crate::lexer::Span;
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::debug_info::{AsDIScope, DIScope};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
@@ -237,6 +240,23 @@ pub struct CodeGenerator<'ctx> {
     // to `loop_header` instead of emitting a stack-growing `call` + `ret` — guaranteeing
     // self-tail-recursion runs in constant stack (see `Tco` / `generate_tail_expr`).
     tco: Option<Tco<'ctx>>,
+    // DWARF line-number debug info, installed only for a `--debug` native build (via
+    // [`enable_debug`]). When present, each emitted function gets a `DISubprogram` and every
+    // expression sets a source location before lowering, so `llvm-dwarfdump` and debuggers
+    // can map machine code back to `.ql` lines. `None` on every other path (JIT, `compile`,
+    // IR-only tests), which keeps the non-debug output unchanged.
+    debug: Option<DebugInfo<'ctx>>,
+    // The `DISubprogram` scope of the function currently being emitted, as a `DIScope`.
+    // Saved/restored around nested function emission (closures, local fns) so a source
+    // location is always attributed to the right function. `None` unless `debug` is set.
+    di_scope: Option<DIScope<'ctx>>,
+    // Number of leading top-level items that came from imported modules. Their byte spans
+    // are relative to their own module source, which the single `.ql` line index cannot map,
+    // so debug info is suppressed while emitting them (see `di_suppressed`).
+    di_imported_boundary: usize,
+    // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`
+    // emit no debug info for it — only the user's own file gets DWARF line info.
+    di_suppressed: bool,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -337,6 +357,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
             tco: None,
+            debug: None,
+            di_scope: None,
+            di_imported_boundary: 0,
+            di_suppressed: false,
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -408,6 +432,72 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.oracle = TypeOracle::new(table);
     }
 
+    /// Turn on DWARF line-number debug-info emission for this module, using `source`
+    /// (the text compiled from `file_path`) to map span byte offsets to `(line, column)`.
+    /// Only the native `--debug` build path calls this; without it the generator emits no
+    /// debug info at all. `imported_item_count` is how many leading top-level items came from
+    /// imported modules (their spans can't be mapped to this file, so they get no debug
+    /// info). Must be called before [`generate`].
+    pub fn enable_debug(
+        &mut self,
+        file_path: &std::path::Path,
+        source: &str,
+        imported_item_count: usize,
+    ) {
+        self.debug = Some(DebugInfo::new(
+            &self.module,
+            self.context,
+            file_path,
+            source,
+        ));
+        self.di_imported_boundary = imported_item_count;
+    }
+
+    /// Point the builder's current debug location at `span` within the function currently
+    /// being emitted. A no-op unless debug info is on and a function scope is active — so
+    /// call sites need no `if debug` guard of their own.
+    fn set_debug_loc(&self, span: &Span) {
+        if self.di_suppressed {
+            return;
+        }
+        if let (Some(debug), Some(scope)) = (self.debug.as_ref(), self.di_scope) {
+            let loc = debug.location(self.context, span, scope);
+            self.builder.set_current_debug_location(loc);
+        }
+    }
+
+    /// Begin emitting the body of `function` (named `name`, starting at `span`) under debug
+    /// info: create its `DISubprogram`, attach it, and make it the active source scope.
+    /// Returns the previously active scope, which the caller restores via [`end_di_scope`]
+    /// once the body is emitted — so a nested function (closure/local fn) does not leave the
+    /// enclosing function attributed to the wrong subprogram. A no-op (returns `None`) when
+    /// debug info is off.
+    fn begin_di_function(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        name: &str,
+        span: &Span,
+    ) -> Option<DIScope<'ctx>> {
+        let saved = self.di_scope;
+        if self.di_suppressed {
+            return saved;
+        }
+        if let Some(debug) = self.debug.as_ref() {
+            let subprogram = debug.create_function(name, span);
+            function.set_subprogram(subprogram);
+            self.di_scope = Some(subprogram.as_debug_info_scope());
+            // Seed the body's leading instructions (parameter stores, TCO back-edge) with a
+            // location at the function header, before per-expression locations take over.
+            self.set_debug_loc(span);
+        }
+        saved
+    }
+
+    /// Restore the source scope saved by [`begin_di_function`] after a function body is done.
+    fn end_di_scope(&mut self, saved: Option<DIScope<'ctx>>) {
+        self.di_scope = saved;
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Pre-pass: register all user sum-type variants so constructors and pattern
         // dispatch resolve regardless of declaration order relative to their uses.
@@ -473,10 +563,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level decl (which would make it
         // look like a nested/local declaration — see `generate_function_decl`).
-        for item in &program.items {
+        for (idx, item) in program.items.iter().enumerate() {
             self.current_function = None;
+            // Imported-module items (the leading `di_imported_boundary` items) get no debug
+            // info: their byte spans are relative to their own module source, not this file.
+            self.di_suppressed = idx < self.di_imported_boundary;
             self.generate_item(item)?;
         }
+        self.di_suppressed = false;
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
@@ -510,6 +604,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .add_global_metadata("llvm.ident", &ident_node)
             .map_err(|e| format!("failed to embed watermark metadata: {e}"))?;
 
+        // Resolve all debug-info forward references before anything reads the metadata.
+        // The module verifier validates debug info, so this must precede `verify` (and any
+        // later object emission). A no-op when debug info was never enabled.
+        if let Some(debug) = self.debug.as_ref() {
+            debug.finalize();
+        }
+
         // Verify the module
         if let Err(e) = self.module.verify() {
             return Err(format!("Module verification failed: {}", e));
@@ -531,6 +632,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             i32_type.fn_type(&[i32_type.into(), ptr_type.into(), ptr_type.into()], false);
 
         let main_fn = self.module.add_function("main", main_type, None);
+        // The generated wrapper has no source of its own; attribute it to the file header so
+        // its instructions (GC init, the call into `^`) carry a valid debug location — the
+        // verifier requires one on a call to a function that itself has debug info.
+        let main_span = Span::new(0, 0);
+        let saved_scope = self.begin_di_function(main_fn, "main", &main_span);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
         let envp = main_fn.get_nth_param(2).unwrap().into_pointer_value();
@@ -666,6 +772,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&return_val))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -805,6 +912,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .get_function(&mangled)
             .ok_or_else(|| format!("Method function not declared: {}", mangled))?;
         self.current_function = Some(function);
+        let saved_scope = self.begin_di_function(function, &method.name, &method.span);
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -846,6 +954,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&body_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -1068,6 +1177,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let function = self.module.add_function(&symbol, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
         self.current_function = Some(function);
+        let saved_scope = self.begin_di_function(function, &decl.name, &decl.span);
 
         // Create entry block
         let entry = self.context.append_basic_block(function, "entry");
@@ -1135,7 +1245,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.tco = None;
             match result {
                 Some(v) => v,
-                None => return Ok(()),
+                None => {
+                    self.end_di_scope(saved_scope);
+                    return Ok(());
+                }
             }
         } else {
             self.generate_expr(&decl.body)?
@@ -1155,6 +1268,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&return_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.end_di_scope(saved_scope);
         Ok(())
     }
 
@@ -2001,6 +2115,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
         self.current_function = Some(function);
+        let saved_scope = self.begin_di_function(function, &name, body.span());
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -2068,14 +2183,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Restore the enclosing emission state.
         self.restore_frame(saved_frame);
         self.current_function = saved_function;
+        self.end_di_scope(saved_scope);
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
+            // Reactivate the enclosing function's source scope for whatever it emits next
+            // (the closure value assembly), now that this nested body is closed out.
+            if self.di_scope.is_some() {
+                self.set_debug_loc(body.span());
+            }
         }
 
         Ok(function)
     }
 
     fn generate_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        // Attribute the instructions this expression lowers to its source location, so the
+        // DWARF line table maps generated code back to the `.ql` line (no-op without debug).
+        self.set_debug_loc(expr.span());
         match expr {
             Expr::Number { value, .. } => {
                 // For now, use f64 for all numbers

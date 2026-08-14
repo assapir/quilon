@@ -19,16 +19,36 @@ use inkwell::targets::{
 use crate::ast::Program;
 use crate::codegen::CodeGenerator;
 
+/// The source needed to emit DWARF line-number debug info: the `.ql` file's path (recorded
+/// in the DWARF `DIFile`) and its text (to map span byte offsets to `(line, column)`).
+pub struct DebugSource<'a> {
+    pub file: &'a Path,
+    pub source: &'a str,
+    /// How many leading program items came from imported modules (import linking prepends
+    /// them); those get no debug info, as their spans are relative to their own module source.
+    pub imported_items: usize,
+}
+
 /// Emit a native object file for `program` at `obj_path` using LLVM's
 /// `TargetMachine`. Uses PIC relocation so string/data relocations link cleanly
-/// into a (default) PIE executable.
-fn emit_object(program: &Program, obj_path: &Path) -> Result<(), String> {
+/// into a (default) PIE executable. When `debug` is `Some`, DWARF line-number info
+/// is emitted (the `--debug` build mode); otherwise the object carries no debug info.
+fn emit_object(
+    program: &Program,
+    obj_path: &Path,
+    debug: Option<&DebugSource<'_>>,
+) -> Result<(), String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
 
     let context = Context::create();
     // Build the generator with the type oracle installed (precise composite read types).
     let mut generator = CodeGenerator::with_oracle(&context, "main", program)?;
+    // Turn on DWARF line-number emission before codegen so every function/expression is
+    // attributed to its `.ql` source location.
+    if let Some(d) = debug {
+        generator.enable_debug(d.file, d.source, d.imported_items);
+    }
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
     let module = generator.module();
@@ -168,9 +188,14 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
 
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt` + Boehm GC.
-pub fn build_native(program: &Program, out: &Path, linker: &str) -> Result<(), String> {
+pub fn build_native(
+    program: &Program,
+    out: &Path,
+    linker: &str,
+    debug: Option<&DebugSource<'_>>,
+) -> Result<(), String> {
     let obj = out.with_extension("o");
-    emit_object(program, &obj)?;
+    emit_object(program, &obj, debug)?;
     let rt_lib = runtime_lib_path()?;
 
     let status = Command::new(linker)

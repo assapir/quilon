@@ -52,6 +52,10 @@ enum Commands {
         /// Linker to drive the final link (clang is natural for LLVM objects)
         #[arg(long, default_value = "clang")]
         linker: String,
+        /// Emit DWARF line-number debug info (source-level debugging: gdb/lldb line
+        /// stepping, backtraces referencing `.ql` lines). Builds are already unoptimized.
+        #[arg(short = 'g', long)]
+        debug: bool,
     },
     /// Check a Quilon program for errors without running
     Check {
@@ -164,16 +168,39 @@ fn main() {
             file,
             output,
             linker,
+            debug,
         } => {
             println!("🔨 Building: {}", file.display());
 
-            let program = checked_program(&file);
+            // A `--debug` build also needs the source text (to map span byte offsets to
+            // `.ql` line/column) and the import boundary (so only the user's own functions
+            // get DWARF line info); the detailed front-end returns both alongside the program.
+            let (program, debug_meta) = if debug {
+                let (program, source, imported) = match driver::front_end_detailed(&file) {
+                    Ok(triple) => triple,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                };
+                (program, Some((source, imported)))
+            } else {
+                (checked_program(&file), None)
+            };
             require_entry_point(&program);
 
             // Default the output to the source name without its `.ql` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
-            match build::build_native(&program, &out, &linker) {
+            let debug_source = debug_meta
+                .as_ref()
+                .map(|(source, imported)| build::DebugSource {
+                    file: &file,
+                    source,
+                    imported_items: *imported,
+                });
+
+            match build::build_native(&program, &out, &linker, debug_source.as_ref()) {
                 Ok(()) => println!("✅ Built native executable: {}", out.display()),
                 Err(e) => {
                     eprintln!("❌ Build error: {}", e);
