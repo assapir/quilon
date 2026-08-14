@@ -1,0 +1,28 @@
+~ A program worth stepping through: it binds a local of every distinct Quilon type
+~ so a debugger built with `quilon build debug_locals.ql --debug` shows each one with
+~ its OWN type — a `Num`, a `Bool`, a `Text`, a `[]Num`, a `Point` record, and a
+~ `Result` sum — even though several share the same `{ptr, i64}`-ish machine shape.
+~ `<< core.test` verifies every value in-language; on success the program exits 0.
+~ Inspect the DWARF with `llvm-dwarfdump --debug-info ./debug_locals`.
+<< core.test
+
+Point = { x :: Num, y :: Num }
+
+~ Every parameter and local below gets a typed DWARF entry under `--debug`.
+describe = (p :: Point) -> Num => <
+  count :: Num = 3
+  flag :: Bool = count > 1
+  label :: Text = "point"
+  nums :: []Num = [1, 2, 3]
+  outcome :: Result = Ok(count)
+  base :: Num = outcome ?
+    | Ok(v)    => v
+    | NotOk(e) => 0
+  p.x + p.y + base + nums.size + label.length
+>
+
+^ = () -> $ => <
+  origin :: Point = Point { x = 4, y = 5 }
+  ~ 4 + 5 + 3 (base) + 3 (nums.size) + 5 ("point".length) = 20
+  assertEq(describe(origin), 20)
+>

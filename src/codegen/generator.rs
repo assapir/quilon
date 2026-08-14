@@ -9,11 +9,12 @@ use crate::lexer::Span;
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::debug_info::{AsDIScope, DIScope};
+use inkwell::debug_info::{AsDIScope, DIScope, DIType};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// Provenance watermark embedded in every native binary. Lowered as an `!llvm.ident`
 /// module metadata entry, which LLVM emits into the ELF `.comment` section during object
@@ -257,6 +258,15 @@ pub struct CodeGenerator<'ctx> {
     // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`
     // emit no debug info for it — only the user's own file gets DWARF line info.
     di_suppressed: bool,
+    // DWARF debug types (only under `--debug`). Full field types of every record type
+    // (`named_type_fields` keeps only names), and each sum type's variant list — both needed
+    // to build a composite type's members/payload slots. Populated by a pre-pass in
+    // `generate`, so a type used before its declaration still resolves.
+    record_field_types: HashMap<String, Vec<(String, Type)>>,
+    sum_variant_defs: HashMap<String, Vec<crate::ast::SumVariant>>,
+    // Structural type keys currently being lowered to DWARF, so a (hypothetically) recursive
+    // record/sum breaks the cycle with an opaque pointer instead of recursing forever.
+    di_building: RefCell<HashSet<String>>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -366,6 +376,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             di_scope: None,
             di_imported_boundary: 0,
             di_suppressed: false,
+            record_field_types: HashMap::new(),
+            sum_variant_defs: HashMap::new(),
+            di_building: RefCell::new(HashSet::new()),
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -503,6 +516,215 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.di_scope = saved;
     }
 
+    /// Enter a nested lexical scope for a `{ }` block starting at `span`, so variables it
+    /// introduces nest under a `DW_TAG_lexical_block` rather than the function directly.
+    /// Returns the scope to restore via [`end_di_scope`]; a no-op (returns the current scope)
+    /// when debug info is off/suppressed.
+    fn begin_di_lexical_block(&mut self, span: &Span) -> Option<DIScope<'ctx>> {
+        let saved = self.di_scope;
+        if self.di_suppressed {
+            return saved;
+        }
+        if let (Some(debug), Some(parent)) = (self.debug.as_ref(), self.di_scope) {
+            self.di_scope = Some(debug.lexical_block(parent, span));
+        }
+        saved
+    }
+
+    /// The DWARF type for the value representation of Quilon type `ty`, under `--debug`.
+    /// `None` when debug info is off. Composites are cached by a structural key so each
+    /// distinct Quilon type is emitted once and shared by all its variables — which is what
+    /// makes `Text`, `[]T`, records and sum types show up as DISTINCT `DW_AT_type`s even
+    /// though they share a `{ptr, i64}`-ish LLVM shape.
+    fn di_type(&self, ty: &Type) -> Option<DIType<'ctx>> {
+        let debug = self.debug.as_ref()?;
+        // Scalars carry no structure to cache and `create_basic_type` already dedups by
+        // (name, size, encoding) — so return them directly, skipping the key allocation and
+        // cache/recursion bookkeeping that only the composites below need.
+        match ty {
+            Type::Num => return Some(debug.num_type()),
+            Type::Bool => return Some(debug.bool_type()),
+            Type::Unit => return Some(debug.unit_type()),
+            Type::Generic { .. } | Type::Function { .. } => return Some(debug.opaque_pointer()),
+            _ => {}
+        }
+        let key = self.di_type_key(ty);
+        if let Some(t) = debug.cached_type(&key) {
+            return Some(t);
+        }
+        // Break a (hypothetical) recursive type: if this key is already being built, hand back
+        // an opaque pointer rather than recursing forever.
+        if !self.di_building.borrow_mut().insert(key.clone()) {
+            return Some(debug.opaque_pointer());
+        }
+        let built = self.build_di_type(debug, &key, ty);
+        self.di_building.borrow_mut().remove(&key);
+        debug.cache_type(&key, built);
+        Some(built)
+    }
+
+    /// Build (uncached) the DWARF type for composite `ty`, whose already-computed structural
+    /// `key` doubles as the DWARF name for the unnamed composites (arrays, anonymous records).
+    /// Scalars are handled in [`di_type`] and never reach here. See [`di_type`] for the
+    /// distinctness contract.
+    fn build_di_type(&self, debug: &DebugInfo<'ctx>, key: &str, ty: &Type) -> DIType<'ctx> {
+        match ty {
+            Type::Text => debug.text_type(),
+            Type::Array(elem) => {
+                let elem_ty = self.di_type(elem).unwrap_or_else(|| debug.num_type());
+                debug.array_type(key, elem_ty)
+            }
+            Type::Record(fields) => {
+                let members = self.di_record_members(debug, fields);
+                debug.record_type(key, &members)
+            }
+            // A named type that resolves to a registered sum is a sum; otherwise a record.
+            Type::Named { name, .. } if self.resolves_to_sum(name) => {
+                self.di_sum_type(debug, name, &[])
+            }
+            Type::Named { name, fields, .. } => {
+                // Prefer the type's own fields; fall back to the registered record definition
+                // (borrowed, not cloned — this only runs on a cache miss but stays cheap).
+                let from_map;
+                let field_defs: &[(String, Type)] = if !fields.is_empty() {
+                    fields
+                } else {
+                    from_map = self.record_field_types.get(name);
+                    from_map.map(Vec::as_slice).unwrap_or(&[])
+                };
+                let members = self.di_record_members(debug, field_defs);
+                debug.record_type(name, &members)
+            }
+            Type::Sum { name, variants } => self.di_sum_type(debug, name, variants),
+            // Scalars / opaque types are resolved in `di_type` before reaching here.
+            _ => debug.opaque_pointer(),
+        }
+    }
+
+    /// Whether the type named `name` denotes a sum type (a registered user sum, or the
+    /// built-in `Result`) rather than a record. The single source of truth shared by
+    /// `build_di_type` and `di_type_key` so their dispatch and cache key never drift.
+    fn resolves_to_sum(&self, name: &str) -> bool {
+        self.sum_layouts.contains_key(name) || name == "Result"
+    }
+
+    /// Lower record `fields` (name + type) to DWARF `(name, DIType)` members.
+    fn di_record_members(
+        &self,
+        debug: &DebugInfo<'ctx>,
+        fields: &[(String, Type)],
+    ) -> Vec<(String, DIType<'ctx>)> {
+        fields
+            .iter()
+            .map(|(fname, fty)| {
+                let dt = self.di_type(fty).unwrap_or_else(|| debug.num_type());
+                (fname.clone(), dt)
+            })
+            .collect()
+    }
+
+    /// Build a sum type's DWARF entry: `{ i8 tag, payload... }`. The payload slots follow the
+    /// same canonical layout as `sum_value_struct_type` — one slot per payload position, typed
+    /// by the first concrete (non-generic, non-Unit) field a variant carries there. `variants`
+    /// may be the type's own list; when empty (e.g. a `Type::Named`/`Result`), the registered
+    /// definition is used. The sizes line up with `register_sum_variants`'s LLVM slots — a
+    /// bit-less Unit position is an `i8`, an absent/generic one a `Num` — so the DWARF struct
+    /// matches the value in memory.
+    fn di_sum_type(
+        &self,
+        debug: &DebugInfo<'ctx>,
+        name: &str,
+        variants: &[crate::ast::SumVariant],
+    ) -> DIType<'ctx> {
+        // Borrow the variant list rather than clone it (this only runs on a cache miss).
+        let from_defs;
+        let variants: &[crate::ast::SumVariant] = if !variants.is_empty() {
+            variants
+        } else {
+            from_defs = self.sum_variant_defs.get(name);
+            from_defs.map(Vec::as_slice).unwrap_or(&[])
+        };
+        let max_fields = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+        let mut slots: Vec<DIType<'ctx>> = Vec::with_capacity(max_fields);
+        for i in 0..max_fields {
+            let concrete = variants
+                .iter()
+                .filter_map(|v| v.fields.get(i))
+                .find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
+            let slot = match concrete {
+                Some(f) => self.di_type(f).unwrap_or_else(|| debug.unit_type()),
+                None => debug.unit_type(),
+            };
+            slots.push(slot);
+        }
+        // A nullary/generic sum (a payload-free enum, or `Result` whose generic payload isn't
+        // specialized here) still gets one slot so its `{ i8, .. }` shape is uniform — a
+        // `Num`-sized (8-byte) slot, matching `register_sum_variants`'s `double` placeholder and
+        // the per-value pointer-or-double Result payload (both 8 bytes wide).
+        if slots.is_empty() {
+            slots.push(debug.num_type());
+        }
+        debug.sum_type(name, &slots)
+    }
+
+    /// A structural cache key for `ty`'s DWARF type. Named records/sums key by name (their
+    /// field/variant set is fixed per name); anonymous records key by their field structure.
+    fn di_type_key(&self, ty: &Type) -> String {
+        match ty {
+            Type::Num => "Num".to_string(),
+            Type::Bool => "Bool".to_string(),
+            Type::Unit => "$".to_string(),
+            Type::Text => "Text".to_string(),
+            Type::Array(elem) => format!("[]{}", self.di_type_key(elem)),
+            Type::Record(fields) => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .map(|(n, t)| format!("{n}:{}", self.di_type_key(t)))
+                    .collect();
+                format!("rec{{{}}}", inner.join(","))
+            }
+            // A named type that resolves to a registered sum keys the SAME as a `Type::Sum` of
+            // that name, so the one logical type isn't emitted (and cached) twice.
+            Type::Named { name, .. } if self.resolves_to_sum(name) => format!("sum${name}"),
+            Type::Named { name, .. } => format!("named${name}"),
+            Type::Sum { name, .. } => format!("sum${name}"),
+            Type::Generic { name, .. } => format!("gen${name}"),
+            Type::Function { .. } => "fn".to_string(),
+        }
+    }
+
+    /// Emit a `DILocalVariable` + `llvm.dbg.declare` for a parameter or `=`/`:=` local named
+    /// `name`, stored at `slot`, of Quilon type `qty`, declared at `span`. `arg_no` is the
+    /// 1-based parameter index for a parameter, or `None` for a local. A no-op unless debug
+    /// info is on, not suppressed, and a function scope is active — so call sites stay guard-free.
+    fn declare_variable(
+        &self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+        qty: &Type,
+        span: &Span,
+        arg_no: Option<u32>,
+    ) {
+        if self.di_suppressed {
+            return;
+        }
+        let (Some(debug), Some(scope)) = (self.debug.as_ref(), self.di_scope) else {
+            return;
+        };
+        let Some(block) = self.builder.get_insert_block() else {
+            return;
+        };
+        let Some(dty) = self.di_type(qty) else {
+            return;
+        };
+        let var = match arg_no {
+            Some(n) => debug.create_parameter(scope, name, n, span, dty),
+            None => debug.create_local(scope, name, span, dty),
+        };
+        let loc = debug.location(self.context, span, scope);
+        debug.declare(slot, var, loc, block);
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Pre-pass: register all user sum-type variants so constructors and pattern
         // dispatch resolve regardless of declaration order relative to their uses.
@@ -514,6 +736,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             }) = item
             {
                 self.register_sum_variants(name, variants)?;
+            }
+            // Under `--debug` only, keep every record type's full field types (name + type) so
+            // the DWARF builders can build its composite members regardless of declaration order
+            // (`named_type_fields` keeps only names, which is all the non-debug paths need, so
+            // this deep clone is skipped entirely when debug info is off).
+            if self.debug.is_some()
+                && let Item::TypeDecl(TypeDecl {
+                    name,
+                    type_def: TypeDef::Record { fields, .. },
+                    ..
+                }) = item
+            {
+                self.record_field_types.insert(name.clone(), fields.clone());
             }
         }
 
@@ -801,6 +1036,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         type_name: &str,
         variants: &[crate::ast::SumVariant],
     ) -> Result<(), String> {
+        // Under `--debug` only, keep the whole variant list so the DWARF builders can build the
+        // sum's payload slots (skipped otherwise — normal codegen sizes sums from `sum_layouts`).
+        if self.debug.is_some() {
+            self.sum_variant_defs
+                .insert(type_name.to_string(), variants.to_vec());
+        }
         for (tag, variant) in variants.iter().enumerate() {
             self.sum_variants
                 .insert(variant.name.clone(), (tag as u8, type_name.to_string()));
@@ -940,6 +1181,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             .insert("it".to_string(), field_names.to_vec());
         self.var_named_types
             .insert("it".to_string(), type_name.to_string());
+        // `it` is the record receiver (parameter #1); build its type only when debug is on.
+        if self.debug.is_some() {
+            let it_qty = Type::Named {
+                name: type_name.to_string(),
+                fields: vec![],
+                methods: vec![],
+            };
+            self.declare_variable("it", it_alloca, &it_qty, &method.span, Some(1));
+        }
 
         // Remaining params follow the receiver.
         for (i, param) in method.params.iter().enumerate() {
@@ -952,6 +1202,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
             self.variables
                 .insert(param.name.clone(), (alloca, param_type));
+            self.declare_variable(
+                &param.name,
+                alloca,
+                param.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &param.span,
+                Some((i + 2) as u32),
+            );
         }
 
         let body_value = self.generate_expr(&method.body)?;
@@ -1061,6 +1318,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(slot, value)
                 .map_err(|e| format!("Failed to build store: {:?}", e))?;
             self.variables.insert(decl.name.clone(), (slot, var_type));
+            // The binding's Quilon type is the one just recorded in `var_types` — borrow it
+            // rather than keeping a separate clone alive across the whole binding.
+            if let Some(qty) = self.var_types.get(&decl.name) {
+                self.declare_variable(&decl.name, slot, qty, &decl.span, None);
+            }
         } else {
             // Global variable
             let global =
@@ -1215,6 +1477,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.record_types.insert(param.name.clone(), fields.clone());
                 }
             }
+            self.declare_variable(&param.name, alloca, &qty, &param.span, Some((i + 1) as u32));
             self.var_types.insert(param.name.clone(), qty);
         }
 
@@ -1402,7 +1665,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Expr::Block { stmts, .. } => {
+            Expr::Block { stmts, span } => {
                 // Emit every statement normally except the tail expression, which stays in
                 // tail position. A non-`Expr`-tail block (ends in an item) has no tail call
                 // (the analysis returned false), so generating it whole is correct.
@@ -1418,7 +1681,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                         self.generate_tail_expr(tail)
                     }
-                    _ => Ok(Some(self.generate_block(stmts)?)),
+                    _ => Ok(Some(self.generate_block(stmts, span)?)),
                 }
             }
 
@@ -2179,6 +2442,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(alloca, llvm_param)
                 .map_err(|e| format!("Failed to store param: {:?}", e))?;
             self.variables.insert(param.name.clone(), (alloca, pty));
+            self.declare_variable(
+                &param.name,
+                alloca,
+                param.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &param.span,
+                Some((i + 1) as u32),
+            );
         }
 
         // Re-bind captures from the environment pointer (the trailing parameter).
@@ -2202,6 +2472,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .into_pointer_value();
                     self.variables
                         .insert(cap.name.clone(), (cell, cap.value_ty));
+                    self.declare_variable(
+                        &cap.name,
+                        cell,
+                        self.var_types.get(&cap.name).unwrap_or(&Type::Num),
+                        body.span(),
+                        None,
+                    );
                 } else {
                     // By-value capture: copy the snapshot into a fresh local slot.
                     let val = self
@@ -2214,6 +2491,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .map_err(|e| format!("Failed to store capture value: {:?}", e))?;
                     self.variables
                         .insert(cap.name.clone(), (alloca, cap.value_ty));
+                    self.declare_variable(
+                        &cap.name,
+                        alloca,
+                        self.var_types.get(&cap.name).unwrap_or(&Type::Num),
+                        body.span(),
+                        None,
+                    );
                 }
                 // If the captured value is itself a closure, re-register its signature so
                 // a `name(args)` inside this lifted body resolves to an indirect call (the
@@ -2339,7 +2623,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 cond, then, else_, ..
             } => self.generate_if(cond, then, else_),
 
-            Expr::Block { stmts, .. } => self.generate_block(stmts),
+            Expr::Block { stmts, span } => self.generate_block(stmts, span),
 
             Expr::Array { elements, .. } => self.generate_array(expr, elements),
 
@@ -3357,7 +3641,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_block(
         &mut self,
         stmts: &[crate::ast::Statement],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Under `--debug`, a `{ }` block introduces a nested lexical scope so its locals nest
+        // under a `DW_TAG_lexical_block` rather than the function directly (a no-op otherwise).
+        let saved_scope = self.begin_di_lexical_block(span);
         let mut result = self.context.f64_type().const_float(0.0).into();
 
         for stmt in stmts {
@@ -3371,6 +3659,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        self.end_di_scope(saved_scope);
         Ok(result)
     }
 

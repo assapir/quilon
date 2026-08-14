@@ -14,13 +14,25 @@ All notable changes to Quilon are documented here.
   source location; the compile unit records the `.ql` file. Verify with
   `llvm-dwarfdump --debug-line ./program` / `--debug-info`. Builds are already
   unoptimized, so `--debug` only *adds* the info — the non-debug build path is
-  unchanged and carries no debug info. This is **Phase 1**: line tables and
-  per-function scopes only; local-variable and full-type debug info is a later
-  phase. Known limitation: debug info covers the program's own source file only —
-  functions imported from other modules (`<<`) carry no usable line info, because
-  the debug info holds a single compile unit and source text to resolve offsets
-  against; multi-file line info is a follow-up (source positions do now carry the
-  identity of the file they index into, so it has what it needs). (#100)
+  unchanged and carries no debug info. Known limitation: debug info covers the
+  program's own source file only — functions imported from other modules (`<<`)
+  carry no usable line info, because the debug info holds a single compile unit and
+  source text to resolve offsets against; multi-file line info is a follow-up (source
+  positions do now carry the identity of the file they index into, so it has what it
+  needs). (#100)
+- **`--debug` also emits local-variable and type debug info.** Beyond line tables,
+  `--debug` now emits **DWARF local variables, parameters, and debug types**, so a
+  debugger can inspect each `.ql` value with its correct Quilon type. Every parameter
+  and `=`/`:=` local gets a typed `DILocalVariable` + `#dbg_declare`, attached to its
+  function's subprogram or a nested lexical block (blocks and closures get their own
+  scopes). The Quilon type system maps to **distinct** DWARF entries: `Num`/`Bool` as
+  base types, and `Text`, `[]T`, records, and each sum type as distinctly-named
+  composites — even though they share a `{ptr, i64}`-ish LLVM shape — so a debugger
+  (and a future pretty-printer) can tell a `Text` from a `[]Num` from a record from a
+  `Result`. Sum types are emitted as layout-faithful tagged structs
+  (`{ i8 tag, payload… }`); a self-describing DWARF *variant part* is a possible later
+  refinement. Verify with `llvm-dwarfdump --debug-info ./program`. Still `--debug`-only
+  — the non-debug build path is unchanged. (#100)
 - **Provenance watermark in native binaries.** Every executable `quilon build`
   produces now carries a plaintext watermark —
   `Built with Quilon by Assaf Sapir - github.com/assapir/quilon` — in the ELF

@@ -826,21 +826,26 @@ quilon build program.ql --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
 
-Add `--debug` (or `-g`) to emit **DWARF line-number debug info** for source-level
-debugging — a debugger (`gdb`/`lldb`) can then set breakpoints, step, and show
-backtraces in terms of `.ql` lines:
+Add `--debug` (or `-g`) to emit **DWARF debug info** for source-level debugging — a
+debugger (`gdb`/`lldb`) can then set breakpoints, step, show backtraces in terms of
+`.ql` lines, and **inspect local variables with their Quilon types**:
 ```bash
 quilon build program.ql --debug -o program
 llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
-gdb ./program                              # break/step by .ql line
+llvm-dwarfdump --debug-info program        # shows variables + their debug types
+gdb ./program                              # break/step by .ql line, print locals
 ```
 Builds are already unoptimized, so `--debug` only *adds* the debug info; without
-it the binary carries none. This first phase covers line tables and per-function
-scopes only — local-variable and full-type debug info is planned for a later
-phase. Debug info is attributed to the program's own source file; functions
-pulled in from imported modules (`<<`) currently carry no line info, because a
-`Span` records only a byte offset and not which module file it came from (the
-same limitation noted for the type oracle). Multi-file line info is a follow-up.
+it the binary carries none. It covers line tables and per-function scopes, plus
+**local variables, parameters, and debug types**: every `=`/`:=` local and
+parameter is emitted with its type, and nested `{ }` blocks and closures get their
+own lexical scopes. Each Quilon type gets a distinct DWARF entry — `Num`/`Bool` as
+base types, and `Text`, arrays (`[]T`), records, and sum types as distinctly-named
+composites (even though they share a `{ptr, i64}`-ish machine shape), so a debugger
+tells them apart. Debug info is attributed to the program's own source file;
+functions pulled in from imported modules (`<<`) currently carry no line info,
+because a `Span` records only a byte offset and not which module file it came from
+(the same limitation noted for the type oracle). Multi-file line info is a follow-up.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 

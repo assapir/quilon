@@ -48,7 +48,7 @@ cached copy. Only the system libraries above (notably libgc) must be installed.
 cargo build --release                        # binary at target/release/quilon
 ./target/release/quilon run   program.ql [args...]   # JIT-compile & execute (args pass through to the program, mirroring ./program args...)
 ./target/release/quilon build program.ql     # build a native executable (links libquilon_rt + libgc)
-./target/release/quilon build program.ql --debug   # + DWARF line info for gdb/lldb source-level debugging (alias -g)
+./target/release/quilon build program.ql --debug   # + DWARF line info, local variables & types for gdb/lldb source-level debugging (alias -g)
 ./target/release/quilon check program.ql     # typecheck only
 ```
 
