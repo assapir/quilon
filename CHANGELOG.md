@@ -6,6 +6,20 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Source-level debugging: `quilon build --debug` (`-g`).** Native builds can now
+  emit **DWARF line-number debug info**, so a debugger (`gdb`/`lldb`) can set
+  breakpoints, single-step, and print backtraces in terms of `.ql` source lines.
+  Each emitted function (top-level functions, methods, closures, and the generated
+  `main` wrapper) gets a `DISubprogram`, and every expression is attributed to its
+  source location; the compile unit records the `.ql` file. Verify with
+  `llvm-dwarfdump --debug-line ./program` / `--debug-info`. Builds are already
+  unoptimized, so `--debug` only *adds* the info — the non-debug build path is
+  unchanged and carries no debug info. This is **Phase 1**: line tables and
+  per-function scopes only; local-variable and full-type debug info is a later
+  phase. Known limitation: debug info covers the program's own source file only —
+  functions imported from other modules (`<<`) carry no line info, because a
+  `Span` records a byte offset without module-file identity; multi-file line info
+  is a follow-up. (#100)
 - **Provenance watermark in native binaries.** Every executable `quilon build`
   produces now carries a plaintext watermark —
   `Built with Quilon by Assaf Sapir - github.com/assapir/quilon` — in the ELF

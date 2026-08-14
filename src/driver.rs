@@ -44,6 +44,14 @@ impl FrontEndError {
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, returning the import-linked, checked program.
 pub fn front_end(file: &Path) -> Result<ast::Program, FrontEndError> {
+    Ok(front_end_detailed(file)?.0)
+}
+
+/// The checked program compiled from `file`, plus the source text and the count of leading
+/// imported-module items (import linking prepends them). The extras support the native
+/// `--debug` build, which needs the source (to map span byte offsets to `.ql` line/column)
+/// and the import boundary (to attribute DWARF line info only to the user's own file).
+pub fn front_end_detailed(file: &Path) -> Result<(ast::Program, String, usize), FrontEndError> {
     let path = file.display().to_string();
 
     let source = std::fs::read_to_string(file)
@@ -55,14 +63,18 @@ pub fn front_end(file: &Path) -> Result<ast::Program, FrontEndError> {
     let program = parser::parse(&tokens)
         .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
 
+    // The source file's own item count, captured before linking prepends imported items.
+    let own_item_count = program.items.len();
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let program = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
+    // `link` prepends imported items, so everything before the source's own items is imported.
+    let imported_count = program.items.len() - own_item_count;
 
     typechecker::TypeChecker::new()
         .check_program(&program)
         .map_err(|e| FrontEndError::at(&path, &source, e.span(), &e.to_string()))?;
 
-    Ok(program)
+    Ok((program, source, imported_count))
 }
 
 /// Whether `program` defines the `^` entry point required to build an executable.
