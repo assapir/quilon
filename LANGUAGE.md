@@ -918,7 +918,7 @@ pathological input.
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
-| Generics / type variables (overloading is the only polymorphism), `while` loops | ❌ |
+| Generics / type variables (overloading is the only polymorphism) | ❌ |
 | Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
