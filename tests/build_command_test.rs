@@ -1,6 +1,6 @@
-//! Regression gate for issue #38: the *documented* build flow —
-//! `cargo build --release` then `quilon build …` — must work as written, with no
-//! extra command and no test-harness fixup.
+//! Regression gate for the *documented* build flow —
+//! `cargo build --release` then `quilon build …` — which must work as written, with
+//! no extra command and no test-harness fixup.
 //!
 //! The JIT/AOT parity gate in `examples_test.rs` masks this bug: it builds a
 //! fresh `libquilon_rt.a` and copies it next to the binary itself before running
@@ -8,6 +8,7 @@
 //! what the crate's cargo build script (`/build.rs`) places, which is exactly what
 //! a user gets from a plain `cargo build`.
 
+use quilon::codegen::generator::WATERMARK;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,12 +25,12 @@ fn tool_available(tool: &str) -> bool {
 
 /// The build script MUST bake `QUILON_RT_LIB` and place the archive there. This
 /// assertion can only pass if the deterministic-placement mechanism ran — it is
-/// independent of the parity gate's copy step, so it catches exactly the gap in
-/// issue #38 (documented flow broken while parity gate is green).
+/// independent of the parity gate's copy step, so it catches exactly the gap where
+/// the documented flow breaks while the parity gate stays green.
 #[test]
 fn build_script_bakes_and_places_runtime_staticlib() {
     let Some(baked) = option_env!("QUILON_RT_LIB") else {
-        panic!("build script must bake QUILON_RT_LIB (issue #38 deterministic placement)");
+        panic!("build script must bake QUILON_RT_LIB for deterministic placement");
     };
     let path = Path::new(baked);
     assert!(
@@ -79,43 +80,49 @@ fn build_hello_and_run(
     run.status.code()
 }
 
-/// The exact provenance watermark embedded in every native binary. Must match the
-/// single source-of-truth constant in codegen verbatim.
-const WATERMARK: &str = "Built with Quilon by Assaf Sapir - github.com/assapir/quilon";
-
-/// Does `haystack` contain `needle` as a contiguous byte subsequence?
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
-}
-
-/// Every `quilon build` native binary carries the plaintext watermark in the ELF
-/// `.comment` section (issue #45). Preferred check is `readelf -p .comment`; when
-/// `readelf` is not on PATH we fall back to scanning the raw binary bytes for the
-/// ASCII string. Exercised under whichever linker is available.
+/// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
+/// first, and assert the produced native binary runs and exits 0 (examples are
+/// self-asserting). This is the two-command README flow, exercised as written.
+///
+/// The same single build also gates the provenance watermark: every native binary
+/// must carry the plaintext `WATERMARK` in its ELF `.comment` section. That
+/// lowering (`llvm.ident` -> `.comment`) is ELF-only, so the watermark assertion is
+/// gated on Linux and skipped when `readelf` is absent.
 #[test]
-fn native_binary_carries_watermark() {
+fn documented_build_flow_produces_running_binary() {
     let Some(linker) = available_linker() else {
-        eprintln!("skipping watermark gate: need a linker (`clang` or `gcc`) on PATH");
+        eprintln!("skipping documented-build-flow gate: need a linker (`clang` or `gcc`) on PATH");
         return;
     };
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out: PathBuf =
-        std::env::temp_dir().join(format!("quilon_issue45_hello_{}", std::process::id()));
+    let out: PathBuf = std::env::temp_dir().join(format!("quilon_hello_{}", std::process::id()));
 
-    let code = build_hello_and_run(quilon, linker, &out, "watermark build", |_| {});
+    let code = build_hello_and_run(quilon, linker, &out, "documented flow regressed", |_| {});
+
+    // Check the watermark before removing the artifact — ELF-only, so gate on Linux
+    // and skip gracefully when `readelf` is unavailable.
+    let watermark_dump = if cfg!(target_os = "linux") && tool_available("readelf") {
+        let dump = Command::new("readelf")
+            .args(["-p", ".comment"])
+            .arg(&out)
+            .output()
+            .expect("run readelf -p .comment");
+        Some(dump)
+    } else {
+        eprintln!("skipping watermark check: needs Linux/ELF with `readelf` on PATH");
+        None
+    };
+
+    let _ = std::fs::remove_file(&out);
+
     assert_eq!(
         code,
         Some(0),
         "hello_world native binary produced the wrong exit code"
     );
 
-    if tool_available("readelf") {
-        let dump = Command::new("readelf")
-            .args(["-p", ".comment"])
-            .arg(&out)
-            .output()
-            .expect("run readelf -p .comment");
+    if let Some(dump) = watermark_dump {
         assert!(
             dump.status.success(),
             "readelf -p .comment failed: {}",
@@ -126,39 +133,7 @@ fn native_binary_carries_watermark() {
             text.contains(WATERMARK),
             "watermark not found in .comment section (linker={linker}); readelf output:\n{text}"
         );
-    } else {
-        eprintln!("readelf not on PATH; falling back to raw byte scan");
-        let bytes = std::fs::read(&out).expect("read produced binary");
-        assert!(
-            contains_bytes(&bytes, WATERMARK.as_bytes()),
-            "watermark bytes not found anywhere in the produced binary (linker={linker})"
-        );
     }
-
-    let _ = std::fs::remove_file(&out);
-}
-
-/// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
-/// first, and assert the produced native binary runs and exits 0 (examples are
-/// self-asserting). This is the two-command README flow, exercised as written.
-#[test]
-fn documented_build_flow_produces_running_binary() {
-    let Some(linker) = available_linker() else {
-        eprintln!("skipping documented-build-flow gate: need a linker (`clang` or `gcc`) on PATH");
-        return;
-    };
-
-    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out: PathBuf =
-        std::env::temp_dir().join(format!("quilon_issue38_hello_{}", std::process::id()));
-
-    let code = build_hello_and_run(quilon, linker, &out, "documented flow regressed", |_| {});
-    let _ = std::fs::remove_file(&out);
-    assert_eq!(
-        code,
-        Some(0),
-        "hello_world native binary produced the wrong exit code"
-    );
 }
 
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no

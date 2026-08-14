@@ -29,7 +29,9 @@ All notable changes to Quilon are documented here.
   `.comment` during object generation, so it survives linking. Inspect it with
   `readelf -p .comment ./program` or `strings`. The string is a fixed
   compile-time constant (no build date), builds stay reproducible, and there is
-  no runtime effect; `strip --strip-all` removes it. `quilon run` (JIT) produces
+  no runtime effect; `strip -R .comment` (or `objcopy --remove-section=.comment`)
+  removes it — plain `strip --strip-all` keeps it, since GNU `strip` preserves the
+  `.comment` section. `quilon run` (JIT) produces
   no artifact and so carries no watermark. (#45)
 - **Runtime-library exception (licensing).** The Quilon runtime (`quilon-rt`),
   which is statically linked and embedded into every binary `quilon build`
