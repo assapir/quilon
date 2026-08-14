@@ -76,6 +76,19 @@ fn checked_program(file: &Path) -> ast::Program {
     }
 }
 
+/// Like [`checked_program`], but also returns the source text and the count of leading
+/// imported-module items, for a `--debug` native build (see [`driver::front_end_detailed`]).
+/// Shares the same print-and-exit handling so the two paths cannot drift.
+fn checked_program_detailed(file: &Path) -> (ast::Program, String, usize) {
+    match driver::front_end_detailed(file) {
+        Ok(triple) => triple,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Exit with the standard diagnostic unless `program` defines the `^` entry point
 /// required to build an executable (compile/run, but not check).
 fn require_entry_point(program: &ast::Program) {
@@ -176,13 +189,7 @@ fn main() {
             // `.ql` line/column) and the import boundary (so only the user's own functions
             // get DWARF line info); the detailed front-end returns both alongside the program.
             let (program, debug_meta) = if debug {
-                let (program, source, imported) = match driver::front_end_detailed(&file) {
-                    Ok(triple) => triple,
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        std::process::exit(1);
-                    }
-                };
+                let (program, source, imported) = checked_program_detailed(&file);
                 (program, Some((source, imported)))
             } else {
                 (checked_program(&file), None)

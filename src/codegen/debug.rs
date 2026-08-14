@@ -27,9 +27,12 @@ pub struct DebugInfo<'ctx> {
     builder: DebugInfoBuilder<'ctx>,
     compile_unit: DICompileUnit<'ctx>,
     file: DIFile<'ctx>,
-    /// Byte offset at which each source line begins (`line_starts[0] == 0`). Used to
-    /// convert a span's byte offset into a `(line, column)` pair by binary search.
+    /// Byte offset at which each source line begins (`line_starts[0] == 0`). Used to find
+    /// a span's line (and its line-start byte) by binary search.
     line_starts: Vec<usize>,
+    /// The source text, kept so a span's DWARF column can be counted in characters (not
+    /// bytes) from its line start — matching how the compiler's diagnostics report columns.
+    source: String,
 }
 
 impl<'ctx> DebugInfo<'ctx> {
@@ -92,11 +95,14 @@ impl<'ctx> DebugInfo<'ctx> {
             compile_unit,
             file,
             line_starts: line_starts(source),
+            source: source.to_string(),
         }
     }
 
-    /// The 1-based `(line, column)` of `offset` in the source. A byte offset past the end
-    /// clamps to the last line (defensive; spans always point inside the source).
+    /// The 1-based `(line, column)` of `offset` in the source. The column counts characters
+    /// (not bytes) from the line start, so multi-byte characters before `offset` advance it
+    /// by one each — matching the compiler's diagnostics. A byte offset past the end clamps
+    /// to the last line (defensive; spans always point inside the source).
     fn line_col(&self, offset: usize) -> (u32, u32) {
         // Index of the last line start that is <= offset.
         let idx = match self.line_starts.binary_search(&offset) {
@@ -104,7 +110,16 @@ impl<'ctx> DebugInfo<'ctx> {
             Err(i) => i.saturating_sub(1),
         };
         let line = idx + 1;
-        let col = offset - self.line_starts[idx] + 1;
+        let line_start = self.line_starts[idx];
+        let end = offset.min(self.source.len());
+        // Count characters from the line start; fall back to the byte delta if `offset` is
+        // not on a char boundary (spans are token starts, so this is only a guard).
+        let col = self
+            .source
+            .get(line_start..end)
+            .map(|s| s.chars().count())
+            .unwrap_or(end - line_start)
+            + 1;
         (line as u32, col as u32)
     }
 

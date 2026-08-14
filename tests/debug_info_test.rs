@@ -37,8 +37,22 @@ fn ensure_runtime_lib(bin_dir: &Path) {
         "failed to build libquilon_rt.a for the debug-info test"
     );
     let fresh = rt_target.join("debug").join("libquilon_rt.a");
-    std::fs::copy(&fresh, bin_dir.join("libquilon_rt.a"))
-        .expect("copy fresh libquilon_rt.a next to the quilon binary");
+    // Copy atomically: other test binaries run concurrently and copy the SAME archive to
+    // the SAME destination, so a plain `fs::copy` could interleave into a partial file that
+    // a racing `quilon build` then links. Write a process-unique temp in the dest dir and
+    // rename over it — the rename is atomic, so every reader sees a complete archive.
+    let dest = bin_dir.join("libquilon_rt.a");
+    // Unique per call (PID alone is shared by this binary's parallel tests, so add a global
+    // counter) so two concurrent copies never target the same temp file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let uniq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = bin_dir.join(format!(
+        "libquilon_rt.a.{}.{}.tmp",
+        std::process::id(),
+        uniq
+    ));
+    std::fs::copy(&fresh, &tmp).expect("copy fresh libquilon_rt.a to a temp file");
+    std::fs::rename(&tmp, &dest).expect("atomically place libquilon_rt.a next to the binary");
 }
 
 #[test]
