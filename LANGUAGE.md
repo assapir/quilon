@@ -1,6 +1,6 @@
 # Quilon Language Reference
 
-**Version:** 0.9.0 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
+**Version:** 0.9.1 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
 Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.ql` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 

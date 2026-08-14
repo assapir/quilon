@@ -4,7 +4,7 @@
 
 Quilon (`.ql`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
-> **Status: 0.9.0 — "stable basics."** The core language works and is verified end-to-end (it compiles, runs, and is tested). It is **not** feature-complete. For exactly what is and isn't implemented, see the feature matrix in **[LANGUAGE.md](./LANGUAGE.md)**.
+> **Status: 0.9.1 — "stable basics."** The core language works and is verified end-to-end (it compiles, runs, and is tested). It is **not** feature-complete. For exactly what is and isn't implemented, see the feature matrix in **[LANGUAGE.md](./LANGUAGE.md)**.
 
 ## A taste
 
@@ -33,7 +33,7 @@ Install these **before** building or running Quilon:
 
 - **LLVM 22** — the compiler backend (via inkwell). Debian/Ubuntu: install from [apt.llvm.org](https://apt.llvm.org); Arch: `llvm`; macOS: `brew install llvm@22` (or the current `llvm`).
 - **libgc (Boehm GC)** — the runtime garbage collector, and a hard dependency: it is required to **build** the `quilon` compiler, to **`quilon run`** (the JIT resolves `GC_*` in-process), **and** it is **dynamically linked into the native executables** produced by `quilon build` — so libgc must also be present wherever those binaries run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
-- **A C toolchain** — `clang` (default) or `gcc`, plus `llc` (ships with LLVM). Used by `quilon build` to assemble and link native executables. Not needed for `quilon run` (JIT).
+- **A C toolchain** — `clang` (default) or `gcc`. Used by `quilon build` to link the native executable (the object file is generated in-process via LLVM's `TargetMachine`, so no external `llc` is needed). Not needed for `quilon run` (JIT).
 
 A compiled `quilon` binary is otherwise **self-contained**: the runtime static
 library (`libquilon_rt.a`) is embedded, gzip-compressed, in the binary itself,
@@ -58,6 +58,14 @@ variable override, then a copy next to the `quilon` binary (the build script
 places one there), then the compressed copy embedded in the binary (see
 Prerequisites) — no extra step. Native builds link with `clang` by default;
 pass `--linker gcc` to use gcc instead.
+
+## Releasing
+
+Run `./scripts/release.sh` from a clean `main`. It reads the version from
+`Cargo.toml`, verifies `quilon-rt` matches and that `CHANGELOG.md` has a dated
+top-most section for it, runs the full gate, then tags `v<version>` and pushes
+it — which triggers CI to build and publish the GitHub release. Pass `--dry-run`
+to run every check and preview the tag without tagging or pushing.
 
 ## Vision (aspirational)
 

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// generation (visible via `readelf -p .comment` and `strings`), coexisting with the
 /// toolchain's own producer string. A single compile-time constant so there is one source
 /// of truth, and no build-date/dynamic content so builds stay reproducible.
-pub(crate) const WATERMARK: &str = "Built with Quilon by Assaf Sapir - github.com/assapir/quilon";
+pub const WATERMARK: &str = "Built with Quilon by Assaf Sapir - github.com/assapir/quilon";
 
 /// Names that the compiler provides built-in overloads for (`print`/`eprint`, lowered
 /// to runtime intrinsics). A user definition of one ADDS an overload member (and is
@@ -623,15 +623,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.generate_main_wrapper(&entry_params)?;
         }
 
-        // Embed the provenance watermark as an `!llvm.ident` entry. LLVM lowers this into
-        // an ELF `.comment` string during object emission (readable via
-        // `readelf -p .comment` / `strings`), alongside the C toolchain's own producer
-        // signature. Harmless for the JIT path, which produces no artifact to carry it.
+        // Embed the provenance watermark as an `!llvm.ident` entry (harmless for the JIT
+        // path, which produces no artifact to carry it).
         let ident = self.context.metadata_string(WATERMARK);
         let ident_node = self.context.metadata_node(&[ident.into()]);
         self.module
             .add_global_metadata("llvm.ident", &ident_node)
-            .map_err(|e| format!("failed to embed watermark metadata: {e}"))?;
+            .expect("llvm.ident metadata node is always a valid node");
 
         // Resolve all debug-info forward references before anything reads the metadata.
         // The module verifier validates debug info, so this must precede `verify` (and any

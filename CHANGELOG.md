@@ -22,6 +22,86 @@ All notable changes to Quilon are documented here.
   `assertEq`/`assertNotEq` failure messages now render records, sum types, and
   arrays too. There are no format specifiers. (See `examples/interpolation.ql`.)
   (#101)
+
+## 0.9.1 "Towel" — 2026-08-14 — "Stable basics, hardened"
+
+Everything merged since 0.9.0: the M1–M3 language-surface work (overloading, sum
+types, closures, ranges, spread, array/`Text` methods, `Unit`, guaranteed TCO,
+`^` args/env, `core.test`/`core.cli`), a cluster of correctness fixes, the
+runtime-library licensing exception, a provenance watermark, and a distribution
+fix that makes a bare `quilon` binary self-contained. No release tag stood
+between 0.9.0 and this one, so this section covers the whole span.
+
+### Added
+
+- **Ad-hoc overloading — the only polymorphism.** Two or more top-level
+  definitions that share a name and each annotate **all** their parameters form
+  an overload set (no marker keyword); call sites dispatch by **exact** static
+  argument type, with no implicit coercion, and an unmatched/ambiguous call is a
+  compile error listing the candidates. **Operators are overload sets too**
+  (`+ - * / %`, `== != < <= > >=`): the built-ins (e.g. `+` on `Num` and on
+  `Text`) are visible overloads, and a user definition named with the operator
+  symbol adds a member for a user type. `==`/`!=` and `<`/`<=`/`>`/`>=` over
+  `Text` (equality + lexicographic order) ship as built-in overloads.
+  Comparison/equality overloads must return `Bool`. (#32)
+- **User-defined sum types (`/` separator).** A set of named variants, nullary
+  or with built-in-typed payloads (`Color = Red / Green / Blue`,
+  `Shape = Circle(Num) / Rect(Num, Num)`), constructed by name and consumed by
+  exhaustive `?`/`|` matching that binds the payload. `Result` (`Ok`/`NotOk`) is
+  just a predefined sum type. (#28) A pattern-bound `Ok`/`NotOk` payload now
+  carries its **concrete type**, so it is usable at the match site and across a
+  `-> Result` function boundary (overload dispatch sees the real `Num`/`Text`/
+  `Bool`). (#53)
+- **`Unit` type and value — `$`.** A type with exactly one value, both written
+  `$`; `print`/`eprint` return `$`, and a `$`-bodied `^` exits 0. (#25)
+- **`Text` methods.** `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/
+  `contains`/`indexOf`/`slice`/`toUpper`/`toLower` — compiler-provided, chainable,
+  grapheme-based, UTF-8-correct, and fail-loud where the request is invalid
+  (`replace` count/empty-argument checks). (#52)
+- **`Text` and nested arrays inside composites.** A codegen type-oracle
+  side-table lets `Text` (and nested arrays) live in records and arrays and be
+  carried as sum-type payloads (`Ok("done")`), reading back at their real type —
+  the previous numeric-only restriction on composite contents is lifted. (#35)
+- **Array methods.** `map`/`filter`/`reduce`/`each`/`find`/`at` — built-in,
+  chainable, taking a lambda the compiler inlines per element; `each` returns the
+  receiver, `find`/`at` return `Ok`/`NotOk`. (#40)
+- **Array concatenation via `+`.** `[]T + []T` (concat), `[]T + T` (append), and
+  `T + []T` (prepend), each selected by exact operand types, always building a
+  new array. (#51)
+- **Ranges — infix `lo <- hi`.** An inclusive `[]Num` (`1 <- 4` → `[1,2,3,4]`,
+  descending when `lo > hi`); pure array sugar, so it composes with `.size`,
+  indexing, and the array methods. (#34)
+- **Spread — prefix `<-` in literals.** Array splice (`[<-xs, 4]`) and record
+  functional-update (`{<-p, x = 9}`, preserving a named record's type + methods
+  when it only overrides existing fields). Disambiguated from the range `<-`
+  purely by position. (#43)
+- **Closures.** A function nested in another body captures the enclosing locals
+  it names; how is decided by the binding operator — `=` captures by value (a
+  frozen snapshot), `:=` captures by reference (a shared, mutable cell that
+  outlives the frame). Monomorphic in this milestone. (#36)
+- **Guaranteed self-tail-call optimization.** A function whose result is a call
+  to itself in tail position is lowered to a loop (parameters become
+  loop-carried slots), so tail recursion runs in constant stack and never
+  overflows, however deep. (#37)
+- **In-place mutation of `:=` records.** Direct field writes (`obj.field := v`)
+  and **setter** methods — a method is a setter exactly when its body writes
+  `it.field := …`; there is no marker, and a setter call requires a `:=`
+  receiver. (#26)
+- **`^` receives `args` and `env`.** The entry point may declare
+  `args :: []Text` (argv, including `argv[0]`) and `env :: [][]Text` (environment
+  as `[key, value]` pairs); the generated `main()` fills them from C
+  `argc`/`argv`/`envp`. Both are real Quilon arrays. (#39)
+- **`core.test` module.** In-language assertions for self-verifying programs:
+  `assert` (with an `AssertOpts { message }` overload), `assertEq`, `assertNotEq`,
+  `assertOk`, `assertNotOk`; a failing assertion prints to stderr and exits 101.
+  Pure Quilon (`corelib/test.ql`) over a single process-exit intrinsic. (#63)
+- **`core.cli` module.** Pipe-friendly `getEnv` / `hasFlag` / `getOpt` over the
+  entry point's `args`/`env` (both `--name value` and `--name=value`; flag names
+  with or without `--`). Pure Quilon (`corelib/cli.ql`), no new intrinsics. (#66)
+- **Human-readable diagnostics.** Compile errors from the lexer, parser, and
+  type checker are reported rustc-style: a `path:line:col: error: <message>`
+  header with the offending source line and a caret underline (1-based,
+  character-counted columns). (#23)
 - **Source-level debugging: `quilon build --debug` (`-g`).** Native builds can now
   emit **DWARF line-number debug info**, so a debugger (`gdb`/`lldb`) can set
   breakpoints, single-step, and print backtraces in terms of `.ql` source lines.
@@ -45,7 +125,9 @@ All notable changes to Quilon are documented here.
   `.comment` during object generation, so it survives linking. Inspect it with
   `readelf -p .comment ./program` or `strings`. The string is a fixed
   compile-time constant (no build date), builds stay reproducible, and there is
-  no runtime effect; `strip --strip-all` removes it. `quilon run` (JIT) produces
+  no runtime effect; `strip -R .comment` (or `objcopy --remove-section=.comment`)
+  removes it — plain `strip --strip-all` keeps it, since GNU `strip` preserves the
+  `.comment` section. `quilon run` (JIT) produces
   no artifact and so carries no watermark. (#45)
 - **Runtime-library exception (licensing).** The Quilon runtime (`quilon-rt`),
   which is statically linked and embedded into every binary `quilon build`
@@ -200,6 +282,14 @@ All notable changes to Quilon are documented here.
   toward zero (documented), and `.at(n)` remains the non-aborting `Ok`/`NotOk`
   form — its bounds check now also runs before the float conversion, so
   `at(0/0)` returns `NotOk` instead of branching on poison. (#74)
+- `quilon run` (JIT) and a native build now agree on `args`: the `quilon run`
+  CLI prefix is stripped and the `.ql` path becomes `argv[0]`, so
+  `quilon run f.ql a b c` gives the program the same `args.size` and trailing
+  arguments as `./f a b c`. Previously the JIT leaked the CLI prefix into `argv`.
+  (#44)
+- `quilon build` places `libquilon_rt.a` deterministically for the local
+  dev loop (next to the binary), superseded for distributed binaries by the
+  embedded, gzip-compressed runtime archive above. (#38)
 
 ## 0.9.0 — "Stable basics"
 
