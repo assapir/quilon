@@ -80,6 +80,27 @@ pub enum TypeError {
         param: String,
         span: Span,
     },
+    /// A call to an overload set every member of which is defined *below* the call.
+    /// Names resolve top to bottom, so the definition is not in scope yet.
+    OverloadCallBeforeDefinition {
+        name: String,
+        span: Span,
+    },
+    /// A call resolved to an overload member whose definition omitted its return type
+    /// annotation, so the call's result type is unknown. Anchored at the call — the
+    /// place the missing annotation actually stops the program.
+    UnannotatedOverloadCall {
+        name: String,
+        params: Vec<Type>,
+        span: Span,
+    },
+    /// An overload member omitted its return type annotation and nothing calls it, so
+    /// there is no call site to blame. Anchored at the definition.
+    UnannotatedOverloadMember {
+        name: String,
+        params: Vec<Type>,
+        span: Span,
+    },
     /// A comparison/equality operator overload (`== != < <= > >=`) declared a non-`Bool`
     /// return type. These operators are predicates and must yield `Bool`.
     ComparisonOverloadNotBool {
@@ -137,6 +158,9 @@ impl TypeError {
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::OverloadCallBeforeDefinition { span, .. }
+            | TypeError::UnannotatedOverloadCall { span, .. }
+            | TypeError::UnannotatedOverloadMember { span, .. }
             | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::PatternTypeMismatch { span, .. }
             | TypeError::RefutableConstructorArg { span, .. }
@@ -224,6 +248,29 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Overloaded definition '{}' must annotate every parameter; '{}' has no type annotation",
                     name, param
+                )
+            }
+            TypeError::OverloadCallBeforeDefinition { name, .. } => {
+                write!(
+                    f,
+                    "cannot call '{}' before its definition — Quilon resolves names top to bottom; move the definition above this call",
+                    name
+                )
+            }
+            TypeError::UnannotatedOverloadCall { name, params, .. } => {
+                write!(
+                    f,
+                    "cannot call '{}': its overload member ({}) has no return type annotation — annotate it, since exact dispatch needs the full signature",
+                    name,
+                    fmt_type_list(params)
+                )
+            }
+            TypeError::UnannotatedOverloadMember { name, params, .. } => {
+                write!(
+                    f,
+                    "overload member '{}' ({}) has no return type annotation — annotate it, since exact dispatch needs the full signature",
+                    name,
+                    fmt_type_list(params)
                 )
             }
             TypeError::ComparisonOverloadNotBool { operator, got, .. } => {
@@ -451,13 +498,20 @@ pub type TypeTable = std::collections::HashMap<Span, Type>;
 
 /// One member of an overload set: an exact parameter-type list and the result type.
 /// Both named functions and operators (keyed by their symbol, e.g. `"+"`) live in the
-/// same registry. `builtin` members are the compiler-lowered defaults (`+` on Num/Text,
-/// the comparisons, `print`, …); user members come from top-level definitions.
+/// same registry, and the compiler-lowered defaults (`+` on Num/Text, the comparisons,
+/// `print`, …) are registered as ordinary members beside the user's own — the standard
+/// operators are visible overloads, not magic, and nothing here treats them differently.
+///
+/// `ret` is `None` when the definition omitted its return annotation. A member is
+/// registered as its own definition is reached and its signature never changes after
+/// that, so an omitted return type stays `None` instead of standing in as a placeholder
+/// type that would answer calls with the wrong answer. Every member must annotate its
+/// return type (as it must annotate every parameter), and the omission is reported where
+/// it bites: at a call to the member, or at its definition if nothing calls it.
 #[derive(Debug, Clone)]
 pub struct Overload {
     pub params: Vec<Type>,
-    pub ret: Type,
-    pub builtin: bool,
+    pub ret: Option<Type>,
 }
 
 pub struct TypeChecker {
@@ -483,6 +537,11 @@ pub struct TypeChecker {
     // A call to one of these resolves by exact argument type via `overloads` rather
     // than through a single `env` function binding. Computed in `check_program`.
     overloaded_names: std::collections::HashSet<String>,
+    // The first overload member registered without a return type annotation, as
+    // `(name, parameter types, definition span)`. A call to such a member is an error at
+    // the call; this is what lets an uncalled one still be reported, at its definition.
+    // Only the first is kept — one report per run is what the checker gives anyway.
+    unannotated_overload_member: Option<(String, Vec<Type>, Span)>,
 }
 
 impl Default for TypeChecker {
@@ -501,6 +560,7 @@ impl TypeChecker {
             type_table: TypeTable::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
+            unannotated_overload_member: None,
         };
 
         // Add built-in sum types to the environment
@@ -561,8 +621,7 @@ impl TypeChecker {
                 op.symbol(),
                 Overload {
                     params: vec![Type::Num, Type::Num],
-                    ret: Type::Num,
-                    builtin: true,
+                    ret: Some(Type::Num),
                 },
             );
         }
@@ -571,8 +630,7 @@ impl TypeChecker {
             BinOp::Add.symbol(),
             Overload {
                 params: vec![Type::Text, Type::Text],
-                ret: Type::Text,
-                builtin: true,
+                ret: Some(Type::Text),
             },
         );
 
@@ -587,8 +645,7 @@ impl TypeChecker {
                     op.symbol(),
                     Overload {
                         params: vec![ty.clone(), ty],
-                        ret: Type::Bool,
-                        builtin: true,
+                        ret: Some(Type::Bool),
                     },
                 );
             }
@@ -599,8 +656,7 @@ impl TypeChecker {
                     op.symbol(),
                     Overload {
                         params: vec![ty.clone(), ty],
-                        ret: Type::Bool,
-                        builtin: true,
+                        ret: Some(Type::Bool),
                     },
                 );
             }
@@ -612,8 +668,7 @@ impl TypeChecker {
                 op.symbol(),
                 Overload {
                     params: vec![Type::Bool, Type::Bool],
-                    ret: Type::Bool,
-                    builtin: true,
+                    ret: Some(Type::Bool),
                 },
             );
         }
@@ -625,8 +680,7 @@ impl TypeChecker {
                     name,
                     Overload {
                         params: vec![ty],
-                        ret: Type::Unit,
-                        builtin: true,
+                        ret: Some(Type::Unit),
                     },
                 );
             }
@@ -641,8 +695,7 @@ impl TypeChecker {
             "__exit",
             Overload {
                 params: vec![Type::Num],
-                ret: Type::Unit,
-                builtin: true,
+                ret: Some(Type::Unit),
             },
         );
     }
@@ -739,8 +792,16 @@ impl TypeChecker {
             }),
             // Re-resolve the result type: an overloaded member's return annotation may
             // have been registered (pre-pass) before its named type existed, so a bare
-            // `Named{T, fields:[]}` is filled in to its full definition here.
-            [only] => Ok(self.resolve_type(&only.ret)),
+            // `Named{T, fields:[]}` is filled in to its full definition here. A member
+            // with no return annotation has no result type to give this call.
+            [only] => match &only.ret {
+                Some(ret) => Ok(self.resolve_type(ret)),
+                None => Err(TypeError::UnannotatedOverloadCall {
+                    name: name.to_string(),
+                    params: only.params.clone(),
+                    span: span.clone(),
+                }),
+            },
             _ => Err(TypeError::AmbiguousOverload {
                 name: name.to_string(),
                 arg_types: arg_types.to_vec(),
@@ -943,8 +1004,12 @@ impl TypeChecker {
             .map(|(name, _)| name.to_string())
             .collect();
 
-        // Register every overloaded definition's signature up front, so a call to any
-        // member resolves regardless of definition order (and recursion works).
+        // Names resolve top to bottom: an overload member joins its set as its own
+        // definition is reached, NOT up front, so a call can only pick a member defined
+        // above it. Registering just before the member's body is checked still lets that
+        // body call itself (the same way a plain function's definition is in scope for
+        // its own body); what it rules out is a call reaching forward to a definition
+        // below — which the checker used to accept and codegen then had no symbol for.
         for item in &program.items {
             if let Item::FunctionDecl(decl) = item
                 && self.overloaded_names.contains(&decl.name)
@@ -952,11 +1017,12 @@ impl TypeChecker {
             {
                 self.register_overload_decl(decl)?;
             }
-        }
-
-        for item in &program.items {
             self.check_item(item)?;
         }
+
+        // Every call has been resolved by now, so an overload member still missing its
+        // return annotation is one nothing calls — reported at its definition.
+        self.report_unannotated_overload_member()?;
 
         // Validate the `^` entry point's parameter signature up front, so `quilon check`
         // and `quilon run`/`build` all reject an unsupported form with the SAME clear
@@ -1007,8 +1073,10 @@ impl TypeChecker {
 
     /// Register a top-level function definition as a member of its overload set. Each
     /// overloaded member must annotate all its parameter types (exact-type dispatch
-    /// can't pick between unannotated members). The result type is the annotation, or
-    /// `Num` as the provisional default (refined when its body is checked).
+    /// can't pick between unannotated members) and its return type — registration runs
+    /// before any body is checked, so an omitted return type is recorded as unknown
+    /// (`ret: None`) and reported at the first call to the member, or at the definition
+    /// if none exists (see `report_unannotated_overload_member`).
     fn register_overload_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
         let mut params = Vec::with_capacity(decl.params.len());
         for p in &decl.params {
@@ -1024,19 +1092,19 @@ impl TypeChecker {
                 }
             }
         }
-        let ret = decl
-            .return_type
-            .as_ref()
-            .map(|t| self.resolve_type(t))
-            .unwrap_or(Type::Num);
+        let ret = decl.return_type.as_ref().map(|t| self.resolve_type(t));
 
         // A comparison/equality operator overload (`== != < <= > >=`) must return `Bool`:
         // these are predicates that feed `?`/`|` matching and conditionals. (Arithmetic
-        // operators are unconstrained — e.g. `Vec * Num -> Vec` is fine.)
-        if is_comparison_operator(&decl.name) && ret != Type::Bool {
+        // operators are unconstrained — e.g. `Vec * Num -> Vec` is fine.) An unannotated
+        // one is left to the missing-return-annotation report, which says what to do.
+        if is_comparison_operator(&decl.name)
+            && let Some(ret) = &ret
+            && ret != &Type::Bool
+        {
             return Err(TypeError::ComparisonOverloadNotBool {
                 operator: decl.name.clone(),
-                got: Box::new(ret),
+                got: Box::new(ret.clone()),
                 span: decl.span.clone(),
             });
         }
@@ -1055,15 +1123,28 @@ impl TypeChecker {
             });
         }
 
-        self.add_overload(
-            &decl.name,
-            Overload {
-                params,
-                ret,
-                builtin: false,
-            },
-        );
+        if ret.is_none() && self.unannotated_overload_member.is_none() {
+            self.unannotated_overload_member =
+                Some((decl.name.clone(), params.clone(), decl.span.clone()));
+        }
+
+        self.add_overload(&decl.name, Overload { params, ret });
         Ok(())
+    }
+
+    /// After every item is checked, an overload member that never got its return type
+    /// annotated is reported at its own definition. A call to one is reported at the call
+    /// instead (`resolve_overload`), which runs first — so this only speaks up for a
+    /// member nothing calls, where there is no better place to point.
+    fn report_unannotated_overload_member(&self) -> Result<(), TypeError> {
+        match &self.unannotated_overload_member {
+            Some((name, params, span)) => Err(TypeError::UnannotatedOverloadMember {
+                name: name.clone(),
+                params: params.clone(),
+                span: span.clone(),
+            }),
+            None => Ok(()),
+        }
     }
 
     fn check_item(&mut self, item: &Item) -> Result<(), TypeError> {
@@ -1486,8 +1567,12 @@ impl TypeChecker {
                 let _ = self.env.update_type(&decl.name, refined);
             }
         } else if is_overloaded {
-            // Refine this overload member's (provisional Num) return type to the body's.
-            self.update_overload_return(&decl.name, &param_types, body_type);
+            // An overload member's return type is its annotation, never its inferred body
+            // type. Adopting the body type here would make the member's signature depend
+            // on where a call sits relative to the definition — a call above it would see
+            // one type and a call below it another — which is precisely the order
+            // dependence the annotation requirement removes. The omission is reported
+            // instead, at the call or at the definition.
         } else if body_type != preliminary_return_type {
             // Update the function type with the inferred return type
             let correct_func_type = Type::Function {
@@ -1554,20 +1639,6 @@ impl TypeChecker {
             params: param_types,
             return_type: Box::new(ret),
         })
-    }
-
-    /// Refine the return type of the overload member of `name` whose parameter types
-    /// are `params` (set during body inference for an unannotated overloaded def).
-    fn update_overload_return(&mut self, name: &str, params: &[Type], ret: Type) {
-        if let Some(set) = self.overloads.get_mut(name)
-            && let Some(member) = set.iter_mut().find(|o| {
-                !o.builtin
-                    && o.params.len() == params.len()
-                    && o.params.iter().zip(params).all(|(a, b)| types_match(a, b))
-            })
-        {
-            member.ret = ret;
-        }
     }
 
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
@@ -2188,6 +2259,20 @@ impl TypeChecker {
         // so its locals stay out of this hot, deeply-recursive frame).
         if self.is_generic_print_call(func, args, &first_ty) {
             return Ok(Type::Unit);
+        }
+
+        // A name that forms an overload set but has no member registered yet is one whose
+        // every definition sits below this call. Say so, rather than falling through to
+        // the plain-function path and reporting the name as undefined — it is defined,
+        // just not yet.
+        if let Expr::Ident { name, .. } = func
+            && self.overloaded_names.contains(name)
+            && !self.overloads.contains_key(name)
+        {
+            return Err(TypeError::OverloadCallBeforeDefinition {
+                name: name.clone(),
+                span: span.clone(),
+            });
         }
 
         // Overload-set dispatch: if `func` names an overload set (a user overload set
@@ -3139,5 +3224,139 @@ test = => <
             eprintln!("Type error: {:?}", e);
         }
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_overload_member_must_annotate_its_return_type() {
+        // Called: the error lands on the call, which is where the unknown result type
+        // stops the program, and names the member by its parameter types.
+        let err = check_ok(
+            "g = (n :: Num) => \"a\"\ng = (t :: Text) -> Text => \"b\"\nh = () -> Text => g(1)\n^ = () -> Num => 0",
+        )
+        .unwrap_err();
+        match err {
+            TypeError::UnannotatedOverloadCall { name, params, .. } => {
+                assert_eq!(name, "g");
+                assert_eq!(params, vec![Type::Num]);
+            }
+            other => panic!(
+                "expected an unannotated-overload-call error, got {:?}",
+                other
+            ),
+        }
+
+        // Annotating it is all the fix takes.
+        assert!(
+            check_ok(
+                "g = (n :: Num) -> Text => \"a\"\ng = (t :: Text) -> Text => \"b\"\nh = () -> Text => g(1)\n^ = () -> Num => 0"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_uncalled_overload_member_missing_return_is_reported_at_its_definition() {
+        // Nothing calls the unannotated member, so there is no call to blame — the
+        // definition is reported instead, rather than the omission passing unnoticed.
+        let err =
+            check_ok("g = (n :: Num) => 1\ng = (t :: Text) -> Num => 2\n^ = () -> Num => g(\"x\")")
+                .unwrap_err();
+        match err {
+            TypeError::UnannotatedOverloadMember { name, params, .. } => {
+                assert_eq!(name, "g");
+                assert_eq!(params, vec![Type::Num]);
+            }
+            other => panic!(
+                "expected an unannotated-overload-member error, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_unannotated_overload_member_return_is_never_inferred_from_its_body() {
+        // A body that plainly returns Text does not excuse the annotation, and checking
+        // that body first does not rescue a later call: inferring the member's return
+        // would make its signature depend on where the call sits relative to the
+        // definition, which is the order dependence the requirement removes.
+        let err = check_ok(
+            "g = (n :: Num) => \"a\"\ng = (t :: Text) -> Text => \"b\"\n^ = () -> Num => g(1).size",
+        )
+        .unwrap_err();
+        assert!(matches!(err, TypeError::UnannotatedOverloadCall { .. }));
+    }
+
+    #[test]
+    fn test_overload_member_recursion_needs_the_annotation_then_works() {
+        // A member calling itself hits the same rule (its own return type is what the
+        // recursive call needs)…
+        assert!(
+            check_ok(
+                "p = (n :: Num) => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => 0"
+            )
+            .is_err()
+        );
+        // …and annotating it makes the recursive member legal.
+        assert!(
+            check_ok(
+                "p = (n :: Num) -> Text => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => p(3).size"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_call_to_an_overload_member_defined_below_is_rejected() {
+        // Members join their set where they are written, so this call sees no `g` at all.
+        // It used to resolve against the pre-registered signature and then fail in
+        // codegen with no matching symbol.
+        let err = check_ok(
+            "h = () -> Text => g(1)\ng = (n :: Num) -> Text => \"a\"\ng = (t :: Text) -> Text => \"b\"\n^ = () -> Num => 0",
+        )
+        .unwrap_err();
+        match err {
+            TypeError::OverloadCallBeforeDefinition { name, .. } => assert_eq!(name, "g"),
+            other => panic!("expected a call-before-definition error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_mutually_recursive_overload_members_are_rejected_not_miscompiled() {
+        // Whichever of the pair comes first must call the other before it exists. This
+        // type-checked before and died in codegen; now it is refused at the forward call.
+        let err = check_ok(
+            "even = (n :: Num) -> Bool => n == 0 ? true : odd(n - 1)\neven = (t :: Text) -> Bool => false\nodd = (n :: Num) -> Bool => n == 0 ? false : even(n - 1)\nodd = (t :: Text) -> Bool => true\n^ = () -> Num => 0",
+        )
+        .unwrap_err();
+        match err {
+            TypeError::OverloadCallBeforeDefinition { name, .. } => assert_eq!(name, "odd"),
+            other => panic!("expected a call-before-definition error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_a_call_resolves_against_the_members_above_it() {
+        // Only `f`'s Num member is defined at the call, so a Text argument reports the
+        // candidates that actually exist there rather than reaching forward.
+        let err = check_ok(
+            "f = (n :: Num) -> Num => 1\nh = () -> Num => f(\"x\")\nf = (t :: Text) -> Num => 2\n^ = () -> Num => 0",
+        )
+        .unwrap_err();
+        match err {
+            TypeError::NoMatchingOverload { candidates, .. } => {
+                assert_eq!(candidates, vec![vec![Type::Num]]);
+            }
+            other => panic!("expected a no-matching-overload error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unannotated_comparison_operator_overload_asks_for_the_annotation() {
+        // Without a return type there is nothing to compare against `Bool` yet, so the
+        // actionable message wins: annotate it. Annotated non-Bool still gets the
+        // comparison-specific error.
+        let err = check_ok("V = { x :: Num }\n== = (a :: V, b :: V) => a\n^ = () -> Num => 0")
+            .unwrap_err();
+        assert!(matches!(err, TypeError::UnannotatedOverloadMember { .. }));
     }
 }

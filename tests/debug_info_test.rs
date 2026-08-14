@@ -1,4 +1,4 @@
-//! DWARF line-number debug-info test for `quilon build --debug` (Phase 1).
+//! DWARF line-number debug-info test for `quilon build --debug`.
 //!
 //! Builds a small `.ql` program with `--debug` and shells out to `llvm-dwarfdump` to
 //! assert the emitted binary carries a DWARF compile unit that references the `.ql`

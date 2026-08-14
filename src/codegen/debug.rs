@@ -1,4 +1,4 @@
-//! DWARF line-number debug information (Phase 1).
+//! DWARF line-number debug information.
 //!
 //! When a native build is requested with `--debug`, the code generator installs a
 //! [`DebugInfo`] alongside the LLVM module. It owns the `DebugInfoBuilder`, the compile
@@ -7,8 +7,8 @@
 //!
 //! Scope is deliberately narrow: a `DISubprogram` per emitted function plus per-instruction
 //! source locations, which is exactly what a debugger needs to map a program counter back to
-//! a `.ql` line and to step through source. Local-variable and full-type debug info is a
-//! later phase — the subroutine type here is intentionally empty (no parameter/return types).
+//! a `.ql` line and to step through source. Local-variable and full-type debug info is tracked
+//! separately — the subroutine type here is intentionally empty (no parameter/return types).
 
 use std::path::Path;
 
@@ -127,7 +127,7 @@ impl<'ctx> DebugInfo<'ctx> {
     /// attached to its `FunctionValue` and used as the scope for its instructions.
     pub fn create_function(&self, name: &str, span: &Span) -> DISubprogram<'ctx> {
         let (line, _) = self.line_col(span.start as usize);
-        // Line-tables phase: an empty subroutine type (no parameter/return types).
+        // Line info only: an empty subroutine type (no parameter/return types).
         let subroutine_type =
             self.builder
                 .create_subroutine_type(self.file, None, &[], DIFlags::PUBLIC);

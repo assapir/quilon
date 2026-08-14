@@ -1096,3 +1096,24 @@ fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
 
     assert_exit_linked_from(&src, &fixtures, 2);
 }
+
+/// An overload member may call itself once its return type is annotated: the member's
+/// own definition is in scope for its body, so the recursive call resolves to it (and,
+/// being in tail position, lowers to a loop). `p(3)` walks down to "done" — 4 bytes.
+#[test]
+fn run_recursive_overload_member_with_annotated_return() {
+    assert_exit(
+        "p = (n :: Num) -> Text => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => p(3).size",
+        4,
+    );
+}
+
+/// A call resolves against the members defined above it: the first `pick` here answers
+/// a Num argument, and the Text member added below is irrelevant to it.
+#[test]
+fn run_overload_call_uses_the_member_defined_above_it() {
+    assert_exit(
+        "pick = (n :: Num) -> Num => 11\nfromNum = () -> Num => pick(1)\npick = (t :: Text) -> Num => 22\n^ = () -> Num => fromNum() + pick(\"x\")",
+        33,
+    );
+}

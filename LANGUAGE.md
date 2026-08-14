@@ -436,6 +436,26 @@ factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.ql`, `examples/fibonacci.ql`.)
 
+### Names resolve top to bottom
+
+A call may only name something **already defined above it** — there is no hoisting. A
+definition is in scope for its own body (so a function may recurse) and for everything
+that follows it, but not for anything before it:
+```quilon
+^ = () -> Num => later()   ~ error: Undefined variable 'later'
+later = () -> Num => 7
+```
+This holds for overload-set members too, which report the situation by name:
+```quilon
+h = () -> Text => g(1)     ~ error: cannot call 'g' before its definition
+g = (n :: Num) -> Text => "a"
+g = (t :: Text) -> Text => "b"
+```
+So **mutual recursion between top-level functions is not expressible**: whichever of the
+pair comes first would have to call the other before it exists. Self-recursion (including
+a recursive overload member calling itself) is unaffected — restructure a mutual pair into
+one self-recursive function.
+
 ### Tail self-recursion is optimized to a loop (guaranteed)
 
 When a function returns a call **to itself in tail position** — i.e. the self-call is
@@ -521,10 +541,17 @@ error that lists the candidates:
 error: No overload of 'score' matches argument types (Bool). Candidates: (Num), (Text)
 ```
 
-- Every member of an overload set must annotate **all** its parameters (exact dispatch
-  can't choose between unannotated members).
+- Every member of an overload set must annotate **all** its parameters **and its return
+  type** — a member's signature is what dispatch selects on, and a call must know the
+  result type it produces:
+  ```quilon
+  g = (n :: Num) => 1        ~ error: overload member 'g' (Num) has no return type
+  g = (t :: Text) -> Num => 2
+  ```
 - A single, ordinary `name = …` definition is **not** an overload set — it keeps full
   type inference (unannotated params default to `Num`, the return type is inferred).
+- A member joins its set where it is written, so a call resolves only against the members
+  above it ([names resolve top to bottom](#names-resolve-top-to-bottom)).
 - Dispatch is resolved at **direct call sites** by static argument types. Passing an
   overloaded name as a value (higher-order use) is not yet supported.
 
@@ -886,12 +913,12 @@ llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
 gdb ./program                              # break/step by .ql line
 ```
 Builds are already unoptimized, so `--debug` only *adds* the debug info; without
-it the binary carries none. This first phase covers line tables and per-function
-scopes only — local-variable and full-type debug info is planned for a later
-phase. Debug info is attributed to the program's own source file; functions
-pulled in from imported modules (`<<`) currently carry no line info, because a
-`Span` records only a byte offset and not which module file it came from (the
-same limitation noted for the type oracle). Multi-file line info is a follow-up.
+it the binary carries none. This covers line tables and per-function scopes;
+local-variable and full-type debug info is tracked separately. Debug info is
+attributed to the program's own source file; functions pulled in from imported
+modules (`<<`) currently carry no line info, because a `Span` records only a byte
+offset and not which module file it came from (the same limitation noted for the
+type oracle). Multi-file line info is a follow-up.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 
