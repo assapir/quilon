@@ -89,13 +89,13 @@ between 0.9.0 and this one, so this section covers the whole span.
   source location; the compile unit records the `.ql` file. Verify with
   `llvm-dwarfdump --debug-line ./program` / `--debug-info`. Builds are already
   unoptimized, so `--debug` only *adds* the info — the non-debug build path is
-  unchanged and carries no debug info. This is **Phase 1**: line tables and
-  per-function scopes only; local-variable and full-type debug info is a later
-  phase. Known limitation: debug info covers the program's own source file only —
-  functions imported from other modules (`<<`) carry no usable line info, because
-  the debug info holds a single compile unit and source text to resolve offsets
-  against; multi-file line info is a follow-up (source positions do now carry the
-  identity of the file they index into, so it has what it needs). (#100)
+  unchanged and carries no debug info. This covers line tables and per-function
+  scopes; local-variable and full-type debug info is tracked separately. Known
+  limitation: debug info covers the program's own source file only — functions
+  imported from other modules (`<<`) carry no usable line info, because the debug
+  info holds a single compile unit and source text to resolve offsets against;
+  multi-file line info is a follow-up (source positions do now carry the identity
+  of the file they index into, so it has what it needs). (#100)
 - **Provenance watermark in native binaries.** Every executable `quilon build`
   produces now carries a plaintext watermark —
   `Built with Quilon by Assaf Sapir - github.com/assapir/quilon` — in the ELF

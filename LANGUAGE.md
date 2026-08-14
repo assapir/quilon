@@ -835,12 +835,12 @@ llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
 gdb ./program                              # break/step by .ql line
 ```
 Builds are already unoptimized, so `--debug` only *adds* the debug info; without
-it the binary carries none. This first phase covers line tables and per-function
-scopes only — local-variable and full-type debug info is planned for a later
-phase. Debug info is attributed to the program's own source file; functions
-pulled in from imported modules (`<<`) currently carry no line info, because a
-`Span` records only a byte offset and not which module file it came from (the
-same limitation noted for the type oracle). Multi-file line info is a follow-up.
+it the binary carries none. This covers line tables and per-function scopes;
+local-variable and full-type debug info is tracked separately. Debug info is
+attributed to the program's own source file; functions pulled in from imported
+modules (`<<`) currently carry no line info, because a `Span` records only a byte
+offset and not which module file it came from (the same limitation noted for the
+type oracle). Multi-file line info is a follow-up.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 
