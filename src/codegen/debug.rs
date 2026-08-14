@@ -126,7 +126,7 @@ impl<'ctx> DebugInfo<'ctx> {
     /// Create a `DISubprogram` for a function named `name` beginning at `span`, to be
     /// attached to its `FunctionValue` and used as the scope for its instructions.
     pub fn create_function(&self, name: &str, span: &Span) -> DISubprogram<'ctx> {
-        let (line, _) = self.line_col(span.start);
+        let (line, _) = self.line_col(span.start as usize);
         // Line-tables phase: an empty subroutine type (no parameter/return types).
         let subroutine_type =
             self.builder
@@ -153,7 +153,7 @@ impl<'ctx> DebugInfo<'ctx> {
         span: &Span,
         scope: DIScope<'ctx>,
     ) -> DILocation<'ctx> {
-        let (line, col) = self.line_col(span.start);
+        let (line, col) = self.line_col(span.start as usize);
         self.builder
             .create_debug_location(context, line, col, scope, None)
     }

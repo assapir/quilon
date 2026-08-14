@@ -640,7 +640,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The generated wrapper has no source of its own; attribute it to the file header so
         // its instructions (GC init, the call into `^`) carry a valid debug location — the
         // verifier requires one on a call to a function that itself has debug info.
-        let main_span = Span::new(0, 0);
+        let main_span = Span::in_root(0, 0);
         let saved_scope = self.begin_di_function(main_fn, "main", &main_span);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
