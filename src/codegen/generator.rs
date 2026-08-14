@@ -248,13 +248,14 @@ struct Tco<'ctx> {
     /// The LLVM symbol of the function being optimized (mangled if overloaded). A `Call`
     /// is a self-tail-call only if it resolves to exactly this symbol with matching arity.
     self_symbol: String,
+    /// The function being optimized — the one a declined back-edge calls instead. Held as
+    /// a value so that path needs no lookup: the callee of a *self*-call is never in doubt.
+    /// Its parameter types are also the slot types (both come from the same declaration,
+    /// in order), which is what `emit_tail_self_call` checks its argument values against.
+    function: FunctionValue<'ctx>,
     /// The function's parameter alloca slots, in declaration order. A tail self-call
     /// recomputes the args and rewrites these slots (its length is the arity).
     param_slots: Vec<PointerValue<'ctx>>,
-    /// What each slot holds, in the same order. An argument value has to match its
-    /// slot's type to be stored into it; `emit_tail_self_call` checks that rather than
-    /// trusting the call resolution that got it here.
-    param_types: Vec<BasicTypeEnum<'ctx>>,
     /// The loop header — the block a tail self-call branches back to. Positioned right
     /// after the parameter slots are (re)loaded into the `variables` map for the body.
     header: inkwell::basic_block::BasicBlock<'ctx>,
@@ -1115,8 +1116,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
         let body_value = if self.body_has_self_tail_call(decl, &symbol) {
-            let (param_slots, param_types): (Vec<PointerValue<'ctx>>, Vec<BasicTypeEnum<'ctx>>) =
-                decl.params.iter().map(|p| self.variables[&p.name]).unzip();
+            let param_slots: Vec<PointerValue<'ctx>> = decl
+                .params
+                .iter()
+                .map(|p| self.variables[&p.name].0)
+                .collect();
             let header = self.context.append_basic_block(function, "tco_loop");
             self.builder
                 .build_unconditional_branch(header)
@@ -1124,8 +1128,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(header);
             self.tco = Some(Tco {
                 self_symbol: symbol.clone(),
+                function,
                 param_slots,
-                param_types,
                 header,
             });
             // Emit the body in tail-aware mode. A `None` result means every tail exit was a
@@ -1326,15 +1330,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `f(n - 1, acc + n)` reading `n` for `acc`) sees the current iteration's values,
     /// not a half-updated set.
     ///
-    /// A slot only accepts a value of its own type, and the values arrive here on the
-    /// strength of a call resolution made from *inferred* argument types. Should that
-    /// inference ever disagree with the parameter's declared type, storing anyway would
-    /// write the wrong-sized value into the frame — silent corruption. So a mismatched
-    /// argument declines the loop: the already-evaluated values (each argument is
-    /// evaluated exactly once, whichever way this goes) are passed to an ordinary call to
-    /// the same function, and its result is returned as the tail value. Recursion depth
-    /// is then bounded by the stack again for that call, which is the conservative half
-    /// of the trade.
+    /// A slot only accepts a value of its parameter's type, and the values arrive here on
+    /// the strength of a call resolution made from *inferred* argument types. Should that
+    /// inference ever disagree with the declared type, storing anyway would write the
+    /// wrong-sized value into the frame — silent corruption. So the values are checked
+    /// against the function's own signature (the slots were built from the same
+    /// declaration, in order) and a mismatch declines the loop: the already-evaluated
+    /// values — each argument is evaluated exactly once, whichever way this goes — are
+    /// passed to an ordinary call to the same function, and its result becomes the tail
+    /// value. Recursion depth is then bounded by the stack again for that call, which is
+    /// the conservative half of the trade.
     fn emit_tail_self_call(
         &mut self,
         args: &[Expr],
@@ -1348,16 +1353,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .as_ref()
             .expect("emit_tail_self_call without a TCO context");
         let slots_fit = tco
-            .param_types
+            .function
+            .get_params()
             .iter()
             .zip(&new_vals)
-            .all(|(slot_ty, val)| val.get_type() == *slot_ty);
+            .all(|(param, val)| val.get_type() == param.get_type());
         if !slots_fit {
-            let self_symbol = tco.self_symbol.clone();
-            let function = self
-                .module
-                .get_function(&self_symbol)
-                .ok_or_else(|| format!("Function not found: {}", self_symbol))?;
+            let function = tco.function;
             return self.emit_call(function, &new_vals).map(Some);
         }
         // Snapshot slots + header before the mutable stores (releases the `self.tco`

@@ -543,7 +543,7 @@ impl TypeChecker {
             "Result".to_string(),
             result_type.clone(),
             false,
-            Span::new(0, 0),
+            Span::in_root(0, 0),
         );
     }
 

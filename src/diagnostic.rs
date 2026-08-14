@@ -104,7 +104,7 @@ mod tests {
     fn render_points_at_the_span() {
         let src = "add = 1 + true";
         // Underline "true" (bytes 10..14).
-        let out = render("f.ql", src, &Span::new(10, 14), Severity::Error, "bad");
+        let out = render("f.ql", src, &Span::in_root(10, 14), Severity::Error, "bad");
         let expected = "\
 f.ql:1:11: error: bad
   |
@@ -116,7 +116,7 @@ f.ql:1:11: error: bad
     #[test]
     fn render_uses_the_spans_own_line() {
         let src = "line one\nx = oops\nline three";
-        let out = render("f.ql", src, &Span::new(13, 17), Severity::Error, "boom");
+        let out = render("f.ql", src, &Span::in_root(13, 17), Severity::Error, "boom");
         assert!(out.contains("f.ql:2:5: error: boom"), "{out}");
         assert!(out.contains("2 | x = oops"), "{out}");
         assert!(out.contains("    ^^^^"), "{out}");
@@ -126,7 +126,7 @@ f.ql:1:11: error: bad
     fn render_clamps_multiline_span_to_first_line() {
         // A span that runs off the end of its line only underlines line one.
         let src = "abc\ndef";
-        let out = render("f.ql", src, &Span::new(0, 7), Severity::Error, "x");
+        let out = render("f.ql", src, &Span::in_root(0, 7), Severity::Error, "x");
         // 3 carets under "abc", not 7.
         assert!(out.ends_with("| ^^^"), "{out}");
     }

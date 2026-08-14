@@ -8,8 +8,10 @@ use logos::Logos;
 pub struct Lexer;
 
 impl Lexer {
-    /// Tokenize the entire root source and return all tokens. An imported module is
-    /// tokenized with [`Lexer::tokenize_in_file`] so its spans carry its own identity.
+    /// Tokenize the entire root source and return all tokens. Root-only by definition:
+    /// every span it produces claims [`ROOT_FILE`], so this is for the source the
+    /// compiler was invoked on and nothing else. An imported module goes through
+    /// [`Lexer::tokenize_in_file`] under its own id.
     pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
         Self::tokenize_in_file(source, ROOT_FILE)
     }

@@ -31,8 +31,10 @@ pub struct Span {
 }
 
 impl Span {
-    /// A span in the root file. Imported modules build spans with [`Span::in_file`].
-    pub fn new(start: u32, end: u32) -> Self {
+    /// A span in the root file — named for the claim it makes, since claiming the wrong
+    /// file is exactly what collides in the type table. Anything built while processing
+    /// an imported module (or any other source) must use [`Span::in_file`].
+    pub fn in_root(start: u32, end: u32) -> Self {
         Self {
             start,
             end,

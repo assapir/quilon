@@ -1076,16 +1076,21 @@ fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
     // The `v` argument of the module's `kind(v)` — the span to collide with.
     let target = module_src.find("kind(v)").expect("fixture shape changed") + "kind(".len();
 
-    let head = "<< \"span_twin.ql\"\n^ = () -> Num => <\n  n = 7\n";
-    let assign = "  q = ";
-    let pad_len = target - head.len() - assign.len() - "  ~ \n".len();
-    let src = format!(
-        "{head}  ~ {}\n{assign}n\n  classify(\"hi\") + q - 7\n>\n",
-        "p".repeat(pad_len)
-    );
-    assert_eq!(
-        src[target..].find('n'),
-        Some(0),
+    // Everything that precedes the `n` which has to land on `target`, with a comment
+    // padded to push it exactly there. The padding is measured off the emitted prefix
+    // itself, so the two cannot drift apart.
+    let mut prefix = String::from("<< \"span_twin.ql\"\n^ = () -> Num => <\n  n = 7\n  ~ ");
+    let assign = "\n  q = ";
+    let pad = target
+        .checked_sub(prefix.len() + assign.len())
+        .expect("the fixture must leave room for the importer's preamble before `kind(v)`");
+    prefix.push_str(&"p".repeat(pad));
+    prefix.push_str(assign);
+
+    let src = format!("{prefix}n\n  classify(\"hi\") + q - 7\n>\n");
+    // Without this holding, the test would pass without ever provoking a collision.
+    assert!(
+        src[target..].starts_with("n\n"),
         "the importer's `n` must land on the module's `v`"
     );
 
