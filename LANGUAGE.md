@@ -1,6 +1,6 @@
 # Quilon Language Reference
 
-**Version:** 0.9.0 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
+**Version:** 0.9.1 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
 Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.ql` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
@@ -386,6 +386,26 @@ factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.ql`, `examples/fibonacci.ql`.)
 
+### Names resolve top to bottom
+
+A call may only name something **already defined above it** — there is no hoisting. A
+definition is in scope for its own body (so a function may recurse) and for everything
+that follows it, but not for anything before it:
+```quilon
+^ = () -> Num => later()   ~ error: Undefined variable 'later'
+later = () -> Num => 7
+```
+This holds for overload-set members too, which report the situation by name:
+```quilon
+h = () -> Text => g(1)     ~ error: cannot call 'g' before its definition
+g = (n :: Num) -> Text => "a"
+g = (t :: Text) -> Text => "b"
+```
+So **mutual recursion between top-level functions is not expressible**: whichever of the
+pair comes first would have to call the other before it exists. Self-recursion (including
+a recursive overload member calling itself) is unaffected — restructure a mutual pair into
+one self-recursive function.
+
 ### Tail self-recursion is optimized to a loop (guaranteed)
 
 When a function returns a call **to itself in tail position** — i.e. the self-call is
@@ -471,10 +491,17 @@ error that lists the candidates:
 error: No overload of 'score' matches argument types (Bool). Candidates: (Num), (Text)
 ```
 
-- Every member of an overload set must annotate **all** its parameters (exact dispatch
-  can't choose between unannotated members).
+- Every member of an overload set must annotate **all** its parameters **and its return
+  type** — a member's signature is what dispatch selects on, and a call must know the
+  result type it produces:
+  ```quilon
+  g = (n :: Num) => 1        ~ error: overload member 'g' (Num) has no return type
+  g = (t :: Text) -> Num => 2
+  ```
 - A single, ordinary `name = …` definition is **not** an overload set — it keeps full
   type inference (unannotated params default to `Num`, the return type is inferred).
+- A member joins its set where it is written, so a call resolves only against the members
+  above it ([names resolve top to bottom](#names-resolve-top-to-bottom)).
 - Dispatch is resolved at **direct call sites** by static argument types. Passing an
   overloaded name as a value (higher-order use) is not yet supported.
 
@@ -835,7 +862,6 @@ llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .ql line, print locals
 ```
-Builds are already unoptimized, so `--debug` only *adds* the debug info; without
 it the binary carries none. It covers line tables and per-function scopes, plus
 **local variables, parameters, and debug types**: every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their

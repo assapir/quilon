@@ -16,6 +16,15 @@ double = (x :: Num) -> Num => x * 2
 countdown = (t :: Text) -> Num => 0
 countdown = (n :: Num) -> Num => n == 0 ? 7 : countdown(n - 1)
 
+~ Every member annotates its return type, and a call sees only the members written
+~ above it — names resolve top to bottom. So `step` comes before the `walk` that uses
+~ it, and `walk` recurses into itself rather than into a partner defined below.
+step = (n :: Num) -> Num => n - 1
+step = (t :: Text) -> Num => 0
+
+walk = (t :: Text) -> Text => t
+walk = (n :: Num) -> Text => n == 0 ? "done" : walk(step(n))
+
 ^ = () -> $ => <
   words :: []Text = ["alpha", "beta"]
   nums :: []Num = [10, 20]
@@ -39,4 +48,9 @@ countdown = (n :: Num) -> Num => n == 0 ? 7 : countdown(n - 1)
   ~ Deep enough that a stack-growing recursion would abort: the self-call is a loop.
   assertEq(countdown(1000000), 7)
   assertEq(countdown("stop"), 0)
+
+  ~ Dispatch through a member defined above, and a recursive member reaching itself.
+  assertEq(walk(3), "done")
+  assertEq(walk("kept"), "kept")
+  assertEq(kind(walk(1)), 2)
 >

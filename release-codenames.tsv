@@ -1,0 +1,7 @@
+# Release codenames follow The Hitchhiker's Guide to the Galaxy.
+# Format: <version-glob><TAB><codename>. '#' and blank lines are ignored.
+# The first column is a glob matched against the release version, so a whole
+# series can share one name (e.g. 0.9.* covers 0.9.1, 0.9.2, ...). The release
+# tooling (scripts/release.sh and .github/workflows/release.yml) reads this file;
+# a version with no matching row just carries no quoted name.
+0.9.*	Towel

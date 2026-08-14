@@ -39,28 +39,24 @@ jobs:
       - name: Build release
         run: cargo build --release --bin quilon
 
+      - name: Resolve release codename
+        id: codename
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          codename="$(awk -F'\t' -v v="$version" '
+            /^#/ || NF < 2 { next }
+            { pat = $1; gsub(/\./, "\\.", pat); gsub(/\*/, ".*", pat)
+              if (v ~ "^" pat "$") { print $2; exit } }' release-codenames.tsv)"
+          if [ -n "$codename" ]; then
+            echo "title=Quilon ${GITHUB_REF_NAME} \"${codename}\"" >> "$GITHUB_OUTPUT"
+          else
+            echo "title=Quilon ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ steps.codename.outputs.title }}
           files: target/release/quilon
           generate_release_notes: true
-          body: |
-            ## Quilon ${{ github.ref_name }} — "Stable basics"
-
-            A stable, verified **core** of the Quilon language — **not yet
-            feature-complete**. Programs run via `quilon run` (in-process LLVM
-            JIT) or compile to native executables via `quilon build`.
-
-            Highlights: `^` entry point (implicit exit-0), `<<`/`>>` modules,
-            `|>` first-argument-injection pipe, `for n <- collection => body`
-            loops, the built-in `Text` type, `core.io` (`print`/`eprint`/`write`),
-            sum types with pattern matching, methods on records, and conservative
-            (Boehm) GC. Built against LLVM 22.
-
-            **Known limitations:** no generics yet (so `Text`/non-numeric values
-            inside records, arrays, or `Ok`/`NotOk` payloads are unsupported — numeric
-            payloads work), no closures / `while` loops / user-defined sum types,
-            dynamic `libgc`, placeholder `argv`. See CHANGELOG.md for the full list.
-
-            The attached `quilon` binary is a dynamically-linked Linux x86-64 build
-            (requires `libgc` at runtime).

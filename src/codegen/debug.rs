@@ -177,7 +177,7 @@ impl<'ctx> DebugInfo<'ctx> {
     /// attached to its `FunctionValue` and used as the scope for its instructions.
     pub fn create_function(&self, name: &str, span: &Span) -> DISubprogram<'ctx> {
         let (line, _) = self.line_col(span.start as usize);
-        // Line-tables phase: an empty subroutine type (no parameter/return types).
+        // Line info only: an empty subroutine type (no parameter/return types).
         let subroutine_type =
             self.builder
                 .create_subroutine_type(self.file, None, &[], DIFlags::PUBLIC);
