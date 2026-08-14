@@ -77,16 +77,16 @@ pub fn run_program(program: &Program, args: &[String]) -> Result<i32, String> {
                 intrinsics::__write_bytes as *const () as usize,
             ),
             (
-                "__print_num_fd",
-                intrinsics::__print_num_fd as *const () as usize,
-            ),
-            (
-                "__print_bool_fd",
-                intrinsics::__print_bool_fd as *const () as usize,
-            ),
-            (
                 "__print_text_fd",
                 intrinsics::__print_text_fd as *const () as usize,
+            ),
+            (
+                "__num_to_text",
+                intrinsics::__num_to_text as *const () as usize,
+            ),
+            (
+                "__bool_to_text",
+                intrinsics::__bool_to_text as *const () as usize,
             ),
             (
                 "__argv_to_text_array",

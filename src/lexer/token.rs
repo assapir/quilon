@@ -64,6 +64,23 @@ impl std::hash::Hash for NumLit {
     }
 }
 
+/// One piece of a (possibly interpolated) string literal, produced by the lexer.
+///
+/// A plain string `"hello"` lexes to a single `Lit("hello")`. Backtick holes split the
+/// literal into interleaved `Lit` text and `Hole` expression sources: `"hi `user.name`!"`
+/// lexes to `[Lit("hi "), Hole { src: "user.name", .. }, Lit("!")]`. A doubled backtick
+/// ` `` ` inside a string is a single literal backtick (never a hole). The parser re-lexes
+/// and parses each `Hole.src` into an expression, offset by `Hole.offset` so the hole's
+/// AST spans stay in the original file's coordinate system (the type oracle keys by span).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StrChunk {
+    /// A run of literal text, with escapes already decoded and ` `` ` collapsed to `` ` ``.
+    Lit(String),
+    /// The raw source of an interpolation hole (the expression between two backticks),
+    /// with `offset` its absolute byte position in the whole source file.
+    Hole { src: String, offset: usize },
+}
+
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r\n]+")] // Skip whitespace
 #[logos(skip("~[^\n]*", allow_greedy = true))] // Skip comments (rest of line)
@@ -72,8 +89,12 @@ pub enum TokenKind {
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
     Number(NumLit),
 
-    #[regex(r#""(\\.|[^"\\])*""#, parse_string)]
-    String(String),
+    // A string literal, lexed whole (including any backtick interpolation holes) by
+    // `lex_string`. The chunks are literal text interleaved with hole expression sources;
+    // a plain string is a single `StrChunk::Lit`. Triggered on the opening `"`, then the
+    // callback scans to the matching close quote (holes and nested strings included).
+    #[token("\"", lex_string)]
+    String(Vec<StrChunk>),
 
     #[token("true")]
     True,
@@ -219,43 +240,142 @@ pub enum TokenKind {
     #[token(":")]
     Colon,
 
+    // The render operator `` ` ``. Only ever seen OUTSIDE a string literal (backticks
+    // *inside* a `"..."` are consumed whole by `lex_string` as interpolation holes), so
+    // there is no ambiguity: a bare `` ` `` token is the overloadable render operator,
+    // used to define a type's own rendering (`` ` = () -> Text => ... ``).
+    #[token("`")]
+    Backtick,
+
     // End of file
     Eof,
 }
 
-/// Parse string with escape sequences and interpolation
-fn parse_string(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
-    let s = lex.slice();
-    // Remove quotes
-    let content = &s[1..s.len() - 1];
+/// Lex a whole string literal, starting just after the opening `"` (which the `#[token]`
+/// already matched). Scans to the matching close quote, decoding escapes, collapsing a
+/// doubled backtick ` `` ` to one literal backtick, and splitting off backtick
+/// interpolation holes as raw expression sources. Consumes the scanned bytes (including
+/// the close quote) via `lex.bump`. Returns `None` (a lexer error) on an unterminated
+/// string, an unterminated hole, an empty hole, or an invalid escape.
+///
+/// Inside a hole the scanner walks over any nested string literal (respecting `\"`), so a
+/// hole may itself contain a string with its own interpolation (`"sum `f("a")`"`); the
+/// nested string's own holes are handled when the parser re-lexes the hole source.
+fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
+    // Absolute byte offset of the first content byte (just past the opening quote).
+    let base = lex.span().end;
+    let rem = lex.remainder();
+    let bytes = rem.as_bytes();
+    let mut i = 0usize;
+    let mut chunks: Vec<StrChunk> = Vec::new();
+    let mut lit = String::new();
 
-    let mut result = String::new();
-    let mut chars = content.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
-                Some('"') => result.push('"'),
-                Some('\\') => result.push('\\'),
-                Some('<') => result.push('<'),
-                _ => return None,
+    loop {
+        if i >= bytes.len() {
+            return None; // unterminated string
+        }
+        match bytes[i] {
+            b'"' => {
+                i += 1; // consume the closing quote
+                break;
             }
-        } else {
-            result.push(ch);
+            b'\\' => {
+                i += 1;
+                if i >= bytes.len() {
+                    return None;
+                }
+                match bytes[i] {
+                    b'n' => lit.push('\n'),
+                    b'r' => lit.push('\r'),
+                    b't' => lit.push('\t'),
+                    b'"' => lit.push('"'),
+                    b'\\' => lit.push('\\'),
+                    b'<' => lit.push('<'),
+                    _ => return None, // invalid escape
+                }
+                i += 1;
+            }
+            b'`' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'`' {
+                    // Doubled backtick -> one literal backtick (never a hole).
+                    lit.push('`');
+                    i += 2;
+                } else {
+                    // Opening backtick: flush the pending literal and scan the hole.
+                    if !lit.is_empty() {
+                        chunks.push(StrChunk::Lit(std::mem::take(&mut lit)));
+                    }
+                    i += 1; // consume the opening backtick
+                    let hole_start = i;
+                    loop {
+                        if i >= bytes.len() {
+                            return None; // unterminated hole
+                        }
+                        match bytes[i] {
+                            b'`' => break, // closing backtick
+                            b'"' => {
+                                // Skip a nested string literal so its quotes/backticks
+                                // don't end the hole; escapes are honored.
+                                i += 1;
+                                loop {
+                                    if i >= bytes.len() {
+                                        return None;
+                                    }
+                                    match bytes[i] {
+                                        b'\\' => i += 2,
+                                        b'"' => {
+                                            i += 1;
+                                            break;
+                                        }
+                                        _ => i += 1,
+                                    }
+                                }
+                            }
+                            _ => i += 1,
+                        }
+                    }
+                    let src = rem[hole_start..i].to_string();
+                    if src.trim().is_empty() {
+                        return None; // empty hole `` `` `` is not an interpolation
+                    }
+                    chunks.push(StrChunk::Hole {
+                        src,
+                        offset: base + hole_start,
+                    });
+                    i += 1; // consume the closing backtick
+                }
+            }
+            _ => {
+                // A normal (possibly multi-byte) character copied verbatim.
+                let ch = rem[i..].chars().next().unwrap();
+                lit.push(ch);
+                i += ch.len_utf8();
+            }
         }
     }
 
-    Some(result)
+    // Keep a trailing literal, and keep a single empty literal for the empty string `""`.
+    if !lit.is_empty() || chunks.is_empty() {
+        chunks.push(StrChunk::Lit(lit));
+    }
+    lex.bump(i);
+    Some(chunks)
 }
 
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TokenKind::Number(n) => write!(f, "Number({})", n.0),
-            TokenKind::String(s) => write!(f, "String(\"{}\")", s),
+            TokenKind::String(chunks) => {
+                write!(f, "String(")?;
+                for chunk in chunks {
+                    match chunk {
+                        StrChunk::Lit(s) => write!(f, "{}", s)?,
+                        StrChunk::Hole { src, .. } => write!(f, "`{}`", src)?,
+                    }
+                }
+                write!(f, ")")
+            }
             TokenKind::True => write!(f, "true"),
             TokenKind::False => write!(f, "false"),
             TokenKind::If => write!(f, "if"),
@@ -299,6 +419,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Or => write!(f, "||"),
             TokenKind::Not => write!(f, "!"),
             TokenKind::Colon => write!(f, ":"),
+            TokenKind::Backtick => write!(f, "`"),
             TokenKind::Eof => write!(f, "EOF"),
         }
     }

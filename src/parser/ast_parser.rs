@@ -1,10 +1,10 @@
 // Parser implementation - simple recursive descent
 
 use crate::ast::{
-    BinOp, Expr, FunctionDecl, Import, Item, MethodDecl, ModulePath, Param, Program, TypeDecl,
-    TypeDef, UnaryOp, VarDecl,
+    BinOp, Expr, FunctionDecl, Import, InterpPart, Item, MethodDecl, ModulePath, Param, Program,
+    TypeDecl, TypeDef, UnaryOp, VarDecl,
 };
-use crate::lexer::{Span, Token, TokenKind};
+use crate::lexer::{Lexer, Span, StrChunk, Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
@@ -102,10 +102,20 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.expect(&TokenKind::Import)?;
 
-        let path = if let TokenKind::String(s) = self.peek().kind.clone() {
-            // File-path import: << "some/path.ql"
+        let path = if let TokenKind::String(chunks) = self.peek().kind.clone() {
+            // File-path import: << "some/path.ql". A path is a plain literal — an
+            // interpolation hole here is meaningless, so reject it clearly.
+            let span = self.peek().span.clone();
             self.advance();
-            ModulePath::FilePath(s)
+            match chunks.as_slice() {
+                [StrChunk::Lit(s)] => ModulePath::FilePath(s.clone()),
+                _ => {
+                    return Err(ParseError {
+                        message: "import path cannot contain interpolation".to_string(),
+                        span,
+                    });
+                }
+            }
         } else {
             // Built-in dotted import: << core.io
             let mut parts = vec![self.expect_ident()?];
@@ -351,7 +361,14 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
 
         while !self.check(&TokenKind::BraceClose) && !self.is_at_end() {
-            let field_name = self.expect_ident()?;
+            // A method may be named `` ` `` (the render operator override); every other
+            // member name is an ordinary identifier.
+            let field_name = if self.check(&TokenKind::Backtick) {
+                self.advance();
+                "`".to_string()
+            } else {
+                self.expect_ident()?
+            };
 
             if self.check(&TokenKind::TypeAnnotation) {
                 // This is a field: name :: Type
@@ -1166,6 +1183,52 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Build a string expression from the lexer's chunks. A single literal chunk is a
+    /// plain `Expr::String`; any interpolation hole yields an `Expr::Interpolation` whose
+    /// holes are re-lexed and parsed as expressions.
+    fn build_string_expr(&self, chunks: Vec<StrChunk>, span: Span) -> Result<Expr, ParseError> {
+        if let [StrChunk::Lit(s)] = chunks.as_slice() {
+            return Ok(Expr::String {
+                value: s.clone(),
+                span,
+            });
+        }
+        let mut parts = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            match chunk {
+                StrChunk::Lit(s) => parts.push(InterpPart::Lit(s)),
+                StrChunk::Hole { src, offset } => {
+                    parts.push(InterpPart::Hole(Self::parse_hole(&src, offset)?));
+                }
+            }
+        }
+        Ok(Expr::Interpolation { parts, span })
+    }
+
+    /// Re-lex and parse one interpolation hole's source into a single expression. Every
+    /// token span is shifted by `offset` so the hole's AST nodes carry their real position
+    /// in the whole source file — the type oracle keys expression types by span, and a
+    /// hole span left relative to `0` could collide with an unrelated top-level node.
+    fn parse_hole(src: &str, offset: usize) -> Result<Expr, ParseError> {
+        let shift = |s: &Span| Span::new(s.start + offset, s.end + offset);
+        let mut tokens = Lexer::tokenize(src).map_err(|e| ParseError {
+            message: format!("in interpolation hole: {}", e.message),
+            span: shift(&e.span),
+        })?;
+        for t in &mut tokens {
+            t.span = shift(&t.span);
+        }
+        let mut parser = Parser::new(&tokens);
+        let expr = parser.parse_expr()?;
+        if !parser.is_at_end() {
+            return Err(ParseError {
+                message: "interpolation hole must be a single expression".to_string(),
+                span: parser.current_span(),
+            });
+        }
+        Ok(expr)
+    }
+
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         let token = self.peek();
 
@@ -1176,11 +1239,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expr::Number { value, span })
             }
-            TokenKind::String(s) => {
+            TokenKind::String(chunks) => {
                 let span = token.span.clone();
-                let value = s.clone();
+                let chunks = chunks.clone();
                 self.advance();
-                Ok(Expr::String { value, span })
+                self.build_string_expr(chunks, span)
             }
             TokenKind::True => {
                 let span = token.span.clone();

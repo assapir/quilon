@@ -1,8 +1,8 @@
 // LLVM code generator for Quilon
 
 use crate::ast::{
-    BinOp, Expr, FunctionDecl, Item, MatchArm, MethodDecl, Pattern, Program, Type, TypeDecl,
-    TypeDef, UnaryOp, VarDecl, is_operator_symbol,
+    BinOp, Expr, FunctionDecl, InterpPart, Item, MatchArm, MethodDecl, Pattern, Program, Type,
+    TypeDecl, TypeDef, UnaryOp, VarDecl, is_operator_symbol,
 };
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
@@ -83,6 +83,19 @@ fn mangle_overload(name: &str, params: &[Type]) -> String {
         s.push_str(&type_mangle(p));
     }
     s
+}
+
+/// The LLVM symbol for a record method `Type.method`. The render operator `` ` `` is not a
+/// valid identifier, so it is spelled out (`Type_op$backtick`); every other method name is
+/// used verbatim. Shared by method declaration, body emission, and call dispatch so all
+/// three always agree.
+fn method_symbol(type_name: &str, method_name: &str) -> String {
+    let m = if method_name == "`" {
+        "op$backtick"
+    } else {
+        method_name
+    };
+    format!("{}_{}", type_name, m)
 }
 
 /// A pronounceable word for an operator symbol, for use in a mangled LLVM name (which
@@ -237,6 +250,15 @@ pub struct CodeGenerator<'ctx> {
     // to `loop_header` instead of emitting a stack-growing `call` + `ret` — guaranteeing
     // self-tail-recursion runs in constant stack (see `Tco` / `generate_tail_expr`).
     tco: Option<Tco<'ctx>>,
+    // Named types (records) that define their own `` ` `` render operator override. A
+    // value of such a type renders via the user's `Type_op$backtick` method instead of the
+    // built-in default (type name). Populated once, in the type-declaration pre-pass.
+    render_overrides: std::collections::HashSet<String>,
+    // While emitting the body of a type's own `` ` `` override, this holds that type's
+    // name. Rendering a value of the SAME type (e.g. a hole that is `it` wholesale) then
+    // falls back to the built-in default instead of re-invoking the override — breaking
+    // what would otherwise be unbounded self-recursion at runtime.
+    generating_backtick_for: Option<String>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -337,6 +359,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
             tco: None,
+            render_overrides: std::collections::HashSet::new(),
+            generating_backtick_for: None,
         };
         codegen.register_builtin_sum_types();
         codegen
@@ -753,12 +777,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.named_type_fields
                 .insert(decl.name.clone(), field_names.clone());
 
+            // Record which types override the render operator `` ` ``, so a render site
+            // dispatches to the override instead of the built-in (type-name) default.
+            if methods.iter().any(|m| m.name == "`") {
+                self.render_overrides.insert(decl.name.clone());
+            }
+
             let ptr_type = self.context.ptr_type(AddressSpace::default());
 
             // Pass 1: declare every method signature first, so a method body may reference
             // sibling methods (or recurse) regardless of declaration order.
             for method in methods {
-                let mangled = format!("{}_{}", decl.name, method.name);
+                let mangled = method_symbol(&decl.name, &method.name);
                 if self.module.get_function(&mangled).is_some() {
                     continue;
                 }
@@ -799,12 +829,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         field_names: &[String],
         method: &MethodDecl,
     ) -> Result<(), String> {
-        let mangled = format!("{}_{}", type_name, method.name);
+        let mangled = method_symbol(type_name, &method.name);
         let function = self
             .module
             .get_function(&mangled)
             .ok_or_else(|| format!("Method function not declared: {}", mangled))?;
         self.current_function = Some(function);
+        // Rendering `it` (this type) wholesale inside the type's own `` ` `` override must
+        // use the built-in default, not re-invoke the override — else it recurses forever.
+        let prev_backtick = self.generating_backtick_for.take();
+        if method.name == "`" {
+            self.generating_backtick_for = Some(type_name.to_string());
+        }
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -846,6 +882,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&body_value))
             .map_err(|e| format!("Failed to build return: {:?}", e))?;
 
+        self.generating_backtick_for = prev_backtick;
         Ok(())
     }
 
@@ -1669,6 +1706,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expr::Spread { expr, .. } => Self::collect_mutable_locals(expr, out),
+            Expr::Interpolation { parts, .. } => {
+                for part in parts {
+                    if let crate::ast::InterpPart::Hole(e) = part {
+                        Self::collect_mutable_locals(e, out);
+                    }
+                }
+            }
             Expr::Number { .. }
             | Expr::String { .. }
             | Expr::Bool { .. }
@@ -1789,6 +1833,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expr::Spread { expr, .. } => Self::walk_exprs(expr, f),
+            Expr::Interpolation { parts, .. } => {
+                for part in parts {
+                    if let crate::ast::InterpPart::Hole(e) = part {
+                        Self::walk_exprs(e, f);
+                    }
+                }
+            }
             Expr::Number { .. }
             | Expr::String { .. }
             | Expr::Bool { .. }
@@ -2105,6 +2156,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .into_struct_value();
                 Ok(text.into())
             }
+
+            Expr::Interpolation { parts, .. } => self.generate_interpolation(parts),
 
             Expr::Bool { value, .. } => Ok(self
                 .context
@@ -2579,12 +2632,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
             "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
-            // void __print_num_fd(i64 fd, double) — number + newline to fd.
-            "__print_num_fd" => void.fn_type(&[i64t.into(), f64t.into()], false),
-            // void __print_bool_fd(i64 fd, i64 b) — "true"/"false" + newline to fd.
-            "__print_bool_fd" => void.fn_type(&[i64t.into(), i64t.into()], false),
             // void __print_text_fd(i64 fd, i8*) — C string + newline to fd.
             "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into()], false),
+            // { ptr, i64 } __num_to_text(double) — render a Num (integer-valued without
+            // decimals, else shortest round-trip). Backs the built-in `` ` `` for Num.
+            "__num_to_text" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
+            // { ptr, i64 } __bool_to_text(i64) — render a Bool as "True"/"False". Backs the
+            // built-in `` ` `` for Bool (capitalized, unlike the `true`/`false` literals).
+            "__bool_to_text" => self.ptr_len_struct_type().fn_type(&[i64t.into()], false),
             // { ptr, i64 } __argv_to_text_array(i64 argc, i8** argv) — build a `[]Text`
             // (array of `{ptr,i64}` Text structs) from the C argc/argv. Returns the
             // `[]Text` value struct (same shape as `ptr_len_struct_type`).
@@ -2643,11 +2698,399 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.module.add_function(name, fn_type, None))
     }
 
-    /// Lower a `print`/`eprint` builtin call: render the single argument's text
-    /// and write it, followed by a newline, to stdout (`print`, fd 1) or stderr
-    /// (`eprint`, fd 2). Dispatches on the LLVM type of the argument: floats print
-    /// as numbers, Text structs / pointers as C strings, integers (incl. bools)
-    /// widen to numbers. Yields `Num` 0, so it is usable in expression position.
+    /// Lower an `Expr::Interpolation`: render each hole to `Text` through its `` ` ``
+    /// operator and concatenate the literal chunks and rendered holes left to right.
+    fn generate_interpolation(
+        &mut self,
+        parts: &[InterpPart],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut acc: Option<BasicValueEnum<'ctx>> = None;
+        for part in parts {
+            let piece = match part {
+                InterpPart::Lit(s) => self.text_literal(s)?,
+                InterpPart::Hole(e) => self.render_expr(e)?,
+            };
+            acc = Some(match acc {
+                None => piece,
+                Some(a) => {
+                    self.generate_text_concat(a.into_struct_value(), piece.into_struct_value())?
+                }
+            });
+        }
+        match acc {
+            Some(v) => Ok(v),
+            None => self.text_literal(""),
+        }
+    }
+
+    /// Render `expr` to a `Text` value: evaluate it, then dispatch on its authoritative
+    /// Quilon type (via the oracle) to the right renderer. The single render path shared
+    /// by string interpolation and `print`/`eprint`.
+    fn render_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let ty = self.infer_type(expr);
+        let value = self.generate_expr(expr)?;
+        self.render_value(&ty, value)
+    }
+
+    /// Render `value` (of Quilon type `ty`) to a `Text` `{ptr,i64}` value. A type with its
+    /// own `` ` `` override renders through that method; every other type uses the built-in
+    /// default (see the rendering table in LANGUAGE.md).
+    ///
+    /// Scalars (Num, Bool) are dispatched by their UNAMBIGUOUS LLVM shape, not by `ty`, so
+    /// rendering stays correct even where the type oracle is unreliable: the oracle keys by
+    /// span and can collide across imported modules (see `TypeOracle`'s limitation), and
+    /// `print`/`eprint` inside `core.test`/`core.io` render exactly these scalars. Composite
+    /// values (Text, array, record, sum) only ever reach here from the MAIN file — where the
+    /// oracle is authoritative — so those cases trust `ty`.
+    fn render_value(
+        &mut self,
+        ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // A number (always f64) renders integer-valued without decimals, else shortest
+        // round-trip — dispatched by shape so a mis-keyed oracle type can't corrupt it.
+        if matches!(value, BasicValueEnum::FloatValue(_)) {
+            return self.render_scalar_intrinsic("__num_to_text", value.into());
+        }
+        // A bool (i1) renders as `True`/`False` (capitalized, unlike the literals).
+        if let BasicValueEnum::IntValue(i) = value
+            && i.get_type().get_bit_width() == 1
+        {
+            let b64 = self
+                .builder
+                .build_int_z_extend(i, self.context.i64_type(), "bool_ext")
+                .map_err(|e| format!("Failed to extend bool: {:?}", e))?;
+            return self.render_scalar_intrinsic("__bool_to_text", b64.into());
+        }
+
+        match ty {
+            // A `Text` renders as itself.
+            Type::Text => Ok(value),
+            Type::Unit => self.text_literal("$"),
+            // A record: its own `` ` `` override (called with the record pointer), else the
+            // type name. The recursion guard renders `it` wholesale via the default instead.
+            Type::Named { name, .. } => {
+                let overridden = self.render_overrides.contains(name)
+                    && self.generating_backtick_for.as_deref() != Some(name.as_str());
+                if overridden {
+                    let sym = method_symbol(name, "`");
+                    let f = self
+                        .module
+                        .get_function(&sym)
+                        .ok_or_else(|| format!("render override not declared: {}", sym))?;
+                    let call = self
+                        .builder
+                        .build_call(f, &[value.into()], "render")
+                        .map_err(|e| format!("Failed to call render override: {:?}", e))?;
+                    Self::call_result_to_basic(call)
+                } else {
+                    self.text_literal(name)
+                }
+            }
+            // An anonymous record has no name to show.
+            Type::Record(_) => self.text_literal("record"),
+            // A sum value renders as its variant/constructor name.
+            Type::Sum { name, .. } => self.render_sum_variant(name, value),
+            // An array renders its elements (truncated past 10, see `render_array`).
+            Type::Array(elem) => self.render_array(elem, value),
+            Type::Function { .. } => self.text_literal("<function>"),
+            // Num / Bool / Generic: the scalar shapes above already handled the real cases.
+            // Reaching here means the oracle mislabeled a composite (a cross-module span
+            // collision): a struct is safely rendered as Text (identity, the historical
+            // `print` default); any stray integer widens to a number.
+            Type::Num | Type::Bool | Type::Generic { .. } => match value {
+                BasicValueEnum::IntValue(i) => {
+                    let f = self
+                        .builder
+                        .build_unsigned_int_to_float(i, self.context.f64_type(), "num")
+                        .map_err(|e| format!("Failed to widen int for render: {:?}", e))?;
+                    self.render_scalar_intrinsic("__num_to_text", f.into())
+                }
+                _ => Ok(value),
+            },
+        }
+    }
+
+    /// Call a `f64|i64 -> {ptr,i64}` render intrinsic (`__num_to_text` / `__bool_to_text`).
+    fn render_scalar_intrinsic(
+        &mut self,
+        name: &str,
+        arg: inkwell::values::BasicMetadataValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let f = self.get_intrinsic(name)?;
+        let call = self
+            .builder
+            .build_call(f, &[arg], "render")
+            .map_err(|e| format!("Failed to call {}: {:?}", name, e))?;
+        Self::call_result_to_basic(call)
+    }
+
+    /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` (mirrors
+    /// `Expr::String` lowering): a global NUL-terminated byte constant plus its byte length.
+    fn text_literal(&mut self, s: &str) -> Result<BasicValueEnum<'ctx>, String> {
+        let global = self
+            .builder
+            .build_global_string_ptr(s, "rstr")
+            .map_err(|e| format!("Failed to build render literal: {:?}", e))?;
+        let len = self.context.i64_type().const_int(s.len() as u64, false);
+        let text_ty = self.ptr_len_struct_type();
+        let with_ptr = self
+            .builder
+            .build_insert_value(
+                text_ty.get_undef(),
+                global.as_pointer_value(),
+                0,
+                "rtext_ptr",
+            )
+            .map_err(|e| format!("Failed to insert render ptr: {:?}", e))?
+            .into_struct_value();
+        let text = self
+            .builder
+            .build_insert_value(with_ptr, len, 1, "rtext_len")
+            .map_err(|e| format!("Failed to insert render len: {:?}", e))?
+            .into_struct_value();
+        Ok(text.into())
+    }
+
+    /// Load `slot` (a `Text`), concatenate `piece` onto it, and store the result back.
+    fn append_text(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        piece: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let text_ty = self.ptr_len_struct_type();
+        let cur = self
+            .builder
+            .build_load(text_ty, slot, "acc")
+            .map_err(|e| format!("Failed to load render acc: {:?}", e))?
+            .into_struct_value();
+        let next = self.generate_text_concat(cur, piece.into_struct_value())?;
+        self.builder
+            .build_store(slot, next)
+            .map_err(|e| format!("Failed to store render acc: {:?}", e))?;
+        Ok(())
+    }
+
+    /// Render a sum value as its variant/constructor name (the built-in default): extract
+    /// the discriminant and `switch` to the matching name string.
+    fn render_sum_variant(
+        &mut self,
+        type_name: &str,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let func = self
+            .current_function
+            .ok_or_else(|| "sum render outside a function".to_string())?;
+        let sv = value.into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "sum_tag")
+            .map_err(|e| format!("Failed to extract sum tag: {:?}", e))?
+            .into_int_value();
+
+        // All (tag, variant name) pairs of this sum type, in tag order.
+        let mut variants: Vec<(u8, String)> = self
+            .sum_variants
+            .iter()
+            .filter(|(_, (_, tn))| tn == type_name)
+            .map(|(vname, (t, _))| (*t, vname.clone()))
+            .collect();
+        variants.sort_by_key(|(t, _)| *t);
+
+        let text_ty = self.ptr_len_struct_type();
+        let name_slot = self.create_entry_block_alloca("sum_name", text_ty.into())?;
+        let i8t = self.context.i8_type();
+        let default_bb = self.context.append_basic_block(func, "sum_default");
+        let merge_bb = self.context.append_basic_block(func, "sum_merge");
+
+        let mut case_blocks = Vec::with_capacity(variants.len());
+        for (t, vname) in &variants {
+            let bb = self.context.append_basic_block(func, "sum_case");
+            case_blocks.push((*t, vname.clone(), bb));
+        }
+        let cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = case_blocks
+            .iter()
+            .map(|(t, _, bb)| (i8t.const_int(*t as u64, false), *bb))
+            .collect();
+        self.builder
+            .build_switch(tag, default_bb, &cases)
+            .map_err(|e| format!("Failed to build sum switch: {:?}", e))?;
+
+        for (_, vname, bb) in &case_blocks {
+            self.builder.position_at_end(*bb);
+            let lit = self.text_literal(vname)?;
+            self.builder
+                .build_store(name_slot, lit)
+                .map_err(|e| format!("Failed to store variant name: {:?}", e))?;
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("Failed to branch: {:?}", e))?;
+        }
+        self.builder.position_at_end(default_bb);
+        let unknown = self.text_literal("?")?;
+        self.builder
+            .build_store(name_slot, unknown)
+            .map_err(|e| format!("Failed to store default name: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(|e| format!("Failed to branch: {:?}", e))?;
+
+        self.builder.position_at_end(merge_bb);
+        self.builder
+            .build_load(text_ty, name_slot, "sum_name_val")
+            .map_err(|e| format!("Failed to load variant name: {:?}", e))
+    }
+
+    /// Render an array: `[a, b, c]` (each element via its own `` ` ``) when the length is
+    /// `<= 10`, else a truncated `[first <- last]`. Emits a runtime loop over the elements.
+    fn render_array(
+        &mut self,
+        elem_ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let func = self
+            .current_function
+            .ok_or_else(|| "array render outside a function".to_string())?;
+        let i64t = self.context.i64_type();
+        let text_ty = self.ptr_len_struct_type();
+
+        let sv = value.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(sv, 0, "arr_data")
+            .map_err(|e| format!("Failed to extract array data: {:?}", e))?
+            .into_pointer_value();
+        let size = self
+            .builder
+            .build_extract_value(sv, 1, "arr_size")
+            .map_err(|e| format!("Failed to extract array size: {:?}", e))?
+            .into_int_value();
+        let elem_llvm = self.value_repr_type(elem_ty)?;
+
+        // Accumulator `Text`, seeded with the opening bracket.
+        let acc_slot = self.create_entry_block_alloca("render_acc", text_ty.into())?;
+        let open = self.text_literal("[")?;
+        self.builder
+            .build_store(acc_slot, open)
+            .map_err(|e| format!("Failed to seed render acc: {:?}", e))?;
+
+        let ten = i64t.const_int(10, false);
+        let is_small = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, size, ten, "arr_small")
+            .map_err(|e| format!("Failed to compare array size: {:?}", e))?;
+        let small_bb = self.context.append_basic_block(func, "arr_small");
+        let trunc_bb = self.context.append_basic_block(func, "arr_trunc");
+        let merge_bb = self.context.append_basic_block(func, "arr_render_merge");
+        self.builder
+            .build_conditional_branch(is_small, small_bb, trunc_bb)
+            .map_err(|e| format!("Failed to branch on array size: {:?}", e))?;
+
+        // --- Full form: loop `i` in 0..size, comma-separated. ---
+        self.builder.position_at_end(small_bb);
+        let i_slot = self.create_entry_block_alloca("render_i", i64t.into())?;
+        self.builder
+            .build_store(i_slot, i64t.const_zero())
+            .map_err(|e| format!("Failed to init loop index: {:?}", e))?;
+        let head = self.context.append_basic_block(func, "arr_head");
+        let sep_bb = self.context.append_basic_block(func, "arr_sep");
+        let elem_bb = self.context.append_basic_block(func, "arr_elem");
+        let done = self.context.append_basic_block(func, "arr_done");
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|e| format!("Failed to enter loop: {:?}", e))?;
+
+        self.builder.position_at_end(head);
+        let i_cur = self
+            .builder
+            .build_load(i64t, i_slot, "i")
+            .map_err(|e| format!("Failed to load i: {:?}", e))?
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i_cur, size, "i_lt")
+            .map_err(|e| format!("Failed to test loop: {:?}", e))?;
+        // Non-zero index appends a separator before the element; index 0 skips it.
+        let is_first = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                i_cur,
+                i64t.const_zero(),
+                "i_first",
+            )
+            .map_err(|e| format!("Failed to test first: {:?}", e))?;
+        self.builder
+            .build_conditional_branch(cont, elem_bb, done)
+            .map_err(|e| format!("Failed to branch loop: {:?}", e))?;
+        // `elem_bb` is entered from `head`; from there, choose whether to insert a comma.
+        self.builder.position_at_end(elem_bb);
+        let after_sep = self.context.append_basic_block(func, "arr_after_sep");
+        self.builder
+            .build_conditional_branch(is_first, after_sep, sep_bb)
+            .map_err(|e| format!("Failed to branch sep: {:?}", e))?;
+        self.builder.position_at_end(sep_bb);
+        let comma = self.text_literal(", ")?;
+        self.append_text(acc_slot, comma)?;
+        self.builder
+            .build_unconditional_branch(after_sep)
+            .map_err(|e| format!("Failed to branch after sep: {:?}", e))?;
+        self.builder.position_at_end(after_sep);
+        let elem = self.load_element(data_ptr, elem_llvm, i_cur)?;
+        let etext = self.render_value(elem_ty, elem)?;
+        self.append_text(acc_slot, etext)?;
+        let inc = self
+            .builder
+            .build_int_add(i_cur, i64t.const_int(1, false), "i_inc")
+            .map_err(|e| format!("Failed to inc i: {:?}", e))?;
+        self.builder
+            .build_store(i_slot, inc)
+            .map_err(|e| format!("Failed to store i: {:?}", e))?;
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|e| format!("Failed to loop back: {:?}", e))?;
+
+        self.builder.position_at_end(done);
+        let close = self.text_literal("]")?;
+        self.append_text(acc_slot, close)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(|e| format!("Failed to finish small: {:?}", e))?;
+
+        // --- Truncated form: `[first <- last]`. ---
+        self.builder.position_at_end(trunc_bb);
+        let first = self.load_element(data_ptr, elem_llvm, i64t.const_zero())?;
+        let ftext = self.render_value(elem_ty, first)?;
+        self.append_text(acc_slot, ftext)?;
+        let arrow = self.text_literal(" <- ")?;
+        self.append_text(acc_slot, arrow)?;
+        let last_idx = self
+            .builder
+            .build_int_sub(size, i64t.const_int(1, false), "last_idx")
+            .map_err(|e| format!("Failed to compute last index: {:?}", e))?;
+        let last = self.load_element(data_ptr, elem_llvm, last_idx)?;
+        let ltext = self.render_value(elem_ty, last)?;
+        self.append_text(acc_slot, ltext)?;
+        let close2 = self.text_literal("]")?;
+        self.append_text(acc_slot, close2)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(|e| format!("Failed to finish trunc: {:?}", e))?;
+
+        self.builder.position_at_end(merge_bb);
+        self.builder
+            .build_load(text_ty, acc_slot, "arr_text")
+            .map_err(|e| format!("Failed to load array text: {:?}", e))
+    }
+
+    /// Lower a `print`/`eprint` builtin call: render the single argument to `Text` through
+    /// its `` ` `` operator (the same render path as string interpolation), then write it —
+    /// followed by a newline — to stdout (`print`, fd 1) or stderr (`eprint`, fd 2). Any
+    /// value is printable because every type has a `` ` `` (built-in default or override).
+    /// Yields `$` (Unit), so it composes in expression position.
     fn generate_print(
         &mut self,
         name: &str,
@@ -2662,45 +3105,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let fd = if name == "eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
-        let val = self.generate_expr(&args[0])?;
-        let (intrinsic, arg): (&str, inkwell::values::BasicMetadataValueEnum) = match val {
-            BasicValueEnum::FloatValue(f) => ("__print_num_fd", f.into()),
-            // Text is { ptr data, i64 len }; print its NUL-terminated `data`.
-            BasicValueEnum::StructValue(s) => {
-                let data = self
-                    .builder
-                    .build_extract_value(s, 0, "text_data")
-                    .map_err(|e| format!("Failed to extract text data: {:?}", e))?
-                    .into_pointer_value();
-                ("__print_text_fd", data.into())
-            }
-            // A bare pointer (C string) prints as text.
-            BasicValueEnum::PointerValue(p) => ("__print_text_fd", p.into()),
-            // A Bool (i1) prints as "true"/"false"; any wider int widens to a number.
-            BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() == 1 => {
-                let b = self
-                    .builder
-                    .build_int_z_extend(i, self.context.i64_type(), "bool_ext")
-                    .map_err(|e| format!("Failed to extend bool for print: {:?}", e))?;
-                ("__print_bool_fd", b.into())
-            }
-            BasicValueEnum::IntValue(i) => {
-                let f = self
-                    .builder
-                    .build_unsigned_int_to_float(i, self.context.f64_type(), "print_num")
-                    .map_err(|e| format!("Failed to convert int for print: {:?}", e))?;
-                ("__print_num_fd", f.into())
-            }
-            other => {
-                return Err(format!(
-                    "print does not support a value of type {:?}",
-                    other.get_type()
-                ));
-            }
-        };
-        let print_fn = self.get_intrinsic(intrinsic)?;
+        let text = self.render_expr(&args[0])?;
+        let data = self
+            .builder
+            .build_extract_value(text.into_struct_value(), 0, "print_data")
+            .map_err(|e| format!("Failed to extract render data: {:?}", e))?
+            .into_pointer_value();
+        let print_fn = self.get_intrinsic("__print_text_fd")?;
         self.builder
-            .build_call(print_fn, &[fd_val.into(), arg], "")
+            .build_call(print_fn, &[fd_val.into(), data.into()], "")
             .map_err(|e| format!("Failed to build print call: {:?}", e))?;
         // `print`/`eprint` yield Unit (`$`); their result is meaningless.
         Ok(self.unit_value().into())
@@ -2820,13 +3233,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // matches the argument types.
         match func_name.as_str() {
             "print" | "eprint" => {
+                // Any single argument renders through its `` ` `` operator (built-in
+                // default or user override); only an EXACT user overload of `print`/`eprint`
+                // (a different signature) is dispatched as a mangled call below instead.
                 let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
-                let is_builtin_print = arg_types.len() == 1
-                    && matches!(arg_types[0], Type::Num | Type::Text | Type::Bool);
                 let has_user_match = self
                     .resolve_overload_symbol(func_name, &arg_types)
                     .is_some();
-                if is_builtin_print && !has_user_match {
+                if arg_types.len() == 1 && !has_user_match {
                     return self.generate_print(func_name, args);
                 }
             }
@@ -2901,7 +3315,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let mangled = args
                         .first()
                         .and_then(|recv| self.receiver_type_name(recv))
-                        .map(|type_name| format!("{}_{}", type_name, func_name));
+                        .map(|type_name| method_symbol(&type_name, func_name));
                     match mangled.and_then(|m| self.module.get_function(&m)) {
                         Some(f) => f,
                         None => return Err(format!("Function not found: {}", func_name)),

@@ -2,7 +2,9 @@
 
 use crate::ast::type_label;
 use crate::ast::{BinOp, UnaryOp};
-use crate::ast::{Expr, FunctionDecl, Item, MatchArm, Param, Pattern, Program, Type, VarDecl};
+use crate::ast::{
+    Expr, FunctionDecl, InterpPart, Item, MatchArm, Param, Pattern, Program, Type, VarDecl,
+};
 use crate::lexer::Span;
 use std::collections::HashMap;
 
@@ -653,6 +655,51 @@ impl TypeChecker {
             .push(overload);
     }
 
+    /// Type-check an interpolated string: every hole must type-check (any type is
+    /// renderable via its `` ` `` operator — built-in default or user override), so the
+    /// whole expression is `Text`. Kept separate from `infer_expr_inner` so its loop
+    /// locals do not enlarge that hot, deeply-recursive frame (debug builds don't reuse
+    /// stack slots, and deep call/pipeline chains recurse ~40 levels through it).
+    fn check_interpolation(&mut self, parts: &[InterpPart]) -> Result<Type, TypeError> {
+        for part in parts {
+            if let InterpPart::Hole(e) = part {
+                self.infer_expr(e)?;
+            }
+        }
+        Ok(Type::Text)
+    }
+
+    /// Whether `func(args)` is a `print`/`eprint` call on a single argument of a type with
+    /// no exact overload — the generic "render anything" path (result `$`). A function
+    /// value is excluded (not a renderable value). Kept out of `check_call`'s frame.
+    fn is_generic_print_call(&self, func: &Expr, args: &[Expr], first_ty: &Option<Type>) -> bool {
+        if let Expr::Ident { name, .. } = func
+            && (name == "print" || name == "eprint")
+            && args.len() == 1
+            && let Some(arg_ty) = first_ty
+            && !matches!(arg_ty, Type::Function { .. })
+        {
+            !self.has_exact_overload(name, std::slice::from_ref(arg_ty))
+        } else {
+            false
+        }
+    }
+
+    /// Whether overload set `name` has a member whose parameters EXACTLY match `arg_types`
+    /// (no coercion) — a non-erroring probe used to decide whether `print`/`eprint` should
+    /// take the generic render path or dispatch to a concrete overload.
+    fn has_exact_overload(&self, name: &str, arg_types: &[Type]) -> bool {
+        self.overloads.get(name).is_some_and(|set| {
+            set.iter().any(|o| {
+                o.params.len() == arg_types.len()
+                    && o.params
+                        .iter()
+                        .zip(arg_types.iter())
+                        .all(|(p, a)| types_match(p, a))
+            })
+        })
+    }
+
     /// Resolve a call to overload set `name` by EXACT argument-type match (no implicit
     /// coercion). Returns the matched overload's return type. Errors on no match or
     /// (with exact matching, a duplicate-signature) ambiguity, listing the candidates.
@@ -1162,6 +1209,27 @@ impl TypeChecker {
                         body_type
                     };
 
+                    // The render operator `` ` `` must render to `Text` and take only its
+                    // implicit `it` receiver (interpolation/`print` call it with no extra
+                    // arguments).
+                    if method.name == "`" {
+                        if !method.params.is_empty() {
+                            return Err(TypeError::InvalidBuiltinArgument {
+                                message: "the `` ` `` render operator takes no parameters (only its implicit `it` receiver)".to_string(),
+                                span: method.span.clone(),
+                            });
+                        }
+                        if resolved_return_type != Type::Text {
+                            return Err(TypeError::InvalidBuiltinArgument {
+                                message: format!(
+                                    "the `` ` `` render operator must return Text, but returns {}",
+                                    type_label(&resolved_return_type)
+                                ),
+                                span: method.span.clone(),
+                            });
+                        }
+                    }
+
                     self.env.pop_scope();
 
                     // Store method for later lookup
@@ -1518,6 +1586,9 @@ impl TypeChecker {
         match expr {
             Expr::Number { .. } => Ok(Type::Num),
             Expr::String { .. } => Ok(Type::Text),
+            // Delegated to a separate method so its locals stay OUT of this hot,
+            // deeply-recursive frame (debug builds don't reuse stack slots).
+            Expr::Interpolation { parts, .. } => self.check_interpolation(parts),
             Expr::Bool { .. } => Ok(Type::Bool),
             Expr::Unit { .. } => Ok(Type::Unit),
 
@@ -2110,6 +2181,13 @@ impl TypeChecker {
                     return Ok(method_return_type.unwrap_or(Type::Num));
                 }
             }
+        }
+
+        // `print`/`eprint` render ANY value through its `` ` `` operator, so a single
+        // argument of any type is accepted and yields `$` (the probe is a separate method
+        // so its locals stay out of this hot, deeply-recursive frame).
+        if self.is_generic_print_call(func, args, &first_ty) {
+            return Ok(Type::Unit);
         }
 
         // Overload-set dispatch: if `func` names an overload set (a user overload set

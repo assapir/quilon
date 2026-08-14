@@ -21,7 +21,9 @@ fn gen_ir(source: &str) -> String {
 }
 
 #[test]
-fn print_number_lowers_to_print_num_fd_intrinsic() {
+fn print_number_renders_via_num_to_text() {
+    // `print` routes through the `` ` `` render operator: a Num renders to Text via
+    // __num_to_text, then the Text is written with __print_text_fd.
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
@@ -31,8 +33,12 @@ fn print_number_lowers_to_print_num_fd_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("@__print_num_fd"),
-        "expected __print_num_fd call in:\n{ir}"
+        ir.contains("@__num_to_text"),
+        "expected __num_to_text call in:\n{ir}"
+    );
+    assert!(
+        ir.contains("@__print_text_fd"),
+        "expected __print_text_fd call in:\n{ir}"
     );
 }
 
@@ -69,8 +75,9 @@ fn write_lowers_to_write_bytes_intrinsic() {
 }
 
 #[test]
-fn print_bool_lowers_to_print_bool_fd_intrinsic() {
-    // Bool prints as "true"/"false" via __print_bool_fd, not widened to a number.
+fn print_bool_renders_via_bool_to_text() {
+    // `print` routes through the `` ` `` render operator: a Bool renders to "True"/"False"
+    // via __bool_to_text, then the Text is written with __print_text_fd.
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
@@ -80,8 +87,12 @@ fn print_bool_lowers_to_print_bool_fd_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("@__print_bool_fd"),
-        "expected __print_bool_fd in:\n{ir}"
+        ir.contains("@__bool_to_text"),
+        "expected __bool_to_text in:\n{ir}"
+    );
+    assert!(
+        ir.contains("@__print_text_fd"),
+        "expected __print_text_fd in:\n{ir}"
     );
 }
 

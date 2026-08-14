@@ -91,7 +91,11 @@ fn test_string_escapes() {
     let tokens = Lexer::tokenize(source).unwrap();
 
     match &tokens[0].kind {
-        TokenKind::String(s) => {
+        TokenKind::String(chunks) => {
+            let s = match chunks.as_slice() {
+                [quilon::lexer::StrChunk::Lit(s)] => s,
+                _ => panic!("Expected a single literal chunk"),
+            };
             assert!(s.contains('\n'));
             assert!(s.contains('\t'));
             assert!(s.contains('"'));

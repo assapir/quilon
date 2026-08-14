@@ -41,6 +41,8 @@ Quilon's identity, and the rules that guide its design:
 | `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
 | `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
+| `` ` `` (in a string) | [Interpolation](#string-interpolation-and-the-render-operator) hole · `` `` `` = one literal backtick | `` "hi `user.name`" `` |
+| `` ` `` (as a name) | The overloadable **render** operator — a type's `Text` rendering | `` ` = () -> Text => "..." `` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `~` | Comment (to end of line) | `~ a note` |
 
@@ -122,8 +124,56 @@ many" contract.
 
 (See `examples/text.ql` and `examples/text_methods.ql`.)
 
+#### String interpolation and the render operator (`` ` ``)
+
+A string literal may contain **interpolation holes** — an expression wrapped in
+backticks — which are rendered to `Text` and spliced in:
+
+```quilon
+"hi `user.name`"      ~ splices the rendered value of user.name
+"sum: `a + b`"        ~ any expression, not just a variable
+"port `getPort()`"    ~ a call
+```
+
+A hole can be **any expression**, and its value can be of **any type** — every type is
+renderable. To write a **literal backtick**, double it: `` `` `` yields one `` ` `` (never
+starts a hole). A plain string with no holes is an ordinary `Text` literal.
+
+**One render path.** Both interpolation and `print`/`eprint` render a value by invoking
+its `` ` `` (backtick) operator. Every built-in type has a **default** `` ` ``; **any**
+user type may **override** its rendering by defining its own `` ` `` operator — declared
+method-style (like other [record methods](#named-record-types-with-methods)), with `it`
+bound to the instance, returning `Text`, and free to use interpolation itself:
+
+```quilon
+User = {
+  name :: Text,
+  age  :: Num,
+  ` = () -> Text => "User(`it.name`, `it.age`)"   ~ override: `it` is the instance
+}
+~ Now both `print(u)` and `"`u`"` render as  User(Ada, 36)
+```
+
+So `print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
+present, the built-in default otherwise. (A `` ` `` that renders `it` *wholesale* falls
+back to the default rather than recursing forever.)
+
+**Default rendering** (the built-in `` ` `` per type):
+
+| Type | Renders as | Example |
+|------|-----------|---------|
+| `Num` | integer-valued → no decimals; else shortest round-trip | `5`, `5.5`, `0.5` |
+| `Bool` | `True` / `False` — **capitalized** (deliberately unlike the `true`/`false` literals) | `True` |
+| `Text` | itself | `hi` |
+| record | the **type name** (unless overridden) | `Point` |
+| sum type | the **variant/constructor name** (unless overridden) | `Green`, `Ok` |
+| array | length **≤ 10** → full `[a, b, c]` (each element via its own `` ` ``); length **> 10** → truncated `[first <- last]` | `[1, 2, 3]`, `[1 <- 100]` |
+
+There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.ql`.)
+
 ### `Bool`
-`true` / `false`.
+`true` / `false` (the literals are lowercase; note that a `Bool` *renders* as capitalized
+`True`/`False` — see [interpolation](#string-interpolation-and-the-render-operator)).
 
 ### `Unit` — `$`
 The **unit type**, written `$`. It has exactly one value, also written `$` — so `$` is
@@ -683,7 +733,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 | Function | Effect |
 |----------|--------|
-| `print(x) -> $` | Write `x` to stdout, **with a trailing newline**. An [overload set](#overloading) over `Num`/`Text`/`Bool` (`Bool` prints `true`/`false`). Returns `$` (Unit). A user `print` definition *adds* an overload. |
+| `print(x) -> $` | Write `x` to stdout, **with a trailing newline**. Accepts a value of **any type**, rendered through its [`` ` `` render operator](#string-interpolation-and-the-render-operator) — so a `Bool` prints `True`/`False`, and records/sum types/arrays print via their default (or overridden) rendering. Returns `$` (Unit). A user `print` definition with a concrete signature *adds* an overload that wins for that type. |
 | `eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
 | `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. |
 | `stdout`, `stderr` | The standard file descriptors. |
@@ -732,9 +782,10 @@ in `examples/` is written this way: it asserts each result it demonstrates and e
 >
 ```
 
-`assertEq`/`assertNotEq` render values with `eprint`, so their failure messages are
-precise for `Num`/`Text`/`Bool`; other types (records, arrays, sum payloads) get only
-the generic `assertion failed` line until a `toText` exists. The whole module is
+`assertEq`/`assertNotEq` render values with `eprint`, so their failure messages show the
+rendered `expected`/`actual` — for `Num`/`Text`/`Bool` and, via the [`` ` `` render
+operator](#string-interpolation-and-the-render-operator), for records, sum types, and
+arrays too. The whole module is
 pure Quilon (`corelib/test.ql`) built on `assert`, `==`/`!=`, and pattern-matching —
 its only native primitive is a process-exit intrinsic. (See `examples/assert_demo.ql`.)
 

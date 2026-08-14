@@ -121,18 +121,20 @@ pub extern "C" fn __write_bytes(fd: i64, ptr: *const u8, len: i64) -> i64 {
     write_to_fd(fd, bytes)
 }
 
-/// Format and write a number to `fd` followed by a newline (backs `print`/`eprint`
-/// of a `Num`). Whole values print without a fractional part (`3`, not `3.0`).
+/// Render a `Num` to a GC-allocated `Text` (the built-in `` ` `` for Num, and the shared
+/// render path for string interpolation and `print`). Whole values render without a
+/// fractional part (`5`, not `5.0`); other values use the shortest round-trip form.
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_num_fd(fd: i64, x: f64) {
-    write_to_fd(fd, format!("{}\n", format_num(x)).as_bytes());
+pub extern "C" fn __num_to_text(x: f64) -> QlSlice {
+    alloc_text(format_num(x).as_bytes())
 }
 
-/// Write `true`/`false` to `fd` followed by a newline (backs `print`/`eprint` of
-/// a `Bool`). `b` is the bool zero-extended to an integer (0 = false).
+/// Render a `Bool` to a GC-allocated `Text` (the built-in `` ` `` for Bool): `True` /
+/// `False`, capitalized — deliberately distinct from the lowercase `true`/`false`
+/// literals. `b` is the bool zero-extended to an integer (0 = false).
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_bool_fd(fd: i64, b: i64) {
-    write_to_fd(fd, if b != 0 { b"true\n" } else { b"false\n" });
+pub extern "C" fn __bool_to_text(b: i64) -> QlSlice {
+    alloc_text(if b != 0 { b"True" } else { b"False" })
 }
 
 /// Write a NUL-terminated C string to `fd` followed by a newline (backs
@@ -593,14 +595,14 @@ type RtFn = unsafe extern "C" fn();
 static QUILON_RT_INTRINSICS: [RtFn; 22] = unsafe {
     [
         core::mem::transmute(__gc_init as extern "C" fn()),
+        core::mem::transmute(__num_to_text as extern "C" fn(f64) -> QlSlice),
+        core::mem::transmute(__bool_to_text as extern "C" fn(i64) -> QlSlice),
         core::mem::transmute(__exit as extern "C" fn(c_int) -> !),
         core::mem::transmute(__index_fail as extern "C" fn(f64, i64) -> !),
         core::mem::transmute(__alloc as extern "C" fn(i64) -> *mut c_void),
         core::mem::transmute(__text_length as extern "C" fn(*const u8, i64) -> i64),
         core::mem::transmute(__text_cmp as extern "C" fn(*const u8, i64, *const u8, i64) -> i32),
         core::mem::transmute(__write_bytes as extern "C" fn(i64, *const u8, i64) -> i64),
-        core::mem::transmute(__print_num_fd as extern "C" fn(i64, f64)),
-        core::mem::transmute(__print_bool_fd as extern "C" fn(i64, i64)),
         core::mem::transmute(__print_text_fd as extern "C" fn(i64, *const c_char)),
         core::mem::transmute(
             __argv_to_text_array as extern "C" fn(i64, *const *const c_char) -> QlSlice,

@@ -149,14 +149,48 @@ mod tests {
         assert_eq!(tokens.len(), 3); // 2 strings + EOF
 
         match &tokens[0].kind {
-            TokenKind::String(s) => assert_eq!(s, "hello"),
+            TokenKind::String(chunks) => {
+                assert_eq!(
+                    chunks.as_slice(),
+                    [crate::lexer::StrChunk::Lit("hello".into())]
+                )
+            }
             _ => panic!("Expected string"),
         }
 
         match &tokens[1].kind {
-            TokenKind::String(s) => assert_eq!(s, "world\n"),
+            TokenKind::String(chunks) => assert_eq!(
+                chunks.as_slice(),
+                [crate::lexer::StrChunk::Lit("world\n".into())]
+            ),
             _ => panic!("Expected string with newline"),
         }
+    }
+
+    #[test]
+    fn test_interpolated_string() {
+        use crate::lexer::StrChunk;
+        // `a`, hole `x + 1`, `!` — plus a doubled backtick collapsing to one literal.
+        let tokens = Lexer::tokenize("\"a `x + 1`!``\"").unwrap();
+        match &tokens[0].kind {
+            TokenKind::String(chunks) => {
+                assert_eq!(chunks.len(), 3);
+                assert_eq!(chunks[0], StrChunk::Lit("a ".into()));
+                match &chunks[1] {
+                    StrChunk::Hole { src, .. } => assert_eq!(src, "x + 1"),
+                    _ => panic!("Expected hole"),
+                }
+                assert_eq!(chunks[2], StrChunk::Lit("!`".into()));
+            }
+            _ => panic!("Expected interpolated string"),
+        }
+    }
+
+    #[test]
+    fn test_backtick_operator_token_outside_string() {
+        // A bare backtick (defining the render operator) lexes as `Backtick`, never a hole.
+        let tokens = Lexer::tokenize("` = () -> Text => \"x\"").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Backtick);
     }
 
     #[test]

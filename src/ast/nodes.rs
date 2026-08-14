@@ -148,6 +148,14 @@ pub fn is_text_method(name: &str) -> bool {
     )
 }
 
+/// One piece of an interpolated string (`Expr::Interpolation`): either literal text or a
+/// hole expression to render and splice in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpPart {
+    Lit(String),
+    Hole(Expr),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals
@@ -157,6 +165,13 @@ pub enum Expr {
     },
     String {
         value: String,
+        span: Span,
+    },
+    /// A string with interpolation holes: literal chunks interleaved with hole
+    /// expressions, e.g. `"hi `user.name`!"`. Renders each hole to `Text` via its `` ` ``
+    /// operator and concatenates. A plain (hole-free) literal stays an `Expr::String`.
+    Interpolation {
+        parts: Vec<InterpPart>,
         span: Span,
     },
     Bool {
@@ -320,6 +335,7 @@ impl Expr {
         match self {
             Expr::Number { span, .. } => span,
             Expr::String { span, .. } => span,
+            Expr::Interpolation { span, .. } => span,
             Expr::Bool { span, .. } => span,
             Expr::Unit { span, .. } => span,
             Expr::Ident { span, .. } => span,

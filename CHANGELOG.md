@@ -6,6 +6,22 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **String interpolation / format strings.** A string literal may contain
+  **interpolation holes** — an arbitrary expression wrapped in backticks — which
+  are rendered to `Text` and spliced in: `` "hi `user.name`" ``,
+  `` "sum: `a + b`" ``, `` "port `getPort()`" ``. A hole can hold a value of any
+  type. A **doubled backtick** `` `` `` is one literal backtick (never a hole).
+  Rendering goes through a single, overloadable **render operator `` ` ``**: every
+  built-in type has a default rendering (Num without trailing zeros; `Bool` as
+  `True`/`False`, capitalized; `Text` as itself; a record as its type name; a sum
+  value as its variant name; an array as `[a, b, c]`, or `[first <- last]` when it
+  has more than 10 elements), and **any user type may override** its rendering by
+  defining its own `` ` `` operator method-style (`it` is the instance; it returns
+  `Text` and may itself interpolate). `print`/`eprint` now render **any** value
+  through the same `` ` `` path, so `print(user)` and `` "`user`" `` agree — and
+  `assertEq`/`assertNotEq` failure messages now render records, sum types, and
+  arrays too. There are no format specifiers. (See `examples/interpolation.ql`.)
+  (#101)
 - **Provenance watermark in native binaries.** Every executable `quilon build`
   produces now carries a plaintext watermark —
   `Built with Quilon by Assaf Sapir - github.com/assapir/quilon` — in the ELF
