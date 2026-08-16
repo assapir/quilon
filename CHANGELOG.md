@@ -256,6 +256,19 @@ between 0.9.0 and this one, so this section covers the whole span.
 
 ### Fixed
 
+- **A host that runs Quilon programs on more than one thread no longer aborts.**
+  The collector stops the world by signalling the threads it knows about, and it
+  was never told about any: whichever thread first ran a program initialized it
+  and nothing registered. A later collection then tried to stop a thread it could
+  not signal and libgc killed the process — `Collecting from unknown thread`,
+  `pthread_kill failed at suspend`, `Signals delivery fails constantly`, all the
+  same fault at different moments. `quilon run` now registers its thread with the
+  collector for the duration of the run and unregisters it afterwards, including
+  the thread that did the initializing, whose entry otherwise outlives it and
+  becomes the corpse the next collection trips over. A compiled binary is
+  unaffected — it has one thread — so this is a fix for embedders and for the
+  test suite, which no longer aborts sporadically when run with the default
+  thread count.
 - An expression in the file you compile can no longer retype an expression inside
   a module it imports. Every module is lexed on its own, so byte offsets restart
   at 0 in each one; the per-expression types codegen reads back were keyed on the

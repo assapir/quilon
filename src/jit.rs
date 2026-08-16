@@ -33,6 +33,13 @@ type MainFn = unsafe extern "C" fn(i32, *const *const c_char, *const *const c_ch
 /// runtime intrinsics added by later workstreams (e.g. `__text_length`,
 /// Boehm GC) are registered at the extension point noted below.
 pub fn run_program(program: &Program, types: TypeTable, args: &[String]) -> Result<i32, String> {
+    // The JIT'd program allocates through the collector on whichever thread called us,
+    // and the collector aborts the process if it has to stop a thread it was never told
+    // about. A compiled binary never meets this — it has one thread — but a host that
+    // runs programs from several threads does, which is what the test suite is. Held for
+    // the duration of the run; dropping it unregisters the thread.
+    let _gc_thread = quilon_rt::register_thread();
+
     // LLVM requires the native target to be initialized before a JIT engine
     // can be created.
     Target::initialize_native(&InitializationConfig::default())

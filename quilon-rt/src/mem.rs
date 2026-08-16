@@ -18,6 +18,16 @@ use std::os::raw::c_void;
 unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut c_void;
     fn GC_init();
+    fn GC_allow_register_threads();
+    fn GC_register_my_thread(sb: *const GcStackBase) -> i32;
+    fn GC_unregister_my_thread() -> i32;
+    fn GC_get_stack_base(sb: *mut GcStackBase) -> i32;
+}
+
+/// Boehm's description of a thread's stack extent, filled in by `GC_get_stack_base`.
+#[repr(C)]
+struct GcStackBase {
+    mem_base: *mut c_void,
 }
 
 /// Initialize the garbage collector. Emitted as the first call in `main`.
@@ -25,6 +35,56 @@ unsafe extern "C" {
 pub extern "C" fn __gc_init() {
     // Safe to call more than once; GC_init is idempotent.
     unsafe { GC_init() }
+}
+
+/// Prepare the collector for threads other than the one that initialized it, and
+/// register the calling thread with it until the returned guard is dropped.
+///
+/// The collector stops the world by signalling the threads it knows, and it only knows
+/// the thread that initialized it plus any it was told about. A thread it has not been
+/// told about is not merely unscanned: when a collection happens the process aborts,
+/// with a message that varies by timing — `Collecting from unknown thread`,
+/// `pthread_kill failed at suspend`, `Signals delivery fails constantly`. A compiled
+/// Quilon program never meets this, because it has one thread. A *host* that runs
+/// Quilon code on more than one thread does, which is why the JIT calls this.
+///
+/// Initialization runs once however many threads arrive at it together: two threads
+/// initializing at the same time abort with `Exclusion ranges overlap`.
+pub fn register_thread() -> GcThread {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| unsafe {
+        GC_init();
+        GC_allow_register_threads();
+    });
+
+    let registered = unsafe {
+        let mut base = GcStackBase {
+            mem_base: std::ptr::null_mut(),
+        };
+        GC_get_stack_base(&mut base);
+        // 0 says we registered it, 1 says it was already known — see `GcThread` for why
+        // both count as ours to remove.
+        matches!(GC_register_my_thread(&base), 0 | 1)
+    };
+    GcThread { registered }
+}
+
+/// Unregisters the thread when it is dropped.
+///
+/// Taking the thread back out matters as much as putting it in, because the collector's
+/// knowledge outlives the thread: an entry left behind is a corpse every later collection
+/// tries to stop. That includes the thread that initialized the collector, which is
+/// already known without registering — so it is unregistered here too.
+pub struct GcThread {
+    registered: bool,
+}
+
+impl Drop for GcThread {
+    fn drop(&mut self) {
+        if self.registered {
+            unsafe { GC_unregister_my_thread() };
+        }
+    }
 }
 
 /// Allocate `size` bytes of GC-managed, zeroed-on-demand memory.
