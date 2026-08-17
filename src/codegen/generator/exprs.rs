@@ -120,6 +120,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::Array { elements, .. } => self.generate_array(expr, elements),
 
+            Expr::MapLit { entries, .. } => self.generate_map_literal(expr, entries),
+
+            Expr::SetLit { elements, .. } => self.generate_set_literal(expr, elements),
+
             Expr::Record { fields, .. } => self.generate_record_expr(expr, fields),
 
             // A bare spread never survives to codegen on its own — the parser only
@@ -272,6 +276,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 || matches!(self.oracle.expr_type(right), Some(Type::Array(_))))
         {
             return self.generate_array_concat(left, right);
+        }
+
+        // Set algebra: `+` union, `-` difference, `+-`/`-+` intersection — each builds a
+        // NEW set. Distinguished from numeric `+`/`-` by the oracle type; `SetIntersect`
+        // (`+-`/`-+`) is only ever a set operator. Routed BEFORE eager operand evaluation
+        // so a set operand isn't mistaken for a Num.
+        if op == BinOp::SetIntersect
+            || (matches!(op, BinOp::Add | BinOp::Sub)
+                && (matches!(self.oracle.expr_type(left), Some(Type::Set(_)))
+                    || matches!(self.oracle.expr_type(right), Some(Type::Set(_)))))
+        {
+            return self.generate_set_op(op, left, right);
         }
 
         // `&&`/`||` are SHORT-CIRCUIT (docs/LANGUAGE.md "Logical: `&& || !` (short-circuit)"):
@@ -654,6 +670,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         array: &Expr,
         index_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // `m[k]` on a Map — fail-loud keyed lookup (crashes on a missing key). Routed by
+        // the oracle's receiver type before the array path (a map value is an opaque
+        // pointer, not a `{ptr,size}` struct).
+        if matches!(self.oracle.expr_type(array), Some(Type::Map(_, _))) {
+            return self.generate_map_index(index_node, array, index_expr);
+        }
+
         // Generate the array expression
         let array_val = self.generate_expr(array)?;
 

@@ -149,9 +149,15 @@ fn collect(
             collect(expr, local, outer, seen, out);
             collect(index, local, outer, seen, out);
         }
-        Expr::Array { elements, .. } => {
+        Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
             for e in elements {
                 collect(e, local, outer, seen, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect(k, local, outer, seen, out);
+                collect(v, local, outer, seen, out);
             }
         }
         Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {

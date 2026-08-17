@@ -198,6 +198,8 @@ pub(crate) fn types_match(param: &Type, arg: &Type) -> bool {
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit) => true,
         (Type::Array(a), Type::Array(b)) => types_match(a, b),
+        (Type::Map(ka, va), Type::Map(kb, vb)) => types_match(ka, kb) && types_match(va, vb),
+        (Type::Set(a), Type::Set(b)) => types_match(a, b),
         // User record / sum types are identified by name.
         (
             Type::Named { name: a, .. } | Type::Sum { name: a, .. },
@@ -368,6 +370,10 @@ impl TypeChecker {
                     })
             }
             (Type::Array(e1), Type::Array(e2)) => Self::types_compatible(e1, e2),
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
+                Self::types_compatible(k1, k2) && Self::types_compatible(v1, v2)
+            }
+            (Type::Set(e1), Type::Set(e2)) => Self::types_compatible(e1, e2),
             _ => a == b,
         }
     }

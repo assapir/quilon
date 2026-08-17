@@ -34,6 +34,7 @@
 //! linking an AOT binary with gcc, pass `-lgc` explicitly (the `#[link]` directive
 //! only drives rustc's own links, not a downstream gcc invocation).
 
+pub mod collections;
 pub mod deferred;
 pub mod gc;
 pub mod io;
@@ -47,6 +48,11 @@ pub mod scheduler;
 pub mod text;
 pub mod time;
 
+pub use collections::{
+    __map_get, __map_has, __map_index, __map_key_a, __map_key_b, __map_len, __map_new, __map_set,
+    __map_val, __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b,
+    __set_len, __set_new, __set_union,
+};
 pub use deferred::{__force_text, __read_launch};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
@@ -162,6 +168,24 @@ intrinsic_registry! {
         *const *const c_char,
         *const *const c_char,
     ) -> c_int,
+    __map_new: extern "C" fn() -> *mut c_void,
+    __map_set: extern "C" fn(*const c_void, i64, i64, i64, *const c_void) -> *mut c_void,
+    __map_get: extern "C" fn(*const c_void, i64, i64, i64, *mut i64) -> *const c_void,
+    __map_index: extern "C" fn(*const c_void, i64, i64, i64) -> *const c_void,
+    __map_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __map_len: extern "C" fn(*const c_void) -> i64,
+    __map_key_a: extern "C" fn(*const c_void, i64) -> i64,
+    __map_key_b: extern "C" fn(*const c_void, i64) -> i64,
+    __map_val: extern "C" fn(*const c_void, i64) -> *const c_void,
+    __set_new: extern "C" fn() -> *mut c_void,
+    __set_add: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
+    __set_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __set_len: extern "C" fn(*const c_void) -> i64,
+    __set_item_a: extern "C" fn(*const c_void, i64) -> i64,
+    __set_item_b: extern "C" fn(*const c_void, i64) -> i64,
+    __set_union: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
+    __set_diff: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
+    __set_intersect: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

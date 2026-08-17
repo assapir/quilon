@@ -103,6 +103,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Bool => return Some(debug.bool_type()),
             Type::Unit => return Some(debug.unit_type()),
             Type::Generic { .. } | Type::Function { .. } => return Some(debug.opaque_pointer()),
+            // Maps and Sets are opaque runtime pointers with no DWARF-visible structure.
+            Type::Map(_, _) | Type::Set(_) => return Some(debug.opaque_pointer()),
             _ => {}
         }
         let key = self.di_type_key(ty);
@@ -249,6 +251,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Unit => "$".to_string(),
             Type::Text => "Text".to_string(),
             Type::Array(elem) => format!("[]{}", self.di_type_key(elem)),
+            Type::Map(k, v) => format!("map${}${}", self.di_type_key(k), self.di_type_key(v)),
+            Type::Set(elem) => format!("set${}", self.di_type_key(elem)),
             Type::Record(fields) => {
                 let inner: Vec<String> = fields
                     .iter()

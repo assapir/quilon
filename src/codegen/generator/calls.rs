@@ -110,6 +110,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_text_method(func_name, args, span);
         }
 
+        // Built-in Map methods — RESERVED on a `Map` receiver, mirroring the array/Text
+        // blocks above.
+        if crate::ast::is_map_method(func_name)
+            && !args.is_empty()
+            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Map(_, _)))
+        {
+            return self.generate_map_method(func_name, args);
+        }
+
+        // Built-in Set methods — RESERVED on a `Set` receiver.
+        if crate::ast::is_set_method(func_name)
+            && !args.is_empty()
+            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Set(_)))
+        {
+            return self.generate_set_method(func_name, args);
+        }
+
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDef::Sum` declarations.
