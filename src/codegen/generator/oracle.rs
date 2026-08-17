@@ -280,6 +280,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let _elem = self.type_to_llvm(elem_type)?;
                 Ok(self.context.ptr_type(AddressSpace::default()).into())
             }
+            // A Map/Set VALUE is a single opaque pointer to its runtime representation
+            // (a GC-allocated native `HashMap`/`HashSet` wrapper). Validate the element
+            // types, but the pointer carries no pointee shape.
+            Type::Map(key_type, value_type) => {
+                let _k = self.type_to_llvm(key_type)?;
+                let _v = self.type_to_llvm(value_type)?;
+                Ok(self.context.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Set(elem_type) => {
+                let _elem = self.type_to_llvm(elem_type)?;
+                Ok(self.context.ptr_type(AddressSpace::default()).into())
+            }
             Type::Record(fields) => {
                 let field_types: Vec<BasicTypeEnum> = fields
                     .iter()

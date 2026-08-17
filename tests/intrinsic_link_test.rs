@@ -84,6 +84,28 @@ const EVERY_INTRINSIC: &str = r#"
   assertEq("a-a".replace("a", "b", 1), "b-a")
   assertEq("slice".slice(1, 3), "li")
   assertEq("x,y".split(",").size, 2)
+
+  ~ Map intrinsics: new/set/index/get/has/len, and keys/values/each iteration.
+  counts :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
+  assertEq(counts["a"], 1)
+  assert(counts.has("b"))
+  assertEq(counts.size, 2)
+  grown :: [|Text => Num|] = counts.set("c", 3)
+  assertEq(grown.keys().size, 3)
+  assertEq(grown.values().size, 3)
+  assertOk(counts.get("a"))
+  counts.each((k, v) => v)
+
+  ~ Set intrinsics: new/add/has/len, items/each iteration, and the algebra operators.
+  odds :: [|Num|] = [|1, 3, 5|]
+  evens :: [|Num|] = [|3, 4, 5|]
+  odds.each(x => x)
+  assert(odds.has(1))
+  assertEq(odds.add(7).size, 4)
+  assertEq(odds.items().size, 3)
+  assertEq((odds + evens).size, 4)
+  assertEq((odds - evens).size, 1)
+  assertEq((odds +- evens).size, 2)
 >
 "#;
 

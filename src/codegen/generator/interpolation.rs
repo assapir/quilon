@@ -105,6 +105,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Sum { name, .. } => self.render_sum_variant(name, value),
             // An array renders its elements (truncated past 10, see `render_array`).
             Type::Array(elem) => self.render_array(elem, value),
+            // Maps and Sets render as their type label (element-by-element rendering of a
+            // native collection is deferred); iteration order would be unspecified anyway.
+            Type::Map(_, _) | Type::Set(_) => {
+                let label = crate::ast::type_label(ty);
+                self.text_literal(&label)
+            }
             Type::Function { .. } => self.text_literal("<function>"),
         }
     }

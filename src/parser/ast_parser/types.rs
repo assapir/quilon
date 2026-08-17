@@ -23,6 +23,13 @@ impl<'a> Parser<'a> {
             return Ok(crate::ast::Type::Unit);
         }
 
+        // A pipe fence `[| … |]` (a `[` immediately followed by `|`) opens a Map or Set
+        // type: `[|K => V|]` is `Map(K, V)`, `[|T|]` is `Set(T)`. Checked BEFORE the plain
+        // `[]T` array type, which also begins with `[`.
+        if token.kind == TokenKind::BracketOpen && self.peek_ahead(1).kind == TokenKind::Pipe {
+            return self.parse_fenced_type();
+        }
+
         // `[]T` — an array type (e.g. `[]Text`, and nested `[][]Text`). The `[]` prefix
         // wraps the element type that follows, so `[][]Text` parses as
         // `Array(Array(Text))` via the recursive `parse_type` call.
@@ -106,5 +113,29 @@ impl<'a> Parser<'a> {
                 span: token.span.clone(),
             }),
         }
+    }
+
+    /// Parse a pipe-fenced collection type, with the cursor at the opening `[` of a `[|`.
+    /// `[|K => V|]` is `Map(K, V)`; `[|T|]` is `Set(T)`. The `=>` after the first type is
+    /// what distinguishes a map from a set.
+    fn parse_fenced_type(&mut self) -> Result<crate::ast::Type, ParseError> {
+        self.expect(&TokenKind::BracketOpen)?;
+        self.expect(&TokenKind::Pipe)?;
+        let first = self.parse_type()?;
+        if self.check(&TokenKind::Arrow) {
+            self.advance(); // `=>`
+            let value = self.parse_type()?;
+            self.expect_fence_close()?;
+            Ok(crate::ast::Type::Map(Box::new(first), Box::new(value)))
+        } else {
+            self.expect_fence_close()?;
+            Ok(crate::ast::Type::Set(Box::new(first)))
+        }
+    }
+
+    /// Consume a closing pipe fence `|]` (a `|` immediately followed by `]`).
+    pub(super) fn expect_fence_close(&mut self) -> Result<(), ParseError> {
+        self.expect(&TokenKind::Pipe)?;
+        self.expect(&TokenKind::BracketClose)
     }
 }

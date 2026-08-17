@@ -158,9 +158,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::collect_mutable_locals(expr, out);
                 Self::collect_mutable_locals(index, out);
             }
-            Expr::Array { elements, .. } => {
+            Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
                 for e in elements {
                     Self::collect_mutable_locals(e, out);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    Self::collect_mutable_locals(k, out);
+                    Self::collect_mutable_locals(v, out);
                 }
             }
             Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
@@ -280,9 +286,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::walk_exprs(expr, f);
                 Self::walk_exprs(index, f);
             }
-            Expr::Array { elements, .. } => {
+            Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
                 for e in elements {
                     Self::walk_exprs(e, f);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    Self::walk_exprs(k, f);
+                    Self::walk_exprs(v, f);
                 }
             }
             Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {

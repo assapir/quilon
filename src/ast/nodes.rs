@@ -236,6 +236,21 @@ pub fn params_accept(
     params.iter().zip(args.iter()).all(|(p, a)| matches(p, a))
 }
 
+/// The reserved built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`).
+/// (`size` is a field, like an array's `.size`, not a method.) Like [`is_array_method`],
+/// these are resolved ahead of any user overload when the receiver is a `Map`, so this
+/// predicate is the single source of truth shared by the type checker and codegen.
+pub fn is_map_method(name: &str) -> bool {
+    matches!(name, "get" | "has" | "set" | "keys" | "values" | "each")
+}
+
+/// The reserved built-in `Set` methods (`has`/`add`/`items`/`each`). (`size` is a field.)
+/// The single source of truth shared by the type checker and codegen, like the array and
+/// map method predicates.
+pub fn is_set_method(name: &str) -> bool {
+    matches!(name, "has" | "add" | "items" | "each")
+}
+
 /// One piece of an interpolated string (`Expr::Interpolation`): either literal text or a
 /// hole expression to render and splice in.
 #[derive(Debug, Clone, PartialEq)]
@@ -373,6 +388,20 @@ pub enum Expr {
         span: Span,
     },
 
+    // Map literal, pipe-fenced: `[|"a" => 1, "b" => 2|]`. Empty is `[|=>|]`.
+    // Each entry is a (key, value) expression pair. Iteration order is unspecified.
+    MapLit {
+        entries: Vec<(Expr, Expr)>,
+        span: Span,
+    },
+
+    // Set literal, pipe-fenced: `[|"a", "b"|]`. Empty is `[||]`. The fence keeps a set
+    // literal distinct from an array literal (`[1, 2, 3]`). Iteration order unspecified.
+    SetLit {
+        elements: Vec<Expr>,
+        span: Span,
+    },
+
     // Record literal
     Record {
         fields: Vec<(String, Expr)>,
@@ -429,6 +458,8 @@ impl Expr {
             Expr::FieldAssign { span, .. } => span,
             Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
+            Expr::MapLit { span, .. } => span,
+            Expr::SetLit { span, .. } => span,
             Expr::Record { span, .. } => span,
             Expr::Constructor { span, .. } => span,
             Expr::Range { span, .. } => span,
@@ -500,6 +531,9 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    // Set intersection, written `+-` / `-+` (symmetric). Distinct from `Add`/`Sub`; only
+    // ever applied to `Set` operands (there is no numeric intersection).
+    SetIntersect,
     Eq,
     Ne,
     // `<` and `>` double as block delimiters; the parser disambiguates them as
@@ -524,6 +558,7 @@ impl BinOp {
             BinOp::Mul => "*",
             BinOp::Div => "/",
             BinOp::Mod => "%",
+            BinOp::SetIntersect => "+-",
             BinOp::Eq => "==",
             BinOp::Ne => "!=",
             BinOp::Lt => "<",
@@ -561,6 +596,10 @@ pub enum Type {
     // side-effecting expressions/functions whose result is meaningless.
     Unit,
     Array(Box<Type>),
+    // Built-in parametric collections (like `[]T`, NOT user generics):
+    // `Map(key, value)` = `[|K => V|]`; `Set(elem)` = `[|T|]`.
+    Map(Box<Type>, Box<Type>),
+    Set(Box<Type>),
     Record(Vec<(String, Type)>), // For anonymous records
     /// A user-declared record type. Its `fields` and `methods` are behind an `Rc` because
     /// a `Type` is cloned once per expression that has this type — into the type table, out
@@ -609,6 +648,8 @@ impl Type {
         match self {
             Type::Generic { .. } => true,
             Type::Array(inner) => inner.contains_generic(),
+            Type::Map(k, v) => k.contains_generic() || v.contains_generic(),
+            Type::Set(inner) => inner.contains_generic(),
             Type::Sum { variants, .. } => variants
                 .iter()
                 .any(|v| v.fields.iter().any(Type::contains_generic)),
@@ -635,6 +676,8 @@ pub fn type_label(ty: &Type) -> String {
         Type::Bool => "Bool".to_string(),
         Type::Unit => "$".to_string(),
         Type::Array(elem) => format!("[]{}", type_label(elem)),
+        Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
+        Type::Set(elem) => format!("[|{}|]", type_label(elem)),
         Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
         Type::Generic { .. } => "<unknown>".to_string(),
         other => format!("{:?}", other),

@@ -244,6 +244,16 @@ pub enum TokenKind {
     #[token("%")]
     Percent,
 
+    // Set intersection, written `+-` or `-+` — the two spellings are the SAME symmetric
+    // operator. Lexed as single tokens; logos maximal munch makes the two-char form win
+    // over `+`/`-` when the characters are adjacent. With whitespace, `a + -b` still
+    // lexes as `Plus`/`Minus` (plus-then-negate on `Num`).
+    #[token("+-")]
+    PlusMinus,
+
+    #[token("-+")]
+    MinusPlus,
+
     // Comparison operators
     #[token("==")]
     Eq,

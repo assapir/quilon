@@ -162,6 +162,17 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
+                    // Maps and Sets carry a built-in `.size` field (entry/element count),
+                    // like an array's `.size`. Their other operations are methods.
+                    Type::Map(_, _) | Type::Set(_) => {
+                        if field == "size" {
+                            return Ok(Type::Num);
+                        }
+                        Err(TypeError::UndefinedVariable {
+                            name: field.clone(),
+                            span: span.clone(),
+                        })
+                    }
                     Type::Text => {
                         // Text has `.size` (byte length) and `.length` (grapheme count).
                         if field == "size" || field == "length" {
@@ -226,18 +237,19 @@ impl TypeChecker {
                 let expr_type = self.infer_expr(expr)?;
                 let index_type = self.infer_expr(index)?;
 
-                // Index must be Num
-                if index_type != Type::Num {
-                    return Err(TypeError::TypeMismatch {
-                        expected: Box::new(Type::Num),
-                        got: Box::new(index_type),
-                        span: span.clone(),
-                    });
-                }
-
-                // Expression must be an array
                 match expr_type {
-                    Type::Array(elem_type) => Ok(*elem_type),
+                    // `arr[i]` — index must be `Num`; yields the element type.
+                    Type::Array(elem_type) => {
+                        self.check_type_compatibility(&Type::Num, &index_type, span)?;
+                        Ok(*elem_type)
+                    }
+                    // `m[k]` — the key must match the map's key type; yields the value type.
+                    // This is the fail-loud form: missing keys CRASH at runtime (use
+                    // `.get(k)` for the `Result`-returning safe form).
+                    Type::Map(key_type, value_type) => {
+                        self.check_type_compatibility(&key_type, &index_type, span)?;
+                        Ok(*value_type)
+                    }
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Array(Box::new(Type::Num))),
                         got: Box::new(expr_type),
@@ -282,6 +294,10 @@ impl TypeChecker {
 
                 Ok(Type::Array(Box::new(elem_type.unwrap_or(Type::Num))))
             }
+
+            Expr::MapLit { entries, span } => self.infer_map_literal(entries, span),
+
+            Expr::SetLit { elements, span } => self.infer_set_literal(elements, span),
 
             Expr::Record { fields, .. } => self.infer_record(fields),
 
@@ -484,6 +500,77 @@ impl TypeChecker {
         Ok(Type::Record(merged))
     }
 
+    /// Whether `ty` may be used as a Map/Set key. In this release the built-in hashable
+    /// types are `Num`, `Text` (hashed by content), and `Bool`. User-defined key types
+    /// (via a `%` hash hook) are not yet supported.
+    pub(super) fn is_hashable_key(ty: &Type) -> bool {
+        matches!(ty, Type::Num | Type::Text | Type::Bool)
+    }
+
+    /// Infer a map literal `[|k1 => v1, ...|]` as `Map(K, V)`. Every key must share one
+    /// hashable type `K`; every value one type `V`. An empty `[|=>|]` defaults to
+    /// `Map(Num, Num)` (mirroring the empty-array default).
+    pub(super) fn infer_map_literal(
+        &mut self,
+        entries: &[(Expr, Expr)],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let mut key_type: Option<Type> = None;
+        let mut value_type: Option<Type> = None;
+        for (key, value) in entries {
+            let k = self.infer_expr(key)?;
+            if !Self::is_hashable_key(&k) {
+                return Err(TypeError::InvalidBuiltinArgument {
+                    message: format!(
+                        "map key must be a hashable type (Num, Text, or Bool), got {}",
+                        crate::ast::type_label(&k)
+                    ),
+                    span: key.span().clone(),
+                });
+            }
+            let v = self.infer_expr(value)?;
+            match &key_type {
+                None => key_type = Some(k),
+                Some(first) => self.check_type_compatibility(first, &k, span)?,
+            }
+            match &value_type {
+                None => value_type = Some(v),
+                Some(first) => self.check_type_compatibility(first, &v, span)?,
+            }
+        }
+        Ok(Type::Map(
+            Box::new(key_type.unwrap_or(Type::Num)),
+            Box::new(value_type.unwrap_or(Type::Num)),
+        ))
+    }
+
+    /// Infer a set literal `[|e1, e2, ...|]` as `Set(T)`. Every element must share one
+    /// hashable type `T`. An empty `[||]` defaults to `Set(Num)`.
+    pub(super) fn infer_set_literal(
+        &mut self,
+        elements: &[Expr],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let mut elem_type: Option<Type> = None;
+        for elem in elements {
+            let t = self.infer_expr(elem)?;
+            if !Self::is_hashable_key(&t) {
+                return Err(TypeError::InvalidBuiltinArgument {
+                    message: format!(
+                        "set element must be a hashable type (Num, Text, or Bool), got {}",
+                        crate::ast::type_label(&t)
+                    ),
+                    span: elem.span().clone(),
+                });
+            }
+            match &elem_type {
+                None => elem_type = Some(t),
+                Some(first) => self.check_type_compatibility(first, &t, span)?,
+            }
+        }
+        Ok(Type::Set(Box::new(elem_type.unwrap_or(Type::Num))))
+    }
+
     pub(super) fn check_binop(
         &mut self,
         left: &Expr,
@@ -527,6 +614,36 @@ impl TypeChecker {
             return Err(TypeError::TypeMismatch {
                 expected: Box::new(left_type),
                 got: Box::new(right_type),
+                span: span.clone(),
+            });
+        }
+
+        // Set algebra: `+` union, `-` difference, `+-`/`-+` intersection. Each takes two
+        // sets of the SAME element type and yields a new set of that type (sets are
+        // immutable — a fresh set is returned). Resolved here, before overload dispatch,
+        // because they are polymorphic over the element type `T` (like array `+`) and
+        // because `+-` (`SetIntersect`) is not a named overload set at all.
+        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::SetIntersect)
+            && (matches!(left_type, Type::Set(_)) || matches!(right_type, Type::Set(_)))
+        {
+            if let (Type::Set(l_elem), Type::Set(r_elem)) = (&left_type, &right_type)
+                && types_match(l_elem, r_elem)
+            {
+                return Ok(left_type.clone());
+            }
+            return Err(TypeError::TypeMismatch {
+                expected: Box::new(left_type),
+                got: Box::new(right_type),
+                span: span.clone(),
+            });
+        }
+
+        // `+-` / `-+` (intersection) is only ever a set operator; reaching here means it
+        // was applied to non-set operands.
+        if op == BinOp::SetIntersect {
+            return Err(TypeError::TypeMismatch {
+                expected: Box::new(Type::Set(Box::new(Type::Num))),
+                got: Box::new(left_type),
                 span: span.clone(),
             });
         }
