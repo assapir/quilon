@@ -197,10 +197,7 @@ fn set_add_is_persistent() {
 /// `.items()` is a `[]T` array of the elements.
 #[test]
 fn set_items_is_array() {
-    assert_exit(
-        "^ = () -> Num => <\n  [|5, 6, 7|].items().size\n>",
-        3,
-    );
+    assert_exit("^ = () -> Num => <\n  [|5, 6, 7|].items().size\n>", 3);
 }
 
 /// An empty set literal `[||]` has size 0.

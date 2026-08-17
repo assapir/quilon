@@ -113,7 +113,10 @@ unsafe fn gc_alloc<T>(count: usize) -> *mut T {
 /// Render a key for a diagnostic (the fail-loud `m[k]` message).
 fn key_desc(key: &QlKey) -> String {
     match key.tag {
-        TAG_TEXT => format!("\"{}\"", String::from_utf8_lossy(unsafe { key.text_bytes() })),
+        TAG_TEXT => format!(
+            "\"{}\"",
+            String::from_utf8_lossy(unsafe { key.text_bytes() })
+        ),
         TAG_BOOL => if key.a == 0 { "false" } else { "true" }.to_string(),
         _ => format_num(f64::from_bits(key.a)),
     }
