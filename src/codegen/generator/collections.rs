@@ -167,7 +167,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into_int_value();
         let found_bool = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::NE, found, i64t.const_zero(), "mget_hit")
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                found,
+                i64t.const_zero(),
+                "mget_hit",
+            )
             .map_err(ctx("Failed to test found flag"))?;
 
         let function = self

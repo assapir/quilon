@@ -156,13 +156,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__map_new" | "__set_new" => ptr.fn_type(&[], false),
             // ptr __map_set(ptr m, i64 tag, i64 a, i64 b, ptr value) — persistent insert.
             "__map_set" => ptr.fn_type(
-                &[ptr.into(), i64t.into(), i64t.into(), i64t.into(), ptr.into()],
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
                 false,
             ),
             // ptr __map_get(ptr m, i64 tag, i64 a, i64 b, ptr found_out) — value box or
             // null; writes 1/0 to the i64 at `found_out`.
             "__map_get" => ptr.fn_type(
-                &[ptr.into(), i64t.into(), i64t.into(), i64t.into(), ptr.into()],
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
                 false,
             ),
             // ptr __map_index(ptr m, i64 tag, i64 a, i64 b) — value box; crashes if absent.
@@ -183,9 +195,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // ptr __map_val(ptr m, i64 i) — value box of the i-th entry.
             "__map_val" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
             // ptr __set_add(ptr s, i64 tag, i64 a, i64 b) — persistent insert.
-            "__set_add" => {
-                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
+            "__set_add" => ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
             // ptr __set_union / __set_diff / __set_intersect(ptr a, ptr b) — set algebra.
             "__set_union" | "__set_diff" | "__set_intersect" => {
                 ptr.fn_type(&[ptr.into(), ptr.into()], false)
