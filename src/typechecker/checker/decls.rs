@@ -5,6 +5,7 @@
 //! run against.
 
 use super::*;
+use std::rc::Rc;
 
 impl TypeChecker {
     /// Type-check `program` and, on success, return the **type oracle** (`TypeTable`):
@@ -208,6 +209,12 @@ impl TypeChecker {
                 // `it`. The latter is resolved to a fixpoint (setters calling setters).
                 self.infer_setter_methods(&decl.name, methods);
 
+                // The declaration itself, built once: every method's `it` binding and the
+                // registered type are the same record, so they share one copy of it.
+                let record_fields = Rc::new(fields.clone());
+                let method_names: Rc<Vec<String>> =
+                    Rc::new(methods.iter().map(|m| m.name.clone()).collect());
+
                 // Type-check each method
                 for method in methods {
                     // Create a new scope for the method
@@ -216,8 +223,8 @@ impl TypeChecker {
                     // Bind implicit "it" parameter to the struct type
                     let struct_type = Type::Named {
                         name: decl.name.clone(),
-                        fields: fields.clone(),
-                        methods: methods.iter().map(|m| m.name.clone()).collect(),
+                        fields: Rc::clone(&record_fields),
+                        methods: Rc::clone(&method_names),
                     };
 
                     self.env
@@ -286,8 +293,8 @@ impl TypeChecker {
                 // Create a Named type with methods
                 Type::Named {
                     name: decl.name.clone(),
-                    fields: fields.clone(),
-                    methods: methods.iter().map(|m| m.name.clone()).collect(),
+                    fields: record_fields,
+                    methods: method_names,
                 }
             }
         };

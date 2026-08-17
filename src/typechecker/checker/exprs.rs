@@ -142,9 +142,9 @@ impl TypeChecker {
                         methods: _,
                     } => {
                         // Handle field access on named types
-                        for (f, t) in fields {
-                            if f == *field {
-                                return Ok(t);
+                        for (f, t) in fields.iter() {
+                            if f == field {
+                                return Ok(t.clone());
                             }
                         }
                         Err(TypeError::UndefinedVariable {
@@ -333,7 +333,7 @@ impl TypeChecker {
                                             span: span.clone(),
                                         });
                                     }
-                                    for (f, _) in &type_fields {
+                                    for (f, _) in type_fields.iter() {
                                         provided_fields.insert(f.clone());
                                     }
                                     continue;
@@ -357,7 +357,7 @@ impl TypeChecker {
                             }
 
                             // Check all fields are provided
-                            for (field_name, _) in &type_fields {
+                            for (field_name, _) in type_fields.iter() {
                                 if !provided_fields.contains(field_name) {
                                     return Err(TypeError::UndefinedVariable {
                                         name: format!(
@@ -377,11 +377,7 @@ impl TypeChecker {
                             })
                         }
                         _ => Err(TypeError::TypeMismatch {
-                            expected: Box::new(Type::Named {
-                                name: type_name.clone(),
-                                fields: vec![],
-                                methods: vec![],
-                            }),
+                            expected: Box::new(Type::named_ref(type_name.clone())),
                             got: Box::new(symbol.type_.clone()),
                             span: span.clone(),
                         }),
@@ -427,7 +423,7 @@ impl TypeChecker {
                         if named_identity.is_none() {
                             named_identity = Some(src_type.clone());
                         }
-                        fs.clone()
+                        fs.to_vec()
                     }
                     other => {
                         return Err(TypeError::TypeMismatch {

@@ -1,6 +1,7 @@
 // AST node definitions
 
 use crate::lexer::Span;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
@@ -472,10 +473,16 @@ pub enum Type {
     Unit,
     Array(Box<Type>),
     Record(Vec<(String, Type)>), // For anonymous records
+    /// A user-declared record type. Its `fields` and `methods` are behind an `Rc` because
+    /// a `Type` is cloned once per expression that has this type — into the type table, out
+    /// of it in codegen, through every inference step — and the declaration itself never
+    /// changes after the checker builds it. Sharing turns each of those clones from a deep
+    /// copy of the whole field list (a `String` allocation per field name, plus the nested
+    /// field types) into a reference-count bump.
     Named {
         name: String,
-        fields: Vec<(String, Type)>,
-        methods: Vec<String>, // Method names (bodies stored elsewhere)
+        fields: Rc<Vec<(String, Type)>>,
+        methods: Rc<Vec<String>>, // Method names (bodies stored elsewhere)
     },
     Generic {
         name: String,
@@ -493,6 +500,18 @@ pub enum Type {
 }
 
 impl Type {
+    /// A named type known only by its name, with no field or method list — what the
+    /// parser produces for a capitalized annotation before the checker substitutes the
+    /// declaration, and what codegen uses where only the name matters. An empty field
+    /// list is the marker for "not yet resolved", so the checker tests for it.
+    pub fn named_ref(name: impl Into<String>) -> Type {
+        Type::Named {
+            name: name.into(),
+            fields: Rc::new(Vec::new()),
+            methods: Rc::new(Vec::new()),
+        }
+    }
+
     /// Whether this type carries an unresolved payload type variable (`Type::Generic`)
     /// anywhere — in practice only the built-in `Result`'s `Ok(T)`/`NotOk(E)`. Used by
     /// the type checker (to refine a generic return annotation) and codegen (to defer a

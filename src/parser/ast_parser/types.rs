@@ -99,11 +99,7 @@ impl<'a> Parser<'a> {
             other if is_capitalized(other) => {
                 let name = other.to_string();
                 self.advance();
-                Ok(crate::ast::Type::Named {
-                    name,
-                    fields: vec![],
-                    methods: vec![],
-                })
+                Ok(crate::ast::Type::named_ref(name))
             }
             _ => Err(ParseError {
                 message: format!("Expected type, got {:?}", token.kind),

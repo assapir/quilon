@@ -237,11 +237,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 variants: vec![],
             }
         } else {
-            Type::Named {
-                name: name.to_string(),
-                fields: vec![],
-                methods: vec![],
-            }
+            Type::named_ref(name)
         }
     }
 

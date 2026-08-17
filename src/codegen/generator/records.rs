@@ -5,6 +5,7 @@
 //! methods run against.
 
 use super::*;
+use std::rc::Rc;
 
 impl<'ctx> CodeGenerator<'ctx> {
     /// Reorder a constructor call's `fields` into the named type's DECLARATION order so
@@ -62,8 +63,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Result layout (ordered fields + types) from the oracle — authoritative for both
         // the struct shape and which slot each name occupies.
-        let result_fields: Vec<(String, Type)> = match self.oracle.expr_type(record_expr) {
-            Some(Type::Named { fields, .. }) | Some(Type::Record(fields)) => fields.clone(),
+        let result_fields: Rc<Vec<(String, Type)>> = match self.oracle.expr_type(record_expr) {
+            Some(Type::Named { fields, .. }) => Rc::clone(fields),
+            Some(Type::Record(fields)) => Rc::new(fields.clone()),
             _ => {
                 return Err(
                     "record functional-update requires type information (missing oracle entry)"
@@ -84,7 +86,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         struct Source<'v> {
             ptr: PointerValue<'v>,
-            layout: Vec<(String, Type)>,
+            layout: Rc<Vec<(String, Type)>>,
             // The source record's LLVM struct type, reconstructed once here (not per
             // field copied from it) so field GEPs just index it.
             struct_type: inkwell::types::StructType<'v>,
@@ -94,8 +96,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         for (name, value) in fields {
             if let Expr::Spread { expr: src, .. } = value {
-                let layout: Vec<(String, Type)> = match self.oracle.expr_type(src) {
-                    Some(Type::Named { fields, .. }) | Some(Type::Record(fields)) => fields.clone(),
+                let layout: Rc<Vec<(String, Type)>> = match self.oracle.expr_type(src) {
+                    Some(Type::Named { fields, .. }) => Rc::clone(fields),
+                    Some(Type::Record(fields)) => Rc::new(fields.clone()),
                     _ => {
                         return Err("record spread source requires type information".to_string());
                     }
@@ -406,8 +409,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `base` (it always should for a tracked record) — preserving the historical
         // numeric layout. The loaded field's own LLVM type is then just the indexed slot.
         let struct_type = match self.oracle.expr_type(base) {
-            Some(Type::Record(fields)) | Some(Type::Named { fields, .. }) => {
+            // Cloned out of the oracle (an `Rc` bump for a named type, whose declaration
+            // is shared) so the borrow ends before `record_struct_type` takes `&self`.
+            Some(Type::Record(fields)) => {
                 let fields = fields.clone();
+                self.record_struct_type(&fields)?
+            }
+            Some(Type::Named { fields, .. }) => {
+                let fields = Rc::clone(fields);
                 self.record_struct_type(&fields)?
             }
             _ => {

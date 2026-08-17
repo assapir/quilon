@@ -102,11 +102,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .insert("it".to_string(), type_name.to_string());
         // `it` is the record receiver (parameter #1); build its type only when debug is on.
         if self.debug.is_some() {
-            let it_qty = Type::Named {
-                name: type_name.to_string(),
-                fields: vec![],
-                methods: vec![],
-            };
+            let it_qty = Type::named_ref(type_name);
             self.declare_variable("it", it_alloca, &it_qty, &method.span, Some(1));
         }
 

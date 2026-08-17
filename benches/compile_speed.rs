@@ -39,6 +39,7 @@ const CORPORA: &[(&str, &str)] = &[
     ("many_modules", "50 imported files"),
     ("interpolation", "600 interpolated literals"),
     ("sum_matches", "40 variants, 120 exhaustive matches"),
+    ("records", "30 record types of 20 fields, used 4x each"),
 ];
 
 fn main() {
@@ -101,6 +102,7 @@ fn regenerate() {
         ("corelib", corelib_program()),
         ("interpolation", interpolation_program(600)),
         ("sum_matches", sum_match_program(40, 120)),
+        ("records", record_program(30, 20, 4)),
     ] {
         let path = dir.join(format!("{stem}.ql"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
@@ -383,6 +385,44 @@ fn interpolation_program(count: usize) -> String {
 
 /// A wide sum type matched exhaustively many times: scales variant registration, arm
 /// checking, exhaustiveness, and the tag dispatch codegen emits per match.
+/// Record-heavy code: `types` named record types, each with `fields` fields and three
+/// methods, each constructed / spread / read by `users` functions. Named record types are
+/// the one shape whose *declaration* is carried around by the checker — a function that
+/// takes one has the whole field list in its parameter type — so this is where the cost
+/// of moving type information through the front end shows up, and the other corpora
+/// (which barely use records) do not see it at all.
+fn record_program(types: usize, fields: usize, users: usize) -> String {
+    let declared = (0..fields)
+        .map(|f| format!("  f{f} :: Num,"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let initializer = (0..fields)
+        .map(|f| format!("f{f} = {f}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut src = String::new();
+    for t in 0..types {
+        let _ = writeln!(
+            src,
+            "R{t} = {{\n{declared}\n  first = => it.f0,\n  scaled = k => it.f0 * k + it.f1,\n  total = => it.f0 + it.f1 + it.f2\n}}\n"
+        );
+    }
+    for t in 0..types {
+        for u in 0..users {
+            let _ = writeln!(
+                src,
+                "read{t}_{u} = (r :: R{t}) -> Num => r.f0 + r.f1 + r.scaled(2) + r.total()"
+            );
+            let _ = writeln!(
+                src,
+                "build{t}_{u} = (k :: Num) -> Num => <\n  r = R{t} {{ {initializer} }}\n  s = R{t} {{ <-r, f0 = k }}\n  read{t}_{u}(r) + read{t}_{u}(s) + s.first()\n>\n"
+            );
+        }
+    }
+    let _ = writeln!(src, "^ = () -> Num => build0_0(1)");
+    src
+}
+
 fn sum_match_program(variants: usize, matches: usize) -> String {
     let alternatives = (0..variants)
         .map(|i| format!("V{i}(Num)"))

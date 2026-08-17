@@ -47,6 +47,18 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **Record-heavy programs type-check about three times faster.** A user-declared
+  record type carried its whole field and method list by value, and a `Type` is
+  copied constantly — into the type table for every expression, back out of it in
+  codegen, and through each inference step — so every one of those copies
+  reallocated the field list and a `String` for each field name. The declaration
+  never changes once the checker has built it, so it is now shared rather than
+  copied. On the new `records` benchmark corpus (30 record types of 20 fields)
+  type checking drops from 3.8 ms to 1.3 ms and the whole compile from 28.4 ms
+  to 25.2 ms. As a side effect every `Type` in the compiler shrank from 72 to 56
+  bytes, which shows up as a smaller peak RSS (143.7 MB → 139.5 MB) and slightly
+  faster checking even for programs with no records in them. Generated code is
+  unaffected — the emitted LLVM IR is byte-identical for every example.
 - **`if` and `while` are no longer reserved words.** The lexer still had tokens for
   them, left over from a design the language never took — nothing in the parser ever
   consumed one, so their only effect was to make `if = 5` fail with "Unexpected token"
