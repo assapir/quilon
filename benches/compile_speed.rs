@@ -224,7 +224,11 @@ fn flat_program(count: usize) -> String {
     for i in 0..count {
         let _ = writeln!(src, "f{i} = (x :: Num) -> Num => x * {i} + 1");
     }
-    let _ = writeln!(src, "^ = () -> Num => f0(1) + f{}(2)", count - 1);
+    let _ = writeln!(src, "^ = () -> Num => <");
+    for i in 0..count {
+        let _ = writeln!(src, "  n{i} = f{i}(1)");
+    }
+    let _ = writeln!(src, "  n0\n>");
     src
 }
 
@@ -241,7 +245,11 @@ fn deep_program(functions: usize, depth: usize) -> String {
     for i in 0..functions {
         let _ = writeln!(src, "d{i} = () -> Num => {expr}");
     }
-    let _ = writeln!(src, "^ = () -> Num => d0()");
+    let _ = writeln!(src, "^ = () -> Num => <");
+    for i in 0..functions {
+        let _ = writeln!(src, "  n{i} = d{i}()");
+    }
+    let _ = writeln!(src, "  n0\n>");
     src
 }
 
@@ -266,6 +274,10 @@ fn overload_program(members: usize) -> String {
 
 /// A tiny program that imports the core library: almost all of its cost is the corelib
 /// itself, which is checked and emitted whole whether or not the program uses it.
+/// Deliberately leaves the imported library unused apart from one assertion: this is the
+/// real shape of a small program that imports `core.*`, and the row where emission-side
+/// pruning shows up. The other corpora reach every function they define, so they keep
+/// measuring codegen; this one measures what an import costs.
 fn corelib_program() -> String {
     "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => assert(1 + 1 == 2)\n".to_string()
 }
@@ -359,12 +371,13 @@ fn many_modules_program(count: usize) -> Vec<(String, String)> {
     for i in 0..count {
         let _ = writeln!(root, "<< \"{}.ql\"", subject_of(i));
     }
-    let _ = writeln!(
-        root,
-        "\n^ = () -> Num => {}_offset(1) + {}_trim(2)",
-        subject_of(0),
-        subject_of(count - 1)
-    );
+    let _ = writeln!(root, "\n^ = () -> Num => <");
+    for i in 0..count {
+        for operation in OPERATIONS {
+            let _ = writeln!(root, "  {}_{operation}(1)", subject_of(i));
+        }
+    }
+    let _ = writeln!(root, "  0\n>");
     files.push(("root.ql".to_string(), root));
     files
 }
@@ -379,7 +392,11 @@ fn interpolation_program(count: usize) -> String {
             "s{i} = (n :: Num, t :: Text) -> Text => \"item `n` of `t` at `n * {i}` end\""
         );
     }
-    let _ = writeln!(src, "^ = () -> Num => s0(1, \"a\").size");
+    let _ = writeln!(src, "^ = () -> Num => <");
+    for i in 0..count {
+        let _ = writeln!(src, "  n{i} = s{i}(1, \"a\").size");
+    }
+    let _ = writeln!(src, "  n0\n>");
     src
 }
 
@@ -419,7 +436,13 @@ fn record_program(types: usize, fields: usize, users: usize) -> String {
             );
         }
     }
-    let _ = writeln!(src, "^ = () -> Num => build0_0(1)");
+    let _ = writeln!(src, "^ = () -> Num => <");
+    for t in 0..types {
+        for u in 0..users {
+            let _ = writeln!(src, "  n{t}_{u} = build{t}_{u}({u})");
+        }
+    }
+    let _ = writeln!(src, "  n0_0\n>");
     src
 }
 
@@ -436,6 +459,10 @@ fn sum_match_program(variants: usize, matches: usize) -> String {
             .join("\n");
         let _ = writeln!(src, "pick{m} = (w :: Wide) -> Num => w ?\n{arms}\n");
     }
-    let _ = writeln!(src, "^ = () -> Num => pick0(V0(1))");
+    let _ = writeln!(src, "^ = () -> Num => <");
+    for m in 0..matches {
+        let _ = writeln!(src, "  n{m} = pick{m}(V0(1))");
+    }
+    let _ = writeln!(src, "  n0\n>");
     src
 }

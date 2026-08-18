@@ -449,11 +449,24 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        // A function nothing can reach from `^` is not emitted. Importing a module brings
+        // in every function it defines, so a program that calls one assertion used to emit
+        // — and, under the JIT, compile — all of them. The analysis over-approximates (see
+        // `ast::reachability`), and `None` means there is no `^` to measure from, in which
+        // case nothing is pruned.
+        let reachable = crate::ast::reachability::reachable_functions(program);
+
         // Generate code for all top-level items. Reset the current-function context
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level decl (which would make it
         // look like a nested/local declaration — see `generate_function_decl`).
         for (idx, item) in program.items.iter().enumerate() {
+            if let Item::FunctionDecl(decl) = item
+                && let Some(reachable) = reachable.as_ref()
+                && !reachable.contains(decl.name.as_str())
+            {
+                continue;
+            }
             self.current_function = None;
             // Imported-module items (the leading `di_imported_boundary` items) get no debug
             // info: their byte spans are relative to their own module source, not this file.

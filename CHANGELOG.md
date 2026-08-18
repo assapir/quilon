@@ -47,6 +47,29 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **A function nothing can reach from `^` is no longer emitted, so importing a
+  library costs only what you use from it.** `<< core.test` brought in every
+  assertion the module defines and all of them were emitted — and, under
+  `quilon run`, JIT-compiled — whether the program called one or none. Across the
+  examples that was more than half of every function emitted (533 down to 323).
+  `quilon run` is now 9–14% faster on programs that import the core library
+  (`examples/hello_world.ql` 11.3 ms → 10.0 ms), and the benchmark's
+  library-importing one-liner drops from 10.8 ms to 9.6 ms; emitting the code for
+  such a program takes a tenth of the time it did (the `corelib` corpus's codegen
+  phase, 1.1 ms → 0.1 ms). Nothing changes for a program with no unused code: the
+  emitted LLVM IR is byte-identical, and the analysis itself is not measurable
+  (`flat`, 4000 reachable functions, is unchanged). What a program does use is
+  unaffected however indirectly it is reached — through an operator overload, a
+  render override called only by interpolation, a helper called only from a method,
+  or overload dispatch. A module compiled on its own, with no `^`, keeps everything.
+- **The compile-speed benchmark corpora now call every function they define.** Their
+  entry points reached one or two, which was fine when everything was emitted anyway
+  but would have left five of the eight measuring almost nothing — `flat` emitting 4
+  of its 4000 functions. This breaks numeric comparability with figures recorded
+  before it, deliberately: the alternative was a codegen column that no longer
+  measured codegen. `corelib` is the exception and still imports a library it barely
+  uses, since that is the shape the pruning above exists for. `runtime_speed` gains a
+  second latency row for a one-liner **with** an import, beside the import-free one.
 - **Record-heavy programs type-check about three times faster.** A user-declared
   record type carried its whole field and method list by value, and a `Type` is
   copied constantly — into the type table for every expression, back out of it in

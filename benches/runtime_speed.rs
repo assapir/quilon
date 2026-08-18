@@ -96,22 +96,38 @@ fn latency_table(quilon: &Path, workdir: &Path) {
     std::fs::copy(quilon, &standalone).expect("copying the compiler somewhere on its own");
     let quilon = &standalone;
 
+    // The same one-liner with a library import. Almost every real program has one, and it
+    // is a different cost: importing pulls the module's whole source through the front end
+    // and (before emission-side pruning) emitted every function it defined. The import-free
+    // row above cannot see any of that, so it stays as the floor and this one sits beside it.
+    let tiny_import = workdir.join("tiny_import.ql");
+    std::fs::write(
+        &tiny_import,
+        "<< core.test\n^ = () -> $ => assertEq(1 + 1, 2)\n",
+    )
+    .expect("writing the importing latency program");
+
     println!("Command latency — best of {RUNS} runs, on a one-line program\n");
     println!("| command | cache | wall | peak RSS |");
     println!("|---|---|--:|--:|");
 
-    let run = best_of(|| {
-        measure(
-            Command::new(quilon)
-                .env_remove("QUILON_RT_LIB")
-                .args(["run".as_ref(), tiny.as_os_str()]),
-        )
-    });
-    println!(
-        "| `quilon run` | n/a | {} | {} |",
-        ms(run.wall),
-        rss(run.peak_rss_kb)
-    );
+    for (label, program) in [
+        ("`quilon run`", &tiny),
+        ("`quilon run`, `<< core.test`", &tiny_import),
+    ] {
+        let run = best_of(|| {
+            measure(
+                Command::new(quilon)
+                    .env_remove("QUILON_RT_LIB")
+                    .args(["run".as_ref(), program.as_os_str()]),
+            )
+        });
+        println!(
+            "| {label} | n/a | {} | {} |",
+            ms(run.wall),
+            rss(run.peak_rss_kb)
+        );
+    }
 
     // A cold cache means the embedded `libquilon_rt.a` has to be extracted before the
     // link; pointing the cache at a fresh directory reproduces a first run on a new
