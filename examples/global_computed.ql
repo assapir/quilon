@@ -1,0 +1,12 @@
+~ NEGATIVE example — this is intentionally rejected by the type checker, to show that a
+~ top-level binding cannot be computed: a global's initializer has to be a constant, and
+~ nothing runs before `^` in which to compute one.
+~ `cargo run -- check examples/global_computed.ql` reports the error and names the fix
+~ (move the work into a function); the examples test asserts that it fails to compile.
+~ The supported top-level forms are in `examples/globals.ql`.
+base = 10
+
+~ An operator has to run somewhere, and there is nowhere: `base * 2` belongs in a function.
+doubled = base * 2
+
+^ = () -> Num => doubled

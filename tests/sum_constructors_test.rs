@@ -4,7 +4,7 @@ use quilon::typechecker::TypeChecker;
 
 #[test]
 fn test_ok_constructor_with_number() {
-    let tokens = Lexer::tokenize("test = Ok(42)").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  test = Ok(42)\n  0\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -12,7 +12,7 @@ fn test_ok_constructor_with_number() {
 
 #[test]
 fn test_ok_constructor_with_string() {
-    let tokens = Lexer::tokenize("test = Ok(\"hello\")").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  test = Ok(\"hello\")\n  0\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -20,7 +20,8 @@ fn test_ok_constructor_with_string() {
 
 #[test]
 fn test_notok_constructor_with_message() {
-    let tokens = Lexer::tokenize("test = NotOk(\"error message\")").unwrap();
+    let tokens =
+        Lexer::tokenize("^ = () -> Num => <\n  test = NotOk(\"error message\")\n  0\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -28,7 +29,7 @@ fn test_notok_constructor_with_message() {
 
 #[test]
 fn test_notok_constructor_with_number() {
-    let tokens = Lexer::tokenize("test = NotOk(404)").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  test = NotOk(404)\n  0\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -96,7 +97,10 @@ fn test_sum_constructor_as_return_value() {
     let tokens = Lexer::tokenize(
         r#"
         make_ok = () => Ok(42)
-        x = make_ok()
+        ^ = () -> Num => <
+          x = make_ok()
+          0
+        >
     "#,
     )
     .unwrap();
@@ -111,7 +115,10 @@ fn test_custom_sum_type_constructor() {
     let tokens = Lexer::tokenize(
         r#"
         Color = Red / Green / Blue
-        test = Red
+        ^ = () -> Num => <
+          test = Red
+          0
+        >
     "#,
     )
     .unwrap();
@@ -126,7 +133,10 @@ fn test_custom_sum_type_with_fields() {
     let tokens = Lexer::tokenize(
         r#"
         Point = Cartesian(Num, Num) / Polar(Num, Num)
-        test = Cartesian(3, 4)
+        ^ = () -> Num => <
+          test = Cartesian(3, 4)
+          0
+        >
     "#,
     )
     .unwrap();

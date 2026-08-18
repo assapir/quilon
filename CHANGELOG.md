@@ -91,6 +91,25 @@ All notable changes to Quilon are documented here.
   expressible (it never worked — it only appeared to type-check). See
   `examples/overload_dispatch.ql` and docs/LANGUAGE.md's "Names resolve top to bottom".
 
+### Fixed
+
+- **A top-level binding that has to be computed is now a clear compile error instead
+  of a broken build.** A binding outside any function becomes a global, whose
+  initializer must already be a constant — nothing runs before `^` in which to
+  compute one. Only literals and arrays/records were ever handled, and the rest fell
+  through into codegen, which generated the value's instructions with the LLVM builder
+  still pointing wherever the last emitted function had left it: `x = 1 + 2` surfaced
+  as the internal `Failed to build add: UnsetPosition`, and `x = f(1)` silently
+  appended a call to the previously emitted function, producing a module that failed
+  verification (`Basic Block in function 'write' does not have terminator!`). Both
+  passed `quilon check` first. The type checker now rejects such a binding where it is
+  written, naming the supported forms and the fix, so `check`, `run` and `build` agree.
+  A `Num`/`Bool`/`$` literal, a function value, and a mutable (`:=`) global all still
+  work, and everything is unrestricted inside a function. Computing a global's value at
+  startup remains unimplemented — see `examples/globals.ql` and
+  `examples/global_computed.ql`, and docs/LANGUAGE.md's "A top-level binding must be a
+  constant or a function".
+
 ## 0.9.1 "Towel" — 2026-08-14 — "Stable basics, hardened"
 
 Everything merged since 0.9.0: the M1–M3 language-surface work (overloading, sum

@@ -17,7 +17,7 @@ fn examples_dir() -> PathBuf {
 }
 
 /// Examples that are intentionally rejected by the compiler (negative examples).
-const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql"];
+const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql", "global_computed.ql"];
 
 fn ql_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())

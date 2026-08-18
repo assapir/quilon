@@ -203,6 +203,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         self.var_types.insert(decl.name.clone(), inferred_qty);
 
+        // A top-level binding becomes a global, and a global's initializer must already be
+        // a constant — there is no code before `^` in which to compute one. Refused BEFORE
+        // the value is generated: with the builder still pointing wherever the last
+        // function left it, generating a computed value here appended its instructions to
+        // that function (a call left it with a block that had no terminator, failing module
+        // verification). The type checker reports this with a source location; this keeps
+        // the invariant even for callers that build IR without checking first.
+        if self.current_function.is_none()
+            && !matches!(
+                decl.value,
+                Expr::Number { .. } | Expr::Bool { .. } | Expr::Unit { .. } | Expr::Lambda { .. }
+            )
+        {
+            return Err(format!(
+                "top-level '{}' must hold a Num, Bool or $ literal, or a function",
+                decl.name
+            ));
+        }
+
         let value = self.generate_expr(&decl.value)?;
 
         if self.current_function.is_some() {

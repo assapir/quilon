@@ -145,6 +145,17 @@ pub enum TypeError {
         message: String,
         span: Span,
     },
+    /// A top-level binding's value has to be computed, which there is nowhere to do: a
+    /// module-level binding becomes a global whose initializer must already be a constant,
+    /// and nothing runs before `^` to fill one in. Only a `Num`/`Bool`/`$` literal or a
+    /// function value qualifies. Rejected here (not in codegen) so `quilon check` and
+    /// `quilon run`/`build` agree — reaching codegen produced an internal builder error
+    /// (`UnsetPosition`), or, when the value was a call, a module whose instructions had
+    /// been appended to whatever function was emitted last.
+    ComputedGlobalBinding {
+        name: String,
+        span: Span,
+    },
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars

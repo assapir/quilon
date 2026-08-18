@@ -28,7 +28,7 @@ fn test_type_mismatch() {
 
 #[test]
 fn test_arithmetic() {
-    let tokens = Lexer::tokenize("result = 2 + 3 * 4").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  result = 2 + 3 * 4\n  result\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -54,7 +54,10 @@ fn test_simple_function() {
 fn test_function_call() {
     let tokens = Lexer::tokenize(
         "add = (a :: Num, b :: Num) -> Num => a + b
-result = add(1, 2)",
+^ = () -> Num => <
+  result = add(1, 2)
+  result
+>",
     )
     .unwrap();
     let program = parse(&tokens).unwrap();
@@ -76,7 +79,7 @@ result = add(1)",
 
 #[test]
 fn test_array() {
-    let tokens = Lexer::tokenize("nums = [1, 2, 3]").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  nums = [1, 2, 3]\n  nums.size\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -92,7 +95,10 @@ fn test_array_type_mismatch() {
 
 #[test]
 fn test_record() {
-    let tokens = Lexer::tokenize("user = { name = \"Alice\", age = 30 }").unwrap();
+    let tokens = Lexer::tokenize(
+        "^ = () -> Num => <\n  user = { name = \"Alice\", age = 30 }\n  user.age\n>",
+    )
+    .unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -100,7 +106,8 @@ fn test_record() {
 
 #[test]
 fn test_if_expr() {
-    let tokens = Lexer::tokenize("result = true ? 1 : 0").unwrap();
+    let tokens =
+        Lexer::tokenize("^ = () -> Num => <\n  result = true ? 1 : 0\n  result\n>").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -124,7 +131,10 @@ fn test_block() {
 
 #[test]
 fn test_pattern_match() {
-    let tokens = Lexer::tokenize("result = 5 ? | 0 => \"zero\" | _ => \"other\"").unwrap();
+    let tokens = Lexer::tokenize(
+        "^ = () -> Text => <\n  result = 5 ? | 0 => \"zero\" | _ => \"other\"\n  result\n>",
+    )
+    .unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -165,8 +175,11 @@ fn test_inferred_param_types() {
 fn test_sum_type_option() {
     // Pattern match on Result type with OK/NotOK
     let tokens = Lexer::tokenize(
-        "val = 5
-result = val ? | OK(x) => x | NotOK => 0",
+        "^ = () -> Num => <
+  val = 5
+  result = val ? | OK(x) => x | NotOK => 0
+  result
+>",
     )
     .unwrap();
     let program = parse(&tokens).unwrap();
@@ -178,8 +191,11 @@ result = val ? | OK(x) => x | NotOK => 0",
 fn test_exhaustiveness_with_wildcard() {
     // Wildcard makes match exhaustive
     let tokens = Lexer::tokenize(
-        "val = 5
-result = val ? | OK(x) => x | _ => 0",
+        "^ = () -> Num => <
+  val = 5
+  result = val ? | OK(x) => x | _ => 0
+  result
+>",
     )
     .unwrap();
     let program = parse(&tokens).unwrap();

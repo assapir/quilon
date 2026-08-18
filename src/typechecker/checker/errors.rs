@@ -26,7 +26,8 @@ impl TypeError {
             | TypeError::RefutableConstructorArg { span, .. }
             | TypeError::NonExhaustiveMatch { span }
             | TypeError::InvalidEntryPointSignature { span, .. }
-            | TypeError::InvalidBuiltinArgument { span, .. } => span,
+            | TypeError::InvalidBuiltinArgument { span, .. }
+            | TypeError::ComputedGlobalBinding { span, .. } => span,
         }
     }
 }
@@ -161,6 +162,15 @@ impl std::fmt::Display for TypeError {
             }
             TypeError::InvalidBuiltinArgument { message, .. } => {
                 write!(f, "{}", message)
+            }
+            TypeError::ComputedGlobalBinding { name, .. } => {
+                write!(
+                    f,
+                    "top-level '{name}' has to be computed, and nothing runs before '^' to \
+                     compute it. A top-level binding may hold a Num, Bool or $ literal, or a \
+                     function; anything else (a call, an operator, an array, a record, Text) \
+                     belongs inside a function — move it into '^' or the function that uses it."
+                )
             }
         }
     }

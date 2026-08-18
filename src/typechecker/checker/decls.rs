@@ -64,10 +64,14 @@ impl TypeChecker {
         // and `quilon run`/`build` all reject an unsupported form with the SAME clear
         // diagnostic (rather than passing the check and failing later in codegen).
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && decl.name == "^"
-            {
-                Self::check_entry_point_signature(decl)?;
+            match item {
+                Item::FunctionDecl(decl) if decl.name == "^" => {
+                    Self::check_entry_point_signature(decl)?;
+                }
+                // Same reason: a top-level binding that has to be computed used to pass
+                // the check and then break codegen from the inside.
+                Item::VarDecl(decl) => Self::check_global_binding(decl)?,
+                _ => {}
             }
         }
 
@@ -102,6 +106,32 @@ impl TypeChecker {
         } else {
             Err(TypeError::InvalidEntryPointSignature {
                 got: params,
+                span: decl.span.clone(),
+            })
+        }
+    }
+
+    /// A top-level binding becomes a global, and a global's initializer has to be a
+    /// constant: there is no code that runs before `^` in which to compute one. So the
+    /// value may be a `Num`, `Bool` or `$` literal, or a function (a lambda binding is
+    /// emitted as a function, not as an initializer) — and nothing else.
+    ///
+    /// Checked here rather than left to codegen, which had no way to say so: it would
+    /// build the value's instructions with the builder wherever the last function had left
+    /// it, so `x = 1 + 2` surfaced as the internal `Failed to build add: UnsetPosition`
+    /// and `x = f(1)` silently appended a call to the previously emitted function, leaving
+    /// a block with no terminator and failing module verification. Both passed
+    /// `quilon check` first.
+    pub(super) fn check_global_binding(decl: &VarDecl) -> Result<(), TypeError> {
+        let constant = matches!(
+            decl.value,
+            Expr::Number { .. } | Expr::Bool { .. } | Expr::Unit { .. } | Expr::Lambda { .. }
+        );
+        if constant {
+            Ok(())
+        } else {
+            Err(TypeError::ComputedGlobalBinding {
+                name: decl.name.clone(),
                 span: decl.span.clone(),
             })
         }

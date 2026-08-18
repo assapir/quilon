@@ -1,0 +1,30 @@
+~ Top-level bindings. A binding written outside any function becomes a global, and a
+~ global's initializer has to be a constant already: nothing runs before `^` in which to
+~ compute one. So the value may be a `Num`, `Bool` or `$` literal, or a function — and a
+~ computed one (a call, an operator, an array, a record, `Text`) is a compile error that
+~ says so and names the fix. See `examples/global_computed.ql` for the rejected form.
+~ Every assertion below holds, so the program exits 0.
+<< core.test
+
+limit = 10
+enabled = true
+scale = n => n * 3
+
+~ `$` is a value like any other, so a top-level binding may hold it. There is nothing to
+~ assert about it — it has exactly one inhabitant.
+nothing = $
+
+~ A `:=` binding is mutable wherever it lives; this one is written from inside `^` below.
+counter := 4
+
+^ = () -> $ => <
+  assertEq(limit, 10)
+  assert(enabled)
+
+  ~ A top-level function value is called like any other function.
+  assertEq(scale(limit), 30)
+
+  ~ Writing a global: the store lands in the one cell, so the read that follows sees it.
+  counter := counter + 1
+  assertEq(counter, 5)
+>
