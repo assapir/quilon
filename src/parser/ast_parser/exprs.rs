@@ -787,7 +787,10 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let first = self.parse_expr()?;
+        // Parse the first element as a KEY (lambda-suppressed): if a `=>` follows it is a
+        // map, otherwise a set — and a set element, being a hashable value, is never a
+        // lambda either, so the suppression is harmless there.
+        let first = self.parse_fence_key()?;
         if self.check(&TokenKind::Arrow) {
             // Map: `first => value, ...`.
             self.advance();
@@ -795,7 +798,7 @@ impl<'a> Parser<'a> {
             let mut entries = vec![(first, value)];
             while self.check(&TokenKind::Comma) {
                 self.advance();
-                let key = self.parse_expr()?;
+                let key = self.parse_fence_key()?;
                 self.expect(&TokenKind::Arrow)?;
                 let val = self.parse_expr()?;
                 entries.push((key, val));
@@ -814,6 +817,17 @@ impl<'a> Parser<'a> {
             let span = self.span(start.start, self.previous_span().end);
             Ok(Expr::SetLit { elements, span })
         }
+    }
+
+    /// Parse a map-literal key expression with lambda detection suppressed, so a key like
+    /// `k` or `(a)` does not swallow the following `=>` "maps to" separator as a lambda.
+    /// A key is always a hashable value, never a function, so this loses nothing.
+    fn parse_fence_key(&mut self) -> Result<Expr, ParseError> {
+        let prev = self.suppress_lambda;
+        self.suppress_lambda = true;
+        let result = self.parse_expr();
+        self.suppress_lambda = prev;
+        result
     }
 
     /// If the cursor is at a prefix `<-` (the FIRST token of an array element or record

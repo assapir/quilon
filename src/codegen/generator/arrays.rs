@@ -896,47 +896,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         data_ptr: PointerValue<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64t = self.context.i64_type();
         let idx_f = self.generate_expr(index)?.into_float_value();
         // Bounds-check on the f64 BEFORE converting: `fptosi` of a NaN or out-of-range
         // value is poison, so the old convert-then-compare order branched on poison for
-        // `at(0/0)`. The conversion below only executes on the in-bounds path.
+        // `at(0/0)`. The conversion in the `Ok` payload only executes on the in-bounds path.
         let in_bounds = self.index_in_bounds(idx_f, size)?;
-
-        let result_ty = self.result_struct_type(elem_llvm);
-        let result_ptr = self.create_entry_block_alloca("at_result", result_ty.into())?;
-        let function = self.current_function.unwrap();
-        let ok_bb = self.context.append_basic_block(function, "at_ok");
-        let no_bb = self.context.append_basic_block(function, "at_no");
-        let cont_bb = self.context.append_basic_block(function, "at_cont");
-        self.builder
-            .build_conditional_branch(in_bounds, ok_bb, no_bb)
-            .map_err(ctx("Failed to branch at bounds"))?;
-        self.builder.position_at_end(ok_bb);
-        let idx = self
-            .builder
-            .build_float_to_signed_int(idx_f, i64t, "at_idx")
-            .map_err(ctx("Failed to convert at index"))?;
-        let elem = self.load_element(data_ptr, elem_llvm, idx)?;
-        let ok = self.build_result(elem_llvm, "Ok", elem)?;
-        self.builder
-            .build_store(result_ptr, ok)
-            .map_err(ctx("Failed to store at Ok"))?;
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(ctx("Failed to branch at ok cont"))?;
-        self.builder.position_at_end(no_bb);
-        let no = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm))?;
-        self.builder
-            .build_store(result_ptr, no)
-            .map_err(ctx("Failed to store at NotOk"))?;
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(ctx("Failed to branch at no cont"))?;
-        self.builder.position_at_end(cont_bb);
-        self.builder
-            .build_load(result_ty, result_ptr, "at_value")
-            .map_err(ctx("Failed to load at result"))
+        self.build_conditional_result(in_bounds, elem_llvm, "at", |this| {
+            let idx = this
+                .builder
+                .build_float_to_signed_int(idx_f, this.context.i64_type(), "at_idx")
+                .map_err(ctx("Failed to convert at index"))?;
+            this.load_element(data_ptr, elem_llvm, idx)
+        })
     }
 
     /// The LLVM value-representation type of a lambda's body (its inferred result type,

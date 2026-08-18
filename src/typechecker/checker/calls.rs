@@ -410,7 +410,7 @@ impl TypeChecker {
             }
             "items" => Ok(Type::Array(Box::new(elem_type))),
             "each" => {
-                self.check_lambda_arg(&method_args[0], std::slice::from_ref(&elem_type), span)?;
+                self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
                 Ok(set_type)
             }
             other => unreachable!("unhandled set method {other}"),

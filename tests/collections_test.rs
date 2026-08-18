@@ -157,6 +157,28 @@ fn map_empty_literal() {
     );
 }
 
+/// `-0.0` and `+0.0` are the SAME Num key (the runtime canonicalizes the bits), matching
+/// float `==` — a computed `-0.0` must not silently miss a `+0.0` entry.
+#[test]
+fn map_negative_zero_key_unifies_with_positive_zero() {
+    assert_exit(
+        "^ = () -> Num => <\n  negz :: Num = 0.0 * (0 - 1)\n  m :: [|Num => Num|] = [|negz => 7|]\n  m[0] + (m.has(0) ? 1 : 0)\n>",
+        // stored under -0.0, found under +0.0 -> 7 + 1
+        8,
+    );
+}
+
+/// A NaN Num key is canonicalized to one self-equal key, so it is usable and dedupes
+/// (rather than being as-many-keys-as-bit-patterns).
+#[test]
+fn map_nan_key_is_findable_and_dedupes() {
+    assert_exit(
+        "^ = () -> Num => <\n  nan :: Num = 0.0 / 0.0\n  m :: [|Num => Num|] = [|nan => 9|]\n  m2 :: [|Num => Num|] = m.set(0.0 / 0.0, 3)\n  m2.size * 10 + m2[0.0 / 0.0]\n>",
+        // the second NaN key overwrites the first -> size 1 -> 10 + 3
+        13,
+    );
+}
+
 /// `m[k]` on a MISSING key is fail-loud: a clear stderr message and exit status 1, never
 /// the `99` the program would otherwise return. Driven as a subprocess (the crash's
 /// `__exit` would take an in-process JIT run down with it).

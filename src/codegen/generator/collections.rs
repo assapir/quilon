@@ -17,7 +17,8 @@
 use super::*;
 use inkwell::values::{BasicMetadataValueEnum, IntValue};
 
-/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `QlKeyTag`).
+/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `TAG_NUM`/`TAG_TEXT`/
+/// `TAG_BOOL` in `collections.rs`).
 const KEY_TAG_NUM: u64 = 0;
 const KEY_TAG_TEXT: u64 = 1;
 const KEY_TAG_BOOL: u64 = 2;
@@ -175,44 +176,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             )
             .map_err(ctx("Failed to test found flag"))?;
 
-        let function = self
-            .current_function
-            .ok_or_else(|| "map.get outside of function".to_string())?;
-        let result_ty = self.result_struct_type(value_llvm);
-        let result_ptr = self.create_entry_block_alloca("mget_result", result_ty.into())?;
-        let ok_bb = self.context.append_basic_block(function, "mget_ok");
-        let no_bb = self.context.append_basic_block(function, "mget_no");
-        let cont_bb = self.context.append_basic_block(function, "mget_cont");
-        self.builder
-            .build_conditional_branch(found_bool, ok_bb, no_bb)
-            .map_err(ctx("Failed to branch on map.get"))?;
-
-        self.builder.position_at_end(ok_bb);
-        let value = self
-            .builder
-            .build_load(value_llvm, boxed, "mget_val")
-            .map_err(ctx("Failed to load map value"))?;
-        let ok = self.build_result(value_llvm, "Ok", value)?;
-        self.builder
-            .build_store(result_ptr, ok)
-            .map_err(ctx("Failed to store Ok"))?;
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(ctx("Failed to branch to cont"))?;
-
-        self.builder.position_at_end(no_bb);
-        let no = self.build_result(value_llvm, "NotOk", zeroed(value_llvm))?;
-        self.builder
-            .build_store(result_ptr, no)
-            .map_err(ctx("Failed to store NotOk"))?;
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(ctx("Failed to branch to cont"))?;
-
-        self.builder.position_at_end(cont_bb);
-        self.builder
-            .build_load(result_ty, result_ptr, "mget_out")
-            .map_err(ctx("Failed to load map.get result"))
+        // The value box is dereferenced only on the found branch (the `Ok` payload), so a
+        // null return on a miss is never loaded.
+        self.build_conditional_result(found_bool, value_llvm, "mget", |this| {
+            this.builder
+                .build_load(value_llvm, boxed, "mget_val")
+                .map_err(ctx("Failed to load map value"))
+        })
     }
 
     /// `m.keys()` — a `[]K` array in the runtime's (unspecified) iteration order.
@@ -373,6 +343,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             this.inline_lambda(lambda, &[(elem, elem_ty.clone())])?;
             Ok(())
         })
+    }
+
+    /// Emit a Map/Set `.size` field read (the entry/element count as a `Num`) via
+    /// `intrinsic` (`__map_len` / `__set_len`). Shared by `generate_field_access`.
+    pub(super) fn generate_collection_size(
+        &mut self,
+        receiver: &Expr,
+        intrinsic: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let collection = self.generate_expr(receiver)?.into_pointer_value();
+        let len = self.call_rt_int(intrinsic, &[collection.into()])?;
+        Ok(self
+            .builder
+            .build_signed_int_to_float(len, self.context.f64_type(), "size_as_num")
+            .map_err(ctx("Failed to convert size"))?
+            .into())
     }
 
     // ---- set operators ----------------------------------------------------
@@ -542,7 +528,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Call a runtime intrinsic returning an `i64`.
-    fn call_rt_int(
+    pub(super) fn call_rt_int(
         &mut self,
         name: &str,
         args: &[BasicMetadataValueEnum<'ctx>],
