@@ -9,7 +9,11 @@
 //! example-asserts don't flake.
 //!
 //! Immutability: every mutator (`__map_set`, `__set_add`, the set-algebra ops) CLONES the
-//! table and returns a NEW header — the receiver is never touched.
+//! table and returns a NEW header — the receiver is never touched. Because the header is
+//! GC-allocated and the collector never runs Rust `Drop`, a superseded table's system-heap
+//! buffer is never freed: a long fold that rebuilds a map N times leaks N buffers. That is
+//! a deliberate trade-off for this release (a GC finalizer that drops the table, or storing
+//! the table in GC memory, is the post-0.9 fix); it never affects correctness.
 //!
 //! GC visibility: the `std` table's own buffer comes from the global allocator and is
 //! invisible to the conservative Boehm collector, but that is safe here because the header
@@ -32,8 +36,9 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::os::raw::c_void;
 
-// Key-kind tags shared with the compiler ABI. Num (0) needs no named constant here — it
-// is the implicit default in `eq`/`hash`/`key_desc` (anything that is not Text or Bool).
+// Key-kind tags shared with the compiler ABI (see `KEY_TAG_*` in the code generator's
+// `collections.rs`).
+const TAG_NUM: u8 = 0;
 const TAG_TEXT: u8 = 1;
 const TAG_BOOL: u8 = 2;
 
@@ -62,9 +67,27 @@ struct QlKey {
 
 impl QlKey {
     fn new(tag: i64, a: i64, b: i64) -> QlKey {
+        let tag = tag as u8;
+        // Canonicalize a Num key's bits so key equality matches the language's `==` on
+        // Num (float `OEQ`): unify `-0.0` with `+0.0` (distinct bit patterns, but `==`),
+        // and collapse every NaN to one bit pattern so a NaN key is a single, self-equal
+        // key rather than as-many-keys-as-bit-patterns. (Bit-distinct NaN keys, and a
+        // `-0.0` that silently misses a `+0.0` entry, are the alternative — both worse.)
+        let a = if tag == TAG_NUM {
+            let f = f64::from_bits(a as u64);
+            if f == 0.0 {
+                0
+            } else if f.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                a as u64
+            }
+        } else {
+            a as u64
+        };
         QlKey {
-            tag: tag as u8,
-            a: a as u64,
+            tag,
+            a,
             b: b as u64,
         }
     }
@@ -324,12 +347,13 @@ pub extern "C" fn __set_union(left: *const c_void, right: *const c_void) -> *mut
     unsafe { build_set(table) as *mut c_void }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn __set_diff(left: *const c_void, right: *const c_void) -> *mut c_void {
+/// A new set of `left`'s elements filtered by membership in `right`: `keep_present` true
+/// keeps those present in `right` (intersection), false those absent (difference).
+unsafe fn set_filter(left: *const c_void, right: *const c_void, keep_present: bool) -> *mut c_void {
     let (left, right) = (left as *const QlSet, right as *const QlSet);
     let mut table = HashSet::with_hasher(FixedState);
     for key in unsafe { (*left).table.iter() } {
-        if unsafe { !(*right).table.contains(key) } {
+        if unsafe { (*right).table.contains(key) } == keep_present {
             table.insert(*key);
         }
     }
@@ -337,13 +361,11 @@ pub extern "C" fn __set_diff(left: *const c_void, right: *const c_void) -> *mut 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __set_diff(left: *const c_void, right: *const c_void) -> *mut c_void {
+    unsafe { set_filter(left, right, false) }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __set_intersect(left: *const c_void, right: *const c_void) -> *mut c_void {
-    let (left, right) = (left as *const QlSet, right as *const QlSet);
-    let mut table = HashSet::with_hasher(FixedState);
-    for key in unsafe { (*left).table.iter() } {
-        if unsafe { (*right).table.contains(key) } {
-            table.insert(*key);
-        }
-    }
-    unsafe { build_set(table) as *mut c_void }
+    unsafe { set_filter(left, right, true) }
 }

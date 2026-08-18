@@ -91,6 +91,10 @@ impl<'a> Parser<'a> {
     /// parameter, so we scan the (single) type annotation and require a `=>` after it.
     pub(super) fn looks_like_bare_lambda(&self) -> bool {
         debug_assert!(self.check(&TokenKind::Ident));
+        // Inside a map-literal key, `ident => …` is a map entry, not a lambda.
+        if self.suppress_lambda {
+            return false;
+        }
         match &self.peek_ahead(1).kind {
             TokenKind::Arrow => true,
             TokenKind::TypeAnnotation => {
@@ -126,6 +130,10 @@ impl<'a> Parser<'a> {
     /// Scans to the matching `)` and checks for a following `=>` or `->` (return type).
     pub(super) fn paren_starts_lambda(&self) -> bool {
         debug_assert!(self.check(&TokenKind::ParenOpen));
+        // Inside a map-literal key, `(…) => …` is a map entry, not a lambda.
+        if self.suppress_lambda {
+            return false;
+        }
         let mut depth = 1;
         let mut idx = 1;
         while idx < 80 && depth > 0 {

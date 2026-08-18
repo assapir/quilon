@@ -259,9 +259,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .get(name)
                 .is_some_and(|fields| fields.iter().any(|f| f == field_name)));
 
-        // A Map/Set `.size` is the runtime entry/element count (`__map_len`/`__set_len`),
-        // converted i64 -> f64. A map/set value is an opaque pointer, so dispatch on the
-        // oracle's receiver type before the array/Text struct-shape handling below.
+        // A Map/Set `.size` is the runtime entry/element count (`__map_len`/`__set_len`);
+        // a map/set value is an opaque pointer, so dispatch on the oracle's receiver type
+        // before the array/Text struct-shape handling below (see `generate_collection_size`).
         if !is_named_record_field && field_name == "size" {
             let count_intrinsic = match self.oracle.expr_type(expr) {
                 Some(Type::Map(_, _)) => Some("__map_len"),
@@ -269,20 +269,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 _ => None,
             };
             if let Some(intrinsic) = count_intrinsic {
-                let collection = self.generate_expr(expr)?.into_pointer_value();
-                let len_fn = self.get_intrinsic(intrinsic)?;
-                use inkwell::values::AnyValue;
-                let len = self
-                    .builder
-                    .build_call(len_fn, &[collection.into()], "col_len")
-                    .map_err(ctx("Failed to call collection length"))?
-                    .as_any_value_enum()
-                    .into_int_value();
-                return Ok(self
-                    .builder
-                    .build_signed_int_to_float(len, self.context.f64_type(), "size_as_num")
-                    .map_err(ctx("Failed to convert size"))?
-                    .into());
+                return self.generate_collection_size(expr, intrinsic);
             }
         }
 

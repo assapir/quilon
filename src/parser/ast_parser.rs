@@ -36,6 +36,11 @@ pub struct Parser<'a> {
     /// exit (see `nested`), so it always reflects the live parser stack. Guards
     /// against a stack overflow on hostile or machine-generated deeply nested input.
     depth: usize,
+    /// While parsing a map-literal KEY, `ident => …` / `(…) => …` must read as a map entry
+    /// (the `=>` is the "maps to" separator), NOT as a bare/parenthesized lambda. A map key
+    /// is a hashable value and is never a function, so lambda detection is suppressed for
+    /// the whole key expression while this is set (see `parse_fence_key`).
+    suppress_lambda: bool,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -73,6 +78,7 @@ impl<'a> Parser<'a> {
             depth: 0,
             file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
             span_base: 0,
+            suppress_lambda: false,
         }
     }
 

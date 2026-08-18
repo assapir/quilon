@@ -315,6 +315,63 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(agg.into())
     }
 
+    /// Build a `Result` value chosen by `cond`: on the true edge, `Ok(payload)` where
+    /// `payload` is produced by `ok_payload` (emitted in the `Ok` block, so it runs only
+    /// when `cond` holds — the callers rely on that: an out-of-bounds index or a missing
+    /// key must not load); on the false edge, `NotOk` with a zeroed slot. `label` names the
+    /// blocks/alloca. Shared by array `.at` and map `.get`, whose only difference is how the
+    /// `Ok` payload is computed.
+    pub(super) fn build_conditional_result(
+        &mut self,
+        cond: inkwell::values::IntValue<'ctx>,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        label: &str,
+        ok_payload: impl FnOnce(&mut Self) -> Result<BasicValueEnum<'ctx>, String>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_ty = self.result_struct_type(elem_llvm);
+        let result_ptr =
+            self.create_entry_block_alloca(&format!("{label}_result"), result_ty.into())?;
+        let function = self
+            .current_function
+            .ok_or_else(|| format!("{label} outside of function"))?;
+        let ok_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_ok"));
+        let no_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_no"));
+        let cont_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_cont"));
+        self.builder
+            .build_conditional_branch(cond, ok_bb, no_bb)
+            .map_err(ctx("Failed to branch on conditional result"))?;
+
+        self.builder.position_at_end(ok_bb);
+        let payload = ok_payload(self)?;
+        let ok = self.build_result(elem_llvm, "Ok", payload)?;
+        self.builder
+            .build_store(result_ptr, ok)
+            .map_err(ctx("Failed to store Ok"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(no_bb);
+        let no = self.build_result(elem_llvm, "NotOk", zeroed(elem_llvm))?;
+        self.builder
+            .build_store(result_ptr, no)
+            .map_err(ctx("Failed to store NotOk"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(cont_bb);
+        self.builder
+            .build_load(result_ty, result_ptr, &format!("{label}_value"))
+            .map_err(ctx("Failed to load conditional result"))
+    }
+
     /// The tagged-union LLVM struct for a sum type: `{ i8 tag, slot0, slot1, ... }`,
     /// where the slots come from the registered canonical payload layout. Both user sum
     /// types and the built-in `Result` are registered (`register_builtin_sum_types` gives
