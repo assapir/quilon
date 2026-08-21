@@ -24,6 +24,7 @@ use std::rc::Rc;
 mod arrays;
 mod calls;
 mod closures;
+mod collections;
 mod decls;
 mod di;
 mod exprs;

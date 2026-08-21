@@ -149,6 +149,52 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), ctx.i32_type().into(), ptr.into(), ptr.into()],
                 false,
             ),
+            // Map/Set collection intrinsics. A Map/Set/value-box is an opaque `ptr`; keys
+            // and elements cross as the ABI triple `(i64 tag, i64 a, i64 b)`. See
+            // `quilon-rt/src/collections.rs` and `codegen/generator/collections.rs`.
+            "__map_new" | "__set_new" => ptr.fn_type(&[], false),
+            // Persistent insert, returning a new table.
+            "__map_set" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
+            // Returns the value box or null, writing 1/0 to the trailing found-out slot.
+            "__map_get" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
+            // Value box; crashes if the key is absent (fail-loud `m[k]`).
+            "__map_index" => {
+                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
+            }
+            // Membership, as 0/1.
+            "__map_has" | "__set_has" => {
+                i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
+            }
+            "__map_len" | "__set_len" => i64t.fn_type(&[ptr.into()], false),
+            // The `a`/`b` key words of the i-th entry, in iteration order.
+            "__map_key_a" | "__map_key_b" | "__set_item_a" | "__set_item_b" => {
+                i64t.fn_type(&[ptr.into(), i64t.into()], false)
+            }
+            // Value box of the i-th entry.
+            "__map_val" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
+            // Persistent insert, returning a new set.
+            "__set_add" => ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
+            "__set_union" | "__set_diff" | "__set_intersect" => {
+                ptr.fn_type(&[ptr.into(), ptr.into()], false)
+            }
             other => return Err(format!("Unknown runtime intrinsic: {}", other)),
         };
         Ok(self.module.add_function(name, fn_type, None))

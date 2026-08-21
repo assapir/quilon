@@ -259,6 +259,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .get(name)
                 .is_some_and(|fields| fields.iter().any(|f| f == field_name)));
 
+        // A Map/Set `.size` is the runtime entry/element count (`__map_len`/`__set_len`);
+        // a map/set value is an opaque pointer, so dispatch on the oracle's receiver type
+        // before the array/Text struct-shape handling below (see `generate_collection_size`).
+        if !is_named_record_field && field_name == "size" {
+            let count_intrinsic = match self.oracle.expr_type(expr) {
+                Some(Type::Map(_, _)) => Some("__map_len"),
+                Some(Type::Set(_)) => Some("__set_len"),
+                _ => None,
+            };
+            if let Some(intrinsic) = count_intrinsic {
+                return self.generate_collection_size(expr, intrinsic);
+            }
+        }
+
         // Special handling for .size field on arrays
         if !is_named_record_field && field_name == "size" {
             // For arrays (which are structs {ptr, i64}), we need special handling

@@ -80,6 +80,24 @@ impl TypeChecker {
             return self.check_text_method(name, args, span);
         }
 
+        // Built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`) — RESERVED on
+        // a `Map` receiver, exactly like the array/Text methods above.
+        if let Expr::Ident { name, .. } = func
+            && crate::ast::is_map_method(name)
+            && let Some(Type::Map(key_type, value_type)) = first_ty.clone()
+        {
+            return self.check_map_method(name, *key_type, *value_type, args, span);
+        }
+
+        // Built-in `Set` methods (`has`/`add`/`items`/`each`) — RESERVED on a `Set`
+        // receiver.
+        if let Expr::Ident { name, .. } = func
+            && crate::ast::is_set_method(name)
+            && let Some(Type::Set(elem_type)) = first_ty.clone()
+        {
+            return self.check_set_method(name, *elem_type, args, span);
+        }
+
         // Check if this is a method call: func is Ident and first arg is a Named type
         if let Expr::Ident { name, .. } = func
             && let Some(first_arg_type) = &first_ty
@@ -287,6 +305,115 @@ impl TypeChecker {
                 Ok(result_of(elem_type))
             }
             other => unreachable!("unhandled array method {other}"),
+        }
+    }
+
+    /// Type-check a built-in `Map` method call. `args[0]` is the receiver map (already
+    /// known to be `Map(K, V)`); the remaining args are the method's own arguments.
+    ///   - `get(k :: K)`        -> `Result` (`Ok(V)` / `NotOk`) — the safe lookup
+    ///   - `has(k :: K)`        -> `Bool`
+    ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (a NEW map; the receiver is unchanged)
+    ///   - `keys()`             -> `[]K`
+    ///   - `values()`           -> `[]V`
+    ///   - `each(f: (K, V) => _)` -> the receiver map (so `.each` chains)
+    pub(super) fn check_map_method(
+        &mut self,
+        method: &str,
+        key_type: Type,
+        value_type: Type,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let method_args = &args[1..];
+        let map_type = Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()));
+
+        let expected = match method {
+            "keys" | "values" => 0,
+            "set" => 2,
+            _ => 1,
+        };
+        if method_args.len() != expected {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected,
+                got: method_args.len(),
+                span: span.clone(),
+            });
+        }
+
+        match method {
+            "get" => {
+                let k = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&key_type, &k, span)?;
+                Ok(result_of(value_type))
+            }
+            "has" => {
+                let k = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&key_type, &k, span)?;
+                Ok(Type::Bool)
+            }
+            "set" => {
+                let k = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&key_type, &k, span)?;
+                let v = self.infer_expr(&method_args[1])?;
+                self.check_type_compatibility(&value_type, &v, span)?;
+                Ok(map_type)
+            }
+            "keys" => Ok(Type::Array(Box::new(key_type))),
+            "values" => Ok(Type::Array(Box::new(value_type))),
+            "each" => {
+                // `f` binds the key AND value; result ignored. Returns the receiver map.
+                self.check_lambda_arg(&method_args[0], &[key_type, value_type], span)?;
+                Ok(map_type)
+            }
+            other => unreachable!("unhandled map method {other}"),
+        }
+    }
+
+    /// Type-check a built-in `Set` method call. `args[0]` is the receiver set (already
+    /// known to be `Set(T)`); the remaining args are the method's own arguments.
+    ///   - `has(x :: T)`   -> `Bool`
+    ///   - `add(x :: T)`   -> `Set(T)` (a NEW set; the receiver is unchanged)
+    ///   - `items()`       -> `[]T`
+    ///   - `each(f: T => _)` -> the receiver set (so `.each` chains)
+    pub(super) fn check_set_method(
+        &mut self,
+        method: &str,
+        elem_type: Type,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let method_args = &args[1..];
+        let set_type = Type::Set(Box::new(elem_type.clone()));
+
+        let expected = match method {
+            "items" => 0,
+            _ => 1,
+        };
+        if method_args.len() != expected {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected,
+                got: method_args.len(),
+                span: span.clone(),
+            });
+        }
+
+        match method {
+            "has" => {
+                let x = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&elem_type, &x, span)?;
+                Ok(Type::Bool)
+            }
+            "add" => {
+                let x = self.infer_expr(&method_args[0])?;
+                self.check_type_compatibility(&elem_type, &x, span)?;
+                Ok(set_type)
+            }
+            "items" => Ok(Type::Array(Box::new(elem_type))),
+            "each" => {
+                self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
+                Ok(set_type)
+            }
+            other => unreachable!("unhandled set method {other}"),
         }
     }
 

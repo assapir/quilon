@@ -410,6 +410,12 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(BinOp::Mod)
             }
+            // `+-` / `-+` — set intersection (symmetric); binds tighter than `+`/`-`
+            // union/difference, mirroring arithmetic's product-over-sum precedence.
+            TokenKind::PlusMinus | TokenKind::MinusPlus => {
+                self.advance();
+                Some(BinOp::SetIntersect)
+            }
             _ => None,
         }
     }
@@ -573,6 +579,15 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::ParenClose)?;
                 Ok(expr)
             }
+            // A pipe fence `[| … |]` opens a Map or Set literal; a plain `[` an array. The
+            // empty set `[||]` lexes its two adjacent pipes as one `Or` token (maximal
+            // munch), so a following `Or` also opens a fence — that case can only be the
+            // empty set.
+            TokenKind::BracketOpen
+                if matches!(self.peek_ahead(1).kind, TokenKind::Pipe | TokenKind::Or) =>
+            {
+                self.parse_fenced_literal()
+            }
             TokenKind::BracketOpen => self.parse_array(),
             TokenKind::BraceOpen => self.parse_record(),
             _ => Err(ParseError {
@@ -727,6 +742,92 @@ impl<'a> Parser<'a> {
         let span = self.span(start.start, self.previous_span().end);
 
         Ok(Expr::Array { elements, span })
+    }
+
+    /// Parse a pipe-fenced Map or Set literal, cursor at the opening `[` of a `[|`.
+    ///   Map:  `[|k1 => v1, k2 => v2|]`   empty `[|=>|]`
+    ///   Set:  `[|e1, e2|]`               empty `[||]`
+    /// A first element followed by `=>` makes it a map; otherwise a set. The two empty
+    /// forms are disambiguated by what follows `[|`: a `=>` is the empty map, an
+    /// immediate closing `|]` (a `|`) is the empty set.
+    pub(super) fn parse_fenced_literal(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::BracketOpen)?;
+
+        // Empty set `[||]`: the two adjacent pipes lexed as a single `Or` token.
+        if self.check(&TokenKind::Or) {
+            self.advance();
+            self.expect(&TokenKind::BracketClose)?;
+            let span = self.span(start.start, self.previous_span().end);
+            return Ok(Expr::SetLit {
+                elements: Vec::new(),
+                span,
+            });
+        }
+
+        self.expect(&TokenKind::Pipe)?;
+
+        // Empty map `[|=>|]`.
+        if self.check(&TokenKind::Arrow) {
+            self.advance();
+            self.expect_fence_close()?;
+            let span = self.span(start.start, self.previous_span().end);
+            return Ok(Expr::MapLit {
+                entries: Vec::new(),
+                span,
+            });
+        }
+        // Empty set `[||]` — the next `|` is the closing fence.
+        if self.check(&TokenKind::Pipe) {
+            self.expect_fence_close()?;
+            let span = self.span(start.start, self.previous_span().end);
+            return Ok(Expr::SetLit {
+                elements: Vec::new(),
+                span,
+            });
+        }
+
+        // Parse the first element as a KEY (lambda-suppressed): if a `=>` follows it is a
+        // map, otherwise a set — and a set element, being a hashable value, is never a
+        // lambda either, so the suppression is harmless there.
+        let first = self.parse_fence_key()?;
+        if self.check(&TokenKind::Arrow) {
+            // Map: `first => value, ...`.
+            self.advance();
+            let value = self.parse_expr()?;
+            let mut entries = vec![(first, value)];
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                let key = self.parse_fence_key()?;
+                self.expect(&TokenKind::Arrow)?;
+                let value = self.parse_expr()?;
+                entries.push((key, value));
+            }
+            self.expect_fence_close()?;
+            let span = self.span(start.start, self.previous_span().end);
+            Ok(Expr::MapLit { entries, span })
+        } else {
+            // Set: `first, e2, ...`.
+            let mut elements = vec![first];
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                elements.push(self.parse_expr()?);
+            }
+            self.expect_fence_close()?;
+            let span = self.span(start.start, self.previous_span().end);
+            Ok(Expr::SetLit { elements, span })
+        }
+    }
+
+    /// Parse a map-literal key expression with lambda detection suppressed, so a key like
+    /// `k` or `(a)` does not swallow the following `=>` "maps to" separator as a lambda.
+    /// A key is always a hashable value, never a function, so this loses nothing.
+    fn parse_fence_key(&mut self) -> Result<Expr, ParseError> {
+        let prev = self.suppress_lambda;
+        self.suppress_lambda = true;
+        let result = self.parse_expr();
+        self.suppress_lambda = prev;
+        result
     }
 
     /// If the cursor is at a prefix `<-` (the FIRST token of an array element or record
