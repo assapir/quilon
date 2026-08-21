@@ -17,6 +17,20 @@ static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `replace` argument) — the abort exits the process, so these must NOT run in-process
 /// (that would kill the test runner). Needs only the JIT (no C toolchain).
 fn assert_run_aborts(src: &str, expect_stderr: &str) {
+    let (code, stderr) = run_and_capture(src);
+    assert_eq!(
+        code, 101,
+        "expected abort exit 101 for source:\n{src}\ngot {code}; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(expect_stderr),
+        "stderr {stderr:?} missing {expect_stderr:?} for source:\n{src}"
+    );
+}
+
+/// Run `src` as a subprocess (never the in-process JIT — these programs call `__exit`,
+/// which would take the test runner with them) and return `(exit code, stderr)`.
+fn run_and_capture(src: &str) -> (i32, String) {
     let seq = CRASH_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir =
         std::env::temp_dir().join(format!("quilon_replace_abort_{}_{seq}", std::process::id()));
@@ -27,17 +41,12 @@ fn assert_run_aborts(src: &str, expect_stderr: &str) {
         .args(["run", file.to_str().unwrap()])
         .output()
         .expect("run quilon run");
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(
-        code, 101,
-        "expected abort exit 101 for source:\n{src}\ngot {code}; stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains(expect_stderr),
-        "stderr {stderr:?} missing {expect_stderr:?} for source:\n{src}"
+    let captured = (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
     );
     let _ = std::fs::remove_dir_all(&dir);
+    captured
 }
 
 // ---- split ----------------------------------------------------------------
@@ -220,6 +229,50 @@ fn repeat_literal_negative_or_fractional_count_is_a_compile_error() {
 }
 
 // Runtime fail-loud for a computed count — abort, never a silent clamp.
+/// A violated contract reports WHERE the call is, in the same frame a failing assertion
+/// uses — so `replace`'s misuse messages name the offending call rather than leaving the
+/// reader to find which of several `replace`s it was.
+#[test]
+fn a_replace_misuse_reports_its_own_location() {
+    let (code, stderr) = run_and_capture(
+        "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
+    );
+    assert_eq!(code, 101);
+    assert!(
+        stderr.contains(":3:3: replace: count 5 exceeds 3 occurrences"),
+        "the report must locate the call, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("3 |   \"a-a-a\".replace(\"a\", \"b\", n).size"),
+        "the report must show the source line, got: {stderr}"
+    );
+    // The carets cover the CALL — `"a-a-a".replace("a", "b", n)` — not the trailing
+    // `.size` the result feeds into.
+    let carets = stderr
+        .lines()
+        .filter_map(|line| line.rsplit_once('|').map(|(_, rest)| rest.trim()))
+        .find(|rest| rest.starts_with('^'))
+        .unwrap_or_default();
+    assert_eq!(
+        carets.len(),
+        "\"a-a-a\".replace(\"a\", \"b\", n)".len(),
+        "the caret run must be exactly as wide as the call, got: {stderr}"
+    );
+}
+
+/// Same for `repeat`'s count contract, and for a call that is not the first thing on its
+/// line: the caret run starts at the call, not at the line.
+#[test]
+fn a_repeat_misuse_reports_its_own_location() {
+    let (code, stderr) =
+        run_and_capture("^ = () -> Num => <\n  n = 1 - 4\n  x = \"ab\".repeat(n).size\n  x\n>");
+    assert_eq!(code, 101);
+    assert!(
+        stderr.contains(":3:7: repeat: `count` must be a whole number of 0 or more"),
+        "the report must locate the call at its column, got: {stderr}"
+    );
+}
+
 #[test]
 fn repeat_runtime_negative_count_aborts() {
     assert_run_aborts(

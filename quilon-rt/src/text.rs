@@ -8,9 +8,8 @@
 //! `QlSlice` so it outlives this call and is collected like any heap value. See
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
-use crate::io::write_to_fd;
 use crate::mem::{__alloc, QlSlice, alloc_text, format_num};
-use crate::process::__exit;
+use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -68,8 +67,9 @@ pub extern "C" fn __text_cmp(a: *const u8, alen: i64, b: *const u8, blen: i64) -
     }
 }
 
-/// View `len` bytes at `ptr` as a slice (empty for null/non-positive `len`).
-fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
+/// View `len` bytes at `ptr` as a slice (empty for null/non-positive `len`). Shared with
+/// [`crate::report`], which reads the `Text` fields of a call site the same way.
+pub(crate) fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
     if ptr.is_null() || len <= 0 {
         &[]
     } else {
@@ -82,19 +82,17 @@ fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
 ///
 /// # Safety contract (upheld by the compiler)
 /// `ptr` is null or points to at least `len` readable bytes.
-fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
+pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
     String::from_utf8_lossy(byte_slice(ptr, len))
 }
 
-/// Abort on an invalid `replace`/`replaceAll` request (empty `from`, non-positive `count`,
-/// or a `count` exceeding the occurrences present): write `msg` + newline to stderr, then
-/// terminate the process with exit code 101 via the shared `__exit` intrinsic — the same
-/// fail-loud path an assertion failure takes. Never returns. The detection lives in the
-/// runtime (not codegen) because the `count > occurrences` case needs the occurrence count.
-fn text_misuse(msg: &str) -> ! {
-    write_to_fd(2, msg.as_bytes());
-    write_to_fd(2, b"\n");
-    __exit(101)
+/// Abort on an invalid `replace`/`replaceAll`/`repeat` request (empty `from`, non-positive
+/// `count`, or a `count` exceeding the occurrences present): report `msg` at `site` — the
+/// framed diagnostic an assertion failure also produces — and exit 101. Never returns. The
+/// detection lives in the runtime (not codegen) because the `count > occurrences` case needs
+/// the occurrence count.
+fn text_misuse(site: *const QlSite, msg: &str) -> ! {
+    fail_at(site, msg, 101)
 }
 
 /// Repeat the text `count` times, back to back. Backs `Text.repeat(count)`; `count` 0
@@ -103,9 +101,14 @@ fn text_misuse(msg: &str) -> ! {
 /// literal, and this is the runtime backstop for a computed one.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_repeat(ptr: *const u8, len: i64, count: f64) -> QlSlice {
+pub extern "C" fn __text_repeat(
+    ptr: *const u8,
+    len: i64,
+    count: f64,
+    site: *const QlSite,
+) -> QlSlice {
     if !count.is_finite() || count < 0.0 || count.fract() != 0.0 {
-        text_misuse("repeat: `count` must be a whole number of 0 or more");
+        text_misuse(site, "repeat: `count` must be a whole number of 0 or more");
     }
     alloc_text(text_str(ptr, len).repeat(count as usize).as_bytes())
 }
@@ -176,11 +179,12 @@ pub extern "C" fn __text_replace_all(
     flen: i64,
     tptr: *const u8,
     tlen: i64,
+    site: *const QlSite,
 ) -> QlSlice {
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
     if from.is_empty() {
-        text_misuse("replace: `from` must not be empty");
+        text_misuse(site, "replace: `from` must not be empty");
     }
     let to = text_str(tptr, tlen);
     alloc_text(hay.replace(&*from, &to).as_bytes())
@@ -202,22 +206,27 @@ pub extern "C" fn __text_replace_n(
     tptr: *const u8,
     tlen: i64,
     count: i64,
+    site: *const QlSite,
 ) -> QlSlice {
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
     // Fail loudly on invalid input — no clamp, no silent no-op (see `text_misuse`).
     if from.is_empty() {
-        text_misuse("replace: `from` must not be empty");
+        text_misuse(site, "replace: `from` must not be empty");
     }
     if count <= 0 {
-        text_misuse(&format!("replace: count must be positive, got {count}"));
+        text_misuse(
+            site,
+            &format!("replace: count must be positive, got {count}"),
+        );
     }
     // Non-overlapping, left→right occurrences — exactly what `replacen` consumes.
     let occurrences = hay.matches(&*from).count() as i64;
     if count > occurrences {
-        text_misuse(&format!(
-            "replace: count {count} exceeds {occurrences} occurrences"
-        ));
+        text_misuse(
+            site,
+            &format!("replace: count {count} exceeds {occurrences} occurrences"),
+        );
     }
     let to = text_str(tptr, tlen);
     alloc_text(hay.replacen(&*from, &to, count as usize).as_bytes())
@@ -361,17 +370,50 @@ mod tests {
         let (tp, tl) = text_of("xx");
         // count = 1 -> first only.
         assert_eq!(
-            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 1)) },
+            unsafe {
+                slice_str(__text_replace_n(
+                    hp,
+                    hl,
+                    fp,
+                    fl,
+                    tp,
+                    tl,
+                    1,
+                    std::ptr::null(),
+                ))
+            },
             "xx-a-a"
         );
         // count = 2 -> first two.
         assert_eq!(
-            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 2)) },
+            unsafe {
+                slice_str(__text_replace_n(
+                    hp,
+                    hl,
+                    fp,
+                    fl,
+                    tp,
+                    tl,
+                    2,
+                    std::ptr::null(),
+                ))
+            },
             "xx-xx-a"
         );
         // count == exact number of occurrences -> all three.
         assert_eq!(
-            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 3)) },
+            unsafe {
+                slice_str(__text_replace_n(
+                    hp,
+                    hl,
+                    fp,
+                    fl,
+                    tp,
+                    tl,
+                    3,
+                    std::ptr::null(),
+                ))
+            },
             "xx-xx-xx"
         );
     }
@@ -384,7 +426,7 @@ mod tests {
         let (fp, fl) = text_of("a");
         let (tp, tl) = text_of("xx");
         assert_eq!(
-            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl)) },
+            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl, std::ptr::null())) },
             "xx-xx-xx"
         );
     }
@@ -502,12 +544,23 @@ mod tests {
         let (tp, tl) = text_of("é");
         // replaceAll: both 4-byte emoji separators become the 2-byte "é".
         assert_eq!(
-            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl)) },
+            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl, std::ptr::null())) },
             "aébéc"
         );
         // replace count = 1: only the first.
         assert_eq!(
-            unsafe { slice_str(__text_replace_n(hp, hl, fp, fl, tp, tl, 1)) },
+            unsafe {
+                slice_str(__text_replace_n(
+                    hp,
+                    hl,
+                    fp,
+                    fl,
+                    tp,
+                    tl,
+                    1,
+                    std::ptr::null(),
+                ))
+            },
             "aéb🌍c"
         );
     }

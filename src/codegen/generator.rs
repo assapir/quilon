@@ -389,6 +389,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             .insert("NotOk".to_string(), vec![generic("E")]);
     }
 
+    /// The LLVM struct a `Site` record lowers to — `{ {ptr,i64}, double, double, {ptr,i64},
+    /// double }` for the declared [`crate::ast::site_fields`].
+    ///
+    /// Public so a test can hold the runtime's hand-written `QlSite` mirror
+    /// (`quilon_rt::QlSite`, which every fallible intrinsic receives) to the layout actually
+    /// emitted: the two are connected by nothing but agreement, and a drifted field order
+    /// would make the runtime read a text pointer as a line number rather than fail to build.
+    pub fn site_struct_type(
+        context: &'ctx Context,
+    ) -> Result<inkwell::types::StructType<'ctx>, String> {
+        let generator = CodeGenerator::new(context, "site_layout");
+        generator.record_struct_type(&crate::ast::site_fields())
+    }
+
     /// Register the built-in `Site` record so a `:: Site` parameter and the field reads on
     /// it (`site.line`) resolve like any declared record's — the checker registers the same
     /// type (`ast::site_type`), and `site_value` fills one in at a call site.

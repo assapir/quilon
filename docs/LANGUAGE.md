@@ -14,7 +14,7 @@ Quilon's identity, and the rules that guide its design:
 - **Symbols mirror notation that already exists.** A symbol should reuse a notation the world already has rather than invent one: `/` separates sum-type alternatives the way you already write "red / green / blue". The symbol is both the shorthand and its own justification.
 - **The playful choice wins.** When a design decision is a genuine toss-up, the more delightful option is picked — characterful, memorable symbols (`^` for the entry point, `$` for Unit) over bland ones. Syntax is allowed to have a sense of humor.
 - **Deliberate simplicity — reject complexity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
-- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value) it is a **compile error**; otherwise a **clear runtime error** (stderr, non-zero exit). Silent behavior is undebuggable, so Quilon refuses it. (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
+- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value) it is a **compile error**; otherwise a **clear runtime error** (stderr, non-zero exit) that says **where** it happened — `file:line:column` with the offending source line and a caret, the same frame a compile error uses. Silent behavior is undebuggable, so Quilon refuses it. (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
 - **No magic.** Behavior is explicit and visible — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
 - **Immutable by default.** `=` binds immutably, `:=` binds mutably; because `:=` is visible wherever mutation happens, a method is a setter exactly when its body writes `it.field := …`.
 - **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
@@ -125,7 +125,8 @@ collapse a `[]Text` with `reduce` + `+`.
 empty `from` (for either method), and a `replace` `count` that is `<= 0` or greater than
 the number of occurrences actually present, are rejected: at **compile time** when the
 values are literals (e.g. `"a".replace("a", "b", 0)` or `"aa".replace("a", "b", 5)`), and
-otherwise at **run time** — the program prints a diagnostic to stderr and exits `101`. Use
+otherwise at **run time** — the program prints a located diagnostic to stderr (the same
+framed shape as a compile error, naming the offending call) and exits `101`. Use
 `replaceAll` for "replace everything"; `replace(count)` is a precise "replace exactly this
 many" contract. `repeat` holds the same line: a negative or fractional `count` is a compile
 error when literal and a run-time abort otherwise — never a silent clamp to `0`.
@@ -202,8 +203,20 @@ first = nums[0]        ~ → 1
 Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 
 Indexing is **checked** (fail loud, never silent): an out-of-bounds, negative, or NaN
-index is a clear runtime error — `runtime error: array index 10 out of bounds (size 3)`
-to stderr, exit status 1 — never a raw memory read. A **fractional** in-range index
+index is a clear runtime error to stderr, exit status 1 — never a raw memory read. The
+report names the read that failed, framed the way a compile error and a
+[failing assertion](corelib/test.md) are:
+
+```text
+demo.ql:4:11: index 7 out of bounds for an array of size 3
+   |
+ 4 |   value = items[wanted]
+   |           ^^^^^^^^^^^^^
+```
+
+(`examples/index_out_of_bounds.ql` is exactly this, failing on purpose.)
+
+A **fractional** in-range index
 truncates toward zero (`nums[1.7]` reads `nums[1]`) — with one unified `Num`, index
 arithmetic like `size / 2` legitimately produces fractions. Use [`at(n)`](#array-methods)
 for the non-aborting form (`Ok`/`NotOk`).
@@ -1125,9 +1138,17 @@ A span covering multiple lines underlines its first line. Failures with no
 source location (a missing file, an unresolved import) print a plain one-line
 message instead. Any compile error exits with status 1.
 
-A **run-time** failure that knows its call site — a failing
-[`core.test` assertion](corelib/test.md) — reports in the same shape, from the same
-position resolver, so a program's own failures read like the compiler's.
+A **run-time** failure reports in the same shape, from the same position resolver, so a
+program's own failures read like the compiler's: a failing
+[`core.test` assertion](corelib/test.md) at the assertion's call site, and a fail-loud
+runtime check (a bad `arr[i]`, a violated `Text.replace`/`repeat` contract) at the
+expression that broke the contract. Those two are colored when stderr is a terminal and
+plain when it is redirected or `NO_COLOR`/`TERM=dumb` is set; compile errors are not colored
+yet.
+
+A located runtime report carries the source line it names, so the text of a line with an
+`arr[i]` or a fallible `Text` call is embedded in the built binary (as it already is for
+every assertion). There is no way to strip it yet.
 
 To stay robust on hostile or machine-generated input, the parser also caps how
 deeply expressions may nest: nesting more than **128 levels** of parentheses,

@@ -22,7 +22,7 @@
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 
 use crate::ast::{Expr, InterpPart, Item, MethodDecl, Program, Statement, TypeDef};
-use crate::lexer::{ROOT_FILE, Span};
+use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 /// The corelib name of the value-returning stdin read primitive; `@readStdin()` evaluates to
@@ -40,10 +40,6 @@ pub struct DeferInfo {
     /// would escape. Empty for pure programs — the whole codegen-visible surface of the
     /// taint analysis.
     force_sites: HashSet<Span>,
-    /// Human-readable launch site (`path:line:col`) for each `@readStdin` call, keyed by the
-    /// `@readStdin` identifier's span, so a read fault reports where the IO was called. Filled
-    /// by the driver (which holds the source); empty in unit tests and IR-only paths.
-    read_sites: HashMap<Span, String>,
 }
 
 impl DeferInfo {
@@ -51,20 +47,10 @@ impl DeferInfo {
     pub fn is_force_site(&self, span: &Span) -> bool {
         self.force_sites.contains(span)
     }
-
-    /// The launch-site description for the `@readStdin` whose identifier is at `span`, if known.
-    pub fn read_site(&self, span: &Span) -> Option<&str> {
-        self.read_sites.get(span).map(String::as_str)
-    }
-
-    /// Install the `@readStdin` launch sites (see [`read_call_sites`]).
-    pub fn set_read_sites(&mut self, read_sites: HashMap<Span, String>) {
-        self.read_sites = read_sites;
-    }
 }
 
 /// Analyze `program`: whether it reaches an `@` primitive, plus the deferred-value taint and
-/// force-set. (`read_sites` are filled separately by the driver, which has the source.)
+/// force-set — the whole codegen-visible surface of the analysis.
 pub fn analyze(program: &Program) -> DeferInfo {
     let uses_deferral = program.items.iter().any(|item| match item {
         Item::FunctionDecl(f) => references_at_primitive(&f.body),
@@ -80,36 +66,7 @@ pub fn analyze(program: &Program) -> DeferInfo {
     DeferInfo {
         uses_deferral,
         force_sites: taint.force_sites,
-        read_sites: HashMap::new(),
     }
-}
-
-/// Map each `@readStdin` call in the ROOT source to a `path:line:col` launch-site string,
-/// keyed by the `@readStdin` identifier's span — the origin a read fault reports. Only
-/// root-file spans are resolved, since `source` is the root file; a call reached through an
-/// imported module (not a pattern the corelib uses) is simply left without a site.
-pub fn read_call_sites(program: &Program, path: &str, source: &str) -> HashMap<Span, String> {
-    let mut sites = HashMap::new();
-    let mut record = |span: &Span| {
-        if span.file == ROOT_FILE {
-            let (line, column) = Span::line_col(source, span.start as usize);
-            sites.insert(span.clone(), format!("{path}:{line}:{column}"));
-        }
-    };
-    for item in &program.items {
-        match item {
-            Item::FunctionDecl(f) => walk_read_calls(&f.body, &mut record),
-            Item::VarDecl(v) => walk_read_calls(&v.value, &mut record),
-            Item::TypeDecl(t) => {
-                if let TypeDef::Record { methods, .. } = &t.type_def {
-                    for method in methods {
-                        walk_read_calls(&method.body, &mut record);
-                    }
-                }
-            }
-        }
-    }
-    sites
 }
 
 /// Whether any `@`-primitive reference appears anywhere in `expr`. An `@` name can only ever
@@ -325,17 +282,6 @@ impl Scope {
 /// Whether `func`/`args` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
 fn is_read_call(func: &Expr, args: &[Expr]) -> bool {
     matches!(func, Expr::Ident { name, .. } if name == READ_PRIMITIVE) && args.is_empty()
-}
-
-/// Run `visit` on the `@readStdin` identifier span of every `@readStdin()` call in `expr`.
-fn walk_read_calls(expr: &Expr, record: &mut impl FnMut(&Span)) {
-    for_each_subexpr(expr, &mut |e| {
-        if let Expr::Call { func, args, .. } = e
-            && is_read_call(func, args)
-        {
-            record(func.span());
-        }
-    });
 }
 
 /// Apply `f` to `expr` and every sub-expression (pre-order). The one structural walk the
