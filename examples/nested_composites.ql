@@ -1,0 +1,36 @@
+~ A sum variant's payload can be a NAMED RECORD, not only a built-in scalar. Construct
+~ the variant with a record instance, match it to bind the record, and read the record's
+~ fields (and call its methods) back at their real types. The payload slot for a position
+~ still has ONE shared representation across variants, so every variant with a field there
+~ must agree on its type — here that shared type is the record `Body`.
+~ `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
+
+~ A record with a Text field and a method — the payload the sum will carry.
+Body = { payload :: Text, contentLength = () -> Num => it.payload.size }
+
+~ An HTTP-method-shaped sum: a nullary `Get` alongside `Post`, whose payload is a `Body`.
+Method = Get / Post(Body)
+
+~ Match on the method; the `Post(b)` arm binds `b` as a `Body`, so `b.payload` reads the
+~ Text field and `b.contentLength()` dispatches the record's method.
+describe = (m :: Method) -> Text => m ?
+  | Get     => "GET"
+  | Post(b) => b.payload
+
+sizeOf = (m :: Method) -> Num => m ?
+  | Get     => 0
+  | Post(b) => b.contentLength()
+
+^ = () -> $ => <
+  post = Post(Body { payload = "hello" })
+
+  ~ The bound record keeps its type: its Text field round-trips (5 graphemes)...
+  assertEq(sizeOf(post), 5)
+  ~ ...and reads back byte-for-byte.
+  assertEq(describe(post), "hello")
+
+  ~ The nullary sibling still dispatches by tag alone.
+  assertEq(sizeOf(Get), 0)
+  assertEq(describe(Get), "GET")
+>

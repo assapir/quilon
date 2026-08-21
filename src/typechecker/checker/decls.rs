@@ -150,25 +150,49 @@ impl TypeChecker {
     }
 
     pub(super) fn check_type_decl(&mut self, decl: &crate::ast::TypeDecl) -> Result<(), TypeError> {
-        use crate::ast::{Type, TypeDef};
+        use crate::ast::{SumVariant, Type, TypeDef};
 
         // Build the type from the definition
         let type_value = match &decl.type_def {
             TypeDef::Sum(variants) => {
-                // Payloads are built-in types only — `Num` / `Text` / `Bool` / `$`
-                // (Unit). No type variables, no nesting of other user types. (LOCKED
-                // design.) `$` is the canonical "no meaningful value" payload, e.g.
-                // `Ok($)`.
+                // Resolve and validate each variant's payload types. A payload is either a
+                // built-in type — `Num` / `Text` / `Bool` / `$` (Unit) — or a NAMED
+                // composite that resolves to an already-declared RECORD (no hoisting, so it
+                // must appear above this declaration). The resolved record carries its
+                // fields, so a later `match Box(p)` binds `p` at its real type and reads
+                // `p.field`. Anything else — an array, a type variable, a nested sum, or an
+                // unknown/non-record name — is rejected. `$` is the canonical "no meaningful
+                // value" payload, e.g. `Ok($)`.
+                let mut resolved_variants = Vec::with_capacity(variants.len());
                 for variant in variants {
+                    let mut fields = Vec::with_capacity(variant.fields.len());
                     for field in &variant.fields {
-                        if !matches!(field, Type::Num | Type::Text | Type::Bool | Type::Unit) {
+                        let resolved = self.resolve_type(field);
+                        let acceptable = match &resolved {
+                            Type::Num | Type::Text | Type::Bool | Type::Unit => true,
+                            // A named payload must resolve to a declared RECORD.
+                            // `resolve_type` maps a sum name to `Type::Sum` (so nested sums
+                            // fall through to the reject arm below) and leaves an unknown
+                            // name as a field-less `Named`; the env lookup distinguishes a
+                            // real record — of any field/method count — from that unknown.
+                            Type::Named { name, .. } => {
+                                matches!(self.env.get_type(name), Some(Type::Named { .. }))
+                            }
+                            _ => false,
+                        };
+                        if !acceptable {
                             return Err(TypeError::TypeMismatch {
                                 expected: Box::new(Type::Num),
                                 got: Box::new(field.clone()),
                                 span: decl.span.clone(),
                             });
                         }
+                        fields.push(resolved);
                     }
+                    resolved_variants.push(SumVariant {
+                        name: variant.name.clone(),
+                        fields,
+                    });
                 }
 
                 // A sum type's payload slots have ONE shared LLVM representation per
@@ -178,10 +202,14 @@ impl TypeChecker {
                 // so it may coexist with a concrete type at the same position (e.g.
                 // `A($) / B(Num)`). Heterogeneous concrete types at one position (e.g.
                 // `A(Num) / B(Text)`) would miscompile, so reject them up front.
-                let max_arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+                let max_arity = resolved_variants
+                    .iter()
+                    .map(|v| v.fields.len())
+                    .max()
+                    .unwrap_or(0);
                 for pos in 0..max_arity {
                     let mut concrete: Option<&Type> = None;
-                    for variant in variants {
+                    for variant in &resolved_variants {
                         if let Some(field) = variant.fields.get(pos)
                             && *field != Type::Unit
                         {
@@ -203,7 +231,7 @@ impl TypeChecker {
                 // Variant (constructor) names must be unique per scope: both within
                 // this declaration and against any already-registered variant.
                 let mut seen = std::collections::HashSet::new();
-                for variant in variants {
+                for variant in &resolved_variants {
                     if !seen.insert(variant.name.clone())
                         || self.sum_variant_owner(&variant.name).is_some()
                     {
@@ -216,14 +244,15 @@ impl TypeChecker {
 
                 let sum_type = Type::Sum {
                     name: decl.name.clone(),
-                    variants: variants.clone(),
+                    variants: resolved_variants,
                 };
                 // Register the sum type for constructor lookup
                 self.sum_types.insert(decl.name.clone(), sum_type.clone());
 
                 // Bind each nullary variant as a value of the sum type, so a bare
                 // `Red` resolves as an expression. (Variants with payloads are
-                // resolved as constructor calls in `check_call`.)
+                // resolved as constructor calls in `check_call`.) Nullary-ness is name
+                // and arity only, identical in the parsed and resolved variant lists.
                 for variant in variants {
                     if variant.fields.is_empty() {
                         self.env.define(

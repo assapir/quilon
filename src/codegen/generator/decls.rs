@@ -195,12 +195,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let inferred_qty = self.infer_type(&decl.value);
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
-        if let Type::Named { name, .. } = &inferred_qty
-            && let Some(fields) = self.named_type_fields.get(name).cloned()
-        {
-            self.record_types.insert(decl.name.clone(), fields);
-            self.var_named_types.insert(decl.name.clone(), name.clone());
-        }
+        self.track_named_record_binding(&decl.name, &inferred_qty);
         self.var_types.insert(decl.name.clone(), inferred_qty);
 
         // A top-level binding becomes a global, and a global's initializer must already be

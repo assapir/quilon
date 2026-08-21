@@ -220,6 +220,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .filter_map(|v| v.fields.get(i))
                 .find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
             let slot = match concrete {
+                // A named-RECORD payload rides in the slot by pointer (the record ABI —
+                // see `register_sum_variants`/`type_to_llvm`), so its DWARF slot is a
+                // pointer, not the record struct laid out by value.
+                Some(Type::Named { name, .. }) if !self.resolves_to_sum(name) => {
+                    debug.opaque_pointer()
+                }
                 Some(f) => self.di_type(f).unwrap_or_else(|| debug.unit_type()),
                 None => debug.unit_type(),
             };

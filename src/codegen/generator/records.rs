@@ -456,6 +456,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(Some((field_ptr, field_llvm)))
     }
 
+    /// Track a binding whose value is a named RECORD: remember its field names and type
+    /// name so later `binding.field` reads and method calls on it resolve, exactly as a
+    /// record-typed local does. A no-op unless `ty` is a `Named` type registered in
+    /// `named_type_fields`.
+    pub(super) fn track_named_record_binding(&mut self, binding: &str, ty: &Type) {
+        if let Type::Named { name, .. } = ty
+            && let Some(fields) = self.named_type_fields.get(name).cloned()
+        {
+            self.record_types.insert(binding.to_string(), fields);
+            self.var_named_types
+                .insert(binding.to_string(), name.clone());
+        }
+    }
+
     /// The LLVM struct type for a record with the given (name, Quilon-type) fields, in
     /// declared order — each slot lowered through [`value_repr_type`]. This is the single
     /// definition of a record's memory layout, shared by record construction

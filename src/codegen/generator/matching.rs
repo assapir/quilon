@@ -254,6 +254,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 .insert(arg_name.clone(), (alloca, payload.get_type()));
                             if let Some(ty) = payload_ty {
                                 self.var_types.insert(arg_name.clone(), ty.clone());
+                                // A named-record payload binds by pointer (the record ABI);
+                                // track it so field reads / method calls on the binding resolve.
+                                self.track_named_record_binding(arg_name, ty);
                             }
                         }
                     }

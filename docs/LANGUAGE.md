@@ -312,13 +312,19 @@ as the separator. Variants may be **nullary** or carry a payload:
 Color = Red / Green / Blue                 ~ three nullary variants
 Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 ```
-- **Payloads are built-in types only** — `Num`, `Text`, `Bool`, or `$` (Unit). There are
-  no type variables (no generics), but a variant may take several payload fields
-  (e.g. `Rect(Num, Num)`). A `$` payload carries no value — it's the "this variant has
-  no data" case (see `Ok($)` below).
+- **Payloads are built-in scalars or a named record** — `Num`, `Text`, `Bool`, `$`
+  (Unit), or a previously-declared **record** type. There are no type variables (no
+  generics), but a variant may take several payload fields (e.g. `Rect(Num, Num)`). A `$`
+  payload carries no value — it's the "this variant has no data" case (see `Ok($)` below).
+- A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
+  where `Body` is a record. The record must be declared **above** the sum (no hoisting),
+  and a match arm binds it at its full type, so `Post(b) => b.payload` reads its fields
+  and calls its methods. (Nesting another **sum** as a payload is not yet supported; see
+  `examples/nested_composites.ql`.)
 - At a given payload position, every variant with a concrete (non-`$`) field there must
-  agree on its type; `$` may coexist with a concrete type at the same position
-  (`Done($) / Pending(Num)` is fine, `A(Num) / B(Text)` is rejected).
+  agree on its type — including the named-record case; `$` may coexist with a concrete
+  type at the same position (`Done($) / Pending(Num)` is fine, `A(Num) / B(Text)` and
+  `Wrap(Body) / Plain(Num)` are rejected).
 - **Variant (constructor) names are unique per scope** — two sum types can't share a
   variant name.
 
@@ -1164,6 +1170,7 @@ pathological input.
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
+| Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `assertOk`/`assertNotOk` on `getEnv`/`getOpt` | ✅ |
 | Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, file-path imports, `>>` exports | ✅ |
@@ -1192,7 +1199,8 @@ pathological input.
 - **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across multiple nesting levels, and capturing-then-calling another closure. Deferred to a later milestone (they need the closure's type threaded through inference / defunctionalization): capturing a *polymorphic* value, *generic* closures, passing a closure **as a function parameter**, and **returning a closure from a function**. A closure used in an unsupported position is rejected at compile time (e.g. an unannotated function parameter that is called reports `Not a function`), never miscompiled.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
-- **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the built-in payload set (`Num`/`Text`/`Bool`, consistent per position) works.
+- **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.
+- **A named-composite sum payload must be a record, and a record field cannot yet be a named composite.** A variant may carry a named **record** (`Post(Body)`), but not another named **sum**; and a record field is still limited to built-in types and arrays (a `{ inner :: Inner }` field of a user type is a deferred follow-up).
 - A `Text` value bound from an `args`/`env` element supports the full `Text` API
   (`.size`/`.length`/`+`/comparison), and — like a bound `Result` payload — dispatches an
   [overload set](#overloading) by its concrete `Text` type.

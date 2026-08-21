@@ -518,6 +518,92 @@ fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
 }
 
 #[test]
+fn run_named_record_sum_payload_reads_field() {
+    // A named RECORD nested as a sum variant's payload: construct `Box(Point{..})`,
+    // match `Box(p)`, and read the record's fields back at their real type. 3 + 4 = 7.
+    let src = r#"
+Point = { x :: Num, y :: Num }
+Boxed = Box(Point) / Empty
+
+unwrap = (b :: Boxed) -> Num => b ?
+  | Box(p) => p.x + p.y
+  | Empty  => 0
+
+^ = () -> Num => unwrap(Box(Point { x = 3, y = 4 }))
+"#;
+    assert_exit(src, 7);
+}
+
+#[test]
+fn run_sum_record_payload_reads_text_field_and_calls_method() {
+    // The `Method`/`Post(Body)` shape: a record payload with a `Text` field and a method.
+    // The bound payload keeps its record type, so a `Text` field round-trips (its grapheme
+    // count) and a method call on the binding resolves. "hello".size = 5.
+    let src = r#"
+Body = { payload :: Text, len = () -> Num => it.payload.size }
+Method = Get / Post(Body)
+
+sizeOf = (m :: Method) -> Num => m ?
+  | Get     => 0
+  | Post(b) => b.len()
+
+^ = () -> Num => sizeOf(Post(Body { payload = "hello" }))
+"#;
+    assert_exit(src, 5);
+}
+
+#[test]
+fn run_sum_record_payload_empty_variant_is_selected_by_tag() {
+    // The nullary sibling of a record-payload variant still dispatches by tag alone.
+    let src = r#"
+Point = { x :: Num, y :: Num }
+Boxed = Box(Point) / Empty
+
+unwrap = (b :: Boxed) -> Num => b ?
+  | Box(p) => p.x + p.y
+  | Empty  => 99
+
+^ = () -> Num => unwrap(Empty)
+"#;
+    assert_exit(src, 99);
+}
+
+#[test]
+fn reject_heterogeneous_record_and_num_payload_at_same_position() {
+    // The "consistent payload type per position" invariant holds for named records too: a
+    // record in one variant and a `Num` in another at the same slot is still rejected.
+    let src = r#"
+Point = { x :: Num, y :: Num }
+Bad = Wrap(Point) / Plain(Num)
+^ = () -> Num => 0
+"#;
+    assert_type_error(src);
+}
+
+#[test]
+fn reject_nested_sum_as_sum_payload() {
+    // A named composite payload must be a RECORD. Nesting another SUM as a payload is not
+    // supported and is rejected by the checker.
+    let src = r#"
+Inner = A / B
+Outer = Wrap(Inner) / Bare
+^ = () -> Num => 0
+"#;
+    assert_type_error(src);
+}
+
+#[test]
+fn reject_unknown_named_sum_payload() {
+    // A payload naming a type that was never declared (no hoisting) is rejected, not
+    // silently accepted as an empty record.
+    let src = r#"
+Bad = Wrap(Nope) / Bare
+^ = () -> Num => 0
+"#;
+    assert_type_error(src);
+}
+
+#[test]
 fn run_text_equality_and_ordering_overloads() {
     // Built-in Text comparison overloads: `==` (equality) and `<`/`>` (lexicographic).
     assert_exit(
