@@ -15,9 +15,11 @@ use quilon::deferral::{self, DeferInfo};
 use quilon::jit;
 use quilon::lexer::Lexer;
 use quilon::parser;
+use quilon::source_map::SourceMap;
 use quilon::typechecker::{TypeChecker, TypeTable};
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,8 +34,8 @@ pub static JIT_LOCK: Mutex<()> = Mutex::new(());
 pub fn assert_exit(src: &str, expected: i32) {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    let (program, types, defer) = front_end(src, None);
-    let code = jit::run_program(&program, types, defer, &["program".to_string()])
+    let (program, types, defer, sources) = front_end(src, None);
+    let code = jit::run_program(&program, types, defer, sources, &["program".to_string()])
         .expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{src}");
 }
@@ -48,8 +50,8 @@ pub fn assert_exit_linked(src: &str, expected: i32) {
 pub fn assert_exit_linked_from(src: &str, base_dir: &Path, expected: i32) {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    let (program, types, defer) = front_end(src, Some(base_dir));
-    let code = jit::run_program(&program, types, defer, &["program".to_string()])
+    let (program, types, defer, sources) = front_end(src, Some(base_dir));
+    let code = jit::run_program(&program, types, defer, sources, &["program".to_string()])
         .expect("execution failed");
     assert_eq!(code, expected, "unexpected exit code for source:\n{src}");
 }
@@ -66,21 +68,52 @@ pub fn assert_type_error(src: &str) {
     );
 }
 
-/// Lex, parse, optionally resolve imports, and type-check — panicking with the stage
-/// that failed. Returns the program with the type table its check produced, which is
-/// what codegen runs on. Shared by the run helpers above.
-fn front_end(src: &str, base_dir: Option<&Path>) -> (quilon::ast::Program, TypeTable, DeferInfo) {
+/// The type error `src` is rejected with, as its rendered message. Panics if the program
+/// type-checks — a test asserting on a diagnostic needs there to be one.
+pub fn type_error_message(src: &str) -> String {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let program = match base_dir {
+    let program = quilon::modules::link(program, Path::new("."))
+        .expect("import linking failed")
+        .0;
+    match TypeChecker::new().check_program(&program) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected a type error for source:\n{src}"),
+    }
+}
+
+/// Lex, parse, optionally resolve imports, and type-check — panicking with the stage
+/// that failed. Returns the program, the type table its check produced, the deferral
+/// coloring, and the source map codegen fills call-site `Site` values from. The in-memory
+/// source is named [`TEST_FILE`], so a located runtime message (a failed assertion) is
+/// reproducible in a test's expected output.
+fn front_end(
+    src: &str,
+    base_dir: Option<&Path>,
+) -> (quilon::ast::Program, TypeTable, DeferInfo, Rc<SourceMap>) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let (program, mut sources) = match base_dir {
         Some(dir) => quilon::modules::link(program, dir).expect("import linking failed"),
-        None => program,
+        None => (program, SourceMap::default()),
     };
+    sources.set_root(TEST_FILE, src);
     let types = TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
     let defer = deferral::analyze(&program);
-    (program, types, defer)
+    (program, types, defer, Rc::new(sources))
+}
+
+/// The path an in-memory test program is reported under — what a failing assertion in a
+/// test source prints as its `file` (`test.ql:3:5: ...`).
+pub const TEST_FILE: &str = "test.ql";
+
+/// An empty source map, for a test that builds its program by hand and does not care where
+/// a call site resolves to. A call site then reports the documented "unknown" location
+/// (empty file, position 1:1) instead of a real one.
+pub fn no_sources() -> Rc<SourceMap> {
+    Rc::new(SourceMap::default())
 }
 
 /// Put a freshly built `libquilon_rt.a` next to the compiler binary, where `quilon build`

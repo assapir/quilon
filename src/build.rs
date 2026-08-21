@@ -18,13 +18,17 @@ use inkwell::targets::{
 
 use crate::ast::Program;
 use crate::codegen::CodeGenerator;
+use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
+use std::rc::Rc;
 
-/// The source needed to emit DWARF line-number debug info: the `.ql` file's path (recorded
-/// in the DWARF `DIFile`) and its text (to map span byte offsets to `(line, column)`).
+/// What DWARF line-number emission needs beyond the source map: the `.ql` file's path as
+/// the user named it (recorded in the DWARF `DIFile`), and the import boundary.
+///
+/// The file's TEXT is not here — it comes from the `SourceMap` the build already carries,
+/// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
-    pub source: &'a str,
     /// How many leading program items came from imported modules (import linking prepends
     /// them); those get no debug info, as their spans are relative to their own module source.
     pub imported_items: usize,
@@ -38,6 +42,7 @@ fn emit_object(
     program: &Program,
     types: TypeTable,
     defer: crate::deferral::DeferInfo,
+    sources: Rc<SourceMap>,
     obj_path: &Path,
     debug: Option<&DebugSource<'_>>,
 ) -> Result<(), String> {
@@ -49,10 +54,11 @@ fn emit_object(
     let mut generator = CodeGenerator::new(&context, "main");
     generator.set_type_table(types);
     generator.set_defer_info(defer);
+    generator.set_source_map(Rc::clone(&sources));
     // Turn on DWARF line-number emission before codegen so every function/expression is
     // attributed to its `.ql` source location.
     if let Some(d) = debug {
-        generator.enable_debug(d.file, d.source, d.imported_items);
+        generator.enable_debug(d.file, sources.root_text(), d.imported_items);
     }
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
@@ -197,12 +203,13 @@ pub fn build_native(
     program: &Program,
     types: TypeTable,
     defer: crate::deferral::DeferInfo,
+    sources: Rc<SourceMap>,
     out: &Path,
     linker: &str,
     debug: Option<&DebugSource<'_>>,
 ) -> Result<(), String> {
     let obj = out.with_extension("o");
-    emit_object(program, types, defer, &obj, debug)?;
+    emit_object(program, types, defer, sources, &obj, debug)?;
     let rt_lib = runtime_lib_path()?;
 
     let status = Command::new(linker)

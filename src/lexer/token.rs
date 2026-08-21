@@ -319,6 +319,11 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
                     b'n' => lit.push('\n'),
                     b'r' => lit.push('\r'),
                     b't' => lit.push('\t'),
+                    // `\e` is the ESC byte (U+001B), the lead-in of every ANSI terminal
+                    // sequence — the one control character a program needs to emit color
+                    // and cannot otherwise write, since a raw ESC in a source file is
+                    // invisible.
+                    b'e' => lit.push('\u{1b}'),
                     b'"' => lit.push('"'),
                     b'\\' => lit.push('\\'),
                     b'<' => lit.push('<'),

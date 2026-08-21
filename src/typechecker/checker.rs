@@ -91,6 +91,13 @@ pub enum TypeError {
         param: String,
         span: Span,
     },
+    /// A `Site` parameter (the built-in call-site record the compiler fills in) that could
+    /// never be filled: one declared before the last parameter, or on a lambda or method,
+    /// neither of which is called by name. `subject` names what declared it.
+    MisplacedSiteParam {
+        subject: String,
+        span: Span,
+    },
     /// A call to an overload set every member of which is defined *below* the call.
     /// Names resolve top to bottom, so the definition is not in scope yet.
     OverloadCallBeforeDefinition {
@@ -232,6 +239,15 @@ pub type TypeTable = std::collections::HashMap<Span, Type>;
 pub struct Overload {
     pub params: Vec<Type>,
     pub ret: Option<Type>,
+}
+
+/// Whether a declaration sits at the top level of a module or inside some body (a
+/// function, method, or lambda). Only a top-level function is called by name through the
+/// path that fills in a `Site` parameter, so this is what decides whether one is allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nesting {
+    TopLevel,
+    Nested,
 }
 
 pub struct TypeChecker {

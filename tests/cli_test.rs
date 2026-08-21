@@ -202,7 +202,7 @@ fn core_cli_resolves_and_type_checks() {
     "#;
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let linked = modules::link(program, Path::new(".")).expect("import linking failed");
+    let (linked, _sources) = modules::link(program, Path::new(".")).expect("import linking failed");
     TypeChecker::new()
         .check_program(&linked)
         .expect("expected core.cli usage to type-check");

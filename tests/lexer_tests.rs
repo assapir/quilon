@@ -87,6 +87,22 @@ fn test_function_with_params() {
     );
 }
 
+/// `\e` is the ESC byte — the lead-in of an ANSI sequence, and the one control character
+/// a `.ql` source cannot otherwise write (a raw ESC in a file is invisible).
+#[test]
+fn test_escape_e_is_the_esc_byte() {
+    let tokens = Lexer::tokenize(r#""\e[1;31mred\e[0m""#).unwrap();
+    match &tokens[0].kind {
+        TokenKind::String(chunks) => match chunks.as_slice() {
+            [quilon::lexer::StrChunk::Lit(s)] => {
+                assert_eq!(s, "\u{1b}[1;31mred\u{1b}[0m");
+            }
+            other => panic!("expected a single literal chunk, got {other:?}"),
+        },
+        other => panic!("expected a string token, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_string_escapes() {
     let source = r#""hello\nworld\t\"\\""#;

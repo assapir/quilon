@@ -251,17 +251,18 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// The overload member of `name` whose parameter types match `arg_types` exactly
     /// (by type tag), if any. Shared by symbol resolution and return-type inference.
+    ///
+    /// A member whose LAST parameter is the built-in `Site` also matches one argument short
+    /// of it — that parameter takes the caller's location, which the call site fills in (see
+    /// `generate_call`). This mirrors the type checker's `resolve_overload`, so both passes
+    /// pick the same member.
     pub(super) fn matching_overload(
         &self,
         name: &str,
         arg_types: &[Type],
     ) -> Option<&(Vec<Type>, Type)> {
         self.overloads.get(name)?.iter().find(|(params, _)| {
-            params.len() == arg_types.len()
-                && params
-                    .iter()
-                    .zip(arg_types)
-                    .all(|(p, a)| type_mangle(p) == type_mangle(a))
+            crate::ast::params_accept(params, arg_types, |p, a| type_mangle(p) == type_mangle(a))
         })
     }
 

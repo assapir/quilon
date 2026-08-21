@@ -91,10 +91,23 @@ fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
 /// terminate the process with exit code 101 via the shared `__exit` intrinsic — the same
 /// fail-loud path an assertion failure takes. Never returns. The detection lives in the
 /// runtime (not codegen) because the `count > occurrences` case needs the occurrence count.
-fn replace_misuse(msg: &str) -> ! {
+fn text_misuse(msg: &str) -> ! {
     write_to_fd(2, msg.as_bytes());
     write_to_fd(2, b"\n");
     __exit(101)
+}
+
+/// Repeat the text `count` times, back to back. Backs `Text.repeat(count)`; `count` 0
+/// yields the empty text. Fails loudly (aborts the process, exit 101) on a `count` that is
+/// negative, fractional, or NaN — the checker rejects those at compile time when they are
+/// literal, and this is the runtime backstop for a computed one.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_repeat(ptr: *const u8, len: i64, count: f64) -> QlSlice {
+    if !count.is_finite() || count < 0.0 || count.fract() != 0.0 {
+        text_misuse("repeat: `count` must be a whole number of 0 or more");
+    }
+    alloc_text(text_str(ptr, len).repeat(count as usize).as_bytes())
 }
 
 /// Strip leading-only (Unicode) whitespace. Backs `Text.trimStart()`. (`Text.trim()`
@@ -167,7 +180,7 @@ pub extern "C" fn __text_replace_all(
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
     if from.is_empty() {
-        replace_misuse("replace: `from` must not be empty");
+        text_misuse("replace: `from` must not be empty");
     }
     let to = text_str(tptr, tlen);
     alloc_text(hay.replace(&*from, &to).as_bytes())
@@ -192,17 +205,17 @@ pub extern "C" fn __text_replace_n(
 ) -> QlSlice {
     let hay = text_str(hptr, hlen);
     let from = text_str(fptr, flen);
-    // Fail loudly on invalid input — no clamp, no silent no-op (see `replace_misuse`).
+    // Fail loudly on invalid input — no clamp, no silent no-op (see `text_misuse`).
     if from.is_empty() {
-        replace_misuse("replace: `from` must not be empty");
+        text_misuse("replace: `from` must not be empty");
     }
     if count <= 0 {
-        replace_misuse(&format!("replace: count must be positive, got {count}"));
+        text_misuse(&format!("replace: count must be positive, got {count}"));
     }
     // Non-overlapping, left→right occurrences — exactly what `replacen` consumes.
     let occurrences = hay.matches(&*from).count() as i64;
     if count > occurrences {
-        replace_misuse(&format!(
+        text_misuse(&format!(
             "replace: count {count} exceeds {occurrences} occurrences"
         ));
     }

@@ -98,7 +98,13 @@ fn main() {
 
             // JIT-compile and execute in-process; the entry point's value
             // becomes the program's exit code.
-            match jit::run_program(&checked.program, checked.types, checked.defer, &argv) {
+            match jit::run_program(
+                &checked.program,
+                checked.types,
+                checked.defer,
+                checked.sources,
+                &argv,
+            ) {
                 Ok(code) => std::process::exit(code),
                 Err(e) => {
                     eprintln!("❌ Runtime error: {}", e);
@@ -120,6 +126,7 @@ fn main() {
             let mut generator = codegen::CodeGenerator::new(&context, "main");
             generator.set_type_table(checked.types);
             generator.set_defer_info(checked.defer);
+            generator.set_source_map(checked.sources);
 
             let ir = match generator.generate(&program) {
                 Ok(ir) => ir,
@@ -159,11 +166,12 @@ fn main() {
         } => {
             println!("🔨 Building: {}", file.display());
 
-            // A `--debug` build also needs the source text (to map span byte offsets to
-            // `.ql` line/column) and the import boundary (so only the user's own functions
-            // get DWARF line info); the detailed front-end returns both alongside the program.
+            // A `--debug` build also needs the import boundary, so only the user's own
+            // functions get DWARF line info; the source text comes from the source map the
+            // build already carries.
             let checked = checked(&file);
-            let debug_meta = debug.then_some((checked.source, checked.imported_items));
+            let sources = checked.sources;
+            let debug_imported_items = debug.then_some(checked.imported_items);
             let defer = checked.defer;
             let program = checked.program;
             require_entry_point(&program);
@@ -171,18 +179,16 @@ fn main() {
             // Default the output to the source name without its `.ql` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
-            let debug_source = debug_meta
-                .as_ref()
-                .map(|(source, imported)| build::DebugSource {
-                    file: &file,
-                    source,
-                    imported_items: *imported,
-                });
+            let debug_source = debug_imported_items.map(|imported_items| build::DebugSource {
+                file: &file,
+                imported_items,
+            });
 
             match build::build_native(
                 &program,
                 checked.types,
                 defer,
+                sources,
                 &out,
                 &linker,
                 debug_source.as_ref(),

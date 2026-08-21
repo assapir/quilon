@@ -1,8 +1,13 @@
 //! `core.test` assertion module: end-to-end exit-code behavior.
 //!
 //! A passing assertion runs to completion (exit 0); a FAILING assertion prints a
-//! message to stderr and exits **101** (the Rust-panic convention `core.test` uses,
-//! distinct from the small result codes examples use as their normal exit status).
+//! located report to stderr and exits **101** (the Rust-panic convention `core.test`
+//! uses, distinct from the small result codes examples use as their normal exit status).
+//!
+//! The report names the failing call's own `file:line:column` and underlines it, and the
+//! location is the USER's call site even through a wrapper (`assertEq` reports where the
+//! program called `assertEq`, not where `core.test` calls `failAt`). Those are the cases
+//! under "Call-site reporting" below.
 //!
 //! Every case is driven as a SUBPROCESS — `quilon run <file>` (in-process JIT) and,
 //! where a linker is present, `quilon build` + execute (native AOT). It must never be
@@ -220,6 +225,135 @@ fn assert_not_ok_pass_and_fail() {
     assert_eq!(code, FAIL_CODE);
 }
 
+// --- Call-site reporting ---------------------------------------------------
+
+/// The whole report for one known failure, line for line: position, message, gutter,
+/// source line, caret run. Pinning the exact shape is the point — this is the output a
+/// person reads when a test fails, and it must stay a compiler-style diagnostic.
+#[test]
+fn failing_assert_reports_the_call_site_in_full() {
+    let src = "<< core.test\n^ = () -> $ => <\n  assertEq(6 * 7, 41)\n>\n";
+    let (code, stderr) = run_jit("site_full", src);
+    assert_eq!(code, FAIL_CODE);
+
+    let path = tmp_dir().join("site_full.ql");
+    let expected = format!(
+        "{}:3:3: assertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
+        path.display()
+    );
+    assert_eq!(stderr, expected, "unexpected failure report");
+}
+
+/// Track-caller: the reported location is where the USER called the wrapper, not the
+/// `failAt` hop inside `core.test`, and not the wrapper's own definition. The call sits
+/// inside a helper function, so a location that merely pointed at `^` would not do.
+#[test]
+fn wrapper_reports_the_users_call_site_not_an_internal_hop() {
+    let src = "<< core.test\n\ncheck = (n :: Num) -> $ => <\n  assertEq(n * 2, 5)\n>\n\n^ = () -> $ => <\n  check(2)\n>\n";
+    let (code, stderr) = run_jit("site_wrapper", src);
+    assert_eq!(code, FAIL_CODE);
+
+    let path = tmp_dir().join("site_wrapper.ql");
+    assert!(
+        stderr.starts_with(&format!("{}:4:3: ", path.display())),
+        "must report the user's assertEq call (line 4, column 3), got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("assertEq(n * 2, 5)"),
+        "the report must show the user's own source line, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("core.test") && !stderr.contains("failAt"),
+        "no internal core.test hop may appear in the report, got: {stderr:?}"
+    );
+}
+
+/// The caret run covers the whole call, however wide it is — the message form's call is
+/// far longer than the bare one, and both underline exactly their own text.
+#[test]
+fn the_caret_run_covers_the_whole_call() {
+    let src =
+        "<< core.test\n^ = () -> $ => <\n  assert(1 == 2, AssertOpts { message = \"boom\" })\n>\n";
+    let (_, stderr) = run_jit("site_caret", src);
+    let source_line = "assert(1 == 2, AssertOpts { message = \"boom\" })";
+    let carets = stderr
+        .lines()
+        .filter_map(|l| l.rsplit_once('|').map(|(_, rest)| rest.trim()))
+        .find(|rest| rest.starts_with('^'))
+        .unwrap_or_default();
+    assert_eq!(
+        carets.len(),
+        source_line.len(),
+        "the caret run must be exactly as wide as the call, got: {stderr:?}"
+    );
+}
+
+/// `failAt` is the reporting primitive `core.test` is built from, and it is available to
+/// user code: an assertion of your own that takes a trailing `site :: Site` and forwards
+/// it reports ITS caller, exactly as `assertEq` does.
+#[test]
+fn fail_at_reports_its_caller() {
+    let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ =>\n  n % 2 == 0 ? $ : failAt(\"assertion failed: `n` is odd\", site)\n\n^ = () -> $ => <\n  assertEven(3)\n>\n";
+    let (code, stderr) = run_jit("site_fail_at", src);
+    assert_eq!(code, FAIL_CODE);
+
+    let path = tmp_dir().join("site_fail_at.ql");
+    assert!(
+        stderr.starts_with(&format!(
+            "{}:7:3: assertion failed: 3 is odd",
+            path.display()
+        )),
+        "a custom assertion must report ITS caller (line 7), got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("assertEven(3)"),
+        "the report must underline the custom assertion's call, got: {stderr:?}"
+    );
+}
+
+/// A failure inside an IMPORTED module reports that module's own path, line, and source
+/// line — the location follows the span's file, not the file being compiled.
+#[test]
+fn a_failure_in_an_imported_module_reports_that_module() {
+    let helper = write_program(
+        "site_helper",
+        "<< core.test\n\n>> checkDouble = (n :: Num) -> $ => <\n  assertEq(n * 2, 5)\n>\n",
+    );
+    let main = write_program(
+        "site_importer",
+        "<< \"site_helper.ql\"\n<< core.test\n\n^ = () -> $ => <\n  checkDouble(2)\n>\n",
+    );
+    let out = Command::new(quilon())
+        .args(["run", main.to_str().unwrap()])
+        .output()
+        .expect("spawn quilon run");
+    assert_eq!(out.status.code().unwrap_or(-1), FAIL_CODE);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with(&format!("{}:4:3: ", helper.display())),
+        "the report must name the imported module and its line, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("assertEq(n * 2, 5)"),
+        "the report must show the imported module's own source line, got: {stderr:?}"
+    );
+}
+
+/// Captured output is plain: color is only for a terminal, so a redirected stderr (every
+/// test here, and any CI log) carries no ANSI escapes.
+#[test]
+fn a_redirected_report_carries_no_ansi_escapes() {
+    let (_, stderr) = run_jit(
+        "site_no_color",
+        "<< core.test\n^ = () -> $ => assert(1 == 2)\n",
+    );
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "a non-tty report must not be colored, got: {stderr:?}"
+    );
+}
+
 // --- Native AOT parity -----------------------------------------------------
 
 /// The exit-code contract must also hold for native AOT binaries (both linkers): a
@@ -262,6 +396,15 @@ fn native_aot_assert_exit_codes() {
         assert!(
             stderr.contains("assertion failed"),
             "native AOT ({linker}): failing assert must print to stderr, got: {stderr:?}"
+        );
+        // The location is compiled IN, so a native binary reports it exactly as the JIT
+        // does — no debug info, no unwinder, nothing to install.
+        assert!(
+            stderr.starts_with(&format!(
+                "{}:2:16: ",
+                tmp_dir().join(format!("aot_fail_{linker}.ql")).display()
+            )),
+            "native AOT ({linker}): failing assert must report its call site, got: {stderr:?}"
         );
 
         // Message overload (AssertOpts) across the native path: prints opts.message.

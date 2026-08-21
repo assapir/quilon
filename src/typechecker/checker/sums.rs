@@ -42,6 +42,18 @@ impl TypeChecker {
             false,
             Span::in_root(0, 0),
         );
+
+        // `Site` — the built-in call-site record (`file`/`line`/`column`/`excerpt`/`width`).
+        // A named record type like any other, registered here rather than declared in a
+        // corelib module so `:: Site` is nameable in any signature with no import; what
+        // makes it special is only that a call FILLS IN a trailing `Site` argument with its
+        // own location (see `ast::is_site_type`).
+        let _ = self.env.define(
+            crate::ast::SITE_TYPE_NAME.to_string(),
+            crate::ast::site_type(),
+            false,
+            Span::in_root(0, 0),
+        );
     }
 
     /// Type-check a constructor application `variant(args...)` against the registered

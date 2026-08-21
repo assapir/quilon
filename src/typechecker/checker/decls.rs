@@ -53,7 +53,7 @@ impl TypeChecker {
             {
                 self.register_overload_decl(decl)?;
             }
-            self.check_item(item)?;
+            self.check_item(item, Nesting::TopLevel)?;
         }
 
         // Every call has been resolved by now, so an overload member still missing its
@@ -137,10 +137,14 @@ impl TypeChecker {
         }
     }
 
-    pub(super) fn check_item(&mut self, item: &Item) -> Result<(), TypeError> {
+    /// Check one declaration. `nesting` says whether it sits at the top level of a module
+    /// or inside some body — which is what decides whether it may take a `Site` parameter
+    /// (see [`Self::reject_unfillable_site_params`]). It is an argument rather than checker
+    /// state so that a body-descending path cannot forget to set it.
+    pub(super) fn check_item(&mut self, item: &Item, nesting: Nesting) -> Result<(), TypeError> {
         match item {
             Item::VarDecl(decl) => self.check_var_decl(decl),
-            Item::FunctionDecl(decl) => self.check_function_decl(decl),
+            Item::FunctionDecl(decl) => self.check_function_decl(decl, nesting),
             Item::TypeDecl(decl) => self.check_type_decl(decl),
         }
     }
@@ -259,6 +263,20 @@ impl TypeChecker {
 
                     self.env
                         .define("it".to_string(), struct_type, false, method.span.clone())?;
+
+                    // A method is dispatched on its receiver's type rather than called by
+                    // name, so it never receives a call site — its last parameter included.
+                    let method_param_types: Vec<Type> = method
+                        .params
+                        .iter()
+                        .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                        .collect();
+                    self.reject_unfillable_site_params(
+                        &format!("method `{}.{}`", decl.name, method.name),
+                        &method.params,
+                        &method_param_types,
+                        false,
+                    )?;
 
                     // Bind method parameters
                     for param in &method.params {
@@ -480,7 +498,45 @@ impl TypeChecker {
         }
     }
 
-    pub(super) fn check_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
+    /// Reject a `Site` parameter that nothing could ever fill in, reported at the offending
+    /// parameter.
+    ///
+    /// The compiler supplies a call site as the LAST argument of a call to a named
+    /// top-level function, and nowhere else: a `Site` before another parameter could never
+    /// be the omitted one, and a lambda, a nested declaration, or a record method is not
+    /// called by name at all (a lambda and a capturing nested declaration are function
+    /// VALUES, and a method dispatches on its receiver's type). `trailing_is_fillable` is
+    /// the one thing that differs between those cases.
+    fn reject_unfillable_site_params(
+        &self,
+        subject: &str,
+        params: &[Param],
+        param_types: &[Type],
+        trailing_is_fillable: bool,
+    ) -> Result<(), TypeError> {
+        let unfillable = match trailing_is_fillable {
+            true => param_types.len().saturating_sub(1),
+            false => param_types.len(),
+        };
+        match params
+            .iter()
+            .zip(param_types)
+            .take(unfillable)
+            .find(|(_, ty)| crate::ast::is_site_type(ty))
+        {
+            Some((param, _)) => Err(TypeError::MisplacedSiteParam {
+                subject: subject.to_string(),
+                span: param.span.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    pub(super) fn check_function_decl(
+        &mut self,
+        decl: &FunctionDecl,
+        nesting: Nesting,
+    ) -> Result<(), TypeError> {
         // The inert core.io `print`/`eprint` placeholder is fully provided by the
         // compiler as a built-in overload; ignore its declaration entirely.
         if decl.is_inert_io_placeholder() {
@@ -498,6 +554,14 @@ impl TypeChecker {
                     .unwrap_or(Type::Num)
             })
             .collect();
+
+        // Only a top-level function's LAST parameter can receive a call site.
+        self.reject_unfillable_site_params(
+            &format!("function `{}`", decl.name),
+            &decl.params,
+            &param_types,
+            nesting == Nesting::TopLevel,
+        )?;
 
         // For recursion support, we need to add the function to the environment
         // BEFORE checking its body. We'll use the annotated return type if available,
@@ -610,6 +674,10 @@ impl TypeChecker {
                     .unwrap_or(Type::Num)
             })
             .collect();
+
+        // A lambda is a function VALUE, called through its binding rather than by name, so
+        // no parameter of it — last included — can receive a call site.
+        self.reject_unfillable_site_params("a lambda", params, &param_types, false)?;
 
         self.env.push_scope();
         for (param, param_type) in params.iter().zip(param_types.iter()) {

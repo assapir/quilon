@@ -182,6 +182,60 @@ fn replace_all_runtime_empty_from_aborts() {
     );
 }
 
+// ---- repeat ---------------------------------------------------------------
+
+#[test]
+fn repeat_concatenates_count_copies() {
+    // "ab".repeat(3) -> "ababab" (size 6); repeat(1) is the text itself.
+    assert_exit(
+        "^ = () -> Num => <\n  a = \"ab\".repeat(3).size\n  b = \"ab\".repeat(1).size\n  a * 10 + b\n>",
+        62,
+    );
+}
+
+#[test]
+fn repeat_zero_is_the_empty_text() {
+    assert_exit("^ = () -> Num => \"ab\".repeat(0).size", 0);
+}
+
+#[test]
+fn repeat_is_grapheme_safe() {
+    // A 2-grapheme, multi-byte text repeated 3 times: 6 graphemes, bytes intact.
+    assert_exit("^ = () -> Num => \"é😀\".repeat(3).length", 6);
+}
+
+#[test]
+fn repeat_composes_with_other_text_methods() {
+    assert_exit(
+        "^ = () -> Num => \"-\".repeat(4).contains(\"----\") ? 1 : 0",
+        1,
+    );
+}
+
+// Compile-time rejections (literal-determinable), mirroring `replace`'s contract.
+#[test]
+fn repeat_literal_negative_or_fractional_count_is_a_compile_error() {
+    assert_type_error("^ = () -> Num => \"ab\".repeat(-1).size");
+    assert_type_error("^ = () -> Num => \"ab\".repeat(2.5).size");
+}
+
+// Runtime fail-loud for a computed count — abort, never a silent clamp.
+#[test]
+fn repeat_runtime_negative_count_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  n = 1 - 4\n  \"ab\".repeat(n).size\n>",
+        "whole number",
+    );
+}
+
+#[test]
+fn repeat_runtime_fractional_count_aborts() {
+    assert_run_aborts(
+        "^ = () -> Num => <\n  n = 7 / 2\n  \"ab\".repeat(n).size\n>",
+        "whole number",
+    );
+}
+
 // ---- contains -------------------------------------------------------------
 
 #[test]

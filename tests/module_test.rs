@@ -16,7 +16,7 @@ fn fixtures_dir() -> PathBuf {
 fn check_with_base(source: &str, base_dir: &Path) -> Result<(), String> {
     let tokens = Lexer::tokenize(source).map_err(|e| format!("lex: {}", e))?;
     let program: Program = parse(&tokens).map_err(|e| format!("parse: {}", e))?;
-    let linked = modules::link(program, base_dir)?;
+    let (linked, _sources) = modules::link(program, base_dir)?;
     let mut checker = TypeChecker::new();
     checker
         .check_program(&linked)
@@ -176,7 +176,7 @@ fn test_each_module_gets_its_own_file_identity() {
     "#;
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
-    let items = modules::resolve_imports(&program, &fixtures_dir()).unwrap();
+    let (items, _sources) = modules::resolve_imports(&program, &fixtures_dir()).unwrap();
 
     let files: HashSet<FileId> = items.iter().map(|item| item_span(item).file).collect();
     assert_eq!(files.len(), 2, "one id per module, got {:?}", files);

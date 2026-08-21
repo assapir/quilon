@@ -103,7 +103,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::UnaryOp { op, expr, .. } => self.generate_unary_op(*op, expr),
 
-            Expr::Call { func, args, .. } => self.generate_call(func, args),
+            Expr::Call { func, args, span } => self.generate_call(func, args, span),
 
             Expr::Lambda {
                 params,

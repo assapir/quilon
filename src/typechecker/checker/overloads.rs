@@ -108,16 +108,13 @@ impl TypeChecker {
 
     /// Whether overload set `name` has a member whose parameters EXACTLY match `arg_types`
     /// (no coercion) — a non-erroring probe used to decide whether `print`/`eprint` should
-    /// take the generic render path or dispatch to a concrete overload.
+    /// take the generic render path or dispatch to a concrete overload. A member whose
+    /// LAST parameter is the built-in `Site` also matches one argument short of it: that
+    /// argument is the caller's location, which the compiler fills in.
     pub(super) fn has_exact_overload(&self, name: &str, arg_types: &[Type]) -> bool {
         self.overloads.get(name).is_some_and(|set| {
-            set.iter().any(|o| {
-                o.params.len() == arg_types.len()
-                    && o.params
-                        .iter()
-                        .zip(arg_types.iter())
-                        .all(|(p, a)| types_match(p, a))
-            })
+            set.iter()
+                .any(|o| crate::ast::params_accept(&o.params, arg_types, types_match))
         })
     }
 
@@ -134,13 +131,7 @@ impl TypeChecker {
         let matches: Vec<&Overload> = set
             .map(|s| {
                 s.iter()
-                    .filter(|o| {
-                        o.params.len() == arg_types.len()
-                            && o.params
-                                .iter()
-                                .zip(arg_types.iter())
-                                .all(|(p, a)| types_match(p, a))
-                    })
+                    .filter(|o| crate::ast::params_accept(&o.params, arg_types, types_match))
                     .collect()
             })
             .unwrap_or_default();

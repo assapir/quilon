@@ -144,7 +144,96 @@ pub fn is_text_method(name: &str) -> bool {
             | "slice"
             | "toUpper"
             | "toLower"
+            | "repeat"
     )
+}
+
+/// The name of the built-in call-site record type, written `Site` in a signature.
+pub const SITE_TYPE_NAME: &str = "Site";
+
+/// The built-in `Site` record's fields, in declaration order — the layout every stage
+/// agrees on: the checker registers this type, and codegen fills one in at a call site
+/// (see `CodeGenerator::site_value`) in exactly this order.
+///
+/// `excerpt` is the text of the line the call sits on and `width` how many characters of
+/// it the call spans, which is what lets a failure message underline the call with a
+/// caret run — the same rendering compiler diagnostics use.
+///
+/// `line`, `column`, and `width` are always at least 1, so arithmetic on them (a lead of
+/// `column - 1` spaces, say) is always well defined. A call the compiler has no source for
+/// — a program assembled in memory rather than read from a file — is signalled by an EMPTY
+/// `file`, not by a zero position.
+pub fn site_fields() -> Vec<(String, Type)> {
+    vec![
+        ("file".to_string(), Type::Text),
+        ("line".to_string(), Type::Num),
+        ("column".to_string(), Type::Num),
+        ("excerpt".to_string(), Type::Text),
+        ("width".to_string(), Type::Num),
+    ]
+}
+
+/// The built-in `Site` type as the checker resolves it: a named record with
+/// [`site_fields`] and no methods.
+pub fn site_type() -> Type {
+    Type::Named {
+        name: SITE_TYPE_NAME.to_string(),
+        fields: Rc::new(site_fields()),
+        methods: Rc::new(Vec::new()),
+    }
+}
+
+/// Whether `ty` is the built-in `Site` record — the marker that makes a parameter
+/// receive its CALLER's location. A trailing `Site` parameter left off at a call site is
+/// filled in by the compiler with that call's `file:line:column`; passing one explicitly
+/// forwards the caller's own site instead, which is how a location propagates through a
+/// chain of wrappers (`assertEq` -> `assert`).
+pub fn is_site_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named { name, .. } if name == SITE_TYPE_NAME)
+}
+
+/// Whether `params` ends in a `Site` parameter — i.e. the callee wants its caller's
+/// location, and a call may leave that last argument off.
+pub fn takes_call_site(params: &[Type]) -> bool {
+    params.last().is_some_and(is_site_type)
+}
+
+/// Whether a call passing `arg_count` arguments to a callee with `params` has its call site
+/// FILLED IN: the callee's last parameter is a `Site` and the call left exactly that one
+/// argument off.
+///
+/// The single statement of the filling rule. Every pass that must agree on it comes through
+/// here — the checker's arity check and overload matching, codegen's argument lowering, and
+/// tail-call detection (a self-call that omits its own trailing `Site` is still a self-call,
+/// and must still become a loop).
+pub fn fills_call_site(params: &[Type], arg_count: usize) -> bool {
+    params.len() == arg_count + 1 && takes_call_site(params)
+}
+
+/// The parameters a CALLER sees: a trailing `Site` is filled in by the compiler, so it is
+/// never part of the signature a call has to satisfy. Used wherever a signature is shown to
+/// a person (an arity error, a candidate list), so no diagnostic asks for an argument the
+/// language does not let anyone pass.
+pub fn visible_params(params: &[Type]) -> &[Type] {
+    match takes_call_site(params) {
+        true => &params[..params.len() - 1],
+        false => params,
+    }
+}
+
+/// Whether a callee with `params` accepts a call passing `args` argument types: either an
+/// exact match, or one argument short of a trailing `Site` the compiler fills in. `matches`
+/// compares one parameter against one argument (the checker and codegen each pass their
+/// own comparison — resolved types vs. mangling tags).
+pub fn params_accept(
+    params: &[Type],
+    args: &[Type],
+    matches: impl Fn(&Type, &Type) -> bool,
+) -> bool {
+    if params.len() != args.len() && !fills_call_site(params, args.len()) {
+        return false;
+    }
+    params.iter().zip(args.iter()).all(|(p, a)| matches(p, a))
 }
 
 /// One piece of an interpolated string (`Expr::Interpolation`): either literal text or a

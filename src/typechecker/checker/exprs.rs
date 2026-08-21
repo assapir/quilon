@@ -89,7 +89,7 @@ impl TypeChecker {
                 for stmt in stmts.iter() {
                     match stmt {
                         crate::ast::Statement::Item(item) => {
-                            self.check_item(item)?;
+                            self.check_item(item, Nesting::Nested)?;
                         }
                         crate::ast::Statement::Expr(expr) => {
                             result_type = self.infer_expr(expr)?;

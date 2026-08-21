@@ -8,6 +8,7 @@
 use crate::ast::Program;
 use crate::codegen::CodeGenerator;
 use crate::deferral::DeferInfo;
+use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -15,6 +16,7 @@ use inkwell::execution_engine::JitFunction;
 use inkwell::targets::{InitializationConfig, Target};
 use std::ffi::CString;
 use std::os::raw::c_char;
+use std::rc::Rc;
 
 /// Signature of the generated C `main`: `int main(int argc, char** argv, char** envp)`.
 type MainFn = unsafe extern "C" fn(i32, *const *const c_char, *const *const c_char) -> i32;
@@ -37,6 +39,7 @@ pub fn run_program(
     program: &Program,
     types: TypeTable,
     defer: DeferInfo,
+    sources: Rc<SourceMap>,
     args: &[String],
 ) -> Result<i32, String> {
     // The JIT'd program allocates through the collector on whichever thread called us,
@@ -57,6 +60,7 @@ pub fn run_program(
     let mut generator = CodeGenerator::new(&context, "main");
     generator.set_type_table(types);
     generator.set_defer_info(defer);
+    generator.set_source_map(sources);
 
     // Populate, verify, and emit the module (also builds the `main` wrapper).
     generator.generate(program)?;

@@ -46,14 +46,14 @@ pub mod text;
 pub mod time;
 
 pub use deferred::{__force_text, __read_launch};
-pub use io::{__print_text_fd, __write_bytes};
+pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use process::{__argv_to_text_array, __envp_to_pairs, __exit};
 pub use scheduler::__run_fiber_main;
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
-    __text_replace_all, __text_replace_n, __text_slice, __text_split, __text_to_lower,
-    __text_to_upper, __text_trim_end, __text_trim_start,
+    __text_repeat, __text_replace_all, __text_replace_n, __text_slice, __text_split,
+    __text_to_lower, __text_to_upper, __text_trim_end, __text_trim_start,
 };
 pub use time::{__now, __sleep};
 
@@ -125,8 +125,10 @@ intrinsic_registry! {
     __text_cmp: extern "C" fn(*const u8, i64, *const u8, i64) -> i32,
     __write_bytes: extern "C" fn(i64, *const u8, i64) -> i64,
     __print_text_fd: extern "C" fn(i64, *const c_char),
+    __color_enabled: extern "C" fn(i64) -> i64,
     __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
     __envp_to_pairs: extern "C" fn(*const *const c_char) -> QlSlice,
+    __text_repeat: extern "C" fn(*const u8, i64, f64) -> QlSlice,
     __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_to_upper: extern "C" fn(*const u8, i64) -> QlSlice,

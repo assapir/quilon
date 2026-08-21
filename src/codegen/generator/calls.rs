@@ -24,10 +24,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call_site)
     }
 
+    /// Lower a call. `span` is the CALL's own span — the location a callee whose last
+    /// parameter is a `Site` receives (see [`Self::site_value`]).
     pub(super) fn generate_call(
         &mut self,
         func: &Expr,
         args: &[Expr],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Get function name - only support direct calls for now
         let func_name = if let Expr::Ident { name, .. } = func {
@@ -76,6 +79,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             "write" => return self.generate_write(args),
+            "colorEnabled" => return self.generate_color_enabled(args),
             // `__exit(code)` — the single native primitive `core.test` builds on,
             // lowered to the `__exit` runtime intrinsic (terminates the process).
             "__exit" => return self.generate_exit(args),
@@ -132,6 +136,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             None
         };
 
+        // Does this call leave off a trailing `Site` for the compiler to fill in? Asked
+        // before the argument values are generated, so the answer is one immutable lookup.
+        let fills_call_site = self.fills_call_site(func_name, args);
+
         // Get the function from the module. If there is no plain top-level function with this
         // name, it may be a method call: the parser desugars `recv.method(a, b)` to
         // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
@@ -156,14 +164,87 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         // Generate argument values
-        let arg_values: Vec<BasicValueEnum> = args
+        let mut arg_values: Vec<BasicValueEnum> = args
             .iter()
             .map(|arg| self.generate_expr(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Fill in the caller's location when the callee's last parameter is a `Site` the
+        // call left off. A call that passes one explicitly (`assertEq`'s body forwarding its
+        // own `site` to `assert`) matches the full parameter list and so fills in nothing —
+        // which is what propagates the USER's call site through a chain of wrappers instead
+        // of reporting the innermost hop.
+        if fills_call_site {
+            arg_values.push(self.site_value(span)?);
+        }
+
         self.emit_call(function, &arg_values)
     }
 
+    /// Whether a call to `name` passing `args` has its call site filled in — the callee's
+    /// last parameter is a `Site` and the call left exactly that argument off.
+    ///
+    /// The one place codegen asks the question, so argument lowering
+    /// ([`Self::generate_call`]) and tail-call detection ([`Self::is_self_tail_call`]) can
+    /// never disagree about it. The rule itself is [`ast::fills_call_site`]; here it is
+    /// applied to whichever signature the name resolves to — a member of an overload set,
+    /// or a plain top-level function.
+    pub(super) fn fills_call_site(&self, name: &str, args: &[Expr]) -> bool {
+        match self.overloads.contains_key(name) {
+            true => {
+                let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                self.matching_overload(name, &arg_types)
+                    .is_some_and(|(params, _)| crate::ast::fills_call_site(params, args.len()))
+            }
+            false => self.fn_call_site_arity.get(name) == Some(&(args.len() + 1)),
+        }
+    }
+
+    /// Build the `Site` record a call site fills in: the call's path, 1-based line and
+    /// column, the text of the line it sits on, and how many characters of that line it
+    /// spans. Every field is a compile-time constant, so this is a record literal built from
+    /// literals — lowered through the ordinary record path so its layout matches what a
+    /// `site.line` read expects.
+    ///
+    /// A span whose file is not in the source map (a program assembled in memory, as the
+    /// IR-only codegen tests do) has no location to report. The site then carries an EMPTY
+    /// `file` — the documented "unknown" signal — with the position left at `1:1` so that
+    /// arithmetic on it (a caret lead of `column - 1`) stays well defined for any reader.
+    pub(super) fn site_value(&mut self, span: &Span) -> Result<BasicValueEnum<'ctx>, String> {
+        let location = self
+            .sources
+            .locate(span)
+            .unwrap_or_else(crate::source_map::Location::unknown);
+        let text = |value: &str| Expr::String {
+            value: value.to_string(),
+            span: span.clone(),
+        };
+        let num = |value: usize| Expr::Number {
+            value: value as f64,
+            span: span.clone(),
+        };
+        // Built by walking the declared field list, so the construction order is the
+        // registered layout rather than a second copy of it: a field added to
+        // `ast::site_fields` shows up here as an unfilled name, not as a silent skew
+        // between what is stored and what a `site.line` read loads.
+        let mut fields = Vec::with_capacity(crate::ast::site_fields().len());
+        for (name, _) in crate::ast::site_fields() {
+            let value = match name.as_str() {
+                "file" => text(&location.path),
+                "line" => num(location.line),
+                "column" => num(location.column),
+                "excerpt" => text(location.excerpt.as_deref().unwrap_or("")),
+                "width" => num(location.width),
+                other => return Err(format!("no call-site value for `Site` field `{other}`")),
+            };
+            fields.push((name, value));
+        }
+        self.generate_record(&fields)
+    }
+
+    /// Lower a leaf `@` IO primitive call to its runtime intrinsic. The first is
+    /// `@sleep(seconds :: Num) -> $`, an effect-only pause that waits on the current fiber
+    /// and yields `$` (Unit).
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier (the call's launch site), used to attach an origin to a deferred value.
     ///

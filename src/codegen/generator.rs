@@ -15,6 +15,7 @@ use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 // The generator's methods live in child modules — one per lowering area — as further
 // `impl<'ctx> CodeGenerator<'ctx>` blocks. Children of this file rather than siblings
@@ -228,6 +229,16 @@ pub struct CodeGenerator<'ctx> {
     // Structural type keys currently being lowered to DWARF, so a (hypothetically) recursive
     // record/sum breaks the cycle with an opaque pointer instead of recursing forever.
     di_building: RefCell<HashSet<String>>,
+    // Every source file the program was assembled from, keyed by the `FileId` its spans
+    // carry. Read when filling in a `Site` argument at a call site, which needs the call's
+    // path, line, column, and the text of its line. Empty for the IR-only codegen tests
+    // (a program with no files on disk), where a call site resolves to no location.
+    sources: Rc<crate::source_map::SourceMap>,
+    // Every NON-overloaded top-level function whose LAST parameter is a `Site`, mapped to
+    // its full parameter count — all a call site needs to know to fill that argument in
+    // (see `fills_call_site`). Only such functions are listed, so an ordinary call looks up
+    // a miss and copies nothing. (Overloaded callees' parameters come from `overloads`.)
+    fn_call_site_arity: HashMap<String, usize>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -330,8 +341,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             record_field_types: HashMap::new(),
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
+            sources: Rc::new(crate::source_map::SourceMap::default()),
+            fn_call_site_arity: HashMap::new(),
         };
         codegen.register_builtin_sum_types();
+        codegen.register_builtin_record_types();
         codegen
     }
 
@@ -366,6 +380,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             .insert("NotOk".to_string(), vec![generic("E")]);
     }
 
+    /// Register the built-in `Site` record so a `:: Site` parameter and the field reads on
+    /// it (`site.line`) resolve like any declared record's — the checker registers the same
+    /// type (`ast::site_type`), and `site_value` fills one in at a call site.
+    fn register_builtin_record_types(&mut self) {
+        let fields = crate::ast::site_fields();
+        self.named_type_fields.insert(
+            crate::ast::SITE_TYPE_NAME.to_string(),
+            fields.iter().map(|(n, _)| n.clone()).collect(),
+        );
+        self.record_field_types
+            .insert(crate::ast::SITE_TYPE_NAME.to_string(), fields);
+    }
+
     /// Access the underlying LLVM module after `generate` has populated it.
     /// Used by the JIT runner to create an execution engine in-process.
     pub fn module(&self) -> &Module<'ctx> {
@@ -389,6 +416,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// deferred) for the IR-only codegen tests, which then compile exactly as before.
     pub fn set_defer_info(&mut self, defer: crate::deferral::DeferInfo) {
         self.defer = defer;
+    }
+
+    /// Install the compilation's [`SourceMap`](crate::source_map::SourceMap) — the path and
+    /// text of every file its spans point into. Codegen needs it to fill in a `Site`
+    /// argument at a call site; without it (the IR-only codegen tests) a call site has no
+    /// resolvable location and the filled-in `Site` reads as unknown.
+    pub fn set_source_map(&mut self, sources: Rc<crate::source_map::SourceMap>) {
+        self.sources = sources;
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
@@ -459,9 +494,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             if let Item::FunctionDecl(decl) = item
                 && !decl.is_inert_io_placeholder()
                 && !self.overloads.contains_key(&decl.name)
-                && let Some(ret) = &decl.return_type
             {
-                self.fn_return_types.insert(decl.name.clone(), ret.clone());
+                if let Some(ret) = &decl.return_type {
+                    self.fn_return_types.insert(decl.name.clone(), ret.clone());
+                }
+                let params: Vec<Type> = decl
+                    .params
+                    .iter()
+                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                    .collect();
+                if crate::ast::takes_call_site(&params) {
+                    self.fn_call_site_arity
+                        .insert(decl.name.clone(), params.len());
+                }
             }
         }
 

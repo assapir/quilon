@@ -9,7 +9,9 @@ use std::path::Path;
 
 use crate::diagnostic::{self, Severity};
 use crate::lexer::Span;
+use crate::source_map::SourceMap;
 use crate::{ast, lexer, modules, parser, typechecker};
+use std::rc::Rc;
 
 /// A failure from any stage of the front-end. Its `Display` is the exact
 /// diagnostic the CLI prints to stderr before exiting: for stages that know a
@@ -35,6 +37,24 @@ impl FrontEndError {
         }
     }
 
+    /// A source-located error whose span may belong to an IMPORTED module, resolved through
+    /// the [`SourceMap`] so it is reported against the file it is actually in.
+    ///
+    /// Type checking runs over the linked program, so a span can point into any module that
+    /// was merged in. Rendering all of them against the root file's text named the wrong
+    /// file and underlined whatever happened to sit at that byte offset in the root — a
+    /// diagnostic pointing at innocent code. Falls back to the root file for a span whose
+    /// file is unknown (an in-memory program), which is where the compiler is looking anyway.
+    fn at_span(sources: &SourceMap, span: &Span, message: &str) -> Self {
+        let Some(location) = sources.locate_or_root(span) else {
+            return Self::plain(message.to_string());
+        };
+        let source = sources
+            .get_text(span.file)
+            .unwrap_or_else(|| sources.root_text());
+        Self::at(&location.path, source, span, message)
+    }
+
     /// An error with no source location (file read failure, import resolution).
     fn plain(message: String) -> Self {
         Self { rendered: message }
@@ -53,8 +73,11 @@ pub struct Checked {
     pub program: ast::Program,
     /// Every expression's inferred type, keyed by source position.
     pub types: typechecker::TypeTable,
-    /// The source text of `file`, for mapping a span back to a line and column.
-    pub source: String,
+    /// Every file the program was assembled from — the source read from `file` plus each
+    /// resolved `<<` module — so any span (in the user's file or in an imported one) maps
+    /// back to a path, line, and column. Shared (`Rc`) because codegen keeps it for the
+    /// whole emission while the caller may still read the root text from it.
+    pub sources: Rc<SourceMap>,
     /// How many leading items came from `<<` imports — `link` prepends them, so anything
     /// before this index belongs to another file. A `--debug` build uses it to attribute
     /// DWARF line info to the user's own source only.
@@ -104,13 +127,14 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     // The source file's own item count, captured before linking prepends imported items.
     let own_item_count = program.items.len();
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
-    let program = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
+    let (program, mut sources) = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
+    sources.set_root(path.clone(), source.clone());
     // `link` prepends imported items, so everything before the source's own items is imported.
     let imported_items = program.items.len() - own_item_count;
 
     let types = typechecker::TypeChecker::new()
         .check_program(&program)
-        .map_err(|e| FrontEndError::at(&path, &source, e.span(), &e.to_string()))?;
+        .map_err(|e| FrontEndError::at_span(&sources, e.span(), &e.to_string()))?;
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
@@ -122,7 +146,7 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     Ok(Checked {
         program,
         types,
-        source,
+        sources: Rc::new(sources),
         imported_items,
         defer,
     })

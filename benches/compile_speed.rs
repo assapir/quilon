@@ -40,6 +40,7 @@ const CORPORA: &[(&str, &str)] = &[
     ("interpolation", "600 interpolated literals"),
     ("sum_matches", "40 variants, 120 exhaustive matches"),
     ("records", "30 record types of 20 fields, used 4x each"),
+    ("call_sites", "2000 assertions, deep in a long file"),
 ];
 
 fn main() {
@@ -103,6 +104,7 @@ fn regenerate() {
         ("interpolation", interpolation_program(600)),
         ("sum_matches", sum_match_program(40, 120)),
         ("records", record_program(30, 20, 4)),
+        ("call_sites", call_site_program(2000)),
     ] {
         let path = dir.join(format!("{stem}.ql"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
@@ -184,9 +186,14 @@ impl Corpus {
             total.parse += start.elapsed();
 
             let start = Instant::now();
-            let program = quilon::modules::link(program, &self.dir)
+            let (program, mut sources) = quilon::modules::link(program, &self.dir)
                 .expect("benchmark corpus must resolve its imports");
             total.link += start.elapsed();
+            // The corpus's own text, under the name the table shows. Codegen resolves a
+            // call site through this map, so WITHOUT it every `Site` a corpus asks for
+            // would take the "unknown location" path and the work would not be measured.
+            sources.set_root(format!("{}.ql", self.name), self.source.clone());
+            let sources = std::rc::Rc::new(sources);
 
             let start = Instant::now();
             let table = TypeChecker::new()
@@ -198,6 +205,7 @@ impl Corpus {
             let context = Context::create();
             let mut codegen = CodeGenerator::new(&context, "bench");
             codegen.set_type_table(table);
+            codegen.set_source_map(std::rc::Rc::clone(&sources));
             codegen
                 .generate(&program)
                 .expect("benchmark corpus must compile");
@@ -280,6 +288,28 @@ fn overload_program(members: usize) -> String {
 /// measuring codegen; this one measures what an import costs.
 fn corelib_program() -> String {
     "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => assert(1 + 1 == 2)\n".to_string()
+}
+
+/// Assertions far down a long file: every one is a call whose trailing `Site` the compiler
+/// fills in, which means resolving a byte offset to a line, column, and source line.
+///
+/// The padding above them is the point. Resolving a position used to walk the file from
+/// offset 0, so the cost grew with each call's DISTANCE into the file — the same 2000
+/// assertions placed after a long prologue cost an order of magnitude more than at the top.
+/// A corpus that put its calls near line 1 would have measured almost none of it.
+fn call_site_program(count: usize) -> String {
+    let mut out = String::from("<< core.test\n\n");
+    for line in 0..count {
+        out.push_str(&format!(
+            "~ padding, so the assertions below sit deep in the file (line {line})\n"
+        ));
+    }
+    out.push_str("\n^ = () -> $ => <\n");
+    for n in 0..count {
+        out.push_str(&format!("  assertEq({n} + 1, {})\n", n + 1));
+    }
+    out.push_str(">\n");
+    out
 }
 
 /// Many small imported files: scales the module system — resolution, per-file span

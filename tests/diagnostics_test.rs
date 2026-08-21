@@ -95,3 +95,40 @@ fn is_line_col_error_header(line: &str) -> bool {
     let row = nums.next().and_then(|s| s.parse::<usize>().ok());
     row.is_some() && col.is_some() && !rest.is_empty()
 }
+
+/// A type error inside an IMPORTED module is reported against that module — its path, its
+/// line, its source line — not against the file being compiled. Type checking runs over the
+/// linked program, so the span belongs to whichever module it came from; rendering every
+/// span against the root file named the wrong file and underlined whatever happened to sit
+/// at that byte offset.
+#[test]
+fn a_type_error_in_an_imported_module_names_that_module() {
+    let dir = std::env::temp_dir().join(format!("quilon_diag_import_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let module = dir.join("broken_lib.ql");
+    std::fs::write(
+        &module,
+        "~ a module with a type error\n>> broken = (n :: Num) -> Text => n\n",
+    )
+    .expect("write module");
+    let main = dir.join("importer.ql");
+    std::fs::write(&main, "<< \"broken_lib.ql\"\n^ = () -> Num => 0\n").expect("write main");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("run quilon");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(!out.status.success(), "the program must be rejected");
+    assert!(
+        stderr.starts_with(&format!("{}:2:1: error:", module.display())),
+        "the error must be reported against the imported module, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(">> broken = (n :: Num) -> Text => n"),
+        "the error must show the imported module's own source line, got: {stderr:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -18,25 +18,34 @@
 use crate::ast::{Import, Item, ModulePath, Program};
 use crate::lexer::{FileId, Lexer, ROOT_FILE};
 use crate::parser;
+use crate::source_map::SourceMap;
 use std::collections::HashSet;
 use std::path::Path;
 
 /// Resolve all imports of `program`, returning the exported items to merge into the
-/// importing program. `base_dir` is the directory of the importing file (used to resolve
-/// relative file-path imports).
-pub fn resolve_imports(program: &Program, base_dir: &Path) -> Result<Vec<Item>, String> {
+/// importing program, and a [`SourceMap`] naming every module those items came from (the
+/// root file is the caller's to record). `base_dir` is the directory of the importing file
+/// (used to resolve relative file-path imports).
+pub fn resolve_imports(
+    program: &Program,
+    base_dir: &Path,
+) -> Result<(Vec<Item>, SourceMap), String> {
     let mut loader = Loader {
         visited: HashSet::new(),
         out: Vec::new(),
+        sources: SourceMap::default(),
         next_file: ROOT_FILE + 1,
     };
     loader.resolve_list(&program.imports, base_dir)?;
-    Ok(loader.out)
+    Ok((loader.out, loader.sources))
 }
 
 struct Loader {
     visited: HashSet<String>,
     out: Vec<Item>,
+    /// Each loaded module's display path and text, keyed by the `FileId` its spans carry —
+    /// what a `file:line:column` for a span in an imported module is resolved through.
+    sources: SourceMap,
     /// The file id the next module lexed gets. Every module's byte offsets restart at 0,
     /// so spans stay unique across the merged program only if each module carries its own
     /// identity: the type oracle is keyed by span, and a collision there hands codegen
@@ -53,13 +62,14 @@ impl Loader {
     }
 
     fn resolve_one(&mut self, path: &ModulePath, base_dir: &Path) -> Result<(), String> {
-        let (canonical, source, next_base) = match path {
+        let (canonical, display, source, next_base) = match path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
                 let src = builtin_source(&name)
                     .ok_or_else(|| format!("unknown built-in module `{}`", name))?;
                 (
                     format!("builtin:{}", name),
+                    name,
                     src.to_string(),
                     base_dir.to_path_buf(),
                 )
@@ -80,6 +90,7 @@ impl Loader {
                     .unwrap_or_else(|| base_dir.to_path_buf());
                 (
                     format!("file:{}", full.to_string_lossy()),
+                    full.to_string_lossy().into_owned(),
                     source,
                     next_base,
                 )
@@ -93,6 +104,7 @@ impl Loader {
 
         let file = self.next_file;
         self.next_file += 1;
+        self.sources.insert(file, display, source.clone());
         let tokens = Lexer::tokenize_in_file(&source, file)
             .map_err(|e| format!("lexer error in module `{}`: {}", canonical, e))?;
         let sub = parser::parse(&tokens)
@@ -161,14 +173,18 @@ fn item_is_exported(item: &Item) -> bool {
 }
 
 /// Convenience used by the CLI: resolve `program`'s imports and return a new program with the
-/// imported exported items prepended to its own items (imports cleared, since they are resolved).
-pub fn link(program: Program, base_dir: &Path) -> Result<Program, String> {
-    let mut items = resolve_imports(&program, base_dir)?;
+/// imported exported items prepended to its own items (imports cleared, since they are resolved),
+/// plus the [`SourceMap`] of the modules they came from.
+pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), String> {
+    let (mut items, sources) = resolve_imports(&program, base_dir)?;
     items.extend(program.items);
-    Ok(Program {
-        imports: Vec::new(),
-        items,
-    })
+    Ok((
+        Program {
+            imports: Vec::new(),
+            items,
+        },
+        sources,
+    ))
 }
 
 #[cfg(test)]

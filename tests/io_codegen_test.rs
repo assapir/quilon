@@ -106,3 +106,14 @@ fn main_wrapper_initializes_gc() {
     // The GC init must be declared as an external (no body) function.
     assert!(ir.contains("declare") && ir.contains("@__gc_init"));
 }
+
+#[test]
+fn color_enabled_lowers_to_the_color_intrinsic() {
+    // `colorEnabled(fd)` is a compiler-lowered core.io builtin (like `write`): it becomes
+    // a `__color_enabled` call, so nothing in `.ql` has to guess at tty detection.
+    let ir = gen_ir("^ = () -> Num => colorEnabled(2) ? 1 : 0");
+    assert!(
+        ir.contains("declare i64 @__color_enabled(i64)"),
+        "colorEnabled must lower to the __color_enabled intrinsic, got:\n{ir}"
+    );
+}

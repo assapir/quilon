@@ -76,14 +76,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         let Expr::Ident { name, .. } = func.as_ref() else {
             return false;
         };
-        if args.len() != arity {
+        // A self-call may leave off a trailing `Site` for the compiler to fill in, and it is
+        // still the same call — so its arity matches one short of the parameter slots. This
+        // is what keeps a recursive function that adopts the facility a LOOP: without it the
+        // call is emitted as a real call, and the language's only iteration mechanism
+        // silently starts overflowing the stack.
+        if args.len() != arity && !(args.len() + 1 == arity && self.fills_call_site(name, args)) {
             return false;
         }
         // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
         // The intrinsic names here MUST stay in sync with those intercepted in
-        // `generate_call` (`print`/`eprint`/`write`/`__exit`).
+        // `generate_call` (`print`/`eprint`/`write`/`colorEnabled`/`now`/`__exit`).
         if self.sum_variants.contains_key(name.as_str())
-            || matches!(name.as_str(), "print" | "eprint" | "write" | "__exit")
+            || matches!(
+                name.as_str(),
+                "print" | "eprint" | "write" | "colorEnabled" | "now" | "__exit"
+            )
         {
             return false;
         }
@@ -130,10 +138,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             // here (a call leaf), not on every tail node. A `Some` from
             // `emit_tail_self_call` means it declined the back-edge and emitted a plain
             // call instead, whose value is an ordinary tail value.
-            Expr::Call { args, .. } => {
+            Expr::Call { args, span, .. } => {
                 let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
                 if self.is_self_tail_call(expr, &self_symbol, arity) {
-                    self.emit_tail_self_call(args)
+                    // A self-call that omitted its trailing `Site` gets one filled in for
+                    // the loop's parameter slot, exactly as an ordinary call would.
+                    let site = match args.len() < arity {
+                        true => Some(span.clone()),
+                        false => None,
+                    };
+                    self.emit_tail_self_call(args, site.as_ref())
                 } else {
                     Ok(Some(self.generate_expr(expr)?))
                 }
@@ -194,11 +208,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn emit_tail_self_call(
         &mut self,
         args: &[Expr],
+        fill_site: Option<&Span>,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let new_vals: Vec<BasicValueEnum<'ctx>> = args
+        let mut new_vals: Vec<BasicValueEnum<'ctx>> = args
             .iter()
             .map(|a| self.generate_expr(a))
             .collect::<Result<Vec<_>, _>>()?;
+        // The call's own location, for a callee (itself) whose last parameter is a `Site`.
+        if let Some(span) = fill_site {
+            new_vals.push(self.site_value(span)?);
+        }
         let tco = self
             .tco
             .as_ref()

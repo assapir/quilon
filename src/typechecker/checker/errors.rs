@@ -19,6 +19,7 @@ impl TypeError {
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::MisplacedSiteParam { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
             | TypeError::UnannotatedOverloadCall { span, .. }
             | TypeError::UnannotatedOverloadMember { span, .. }
@@ -108,6 +109,13 @@ impl std::fmt::Display for TypeError {
                     name, param
                 )
             }
+            TypeError::MisplacedSiteParam { subject, .. } => {
+                write!(
+                    f,
+                    "{} declares a `Site` parameter that nothing can fill in — the compiler supplies a call site only as the LAST parameter of a top-level function",
+                    subject
+                )
+            }
             TypeError::OverloadCallBeforeDefinition { name, .. } => {
                 write!(
                     f,
@@ -185,7 +193,10 @@ pub(super) fn fmt_type_list(types: &[Type]) -> String {
 pub(super) fn fmt_candidates(candidates: &[Vec<Type>]) -> String {
     candidates
         .iter()
-        .map(|params| format!("({})", fmt_type_list(params)))
+        // A trailing `Site` is filled in by the compiler and can never be written at a call
+        // site, so a candidate list must not ask for it — `assertEq(1)` reports the
+        // candidates as `(Num, Num)`, not `(Num, Num, Site)`.
+        .map(|params| format!("({})", fmt_type_list(crate::ast::visible_params(params))))
         .collect::<Vec<_>>()
         .join(", ")
 }

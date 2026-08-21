@@ -189,9 +189,12 @@ impl TypeChecker {
                 params,
                 return_type,
             } => {
-                if params.len() != args.len() {
+                // A trailing `Site` parameter receives the CALLER's location, which the
+                // compiler fills in (`CodeGenerator::site_value`), so a call may leave that
+                // last argument off — and the arity a caller sees excludes it.
+                if params.len() != args.len() && !crate::ast::fills_call_site(&params, args.len()) {
                     return Err(TypeError::WrongNumberOfArguments {
-                        expected: params.len(),
+                        expected: crate::ast::visible_params(&params).len(),
                         got: args.len(),
                         span: span.clone(),
                     });
@@ -297,6 +300,7 @@ impl TypeChecker {
     ///   - `contains(sub :: Text)`              -> `Bool`
     ///   - `indexOf(sub :: Text)`               -> `Result` (`Ok(Num)` / `NotOk`)
     ///   - `slice(start :: Num, end :: Num)`    -> `Text`
+    ///   - `repeat(count :: Num)`               -> `Text` (`count` copies, joined)
     pub(super) fn check_text_method(
         &mut self,
         method: &str,
@@ -316,6 +320,7 @@ impl TypeChecker {
             "contains" => (vec![Text], Bool),
             "indexOf" => (vec![Text], result_of(Num)),
             "slice" => (vec![Num, Num], Text),
+            "repeat" => (vec![Num], Text),
             "replaceAll" => (vec![Text, Text], Text),
             "replace" => (vec![Text, Text, Num], Text),
             other => unreachable!("unhandled text method {other}"),
@@ -337,6 +342,19 @@ impl TypeChecker {
         // determinable from literals (the runtime aborts on the rest — no silent no-ops).
         if method == "replace" || method == "replaceAll" {
             self.check_replace_literals(method, args, span)?;
+        }
+        // Same contract for `repeat`: a literal count that is negative or fractional is a
+        // compile error; a computed one is the runtime's to reject.
+        if method == "repeat"
+            && let Some(count) = literal_number(&args[1])
+            && (count < 0.0 || count.fract() != 0.0)
+        {
+            return Err(TypeError::InvalidBuiltinArgument {
+                message: format!(
+                    "repeat: `count` must be a whole number of 0 or more (got {count})"
+                ),
+                span: span.clone(),
+            });
         }
 
         Ok(result)
@@ -374,20 +392,7 @@ impl TypeChecker {
         if method != "replace" {
             return Ok(());
         }
-        // A literal count is `Number` or a negated `Number` (`-2` parses as `Neg(2)`).
-        let literal_count = match &args[3] {
-            Expr::Number { value, .. } => Some(*value),
-            Expr::UnaryOp {
-                op: crate::ast::UnaryOp::Neg,
-                expr,
-                ..
-            } => match expr.as_ref() {
-                Expr::Number { value, .. } => Some(-value),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some(count) = literal_count else {
+        let Some(count) = literal_number(&args[3]) else {
             return Ok(()); // non-literal count — checked at runtime
         };
         // Truncate toward zero, matching codegen/runtime integer handling.
@@ -456,5 +461,22 @@ impl TypeChecker {
         self.type_table
             .insert(arg.span().clone(), body_type.clone());
         Ok(body_type)
+    }
+}
+
+/// A literal `Num` argument's value: a `Number`, or a negated one (`-2` parses as
+/// `Neg(2)`). `None` for anything computed, which only the runtime can check.
+fn literal_number(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Number { value, .. } => Some(*value),
+        Expr::UnaryOp {
+            op: crate::ast::UnaryOp::Neg,
+            expr,
+            ..
+        } => match expr.as_ref() {
+            Expr::Number { value, .. } => Some(-value),
+            _ => None,
+        },
+        _ => None,
     }
 }

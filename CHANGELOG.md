@@ -28,6 +28,45 @@ All notable changes to Quilon are documented here.
   declare `@` primitives while still rejecting them in user code. See
   `examples/readStdin.ql` (pipe it a line to watch a real value flow); cross-source *overlap*
   is demonstrated later with a networked primitive.
+- **Failing assertions say where they failed, and a general call-site facility to build
+  that on ([#65](https://github.com/assapir/quilon/issues/65)).** A failing `core.test`
+  assertion now reports in the shape of a compiler error — the failing call's own
+  `file:line:column`, the message, the source line, and a caret run under the call:
+
+  ```text
+  demo.ql:12:3: assertion failed: expected 42, got 41
+     |
+  12 |   assertEq(answer(), 42)
+     |   ^^^^^^^^^^^^^^^^^^^^^^
+  ```
+
+  The location is the **user's** call site, not an internal hop: `assertEq` fails several
+  calls deep inside `core.test` and still points at the line where the program called
+  `assertEq`, including inside a helper rather than `^`. The report is colored when stderr
+  is a terminal, plain when redirected or under `NO_COLOR`.
+
+  The mechanism is a new built-in record type **`Site`** (`file`/`line`/`column`/`excerpt`/
+  `width`), usable in any signature with no import: a function whose **last** parameter is
+  a `Site` receives the location of the call that left that argument off, and **passing one
+  explicitly forwards it** — which is the whole propagation rule, and what makes a chain of
+  wrappers blame the outermost caller (Rust's `#[track_caller]`, as an ordinary argument).
+  It is compile-time only: the fields are constants, so there is no unwinder and no debug
+  info to keep, and `quilon run` (JIT) and native builds report identically. A `Site`
+  parameter that nothing could fill in — before another parameter, or on a lambda, a nested
+  declaration, or a record method — is a compile error rather than a silent demand for an
+  explicit location. See `examples/call_site.ql`, and `examples/assert_location.ql`, which
+  fails on purpose to show the report.
+
+  Supporting surface, all documented: `core.test`'s **`failAt(message)`** (the reporting
+  primitive the assertions are built from, and what a custom assertion of your own
+  forwards its own `site` to), **`Text.repeat(count)`** (`count` copies; fail-loud on a
+  negative or fractional count, at compile time when literal), **`core.io`'s
+  `colorEnabled(fd)`** (tty + `NO_COLOR` + `TERM` check), and the **`\e`** string escape
+  for the ESC byte, without which `.ql` code could not write an ANSI sequence at all.
+  Internally, the front end now carries a `SourceMap` (every file's path and text, keyed by
+  the `FileId` its spans carry) through to codegen, and compiler diagnostics and `Site`
+  values resolve a span through the same code — so both report a position and caret width
+  identically.
 - **Concurrency runtime — the `@sleep` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The first Quilon-visible surface of the colorless implicit-futures model: `@sleep`
   (in the new `core.time` module), an effect-only pause. `@sleep(secs)` takes seconds

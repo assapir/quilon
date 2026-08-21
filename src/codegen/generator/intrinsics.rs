@@ -89,6 +89,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__text_split" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
+            // i64 __color_enabled(i64 fd) — 1 when `fd` is a terminal that wants color.
+            "__color_enabled" => i64t.fn_type(&[i64t.into()], false),
+            // { ptr, i64 } __text_repeat(i8*, i64, double count) — `count` copies of the
+            // text. The count stays a `double` so the runtime can reject a fractional or
+            // negative one rather than silently truncating it.
+            "__text_repeat" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), f64t.into()], false),
             // { ptr, i64 } __text_slice(i8*, i64, i64 start, i64 end).
             "__text_slice" => self
                 .ptr_len_struct_type()
@@ -208,6 +216,31 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build __exit call"))?;
         // `__exit` never returns; yield Unit so the call composes in expression position.
         Ok(self.unit_value().into())
+    }
+
+    /// Lower `core.io`'s `colorEnabled(fd)` to the `__color_enabled` intrinsic: a `Bool`
+    /// saying whether `fd` is a terminal that wants ANSI styling (see the runtime for the
+    /// `NO_COLOR`/`TERM`/tty rules). Its corelib body is an inert placeholder.
+    pub(super) fn generate_color_enabled(
+        &mut self,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "colorEnabled expects exactly 1 argument (fd), got {}",
+                args.len()
+            ));
+        }
+        use inkwell::values::AnyValue;
+        let fd = self.text_index_arg(&args[0], "fd")?;
+        let f = self.get_intrinsic("__color_enabled")?;
+        let enabled = self
+            .builder
+            .build_call(f, &[fd.into()], "color_enabled")
+            .map_err(ctx("Failed to call __color_enabled"))?
+            .as_any_value_enum()
+            .into_int_value();
+        self.int_to_bool(enabled, "color_bool")
     }
 
     /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`

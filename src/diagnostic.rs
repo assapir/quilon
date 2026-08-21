@@ -12,6 +12,7 @@
 //! ```
 
 use crate::lexer::Span;
+use crate::source_map::locate_in;
 
 /// How a diagnostic is labelled (`error`, `warning`, ...). Quilon only emits
 /// errors today, but the renderer is severity-agnostic.
@@ -32,45 +33,37 @@ impl Severity {
 /// the offending source line and a caret underline beneath the span.
 ///
 /// `path` is the source file as the user named it on the command line. `source`
-/// is its full text. `span` is the byte range the message refers to; for a
-/// multi-line span only the first line is underlined.
+/// is its full text. `span` is the byte range the message refers to. The position and
+/// caret width come from [`locate_in`] — the same resolver a runtime `Site` uses — so a
+/// compile error and a failing assertion point at a span identically (for a multi-line
+/// span, only the first line is underlined).
 pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message: &str) -> String {
-    let (line, col) = Span::line_col(source, span.start as usize);
-    let mut out = format!("{path}:{line}:{col}: {}: {message}", severity.label());
+    let loc = locate_in(path, source, span);
+    let mut out = format!(
+        "{path}:{}:{}: {}: {message}",
+        loc.line,
+        loc.column,
+        severity.label()
+    );
 
-    // The text of the line the span starts on (without its trailing newline).
-    let Some(line_text) = source.lines().nth(line - 1) else {
+    // A span past the end of the file has no line to show; the position alone is the
+    // whole diagnostic.
+    let Some(excerpt) = &loc.excerpt else {
         return out;
     };
 
     // Width of the line-number gutter, e.g. "3 | " -> the "3" plus a space.
-    let line_no = line.to_string();
+    let line_no = loc.line.to_string();
     let gutter = " ".repeat(line_no.len());
 
-    // Caret run: `col - 1` chars of lead, then underline the span's width,
-    // clamped to what is left on this line (multi-line spans stay on line one)
-    // and to at least one caret so an empty/zero-width span is still pointed at.
-    let lead = col - 1;
-    let span_chars = char_len(source, span.range());
-    let remaining = line_text.chars().count().saturating_sub(lead);
-    let underline = span_chars.clamp(1, remaining.max(1));
-
     out.push_str(&format!("\n{gutter} |"));
-    out.push_str(&format!("\n{line_no} | {line_text}"));
+    out.push_str(&format!("\n{line_no} | {excerpt}"));
     out.push_str(&format!(
         "\n{gutter} | {}{}",
-        " ".repeat(lead),
-        "^".repeat(underline)
+        " ".repeat(loc.column - 1),
+        "^".repeat(loc.width)
     ));
     out
-}
-
-/// Number of `char`s in the source over `range`, clamped to the source bounds.
-/// Used for the caret width so it counts scalar values, not bytes.
-fn char_len(source: &str, range: std::ops::Range<usize>) -> usize {
-    let start = range.start.min(source.len());
-    let end = range.end.min(source.len()).max(start);
-    source[start..end].chars().count()
 }
 
 #[cfg(test)]

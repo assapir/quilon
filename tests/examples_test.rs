@@ -19,6 +19,20 @@ fn examples_dir() -> PathBuf {
 /// Examples that are intentionally rejected by the compiler (negative examples).
 const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql", "global_computed.ql"];
 
+/// Examples that compile and run but deliberately FAIL, because the failure IS what they
+/// demonstrate: `(file, exit code, a fragment its stderr must contain)`. They are excluded
+/// from the exit-0 gates below and checked by `failing_examples_report_their_failure`.
+const EXPECT_RUNTIME_FAILURE: &[(&str, i32, &str)] = &[(
+    "assert_location.ql",
+    101,
+    "assert_location.ql:23:3: assertion failed: expected 42, got 41",
+)];
+
+/// Whether `name` is one of the deliberately-failing examples.
+fn expects_runtime_failure(name: &str) -> bool {
+    EXPECT_RUNTIME_FAILURE.iter().any(|(f, _, _)| *f == name)
+}
+
 fn ql_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
         .expect("examples/ should exist")
@@ -36,14 +50,17 @@ fn defines_entry(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// The runnable examples: every `.ql` that defines `^` and is not a negative example.
-/// A new runnable example is picked up automatically — no per-file registration.
+/// The runnable examples: every `.ql` that defines `^`, is not a negative example, and is
+/// not one of the deliberately-failing ones. A new runnable example is picked up
+/// automatically — no per-file registration.
 fn runnable_examples() -> Vec<PathBuf> {
     ql_files()
         .into_iter()
         .filter(|p| {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
-            !EXPECT_COMPILE_ERROR.contains(&name.as_str()) && defines_entry(p)
+            !EXPECT_COMPILE_ERROR.contains(&name.as_str())
+                && !expects_runtime_failure(&name)
+                && defines_entry(p)
         })
         .collect()
 }
@@ -120,10 +137,49 @@ fn runnable_examples_exit_zero() {
             &checked.program,
             checked.types,
             checked.defer,
+            checked.sources,
             &["program".to_string()],
         )
         .unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
         assert_eq!(code, 0, "{name}: self-asserting example did not exit 0");
+    }
+}
+
+/// The deliberately-failing examples: each must exit with its documented code and print
+/// its documented location to stderr. This is what keeps a failure-demonstrating example
+/// honest — its own header shows the report, and here the report is checked against it.
+///
+/// Driven as a SUBPROCESS (`quilon run`), never the in-process JIT: a failing assertion
+/// calls `__exit`, which would terminate the test runner.
+#[test]
+fn failing_examples_report_their_failure() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    for (name, code, expected) in EXPECT_RUNTIME_FAILURE {
+        let path = examples_dir().join(name);
+        assert!(path.exists(), "{name} is registered but missing");
+
+        let out = Command::new(quilon)
+            .args(["run", path.to_str().unwrap()])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("run quilon run");
+        assert_eq!(
+            out.status.code().unwrap_or(-1),
+            *code,
+            "{name}: expected exit {code}"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: stderr must contain {expected:?}, got: {stderr:?}"
+        );
+        // The example's own header documents the report; a drifted line number there is a
+        // stale example, so the documented text must appear in the file too.
+        let src = std::fs::read_to_string(&path).expect("read example");
+        assert!(
+            src.contains(expected),
+            "{name}: its header must document the report it prints ({expected:?})"
+        );
     }
 }
 

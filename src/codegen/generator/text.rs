@@ -72,6 +72,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                     &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
                 )
             }
+            "repeat" => {
+                // `count` copies of the receiver. Passed as a Num (double): the runtime
+                // rejects a negative/fractional count instead of truncating it, and the
+                // checker already rejected a literal one.
+                let count = self.generate_expr(&args[1])?.into_float_value();
+                call_struct(
+                    self,
+                    "__text_repeat",
+                    &[recv_ptr.into(), recv_len.into(), count.into()],
+                )
+            }
             "replaceAll" => {
                 // Replace every occurrence. The intrinsic aborts (exit 101) on an empty
                 // `from`; there is no count.
@@ -135,17 +146,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to call __text_contains"))?
                     .as_any_value_enum()
                     .into_int_value();
-                // i64 0/1 -> i1 Bool.
-                Ok(self
-                    .builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::NE,
-                        r,
-                        r.get_type().const_zero(),
-                        "contains_bool",
-                    )
-                    .map_err(ctx("Failed to build contains bool"))?
-                    .into())
+                self.int_to_bool(r, "contains_bool")
             }
             "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
             other => Err(format!("unknown text method `{other}`")),
@@ -178,6 +179,25 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Evaluate a `Num` index argument (an `f64`) and convert it to the `i64` the Text
     /// intrinsics take (used by `slice`'s start/end).
+    /// Narrow an intrinsic's `i64` 0/1 answer to an `i1` Quilon `Bool`. Several runtime
+    /// intrinsics return a plain integer because the C ABI has no bool of our width.
+    pub(super) fn int_to_bool(
+        &self,
+        value: inkwell::values::IntValue<'ctx>,
+        name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                value,
+                value.get_type().const_zero(),
+                name,
+            )
+            .map_err(ctx("Failed to narrow an intrinsic result to Bool"))?
+            .into())
+    }
+
     pub(super) fn text_index_arg(
         &mut self,
         expr: &Expr,

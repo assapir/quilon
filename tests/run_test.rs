@@ -750,16 +750,28 @@ fn jit_uses_caller_supplied_argv() {
         "c".to_string(),
     ];
     let defer = quilon::deferral::analyze(&program);
-    let code =
-        jit::run_program(&program, types.clone(), defer.clone(), &argv).expect("execution failed");
+    let code = jit::run_program(
+        &program,
+        types.clone(),
+        defer.clone(),
+        common::no_sources(),
+        &argv,
+    )
+    .expect("execution failed");
     assert_eq!(
         code, 4,
         "JIT `args.size` must equal the caller-supplied argv length (file + 3 user args)"
     );
 
     // A bare argv (`argv[0]` only) mirrors a native binary run with no extra args.
-    let code =
-        jit::run_program(&program, types, defer, &["f.ql".to_string()]).expect("execution failed");
+    let code = jit::run_program(
+        &program,
+        types,
+        defer,
+        common::no_sources(),
+        &["f.ql".to_string()],
+    )
+    .expect("execution failed");
     assert_eq!(code, 1, "bare argv -> args.size == 1 (argv[0] only)");
 }
 
@@ -778,8 +790,14 @@ fn legacy_numeric_argc_argv_entry_still_runs() {
         .expect("legacy numeric entry should type-check");
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let defer = quilon::deferral::analyze(&program);
-    let code = jit::run_program(&program, types, defer, &["program".to_string()])
-        .expect("legacy numeric entry should run");
+    let code = jit::run_program(
+        &program,
+        types,
+        defer,
+        common::no_sources(),
+        &["program".to_string()],
+    )
+    .expect("legacy numeric entry should run");
     assert_eq!(code, 3, "legacy (Num, Num) entry should still run");
 }
 
