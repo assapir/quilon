@@ -22,11 +22,18 @@ const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql", "global_computed.ql"];
 /// Examples that compile and run but deliberately FAIL, because the failure IS what they
 /// demonstrate: `(file, exit code, a fragment its stderr must contain)`. They are excluded
 /// from the exit-0 gates below and checked by `failing_examples_report_their_failure`.
-const EXPECT_RUNTIME_FAILURE: &[(&str, i32, &str)] = &[(
-    "assert_location.ql",
-    101,
-    "assert_location.ql:23:3: assertion failed: expected 42, got 41",
-)];
+const EXPECT_RUNTIME_FAILURE: &[(&str, i32, &str)] = &[
+    (
+        "assert_location.ql",
+        101,
+        "assert_location.ql:23:3: assertion failed: expected 42, got 41",
+    ),
+    (
+        "index_out_of_bounds.ql",
+        1,
+        "index_out_of_bounds.ql:21:11: index 7 out of bounds for an array of size 3",
+    ),
+];
 
 /// Whether `name` is one of the deliberately-failing examples.
 fn expects_runtime_failure(name: &str) -> bool {

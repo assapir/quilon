@@ -694,8 +694,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(fail_bb);
             let fail_fn = self.get_intrinsic("__index_fail")?;
+            // Where the program wrote `arr[i]`, so the report points at the read rather
+            // than leaving the reader to guess which one of them it was.
+            let site = self.site_value(index_node.span())?;
             self.builder
-                .build_call(fail_fn, &[idx_f.into(), size.into()], "")
+                .build_call(fail_fn, &[idx_f.into(), size.into(), site.into()], "")
                 .map_err(ctx("Failed to call __index_fail"))?;
             self.builder
                 .build_unreachable()

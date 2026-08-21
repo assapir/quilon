@@ -10,10 +10,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver). Each is
     /// lowered to its `quilon-rt` intrinsic; `split` yields the `[]Text` `{ptr,i64}`
     /// struct the intrinsic builds, and `indexOf` builds an `Ok(Num)`/`NotOk` `Result`.
+    ///
+    /// `span` is the whole method call's span: the three methods with a fail-loud contract
+    /// (`repeat`, `replace`, `replaceAll`) hand it to the runtime as a `Site`, so a violated
+    /// contract reports where the call is written.
     pub(super) fn generate_text_method(
         &mut self,
         method: &str,
         args: &[Expr],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
         let (recv_ptr, recv_len) = self.extract_text(&args[0])?;
@@ -77,10 +82,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // rejects a negative/fractional count instead of truncating it, and the
                 // checker already rejected a literal one.
                 let count = self.generate_expr(&args[1])?.into_float_value();
+                let site = self.site_value(span)?;
                 call_struct(
                     self,
                     "__text_repeat",
-                    &[recv_ptr.into(), recv_len.into(), count.into()],
+                    &[recv_ptr.into(), recv_len.into(), count.into(), site.into()],
                 )
             }
             "replaceAll" => {
@@ -88,6 +94,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // `from`; there is no count.
                 let (fp, fl) = self.extract_text(&args[1])?;
                 let (tp, tl) = self.extract_text(&args[2])?;
+                let site = self.site_value(span)?;
                 call_struct(
                     self,
                     "__text_replace_all",
@@ -98,6 +105,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         fl.into(),
                         tp.into(),
                         tl.into(),
+                        site.into(),
                     ],
                 )
             }
@@ -110,6 +118,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let (fp, fl) = self.extract_text(&args[1])?;
                 let (tp, tl) = self.extract_text(&args[2])?;
                 let count = self.text_index_arg(&args[3], "replace_count")?;
+                let site = self.site_value(span)?;
                 call_struct(
                     self,
                     "__text_replace_n",
@@ -121,6 +130,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         tp.into(),
                         tl.into(),
                         count.into(),
+                        site.into(),
                     ],
                 )
             }

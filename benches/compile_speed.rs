@@ -41,6 +41,7 @@ const CORPORA: &[(&str, &str)] = &[
     ("sum_matches", "40 variants, 120 exhaustive matches"),
     ("records", "30 record types of 20 fields, used 4x each"),
     ("call_sites", "2000 assertions, deep in a long file"),
+    ("array_reads", "2000 checked array reads"),
 ];
 
 fn main() {
@@ -105,6 +106,7 @@ fn regenerate() {
         ("sum_matches", sum_match_program(40, 120)),
         ("records", record_program(30, 20, 4)),
         ("call_sites", call_site_program(2000)),
+        ("array_reads", array_read_program(2000)),
     ] {
         let path = dir.join(format!("{stem}.ql"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
@@ -309,6 +311,20 @@ fn call_site_program(count: usize) -> String {
         out.push_str(&format!("  assertEq({n} + 1, {})\n", n + 1));
     }
     out.push_str(">\n");
+    out
+}
+
+/// Checked array reads: every `arr[i]` emits a bounds test, a cold failure branch, and a
+/// `Site` constant for the report that branch produces — a shape none of the other corpora
+/// has (they contain no indexing at all), and the one this file grows if locating a runtime
+/// failure ever stops being free on the success path.
+fn array_read_program(count: usize) -> String {
+    let mut out =
+        String::from("^ = (args :: []Text) -> Num => <\n  items = [1, 2, 3]\n  total := 0\n");
+    for n in 0..count {
+        out.push_str(&format!("  total := total + items[{}]\n", n % 3));
+    }
+    out.push_str("  total\n>\n");
     out
 }
 

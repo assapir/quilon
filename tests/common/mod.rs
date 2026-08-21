@@ -68,6 +68,43 @@ pub fn assert_type_error(src: &str) {
     );
 }
 
+/// Compile and run `src` as a SUBPROCESS (`quilon run`), returning `(exit code, stderr)`
+/// and the path it was written to.
+///
+/// A program that fails loudly calls `__exit`, which would terminate the test runner if it
+/// ran in-process — so any test asserting on a failure's output has to spawn. `tag` names
+/// the file, which matters because the location the program reports IS that path.
+pub fn run_program(tag: &str, src: &str) -> (i32, String, std::path::PathBuf) {
+    let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("quilon_run_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let file = dir.join(format!("{tag}.ql"));
+    std::fs::write(&file, src).expect("write temp program");
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["run", file.to_str().unwrap()])
+        .output()
+        .expect("spawn quilon run");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        file,
+    )
+}
+
+/// Serializes nothing — it only keeps concurrently-running tests from colliding on a
+/// temp-directory name (a single test binary runs its own tests in parallel).
+static SUBPROCESS_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Whether `tool` is on PATH, for gates that need a linker and skip gracefully without one.
+pub fn tool_available(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
 /// The type error `src` is rejected with, as its rendered message. Panics if the program
 /// type-checks — a test asserting on a diagnostic needs there to be one.
 pub fn type_error_message(src: &str) -> String {

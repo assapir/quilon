@@ -6,6 +6,30 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Fail-loud runtime failures say where they happened
+  ([#153](https://github.com/assapir/quilon/issues/153)).** A checked `arr[i]` that is out
+  of bounds, negative, or NaN, and a violated `Text.replace` / `replaceAll` / `repeat`
+  contract, now report the *expression that broke the contract* — file, line, column, the
+  source line, and a caret run — instead of a bare stderr line:
+
+  ```text
+  demo.ql:4:11: index 7 out of bounds for an array of size 3
+     |
+   4 |   value = items[wanted]
+     |           ^^^^^^^^^^^^^
+  ```
+
+  Same frame as a compile error and a failing assertion, so one shape covers every located
+  failure a program can produce, and a program with several array reads no longer leaves you
+  hunting for which one it was. Exit codes are unchanged (`1` for a bad index, `101` for a
+  `Text` contract), and a redirected report stays plain. The location is compiled in — each
+  fallible intrinsic takes the read's `Site` constant — so a native build reports exactly
+  what `quilon run` does, with no debug info and no unwinder. `tests/fail_loud_location_test.rs`
+  pins compile errors, assertions, and runtime checks to the same framing, since the
+  assertion renderer lives in Quilon (`corelib/test.ql`) and the runtime one in Rust
+  (`quilon-rt`'s `report`). See `examples/index_out_of_bounds.ql`, which fails on purpose to
+  show the report.
+
 - **Deferred values — the `@readStdin` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The value-returning half of the colorless implicit-futures model. `@readStdin()` (in
   `core.io`) reads one line from stdin and returns a **deferred** `Text`: calling it

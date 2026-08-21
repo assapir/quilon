@@ -7,8 +7,7 @@
 //! `core.*` module, so it lives in this internal tier). This tier is where the
 //! future fiber scheduler and reactor will also live.
 
-use crate::io::write_to_fd;
-use crate::process::__exit;
+use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 
 // Link the Boehm GC and tie it to these symbol references so the linker keeps
@@ -98,20 +97,28 @@ pub extern "C" fn __alloc(size: i64) -> *mut c_void {
     unsafe { GC_malloc(n) }
 }
 
-/// Report an invalid array index — out of bounds, negative, or NaN — to stderr and
-/// terminate with exit status 1: the fail-loud contract of checked `arr[i]` indexing.
-/// `index` is the ORIGINAL f64 the program computed (pre-truncation), so the message
-/// shows what the user actually asked for; `size` is the array's element count.
-/// Codegen calls this from the invalid branch of every `arr[i]` bounds check.
+/// Report an invalid array index — out of bounds, negative, or NaN — at the indexing
+/// expression that asked for it, and terminate with exit status 1: the fail-loud contract of
+/// checked `arr[i]` indexing.
+///
+/// `index` is the ORIGINAL f64 the program computed (pre-truncation), so the message shows
+/// what the user actually asked for; `size` is the array's element count; `site` is the
+/// `arr[i]` expression's own location, which the report frames the same way a failing
+/// assertion does. Codegen calls this from the invalid branch of every `arr[i]` bounds check.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid [`QlSite`].
 #[unsafe(no_mangle)]
-pub extern "C" fn __index_fail(index: f64, size: i64) -> ! {
-    let msg = format!(
-        "runtime error: array index {} out of bounds (size {})\n",
-        format_num(index),
-        size
-    );
-    write_to_fd(2, msg.as_bytes());
-    __exit(1)
+pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! {
+    fail_at(
+        site,
+        &format!(
+            "index {} out of bounds for an array of size {}",
+            format_num(index),
+            size
+        ),
+        1,
+    )
 }
 
 /// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
@@ -134,6 +141,20 @@ impl QlSlice {
             data: std::ptr::null(),
             len: 0,
         }
+    }
+
+    /// This slice's bytes decoded as `Text` — empty when it carries none (a null pointer or
+    /// a non-positive length). Reads it exactly as the `Text` intrinsics do.
+    ///
+    /// # Safety contract (upheld by the compiler)
+    /// A non-null `data` points to at least `len` readable bytes.
+    pub(crate) fn as_text(&self) -> std::borrow::Cow<'_, str> {
+        crate::text::text_str(self.data as *const u8, self.len)
+    }
+
+    /// Whether this slice carries no bytes.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.data.is_null() || self.len <= 0
     }
 }
 
