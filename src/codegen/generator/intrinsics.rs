@@ -145,6 +145,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
             // read fault is reported at.
             "__read_launch" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // { ptr, i64 } __tcp_request_launch(i8* addr,i64, i8* request,i64) — the internal
+            // `@tcpRequest` leaf IO primitive: launch a background TCP request exchange (connect,
+            // write the request, read until the peer closes) and return the DEFERRED response
+            // Text (`{ deferred, -1 }`) immediately. Backs the HTTP client; not user-facing.
+            "__tcp_request_launch" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // { ptr, i64 } __force_text(i8* promise) — force a deferred Text: park until the
             // promise is fulfilled, then return its `{ ptr, i64 }` bytes (memoized).
             "__force_text" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),

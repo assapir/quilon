@@ -818,7 +818,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 >> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io`, `core.test`, `core.cli`, and `core.time`; their members are real functions. See the [Standard library](#standard-library) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [Standard library](#standard-library) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -838,6 +838,7 @@ small example per function.
 | [`core.test`](corelib/test.md) | `<< core.test` | In-language assertions for self-verifying programs, reporting the caller's `file:line:column`: `assert` (+ `AssertOpts`) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt` (fail → exit 101). |
 | [`core.cli`](corelib/cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](corelib/time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
+| [`core.net`](corelib/net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
 
 `Text` and the operators are built-ins and need **no** import. The [concurrency model](#concurrency--colorless-implicit-futures--in-progress) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.
 
@@ -1054,6 +1055,15 @@ comparison, `print`, a native call. On end-of-input it yields the empty `Text` `
 Binding `line` does not wait; the force is the `==` inside `assertEq`. (Because `print`/`eprint`
 force and write eagerly, per-fiber output stays in program order.)
 
+**Networked (`@tcpRequest`, the socket primitive).** The first *networked* value-returning
+primitive is `@tcpRequest(address :: Text, requestBytes :: Text) -> Text` — a one-shot request
+exchange: connect to `address` (`host:port`), write the request bytes, read the response until
+the peer closes (close-delimited), and hand back all the response bytes as a deferred `Text`,
+forced on use exactly like `@readStdin`. It lives in the public `core.net` module (`<< core.net`)
+alongside `core.io`/`core.time`, and the HTTP client sits on it. It is the bytes-backed
+foundation that makes the networked `@get` below real — HTTP framing and parsing happen in
+ordinary Quilon on the forced response bytes.
+
 **Where it is headed (overlap, `@get`).** With a *networked* value-returning primitive,
 independent launches overlap automatically — the reason implicit futures matter. Leaf
 primitives stay the only marked thing, and user code stays unmarked:
@@ -1197,7 +1207,7 @@ pathological input.
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `assertOk`/`assertNotOk` on `getEnv`/`getOpt` | ✅ |
-| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, file-path imports, `>>` exports | ✅ |
+| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.net`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |

@@ -146,10 +146,23 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
     }
 }
 
+/// Launch a `Text`-producing IO on a background fiber and return its DEFERRED `Text`
+/// representation (`{ deferred, -1 }`) immediately — the C-ABI wrapper over the generic
+/// [`launch`] that EVERY value-returning `@` primitive shares (`@readStdin`, `@tcpRequest`), so
+/// none re-copies the sentinel-tagging. The result threads through the program as an ordinary
+/// `Text`; the code generator forces it (via [`__force_text`]) at its strict-use site.
+pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QlSlice + 'static) -> QlSlice {
+    let cell = launch(producer);
+    QlSlice {
+        data: cell as *const c_void,
+        len: DEFERRED_SENTINEL,
+    }
+}
+
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred
-/// `Text` immediately (the calling fiber does not park here). A THIN wrapper over the generic
-/// [`launch`], with a stdin-specific producer. `site` is the call's own location, used to
-/// frame a fault report; it may be null if unknown.
+/// `Text` immediately (the calling fiber does not park here). A THIN wrapper over the shared
+/// [`launch_deferred_text`], with a stdin-specific producer. `site` is the call's own location,
+/// used to frame a fault report; it may be null if unknown.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a [`QlSite`] constant that outlives the program (the code
@@ -157,11 +170,7 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
 #[unsafe(no_mangle)]
 pub extern "C" fn __read_launch(site: *const QlSite) -> QlSlice {
     // The site is a read-only constant in the module, so it outlives the launched read.
-    let cell = launch(move || read_stdin_text(site));
-    QlSlice {
-        data: cell as *const c_void,
-        len: DEFERRED_SENTINEL,
-    }
+    launch_deferred_text(move || read_stdin_text(site))
 }
 
 /// Force a deferred `Text`: the per-representation C-ABI wrapper over the generic [`force`].
@@ -410,15 +419,11 @@ mod tests {
     /// can drive the producer with a controllable writer. Exercises the generic [`launch`] core
     /// with a pipe-reading producer and returns the deferred `{deferred, -1}` representation.
     fn launch_read_from_fd(fd: i32) -> QlSlice {
-        let cell = launch(move || {
+        launch_deferred_text(move || {
             let mut buffer = Vec::new();
             let bytes = read_line_from(fd, &mut buffer).expect("pipe read");
             alloc_text(&bytes)
-        });
-        QlSlice {
-            data: cell as *const c_void,
-            len: DEFERRED_SENTINEL,
-        }
+        })
     }
 
     #[test]
