@@ -34,6 +34,24 @@ All notable changes to Quilon are documented here.
   (`quilon-rt`'s `report`). `examples/array_methods.ql` shows the non-aborting alternative:
   `at(n)` hands an out-of-range index back as `NotOk` instead of stopping the program.
 
+- **Built-in `Map` and `Set` collections ([#72](https://github.com/assapir/quilon/issues/72)).**
+  Keyed lookup arrives as two built-in parametric collection primitives — like `[]T`, not
+  user-defined generics. A **pipe fence** carries both the type and the literal: a map is
+  `[|K => V|]` with `=>` reading "maps to" (`[|"a" => 1, "b" => 2|]`, empty `[|=>|]`); a set
+  is `[|T|]` (`[|"a", "b"|]`, empty `[||]`). The fence is what keeps a set literal distinct
+  from an array (`[1, 2, 3]`). Both are **immutable** — every mutating method returns a NEW
+  collection — and backed by plain `std::collections::HashMap`/`HashSet` in `quilon-rt` over
+  GC memory. Keys are the built-in hashable types (Num / Text / Bool; Text hashes by
+  content, consistent with value `==`). Access mirrors arrays: `m[k]` returns the value and
+  **crashes on a missing key**, while `m.get(k)` is the safe `Ok(v)`/`NotOk` form. Map
+  methods: `.get`/`.has`/`.set`/`.keys`/`.values`/`.each` plus the `.size` field; set
+  methods: `.has`/`.add`/`.items`/`.each` plus `.size`. **Set algebra** is spelled with
+  single-token operators: `+` union, `-` difference, `+-` (= `-+`) intersection.
+  **Iteration order is unspecified** and must not be relied on — the runtime uses a
+  fixed-seed hasher so a program is reproducible run-to-run, but the order is unspecified by
+  contract, not insertion order. User-defined key hashing (the `%`/`==` hooks), `remove`,
+  and handing `^`'s env over as a `[|Text => Text|]` map are deferred to a later slice. See
+  `examples/maps_and_sets.ql`.
 - **Deferred values — the `@readStdin` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The value-returning half of the colorless implicit-futures model. `@readStdin()` (in
   `core.io`) reads one line from stdin and returns a **deferred** `Text`: calling it
