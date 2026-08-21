@@ -169,6 +169,17 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
                 mentions(e, out);
             }
         }
+        Expr::MapLit { entries, .. } => {
+            for (key, value) in entries {
+                mentions(key, out);
+                mentions(value, out);
+            }
+        }
+        Expr::SetLit { elements, .. } => {
+            for e in elements {
+                mentions(e, out);
+            }
+        }
         Expr::Record { fields, .. } => {
             for (_, e) in fields {
                 mentions(e, out);
