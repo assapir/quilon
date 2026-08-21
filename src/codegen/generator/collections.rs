@@ -116,7 +116,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let (tag, ka, kb) = self.key_words(&args[1], &key_ty)?;
                 let found =
                     self.call_rt_int("__map_has", &[map.into(), tag.into(), ka.into(), kb.into()])?;
-                self.int_to_bool(found)
+                self.int_to_bool(found, "rt_bool")
             }
             "set" => {
                 let (tag, ka, kb) = self.key_words(&args[1], &key_ty)?;
@@ -283,7 +283,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let (tag, a, b) = self.key_words(&args[1], &elem_ty)?;
                 let found =
                     self.call_rt_int("__set_has", &[set.into(), tag.into(), a.into(), b.into()])?;
-                self.int_to_bool(found)
+                self.int_to_bool(found, "rt_bool")
             }
             "add" => {
                 let (tag, a, b) = self.key_words(&args[1], &elem_ty)?;
@@ -493,20 +493,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_store(boxed, value)
             .map_err(ctx("Failed to store boxed value"))?;
         Ok(boxed)
-    }
-
-    /// Convert a runtime `i64` truthiness flag (0/1) to a Quilon `Bool` (`i1`).
-    fn int_to_bool(&mut self, flag: IntValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
-        Ok(self
-            .builder
-            .build_int_compare(
-                inkwell::IntPredicate::NE,
-                flag,
-                self.context.i64_type().const_zero(),
-                "rt_bool",
-            )
-            .map_err(ctx("Failed to convert flag to Bool"))?
-            .into())
     }
 
     // ---- runtime-call plumbing --------------------------------------------

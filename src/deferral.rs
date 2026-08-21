@@ -173,9 +173,16 @@ impl Taint {
                 self.strict(end, env);
                 false
             }
-            Expr::Array { elements, .. } => {
+            Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
                 for element in elements {
                     self.strict(element, env);
+                }
+                false
+            }
+            Expr::MapLit { entries, .. } => {
+                for (key, value) in entries {
+                    self.strict(key, env);
+                    self.strict(value, env);
                 }
                 false
             }
@@ -340,9 +347,15 @@ fn for_each_subexpr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
                 for_each_subexpr(&arm.body, f);
             }
         }
-        Expr::Array { elements, .. } => {
+        Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
             for element in elements {
                 for_each_subexpr(element, f);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key, value) in entries {
+                for_each_subexpr(key, f);
+                for_each_subexpr(value, f);
             }
         }
         Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
