@@ -24,8 +24,6 @@ const KEY_TAG_TEXT: u64 = 1;
 const KEY_TAG_BOOL: u64 = 2;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    // ---- literals ---------------------------------------------------------
-
     /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then a persistent
     /// `__map_set` per entry. The oracle gives the map's `Map(K, V)` type.
     pub(super) fn generate_map_literal(
@@ -70,8 +68,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(set.into())
     }
 
-    // ---- indexing ---------------------------------------------------------
-
     /// `m[k]` — fail-loud keyed lookup. `__map_index` returns the value box pointer or
     /// crashes (stderr + exit 1) when the key is absent; codegen loads the value at its
     /// static type.
@@ -96,8 +92,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_load(value_llvm, boxed, "map_val")
             .map_err(ctx("Failed to load map value"))
     }
-
-    // ---- map methods ------------------------------------------------------
 
     pub(super) fn generate_map_method(
         &mut self,
@@ -265,8 +259,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         })
     }
 
-    // ---- set methods ------------------------------------------------------
-
     pub(super) fn generate_set_method(
         &mut self,
         method: &str,
@@ -361,8 +353,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into())
     }
 
-    // ---- set operators ----------------------------------------------------
-
     /// `+` union, `-` difference, `+-`/`-+` intersection — each returns a NEW set.
     pub(super) fn generate_set_op(
         &mut self,
@@ -381,8 +371,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let out = self.call_rt_ptr(intrinsic, &[l.into(), r.into()])?;
         Ok(out.into())
     }
-
-    // ---- key encoding / boxing helpers ------------------------------------
 
     /// Lower a key/element expression to the runtime ABI triple `(tag, a, b)` of `i64`s.
     fn key_words(
@@ -494,8 +482,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to store boxed value"))?;
         Ok(boxed)
     }
-
-    // ---- runtime-call plumbing --------------------------------------------
 
     /// Call a runtime intrinsic returning an opaque pointer (a Map/Set/box pointer).
     fn call_rt_ptr(

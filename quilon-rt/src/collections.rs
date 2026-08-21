@@ -134,7 +134,7 @@ unsafe fn gc_alloc<T>(count: usize) -> *mut T {
 }
 
 /// Render a key for a diagnostic (the fail-loud `m[k]` message).
-fn key_desc(key: &QlKey) -> String {
+fn key_description(key: &QlKey) -> String {
     match key.tag {
         TAG_TEXT => format!(
             "\"{}\"",
@@ -145,15 +145,13 @@ fn key_desc(key: &QlKey) -> String {
     }
 }
 
-// ---- Map ------------------------------------------------------------------
-
 /// GC-managed native map header. See the module docs for the GC-visibility contract.
 #[repr(C)]
 struct QlMap {
     table: HashMap<QlKey, *const c_void, FixedState>,
-    snap_a: *const u64,
-    snap_b: *const u64,
-    snap_v: *const *const c_void,
+    snapshot_a: *const u64,
+    snapshot_b: *const u64,
+    snapshot_values: *const *const c_void,
     len: i64,
 }
 
@@ -161,14 +159,14 @@ struct QlMap {
 /// also anchors every key's bytes and value box for the collector).
 unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut QlMap {
     let n = table.len();
-    let snap_a = unsafe { gc_alloc::<u64>(n) };
-    let snap_b = unsafe { gc_alloc::<u64>(n) };
-    let snap_v = unsafe { gc_alloc::<*const c_void>(n) };
+    let snapshot_a = unsafe { gc_alloc::<u64>(n) };
+    let snapshot_b = unsafe { gc_alloc::<u64>(n) };
+    let snapshot_values = unsafe { gc_alloc::<*const c_void>(n) };
     for (i, (key, value)) in table.iter().enumerate() {
         unsafe {
-            *snap_a.add(i) = key.a;
-            *snap_b.add(i) = key.b;
-            *snap_v.add(i) = *value;
+            *snapshot_a.add(i) = key.a;
+            *snapshot_b.add(i) = key.b;
+            *snapshot_values.add(i) = *value;
         }
     }
     let header = unsafe { gc_alloc::<QlMap>(1) };
@@ -177,9 +175,9 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
             header,
             QlMap {
                 table,
-                snap_a,
-                snap_b,
-                snap_v,
+                snapshot_a,
+                snapshot_b,
+                snapshot_values,
                 len: n as i64,
             },
         )
@@ -234,7 +232,10 @@ pub extern "C" fn __map_index(map: *const c_void, tag: i64, a: i64, b: i64) -> *
     match unsafe { (*map).table.get(&key) } {
         Some(value) => *value,
         None => {
-            let msg = format!("runtime error: map key {} not found\n", key_desc(&key));
+            let msg = format!(
+                "runtime error: map key {} not found\n",
+                key_description(&key)
+            );
             write_to_fd(2, msg.as_bytes());
             __exit(1)
         }
@@ -254,38 +255,36 @@ pub extern "C" fn __map_len(map: *const c_void) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_a(map: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(map as *const QlMap)).snap_a.add(i as usize) as i64 }
+    unsafe { *(*(map as *const QlMap)).snapshot_a.add(i as usize) as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_b(map: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(map as *const QlMap)).snap_b.add(i as usize) as i64 }
+    unsafe { *(*(map as *const QlMap)).snapshot_b.add(i as usize) as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_val(map: *const c_void, i: i64) -> *const c_void {
-    unsafe { *(*(map as *const QlMap)).snap_v.add(i as usize) }
+    unsafe { *(*(map as *const QlMap)).snapshot_values.add(i as usize) }
 }
-
-// ---- Set ------------------------------------------------------------------
 
 /// GC-managed native set header (element analogue of [`QlMap`], with no values).
 #[repr(C)]
 struct QlSet {
     table: HashSet<QlKey, FixedState>,
-    snap_a: *const u64,
-    snap_b: *const u64,
+    snapshot_a: *const u64,
+    snapshot_b: *const u64,
     len: i64,
 }
 
 unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
     let n = table.len();
-    let snap_a = unsafe { gc_alloc::<u64>(n) };
-    let snap_b = unsafe { gc_alloc::<u64>(n) };
+    let snapshot_a = unsafe { gc_alloc::<u64>(n) };
+    let snapshot_b = unsafe { gc_alloc::<u64>(n) };
     for (i, key) in table.iter().enumerate() {
         unsafe {
-            *snap_a.add(i) = key.a;
-            *snap_b.add(i) = key.b;
+            *snapshot_a.add(i) = key.a;
+            *snapshot_b.add(i) = key.b;
         }
     }
     let header = unsafe { gc_alloc::<QlSet>(1) };
@@ -294,8 +293,8 @@ unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
             header,
             QlSet {
                 table,
-                snap_a,
-                snap_b,
+                snapshot_a,
+                snapshot_b,
                 len: n as i64,
             },
         )
@@ -329,12 +328,12 @@ pub extern "C" fn __set_len(set: *const c_void) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_item_a(set: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(set as *const QlSet)).snap_a.add(i as usize) as i64 }
+    unsafe { *(*(set as *const QlSet)).snapshot_a.add(i as usize) as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_item_b(set: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(set as *const QlSet)).snap_b.add(i as usize) as i64 }
+    unsafe { *(*(set as *const QlSet)).snapshot_b.add(i as usize) as i64 }
 }
 
 #[unsafe(no_mangle)]

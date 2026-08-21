@@ -800,8 +800,8 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let key = self.parse_fence_key()?;
                 self.expect(&TokenKind::Arrow)?;
-                let val = self.parse_expr()?;
-                entries.push((key, val));
+                let value = self.parse_expr()?;
+                entries.push((key, value));
             }
             self.expect_fence_close()?;
             let span = self.span(start.start, self.previous_span().end);

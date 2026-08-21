@@ -30,8 +30,6 @@ fn run_subprocess(name: &str, source: &str) -> (i32, String) {
     )
 }
 
-// ---- Map: literals, indexing, membership --------------------------------
-
 /// A map literal, then fail-loud `m[k]` lookup of a present key.
 #[test]
 fn map_literal_and_index() {
@@ -68,8 +66,6 @@ fn map_duplicate_key_overwrites() {
     );
 }
 
-// ---- Map: get returns a Result ------------------------------------------
-
 /// `.get` yields `Ok(value)` for a present key.
 #[test]
 fn map_get_ok_present() {
@@ -87,8 +83,6 @@ fn map_get_notok_absent() {
         42,
     );
 }
-
-// ---- Map: immutability, set, keys, values -------------------------------
 
 /// `.set` returns a NEW map; the receiver is unchanged (persistent/immutable).
 #[test]
@@ -117,8 +111,6 @@ fn map_keys_and_values_are_arrays() {
         306,
     );
 }
-
-// ---- Map: each, key kinds ------------------------------------------------
 
 /// `.each((k, v) => ...)` runs for effect and returns the receiver (so it chains).
 #[test]
@@ -195,8 +187,6 @@ fn map_index_missing_key_crashes() {
     );
 }
 
-// ---- Set: literals, membership, add -------------------------------------
-
 /// A set literal, `.has`, and `.size`; a duplicate element is collapsed.
 #[test]
 fn set_literal_has_and_size() {
@@ -238,8 +228,6 @@ fn set_each_effect_and_chains() {
     );
 }
 
-// ---- Set: algebra operators ---------------------------------------------
-
 /// `+` is union.
 #[test]
 fn set_union() {
@@ -269,8 +257,6 @@ fn set_intersection_both_spellings() {
         11,
     );
 }
-
-// ---- Rejections ----------------------------------------------------------
 
 /// Indexing a map with the wrong key type is a type error.
 #[test]
