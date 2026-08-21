@@ -138,10 +138,9 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
-    // adds none, so the check above is unaffected. The `@readStdin` launch sites need the source
-    // to render `path:line:col`, which only lives here — so fill them in now.
-    let mut defer = crate::deferral::analyze(&program);
-    defer.set_read_sites(crate::deferral::read_call_sites(&program, &path, &source));
+    // adds none, so the check above is unaffected. (A call's own location is not part of this:
+    // codegen reads it from the source map, the same way every other located report does.)
+    let defer = crate::deferral::analyze(&program);
 
     Ok(Checked {
         program,

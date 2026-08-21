@@ -107,7 +107,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             && !args.is_empty()
             && matches!(self.oracle.expr_type(&args[0]), Some(Type::Text))
         {
-            return self.generate_text_method(func_name, args);
+            return self.generate_text_method(func_name, args, span);
         }
 
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
@@ -316,11 +316,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         global
     }
 
-    /// Lower a leaf `@` IO primitive call to its runtime intrinsic. The first is
-    /// `@sleep(seconds :: Num) -> $`, an effect-only pause that waits on the current fiber
-    /// and yields `$` (Unit).
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
-    /// `@`-identifier (the call's launch site), used to attach an origin to a deferred value.
+    /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
     /// `@sleep(seconds :: Num) -> $` is an effect-only pause: it waits on the current fiber and
     /// yields `$`. `@readStdin() -> Text` is the first value-returning primitive: it *launches* a
@@ -357,43 +354,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                         args.len()
                     ));
                 }
-                let (site_ptr, site_len) = self.read_launch_site(site)?;
+                let launch_site = self.site_value(site)?;
                 let read = self.get_intrinsic("__read_launch")?;
                 let call = self
                     .builder
-                    .build_call(read, &[site_ptr.into(), site_len.into()], "read")
+                    .build_call(read, &[launch_site.into()], "read")
                     .map_err(ctx("Failed to call @readStdin"))?;
                 // The result is a DEFERRED `Text` (`{ promise, -1 }`); the force-set decides
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
-        }
-    }
-
-    /// Build the `(i8* data, i64 len)` launch-site argument for `__read_launch` from the
-    /// `@readStdin` call's `site` span: a `path:line:col` string constant when the driver
-    /// recorded one, else a null pointer / zero length (runtime reports `<unknown>` on fault).
-    fn read_launch_site(
-        &mut self,
-        site: &Span,
-    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
-        match self.defer.read_site(site) {
-            Some(description) => {
-                let global = self
-                    .builder
-                    .build_global_string_ptr(description, "read_site")
-                    .map_err(ctx("Failed to build @readStdin launch site"))?;
-                let len = self
-                    .context
-                    .i64_type()
-                    .const_int(description.len() as u64, false);
-                Ok((global.as_pointer_value(), len))
-            }
-            None => Ok((
-                self.context.ptr_type(AddressSpace::default()).const_null(),
-                self.context.i64_type().const_zero(),
-            )),
         }
     }
 

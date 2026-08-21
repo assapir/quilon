@@ -41,6 +41,8 @@ pub mod mem;
 pub mod net;
 pub mod process;
 pub mod reactor;
+// Only the `QlSite` type is public (re-exported below); the formatter is the runtime's own.
+mod report;
 pub mod scheduler;
 pub mod text;
 pub mod time;
@@ -49,6 +51,7 @@ pub use deferred::{__force_text, __read_launch};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use process::{__argv_to_text_array, __envp_to_pairs, __exit};
+pub use report::QlSite;
 pub use scheduler::__run_fiber_main;
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
@@ -119,7 +122,7 @@ intrinsic_registry! {
     __num_to_text: extern "C" fn(f64) -> QlSlice,
     __bool_to_text: extern "C" fn(i64) -> QlSlice,
     __exit: extern "C" fn(c_int) -> !,
-    __index_fail: extern "C" fn(f64, i64) -> !,
+    __index_fail: extern "C" fn(f64, i64, *const QlSite) -> !,
     __alloc: extern "C" fn(i64) -> *mut c_void,
     __text_length: extern "C" fn(*const u8, i64) -> i64,
     __text_cmp: extern "C" fn(*const u8, i64, *const u8, i64) -> i32,
@@ -128,20 +131,30 @@ intrinsic_registry! {
     __color_enabled: extern "C" fn(i64) -> i64,
     __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
     __envp_to_pairs: extern "C" fn(*const *const c_char) -> QlSlice,
-    __text_repeat: extern "C" fn(*const u8, i64, f64) -> QlSlice,
+    __text_repeat: extern "C" fn(*const u8, i64, f64, *const QlSite) -> QlSlice,
     __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_to_upper: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_to_lower: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_contains: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
     __text_index_of: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
-    __text_replace_all: extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64) -> QlSlice,
-    __text_replace_n: extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, i64) -> QlSlice,
+    __text_replace_all:
+        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, *const QlSite) -> QlSlice,
+    __text_replace_n: extern "C" fn(
+        *const u8,
+        i64,
+        *const u8,
+        i64,
+        *const u8,
+        i64,
+        i64,
+        *const QlSite,
+    ) -> QlSlice,
     __text_slice: extern "C" fn(*const u8, i64, i64, i64) -> QlSlice,
     __text_split: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
-    __read_launch: extern "C" fn(*const u8, i64) -> QlSlice,
+    __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
     __run_fiber_main: extern "C" fn(
         extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int,

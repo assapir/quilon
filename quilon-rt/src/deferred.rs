@@ -32,9 +32,8 @@
 //! ever owns the descriptor and the shared line buffer at a time. Two concurrent `@readStdin`
 //! calls therefore read consecutive lines in launch order rather than racing the fd.
 
-use crate::io::write_to_fd;
 use crate::mem::{__alloc, QlSlice, alloc_text};
-use crate::process::__exit;
+use crate::report::{QlSite, fail_at};
 use crate::scheduler::{
     deregister_readiness, park_on_address, park_on_readiness, register_readiness,
     reregister_readiness, spawn, wake_address,
@@ -149,16 +148,16 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
 
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred
 /// `Text` immediately (the calling fiber does not park here). A THIN wrapper over the generic
-/// [`launch`], with a stdin-specific producer. `site_data`/`site_len` describe the call site
-/// for fault reporting; either may be null/zero if unknown.
+/// [`launch`], with a stdin-specific producer. `site` is the call's own location, used to
+/// frame a fault report; it may be null if unknown.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site_data` is null or points to `site_len` readable bytes that outlive the program
-/// (a static string constant emitted by the code generator).
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// `site` is null or points to a [`QlSite`] constant that outlives the program (the code
+/// generator emits one read-only global per call site).
 #[unsafe(no_mangle)]
-pub extern "C" fn __read_launch(site_data: *const u8, site_len: i64) -> QlSlice {
-    let cell = launch(move || read_stdin_text(site_data, site_len));
+pub extern "C" fn __read_launch(site: *const QlSite) -> QlSlice {
+    // The site is a read-only constant in the module, so it outlives the launched read.
+    let cell = launch(move || read_stdin_text(site));
     QlSlice {
         data: cell as *const c_void,
         len: DEFERRED_SENTINEL,
@@ -181,38 +180,24 @@ pub extern "C" fn __force_text(deferred_ptr: *const c_void) -> QlSlice {
 
 /// The `@readStdin` producer: read one line from stdin as a `Text`, serialized on the stdin
 /// gate so concurrent reads take consecutive lines rather than racing fd 0. Yields the empty
-/// `Text` at end-of-input; a genuine IO error faults with the launch site (fail-loud).
-///
-/// # Safety contract (upheld by the compiler)
-/// `site_data` is null or points to `site_len` readable bytes valid for the program's life.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-fn read_stdin_text(site_data: *const u8, site_len: i64) -> QlSlice {
+/// `Text` at end-of-input; a genuine IO error faults at the launch site (fail-loud).
+fn read_stdin_text(site: *const QlSite) -> QlSlice {
     acquire_stdin();
     let read = read_stdin_line();
     release_stdin();
     match read {
         Ok(bytes) => alloc_text(&bytes),
-        Err(error) => fail_read(site_data, site_len, &error),
+        Err(error) => fail_read(site, &error),
     }
 }
 
-/// Report a fatal stdin read error against the `@readStdin` launch site, then terminate the
+/// Report a fatal stdin read error at the `@readStdin` launch site, then terminate the
 /// process (fail-loud). A genuine IO error on stdin is neither EOF nor `WouldBlock`.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site_data` is null or points to `site_len` readable bytes.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-fn fail_read(site_data: *const u8, site_len: i64, error: &io::Error) -> ! {
-    let site = if site_data.is_null() || site_len <= 0 {
-        "<unknown>".to_string()
-    } else {
-        // SAFETY: the compiler's contract: `site_len` readable bytes at `site_data`.
-        let bytes = unsafe { std::slice::from_raw_parts(site_data, site_len as usize) };
-        String::from_utf8_lossy(bytes).into_owned()
-    };
-    let message = format!("runtime error: @readStdin at {site} failed: {error}\n");
-    write_to_fd(2, message.as_bytes());
-    __exit(1)
+/// `site` is null or points to a valid [`QlSite`].
+fn fail_read(site: *const QlSite, error: &io::Error) -> ! {
+    fail_at(site, &format!("@readStdin failed: {error}"), 1)
 }
 
 thread_local! {

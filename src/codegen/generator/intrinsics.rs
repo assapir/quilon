@@ -42,10 +42,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // `__exit(n)` primitive that `core.test`'s `assert` calls to fail. Never
             // returns (the runtime calls libc `exit`).
             "__exit" => void.fn_type(&[ctx.i32_type().into()], false),
-            // void __index_fail(double index, i64 size) — report an invalid array index
-            // (out of bounds / negative / NaN) to stderr and terminate with status 1.
-            // Never returns; codegen emits `unreachable` after the call.
-            "__index_fail" => void.fn_type(&[f64t.into(), i64t.into()], false),
+            // void __index_fail(double index, i64 size, Site* site) — report an invalid
+            // array index (out of bounds / negative / NaN) at `site` (the `arr[i]`
+            // expression's own location) and terminate with status 1. Never returns;
+            // codegen emits `unreachable` after the call.
+            "__index_fail" => void.fn_type(&[f64t.into(), i64t.into(), ptr.into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.
@@ -91,17 +92,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __color_enabled(i64 fd) — 1 when `fd` is a terminal that wants color.
             "__color_enabled" => i64t.fn_type(&[i64t.into()], false),
-            // { ptr, i64 } __text_repeat(i8*, i64, double count) — `count` copies of the
-            // text. The count stays a `double` so the runtime can reject a fractional or
-            // negative one rather than silently truncating it.
+            // { ptr, i64 } __text_repeat(i8*, i64, double count, Site* site) — `count`
+            // copies of the text. The count stays a `double` so the runtime can reject a
+            // fractional or negative one rather than silently truncating it, and `site` is
+            // the call's location, which such a rejection is reported at.
             "__text_repeat" => self
                 .ptr_len_struct_type()
-                .fn_type(&[ptr.into(), i64t.into(), f64t.into()], false),
+                .fn_type(&[ptr.into(), i64t.into(), f64t.into(), ptr.into()], false),
             // { ptr, i64 } __text_slice(i8*, i64, i64 start, i64 end).
             "__text_slice" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
-            // { ptr, i64 } __text_replace_all(i8* hay,i64, i8* from,i64, i8* to,i64).
+            // { ptr, i64 } __text_replace_all(i8* hay,i64, i8* from,i64, i8* to,i64,
+            // Site* site).
             "__text_replace_all" => self.ptr_len_struct_type().fn_type(
                 &[
                     ptr.into(),
@@ -110,10 +113,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     ptr.into(),
                     i64t.into(),
+                    ptr.into(),
                 ],
                 false,
             ),
-            // { ptr, i64 } __text_replace_n(i8* hay,i64, i8* from,i64, i8* to,i64, i64 count).
+            // { ptr, i64 } __text_replace_n(i8* hay,i64, i8* from,i64, i8* to,i64, i64 count,
+            // Site* site). The trailing `Site` — as on every Text intrinsic with a fail-loud
+            // contract — is the method call's own location, which the runtime frames its
+            // report around.
             "__text_replace_n" => self.ptr_len_struct_type().fn_type(
                 &[
                     ptr.into(),
@@ -123,6 +130,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     ptr.into(),
                     i64t.into(),
                     i64t.into(),
+                    ptr.into(),
                 ],
                 false,
             ),
@@ -132,13 +140,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // double __now() — read the monotonic clock, in seconds. Backs `core.time`'s
             // plain (non-`@`) `now()`; only differences between readings are meaningful.
             "__now" => f64t.fn_type(&[], false),
-            // { ptr, i64 } __read_launch(i8* site_data, i64 site_len) — the `@read` leaf IO
-            // primitive: launch a background read of one line from stdin and return the
-            // DEFERRED Text (`{ promise, -1 }`) immediately. `site_data`/`site_len` carry the
-            // call site for fault reporting.
-            "__read_launch" => self
-                .ptr_len_struct_type()
-                .fn_type(&[ptr.into(), i64t.into()], false),
+            // { ptr, i64 } __read_launch(Site* site) — the `@read` leaf IO primitive: launch
+            // a background read of one line from stdin and return the DEFERRED Text
+            // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
+            // read fault is reported at.
+            "__read_launch" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
             // { ptr, i64 } __force_text(i8* promise) — force a deferred Text: park until the
             // promise is fulfilled, then return its `{ ptr, i64 }` bytes (memoized).
             "__force_text" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
