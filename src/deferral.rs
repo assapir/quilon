@@ -29,6 +29,10 @@ use std::collections::{HashMap, HashSet};
 /// a deferred `Text`.
 const READ_PRIMITIVE: &str = "@readStdin";
 
+/// The internal name of the request-exchange socket primitive; `@tcpRequest(addr, req)`
+/// evaluates to a deferred `Text` (the response bytes), read once forced.
+const TCP_REQUEST_PRIMITIVE: &str = "@tcpRequest";
+
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
 pub struct DeferInfo {
@@ -171,16 +175,17 @@ impl Taint {
             }
             Expr::Ident { name, .. } => env.is_deferred(name),
 
-            // `@readStdin()` is the one deferred-producing primitive; every other call delivers
-            // a ready value (its own body forced its result). The callee expression and the
-            // arguments are all strict slots (a deferred value used inside `func` — e.g. a
-            // called lambda — or passed as an argument is forced there).
+            // A value-returning `@` primitive (`@readStdin`, `@tcpRequest`) is the only kind of
+            // deferred-producing call; every other call delivers a ready value (its own body
+            // forced its result). The callee expression and the arguments are all strict slots
+            // (a deferred value used inside `func` — e.g. a called lambda — or passed as an
+            // argument is forced there).
             Expr::Call { func, args, .. } => {
                 self.strict(func, env);
                 for arg in args {
                     self.strict(arg, env);
                 }
-                is_read_call(func, args)
+                produces_deferred(func, args)
             }
 
             Expr::BinOp { left, right, .. } => {
@@ -325,6 +330,15 @@ impl Scope {
 /// Whether `func`/`args` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
 fn is_read_call(func: &Expr, args: &[Expr]) -> bool {
     matches!(func, Expr::Ident { name, .. } if name == READ_PRIMITIVE) && args.is_empty()
+}
+
+/// Whether `func`/`args` is a call to a value-returning `@` primitive — one that hands back a
+/// DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
+/// `@tcpRequest(addr, req)` (a deferred `Text` response). Effect-only primitives like `@sleep`
+/// (which yields `$`) are never deferred and so never appear here.
+fn produces_deferred(func: &Expr, args: &[Expr]) -> bool {
+    is_read_call(func, args)
+        || matches!(func, Expr::Ident { name, .. } if name == TCP_REQUEST_PRIMITIVE)
 }
 
 /// Run `visit` on the `@readStdin` identifier span of every `@readStdin()` call in `expr`.
@@ -507,6 +521,23 @@ mod tests {
         let src =
             "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
         // Two lazy bindings, forced once at the comparison.
+        assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn tcp_request_marks_deferral() {
+        assert!(uses_deferral(
+            "<< internal.net\n^ = () -> Num => <\n  @tcpRequest(\"a:1\", \"b\")\n  0\n>"
+        ));
+    }
+
+    #[test]
+    fn bound_tcp_request_is_deferred_and_forced_at_a_strict_use() {
+        // `r = @tcpRequest(...)` binds a deferred Text (lazy); the comparison forces it once —
+        // the same shape as a bound `@readStdin`, proving the taint tracks both producers.
+        let src = "<< internal.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\", \"b\")\n  r == \"ok\" ? 0 : 1\n>";
+        let i = info(src);
+        assert!(i.uses_deferral);
         assert_eq!(force_count(src), 1);
     }
 
