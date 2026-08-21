@@ -1035,6 +1035,15 @@ comparison, `print`, a native call. On end-of-input it yields the empty `Text` `
 Binding `line` does not wait; the force is the `==` inside `assertEq`. (Because `print`/`eprint`
 force and write eagerly, per-fiber output stays in program order.)
 
+**Internal (`@tcpRequest`, the socket foundation).** The first *networked* value-returning
+primitive is `@tcpRequest(address :: Text, requestBytes :: Text) -> Text` — a one-shot request
+exchange: connect to `address` (`host:port`), write the request bytes, read the response until
+the peer closes (close-delimited), and hand back all the response bytes as a deferred `Text`,
+forced on use exactly like `@readStdin`. It is **internal** (`<< internal.net`, not a public
+`core.net`): the HTTP client sits on it and users do not import raw sockets, so it carries no
+public corelib doc. It is the bytes-backed foundation that makes the networked `@get` below
+real — HTTP framing and parsing happen in ordinary Quilon on the forced response bytes.
+
 **Where it is headed (overlap, `@get`).** With a *networked* value-returning primitive,
 independent launches overlap automatically — the reason implicit futures matter. Leaf
 primitives stay the only marked thing, and user code stays unmarked:

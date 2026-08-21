@@ -40,6 +40,7 @@ const EVERY_INTRINSIC: &str = r#"
 << core.io
 << core.test
 << core.time
+<< internal.net
 
 ^ = (args :: []Text, env :: [][]Text) -> $ => <
   ~ __sleep (the @sleep leaf primitive) and __run_fiber_main (the entry runs on a
@@ -51,6 +52,11 @@ const EVERY_INTRINSIC: &str = r#"
   ~ deferred Text's bytes, forcing it). Run with empty stdin here, so @readStdin yields "".
   line = @readStdin()
   assert(line.length >= 0)
+
+  ~ __tcp_request_launch (the internal @tcpRequest socket primitive). Guarded by a
+  ~ runtime-false condition so codegen EMITS the call (the link/JIT gate sees the symbol)
+  ~ but it never opens a real connection here.
+  args.size > 1000000 ? @tcpRequest("127.0.0.1:1", "") : ""
 
   ~ __argv_to_text_array / __envp_to_pairs come from these parameters existing.
   assert(args.size >= 1)

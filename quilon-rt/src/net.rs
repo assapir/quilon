@@ -10,7 +10,11 @@
 //! the way [`crate::scheduler::sleep`] parks on a deadline. Many sockets thus make
 //! progress cooperatively on one thread.
 //!
-//! This tier is internal Rust; no Quilon-visible `@` primitive is wired to it yet.
+//! [`__tcp_request_launch`] wires this tier to a Quilon `@` primitive: it backs the internal
+//! `@tcpRequest` request-exchange primitive (connect, write the request, read the response until
+//! the peer closes) as a background producer over the generic deferral core, returning the
+//! response bytes as a deferred `Text`. It is internal — the HTTP client sits on it; users do
+//! not import raw sockets.
 //!
 //! GC note: parking is transparent to the collector. A parked fiber's stack — with
 //! its live roots — is scanned by [`crate::gc`]'s `GC_push_other_roots` callback,
@@ -18,13 +22,17 @@
 //! *why* it is parked. A socket-blocked fiber is therefore covered identically to a
 //! sleeping one; `tests::socket_parked_fiber_roots_survive_collection` proves it.
 
+use crate::deferred::launch_deferred_text;
+use crate::io::write_to_fd;
+use crate::mem::{QlSlice, alloc_text};
+use crate::process::__exit;
 use crate::scheduler::{
     deregister_readiness, park_on_readiness, register_readiness, reregister_readiness,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
 use std::io::{self, Read, Write};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
@@ -163,6 +171,115 @@ impl Drop for TcpStream {
     fn drop(&mut self) {
         deregister_readiness(&mut self.inner);
     }
+}
+
+/// `@tcpRequest(address, requestBytes)`: launch a one-shot TCP request exchange on a background
+/// fiber and return the deferred `Text` response immediately (the calling fiber does not park
+/// here). A THIN wrapper over the generic [`launch`], with a socket request-exchange producer:
+/// connect to `address`, write the request bytes, read the response until the peer closes
+/// (close-delimited — the model the one-connection-per-request HTTP client uses), and hand back
+/// all the response bytes. The result is a deferred `Text` (`{ deferred, -1 }`); the code
+/// generator forces it where a strict use reads the bytes.
+///
+/// The address and request bytes are copied into owned buffers here, before the producer is
+/// spawned, so the producer fiber owns its inputs and never reads a `Text` that a later
+/// collection might reclaim.
+///
+/// # Safety contract (upheld by the compiler)
+/// `address_data`/`request_data` are null, or point to `address_len`/`request_len` readable
+/// bytes for the duration of this call (a `Text`'s live bytes at the call site).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_request_launch(
+    address_data: *const u8,
+    address_len: i64,
+    request_data: *const u8,
+    request_len: i64,
+) -> QlSlice {
+    let address = bytes_to_string(address_data, address_len);
+    let request = copy_bytes(request_data, request_len);
+    launch_deferred_text(move || tcp_request(&address, &request))
+}
+
+/// The `@tcpRequest` producer: perform the whole request exchange against `address` and return
+/// the response bytes as a `Text`. Any failure — address resolution, connect, write, or read —
+/// faults with the address (fail-loud), the same posture as the stdin reader.
+fn tcp_request(address: &str, request: &[u8]) -> QlSlice {
+    let target = resolve(address);
+    let mut stream = match TcpStream::connect(target) {
+        Ok(stream) => stream,
+        Err(error) => fail_tcp(address, "connect", &error),
+    };
+    if let Err(error) = stream.write_all(request) {
+        fail_tcp(address, "write", &error);
+    }
+    match read_to_close(&mut stream) {
+        Ok(response) => alloc_text(&response),
+        Err(error) => fail_tcp(address, "read", &error),
+    }
+}
+
+/// Resolve `address` (`host:port`, e.g. `127.0.0.1:8080` or `example.com:80`) to a single
+/// [`SocketAddr`]. Faults if it names nothing. Note: [`ToSocketAddrs`] does a BLOCKING DNS
+/// lookup for a hostname; a numeric address (what the local round-trip uses) parses without any
+/// network call. Non-blocking DNS is a later refinement.
+fn resolve(address: &str) -> SocketAddr {
+    match address.to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => addr,
+            None => fail_tcp(
+                address,
+                "resolve",
+                &io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint"),
+            ),
+        },
+        Err(error) => fail_tcp(address, "resolve", &error),
+    }
+}
+
+/// Read from `stream` until the peer closes the connection, returning every byte received. The
+/// close-delimited read the one-connection-per-request exchange relies on: each partial read
+/// parks the fiber on socket readiness, and `Ok(0)` (EOF) ends the loop.
+fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => return Ok(response),
+            Ok(count) => response.extend_from_slice(&chunk[..count]),
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Report a fatal `@tcpRequest` error against the target `address` and the `stage` it failed at
+/// (`connect`/`write`/`read`/`resolve`), then terminate the process (fail-loud).
+fn fail_tcp(address: &str, stage: &str, error: &io::Error) -> ! {
+    let message = format!("runtime error: @tcpRequest to {address} failed at {stage}: {error}\n");
+    write_to_fd(2, message.as_bytes());
+    __exit(1)
+}
+
+/// Copy `len` bytes at `data` into an owned `Vec` (empty if null/empty), so the producer fiber
+/// owns its input independent of the caller's `Text`.
+///
+/// # Safety contract (upheld by the compiler)
+/// `data` is null, or points to `len` readable bytes for the duration of this call.
+fn copy_bytes(data: *const u8, len: i64) -> Vec<u8> {
+    if data.is_null() || len <= 0 {
+        return Vec::new();
+    }
+    // SAFETY: the compiler's contract: `len` readable bytes at `data`, valid for this call.
+    unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec()
+}
+
+/// Copy `len` bytes at `data` into an owned `String` (empty if null/empty). Invalid UTF-8 is
+/// replaced; an address is always valid UTF-8 in practice.
+///
+/// # Safety contract (upheld by the compiler)
+/// `data` is null, or points to `len` readable bytes for the duration of this call.
+fn bytes_to_string(data: *const u8, len: i64) -> String {
+    String::from_utf8_lossy(&copy_bytes(data, len)).into_owned()
 }
 
 #[cfg(test)]
@@ -384,5 +501,54 @@ mod tests {
         });
 
         assert_eq!(VERIFIED.load(Ordering::SeqCst), N);
+    }
+
+    #[test]
+    fn tcp_request_round_trips_against_a_local_listener() {
+        // The whole `@tcpRequest` path end to end: the primitive LAUNCHES a background producer
+        // that connects to a real listener, writes the request, and reads the response until the
+        // peer closes; a separate fiber FORCES the deferred value; the response bytes flow back.
+        use crate::deferred::__force_text;
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener as StdListener;
+
+        static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+        GOT.lock().unwrap().clear();
+
+        // A blocking std listener on its own OS thread stands in for a peer: accept one
+        // connection, read the request, write a fixed response, then close (close-delimited —
+        // dropping the stream is what ends the client's read-to-close).
+        let listener = StdListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut request = [0u8; 5];
+            conn.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"PING\n");
+            conn.write_all(b"PONG\n").unwrap();
+        });
+
+        let address = format!("{addr}");
+        on_gc_thread(move || {
+            run(move || {
+                let deferred = __tcp_request_launch(
+                    address.as_ptr(),
+                    address.len() as i64,
+                    b"PING\n".as_ptr(),
+                    5,
+                );
+                let deferred_ptr = deferred.data;
+                spawn(move || {
+                    let forced = __force_text(deferred_ptr);
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(forced.data as *const u8, forced.len as usize)
+                    };
+                    *GOT.lock().unwrap() = bytes.to_vec();
+                });
+            });
+        });
+
+        server.join().unwrap();
+        assert_eq!(&*GOT.lock().unwrap(), b"PONG\n");
     }
 }

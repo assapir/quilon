@@ -367,6 +367,32 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
+            "tcpRequest" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "@tcpRequest expects exactly 2 arguments (address, requestBytes), got {}",
+                        args.len()
+                    ));
+                }
+                let (addr_ptr, addr_len) = self.extract_text(&args[0])?;
+                let (req_ptr, req_len) = self.extract_text(&args[1])?;
+                let request = self.get_intrinsic("__tcp_request_launch")?;
+                let call = self
+                    .builder
+                    .build_call(
+                        request,
+                        &[
+                            addr_ptr.into(),
+                            addr_len.into(),
+                            req_ptr.into(),
+                            req_len.into(),
+                        ],
+                        "tcp_request",
+                    )
+                    .map_err(ctx("Failed to call @tcpRequest"))?;
+                // A DEFERRED `Text` response (`{ deferred, -1 }`); forced at its strict-use site.
+                Self::call_result_to_basic(call)
+            }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
         }
     }

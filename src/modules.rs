@@ -128,10 +128,12 @@ const CORE_IO: &str = include_str!("../corelib/io.ql");
 const CORE_TEST: &str = include_str!("../corelib/test.ql");
 const CORE_CLI: &str = include_str!("../corelib/cli.ql");
 const CORE_TIME: &str = include_str!("../corelib/time.ql");
+const INTERNAL_NET: &str = include_str!("../corelib/net.ql");
 
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
-/// primitives.
-const CORELIB_SOURCES: &[&str] = &[CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME];
+/// primitives. Includes `internal.net`, an INTERNAL module (the socket primitive the HTTP
+/// client sits on): trusted to declare `@`, but not part of the public, documented surface.
+const CORELIB_SOURCES: &[&str] = &[CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, INTERNAL_NET];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
@@ -148,6 +150,11 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // like `print`/`write`, so importing the module makes intent explicit but merges
         // no items. It is the documented home of the deferring `@sleep` primitive.
         "core.time" => Some(CORE_TIME),
+        // internal.net — the INTERNAL request-exchange socket primitive (`@tcpRequest`), the
+        // foundation the HTTP client sits on. Not a public `core.net`: users do not import raw
+        // sockets. Like `@sleep`/`@readStdin` it is compiler-lowered (its body is inert), so the
+        // import merges the primitive's signature and declares intent, nothing more.
+        "internal.net" => Some(INTERNAL_NET),
         // Text is a built-in primitive type (like Num/Bool/arrays): its operations
         // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
         // there is intentionally no `core.text` module.
