@@ -6,8 +6,6 @@
 ~   eprint(x)            ~ same, to stderr
 ~   @readStdin()         ~ read one line from stdin (Text, without the trailing newline)
 ~   stdout, stderr       ~ the standard file descriptors (Num: 1 and 2)
-~   colorEnabled(fd)     ~ Bool: is fd a terminal that wants ANSI color? (false when
-~                          NO_COLOR is set, TERM=dumb, or fd is not a tty)
 ~
 ~ Examples:
 ~   << core.io
@@ -50,8 +48,3 @@
 ~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder; the
 ~ code generator lowers `@readStdin()` to the runtime read/force intrinsics.
 >> @readStdin = () -> Text => ""
-
-~ Whether writing ANSI color to `fd` is appropriate: it is a terminal, `NO_COLOR` is
-~ unset, and `TERM` is not `dumb`. Use it to style output only when a human is watching:
-~   colorEnabled(stderr) ? "\e[1;31mboom\e[0m" : "boom"
->> colorEnabled = (fd :: Num) -> Bool => false

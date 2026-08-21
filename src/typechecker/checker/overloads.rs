@@ -96,6 +96,20 @@ impl TypeChecker {
                 ret: Some(Type::Unit),
             },
         );
+
+        // `__color_enabled(fd :: Num) -> Bool` — whether ANSI styling suits a file
+        // descriptor (it is a terminal, `NO_COLOR` is unset, `TERM` is not `dumb`), which
+        // is how `core.test` decides whether to color a failure report. Internal for the
+        // same reason as `__exit`: raw file descriptors are not user-facing surface — the
+        // language's IO direction is `@` leaf primitives, not `fd`-taking functions — so
+        // this is `__`-prefixed and exported by no module.
+        self.add_overload(
+            "__color_enabled",
+            Overload {
+                params: vec![Type::Num],
+                ret: Some(Type::Bool),
+            },
+        );
     }
 
     /// Add one member to the overload set `name`.

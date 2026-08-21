@@ -109,11 +109,12 @@ fn main_wrapper_initializes_gc() {
 
 #[test]
 fn color_enabled_lowers_to_the_color_intrinsic() {
-    // `colorEnabled(fd)` is a compiler-lowered core.io builtin (like `write`): it becomes
-    // a `__color_enabled` call, so nothing in `.ql` has to guess at tty detection.
-    let ir = gen_ir("^ = () -> Num => colorEnabled(2) ? 1 : 0");
+    // `__color_enabled(fd)` is an INTERNAL compiler-lowered primitive (like `__exit`, and
+    // exported by no module): it becomes a `__color_enabled` call, so `core.test` does not
+    // have to guess at terminal detection in `.ql`.
+    let ir = gen_ir("^ = () -> Num => __color_enabled(2) ? 1 : 0");
     assert!(
         ir.contains("declare i64 @__color_enabled(i64)"),
-        "colorEnabled must lower to the __color_enabled intrinsic, got:\n{ir}"
+        "__color_enabled must lower to the runtime intrinsic, got:\n{ir}"
     );
 }

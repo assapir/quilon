@@ -21,6 +21,10 @@ callerWidth = (site :: Site) -> Num => site.width
 callerFile = (site :: Site) -> Text => site.file
 callerSource = (site :: Site) -> Text => site.excerpt
 
+~ A `Site` is read-only — a location is a value, not a variable, so `site.line := 9` is a
+~ compile error. That is what lets the compiler lower each call site to one shared
+~ constant, which is why filling one in costs nothing while the program runs.
+~
 ~ A hop that FORWARDS its own site: the location stays the outermost caller's.
 throughAWrapper = (site :: Site) -> Num => callerLine(site)
 

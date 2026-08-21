@@ -50,19 +50,28 @@ All notable changes to Quilon are documented here.
   a `Site` receives the location of the call that left that argument off, and **passing one
   explicitly forwards it** — which is the whole propagation rule, and what makes a chain of
   wrappers blame the outermost caller (Rust's `#[track_caller]`, as an ordinary argument).
-  It is compile-time only: the fields are constants, so there is no unwinder and no debug
-  info to keep, and `quilon run` (JIT) and native builds report identically. A `Site`
-  parameter that nothing could fill in — before another parameter, or on a lambda, a nested
-  declaration, or a record method — is a compile error rather than a silent demand for an
-  explicit location. See `examples/call_site.ql`, and `examples/assert_location.ql`, which
+  It is compile-time only, and free while the program runs: every field is a constant, so
+  each call site is emitted as a **read-only constant** whose address the call passes — no
+  allocation and no stores, so a passing assertion costs its comparison and a pointer
+  argument even in the hottest loop (1M asserted iterations: 3 ms). A `Site` is therefore
+  **read-only** — a location is a value, not a variable, so writing one of its fields is a
+  compile error however the value was reached, since records alias and a write through any
+  binding would be a write to that constant. There is no unwinder
+  and no debug info to keep, and `quilon run` (JIT) and native builds report identically. A
+  `Site` parameter that nothing could fill in — before another parameter, or on a lambda, a
+  nested declaration, or a record method — is a compile error rather than a silent demand
+  for an explicit location. See `examples/call_site.ql`, and `examples/assert_location.ql`, which
   fails on purpose to show the report.
 
   Supporting surface, all documented: `core.test`'s **`failAt(message)`** (the reporting
   primitive the assertions are built from, and what a custom assertion of your own
   forwards its own `site` to), **`Text.repeat(count)`** (`count` copies; fail-loud on a
-  negative or fractional count, at compile time when literal), **`core.io`'s
-  `colorEnabled(fd)`** (tty + `NO_COLOR` + `TERM` check), and the **`\e`** string escape
-  for the ESC byte, without which `.ql` code could not write an ANSI sequence at all.
+  negative or fractional count, at compile time when literal), and the **`\e`** string
+  escape for the ESC byte, without which `.ql` code could not write an ANSI sequence at
+  all. The terminal check behind the coloring is an INTERNAL primitive
+  (`__color_enabled`, alongside `__exit`): raw file descriptors gain no user-facing API,
+  since the language's IO direction is `@` leaf primitives rather than `fd`-taking
+  functions, and a user-facing color story waits for that design.
   Internally, the front end now carries a `SourceMap` (every file's path and text, keyed by
   the `FileId` its spans carry) through to codegen, and compiler diagnostics and `Site`
   values resolve a span through the same code — so both report a position and caret width

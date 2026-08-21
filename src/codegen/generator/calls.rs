@@ -79,7 +79,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             "write" => return self.generate_write(args),
-            "colorEnabled" => return self.generate_color_enabled(args),
+            "__color_enabled" => return self.generate_color_enabled(args),
             // `__exit(code)` — the single native primitive `core.test` builds on,
             // lowered to the `__exit` runtime intrinsic (terminates the process).
             "__exit" => return self.generate_exit(args),
@@ -200,46 +200,120 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Build the `Site` record a call site fills in: the call's path, 1-based line and
-    /// column, the text of the line it sits on, and how many characters of that line it
-    /// spans. Every field is a compile-time constant, so this is a record literal built from
-    /// literals — lowered through the ordinary record path so its layout matches what a
-    /// `site.line` read expects.
+    /// The `Site` a call site fills in: a pointer to a read-only global holding the call's
+    /// path, 1-based line and column, the text of its line, and how many characters of that
+    /// line it spans.
+    ///
+    /// Every field is a compile-time constant, so the record is emitted as a `constant`
+    /// global (it lands in `.rodata`) and the call passes its address. Nothing is allocated
+    /// and nothing is stored at run time — which is what lets a program assert as often as
+    /// it likes: a passing assertion costs its comparison and a pointer argument. Sound
+    /// because a `Site` is immutable by rule: the checker refuses a write to any field of
+    /// one (`TypeError::SiteIsImmutable`), which it has to, since records are handles that
+    /// alias and a write through any binding would be a write to this constant.
+    ///
+    /// One global per distinct call site: the same span asked for twice (a tail-recursive
+    /// self-call is lowered once, but the argument list is walked per tail path) reuses the
+    /// first. This is compile-time interning of identical constants, not a runtime registry.
     ///
     /// A span whose file is not in the source map (a program assembled in memory, as the
-    /// IR-only codegen tests do) has no location to report. The site then carries an EMPTY
+    /// IR-only codegen tests do) has no location to report; the site then carries an EMPTY
     /// `file` — the documented "unknown" signal — with the position left at `1:1` so that
     /// arithmetic on it (a caret lead of `column - 1`) stays well defined for any reader.
     pub(super) fn site_value(&mut self, span: &Span) -> Result<BasicValueEnum<'ctx>, String> {
+        // Keyed by the WHOLE span: the constant's `width` comes from the span's length, so
+        // two spans sharing a start offset are not the same site.
+        let key = (span.file, span.start, span.end);
+        if let Some(existing) = self.site_globals.get(&key) {
+            return Ok((*existing).into());
+        }
+
         let location = self
             .sources
             .locate(span)
             .unwrap_or_else(crate::source_map::Location::unknown);
-        let text = |value: &str| Expr::String {
-            value: value.to_string(),
-            span: span.clone(),
-        };
-        let num = |value: usize| Expr::Number {
-            value: value as f64,
-            span: span.clone(),
-        };
-        // Built by walking the declared field list, so the construction order is the
-        // registered layout rather than a second copy of it: a field added to
-        // `ast::site_fields` shows up here as an unfilled name, not as a silent skew
-        // between what is stored and what a `site.line` read loads.
-        let mut fields = Vec::with_capacity(crate::ast::site_fields().len());
+        let num = |value: usize| self.context.f64_type().const_float(value as f64).into();
+        // Field values in the declared order, so construction cannot skew against the reads
+        // (which index by `ast::site_fields`' order through the type oracle).
+        let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
         for (name, _) in crate::ast::site_fields() {
-            let value = match name.as_str() {
-                "file" => text(&location.path),
+            values.push(match name.as_str() {
+                "file" => self.constant_text(&location.path),
                 "line" => num(location.line),
                 "column" => num(location.column),
-                "excerpt" => text(location.excerpt.as_deref().unwrap_or("")),
+                "excerpt" => self.constant_text(location.excerpt.as_deref().unwrap_or("")),
                 "width" => num(location.width),
                 other => return Err(format!("no call-site value for `Site` field `{other}`")),
-            };
-            fields.push((name, value));
+            });
         }
-        self.generate_record(&fields)
+
+        // The layout comes from the shared record definition — the same one a `site.line`
+        // read GEPs through — rather than from the constants just built, so the two cannot
+        // skew. A constant that does not fit its slot is a compiler bug, and says so here
+        // instead of producing a global that reads back as garbage.
+        let struct_type = self.record_struct_type(&crate::ast::site_fields())?;
+        for (index, (value, slot)) in values.iter().zip(struct_type.get_field_types()).enumerate() {
+            if value.get_type() != slot {
+                return Err(format!(
+                    "call-site `Site` field {index} is a {:?}, but its slot is a {slot:?}",
+                    value.get_type()
+                ));
+            }
+        }
+        let name = format!("site.{}.{}.{}", span.file, span.start, span.end);
+        let global =
+            self.constant_global(struct_type, struct_type.const_named_struct(&values), &name);
+        // Its natural alignment, not LLVM's PREFERRED alignment for an aggregate this size
+        // (16), which would pad every site by 8 bytes — a program with a site per assertion
+        // pays that per assertion.
+        global.set_alignment(8);
+        let pointer = global.as_pointer_value();
+        self.site_globals.insert(key, pointer);
+        Ok(pointer.into())
+    }
+
+    /// A `Text` `{ptr, i64}` CONSTANT for `value` — usable in a global initializer, unlike
+    /// `text_literal`, which builds its value with the instruction builder.
+    ///
+    /// The byte constants are interned by content: a path repeats in every call site of a
+    /// file, and at `OptimizationLevel::None` nothing merges duplicate globals later.
+    fn constant_text(&mut self, value: &str) -> BasicValueEnum<'ctx> {
+        let bytes = match self.text_constants.get(value) {
+            Some(existing) => *existing,
+            None => {
+                let bytes = self.context.const_string(value.as_bytes(), true);
+                let global = self.constant_global(bytes.get_type(), bytes, "site.str");
+                global.set_alignment(1);
+                let pointer = global.as_pointer_value();
+                self.text_constants.insert(value.to_string(), pointer);
+                pointer
+            }
+        };
+        let len = self.context.i64_type().const_int(value.len() as u64, false);
+        self.ptr_len_struct_type()
+            .const_named_struct(&[bytes.into(), len.into()])
+            .into()
+    }
+
+    /// Add a private, read-only global initialized to `value` — the shape every compile-time
+    /// constant this file emits needs. `constant` is what makes it read-only memory (the
+    /// property call-site immutability rests on) and `unnamed_addr` lets the linker merge
+    /// duplicates. Callers set the alignment: LLVM's default for a global is its PREFERRED
+    /// alignment, which over-pads small constants emitted in bulk.
+    fn constant_global<T: inkwell::types::BasicType<'ctx>>(
+        &self,
+        ty: T,
+        value: impl inkwell::values::BasicValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::GlobalValue<'ctx> {
+        let global = self
+            .module
+            .add_global(ty, Some(AddressSpace::default()), name);
+        global.set_initializer(&value);
+        global.set_constant(true);
+        global.set_linkage(inkwell::module::Linkage::Private);
+        global.set_unnamed_addr(true);
+        global
     }
 
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. The first is

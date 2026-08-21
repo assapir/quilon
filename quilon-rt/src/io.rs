@@ -75,9 +75,9 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Option<std::borrow::Cow<'a, str>> {
 }
 
 /// Whether colored output is appropriate on file descriptor `fd`: 1 when it is a terminal
-/// and the environment has not opted out, 0 otherwise. Backs `core.io`'s
-/// `colorEnabled(fd)`, which `core.test` uses to decide whether a failed assertion's
-/// report carries ANSI styling.
+/// and the environment has not opted out, 0 otherwise. Backs the internal
+/// `__color_enabled(fd)` primitive, which `core.test` uses to decide whether a failed
+/// assertion's report carries ANSI styling.
 ///
 /// Opt-outs, in the order they are checked: `NO_COLOR` set to any non-empty value (the
 /// no-color.org convention), `TERM=dumb`, and finally a descriptor that is not a tty (a

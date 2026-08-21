@@ -11,8 +11,8 @@
 ~ and exits 101. The location is always the call site in your code, never an internal
 ~ hop inside this module: every assertion takes a trailing `site :: Site` parameter,
 ~ which the compiler fills in with the location of the call that left it off, and which
-~ each wrapper forwards to `failAt`. The report is colored when stderr is a terminal
-~ (`NO_COLOR=1`, `TERM=dumb`, or a redirect turns it off — see core.io's `colorEnabled`).
+~ each wrapper forwards to `failAt`. The report is colored automatically when stderr is a
+~ terminal, and plain when it is redirected or `NO_COLOR=1` / `TERM=dumb` is set.
 ~
 ~   assert(cond)          on a false `cond`, report a default message and exit 101;
 ~                         on true, do nothing. Returns `$` (Unit).
@@ -49,7 +49,7 @@
 ~ result codes a program returns from `^`). The report mirrors a compiler diagnostic:
 ~ the position, the message, then the source line with a caret run under the call.
 >> failAt = (message :: Text, site :: Site) -> $ => <
-  color = colorEnabled(stderr)
+  color = __color_enabled(stderr)
   ~ ANSI styling, or nothing at all when the reader is not a terminal.
   position = color ? "\e[36m" : ""
   problem = color ? "\e[1;31m" : ""

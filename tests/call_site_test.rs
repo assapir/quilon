@@ -201,6 +201,48 @@ fn a_diagnostic_never_asks_for_the_filled_in_argument() {
     );
 }
 
+/// A `Site` is a compile-time constant, so a call pays nothing for it: the record is a
+/// read-only global and the call passes its address. No `__alloc` for the site, no stores —
+/// which is what lets a program assert as often as it likes.
+#[test]
+fn a_call_site_is_a_constant_not_an_allocation() {
+    let src = "line = (site :: Site) -> Num => site.line\n^ = () -> Num => line()\n";
+    let ir = ir_for(src);
+    let entry = ir
+        .split("define internal double @\"^\"")
+        .nth(1)
+        .expect("the entry point must be emitted");
+    assert!(
+        !entry.contains("@__alloc"),
+        "filling in a call site must not allocate, got:\n{entry}"
+    );
+    assert!(
+        site_constant(&ir).is_some(),
+        "the site must be a read-only constant global, got:\n{ir}"
+    );
+}
+
+/// A `Site` is read-only: writing one of its fields is a compile error, however the value
+/// was reached. Records are handles that alias, so a write through a `:=` rebinding would
+/// otherwise be a write to the constant the call site was lowered to.
+#[test]
+fn writing_a_site_field_is_rejected() {
+    let error = type_error_message(
+        "\
+tamper = (site :: Site) -> Num => <
+  s := site
+  s.line := 99
+  s.line
+>
+^ = () -> Num => tamper()
+",
+    );
+    assert!(
+        error.contains("a `Site` is read-only"),
+        "a Site field write must be refused as read-only, got: {error}"
+    );
+}
+
 /// `Site` is a built-in type name, so a program declaring its own is a duplicate
 /// definition — the same way `Result` is taken.
 #[test]
@@ -216,19 +258,38 @@ fn a_program_cannot_declare_its_own_site_type() {
 #[test]
 fn a_call_site_without_a_source_map_still_compiles() {
     let src = "line = (site :: Site) -> Num => site.line + site.column\n^ = () -> Num => line()\n";
-    let tokens = Lexer::tokenize(src).expect("lexing failed");
-    let program = parse(&tokens).expect("parsing failed");
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let ir = generator
-        .generate(&program)
-        .unwrap_or_else(|e| panic!("codegen without a source map failed: {e}"));
+    let ir = ir_for(src);
     assert!(
         ir.contains("@line(ptr %site)"),
         "the Site-taking function must still be emitted, got:\n{ir}"
     );
+    let site = site_constant(&ir).unwrap_or_else(|| panic!("no site constant in:\n{ir}"));
     assert!(
-        ir.contains("store double 1.000000e+00"),
-        "an unknown location must still carry a 1-based position, got:\n{ir}"
+        site.contains("double 1.000000e+00"),
+        "an unknown location must still carry a 1-based position, got: {site}"
     );
+}
+
+/// The LLVM IR for `src`, generated with NO source map installed — the IR-only path the
+/// codegen tests use, where a call site resolves to the documented "unknown" location.
+fn ir_for(src: &str) -> String {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parse(&tokens).expect("parsing failed");
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "test");
+    generator
+        .generate(&program)
+        .unwrap_or_else(|e| panic!("codegen without a source map failed: {e}"))
+}
+
+/// The IR line defining a call site's constant global, if the module has one. Matched by
+/// the global's name (`@site.<file>.<start>.<end>`, as opposed to the `@site.str` byte
+/// constants its `Text` fields point at) rather than by the struct layout, so adding a
+/// `Site` field does not break every test that only cares that a site IS a constant.
+fn site_constant(ir: &str) -> Option<&str> {
+    ir.lines().find(|line| {
+        line.strip_prefix("@site.")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+            && line.contains("constant")
+    })
 }

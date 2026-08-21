@@ -218,16 +218,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// Lower `core.io`'s `colorEnabled(fd)` to the `__color_enabled` intrinsic: a `Bool`
-    /// saying whether `fd` is a terminal that wants ANSI styling (see the runtime for the
-    /// `NO_COLOR`/`TERM`/tty rules). Its corelib body is an inert placeholder.
+    /// Lower the internal `__color_enabled(fd)` primitive to its runtime intrinsic: a
+    /// `Bool` saying whether `fd` is a terminal that wants ANSI styling (see the runtime for
+    /// the `NO_COLOR`/`TERM`/tty rules). `core.test` uses it to decide whether to color a
+    /// failure report; like `__exit` it is `__`-prefixed and exported by no module, since a
+    /// raw file descriptor is not user-facing surface.
     pub(super) fn generate_color_enabled(
         &mut self,
         args: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 1 {
             return Err(format!(
-                "colorEnabled expects exactly 1 argument (fd), got {}",
+                "__color_enabled expects exactly 1 argument (fd), got {}",
                 args.len()
             ));
         }

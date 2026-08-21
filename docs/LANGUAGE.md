@@ -75,9 +75,8 @@ c = greeting.length          ~ grapheme count   → 7
 - `+` = concatenation.
 
 Escapes inside a literal: `\n`, `\r`, `\t`, `\"`, `\\`, `\<` (a literal `<`, which would
-otherwise open a block), and `\e` — the ESC byte that leads an ANSI terminal sequence, so a
-program can color its own output (`"\e[1m" + text + "\e[0m"`; ask
-[`colorEnabled`](#io--core-io) first). Any other escape is a lex error.
+otherwise open a block), and `\e` — the ESC byte that leads an ANSI terminal sequence
+(`"\e[1m" + text + "\e[0m"`). Any other escape is a lex error.
 
 #### Text methods
 
@@ -428,6 +427,9 @@ reassignment but in-place mutation of records:
 - A `:=`-bound instance is **mutable**: both forms of in-place mutation are allowed —
   a direct field write `obj.field := value` (mutates the existing record, no
   re-allocation), and any **setter** method.
+- One exception, by type rather than by binding: a [`Site`](#call-site-locations--site) is
+  read-only — a location is a value, not a variable — so writing one of its fields is an
+  error even through a `:=` binding.
 
 ```quilon
 Counter = {
@@ -814,7 +816,6 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 | `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. |
 | `@readStdin() -> Text` | Read one line from stdin (without the trailing newline). A [leaf IO primitive](#concurrency--colorless-implicit-futures--in-progress): it launches the read and returns a **deferred** `Text` forced on first strict use. Yields `""` at end-of-input. |
 | `stdout`, `stderr` | The standard file descriptors. |
-| `colorEnabled(fd :: Num) -> Bool` | Whether ANSI color suits `fd`: it is a terminal, `NO_COLOR` is unset, and `TERM` is not `dumb`. Style output only when a human is watching — this is what keeps a redirected log or a CI transcript plain. |
 
 ```quilon
 << core.io
@@ -855,6 +856,16 @@ whereAmI = (site :: Site) -> Text => "`site.file`:`site.line`:`site.column`"
 `line`, `column`, and `width` are always at least 1. `Site` is a built-in type name, so a
 program cannot declare its own `Site` (as with `Result`).
 
+**A `Site` is read-only.** A location is a value, not a variable: writing one of its fields
+(`site.line := 9`) is a compile error however the value was reached — records are handles
+that alias, so a write through a `:=` rebinding would be a write to the same thing. That is
+what lets the compiler lower each call site to one shared constant.
+
+A program *may* build a `Site` of its own (`Site { file = "…", line = 1, column = 1,
+excerpt = "…", width = 1 }`) and pass it on — a hand-made one is an ordinary record value,
+read-only like any other, and `failAt` will report wherever it says. What a program cannot
+do is *declare* the type: `Site` is a built-in name (as with `Result`).
+
 **Passing one explicitly forwards it.** That is the whole propagation rule, and it is what
 makes a chain of wrappers report the *user's* call rather than the innermost hop
 (Rust's `#[track_caller]`, expressed as an ordinary argument):
@@ -873,11 +884,15 @@ record method (dispatched by receiver type). The arity a caller sees never count
 `whereAmI()` above takes no arguments as far as the call site is concerned.
 
 This is the mechanism [`core.test`'s assertions](#assertions--core-test) report your call
-site with; nothing about it is specific to them. Every field is a compile-time constant, so
-there is no unwinder and no debug info to keep, and JIT (`quilon run`) and native builds
-report identically; what a call pays is building the record — a handful of constant stores,
-nothing computed. A passing assertion does no further work at all: its message, and the
-report around it, are built only on the failing branch. (See `examples/call_site.ql`.)
+site with; nothing about it is specific to them. **It costs nothing while the program
+runs.** Every field is a compile-time constant, so each call site is emitted as a read-only
+constant and the call passes its address — no allocation, no stores, no unwinder, and no
+debug info to keep; JIT (`quilon run`) and native builds report identically. A passing
+assertion costs its comparison and a pointer argument, and nothing else: the message and the
+report around it are built only on the failing branch. Assert as often as you like, in the
+hottest loop you have. (What a site does cost is image space — the record, plus two
+relocations for its `Text` fields in a position-independent executable.) (See
+`examples/call_site.ql`.)
 
 ---
 
@@ -905,7 +920,8 @@ deep inside `core.test`, and still points at the line where your program called 
 — including when that line is inside a helper function rather than `^`. Each assertion
 takes a trailing [`site :: Site`](#call-site-locations--site) the compiler fills in and the
 wrappers forward. The report is **colored** when stderr is a terminal, and plain when it is
-redirected or `NO_COLOR` is set (see [`colorEnabled`](#io--core-io)).
+redirected or `NO_COLOR` / `TERM=dumb` is set — decided per run, so a CI log and a piped
+build stay clean.
 
 | Function | Effect |
 |----------|--------|
@@ -936,7 +952,7 @@ rendered — `Num`/`Text`/`Bool` directly, and records, sum types, and arrays th
 `` ` `` render operator. The whole module is pure Quilon (`corelib/test.ql`): the report is
 composed and printed in-language from the `Site` fields, built on `assert`, `==`/`!=`,
 pattern matching, and `Text.repeat` for the caret run — its only native primitives are the
-process-exit intrinsic and the tty check behind `colorEnabled`. (See
+internal process-exit and terminal-detection intrinsics. (See
 `examples/assert_demo.ql`, and `examples/assert_location.ql`, which fails on purpose to
 show the report.)
 
@@ -1252,7 +1268,7 @@ pathological input.
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
-| Terminal-aware color: `core.io`'s `colorEnabled(fd)` (tty + `NO_COLOR` + `TERM`) and the `\e` (ESC) string escape | ✅ |
+| Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.ql` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |

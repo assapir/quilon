@@ -86,11 +86,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
         // The intrinsic names here MUST stay in sync with those intercepted in
-        // `generate_call` (`print`/`eprint`/`write`/`colorEnabled`/`now`/`__exit`).
+        // `generate_call` (`print`/`eprint`/`write`/`now`/`__exit`/`__color_enabled`).
         if self.sum_variants.contains_key(name.as_str())
             || matches!(
                 name.as_str(),
-                "print" | "eprint" | "write" | "colorEnabled" | "now" | "__exit"
+                "print" | "eprint" | "write" | "now" | "__exit" | "__color_enabled"
             )
         {
             return false;

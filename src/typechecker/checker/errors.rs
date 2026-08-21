@@ -19,6 +19,7 @@ impl TypeError {
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParam { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
             | TypeError::UnannotatedOverloadCall { span, .. }
@@ -107,6 +108,13 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Overloaded definition '{}' must annotate every parameter; '{}' has no type annotation",
                     name, param
+                )
+            }
+            TypeError::SiteIsImmutable { field, .. } => {
+                write!(
+                    f,
+                    "cannot write `{}`: a `Site` is read-only — a location is a value, not a variable",
+                    field
                 )
             }
             TypeError::MisplacedSiteParam { subject, .. } => {

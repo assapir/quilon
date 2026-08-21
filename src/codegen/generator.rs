@@ -234,6 +234,13 @@ pub struct CodeGenerator<'ctx> {
     // path, line, column, and the text of its line. Empty for the IR-only codegen tests
     // (a program with no files on disk), where a call site resolves to no location.
     sources: Rc<crate::source_map::SourceMap>,
+    // One read-only global per distinct call site that fills in a `Site`, keyed by the
+    // whole span (file, start, end) — so the same site asked for twice reuses one constant,
+    // while two spans that merely start alike stay distinct (`width` is the span's length).
+    site_globals: HashMap<(crate::lexer::FileId, u32, u32), PointerValue<'ctx>>,
+    // Byte constants behind those sites' `Text` fields, interned by content: a file's path
+    // repeats in every call site in it, and no pass merges duplicate globals at -O0.
+    text_constants: HashMap<String, PointerValue<'ctx>>,
     // Every NON-overloaded top-level function whose LAST parameter is a `Site`, mapped to
     // its full parameter count — all a call site needs to know to fill that argument in
     // (see `fills_call_site`). Only such functions are listed, so an ordinary call looks up
@@ -342,6 +349,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
             sources: Rc::new(crate::source_map::SourceMap::default()),
+            site_globals: HashMap::new(),
+            text_constants: HashMap::new(),
             fn_call_site_arity: HashMap::new(),
         };
         codegen.register_builtin_sum_types();

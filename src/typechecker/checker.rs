@@ -91,6 +91,14 @@ pub enum TypeError {
         param: String,
         span: Span,
     },
+    /// A write to a field of a `Site`. The type is read-only as a whole: a location is a
+    /// value, not a variable. It has to be — a compiler-filled call site is one shared
+    /// read-only constant, and records alias, so a write through any binding of one would be
+    /// a write to that constant.
+    SiteIsImmutable {
+        field: String,
+        span: Span,
+    },
     /// A `Site` parameter (the built-in call-site record the compiler fills in) that could
     /// never be filled: one declared before the last parameter, or on a lambda or method,
     /// neither of which is called by name. `subject` names what declared it.
