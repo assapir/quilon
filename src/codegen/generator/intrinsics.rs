@@ -181,10 +181,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ],
                 false,
             ),
-            // Value box; crashes if the key is absent (fail-loud `m[k]`).
-            "__map_index" => {
-                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
             // Membership, as 0/1.
             "__map_has" | "__set_has" => {
                 i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)

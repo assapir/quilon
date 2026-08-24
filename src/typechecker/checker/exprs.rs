@@ -243,13 +243,16 @@ impl TypeChecker {
                         self.check_type_compatibility(&Type::Num, &index_type, span)?;
                         Ok(*elem_type)
                     }
-                    // `m[k]` — the key must match the map's key type; yields the value type.
-                    // This is the fail-loud form: missing keys CRASH at runtime (use
-                    // `.get(k)` for the `Result`-returning safe form).
-                    Type::Map(key_type, value_type) => {
-                        self.check_type_compatibility(&key_type, &index_type, span)?;
-                        Ok(*value_type)
-                    }
+                    // A map is not indexable: values are read only through `.get(k)`,
+                    // which returns a `Result` the caller must match. There is no
+                    // bracket form for maps.
+                    Type::Map(_, _) => Err(TypeError::InvalidBuiltinArgument {
+                        message: "Map has no index access — use `.get(k)`, which returns \
+                                  `Ok(value)` when the key is present and `NotOk` when it \
+                                  is absent"
+                            .to_string(),
+                        span: span.clone(),
+                    }),
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Array(Box::new(Type::Num))),
                         got: Box::new(expr_type),
@@ -295,9 +298,9 @@ impl TypeChecker {
                 Ok(Type::Array(Box::new(elem_type.unwrap_or(Type::Num))))
             }
 
-            Expr::MapLit { entries, span } => self.infer_map_literal(entries, span),
+            Expr::MapLiteral { entries, span } => self.infer_map_literal(entries, span),
 
-            Expr::SetLit { elements, span } => self.infer_set_literal(elements, span),
+            Expr::SetLiteral { elements, span } => self.infer_set_literal(elements, span),
 
             Expr::Record { fields, .. } => self.infer_record(fields),
 

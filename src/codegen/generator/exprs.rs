@@ -120,9 +120,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::Array { elements, .. } => self.generate_array(expr, elements),
 
-            Expr::MapLit { entries, .. } => self.generate_map_literal(expr, entries),
+            Expr::MapLiteral { entries, .. } => self.generate_map_literal(expr, entries),
 
-            Expr::SetLit { elements, .. } => self.generate_set_literal(expr, elements),
+            Expr::SetLiteral { elements, .. } => self.generate_set_literal(expr, elements),
 
             Expr::Record { fields, .. } => self.generate_record_expr(expr, fields),
 
@@ -664,19 +664,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower an array index `array[index]`. `index_node` is the whole `Expr::Index`
     /// (used to look up the element type in the oracle — the checker records an index
     /// expression's type as its element type); `array` and `index_expr` are its parts.
+    /// Only arrays are indexable; the checker rejects `map[key]` (maps are read via
+    /// `.get`), so a map value never reaches here.
     pub(super) fn generate_index(
         &mut self,
         index_node: &Expr,
         array: &Expr,
         index_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // `m[k]` on a Map — fail-loud keyed lookup (crashes on a missing key). Routed by
-        // the oracle's receiver type before the array path (a map value is an opaque
-        // pointer, not a `{ptr,size}` struct).
-        if matches!(self.oracle.expr_type(array), Some(Type::Map(_, _))) {
-            return self.generate_map_index(index_node, array, index_expr);
-        }
-
         // Generate the array expression
         let array_val = self.generate_expr(array)?;
 

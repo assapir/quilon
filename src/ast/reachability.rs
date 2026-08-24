@@ -169,13 +169,13 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
                 mentions(e, out);
             }
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLiteral { entries, .. } => {
             for (key, value) in entries {
                 mentions(key, out);
                 mentions(value, out);
             }
         }
-        Expr::SetLit { elements, .. } => {
+        Expr::SetLiteral { elements, .. } => {
             for e in elements {
                 mentions(e, out);
             }

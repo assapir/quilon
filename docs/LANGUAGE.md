@@ -41,8 +41,8 @@ Quilon's identity, and the rules that guide its design:
 | `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` · `Vec {<-p, x = 9}` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
 | `/` | Division **or** sum-type variant separator | `a / b` · `Color = Red / Green` |
-| `[\| \|]` | [Map / Set](#maps-and-sets) pipe fence (`=>` = "maps to") | `[\|"a" => 1\|]` (map) · `[\|1, 2\|]` (set) |
-| `+-` `-+` | [Set intersection](#maps-and-sets) (one symmetric operator) | `a +- b` ≡ `a -+ b` |
+| `[\| \|]` | [Map](#maps) / [Set](#sets) pipe fence (`=>` = "maps to") | `[\|"a" => 1\|]` (map) · `[\|1, 2\|]` (set) |
+| `+-` `-+` | [Set intersection](#sets) (one symmetric operator) | `a +- b` ≡ `a -+ b` |
 | `` ` `` (in a string) | [Interpolation](#string-interpolation-and-the-render-operator) hole · `` `` `` = one literal backtick | `` "hi `user.name`" `` |
 | `` ` `` (as a name) | The overloadable **render** operator — a type's `Text` rendering | `` ` = () -> Text => "..." `` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
@@ -289,45 +289,79 @@ element `T`), so even nested arrays disambiguate cleanly: `[][]Num + []Num` is a
 lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays alike.
 (See `examples/array_concat.ql`.)
 
-### Maps and Sets
+### Maps
 
-Written `[|K => V|]` (map) and `[|T|]` (set). `Map` and `Set` are **built-in parametric collections** — like `[]T`, not user-defined
-generics. Both are written with a **pipe fence** `[| … |]`; the fence is what keeps a set
-literal distinct from an array (`[1, 2, 3]` is an array, `[|1, 2, 3|]` is a set). `=>`
-reads "maps to".
+A `Map` is written `[|K => V|]` (`=>` reads "maps to"). `Map` is a **built-in parametric
+collection** — like `[]T`, not a user-defined generic — written with a **pipe fence**
+`[| … |]`.
 
 ```quilon
 ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41|]   ~ a Map
-primes :: [|Num|]       = [|2, 3, 5, 7|]                   ~ a Set
-empty  :: [|Num => Num|] = [|=>|]                          ~ empty map
-none   :: [|Num|]        = [||]                            ~ empty set
+empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 ```
 
-**Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`.
-Both collections are **immutable / persistent**: every mutator (`set`, `add`, the set
-operators) returns a **new** collection and never touches the receiver.
+**Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`. A
+map is **immutable / persistent**: every mutator (`set`) returns a **new** map and never
+touches the receiver.
 
-**Iteration order is UNSPECIFIED** — conceptually a map/set is unordered, so never rely on
-the order of `keys`/`values`/`items`/`each`. (It is the hash order, *not* insertion order.
-A fixed-seed hasher makes it reproducible run-to-run so example asserts don't flake, but
-that is an implementation detail, not a contract.)
+**Iteration order is UNSPECIFIED** — conceptually a map is unordered, so never rely on the
+order of `keys`/`values`/`each`. (It is the hash order, *not* insertion order. A fixed-seed
+hasher makes it reproducible run-to-run so example asserts don't flake, but that is an
+implementation detail, not a contract.)
 
-**Fail-loud access:** `m[k]` returns the value and **crashes** on a missing key
-(`runtime error: map key "…" not found`, exit status 1), exactly like an out-of-bounds
-`arr[i]`. Use `m.get(k)` for the safe, `Result`-returning form.
+**Access is via `.get`, which returns a `Result`** — `Ok(value)` when the key is present,
+`NotOk` when it is absent — so a caller must handle the missing case. There is **no bracket
+indexing on a map** (`m[k]` is a type error; bracket indexing is arrays only).
 
-Both carry a built-in `.size` **field** (entry/element count, like an array's `.size`);
+A map carries a built-in `.size` **field** (entry count, like an array's `.size`);
 everything else is a reserved method (resolved ahead of any same-named user overload when
-the receiver is a Map/Set):
+the receiver is a Map):
 
 | Map method | Result | Notes |
 |------------|--------|-------|
-| `get(k)` | `Ok(v)` / `NotOk` | safe lookup (the non-aborting form of `m[k]`) |
+| `get(k)` | `Ok(v)` / `NotOk` | the safe, `Result`-returning lookup (the only way to read a value) |
 | `has(k)` | `Bool` | membership |
 | `set(k, v)` | new `[\|K => V\|]` | a fresh map with `k` bound to `v` (persistent) |
 | `keys()` | `[]K` | the keys as an array (order unspecified) |
 | `values()` | `[]V` | the values as an array (same order as `keys()`) |
 | `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains) |
+
+```quilon
+<< core.io
+m :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
+total = m.values().reduce(0, (acc, x) => acc + x)   ~ 3
+m.get("a") ? | Ok(v) => v | NotOk(_) => 0           ~ 1
+```
+
+Removal is deferred (not in the initial surface), as are user-defined key types (via a
+`%` hash hook). Like the empty array `[]` (which is `[]Num`), an **empty** map literal
+defaults to `Num` key/value types and cannot yet be annotated to another type.
+(See `examples/maps.ql`.)
+
+### Sets
+
+A `Set` is written `[|T|]`. `Set` is a **built-in parametric collection** — like `[]T`,
+not a user-defined generic — written with the same **pipe fence** `[| … |]`; the fence is
+what keeps a set literal distinct from an array (`[1, 2, 3]` is an array, `[|1, 2, 3|]` is
+a set).
+
+```quilon
+primes :: [|Num|] = [|2, 3, 5, 7|]                        ~ a Set
+none   :: [|Num|] = [||]                                  ~ empty set
+```
+
+**Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`;
+duplicates collapse. A set is **immutable / persistent**: every mutator (`add`, the set
+operators) returns a **new** set and never touches the receiver.
+
+**Iteration order is UNSPECIFIED** — conceptually a set is unordered, so never rely on the
+order of `items`/`each`. (It is the hash order, *not* insertion order. A fixed-seed hasher
+makes it reproducible run-to-run so example asserts don't flake, but that is an
+implementation detail, not a contract.)
+
+A set carries a built-in `.size` **field** (element count, like an array's `.size`);
+everything else is a reserved method (resolved ahead of any same-named user overload when
+the receiver is a Set):
 
 | Set method | Result | Notes |
 |------------|--------|-------|
@@ -344,17 +378,10 @@ the receiver is a Map/Set):
 [|1, 2, 3|] +- [|3, 4, 5|]   ~ intersection → {3}   (`+-` and `-+` are the same operator)
 ```
 
-```quilon
-<< core.io
-m :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
-total = m.values().reduce(0, (acc, x) => acc + x)   ~ 3
-m.get("a") ? | Ok(v) => v | NotOk(_) => 0           ~ 1
-```
-
-Removal is deferred (not in the initial surface), as are user-defined key types (via a
-`%` hash hook). Like the empty array `[]` (which is `[]Num`), an **empty** map/set literal
-defaults to `Num` key/value/element types and cannot yet be annotated to another type.
-(See `examples/maps_and_sets.ql`.)
+Like the empty array `[]` (which is `[]Num`), an **empty** set literal defaults to `Num`
+element type and cannot yet be annotated to another type. User-defined element types (via a
+`%` hash hook) and element removal are deferred (not in the initial surface).
+(See `examples/sets.ql`.)
 
 ### Records
 Anonymous structs with named fields:
@@ -1250,7 +1277,7 @@ pathological input.
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
-| Maps `[\|K => V\|]`: literals, `.size`, `m[k]` (fail-loud), `get`/`has`/`set`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
+| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
 | Sets `[\|T\|]`: literals, `.size`, `has`/`add`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection); immutable | ✅ |
 | Map/Set removal, and user-defined key types (via a `%` hash hook) | ❌ |
 | Records + field access | ✅ |

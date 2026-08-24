@@ -759,7 +759,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.expect(&TokenKind::BracketClose)?;
             let span = self.span(start.start, self.previous_span().end);
-            return Ok(Expr::SetLit {
+            return Ok(Expr::SetLiteral {
                 elements: Vec::new(),
                 span,
             });
@@ -772,7 +772,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.expect_fence_close()?;
             let span = self.span(start.start, self.previous_span().end);
-            return Ok(Expr::MapLit {
+            return Ok(Expr::MapLiteral {
                 entries: Vec::new(),
                 span,
             });
@@ -781,7 +781,7 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::Pipe) {
             self.expect_fence_close()?;
             let span = self.span(start.start, self.previous_span().end);
-            return Ok(Expr::SetLit {
+            return Ok(Expr::SetLiteral {
                 elements: Vec::new(),
                 span,
             });
@@ -805,7 +805,7 @@ impl<'a> Parser<'a> {
             }
             self.expect_fence_close()?;
             let span = self.span(start.start, self.previous_span().end);
-            Ok(Expr::MapLit { entries, span })
+            Ok(Expr::MapLiteral { entries, span })
         } else {
             // Set: `first, e2, ...`.
             let mut elements = vec![first];
@@ -815,7 +815,7 @@ impl<'a> Parser<'a> {
             }
             self.expect_fence_close()?;
             let span = self.span(start.start, self.previous_span().end);
-            Ok(Expr::SetLit { elements, span })
+            Ok(Expr::SetLiteral { elements, span })
         }
     }
 

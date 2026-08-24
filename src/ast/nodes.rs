@@ -390,14 +390,14 @@ pub enum Expr {
 
     // Map literal, pipe-fenced: `[|"a" => 1, "b" => 2|]`. Empty is `[|=>|]`.
     // Each entry is a (key, value) expression pair. Iteration order is unspecified.
-    MapLit {
+    MapLiteral {
         entries: Vec<(Expr, Expr)>,
         span: Span,
     },
 
     // Set literal, pipe-fenced: `[|"a", "b"|]`. Empty is `[||]`. The fence keeps a set
     // literal distinct from an array literal (`[1, 2, 3]`). Iteration order unspecified.
-    SetLit {
+    SetLiteral {
         elements: Vec<Expr>,
         span: Span,
     },
@@ -458,8 +458,8 @@ impl Expr {
             Expr::FieldAssign { span, .. } => span,
             Expr::Index { span, .. } => span,
             Expr::Array { span, .. } => span,
-            Expr::MapLit { span, .. } => span,
-            Expr::SetLit { span, .. } => span,
+            Expr::MapLiteral { span, .. } => span,
+            Expr::SetLiteral { span, .. } => span,
             Expr::Record { span, .. } => span,
             Expr::Constructor { span, .. } => span,
             Expr::Range { span, .. } => span,

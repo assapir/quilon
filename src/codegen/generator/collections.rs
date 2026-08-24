@@ -2,7 +2,7 @@
 //!
 //! A Map/Set value is a single opaque pointer to a GC-allocated native runtime wrapper
 //! (a `std::collections::HashMap`/`HashSet` with a fixed-seed hasher; see
-//! `quilon-rt/src/collections.rs`). The collections are IMMUTABLE — every mutator
+//! `quilon-rt/src/collections/`). The collections are IMMUTABLE — every mutator
 //! (`set`/`add`, the set operators) returns a NEW collection pointer and never touches
 //! the receiver.
 //!
@@ -17,8 +17,8 @@
 use super::*;
 use inkwell::values::{BasicMetadataValueEnum, IntValue};
 
-/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `TAG_NUM`/`TAG_TEXT`/
-/// `TAG_BOOL` in `collections.rs`).
+/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `TAG_NUM`/`TAG_TEXT`
+/// in `collections/common.rs`).
 const KEY_TAG_NUM: u64 = 0;
 const KEY_TAG_TEXT: u64 = 1;
 const KEY_TAG_BOOL: u64 = 2;
@@ -66,31 +66,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             set = self.call_rt_ptr("__set_add", &[set.into(), tag.into(), a.into(), b.into()])?;
         }
         Ok(set.into())
-    }
-
-    /// `m[k]` — fail-loud keyed lookup. `__map_index` returns the value box pointer or
-    /// crashes (stderr + exit 1) when the key is absent; codegen loads the value at its
-    /// static type.
-    pub(super) fn generate_map_index(
-        &mut self,
-        index_node: &Expr,
-        map_expr: &Expr,
-        key_expr: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        let key_ty = match self.oracle.expr_type(map_expr) {
-            Some(Type::Map(k, _)) => (**k).clone(),
-            _ => return Err("indexed value is not a Map".to_string()),
-        };
-        let map = self.generate_expr(map_expr)?.into_pointer_value();
-        let (tag, ka, kb) = self.key_words(key_expr, &key_ty)?;
-        let boxed = self.call_rt_ptr(
-            "__map_index",
-            &[map.into(), tag.into(), ka.into(), kb.into()],
-        )?;
-        let value_llvm = self.oracle_value_type(index_node)?;
-        self.builder
-            .build_load(value_llvm, boxed, "map_val")
-            .map_err(ctx("Failed to load map value"))
     }
 
     pub(super) fn generate_map_method(

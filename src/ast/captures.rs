@@ -149,12 +149,12 @@ fn collect(
             collect(expr, local, outer, seen, out);
             collect(index, local, outer, seen, out);
         }
-        Expr::Array { elements, .. } | Expr::SetLit { elements, .. } => {
+        Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
             for e in elements {
                 collect(e, local, outer, seen, out);
             }
         }
-        Expr::MapLit { entries, .. } => {
+        Expr::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect(k, local, outer, seen, out);
                 collect(v, local, outer, seen, out);

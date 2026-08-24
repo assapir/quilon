@@ -1,40 +1,16 @@
 //! Built-in `Map` and `Set` collection types: the pipe-fenced literals `[|K => V|]` /
-//! `[|T|]`, keyed access (`m[k]` fail-loud, `.get` safe), the lean method surface, and
+//! `[|T|]`, safe keyed access (`.get`, returning a `Result`), the lean method surface, and
 //! the set-algebra operators. These drive the full pipeline (lex -> parse -> typecheck ->
 //! codegen -> JIT) and assert the real exit code, plus a batch of rejection cases.
 
 mod common;
 use common::{assert_exit, assert_type_error};
-use std::io::Write;
-use std::process::Command;
 
-/// Run `source` through the real `quilon` binary as a subprocess, returning
-/// `(exit_code, stderr)`. Used for the fail-loud `m[k]` crash, whose `__exit` would
-/// otherwise take the in-process JIT harness down with it (mirrors `index_checks_test`).
-fn run_subprocess(name: &str, source: &str) -> (i32, String) {
-    let mut path = std::env::temp_dir();
-    path.push(format!("quilon_col_{}_{}.ql", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .ql");
-    f.write_all(source.as_bytes()).expect("write temp .ql");
-
-    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .arg("run")
-        .arg(&path)
-        .output()
-        .expect("run quilon");
-
-    let _ = std::fs::remove_file(&path);
-    (
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-/// A map literal, then fail-loud `m[k]` lookup of a present key.
+/// A map literal, then `.get` lookup of present keys (the only way to read a value).
 #[test]
-fn map_literal_and_index() {
+fn map_literal_and_get() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 10, \"b\" => 20|]\n  m[\"a\"] + m[\"b\"]\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 10, \"b\" => 20|]\n  (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0) + (m.get(\"b\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
         30,
     );
 }
@@ -61,7 +37,7 @@ fn map_size_is_entry_count() {
 #[test]
 fn map_duplicate_key_overwrites() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"a\" => 9|]\n  m.size * 100 + m[\"a\"]\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"a\" => 9|]\n  m.size * 100 + (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
         109,
     );
 }
@@ -88,7 +64,7 @@ fn map_get_notok_absent() {
 #[test]
 fn map_set_is_persistent() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m2 :: [|Text => Num|] = m.set(\"a\", 5)\n  m[\"a\"] * 10 + m2[\"a\"]\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m2 :: [|Text => Num|] = m.set(\"a\", 5)\n  (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0) * 10 + (m2.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
         15,
     );
 }
@@ -126,7 +102,7 @@ fn map_each_effect_and_chains() {
 #[test]
 fn map_num_keys() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Num => Num|] = [|1 => 100, 2 => 200|]\n  m[1] + m[2]\n>",
+        "^ = () -> Num => <\n  m :: [|Num => Num|] = [|1 => 100, 2 => 200|]\n  (m.get(1) ? | Ok(v) => v | NotOk(_) => 0) + (m.get(2) ? | Ok(v) => v | NotOk(_) => 0)\n>",
         300,
     );
 }
@@ -135,7 +111,7 @@ fn map_num_keys() {
 #[test]
 fn map_bool_keys() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Bool => Num|] = [|true => 3, false => 4|]\n  m[true] * 10 + m[false]\n>",
+        "^ = () -> Num => <\n  m :: [|Bool => Num|] = [|true => 3, false => 4|]\n  (m.get(true) ? | Ok(v) => v | NotOk(_) => 0) * 10 + (m.get(false) ? | Ok(v) => v | NotOk(_) => 0)\n>",
         34,
     );
 }
@@ -154,7 +130,7 @@ fn map_empty_literal() {
 #[test]
 fn map_negative_zero_key_unifies_with_positive_zero() {
     assert_exit(
-        "^ = () -> Num => <\n  negz :: Num = 0.0 * (0 - 1)\n  m :: [|Num => Num|] = [|negz => 7|]\n  m[0] + (m.has(0) ? 1 : 0)\n>",
+        "^ = () -> Num => <\n  negz :: Num = 0.0 * (0 - 1)\n  m :: [|Num => Num|] = [|negz => 7|]\n  (m.get(0) ? | Ok(v) => v | NotOk(_) => 0) + (m.has(0) ? 1 : 0)\n>",
         // stored under -0.0, found under +0.0 -> 7 + 1
         8,
     );
@@ -165,25 +141,9 @@ fn map_negative_zero_key_unifies_with_positive_zero() {
 #[test]
 fn map_nan_key_is_findable_and_dedupes() {
     assert_exit(
-        "^ = () -> Num => <\n  nan :: Num = 0.0 / 0.0\n  m :: [|Num => Num|] = [|nan => 9|]\n  m2 :: [|Num => Num|] = m.set(0.0 / 0.0, 3)\n  m2.size * 10 + m2[0.0 / 0.0]\n>",
+        "^ = () -> Num => <\n  nan :: Num = 0.0 / 0.0\n  m :: [|Num => Num|] = [|nan => 9|]\n  m2 :: [|Num => Num|] = m.set(0.0 / 0.0, 3)\n  m2.size * 10 + (m2.get(0.0 / 0.0) ? | Ok(v) => v | NotOk(_) => 0)\n>",
         // the second NaN key overwrites the first -> size 1 -> 10 + 3
         13,
-    );
-}
-
-/// `m[k]` on a MISSING key is fail-loud: a clear stderr message and exit status 1, never
-/// the `99` the program would otherwise return. Driven as a subprocess (the crash's
-/// `__exit` would take an in-process JIT run down with it).
-#[test]
-fn map_index_missing_key_crashes() {
-    let (code, stderr) = run_subprocess(
-        "missing",
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  x :: Num = m[\"missing\"]\n  99\n>",
-    );
-    assert_eq!(code, 1, "missing key must exit 1, got {code}: {stderr}");
-    assert!(
-        stderr.contains("map key \"missing\" not found"),
-        "stderr must name the missing key, got: {stderr}"
     );
 }
 
@@ -258,10 +218,11 @@ fn set_intersection_both_spellings() {
     );
 }
 
-/// Indexing a map with the wrong key type is a type error.
+/// A map has no bracket indexing at all: values are read only through `.get` (which
+/// returns a `Result`). Even a correctly-typed key is rejected by the checker.
 #[test]
-fn map_index_wrong_key_type_rejected() {
-    assert_type_error("^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m[1]\n>");
+fn map_index_rejected() {
+    assert_type_error("^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m[\"a\"]\n>");
 }
 
 /// A map literal whose values disagree in type is rejected.
@@ -282,7 +243,7 @@ fn set_non_hashable_element_rejected() {
     assert_type_error("^ = () -> Num => <\n  [|[1, 2], [3, 4]|].size\n>");
 }
 
-/// A set cannot be indexed with `[]` (only arrays and maps can).
+/// A set cannot be indexed with `[]` (only arrays can).
 #[test]
 fn set_index_rejected() {
     assert_type_error("^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  s[0]\n>");

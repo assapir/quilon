@@ -42,8 +42,8 @@ All notable changes to Quilon are documented here.
   from an array (`[1, 2, 3]`). Both are **immutable** — every mutating method returns a NEW
   collection — and backed by plain `std::collections::HashMap`/`HashSet` in `quilon-rt` over
   GC memory. Keys are the built-in hashable types (Num / Text / Bool; Text hashes by
-  content, consistent with value `==`). Access mirrors arrays: `m[k]` returns the value and
-  **crashes on a missing key**, while `m.get(k)` is the safe `Ok(v)`/`NotOk` form. Map
+  content, consistent with value `==`). A map value is read only through `m.get(k)`, the
+  safe `Ok(v)`/`NotOk` form — there is no bracket indexing on a map. Map
   methods: `.get`/`.has`/`.set`/`.keys`/`.values`/`.each` plus the `.size` field; set
   methods: `.has`/`.add`/`.items`/`.each` plus `.size`. **Set algebra** is spelled with
   single-token operators: `+` union, `-` difference, `+-` (= `-+`) intersection.
@@ -51,7 +51,7 @@ All notable changes to Quilon are documented here.
   fixed-seed hasher so a program is reproducible run-to-run, but the order is unspecified by
   contract, not insertion order. User-defined key hashing (the `%`/`==` hooks), `remove`,
   and handing `^`'s env over as a `[|Text => Text|]` map are deferred to a later slice. See
-  `examples/maps_and_sets.ql`.
+  `examples/maps.ql` and `examples/sets.ql`.
 - **Deferred values — the `@readStdin` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The value-returning half of the colorless implicit-futures model. `@readStdin()` (in
   `core.io`) reads one line from stdin and returns a **deferred** `Text`: calling it

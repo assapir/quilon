@@ -85,9 +85,8 @@ const EVERY_INTRINSIC: &str = r#"
   assertEq("slice".slice(1, 3), "li")
   assertEq("x,y".split(",").size, 2)
 
-  ~ Map intrinsics: new/set/index/get/has/len, and keys/values/each iteration.
+  ~ Map intrinsics: new/set/get/has/len, and keys/values/each iteration.
   counts :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
-  assertEq(counts["a"], 1)
   assert(counts.has("b"))
   assertEq(counts.size, 2)
   grown :: [|Text => Num|] = counts.set("c", 3)
