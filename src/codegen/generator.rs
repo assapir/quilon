@@ -455,7 +455,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         for item in &program.items {
             if let Item::TypeDeclaration(TypeDeclaration {
                 name,
-                type_definition: TypeDefinition::Sum(variants),
+                type_definition: TypeDefinition::Sum { variants, .. },
                 ..
             }) = item
             {

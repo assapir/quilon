@@ -45,12 +45,28 @@ pub struct TypeDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDefinition {
     /// A user-defined sum type: `Color = Red / Green / Blue`,
-    /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`.
-    Sum(Vec<SumVariant>),
+    /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`. An optional
+    /// trailing `{ }` block carries METHODS ONLY (named methods, the render `` ` ``, and
+    /// operator members) — a sum has no fields, so a field-like entry there is rejected.
+    Sum {
+        variants: Vec<SumVariant>,
+        methods: Vec<MethodDeclaration>,
+    },
     Record {
         fields: Vec<(String, Type)>,
         methods: Vec<MethodDeclaration>,
     },
+}
+
+impl TypeDefinition {
+    /// The methods declared on this type, for either kind — a record's method members or
+    /// a sum's `{ }` block. Lets a pass walk a type's methods without matching on the kind.
+    pub fn methods(&self) -> &[MethodDeclaration] {
+        match self {
+            TypeDefinition::Sum { methods, .. } => methods,
+            TypeDefinition::Record { methods, .. } => methods,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

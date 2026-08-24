@@ -297,17 +297,40 @@ impl<'a> Parser<'a> {
         exported: bool,
     ) -> Result<Item, ParseError> {
         // Parse type definition: Name = { field :: Type, ... method = => body, ... }
+        let (fields, methods) = self.parse_member_block()?;
+        let end = self.previous_span();
+
+        Ok(Item::TypeDeclaration(TypeDeclaration {
+            name,
+            type_definition: TypeDefinition::Record { fields, methods },
+            exported,
+            span: self.span(start.start, end.end),
+        }))
+    }
+
+    /// Parse a `{ … }` member block — the shared grammar of a record body and a sum type's
+    /// optional trailing method block. Each member is either a field `name :: Type` or a
+    /// method `name = parameters => body`. A member may be named by an operator symbol
+    /// (`==`, `+`, …, the binary operators) or by the render operator `` ` ``, both of
+    /// which are always methods; every other member name is an ordinary identifier.
+    /// Returns the fields and methods in declaration order.
+    pub(super) fn parse_member_block(
+        &mut self,
+    ) -> Result<(Vec<(String, Type)>, Vec<MethodDeclaration>), ParseError> {
         self.expect(&TokenKind::BraceOpen)?;
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
 
         while !self.check(&TokenKind::BraceClose) && !self.is_at_end() {
-            // A method may be named `` ` `` (the render operator override); every other
-            // member name is an ordinary identifier.
-            let field_name = if self.check(&TokenKind::Backtick) {
+            let member_name = if self.check(&TokenKind::Backtick) {
                 self.advance();
                 "`".to_string()
+            } else if let Some(operator) = self.operator_def_name() {
+                // An operator-symbol member (`== = …`, `+ = …`). `operator_def_name`
+                // requires the following `=`, so this never swallows a stray operator.
+                self.advance();
+                operator
             } else {
                 self.expect_ident()?
             };
@@ -316,7 +339,7 @@ impl<'a> Parser<'a> {
                 // This is a field: name :: Type
                 self.advance();
                 let field_type = self.parse_type()?;
-                fields.push((field_name, field_type));
+                fields.push((member_name, field_type));
             } else if self.check(&TokenKind::Assign) {
                 // This is a method: name = parameters => body
                 self.advance();
@@ -347,7 +370,7 @@ impl<'a> Parser<'a> {
                 let method_end = self.previous_span();
 
                 methods.push(MethodDeclaration {
-                    name: field_name,
+                    name: member_name,
                     parameters,
                     return_type,
                     body,
@@ -367,14 +390,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(&TokenKind::BraceClose)?;
-        let end = self.previous_span();
-
-        Ok(Item::TypeDeclaration(TypeDeclaration {
-            name,
-            type_definition: TypeDefinition::Record { fields, methods },
-            exported,
-            span: self.span(start.start, end.end),
-        }))
+        Ok((fields, methods))
     }
 
     /// Parse a sum-type declaration: `Name = VariantA / VariantB(Num, Text) / ...`.
@@ -430,10 +446,29 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Optional trailing `{ … }` method block. A sum has no fields, so a field-like
+        // entry (`x :: Num`) there is rejected with a clear message; only methods are
+        // allowed (named methods, the render `` ` ``, and operator members).
+        let methods = if self.check(&TokenKind::BraceOpen) {
+            let (fields, methods) = self.parse_member_block()?;
+            if !fields.is_empty() {
+                return Err(ParseError {
+                    message: format!(
+                        "sum type `{}` cannot have fields — its `{{ }}` block holds methods only (sums carry data in their variant payloads, not fields)",
+                        name
+                    ),
+                    span: self.previous_span(),
+                });
+            }
+            methods
+        } else {
+            Vec::new()
+        };
+
         let end = self.previous_span();
         Ok(Item::TypeDeclaration(TypeDeclaration {
             name,
-            type_definition: TypeDefinition::Sum(variants),
+            type_definition: TypeDefinition::Sum { variants, methods },
             exported,
             span: self.span(start.start, end.end),
         }))

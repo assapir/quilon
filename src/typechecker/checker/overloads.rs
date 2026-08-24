@@ -246,6 +246,77 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Register an operator MEMBER of a record or sum type as a member of that operator's
+    /// overload set. An operator lives inside the type it operates on: `it` is the left
+    /// operand (its type is `self_type`) and the member's single explicit parameter is the
+    /// right operand. So `Color`'s `== = (other :: Color) -> Bool` becomes the `==`
+    /// overload `(Color, Color) -> Bool`, and binary-operator dispatch resolves `a == b`
+    /// through the same exact-type mechanism as any overload. The render `` ` `` is not an
+    /// operator symbol and is handled as a method, not here.
+    pub(super) fn register_operator_member(
+        &mut self,
+        self_type: &Type,
+        method: &MethodDeclaration,
+    ) -> Result<(), TypeError> {
+        // A binary operator member takes exactly one explicit parameter (the right operand).
+        if method.parameters.len() != 1 {
+            return Err(TypeError::OperatorMemberArity {
+                operator: method.name.clone(),
+                got: method.parameters.len(),
+                span: method.span.clone(),
+            });
+        }
+        let parameter = &method.parameters[0];
+        let parameter_type = match &parameter.type_annotation {
+            Some(t) => self.resolve_type(t),
+            None => {
+                return Err(TypeError::OverloadMissingAnnotation {
+                    name: method.name.clone(),
+                    parameter: parameter.name.clone(),
+                    span: parameter.span.clone(),
+                });
+            }
+        };
+        let parameters = vec![self_type.clone(), parameter_type];
+        let ret = method.return_type.as_ref().map(|t| self.resolve_type(t));
+
+        // A comparison/equality operator member (`== != < <= > >=`) must return `Bool`.
+        if is_comparison_operator(&method.name)
+            && let Some(ret) = &ret
+            && ret != &Type::Bool
+        {
+            return Err(TypeError::ComparisonOverloadNotBool {
+                operator: method.name.clone(),
+                got: Box::new(ret.clone()),
+                span: method.span.clone(),
+            });
+        }
+
+        // Reject an exact-duplicate signature up front — it would make every use ambiguous.
+        if let Some(set) = self.overloads.get(&method.name)
+            && set.iter().any(|o| {
+                o.parameters.len() == parameters.len()
+                    && o.parameters
+                        .iter()
+                        .zip(&parameters)
+                        .all(|(a, b)| types_match(a, b))
+            })
+        {
+            return Err(TypeError::DuplicateDefinition {
+                name: method.name.clone(),
+                span: method.span.clone(),
+            });
+        }
+
+        if ret.is_none() && self.unannotated_overload_member.is_none() {
+            self.unannotated_overload_member =
+                Some((method.name.clone(), parameters.clone(), method.span.clone()));
+        }
+
+        self.add_overload(&method.name, Overload { parameters, ret });
+        Ok(())
+    }
+
     /// After every item is checked, an overload member that never got its return type
     /// annotated is reported at its own definition. A call to one is reported at the call
     /// instead (`resolve_overload`), which runs first — so this only speaks up for a

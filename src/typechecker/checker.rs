@@ -172,6 +172,20 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// A top-level definition was named by an operator symbol. Operator overloading now
+    /// lives inside a type: an operator is a member of the record or sum type it operates
+    /// on, with `it` as the left operand.
+    OperatorMustBeMember {
+        operator: String,
+        span: Span,
+    },
+    /// An operator member had the wrong number of explicit parameters. A binary operator
+    /// member takes exactly one (the right operand); `it` is the left operand.
+    OperatorMemberArity {
+        operator: String,
+        got: usize,
+        span: Span,
+    },
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
