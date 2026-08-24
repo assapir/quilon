@@ -27,6 +27,10 @@ const RUNS: u32 = 5;
 const RUNTIME_DIR: &str = "benches/runtime";
 
 /// The programs, in table order: file stem, and what each one exercises.
+#[path = "series.rs"]
+mod series;
+use series::Trend;
+
 const PROGRAMS: &[(&str, &str)] = &[
     ("tco_loop", "50M-iteration tail-recursive countdown"),
     ("array_pipeline", "map/filter/reduce over a 2M range"),
@@ -44,9 +48,23 @@ fn main() {
     let workdir = std::env::temp_dir().join("quilon-runtime-bench");
     let _ = std::fs::create_dir_all(&workdir);
 
+    // `--baseline <path>` compares against a previous run, `--metrics <path>` records this
+    // one. Both absent prints the tables exactly as they always have.
+    let mut trend = Trend::from_args("runtime_speed");
+    let (header, rule) = match trend.has_baseline() {
+        true => (
+            "| program | shape | build | run | Δ run | peak RSS | Δ RSS |",
+            "|---|---|--:|--:|--:|--:|--:|",
+        ),
+        false => (
+            "| program | shape | build | run | peak RSS |",
+            "|---|---|--:|--:|--:|",
+        ),
+    };
+
     println!("Runtime benchmark — best of {RUNS} runs\n");
-    println!("| program | shape | build | run | peak RSS |");
-    println!("|---|---|--:|--:|--:|");
+    println!("{header}");
+    println!("{rule}");
     for (stem, shape) in PROGRAMS {
         let source = runtime_dir().join(format!("{stem}.ql"));
         let binary = workdir.join(stem);
@@ -65,16 +83,33 @@ fn main() {
             assert!(run.ok, "running {stem} failed");
             best = best.min(run);
         }
-        println!(
-            "| `{stem}` | {shape} | {} | {} | {} |",
+        // `build` is recorded but has no printed delta: it is the compiler's cost, which the
+        // compile-speed family measures properly. What this family is about is `run` and the
+        // memory the emitted program uses.
+        trend.delta(stem, "build", build.wall.as_secs_f64() * 1000.0);
+        let run_delta = trend.delta(stem, "run", best.wall.as_secs_f64() * 1000.0);
+        let rss_delta = trend.delta(
+            stem,
+            "peak RSS",
+            best.peak_rss_kb.unwrap_or(0) as f64 / 1024.0,
+        );
+        let row = format!(
+            "| `{stem}` | {shape} | {} | {} |",
             ms(build.wall),
             ms(best.wall),
-            rss(best.peak_rss_kb),
         );
+        match trend.has_baseline() {
+            true => println!(
+                "{row} {run_delta} | {} | {rss_delta} |",
+                rss(best.peak_rss_kb)
+            ),
+            false => println!("{row} {} |", rss(best.peak_rss_kb)),
+        }
     }
     println!();
 
-    latency_table(quilon, &workdir);
+    latency_table(quilon, &workdir, &mut trend);
+    trend.finish();
 }
 
 /// What a user waits for: the whole command, including process start, JIT set-up or the
@@ -87,7 +122,7 @@ fn main() {
 /// override and cargo hands it to anything it runs, so without clearing it the compiler
 /// links straight against the build tree's archive and never consults a cache at all —
 /// which is exactly what made the first version of this table report two warm rows.
-fn latency_table(quilon: &Path, workdir: &Path) {
+fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
     let tiny = workdir.join("tiny.ql");
     std::fs::write(&tiny, "^ = () -> Num => 0\n").expect("writing the latency program");
     let out = workdir.join("tiny");
@@ -108,8 +143,16 @@ fn latency_table(quilon: &Path, workdir: &Path) {
     .expect("writing the importing latency program");
 
     println!("Command latency — best of {RUNS} runs, on a one-line program\n");
-    println!("| command | cache | wall | peak RSS |");
-    println!("|---|---|--:|--:|");
+    match trend.has_baseline() {
+        true => {
+            println!("| command | cache | wall | Δ wall | peak RSS | Δ RSS |");
+            println!("|---|---|--:|--:|--:|--:|");
+        }
+        false => {
+            println!("| command | cache | wall | peak RSS |");
+            println!("|---|---|--:|--:|");
+        }
+    }
 
     for (label, program) in [
         ("`quilon run`", &tiny),
@@ -122,11 +165,20 @@ fn latency_table(quilon: &Path, workdir: &Path) {
                     .args(["run".as_ref(), program.as_os_str()]),
             )
         });
-        println!(
-            "| {label} | n/a | {} | {} |",
-            ms(run.wall),
-            rss(run.peak_rss_kb)
+        let wall_delta = trend.delta(label, "wall", run.wall.as_secs_f64() * 1000.0);
+        let rss_delta = trend.delta(
+            label,
+            "peak RSS",
+            run.peak_rss_kb.unwrap_or(0) as f64 / 1024.0,
         );
+        let row = format!("| {label} | n/a | {} |", ms(run.wall));
+        match trend.has_baseline() {
+            true => println!(
+                "{row} {wall_delta} | {} | {rss_delta} |",
+                rss(run.peak_rss_kb)
+            ),
+            false => println!("{row} {} |", rss(run.peak_rss_kb)),
+        }
     }
 
     // A cold cache means the embedded `libquilon_rt.a` has to be extracted before the
@@ -174,11 +226,23 @@ fn latency_table(quilon: &Path, workdir: &Path) {
             );
             m
         });
-        println!(
-            "| `quilon build` | {label} | {} | {} |",
-            ms(build.wall),
-            rss(build.peak_rss_kb)
+        // Labelled by cache state, since `quilon build` appears twice with very different
+        // numbers and a series row has to tell them apart.
+        let row_label = format!("quilon build ({label} cache)");
+        let wall_delta = trend.delta(&row_label, "wall", build.wall.as_secs_f64() * 1000.0);
+        let rss_delta = trend.delta(
+            &row_label,
+            "peak RSS",
+            build.peak_rss_kb.unwrap_or(0) as f64 / 1024.0,
         );
+        let row = format!("| `quilon build` | {label} | {} |", ms(build.wall));
+        match trend.has_baseline() {
+            true => println!(
+                "{row} {wall_delta} | {} | {rss_delta} |",
+                rss(build.peak_rss_kb)
+            ),
+            false => println!("{row} {} |", rss(build.peak_rss_kb)),
+        }
     }
     println!();
 }

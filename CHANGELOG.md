@@ -160,6 +160,18 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **CI shows benchmark deltas against the previous run on the branch
+  ([#162](https://github.com/assapir/quilon/issues/162)).** Both benchmark families print a
+  `Δ` column beside their measurements, so performance drift shows up in the run that
+  introduced it rather than as a column someone has to diff across job summaries. The
+  numbers are kept between runs in `actions/cache` and restored by prefix; a missing
+  baseline (first run, evicted cache, a fork) prints the tables exactly as before. Still
+  **informational** — no threshold, nothing gates on a delta — because shared runners are
+  noisy in absolute terms and only interleaved runs on one machine compare credibly; the
+  summary says so where a reader sees it. The same flags work locally:
+  `cargo bench --bench compile_speed -- --metrics before.tsv`, then `--baseline before.tsv`
+  after a change.
+
 - **Every located report puts the message on its own line, and shortens a long path.**
   Since 0.9.1 a compile error read `path:line:col: error: <message>` on one line; it — and
   the assertion and fail-loud runtime reports added in this release — now print the position

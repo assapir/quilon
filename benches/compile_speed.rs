@@ -20,6 +20,10 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::typechecker::TypeChecker;
 
+#[path = "series.rs"]
+mod series;
+use series::Trend;
+
 /// How many times each corpus is compiled. The reported number is the mean; a handful
 /// of runs is enough to damp scheduler noise without making the suite slow enough that
 /// people skip it.
@@ -50,13 +54,40 @@ fn main() {
         return;
     }
 
+    // `--baseline <path>` compares against a previous run's numbers, `--metrics <path>`
+    // records this run's. Both absent is the ordinary local case, and prints as it always has.
+    let mut trend = Trend::from_args("compile_speed");
+    let (header, rule) = match trend.has_baseline() {
+        true => (
+            "| corpus | shape | bytes | lex | parse | link | check | codegen | total | Δ total |",
+            "|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
+        ),
+        false => (
+            "| corpus | shape | bytes | lex | parse | link | check | codegen | total |",
+            "|---|---|--:|--:|--:|--:|--:|--:|--:|",
+        ),
+    };
+
     println!("Compile-speed benchmark — mean of {RUNS} runs, milliseconds\n");
-    println!("| corpus | shape | bytes | lex | parse | link | check | codegen | total |");
-    println!("|---|---|--:|--:|--:|--:|--:|--:|--:|");
+    println!("{header}");
+    println!("{rule}");
     for (stem, shape) in CORPORA {
         let corpus = Corpus::read(stem, shape);
         let t = corpus.measure();
-        println!(
+        // Every stage is recorded, so a series file carries the whole shape of a run and a
+        // later reader can compare any column. Only the total gets a printed delta: nine
+        // delta columns would be unreadable, and the total is what a regression shows in.
+        for (metric, value) in [
+            ("lex", t.lex),
+            ("parse", t.parse),
+            ("link", t.link),
+            ("check", t.check),
+            ("codegen", t.codegen),
+        ] {
+            trend.delta(corpus.name, metric, value.as_secs_f64() * 1000.0);
+        }
+        let total = trend.delta(corpus.name, "total", t.total().as_secs_f64() * 1000.0);
+        let row = format!(
             "| `{}` | {} | {} | {} | {} | {} | {} | {} | **{}** |",
             corpus.name,
             corpus.shape,
@@ -68,13 +99,20 @@ fn main() {
             ms(t.codegen),
             ms(t.total()),
         );
+        match trend.has_baseline() {
+            true => println!("{row} {total} |"),
+            false => println!("{row}"),
+        }
     }
     if let Some(kb) = peak_rss_kb() {
         // One figure for the whole run rather than a column: these corpora are compiled
         // in one process, so the kernel's high-water mark is shared between them. It is
         // dominated by the largest, which is the number the memory work needs anyway.
-        println!("Peak RSS for the whole run: {:.1} MB", kb as f64 / 1024.0);
+        let megabytes = kb as f64 / 1024.0;
+        let delta = trend.delta("whole run", "peak RSS", megabytes);
+        println!("Peak RSS for the whole run: {megabytes:.1} MB {delta}");
     }
+    trend.finish();
     // A trailing blank line closes the table for whatever reads it back out of the log.
     println!();
 }

@@ -33,6 +33,18 @@ regression shows up as a column growing over time.
   of the built programs in `benches/runtime/`, then `quilon run` / `quilon build` latency
   including a cold runtime-archive cache.
 
+Both families take `--baseline <path>` (a previous run's numbers) and `--metrics <path>`
+(where to record this run's). With a baseline, each table gains a `Δ` column — locally that
+is `cargo bench --bench compile_speed -- --metrics before.tsv`, then the same with
+`--baseline before.tsv` after a change. CI does this across runs on a branch (the series is
+kept in `actions/cache`, restored by prefix), so the job summary shows a delta against the
+previous run on the same branch. It is **informational**: shared runners are noisy in
+absolute terms and only interleaved runs on one machine compare credibly, so nothing gates
+on a delta and a few percent either way is the floor. No baseline (first run, evicted
+cache, a fork) prints the tables exactly as before. Format: one tab-separated
+`family<TAB>row<TAB>metric<TAB>value` row per measurement, in `benches/series.rs` and gated
+by `tests/bench_series_test.rs`.
+
 `cargo bench --bench <name> -- --regen` rewrites that family's corpora from the
 generators in the bench. Resizing a corpus is a deliberate act that lands as a reviewable
 diff and breaks comparability with earlier numbers, which is why it is not automatic. Add

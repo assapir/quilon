@@ -76,19 +76,41 @@ jobs:
       - name: Test
         run: cargo test --workspace --verbose
 
+      # The previous run-on-main's numbers, so each table can carry a delta column. Keyed
+      # per commit and restored by prefix: a fresh key every run (caches are immutable once
+      # written), and `restore-keys` finds the most recent one. A miss — first run, an
+      # evicted cache, a fork with no main history — just means no delta column.
+      - name: Restore benchmark series
+        uses: actions/cache/restore@v6
+        with:
+          path: bench-series.tsv
+          key: bench-series-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            bench-series-${{ github.ref_name }}-
+            bench-series-main-
+
       # Informational only: no threshold, no gate. Shared runners are too noisy for
-      # absolute limits, so the numbers are published for trend tracking and a ratio
-      # tripwire is a later decision once there is history to set it from.
+      # absolute limits — only interleaved runs on one machine compare credibly — so the
+      # deltas below are a hint about where to look, not a verdict.
       - name: Benchmarks
         run: |
           set -euo pipefail
-          cargo bench --bench compile_speed | tee compile-bench.txt
-          cargo bench --bench runtime_speed | tee runtime-bench.txt
+          # The restored file is the baseline; this run's numbers go to a new one, which
+          # becomes the next run's baseline.
+          cargo bench --bench compile_speed -- \
+            --baseline bench-series.tsv --metrics bench-series.next.tsv | tee compile-bench.txt
+          cargo bench --bench runtime_speed -- \
+            --baseline bench-series.tsv --metrics bench-series.next.tsv | tee runtime-bench.txt
+          mv bench-series.next.tsv bench-series.tsv
           {
             echo "### Benchmarks"
             echo
-            echo "Informational — no pass/fail. Shared-runner numbers are noisy in"
-            echo "absolute terms; watch the trend across commits."
+            echo "Informational — no pass/fail. A \`Δ\` column compares against the"
+            echo "previous run on this branch. Shared runners are noisy in absolute"
+            echo "terms and only interleaved runs on one machine compare credibly, so"
+            echo "a few percent either way is the floor: treat a delta as a hint about"
+            echo "where to look, not a verdict. No delta column means there was no"
+            echo "previous run to compare against."
             echo
             echo "#### Compile speed"
             echo
@@ -102,3 +124,13 @@ jobs:
             echo
             sed -n '/^| command/,/^$/p' runtime-bench.txt
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keep this run's numbers for the next one to compare against. Only from a push to
+      # the repo's own branches: a pull-request run measures a different runner under a
+      # different load, and letting it overwrite the series would compare noise to noise.
+      - name: Save benchmark series
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v6
+        with:
+          path: bench-series.tsv
+          key: bench-series-${{ github.ref_name }}-${{ github.sha }}

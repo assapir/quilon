@@ -6,6 +6,11 @@ authors = ["Assaf Sapir <assaf@sapir.io>"]
 description = "A fast, statically-typed web programming language"
 license = "GPL-2.0-only"
 
+# `benches/series.rs` is a shared include (both bench targets and a test include it), not a
+# benchmark of its own — without this, Cargo's auto-discovery would compile it as a target
+# with no `main`.
+autobenches = false
+
 [workspace]
 members = ["quilon-rt"]
 
