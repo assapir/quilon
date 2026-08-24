@@ -43,16 +43,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         let value = self.generate_expression(expression)?;
         // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
         // own type's `` ` `` override would invoke that override forever. That one case
-        // renders via the built-in default (the type name); a DIFFERENT value of the same
-        // type — e.g. a child node `it.next` — still uses the override and terminates for
-        // any finite structure.
+        // renders via the built-in default (a record's type name, a sum's variant name); a
+        // DIFFERENT value of the same type — e.g. a child node `it.next` — still uses the
+        // override and terminates for any finite structure.
         if let Expression::Identifier { name, .. } = expression
             && name == "it"
-            && let Type::Named { name: ty_name, .. } = &ty
+            && let Type::Named { name: ty_name, .. } | Type::Sum { name: ty_name, .. } = &ty
             && self.generating_backtick_for.as_deref() == Some(ty_name.as_str())
         {
-            let ty_name = ty_name.clone();
-            return self.text_literal(&ty_name);
+            return self.render_builtin_default(&ty, value);
         }
         self.render_value(&ty, value)
     }
@@ -113,6 +112,28 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.text_literal(&label)
             }
             Type::Function { .. } => self.text_literal("<function>"),
+        }
+    }
+
+    /// Render `value` with the type's BUILT-IN default `` ` ``, bypassing any user override —
+    /// used to terminate an override that renders its own receiver `it` wholesale. A record
+    /// renders as its type name, a sum as its variant name; any other type has only its one
+    /// built-in rendering, so it takes the normal path.
+    fn render_builtin_default(
+        &mut self,
+        ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match ty {
+            Type::Named { name, .. } => {
+                let name = name.clone();
+                self.text_literal(&name)
+            }
+            Type::Sum { name, .. } => {
+                let name = name.clone();
+                self.render_sum_variant(&name, value)
+            }
+            _ => self.render_value(ty, value),
         }
     }
 

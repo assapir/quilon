@@ -103,6 +103,23 @@ fn sum_render_member_is_used_by_interpolation() {
 }
 
 #[test]
+fn sum_render_member_rendering_it_wholesale_falls_back_to_the_variant_name() {
+    // A sum `` ` `` override that renders its own receiver `it` wholesale must NOT recurse
+    // forever — that one case uses the built-in default (the variant name), like a record's.
+    assert_exit_linked(
+        "<< core.test\n\
+         Shape = Circle(Num) / Rect(Num, Num) {\n\
+           ` = () -> Text => \"Shape: `it`\"\n\
+         }\n\
+         ^ = () -> $ => <\n\
+           assertEq(\"`Circle(4)`\", \"Shape: Circle\")\n\
+           assertEq(\"`Rect(6, 7)`\", \"Shape: Rect\")\n\
+         >",
+        0,
+    );
+}
+
+#[test]
 fn sum_with_no_method_block_is_unchanged() {
     // The `{ }` block is optional — a plain sum is written exactly as before.
     assert_exit(
