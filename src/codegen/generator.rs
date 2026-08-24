@@ -3,7 +3,7 @@
 use crate::ast::{
     BinaryOperator, Expression, FunctionDeclaration, InterpolationPart, Item, MatchArm,
     MethodDeclaration, Pattern, Program, Type, TypeDeclaration, TypeDefinition, UnaryOperator,
-    VariableDeclaration, is_operator_symbol,
+    VariableDeclaration, is_builtin_overload_name, is_operator_symbol,
 };
 use crate::codegen::debug::DebugInfo;
 use crate::lexer::Span;
@@ -41,9 +41,7 @@ mod tco;
 mod tests;
 mod text;
 
-use mangle::{
-    fmt_parameter_types, is_builtin_overload_name, mangle_overload, method_symbol, type_mangle,
-};
+use mangle::{fmt_parameter_types, mangle_overload, method_symbol, type_mangle};
 use oracle::zeroed;
 
 /// Provenance watermark embedded in every native binary. Lowered as an `!llvm.ident`
@@ -484,14 +482,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut fn_counts: HashMap<&str, usize> = HashMap::new();
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
-                && !declaration.is_inert_io_placeholder()
+                && !declaration.is_inert_corelib_placeholder()
             {
                 *fn_counts.entry(declaration.name.as_str()).or_insert(0) += 1;
             }
         }
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
-                && !declaration.is_inert_io_placeholder()
+                && !declaration.is_inert_corelib_placeholder()
                 && (is_operator_symbol(&declaration.name)
                     || fn_counts
                         .get(declaration.name.as_str())
@@ -521,7 +519,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // overloaded call/operator (keeps codegen dispatch in sync with the checker).
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
-                && !declaration.is_inert_io_placeholder()
+                && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
                 if let Some(ret) = &declaration.return_type {

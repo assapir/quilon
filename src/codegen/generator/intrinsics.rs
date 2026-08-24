@@ -303,6 +303,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.int_to_bool(enabled, "color_bool")
     }
 
+    /// Lower the `now()` builtin: seconds on a monotonic clock, read through the `__now`
+    /// runtime intrinsic. Only differences between two readings are meaningful.
+    pub(super) fn generate_now(&mut self) -> Result<BasicValueEnum<'ctx>, String> {
+        let now = self.get_intrinsic("__now")?;
+        let call = self
+            .builder
+            .build_call(now, &[], "now")
+            .map_err(ctx("Failed to call now()"))?;
+        Self::call_result_to_basic(call)
+    }
+
     /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
     /// `content` to file descriptor `fd` (a `Num`), with no trailing newline.
     /// Yields `Num` (bytes written).

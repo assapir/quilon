@@ -602,6 +602,17 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   ```
 - A single ordinary `name = …` definition is **not** an overload set: it keeps full
   inference (unannotated params default to `Num`, return type inferred).
+- **The compiler's own definitions are members, not reserved names.** The built-in
+  operators, and the corelib functions the compiler provides (`print`/`eprint`, `write`,
+  `now`), are members of their sets like any other. Defining one of those names with a
+  different signature ADDS a member that wins for its argument types, and the built-in
+  stays reachable for the types it claims; defining the built-in's own signature is the
+  usual duplicate-definition error:
+  ```quilon
+  write = (content :: Text) -> Num => write(content, stdout)  ~ adds a member…
+  write("raw")           ~ …which this call picks
+  write("raw", stdout)   ~ while this one still reaches the built-in
+  ```
 - A member joins its set where it is written, so a call resolves only against the members
   above it ([names resolve top to bottom](#names-resolve-top-to-bottom)).
 - Dispatch is resolved at **direct call sites** by static argument types. Passing an

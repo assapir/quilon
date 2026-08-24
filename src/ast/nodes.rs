@@ -87,22 +87,123 @@ pub struct FunctionDeclaration {
     pub body: Expression,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
+    /// Declared in a bundled corelib module (`core.io`, `core.time`, …) rather than in
+    /// user code. Set by the module loader as it merges a built-in module's exports, and
+    /// by the front end for a corelib file checked directly. It is what tells the inert
+    /// placeholder of a compiler-provided name from a user's real definition of that name
+    /// — see [`FunctionDeclaration::is_inert_corelib_placeholder`].
+    pub from_corelib: bool,
     pub span: Span,
 }
 
 impl FunctionDeclaration {
-    /// Whether this is the inert `core.io` `print`/`eprint` placeholder: a single
-    /// UNannotated parameter with an inert body. The compiler fully provides
-    /// `print`/`eprint` as built-in overloads (lowered to runtime intrinsics), so the
-    /// placeholder is ignored everywhere — neither registered as a user overload nor
-    /// type-checked / emitted. A genuine user `print`/`eprint` overload has fully
-    /// annotated parameters and is therefore NOT a placeholder. Shared by the type
-    /// checker and codegen so the two never disagree on what to skip.
-    pub fn is_inert_io_placeholder(&self) -> bool {
-        (self.name == "print" || self.name == "eprint")
-            && self.parameters.len() == 1
-            && self.parameters[0].type_annotation.is_none()
+    /// Whether this is the corelib's own declaration of a name the compiler provides
+    /// itself (see [`BUILTIN_OVERLOADS`]) — an inert placeholder that documents the
+    /// signature while the real thing is a runtime intrinsic. It is ignored everywhere:
+    /// neither registered as an overload member (it would duplicate the built-in one) nor
+    /// type-checked or emitted. Provenance, not shape, is what marks it: a user's own
+    /// `print`/`write`/`now` is a real definition however it is written, and gets the
+    /// ordinary diagnostics — a duplicate signature, or a member missing an annotation.
+    /// Shared by the type checker and codegen so the two never disagree on what to skip.
+    pub fn is_inert_corelib_placeholder(&self) -> bool {
+        self.from_corelib && is_builtin_overload_name(&self.name)
     }
+}
+
+/// One member the compiler contributes to an overload set: the built-in's own signature.
+pub struct BuiltinOverload {
+    pub name: &'static str,
+    pub parameters: &'static [Type],
+    pub ret: Type,
+}
+
+/// The corelib functions the compiler provides itself, as the members they occupy in their
+/// overload sets — `print`/`eprint` over each printable built-in, `core.io`'s `write`, and
+/// `core.time`'s `now`, all lowered to runtime intrinsics. A user definition of one of
+/// these names ADDS a member to its set rather than shadowing the built-in, and dispatch
+/// picks by exact argument types like any other set.
+///
+/// The `__`-prefixed entries are internal primitives (`core.test` builds its `assert` on
+/// them) that no module exports and no `.ql` declares. They are members on the same terms
+/// all the same, so the one rule covers them too.
+///
+/// This is the single table the type checker registers from, codegen mangles and dispatches
+/// by, and the inert-placeholder test reads — a divergence between those would silently
+/// make a user's definition unreachable, or intercept a call the checker resolved to it,
+/// which is exactly the class of bug the table exists to prevent.
+pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
+    BuiltinOverload {
+        name: "print",
+        parameters: &[Type::Num],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "print",
+        parameters: &[Type::Text],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "print",
+        parameters: &[Type::Bool],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "eprint",
+        parameters: &[Type::Num],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "eprint",
+        parameters: &[Type::Text],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "eprint",
+        parameters: &[Type::Bool],
+        ret: Type::Unit,
+    },
+    BuiltinOverload {
+        name: "write",
+        parameters: &[Type::Text, Type::Num],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "now",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    // Terminates the process with an exit code — what `core.test`'s failing `assert`
+    // calls. `__`-prefixed to mark it internal: there is no user-facing `exit`.
+    BuiltinOverload {
+        name: "__exit",
+        parameters: &[Type::Num],
+        ret: Type::Unit,
+    },
+    // Whether ANSI styling suits a file descriptor (it is a terminal, `NO_COLOR` is unset,
+    // `TERM` is not `dumb`) — how `core.test` decides whether to color a failure report.
+    // Internal for the same reason as `__exit`: raw file descriptors are not user-facing
+    // surface, since the language's IO direction is `@` leaf primitives.
+    BuiltinOverload {
+        name: "__color_enabled",
+        parameters: &[Type::Num],
+        ret: Type::Bool,
+    },
+];
+
+/// Whether the compiler provides built-in members for `name`, so a single user definition
+/// of it already forms an overload set (rather than being an ordinary function).
+pub fn is_builtin_overload_name(name: &str) -> bool {
+    BUILTIN_OVERLOADS.iter().any(|member| member.name == name)
+}
+
+/// The arity of `name`'s built-in members, or `None` if the compiler provides none. Every
+/// member of one set shares an arity — `print`'s three differ only in the type they take —
+/// so what a built-in claims of a call is an arity question.
+pub fn builtin_overload_arity(name: &str) -> Option<usize> {
+    BUILTIN_OVERLOADS
+        .iter()
+        .find(|member| member.name == name)
+        .map(|member| member.parameters.len())
 }
 
 #[derive(Debug, Clone, PartialEq)]

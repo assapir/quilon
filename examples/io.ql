@@ -7,9 +7,15 @@
 << core.io
 << core.test
 
+~ The corelib names are overload sets, not reserved words: this ADDS a `write` member
+~ taking just the content, and the built-in two-argument member it calls still reaches
+~ the runtime. Every call picks the member its argument types match.
+write = (content :: Text) -> Num => write(content, stdout)
+
 ^ = () -> $ => <
   print("hello")            ~ stdout: hello\n
   written :: Num = "raw" |> write(stdout)   ~ stdout: raw   (no newline)
   assertEq(written, 3)      ~ "raw" is 3 bytes
+  assertEq(write("!"), 1)   ~ the one-argument member, picked by its type
   eprint("done")            ~ stderr: done\n
 >

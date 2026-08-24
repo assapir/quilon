@@ -283,6 +283,9 @@ impl<'a> Parser<'a> {
             return_type,
             body,
             exported,
+            // Parsing is provenance-blind: the module loader marks what it merges from a
+            // built-in module, and the front end marks a corelib file checked directly.
+            from_corelib: false,
             span: self.span(start.start, end.end),
         }))
     }

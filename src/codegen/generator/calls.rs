@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// The runtime intrinsic a call lowers to, as chosen by
+/// [`CodeGenerator::intrinsic_lowering`].
+pub(super) enum IntrinsicLowering {
+    Print,
+    Write,
+    Now,
+    ColorEnabled,
+    Exit,
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
     /// Emit a call to `function` with argument values that are already generated, and
     /// yield its result. The one place a direct call is built, shared by `generate_call`
@@ -22,6 +32,39 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(function, &arg_metadata, "calltmp")
             .map_err(ctx("Failed to build call"))?;
         Self::call_result_to_basic(call_site)
+    }
+
+    /// Which runtime intrinsic a call lowers to, when it lowers to one rather than to a
+    /// Quilon function. The compiler's built-ins are overload MEMBERS, so one claims a call
+    /// only at its own arity and only while no user member of the same set matches the
+    /// argument types. Call lowering and the tail-call analysis both ask this one question,
+    /// so they can never disagree about what a call is — a built-in name a user overloaded
+    /// is an ordinary function, and a self-call in it still becomes a loop.
+    pub(super) fn intrinsic_lowering(
+        &self,
+        name: &str,
+        arguments: &[Expression],
+    ) -> Option<IntrinsicLowering> {
+        let lowering = match name {
+            "print" | "eprint" => IntrinsicLowering::Print,
+            "write" => IntrinsicLowering::Write,
+            "now" => IntrinsicLowering::Now,
+            "__exit" => IntrinsicLowering::Exit,
+            "__color_enabled" => IntrinsicLowering::ColorEnabled,
+            _ => return None,
+        };
+        if arguments.len() != crate::ast::builtin_overload_arity(name)? {
+            return None;
+        }
+        // No user member can match unless the name is an overload set here at all, and
+        // inferring every argument's type is the expensive part — so ask that first.
+        if !self.overloads.contains_key(name) {
+            return Some(lowering);
+        }
+        let argument_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
+        self.matching_overload(name, &argument_types)
+            .is_none()
+            .then_some(lowering)
     }
 
     /// Lower a call. `span` is the CALL's own span — the location a callee whose last
@@ -46,44 +89,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
-        // `core.time`'s `now()` — a plain (non-`@`) monotonic clock read, lowered to the
-        // `__now` runtime intrinsic. Its corelib body is an inert placeholder.
-        if function_name == "now" && arguments.is_empty() {
-            let now = self.get_intrinsic("__now")?;
-            let call = self
-                .builder
-                .build_call(now, &[], "now")
-                .map_err(ctx("Failed to call now()"))?;
-            return Self::call_result_to_basic(call);
-        }
-
-        // Core IO builtins, lowered to runtime intrinsics (see runtime::intrinsics).
-        // `print`/`eprint` are the built-in single-arg Num/Text/Bool overloads; a
-        // *user* overload of the same name (a different signature) is dispatched as a
-        // mangled function below, so only use the intrinsic when no user overload
-        // matches the argument types.
-        match function_name.as_str() {
-            "print" | "eprint" => {
-                // Any single argument renders through its `` ` `` operator (built-in
-                // default or user override); only an EXACT user overload of `print`/`eprint`
-                // (a different signature) is dispatched as a mangled call below instead. A
-                // function-typed argument is not a renderable value — the type checker
-                // already rejects `print(f)` (see `is_generic_print_call`), so it never
-                // reaches here and this gate needs no separate `Function` exclusion.
-                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
-                let has_user_match = self
-                    .resolve_overload_symbol(function_name, &arg_types)
-                    .is_some();
-                if arg_types.len() == 1 && !has_user_match {
-                    return self.generate_print(function_name, arguments);
-                }
-            }
-            "write" => return self.generate_write(arguments),
-            "__color_enabled" => return self.generate_color_enabled(arguments),
-            // `__exit(code)` — the single native primitive `core.test` builds on,
-            // lowered to the `__exit` runtime intrinsic (terminates the process).
-            "__exit" => return self.generate_exit(arguments),
-            _ => {}
+        // Only the calls a built-in itself claims are lowered to its runtime intrinsic
+        // (see `intrinsic_lowering`); anything a user member of the same set matches is
+        // dispatched as an ordinary mangled call below.
+        if let Some(lowering) = self.intrinsic_lowering(function_name, arguments) {
+            return match lowering {
+                // The single argument renders through its `` ` `` operator (built-in
+                // default or user override). A function-typed argument is not a renderable
+                // value — the type checker already rejects `print(f)` (see
+                // `is_generic_print_call`), so it never reaches here.
+                IntrinsicLowering::Print => self.generate_print(function_name, arguments),
+                IntrinsicLowering::Write => self.generate_write(arguments),
+                IntrinsicLowering::Now => self.generate_now(),
+                IntrinsicLowering::ColorEnabled => self.generate_color_enabled(arguments),
+                // `__exit(code)` — the single native primitive `core.test` builds on
+                // (terminates the process).
+                IntrinsicLowering::Exit => self.generate_exit(arguments),
+            };
         }
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) — RESERVED

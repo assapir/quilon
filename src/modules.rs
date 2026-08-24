@@ -62,6 +62,7 @@ impl Loader {
     }
 
     fn resolve_one(&mut self, path: &ModulePath, base_dir: &Path) -> Result<(), String> {
+        let from_corelib = matches!(path, ModulePath::BuiltinDotted(_));
         let (canonical, display, source, next_base) = match path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
@@ -112,8 +113,14 @@ impl Loader {
 
         // Resolve the module's own imports first (transitive), then collect its exports.
         self.resolve_list(&sub.imports, &next_base)?;
-        for item in sub.items {
+        for mut item in sub.items {
             if item_is_exported(&item) {
+                // A bundled module's functions carry their origin: it is what marks the
+                // corelib's inert declaration of a compiler-provided name (`print`,
+                // `write`, `now`) as the placeholder it is, rather than a definition.
+                if let Item::FunctionDeclaration(declaration) = &mut item {
+                    declaration.from_corelib = from_corelib;
+                }
                 self.out.push(item);
             }
         }

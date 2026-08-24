@@ -82,45 +82,21 @@ impl TypeChecker {
             );
         }
 
-        // `print`/`eprint`: one member per printable built-in; all return `$` (Unit).
-        for name in ["print", "eprint"] {
-            for ty in [Type::Num, Type::Text, Type::Bool] {
-                self.add_overload(
-                    name,
-                    Overload {
-                        parameters: vec![ty],
-                        ret: Some(Type::Unit),
-                    },
-                );
-            }
+        // The functions the compiler provides itself — `print`/`eprint` over each
+        // printable built-in, `write`, `now`, and the internal `__` primitives — as
+        // members of their own sets, from the one table codegen also dispatches and
+        // mangles by. A user definition of one of these names adds a member beside them;
+        // the built-in signature itself stays taken, so redefining it is the usual
+        // duplicate-definition error.
+        for member in crate::ast::BUILTIN_OVERLOADS {
+            self.add_overload(
+                member.name,
+                Overload {
+                    parameters: member.parameters.to_vec(),
+                    ret: Some(member.ret.clone()),
+                },
+            );
         }
-
-        // `__exit(code :: Num) -> $` — the internal process-exit primitive `core.test`
-        // builds on (its `assert` calls `__exit(101)` to fail). Codegen lowers it to the
-        // `__exit` runtime intrinsic. Registered as a builtin so a corelib `.ql` (and,
-        // by the same token, any program) can call it by name; it is deliberately
-        // `__`-prefixed to mark it internal — there is no user-facing `exit`.
-        self.add_overload(
-            "__exit",
-            Overload {
-                parameters: vec![Type::Num],
-                ret: Some(Type::Unit),
-            },
-        );
-
-        // `__color_enabled(fd :: Num) -> Bool` — whether ANSI styling suits a file
-        // descriptor (it is a terminal, `NO_COLOR` is unset, `TERM` is not `dumb`), which
-        // is how `core.test` decides whether to color a failure report. Internal for the
-        // same reason as `__exit`: raw file descriptors are not user-facing surface — the
-        // language's IO direction is `@` leaf primitives, not `fd`-taking functions — so
-        // this is `__`-prefixed and exported by no module.
-        self.add_overload(
-            "__color_enabled",
-            Overload {
-                parameters: vec![Type::Num],
-                ret: Some(Type::Bool),
-            },
-        );
     }
 
     /// Add one member to the overload set `name`.

@@ -20,7 +20,7 @@ impl TypeChecker {
             std::collections::HashMap::new();
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
-                && !declaration.is_inert_io_placeholder()
+                && !declaration.is_inert_corelib_placeholder()
             {
                 *fn_counts.entry(declaration.name.as_str()).or_insert(0) += 1;
             }
@@ -49,7 +49,7 @@ impl TypeChecker {
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
                 && self.overloaded_names.contains(&declaration.name)
-                && !declaration.is_inert_io_placeholder()
+                && !declaration.is_inert_corelib_placeholder()
             {
                 self.register_overload_declaration(declaration)?;
             }
@@ -606,7 +606,7 @@ impl TypeChecker {
     ) -> Result<(), TypeError> {
         // The inert core.io `print`/`eprint` placeholder is fully provided by the
         // compiler as a built-in overload; ignore its declaration entirely.
-        if declaration.is_inert_io_placeholder() {
+        if declaration.is_inert_corelib_placeholder() {
             return Ok(());
         }
 

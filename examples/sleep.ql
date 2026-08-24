@@ -9,11 +9,17 @@
 << core.test
 << core.time
 
+~ `now` is an overload set like any other name — the compiler's clock read is one member,
+~ and this adds a second that scales it (seconds to milliseconds, say). The built-in
+~ `now()` inside the body still resolves to the clock.
+now = (scale :: Num) -> Num => now() * scale
+
 ^ = () -> Num => <
   start = now()
   @sleep(0.05)                    ~ pause ~50ms
   ~ A sleep waits AT LEAST its duration, so this bound is deterministic (never flaky).
   assert(now() - start >= 0.05)
+  assert(now(1000) - start * 1000 >= 50)   ~ the same bound in milliseconds
 
   ~ Ordinary code runs after the pause, computing a ready value.
   answer = 6 * 7

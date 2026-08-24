@@ -104,14 +104,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         {
             return false;
         }
-        // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
-        // The intrinsic names here MUST stay in sync with those intercepted in
-        // `generate_call` (`print`/`eprint`/`write`/`now`/`__exit`/`__color_enabled`).
+        // A name shadowed by a sum-type constructor, or a call that lowers to a runtime
+        // intrinsic instead of a Quilon function, is not a self-call — the same question
+        // call lowering asks, so the two cannot disagree (see `intrinsic_lowering`).
         if self.sum_variants.contains_key(name.as_str())
-            || matches!(
-                name.as_str(),
-                "print" | "eprint" | "write" | "now" | "__exit" | "__color_enabled"
-            )
+            || self.intrinsic_lowering(name, arguments).is_some()
         {
             return false;
         }

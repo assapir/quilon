@@ -99,8 +99,19 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     let tokens = lexer::Lexer::tokenize(&source)
         .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
 
-    let program = parser::parse(&tokens)
+    let mut program = parser::parse(&tokens)
         .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
+
+    // Checking a corelib file directly (`quilon check corelib/io.ql`) is legitimate, and
+    // its declarations are the corelib's own wherever they are read from — including the
+    // inert placeholders for compiler-provided names, which are ignored on that basis.
+    if modules::is_corelib_source(&source) {
+        for item in &mut program.items {
+            if let ast::Item::FunctionDeclaration(declaration) = item {
+                declaration.from_corelib = true;
+            }
+        }
+    }
 
     // The `@` marker names a leaf IO primitive, which only the corelib/runtime may
     // define; user code merely *calls* one. Reject an `@`-prefixed declaration in the

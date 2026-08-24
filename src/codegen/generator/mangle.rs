@@ -4,13 +4,6 @@
 
 use super::*;
 
-/// Names that the compiler provides built-in overloads for (`print`/`eprint`, lowered
-/// to runtime intrinsics). A user definition of one ADDS an overload member (and is
-/// mangled), rather than shadowing the built-in single-arg Num/Text/Bool forms.
-pub(super) fn is_builtin_overload_name(name: &str) -> bool {
-    matches!(name, "print" | "eprint")
-}
-
 /// A short, mangling-safe tag for a Quilon type used in overload name mangling. Must be
 /// deterministic and identical at definition and call sites (built from the declared
 /// parameter type and from the inferred argument type respectively).

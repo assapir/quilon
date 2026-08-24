@@ -9,6 +9,9 @@ The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progre
 | `@sleep(seconds :: Num) -> $` | Pause the current fiber for `seconds` (a fractional `Num`); execution then continues in program order. Effect-only, so nothing defers or forces. A [leaf IO primitive](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) (the `@` marker). |
 | `now() -> Num` | Read a **monotonic** clock (seconds, fractional `Num`). Only *differences* between readings are meaningful, so it measures elapsed time. A plain (non-`@`) primitive: instant, never parks. |
 
+`now` is an [overload set](../LANGUAGE.md#overloading) — defining it with another signature
+adds a member rather than shadowing the clock.
+
 ```quilon
 << core.time
 

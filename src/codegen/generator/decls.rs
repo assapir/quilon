@@ -286,7 +286,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The inert core.io print/eprint placeholder is never emitted (the compiler
         // lowers print/eprint to runtime intrinsics). A leaf `@` primitive (`@sleep`) is
         // likewise a corelib placeholder lowered to a runtime intrinsic at its call site.
-        if declaration.is_inert_io_placeholder() || declaration.name.starts_with('@') {
+        if declaration.is_inert_corelib_placeholder() || declaration.name.starts_with('@') {
             return Ok(());
         }
 

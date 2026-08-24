@@ -91,6 +91,42 @@ pub fn run_program(tag: &str, src: &str) -> (i32, String, std::path::PathBuf) {
     )
 }
 
+/// Build `src` into a native executable with `quilon build` and run it, returning
+/// `(exit code, stdout)`. The caller must have checked that a linker is on PATH
+/// ([`tool_available`]); `tag` names the program's file and its binary.
+pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
+    let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
+    ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
+
+    let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("quilon_build_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let file = dir.join(format!("{tag}.ql"));
+    std::fs::write(&file, src).expect("write temp program");
+    let binary = dir.join(tag);
+
+    let build = Command::new(&quilon)
+        .arg("build")
+        .arg(&file)
+        .args(["-o".as_ref(), binary.as_os_str()])
+        .output()
+        .expect("spawn quilon build");
+    assert!(
+        build.status.success(),
+        "quilon build failed:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&binary)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run the built executable");
+    (
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+    )
+}
+
 /// Serializes nothing — it only keeps concurrently-running tests from colliding on a
 /// temp-directory name (a single test binary runs its own tests in parallel).
 static SUBPROCESS_SEQ: AtomicU64 = AtomicU64::new(0);
