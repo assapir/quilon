@@ -17,11 +17,11 @@ evergreen — the durable record that survives across contributors and AI-agent 
 |-------|-------|--------|
 | **M1** | Diagnostics & small wins (readable errors, `Unit` `$`, VS Code extension) | ✅ Complete |
 | **M2** | Type system (setters, user sum types `/`, ad-hoc overloading) | ✅ Complete |
-| **M3** | Closures & functional core | 🔨 In progress |
-| **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | ⬜ Planned (partly 💤) |
+| **M3** | Closures & functional core | ✅ Complete |
+| **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | 🔨 In progress (partly 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
-| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC ([#98]) | ⬜ Planned — **core** |
-| **M7** | Polish — formatter/linter, corelib, debug info | ⬜ Planned |
+| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC ([#98]) | 🔨 In progress (Stage 1 ✅) — **core** |
+| **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
 | **M8** | **Web — a native HTTP server built on the M6 runtime** | ⬜ Planned |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
@@ -56,7 +56,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 | User-defined sum types (`/` separator); `Result` generalized | ✅ |
 | Explicit ad-hoc overloading (operators + `Text` comparison) | ✅ |
 
-### M3 — Closures & functional core 🔨
+### M3 — Closures & functional core ✅
 
 | Item | Status |
 |------|--------|
@@ -68,16 +68,16 @@ served an auto-data-parallelism goal the project no longer pursues.
 | `^` entry point receives `args: []Text`, `env: [][]Text` | ✅ |
 | Remove the `for` loop | ✅ |
 | Spread — prefix `<-` in literals | ✅ |
-| Text methods (`split`/`trim`/`replace`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower`) | 🔨 |
-| Array concatenation via `+` | 🔨 |
-| Concrete `Result` payload typing | 🔨 |
-| `core.cli` module | ⬜ Planned (blocked on Text methods + Result-payload typing) |
+| Text methods (`split`/`trim`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower`) | ✅ |
+| Array concatenation via `+` | ✅ |
+| Concrete `Result` payload typing | ✅ |
+| `core.cli` module | ✅ |
 
-### M4 — Codegen infra ⬜
+### M4 — Codegen infra 🔨
 
 | Item | Status |
 |------|--------|
-| Authoritative types in codegen (retire the lossy `infer_type`; use the type-oracle) — generally useful, **kept** | ⬜ |
+| Authoritative types in codegen (retire the lossy `infer_type`; use the type-oracle) — generally useful, **kept** | 🔨 (the type-oracle ships and is threaded through codegen; some `infer_type` callers remain) |
 | Monomorphization + defunctionalization (function values statically visible) — **deprioritized**: it served the auto-data-parallelism goal (M5), now dropped | 💤 |
 
 ### M5 — Implicit parallelism (CPU) 💤 Deprioritized
@@ -93,7 +93,7 @@ ever returns it will be **explicit** (a someday `mapParallel`), never inferred.
 | Inferred-purity analysis | 💤 |
 | Parallel `map` / `filter` | 💤 |
 
-### M6 — Concurrency runtime: colorless implicit futures ⬜ (core deliverable)
+### M6 — Concurrency runtime: colorless implicit futures 🔨 (core deliverable)
 
 Quilon's north-star **"parallelism"**: the **colorless implicit-futures / promise-pipelining**
 model — `@` leaf IO primitives, deferred values that propagate as they flow, and forcing
@@ -103,16 +103,16 @@ and specified in full in [#120]. Built smallest-first:
 
 | Item | Status |
 |------|--------|
-| **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives, deferred values, force-at-strict-op | ⬜ |
+| **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op | ✅ |
 | **Stage 2** — M:N work-stealing scheduler + Boehm GC across threads ([#98]) | ⬜ |
 
-### M7 — Polish ⬜
+### M7 — Polish 🔨
 
 | Item | Status |
 |------|--------|
 | `quilon fmt` / linter | ⬜ |
-| Corelib | ⬜ |
-| Debug info (→ real VS Code debugging) | ⬜ |
+| Corelib | 🔨 (`core.io`/`core.test`/`core.cli`/`core.time`/`core.net` ship; grows with the language) |
+| Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types; stepping into corelib is a follow-up) |
 | Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 
@@ -124,6 +124,6 @@ Its on-ramps:
 
 | Item | Status |
 |------|--------|
-| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | ⬜ |
+| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin and one-shot TCP ship; files remain) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ⬜ |
 | Native HTTP server on the runtime | ⬜ |
