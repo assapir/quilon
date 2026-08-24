@@ -11,10 +11,10 @@ Version matches the Quilon compiler it targets.
 
 ### Changed
 
-- **Quilon source is `.qn`; `.ql` is gone.** The language's extension changed — `.ql` is
-  CodeQL's, see the compiler's changelog — so `.qn` is what the extension registers,
-  highlights, runs, checks, and debugs, and `.ql` is no longer a Quilon file. Rename any
-  `.ql` source you still have; the compiler no longer accepts it either.
+- **Breaking: Quilon source is `.qn`**, and `.ql` is not a Quilon file any more — it no
+  longer highlights, and Run / Check / Debug do not act on it. Rename any `.ql` source you
+  still have; the compiler no longer accepts it either. (`.ql` is CodeQL's extension — see
+  the compiler's changelog.)
 
 ### Added
 
