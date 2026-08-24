@@ -1,6 +1,6 @@
 # `core.net` — Networking
 
-Import with `<< core.net`. See the [Standard library index](../LANGUAGE.md#standard-library).
+Import with `<< core.net`. See the [corelib index](../LANGUAGE.md#corelib).
 
 `@tcpRequest`, the raw TCP request-exchange primitive the HTTP client sits on, compiler-lowered to the runtime launch/force intrinsics.
 

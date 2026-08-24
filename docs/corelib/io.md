@@ -1,6 +1,6 @@
 # `core.io` — I/O
 
-Import with `<< core.io`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/io.ql`.
+Import with `<< core.io`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/io.ql`.
 
 | Function | Effect |
 |----------|--------|

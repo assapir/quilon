@@ -1,6 +1,6 @@
 # `core.test` — Assertions
 
-Import with `<< core.test`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/assert_demo.ql`.
+Import with `<< core.test`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/assert_demo.ql`.
 
 In-language assertions for **self-verifying programs and examples**. A holding assertion does
 nothing; a failing one reports to stderr and exits **101** (the Rust-panic convention), so a

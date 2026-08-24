@@ -802,7 +802,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 >> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [Standard library](#standard-library) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -810,11 +810,11 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 ---
 
-## Standard library
+## Corelib
 
-The corelib modules ship with Quilon; import one with `<< core.<module>`. Each has its
-own focused API reference under [`docs/corelib/`](corelib/) — signatures, behavior, and a
-small example per function.
+The corelib — Quilon's standard library — ships with the compiler; import a module with
+`<< core.<module>`. Each has its own API reference under [`docs/corelib/`](corelib/):
+signatures, behavior, and a small example per function.
 
 | Module | Import | What it gives you |
 |--------|--------|-------------------|
@@ -944,7 +944,7 @@ token, and no **function coloring** — a function that does IO is written and t
 like one that doesn't. `async`/`await` colors every function on the IO path; Go and Loom
 still need an explicit `go`. The nearest precedent is **promise pipelining** (E, Cap'n Proto).
 
-**`@` marks leaf IO primitives only** — the stdlib/runtime primitives that actually do IO
+**`@` marks leaf IO primitives only** — the corelib/runtime primitives that actually do IO
 (`http.get`, a file read, a socket recv, `sleep`). All user code is unmarked: a function that
 transitively calls an `@` primitive is concurrency-capable for free, with **no propagation**
 up the call chain. That absence of propagation is what makes the model colorless.
@@ -1024,7 +1024,7 @@ A networked value-returning primitive makes independent launches overlap, which 
 implicit futures matter:
 
 ```quilon
-~ `@get` is a leaf IO primitive (stdlib/runtime) — the ONLY marked thing here.
+~ `@get` is a leaf IO primitive (corelib/runtime) — the ONLY marked thing here.
 ~ `fetchJson` is ordinary, unmarked user code, yet concurrency-capable for free:
 fetchJson = (url :: Text) -> Text => @get(url)   ~ launches IO, returns a deferred Text
 

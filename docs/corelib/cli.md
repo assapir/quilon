@@ -1,6 +1,6 @@
 # `core.cli` — CLI helpers
 
-Import with `<< core.cli`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/cli.ql`.
+Import with `<< core.cli`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/cli.ql`.
 
 Thin, pipe-friendly helpers over the [entry point](../LANGUAGE.md#entry-point)'s
 `args :: []Text` and `env :: [][]Text`. The data is always the **first** parameter, so

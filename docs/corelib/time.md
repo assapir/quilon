@@ -1,6 +1,6 @@
 # `core.time` — Time
 
-Import with `<< core.time`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/sleep.ql`.
+Import with `<< core.time`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/sleep.ql`.
 
 The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock, both compiler-lowered to runtime intrinsics.
 
