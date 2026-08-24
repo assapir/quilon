@@ -2,12 +2,12 @@
 
 Import with `<< core.time`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/sleep.ql`.
 
-`core.time` provides two things: the [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock. Both are compiler-lowered to runtime intrinsics.
+The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock, both compiler-lowered to runtime intrinsics.
 
 | Function | Effect |
 |----------|--------|
-| `@sleep(seconds :: Num) -> $` | Pause the current fiber for `seconds` seconds (a fractional `Num`), then continue. Effect-only (`-> $`): used as a statement it **waits right there** on the current fiber, then execution continues in program order. It carries no value, so nothing defers or forces. A [leaf IO primitive](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) (the `@` marker). |
-| `now() -> Num` | Read a **monotonic** clock (seconds as a fractional `Num`). Only *differences* between two readings are meaningful — that is exactly what measures an elapsed duration. A plain (non-`@`) primitive: reading the clock is instant and never parks. |
+| `@sleep(seconds :: Num) -> $` | Pause the current fiber for `seconds` (a fractional `Num`); execution then continues in program order. Effect-only, so nothing defers or forces. A [leaf IO primitive](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) (the `@` marker). |
+| `now() -> Num` | Read a **monotonic** clock (seconds, fractional `Num`). Only *differences* between readings are meaningful, which is what measures elapsed time. A plain (non-`@`) primitive: instant, never parks. |
 
 ```quilon
 << core.time
@@ -19,7 +19,6 @@ Import with `<< core.time`. See the [Standard library index](../LANGUAGE.md#stan
 >
 ```
 
-Running the entry on the fiber scheduler is what lets `@sleep` park; `^` and any helper it
-calls carry no marker, no `async`, no `await` — only the leaf `@sleep` is marked. See the
-[Concurrency model](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) for
-how `@` leaf primitives, deferred values, and force-at-strict-op fit together. (See `examples/sleep.ql`.)
+Only the leaf `@sleep` is marked — `^` and any helper it calls carry nothing. See the
+[Concurrency model](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) and
+`examples/sleep.ql`.

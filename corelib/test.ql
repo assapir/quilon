@@ -1,55 +1,31 @@
 ~ core.test — assertions for self-verifying programs. Import with `<< core.test`.
+~ Reference: docs/corelib/test.md.
 ~
-~ A failing assertion says WHERE it failed: the file, line, and column of the call in
-~ YOUR code on one line, the message on the next, then the source line and a caret under
-~ the call —
-~
-~   demo.ql:12:3:
-~   assertion failed: expected 42, got 41
-~     |
-~  12 |   assertEq(answer(), 42)
-~     |   ^^^^^^^^^^^^^^^^^^^^^^
-~
-~ and exits 101. The location is always the call site in your code, never an internal
-~ hop inside this module: every assertion takes a trailing `site :: Site` parameter,
-~ which the compiler fills in with the location of the call that left it off, and which
-~ each wrapper forwards to `failAt`. The report is colored automatically when stderr is a
-~ terminal, and plain when it is redirected or `NO_COLOR=1` / `TERM=dumb` is set.
+~ A failing assertion reports at YOUR call site — the compiler fills in each assertion's
+~ trailing `site :: Site`, and every wrapper forwards it — then exits 101.
 ~
 ~   assert(cond)          on a false `cond`, report a default message and exit 101;
 ~                         on true, do nothing. Returns `$` (Unit).
-~   assert(cond, opts)    same, but report `opts.message` instead of the default.
-~   AssertOpts            options record for `assert`: { message :: Text }. Records
-~                         are nominal — construct by name: `AssertOpts { message = "…" }`.
+~   assert(cond, opts)    same, but report `opts.message`.
+~   AssertOpts            options record for `assert`: { message :: Text }. Records are
+~                         nominal — construct by name: `AssertOpts { message = "…" }`.
 ~   assertEq(a, b)        assert `a == b` (over Num / Text / Bool); reports both values.
 ~   assertNotEq(a, b)     assert `a != b`; reports the (equal) value.
 ~   assertOk(r)           assert a Result is `Ok`.
 ~   assertNotOk(r)        assert a Result is `NotOk`.
-~   failAt(message)       fail outright at the CALLER's location — the primitive the
-~                         assertions above are built from. An assertion of your own that
-~                         should report ITS caller takes a trailing `site :: Site` and
-~                         forwards it:
+~   failAt(message)       fail outright at the CALLER's location — what the assertions
+~                         above are built from. An assertion of your own reports ITS
+~                         caller by taking a trailing `site :: Site` and forwarding it:
 ~                           assertEven = (n :: Num, site :: Site) -> $ =>
 ~                             n % 2 == 0 ? $ : failAt("`n` is odd", site)
-~
-~ Example:
-~   << core.test
-~   ^ = () -> $ => <
-~     assert(1 + 1 == 2)
-~     assert(1 + 1 == 2, AssertOpts { message = "math is broken" })
-~     assertEq(6 * 7, 42)
-~     assertNotEq("a", "b")
-~     assertOk([1, 2].at(0))
-~   >
 << core.io
 
 ~ Options record for `assert`; `message` is the text reported on failure.
 >> AssertOpts = { message :: Text }
 
-~ Report `message` at `site` — the location of the call that left the `site` argument
-~ off — and exit 101 (the Rust-panic convention, deliberately distinct from the small
-~ result codes a program returns from `^`). The report mirrors a compiler diagnostic:
-~ the position, the message, then the source line with a caret run under the call.
+~ Report `message` at `site` — the location of the call that left the `site` argument off —
+~ in the compiler's diagnostic frame, then exit 101 (distinct from the small result codes a
+~ program returns from `^`).
 >> failAt = (message :: Text, site :: Site) -> $ => <
   color = __color_enabled(stderr)
   ~ ANSI styling, or nothing at all when the reader is not a terminal.
@@ -64,10 +40,8 @@
   lead = " ".repeat(site.column - 1)
   carets = "^".repeat(site.width)
 
-  ~ A path longer than this is shown from its END behind a `…`: the file name and its
-  ~ nearest directories are what a reader needs, and a wrapped position line is hard to
-  ~ scan. Keep the width in step with `shorten_path` in the runtime, which does the same
-  ~ for a fail-loud runtime report.
+  ~ A path longer than this is shown from its END behind a `…`. Keep the width in step with
+  ~ `shorten_path` in the runtime, which shortens a fail-loud report's path the same way.
   room = 60
   file = site.file.length > room
     ? "…" + site.file.slice(site.file.length - room + 1, site.file.length)

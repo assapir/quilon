@@ -11,11 +11,11 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 Quilon's identity, and the rules that guide its design:
 
 - **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. Not one word is reserved: `if`, `while`, `for` and the rest are ordinary identifiers you may bind.
-- **Symbols mirror notation that already exists.** A symbol should reuse a notation the world already has rather than invent one: `/` separates sum-type alternatives the way you already write "red / green / blue". The symbol is both the shorthand and its own justification.
-- **The playful choice wins.** When a design decision is a genuine toss-up, the more delightful option is picked — characterful, memorable symbols (`^` for the entry point, `$` for Unit) over bland ones. Syntax is allowed to have a sense of humor.
-- **Deliberate simplicity — reject complexity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
-- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. If the compiler can determine the problem (a literal / statically-known value) it is a **compile error**; otherwise a **clear runtime error** (stderr, non-zero exit) that says **where** it happened — `file:line:column` with the offending source line and a caret, the same frame a compile error uses. Silent behavior is undebuggable, so Quilon refuses it. (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
-- **No magic.** Behavior is explicit and visible — no hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
+- **Symbols mirror notation that already exists.** A symbol reuses a notation the world already has rather than inventing one: `/` separates sum-type alternatives the way you already write "red / green / blue".
+- **The playful choice wins.** On a genuine toss-up, the more delightful option is picked — `^` for the entry point, `$` for Unit. Syntax is allowed a sense of humor.
+- **Deliberate simplicity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
+- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](#error-messages). (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
+- **No magic.** No hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
 - **Immutable by default.** `=` binds immutably, `:=` binds mutably; because `:=` is visible wherever mutation happens, a method is a setter exactly when its body writes `it.field := …`.
 - **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
 - **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (`print(x)`, never `print(show(x))`).
@@ -82,9 +82,8 @@ otherwise open a block), and `\e` — the ESC byte that leads an ANSI terminal s
 
 #### Text methods
 
-`Text` carries a set of **built-in, compiler-provided methods**, called with method
-syntax (`text.method(...)`) and freely chainable, each backed by a UTF-8-correct runtime
-intrinsic. Where an index or length is user-visible they are **grapheme-based** (matching
+`Text` carries **built-in, compiler-provided methods**, called as `text.method(...)` and
+freely chainable. User-visible indices and lengths are **grapheme-based** (matching
 `.length`), not byte-based.
 
 | Method | Result | Notes |
@@ -116,22 +115,18 @@ intrinsic. Where an index or length is user-visible they are **grapheme-based** 
 "héllo".toUpper()                        ~ "HÉLLO"
 ```
 
-Like the [array methods](#array-methods), these are **reserved on `Text`**: a user may
-define a same-named function/overload on another type, but on a `Text` receiver the
-built-in always wins. `split`'s result is a **plain generic array** — `[]Text` is just
-`[]T` with `T = Text` (like `[]Num`), so it composes with `.size`, indexing `[i]`, the
-[array methods](#array-methods), and array `+` concatenation. There is **no `join`** —
-collapse a `[]Text` with `reduce` + `+`.
+Like the [array methods](#array-methods), these are **reserved on `Text`**: a same-named
+user overload on another type is fine, but on a `Text` receiver the built-in wins. `split`
+yields a plain `[]Text`, so it composes with `.size`, `[i]`, the
+[array methods](#array-methods), and array `+`. There is **no `join`** — collapse a `[]Text`
+with `reduce` + `+`.
 
-`replace`/`replaceAll` **fail loudly** — an invalid request is never a silent no-op. An
-empty `from` (for either method), and a `replace` `count` that is `<= 0` or greater than
-the number of occurrences actually present, are rejected: at **compile time** when the
-values are literals (e.g. `"a".replace("a", "b", 0)` or `"aa".replace("a", "b", 5)`), and
-otherwise at **run time** — the program prints a located diagnostic to stderr (the same
-framed shape as a compile error, naming the offending call) and exits `101`. Use
-`replaceAll` for "replace everything"; `replace(count)` is a precise "replace exactly this
-many" contract. `repeat` holds the same line: a negative or fractional `count` is a compile
-error when literal and a run-time abort otherwise — never a silent clamp to `0`.
+`replace`/`replaceAll`/`repeat` **fail loudly**, never silently no-op or clamp. Rejected: an
+empty `from`; a `replace` `count` that is `<= 0` or exceeds the occurrences present; a
+negative or fractional `repeat` count. Literal cases are compile errors (`"a".replace("a",
+"b", 0)`, `"aa".replace("a", "b", 5)`); computed ones are a [located
+diagnostic](#error-messages) at run time, exit `101`. Use `replaceAll` for "replace
+everything"; `replace(count)` means exactly that many.
 
 (See `examples/text.ql` and `examples/text_methods.ql`.)
 
@@ -204,24 +199,13 @@ first = nums[0]        ~ → 1
 ```
 Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
 
-Indexing is **checked** (fail loud, never silent): an out-of-bounds, negative, or NaN
-index is a clear runtime error to stderr, exit status 1 — never a raw memory read. The
-report names the read that failed, framed the way a compile error and a
-[failing assertion](corelib/test.md) are:
-
-```text
-demo.ql:4:11:
-index 7 out of bounds for an array of size 3
-   |
- 4 |   value = items[wanted]
-   |           ^^^^^^^^^^^^^
-```
-
-A **fractional** in-range index
-truncates toward zero (`nums[1.7]` reads `nums[1]`) — with one unified `Num`, index
-arithmetic like `size / 2` legitimately produces fractions. Use [`at(n)`](#array-methods)
-for the non-aborting form (`Ok`/`NotOk`) when an index might be out of range — see the
-computed-index case at the end of `examples/array_methods.ql`.
+Indexing is **checked** (fail loud, never silent): an out-of-bounds, negative, or NaN index
+is a runtime error naming the read that failed ([shape](#error-messages)), exit status 1 —
+never a raw memory read. A **fractional** in-range index truncates toward zero (`nums[1.7]`
+reads `nums[1]`); with one unified `Num`, index arithmetic like `size / 2` legitimately
+produces fractions. Use [`at(n)`](#array-methods) for the non-aborting `Ok`/`NotOk` form when
+an index might be out of range — see the computed-index case at the end of
+`examples/array_methods.ql`.
 
 #### Array methods
 
@@ -455,14 +439,13 @@ is only about globals. (See `examples/globals.ql` and `examples/global_computed.
 
 ## Mutation: in-place field writes & setters
 
-Mutability is **Rust-like**, decided by the binding operator — it governs not just
-reassignment but in-place mutation of records:
+Mutability is decided by the binding operator, and governs in-place mutation as well as
+reassignment:
 
-- An `=`-bound instance is **immutable** (frozen): no field writes, and calling a
-  setter (mutating) method on it is a compile error.
-- A `:=`-bound instance is **mutable**: both forms of in-place mutation are allowed —
-  a direct field write `obj.field := value` (mutates the existing record, no
-  re-allocation), and any **setter** method.
+- An `=`-bound instance is **immutable**: no field writes, and calling a setter method on it
+  is a compile error.
+- A `:=`-bound instance is **mutable**: a direct field write `obj.field := value` (in place,
+  no re-allocation) and any **setter** method.
 - One exception, by type rather than by binding: a [`Site`](#call-site-locations--site) is
   read-only — a location is a value, not a variable — so writing one of its fields is an
   error even through a `:=` binding.
@@ -478,9 +461,8 @@ c.bump(5)                      ~ setter mutates in place -> value = 35
 c.value := c.value + 7         ~ direct field write    -> value = 42
 ```
 
-A method is a **setter** iff its body writes `it.field := …` (or calls another setter
-on `it`) — there is **no marker/annotation**; the `:=` in the body is the signal.
-A setter call requires a `:=` receiver:
+A method is a **setter** iff its body writes `it.field := …` (or calls another setter on
+`it`) — no marker; the `:=` is the signal. A setter call requires a `:=` receiver:
 
 ```quilon
 c = Counter { value = 30 }   ~ `=` -> immutable
@@ -488,8 +470,8 @@ c.value := 99                 ~ error: cannot write a field of immutable `c`
 c.bump(5)                     ~ error: cannot call mutating method `bump` on immutable `c`
 ```
 
-Non-mutating (getter) methods carry no `it.field := …` and so are callable on `=`
-instances too. (See `examples/mutation.ql`.)
+Getter methods carry no `it.field := …`, so they are callable on `=` instances too. (See
+`examples/mutation.ql`.)
 
 ---
 
@@ -555,16 +537,14 @@ calls are a later follow-up). This is codegen-only — there is no surface synta
 ### Closures — capture by `=` (value) vs `:=` (reference)
 
 A function written **inside** another function's body is a **closure**: it can read the
-enclosing locals it refers to. How each captured name is captured is decided **by the
-operator that bound it** — there is no capture list and no marker, mirroring the
-mutability rule for [variables](#variables) and [records](#mutation-in-place-field-writes--setters):
+enclosing locals it refers to. How each name is captured is decided by **the operator that
+bound it** — no capture list, no marker, mirroring the mutability rule for
+[variables](#variables) and [records](#mutation-in-place-field-writes--setters):
 
-- a name bound with **`=`** is captured **by value** — a frozen, read-only snapshot taken
-  when the closure is created;
-- a name bound with **`:=`** is captured **by reference** — a single shared, mutable cell.
-  Writes through it (from inside the closure or from the enclosing code) are visible to
-  everyone sharing it, and the cell survives even if the closure outlives the frame that
-  created it.
+- **`=`** captures **by value** — a frozen snapshot taken when the closure is created;
+- **`:=`** captures **by reference** — one shared mutable cell. Writes through it, from
+  inside the closure or outside, are visible to everyone sharing it, and the cell survives
+  the frame that created it.
 
 ```quilon
 ^ = () -> Num => <
@@ -587,20 +567,17 @@ A non-capturing nested function may **recurse** (`fact = n => … fact(n-1) …`
 closures may capture from any enclosing frame (the shared `:=` cell is threaded through
 every level), and a closure value may itself be captured by another closure and called.
 
-Closures are **monomorphic** in this milestone: parameters and captured values are
-concrete-typed (the capture rule needs no type variables). Capturing a polymorphic value,
-generic closures, passing a closure as a function **parameter**, and returning a closure
-from a function (higher-order across frames) are deferred — see
-[Known limitations](#known-limitations). (See `examples/closures.ql`.)
+Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing a
+polymorphic value, generic closures, and passing or returning a closure across frames are
+deferred — see [Known limitations](#known-limitations). (See `examples/closures.ql`.)
 
 ---
 
 ## Overloading
 
-Quilon has **explicit ad-hoc overloading** — the *only* form of polymorphism (there
-are no generics / type variables). Multiple top-level definitions that **share a name
-and each carry full parameter type annotations** simply *are* an overload set — there is
-no marker symbol or keyword:
+Quilon has **explicit ad-hoc overloading** — the only polymorphism, since there are no
+generics. Top-level definitions that share a name and each annotate their parameters *are*
+an overload set; there is no marker:
 
 ```quilon
 score = (n :: Num)  -> Num => n + 1       ~ the Num member
@@ -610,24 +587,21 @@ a = score(41)       ~ 42  — picks the Num member
 b = score("abcd")   ~ 4   — picks the Text member
 ```
 
-**Dispatch is by exact static argument type, with NO implicit coercion.** At each call
-site the compiler picks the member whose parameter types match exactly. If none matches,
-or (with exact matching) two members share a parameter-type list, it is a clear compile
-error that lists the candidates:
+**Dispatch is by exact static argument type, with NO implicit coercion.** No match, or two
+members sharing a parameter-type list, is a compile error listing the candidates:
 
 ```
 error: No overload of 'score' matches argument types (Bool). Candidates: (Num), (Text)
 ```
 
-- Every member of an overload set must annotate **all** its parameters **and its return
-  type** — a member's signature is what dispatch selects on, and a call must know the
-  result type it produces:
+- Every member must annotate **all** its parameters **and its return type** — the signature
+  is what dispatch selects on, and a call has to know what it produces:
   ```quilon
   g = (n :: Num) => 1        ~ error: overload member 'g' (Num) has no return type
   g = (t :: Text) -> Num => 2
   ```
-- A single, ordinary `name = …` definition is **not** an overload set — it keeps full
-  type inference (unannotated params default to `Num`, the return type is inferred).
+- A single ordinary `name = …` definition is **not** an overload set: it keeps full
+  inference (unannotated params default to `Num`, return type inferred).
 - A member joins its set where it is written, so a call resolves only against the members
   above it ([names resolve top to bottom](#names-resolve-top-to-bottom)).
 - Dispatch is resolved at **direct call sites** by static argument types. Passing an
@@ -673,20 +647,17 @@ argument types that come out of an array element, a match, a call, or a lambda.)
 
 > **`<` and `>` vs. `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
 > after a complete operand is always less-than (a block can't start mid-expression). A
-> `>` is the **block close** only when it is the **last token on its line** (`>`
-> followed by only spaces/tabs then a newline or end-of-file); any other `>` — one with
-> more on the same line, like `a > b` — is the greater-than operator. So `a > b` works
-> everywhere; the only rule is *don't end a line with a comparison `>`* (write the right
-> operand on the same line). `<=`/`>=`/`>>` are distinct tokens and unaffected.
+> `>` is the **block close** only when it is the **last token on its line** (followed by
+> only spaces/tabs then a newline or end-of-file); any other `>`, like `a > b`, is
+> greater-than. So: don't end a line with a comparison `>`. `<=`/`>=`/`>>` are distinct
+> tokens and unaffected.
 
-> **Statement boundaries — line-first `(` / `[` / `{`.** Quilon has no statement
-> separator, and the grammar is newline-insensitive except for **two** line-aware rules:
-> the line-final `>` above, and this one — a `(`, `[`, or `{` that is the **first token
-> on its line** never continues the previous expression as a call, index, or record
-> constructor; it begins a **new statement**. Call arguments, index brackets, and
-> constructor braces must open on the **same line** as the expression they apply to. A
-> continuation line may still start with `.`, `|>`, or an operator, and an argument list
-> (or a constructor body) opened on its expression's line may span lines.
+> **Statement boundaries — line-first `(` / `[` / `{`.** Quilon has no statement separator,
+> and the grammar is newline-insensitive but for two rules: the line-final `>` above, and
+> this one — a `(`, `[`, or `{` that is the **first token on its line** begins a new
+> statement rather than continuing the previous expression as a call, index, or constructor.
+> Those must open on the **same line** as the expression they apply to, though once opened
+> they may span lines; a continuation line may still start with `.`, `|>`, or an operator.
 > ```quilon
 > ~ (statements inside a `< >` block / `^` body)
 > ~ OK — these all continue the expression:
@@ -767,24 +738,22 @@ direction (ascending vs descending) is decided at runtime. (See `examples/ranges
 ### Spread in literals
 The **prefix** `<-` splices a source's contents into an array or record literal:
 
-- **Array spread** `[<-xs, 4, 5]` builds a new array = every element of `xs`, then
-  `4, 5`. Multiple spreads are allowed and applied left-to-right: `[<-a, <-b]`, or
-  `[0, <-a, <-b, 9]`. The spread source must be an array with the same element type as
-  the rest of the literal; `[]Text`/`[]Num`/nested-array elements all splice correctly.
-  `[<-xs]` on its own is a copy of `xs`.
+- **Array spread** `[<-xs, 4, 5]` builds a new array of every element of `xs`, then `4, 5`.
+  Multiple spreads apply left-to-right (`[0, <-a, <-b, 9]`). The source must be an array of
+  the literal's element type; `[]Text`, `[]Num`, and nested arrays all splice. `[<-xs]` alone
+  copies `xs`.
 - **Record functional-update** `{<-p, x = 9}` builds a new record copying every field of
   `p`, then applying the overrides. Later entries override earlier ones (left-to-right),
   and an entry naming a field not in `p` **adds** it. If `p` is a **named** record and the
   result reproduces that type's fields exactly (only overriding existing fields, adding
   nothing), the result keeps the **named type and its methods**; otherwise it is an
   anonymous record.
-- **Naming the type you are building** — `Vec {<-p, x = 9}` — is the same update, written
-  as a constructor. Because the target type is stated, the spread source must be able to
-  fill it: either **already that type**, or an **anonymous record of exactly its shape**
-  (same field names and types, nothing extra). A *different* named type is never
-  accepted, however similar its fields — `Point` and `Other` stay distinct types — and an
-  anonymous record cannot fill a type that declares **methods**, since it carries none.
-  Every declared field must end up provided, by the spread or by an override.
+- **Naming the type you are building** — `Vec {<-p, x = 9}` — is the same update as a
+  constructor. The stated target constrains the source: it must be **already that type** or
+  an **anonymous record of exactly its shape** (same fields and types, nothing extra). A
+  different named type is never accepted however similar (`Point` and `Other` stay
+  distinct), and an anonymous record cannot fill a type declaring **methods**. Every declared
+  field must end up provided, by the spread or an override.
 
 ```quilon
 xs = [1, 2, 3]
@@ -797,11 +766,9 @@ b = { <-a, x = 5 }       ~ still a Vec: b.sum() → 25
 c = Vec { <-a, x = 5 }   ~ the same update, naming the type being built
 ```
 
-**Range vs. spread — the disambiguation rule.** `<-` is now BOTH the infix inclusive
-range (`lo <- hi`, between two complete expressions) AND the prefix spread. They are told
-apart purely by **position**: a `<-` that is the **first token of a `[ ]` element or a
-`{ }` field** is a spread; a `<-` that follows a complete expression is the range
-operator. So:
+**Range vs. spread.** `<-` is both the infix inclusive range (`lo <- hi`) and the prefix
+spread, told apart by **position**: first token of a `[ ]` element or `{ }` field is a
+spread, following a complete expression is the range. So:
 
 - `[1 <- 4]` is a **one-element** array whose sole element is the range `[1,2,3,4]`
   (the `<-` follows the complete expression `1`).
@@ -878,28 +845,25 @@ whereAmI = (site :: Site) -> Text => "`site.file`:`site.line`:`site.column`"
 
 | Field | Type | Is |
 |---|---|---|
-| `file` | `Text` | the call's file, as the compiler resolved it (the path you named on the command line, for your own file) |
+| `file` | `Text` | the call's file, as the compiler resolved it |
 | `line` | `Num` | 1-based line of the call |
 | `column` | `Num` | 1-based column, in characters |
 | `excerpt` | `Text` | the text of that line, without its newline |
-| `width` | `Num` | how many characters of the line the call spans — a caret run under the call |
+| `width` | `Num` | how many characters of the line the call spans |
 
 `line`, `column`, and `width` are always at least 1. `Site` is a built-in type name, so a
-program cannot declare its own `Site` (as with `Result`).
+program cannot declare its own (as with `Result`) — though it may *build* one
+(`Site { file = "…", line = 1, column = 1, excerpt = "…", width = 1 }`) and pass it on, and
+`failAt` will report wherever it says.
 
 **A `Site` is read-only.** A location is a value, not a variable: writing one of its fields
-(`site.line := 9`) is a compile error however the value was reached — records are handles
-that alias, so a write through a `:=` rebinding would be a write to the same thing. That is
-what lets the compiler lower each call site to one shared constant.
+(`site.line := 9`) is a compile error however the value was reached — records alias, so a
+write through a `:=` rebinding writes the same thing. That is what lets the compiler lower
+each call site to one shared constant.
 
-A program *may* build a `Site` of its own (`Site { file = "…", line = 1, column = 1,
-excerpt = "…", width = 1 }`) and pass it on — a hand-made one is an ordinary record value,
-read-only like any other, and `failAt` will report wherever it says. What a program cannot
-do is *declare* the type: `Site` is a built-in name (as with `Result`).
-
-**Passing one explicitly forwards it.** That is the whole propagation rule, and it is what
-makes a chain of wrappers report the *user's* call rather than the innermost hop
-(Rust's `#[track_caller]`, expressed as an ordinary argument):
+**Passing one explicitly forwards it.** That is the whole propagation rule, and it makes a
+chain of wrappers report the *user's* call rather than the innermost hop (Rust's
+`#[track_caller]`, as an ordinary argument):
 
 ```quilon
 inner = (site :: Site) -> Num => site.line
@@ -907,23 +871,18 @@ outer = (site :: Site) -> Num => inner(site)   ~ forwards: reports where `outer`
 plain = (site :: Site) -> Num => inner()       ~ does not: reports THIS line
 ```
 
-A `Site` is an ordinary record value otherwise — read its fields, hand it on, store it.
-Only a **top-level function's last** parameter can be filled in, so a `Site` anywhere else
-is a compile error rather than an argument nothing supplies: not before another parameter,
-not on a lambda or a nested declaration (called through a value, not by name), and not on a
-record method (dispatched by receiver type). The arity a caller sees never counts it —
-`whereAmI()` above takes no arguments as far as the call site is concerned.
+Only a **top-level function's last** parameter can be filled in; a `Site` anywhere else is a
+compile error rather than an argument nothing supplies — not before another parameter, not on
+a lambda or nested declaration (called through a value, not by name), and not on a record
+method (dispatched by receiver type). The arity a caller sees never counts it: `whereAmI()`
+above takes no arguments at the call site.
 
-This is the mechanism [`core.test`'s assertions](corelib/test.md) report your call
-site with; nothing about it is specific to them. **It costs nothing while the program
-runs.** Every field is a compile-time constant, so each call site is emitted as a read-only
-constant and the call passes its address — no allocation, no stores, no unwinder, and no
-debug info to keep; JIT (`quilon run`) and native builds report identically. A passing
-assertion costs its comparison and a pointer argument, and nothing else: the message and the
-report around it are built only on the failing branch. Assert as often as you like, in the
-hottest loop you have. (What a site does cost is image space — the record, plus two
-relocations for its `Text` fields in a position-independent executable.) (See
-`examples/call_site.ql`.)
+Filling one in **costs nothing at run time**: the fields are compile-time constants, so each
+call site is a read-only constant whose address the call passes — no allocation, no unwinder,
+no debug info, and JIT and native builds report identically. Assert as often as you like, in
+the hottest loop you have. (A site does cost image space: the record plus two relocations for
+its `Text` fields.) [`core.test`'s assertions](corelib/test.md) are built on this; nothing
+about it is specific to them. See `examples/call_site.ql`.
 
 ---
 
@@ -944,7 +903,9 @@ generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
   array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
   (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them.
+Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them — and
+an element bound out of one is a full `Text`: the whole `Text` API, and
+[overload](#overloading) dispatch by its concrete type.
 `quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
 program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
 the `.ql` path becomes `argv[0]`), so `quilon run f.ql a b c` gives the same `args.size`
@@ -971,69 +932,55 @@ Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, e
 
 > Colorless implicit futures on cooperative fibers: IO returns type-invisible deferreds, only strict operations force them — concurrency follows data dependence, not program order.
 
-> **Status: 🚧 in progress.** The model described below is locked, and its core now runs: the
-> single-threaded fiber scheduler, the effect-only `@sleep` **pause** (`@sleep(seconds) -> $`,
-> in `core.time`), and — the *deferred value* half — the value-returning `@readStdin` primitive
-> (`@readStdin() -> Text`, in `core.io`). `@readStdin` launches a stdin line read and hands back a
-> deferred `Text` that threads lazily through code and is **forced on use** at a strict
-> operation. What is not here yet: cross-source **overlap** as a showcase (two independent
-> reads finishing in max-time rather than sum-time) arrives with a networked primitive such as
-> `@get`; and the multicore (M:N) runtime. A program's entry runs on the fiber scheduler only
-> when it uses an `@` primitive, so pure programs are byte-identical (zero overhead). What
-> follows is the durable summary of the locked model.
+> **Status: 🚧 in progress.** The model below is locked, and its core runs: the
+> single-threaded fiber scheduler, the effect-only `@sleep` pause (`core.time`), the
+> deferred-value `@readStdin` (`core.io`), and the networked `@tcpRequest` (`core.net`).
+> Not yet: **overlap** as a showcase (two independent reads finishing in max-time rather
+> than sum-time), which needs a primitive like `@get`; and the multicore (M:N) runtime.
 
-Quilon's concurrency is **colorless**: you write ordinary, blocking-*looking* code, and the
-runtime overlaps independent IO for you automatically. There is **no** `async`, **no**
-`await`, no `go`/`spawn` operator, no resolve token, and — crucially — **no function
-coloring**: a function that does IO is written and typed exactly like one that doesn't. This
-is more ambitious than Go or Java's Loom (which still need an explicit `go` to start
-concurrent work) and than `async`/`await` (which colors every function on the IO path). The
-nearest precedent is **promise pipelining** (E, Cap'n Proto).
+Quilon's concurrency is **colorless**: you write ordinary, blocking-*looking* code and the
+runtime overlaps independent IO for you. No `async`, no `await`, no `go`/`spawn`, no resolve
+token, and no **function coloring** — a function that does IO is written and typed exactly
+like one that doesn't. `async`/`await` colors every function on the IO path; Go and Loom
+still need an explicit `go`. The nearest precedent is **promise pipelining** (E, Cap'n Proto).
 
-**`@` marks leaf IO primitives only.** The one marker in the whole model is `@`, and it
-appears **only** on the leaf IO primitives that live in the stdlib/runtime — an `http.get`,
-a file read, a socket recv, `sleep`. **All user code is unmarked.** A function that
-transitively calls an `@` primitive is concurrency-capable *for free*, with **no
-propagation** up the call chain — that absence of propagation is exactly why the model is
-colorless.
+**`@` marks leaf IO primitives only** — the stdlib/runtime primitives that actually do IO
+(`http.get`, a file read, a socket recv, `sleep`). All user code is unmarked: a function that
+transitively calls an `@` primitive is concurrency-capable for free, with **no propagation**
+up the call chain. That absence of propagation is what makes the model colorless.
 
-**Deferred values.** Calling an `@` primitive launches the IO and **returns immediately**
-with a *deferred* value; it does **not** park the caller. Deferred-ness then **propagates as
-the value flows** — passed as an argument, stored in a record or array, returned from a
-function — without forcing anything along the way. That lazy threading is the *pipelining*.
+**Deferred values.** Calling an `@` primitive launches the IO and returns immediately with a
+*deferred* value, without parking the caller. Deferred-ness propagates as the value flows —
+passed as an argument, stored in a record or array, returned from a function — forcing
+nothing along the way. That lazy threading is the *pipelining*.
 
-**Forcing happens at the leaves.** A deferred value is **forced** — the fiber parks until
-the value is actually ready — only at a **strict** operation: the built-in primitives that
-must read the concrete bytes. Those are arithmetic, comparison, pattern match (`?`), IO
-output (`print` / `write`), and native calls. Pure threading of a value stays lazy; forcing
-happens only where a real byte is finally needed. Independent values that are *launched
-before they are forced* therefore **overlap automatically** — implicit concurrency, with
-nothing written to ask for it.
+**Forcing happens at the leaves.** A deferred value is forced — the fiber parks until it is
+ready — only at a **strict** operation: arithmetic, comparison, pattern match (`?`), IO
+output (`print`/`write`), and native calls. Values *launched before they are forced* therefore
+overlap automatically, with nothing written to ask for it.
 
-**Deferral is type-invisible.** A deferred `Text` still *types* as `Text` — deferral is an
-internal runtime detail, not part of the type — so it does **not** disturb the exact-type
-[overload resolution](#overloading): a deferred `Text` dispatches exactly as an ordinary
-`Text` would.
+**Deferral is type-invisible.** A deferred `Text` types as `Text`, so it does not disturb
+exact-type [overload resolution](#overloading).
 
-**Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the
-block **forces and joins** every task it launched before it returns, and a panic propagates
-out of the scope.
+**Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the block
+forces and joins everything it launched before returning, and a panic propagates out.
 
-**Why it can be colorless.** Each fiber is **stackful** (via `corosensei`): it has a real
-call stack, so *any* function can park at a force point without the compiler rewriting it
-into a state machine. That is what removes coloring entirely — nothing needs an `async`
-signature to be allowed to suspend.
+**Why it can be colorless.** Each fiber is **stackful** (via `corosensei`), so any function
+can park at a force point without the compiler rewriting it into a state machine.
 
-**Determinism.** *Pure* results are fully deterministic. The **ordering of side effects**
-across independent deferred IO is **unspecified** — an accepted tradeoff for getting the
-overlap implicitly.
+**Determinism.** Pure results are fully deterministic. The **ordering of side effects** across
+independent deferred IO is unspecified — the accepted cost of implicit overlap.
 
-**Runnable today (`@sleep`, a pause; `now`, a clock).** `core.time` provides two things:
-`@sleep(seconds)` — seconds as a fractional `Num` — is effect-only (`-> $`): used as a
-statement it **waits right there** on the current fiber, then execution continues in program
-order. It carries no value, so nothing defers or forces yet. `now()` reads a **monotonic**
-clock (seconds as a `Num`); only *differences* between two readings are meaningful, so it
-measures elapsed time. See `examples/sleep.ql`.
+**A program's entry runs on the fiber scheduler only when it uses an `@` primitive**, so pure
+programs are byte-identical (zero overhead).
+
+### Runnable today
+
+`core.time` — **`@sleep(seconds)`** takes a fractional `Num` and is effect-only (`-> $`): it
+waits right there on the current fiber, then execution continues in program order. It carries
+no value, so nothing defers or forces. **`now()`** reads a **monotonic** clock in seconds;
+only *differences* between readings are meaningful. It is a plain (non-`@`) primitive —
+reading the clock is instant and never parks. (See `examples/sleep.ql`.)
 
 ```quilon
 << core.time
@@ -1045,16 +992,10 @@ measures elapsed time. See `examples/sleep.ql`.
 >
 ```
 
-Running the entry on the fiber scheduler is what lets `@sleep` park; `^` and any helper it
-calls carry no marker, no `async`, no `await` — only the leaf `@sleep` is marked. `now()` is
-a plain (non-`@`) primitive — reading the clock is instant and never parks.
-
-**Runnable today (`@readStdin`, a deferred value).** `@readStdin() -> Text` (in `core.io`) reads one
-line from stdin. It is the first *value-returning* `@` primitive, so it is the deferred one:
-calling it **launches** the read and returns a deferred `Text` immediately; the value threads
-lazily through bindings and is **forced** only where a strict operation reads its bytes — a
-comparison, `print`, a native call. On end-of-input it yields the empty `Text` `""`. See
-`examples/readStdin.ql`.
+`core.io` — **`@readStdin() -> Text`** reads one line from stdin. Being value-returning makes
+it the deferred one: it launches the read, returns immediately, and is forced only where a
+strict operation reads its bytes. At end-of-input it yields `""`. (See
+`examples/readStdin.ql`.)
 
 ```quilon
 << core.io
@@ -1068,22 +1009,19 @@ comparison, `print`, a native call. On end-of-input it yields the empty `Text` `
 ~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.ql
 ```
 
-`@readStdin` and `^` and any helper are unmarked — only the leaf `@readStdin` carries `@`.
-Binding `line` does not wait; the force is the `==` inside `assertEq`. (Because `print`/`eprint`
-force and write eagerly, per-fiber output stays in program order.)
+Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
+`print`/`eprint` force and write eagerly, per-fiber output stays in program order.
 
-**Networked (`@tcpRequest`, the socket primitive).** The first *networked* value-returning
-primitive is `@tcpRequest(address :: Text, requestBytes :: Text) -> Text` — a one-shot request
-exchange: connect to `address` (`host:port`), write the request bytes, read the response until
-the peer closes (close-delimited), and hand back all the response bytes as a deferred `Text`,
-forced on use exactly like `@readStdin`. It lives in the public `core.net` module (`<< core.net`)
-alongside `core.io`/`core.time`, and the HTTP client sits on it. It is the bytes-backed
-foundation that makes the networked `@get` below real — HTTP framing and parsing happen in
-ordinary Quilon on the forced response bytes.
+`core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Text`** is a one-shot
+request exchange: connect to `address` (`host:port`), write the request bytes, read the
+response until the peer closes (close-delimited), and hand back all of it as a deferred
+`Text`, forced on use like `@readStdin`. The HTTP client sits on it — framing and parsing
+happen in ordinary Quilon on the forced bytes.
 
-**Where it is headed (overlap, `@get`).** With a *networked* value-returning primitive,
-independent launches overlap automatically — the reason implicit futures matter. Leaf
-primitives stay the only marked thing, and user code stays unmarked:
+### Where it is headed
+
+A networked value-returning primitive makes independent launches overlap, which is the reason
+implicit futures matter:
 
 ```quilon
 ~ `@get` is a leaf IO primitive (stdlib/runtime) — the ONLY marked thing here.
@@ -1096,9 +1034,6 @@ loadDashboard = (user :: Text) -> Text => <
   render(profile, orders)                    ~ each forced at a strict op inside render (block joins)
 >
 ```
-
-Only the leaf `@get`/`@readStdin` is marked; `fetchJson` and `loadDashboard` are ordinary,
-unmarked user code, concurrency-capable for free.
 
 ---
 
@@ -1127,28 +1062,25 @@ llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .ql line, print locals
 ```
-it the binary carries none. It covers line tables and per-function scopes, plus
-**local variables, parameters, and debug types**: every `=`/`:=` local and
-parameter is emitted with its type, and nested `{ }` blocks and closures get their
-own lexical scopes. Each Quilon type gets a distinct DWARF entry — `Num`/`Bool` as
-base types, and `Text`, arrays (`[]T`), records, and sum types as distinctly-named
-composites (even though they share a `{ptr, i64}`-ish machine shape), so a debugger
-tells them apart. Debug info is attributed to the program's own source file;
-functions pulled in from imported modules (`<<`) currently carry no line info,
-because a `Span` records only a byte offset and not which module file it came from
-(the same limitation noted for the type oracle). Multi-file line info is a follow-up.
+Debug info is opt-in: without `--debug` the binary carries none. It covers line tables,
+per-function scopes, and **locals, parameters, and debug types** — every `=`/`:=` local and
+parameter is emitted with its type, and nested `{ }` blocks and closures get their own
+lexical scopes. Each Quilon type gets a distinct DWARF entry: `Num`/`Bool` as base types,
+and `Text`, arrays (`[]T`), records, and sum types as distinctly-named composites, so a
+debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Only the
+program's own source is attributed — functions from imported modules (`<<`) carry no line
+info yet, since emission builds one `DIFile` from the root source. Multi-file line info is a
+follow-up.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
 
 ### Error messages
 
-Compile errors — from the lexer, parser, and type checker — are reported in a
-rustc-style format: a `path:line:col:` position line, the `error: <message>` on the
-line under it, then the offending source line and a caret (`^`) underline beneath the
-exact span. A path too long for the position line is shown from its END behind a `…`,
-so the file name stays visible and the line does not wrap. Line
-and column are **1-based**, and the column counts characters (not bytes), so it
-is correct in the presence of multi-byte characters. For example, the program
+Every located failure — a compile error, a failing assertion, a fail-loud runtime check —
+prints the same frame: a `path:line:col:` position line, the message on the line under it,
+then the offending source line and a caret (`^`) underline beneath the exact span. Line and
+column are **1-based** and count characters, not bytes. A path too long for the position line
+is shown from its END behind a `…`, so the file name stays visible. For example, the program
 
 ```
 add = (a :: Num) -> Num => a + true
@@ -1164,21 +1096,16 @@ error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, 
   |                            ^^^^^^^^
 ```
 
-A span covering multiple lines underlines its first line. Failures with no
-source location (a missing file, an unresolved import) print a plain one-line
-message instead. Any compile error exits with status 1.
+A multi-line span underlines its first line. A failure with no source location (a missing
+file, an unresolved import) prints a plain one-line message. Any compile error exits 1.
 
-A **run-time** failure reports in the same shape, from the same position resolver, so a
-program's own failures read like the compiler's: a failing
-[`core.test` assertion](corelib/test.md) at the assertion's call site, and a fail-loud
-runtime check (a bad `arr[i]`, a violated `Text.replace`/`repeat` contract) at the
-expression that broke the contract. Those two are colored when stderr is a terminal and
-plain when it is redirected or `NO_COLOR`/`TERM=dumb` is set; compile errors are not colored
-yet.
-
-A located runtime report carries the source line it names, so the text of a line with an
-`arr[i]` or a fallible `Text` call is embedded in the built binary (as it already is for
-every assertion). There is no way to strip it yet.
+Runtime failures use the same frame at the expression responsible: a failing
+[`core.test` assertion](corelib/test.md) at the assertion's call site, a fail-loud check (a
+bad `arr[i]`, a violated `Text.replace`/`repeat` contract) at the call that broke the
+contract. Those are colored when stderr is a terminal, plain when redirected or under
+`NO_COLOR`/`TERM=dumb`; compile errors are not colored yet. Because a runtime report carries
+the source line it names, that line's text is embedded in the built binary, with no way to
+strip it yet.
 
 To stay robust on hostile or machine-generated input, the parser also caps how
 deeply expressions may nest: nesting more than **128 levels** of parentheses,
@@ -1251,14 +1178,11 @@ pathological input.
 0.9 is a stable **core**, not the whole language. Notably:
 
 - **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
-- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across multiple nesting levels, and capturing-then-calling another closure. Deferred to a later milestone (they need the closure's type threaded through inference / defunctionalization): capturing a *polymorphic* value, *generic* closures, passing a closure **as a function parameter**, and **returning a closure from a function**. A closure used in an unsupported position is rejected at compile time (e.g. an unannotated function parameter that is called reports `Not a function`), never miscompiled.
+- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, passing a closure **as a parameter**, and **returning one from a function**. An unsupported position is rejected at compile time (a called unannotated parameter reports `Not a function`), never miscompiled.
 - **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
-- **Sum-type payloads mixing types across variants behind one value aren't unified yet.** Each variant's payload slots have a fixed representation sized to the widest variant; a single value carries one variant's payload. Distinct payload *types* per slot across variants (e.g. a position that is `Num` in one variant and `Text` in another) is a deferred follow-up — the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.
+- **Sum-type payloads mixing types across variants aren't unified yet.** Payload slots have a fixed representation sized to the widest variant. Distinct payload *types* per slot across variants (a position that is `Num` in one variant and `Text` in another) is deferred; the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.
 - **A named-composite sum payload must be a record, and a record field cannot yet be a named composite.** A variant may carry a named **record** (`Post(Body)`), but not another named **sum**; and a record field is still limited to built-in types and arrays (a `{ inner :: Inner }` field of a user type is a deferred follow-up).
-- A `Text` value bound from an `args`/`env` element supports the full `Text` API
-  (`.size`/`.length`/`+`/comparison), and — like a bound `Result` payload — dispatches an
-  [overload set](#overloading) by its concrete `Text` type.
-- **Concurrency is in its first slice.** The [colorless implicit-futures model](#concurrency--colorless-implicit-futures--in-progress) is locked and partly built: the single-threaded fiber scheduler + reactor run, and the `@sleep` leaf primitive (in `core.time`) — an effect-only pause — works end to end on it. The *deferred value* half (a value-returning `@` primitive whose result threads lazily and forces at a strict operation, giving automatic overlap), deferred composites, further `@` primitives (file/socket), and multicore M:N are the remaining work on the road to 1.0.
+- **Concurrency is partly built.** The [model](#concurrency--colorless-implicit-futures--in-progress) is locked; the fiber scheduler, reactor, `@sleep`, and the deferred-value primitives (`@readStdin`, `@tcpRequest`) run. Remaining for 1.0: overlap as a showcase, deferred composites, further `@` primitives (file), and multicore M:N.
 
 ---
 

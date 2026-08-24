@@ -29,11 +29,9 @@ See **[LANGUAGE.md](./docs/LANGUAGE.md)** for the full reference — types, modu
 
 ## Principles
 
-What guides the design:
-
 - **Should make me laugh** — if a feature is a delight, that alone earns it a place.
 - **Colorless concurrency** — implicit futures on cooperative fibers; no `async`/`await`.
-- **Fail loud, never silent** — invalid operations error (a compile error when we can see it, else a crash); never a silent no-op, clamp, or magic sentinel.
+- **Fail loud, never silent** — invalid operations error (at compile time when visible, else at run time); never a silent no-op, clamp, or magic sentinel.
 - **Overloading, not generics** — ad-hoc overloading is the only polymorphism.
 - **Eat the rich** — APIs expose everything up front; parsing and computing happen only when you touch it.
 
@@ -44,10 +42,10 @@ The full list lives in **[LANGUAGE.md](./docs/LANGUAGE.md#design-principles)**.
 Install these **before** building or running Quilon:
 
 - **LLVM 22** — the compiler backend (via inkwell). Debian/Ubuntu: [apt.llvm.org](https://apt.llvm.org); Arch: `llvm`; macOS: `brew install llvm@22`.
-- **libgc (Boehm GC)** — the runtime GC, and a hard dependency: needed to build the compiler, to `quilon run` (the JIT resolves `GC_*` in-process), and dynamically linked into `quilon build` binaries — so it must be present wherever those binaries run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
+- **libgc (Boehm GC)** — the runtime GC. Needed to build the compiler, to `quilon run`, and at run time by `quilon build` binaries (dynamically linked), so it must be present wherever they run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
 - **A C toolchain** — `clang` (default) or `gcc`, used by `quilon build` to link the executable. Not needed for `quilon run`.
 
-The `quilon` binary is otherwise **self-contained**: the runtime library (`libquilon_rt.a`) is embedded in it (gzip-compressed, decompressed to `~/.cache/quilon` on first build), so `quilon build` works from a bare download with no extra files. Only the system libraries above (notably libgc) need installing.
+The `quilon` binary is otherwise **self-contained**: `libquilon_rt.a` is embedded in it (gzip-compressed, unpacked to `~/.cache/quilon` on first build), so `quilon build` works from a bare download.
 
 ## Build & run
 
@@ -59,7 +57,7 @@ cargo build --release                        # binary at target/release/quilon
 ./target/release/quilon check program.ql     # typecheck only
 ```
 
-`cargo build --release` is all you need — `quilon build` locates the embedded runtime automatically. Native builds link with `clang` by default; pass `--linker gcc` to use gcc.
+Native builds link with `clang` by default; pass `--linker gcc` for gcc.
 
 ## Releasing
 
@@ -67,7 +65,7 @@ Run `./scripts/release.sh` from a clean `main`: it checks the `Cargo.toml`/`quil
 
 ## Vision (aspirational)
 
-Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language for high-performance services. Today the runtime is single-threaded; the parallel/non-blocking machinery is direction, not delivered.
+Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language. The runtime is single-threaded today; the parallel machinery is direction, not delivery.
 
 ## Licensing
 

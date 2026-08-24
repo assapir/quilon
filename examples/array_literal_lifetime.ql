@@ -1,14 +1,11 @@
-~ Array literals are heap-backed, so they are safe in the two places a stack-allocated
-~ buffer would break:
+~ Array literals are heap-backed, so they hold in the two places a stack buffer would break:
 ~
-~   1. Escape — an array literal returned from a function (here inside a record field)
-~      keeps its data alive after the defining frame dies. A later call reusing the same
-~      stack region must NOT corrupt it. With stack allocation `p.xs[0]` would read the
-~      later call's locals (77); heap allocation keeps it 10.
-~   2. Tail recursion — building and indexing an array literal every iteration of a
-~      self-tail-recursive loop must stay in constant stack. A per-iteration stack
-~      allocation would grow without bound and overflow at depth; heap-backing (and
-~      register field reads on index) keep the loop flat, so it runs 1,000,000 deep.
+~   1. Escape — a literal returned from a function (here in a record field) outlives that
+~      frame, and a later call reusing the stack region does not corrupt it: `p.xs[0]` stays
+~      10 rather than reading the later call's locals.
+~   2. Tail recursion — building and indexing a literal each iteration of a self-tail-
+~      recursive loop stays in constant stack, so the loop runs 1,000,000 deep instead of
+~      overflowing.
 ~
 ~ `<< core.test` verifies the results; on success the program exits 0.
 << core.test

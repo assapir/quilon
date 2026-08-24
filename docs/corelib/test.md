@@ -2,31 +2,18 @@
 
 Import with `<< core.test`. See the [Standard library index](../LANGUAGE.md#standard-library) and `examples/assert_demo.ql`.
 
-In-language assertions for **self-verifying programs and examples**. A holding
-assertion does nothing; a **failing** one reports to **stderr** and exits the process with
-code **101** (the Rust-panic convention, distinct from the 0 a passing program exits with),
-so a broken program fails loudly in CI. Every example in `examples/` is written this way: it
-asserts each result it demonstrates and exits 0 on success — the examples gate runs them all
-under the JIT and native AOT.
+In-language assertions for **self-verifying programs and examples**. A holding assertion does
+nothing; a failing one reports to stderr and exits **101** (the Rust-panic convention), so a
+broken program fails loudly in CI. Every example in `examples/` is written this way — it
+asserts each result it demonstrates and exits 0 — and the examples gate runs them all under
+the JIT and native AOT.
 
-A failure says **where** it failed, in the same shape as a compiler
-[error](../LANGUAGE.md#error-messages) — position, message, source line, caret run:
-
-```text
-demo.ql:12:3:
-assertion failed: expected 42, got 41
-   |
-12 |   assertEq(answer(), 42)
-   |   ^^^^^^^^^^^^^^^^^^^^^^
-```
-
-The location is **your** call site, never an internal hop: `assertEq` fails several calls
-deep inside `core.test`, and still points at the line where your program called `assertEq`
-— including when that line is inside a helper function rather than `^`. Each assertion
-takes a trailing [`site :: Site`](../LANGUAGE.md#call-site-locations--site) the compiler fills in and the
-wrappers forward. The report is **colored** when stderr is a terminal, and plain when it is
-redirected or `NO_COLOR` / `TERM=dumb` is set — decided per run, so a CI log and a piped
-build stay clean.
+A failure reports in the standard [error frame](../LANGUAGE.md#error-messages), at **your**
+call site rather than an internal hop: `assertEq` fails several calls deep inside `core.test`
+and still points at the line where your program called it, including inside a helper rather
+than `^`. Each assertion takes a trailing
+[`site :: Site`](../LANGUAGE.md#call-site-locations--site) that the compiler fills in and the
+wrappers forward.
 
 | Function | Effect |
 |----------|--------|
@@ -52,9 +39,8 @@ build stay clean.
 ```
 
 `assertEq`/`assertNotEq` build their message with
-[interpolation](../LANGUAGE.md#string-interpolation-and-the-render-operator-), so the values appear
+[interpolation](../LANGUAGE.md#string-interpolation-and-the-render-operator-), so values appear
 rendered — `Num`/`Text`/`Bool` directly, and records, sum types, and arrays through their
-`` ` `` render operator. The whole module is pure Quilon (`corelib/test.ql`): the report is
-composed and printed in-language from the `Site` fields, built on `assert`, `==`/`!=`,
-pattern matching, and `Text.repeat` for the caret run — its only native primitives are the
-internal process-exit and terminal-detection intrinsics. (See `examples/assert_demo.ql`.)
+`` ` `` render operator. The module is pure Quilon (`corelib/test.ql`), composing the report
+in-language from the `Site` fields; its only native primitives are the internal process-exit
+and terminal-detection intrinsics. (See `examples/assert_demo.ql`.)
