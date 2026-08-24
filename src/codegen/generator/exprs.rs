@@ -341,11 +341,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to read deferred Result promise"))?
             .into_pointer_value();
         let force_fn = self.get_intrinsic("__force_result")?;
-        let forced = Self::call_result_to_basic(
-            self.builder
-                .build_call(force_fn, &[promise.into()], "forced_result")
-                .map_err(ctx("Failed to call __force_result"))?,
-        )?;
+        // A `Result` (24 bytes) crosses the FFI via an out-pointer, not an aggregate return.
+        let out = self.create_entry_block_alloca("force_result_out", result_ty.into())?;
+        self.builder
+            .build_call(force_fn, &[out.into(), promise.into()], "")
+            .map_err(ctx("Failed to call __force_result"))?;
+        let forced = self
+            .builder
+            .build_load(result_ty, out, "forced_result")
+            .map_err(ctx("Failed to load forced Result"))?;
         let force_end_block = self.builder.get_insert_block().unwrap();
         self.builder
             .build_unconditional_branch(cont_block)

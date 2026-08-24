@@ -217,18 +217,24 @@ pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'stat
     }
 }
 
-/// Force a deferred `Result`: the per-representation C-ABI wrapper over the generic [`force`].
-/// Only the code generator calls this, and only after its force check saw
-/// [`DEFERRED_RESULT_TAG`], so `deferred_ptr` is always a live `Result` deferred.
+/// Force a deferred `Result`, writing the resolved `{ tag, slot }` into `out`: the
+/// per-representation C-ABI wrapper over the generic [`force`]. A `Result` is 24 bytes, which the
+/// C ABI returns via a hidden pointer rather than in registers (unlike the 16-byte `Text`), so
+/// the value is passed back through an out-pointer the code generator supplies — no aggregate
+/// return crosses the FFI boundary. Only the code generator calls this, and only after its force
+/// check saw [`DEFERRED_RESULT_TAG`], so `deferred_ptr` is always a live `Result` deferred.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `deferred_ptr` is the slot `data` of a deferred `Result` produced by [`launch_deferred_result`]
-/// and is still reachable (the taint pass keeps it live to here).
+/// `out` points to writable storage for one [`QlResult`]; `deferred_ptr` is the slot `data` of a
+/// deferred `Result` produced by [`launch_deferred_result`] and is still reachable (the taint pass
+/// keeps it live to here).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __force_result(deferred_ptr: *const c_void) -> QlResult {
+pub extern "C" fn __force_result(out: *mut QlResult, deferred_ptr: *const c_void) {
     // SAFETY: per the contract, this is a live `Result` deferred (a `Deferred<QlResult>`).
-    unsafe { force(deferred_ptr as *mut Deferred<QlResult>) }
+    let value = unsafe { force(deferred_ptr as *mut Deferred<QlResult>) };
+    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    unsafe { *out = value };
 }
 
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred

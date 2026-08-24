@@ -162,9 +162,9 @@ intrinsic_registry! {
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
-    __tcp_request_launch: extern "C" fn(*const u8, i64, *const u8, i64) -> QlResult,
+    __tcp_request_launch: extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64),
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
-    __force_result: extern "C" fn(*const c_void) -> QlResult,
+    __force_result: extern "C" fn(*mut QlResult, *const c_void),
     __run_fiber_main: extern "C" fn(
         extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int,
         c_int,

@@ -404,23 +404,28 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 let (addr_ptr, addr_len) = self.extract_text(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
+                // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
+                // tagged deferred) into `out`; a `Result` crosses the FFI via this out-pointer, not
+                // an aggregate return. The loaded value is forced at its strict-use site.
+                let result_ty = self.sum_struct_type("Result");
+                let out = self.create_entry_block_alloca("tcp_request_out", result_ty.into())?;
                 let request = self.get_intrinsic("__tcp_request_launch")?;
-                let call = self
-                    .builder
+                self.builder
                     .build_call(
                         request,
                         &[
+                            out.into(),
                             addr_ptr.into(),
                             addr_len.into(),
                             req_ptr.into(),
                             req_len.into(),
                         ],
-                        "tcp_request",
+                        "",
                     )
                     .map_err(ctx("Failed to call @tcpRequest"))?;
-                // A DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`), tagged deferred;
-                // forced at its strict-use site.
-                Self::call_result_to_basic(call)
+                self.builder
+                    .build_load(result_ty, out, "tcp_request")
+                    .map_err(ctx("Failed to load @tcpRequest result"))
             }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
         }

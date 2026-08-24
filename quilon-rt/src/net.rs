@@ -188,22 +188,28 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 ///
 /// The address and request bytes are copied into owned buffers here, before the producer is
 /// spawned, so the producer fiber owns its inputs and never reads a `Text` that a later
-/// collection might reclaim.
+/// collection might reclaim. The deferred `Result` is written into `out` rather than returned:
+/// a `Result` is 24 bytes, which the C ABI returns via a hidden pointer, so an out-pointer keeps
+/// the FFI boundary free of an aggregate return (see [`__force_result`]).
 ///
 /// # Safety contract (upheld by the compiler)
-/// `address_data`/`request_data` are null, or point to `address_len`/`request_len` readable
-/// bytes for the duration of this call (a `Text`'s live bytes at the call site).
+/// `out` points to writable storage for one [`QlResult`]; `address_data`/`request_data` are null,
+/// or point to `address_len`/`request_len` readable bytes for the duration of this call (a
+/// `Text`'s live bytes at the call site).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __tcp_request_launch(
+    out: *mut QlResult,
     address_data: *const u8,
     address_len: i64,
     request_data: *const u8,
     request_len: i64,
-) -> QlResult {
+) {
     let address = bytes_to_string(address_data, address_len);
     let request = copy_bytes(request_data, request_len);
-    launch_deferred_result(move || tcp_request(&address, &request))
+    let deferred = launch_deferred_result(move || tcp_request(&address, &request));
+    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    unsafe { *out = deferred };
 }
 
 /// The `@tcpRequest` producer: perform the whole request exchange against `address` and return
@@ -520,8 +526,15 @@ mod tests {
         // peer closes; a separate fiber FORCES the deferred value; the `Ok(responseBytes)` flows
         // back.
         use crate::deferred::{RESULT_OK_TAG, __force_result};
+        use crate::mem::QlSlice;
         use std::io::{Read as _, Write as _};
         use std::net::TcpListener as StdListener;
+
+        // A zeroed `Result` out-parameter for the FFI calls to fill.
+        let blank = || QlResult {
+            tag: 0,
+            slot: QlSlice::empty(),
+        };
 
         static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
         static TAG: AtomicUsize = AtomicUsize::new(0);
@@ -544,7 +557,9 @@ mod tests {
         let address = format!("{addr}");
         on_gc_thread(move || {
             run(move || {
-                let deferred = __tcp_request_launch(
+                let mut deferred = blank();
+                __tcp_request_launch(
+                    &mut deferred,
                     address.as_ptr(),
                     address.len() as i64,
                     b"PING\n".as_ptr(),
@@ -552,7 +567,8 @@ mod tests {
                 );
                 let deferred_ptr = deferred.slot.data;
                 spawn(move || {
-                    let forced = __force_result(deferred_ptr);
+                    let mut forced = blank();
+                    __force_result(&mut forced, deferred_ptr);
                     TAG.store(forced.tag as usize, Ordering::SeqCst);
                     let bytes = unsafe {
                         std::slice::from_raw_parts(
