@@ -1,0 +1,51 @@
+# `Map` — keyed collection
+
+A built-in, no-import type. See the [Language reference](../LANGUAGE.md#maps) and `examples/maps.ql`.
+
+A `Map` is written `[|K => V|]` (`=>` reads "maps to"). `Map` is a **built-in parametric
+collection** — like `[]T`, not a user-defined generic — written with a **pipe fence**
+`[| … |]`.
+
+```quilon
+ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41|]   ~ a Map
+empty :: [|Num => Num|] = [|=>|]                          ~ empty map
+```
+
+**Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`. A
+map is **immutable / persistent**: every mutator (`set`) returns a **new** map and never
+touches the receiver.
+
+**Iteration order is UNSPECIFIED** — conceptually a map is unordered, so never rely on the
+order of `keys`/`values`/`each`. (It is the hash order, *not* insertion order. A fixed-seed
+hasher makes it reproducible run-to-run so example asserts don't flake, but that is an
+implementation detail, not a contract.)
+
+**Access is via `.get`, which returns a `Result`** — `Ok(value)` when the key is present,
+`NotOk` when it is absent — so a caller must handle the missing case. There is **no bracket
+indexing on a map** (`m[k]` is a type error; bracket indexing is arrays only).
+
+A map carries a built-in `.size` **field** (entry count, like an array's `.size`);
+everything else is a reserved method (resolved ahead of any same-named user overload when
+the receiver is a Map):
+
+| Map method | Result | Notes |
+|------------|--------|-------|
+| `get(k)` | `Ok(v)` / `NotOk` | the safe, `Result`-returning lookup (the only way to read a value) |
+| `has(k)` | `Bool` | membership |
+| `set(k, v)` | new `[\|K => V\|]` | a fresh map with `k` bound to `v` (persistent) |
+| `keys()` | `[]K` | the keys as an array (order unspecified) |
+| `values()` | `[]V` | the values as an array (same order as `keys()`) |
+| `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains) |
+
+```quilon
+<< core.io
+m :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
+total = m.values().reduce(0, (acc, x) => acc + x)   ~ 3
+m.get("a") ? | Ok(v) => v | NotOk(_) => 0           ~ 1
+```
+
+Removal is deferred (not in the initial surface), as are user-defined key types (via a
+`%` hash hook). Like the empty array `[]` (which is `[]Num`), an **empty** map literal
+defaults to `Num` key/value types and cannot yet be annotated to another type.
+
+(See `examples/maps.ql`.)
