@@ -85,15 +85,9 @@ test("tempBinaryPath: strips .qn, embeds base name + pid + uniquifier, honors tm
   assert.equal(out, path.join("/mytmp", `quilon-debug-factorial-${process.pid}-abc`));
 });
 
-test("tempBinaryPath: strips either extension, case-insensitively", () => {
-  assert.equal(
-    path.basename(tempBinaryPath("/x/APP.QN", "1", "/t")),
-    `quilon-debug-APP-${process.pid}-1`,
-  );
-  assert.equal(
-    path.basename(tempBinaryPath("/x/APP.QL", "1", "/t")),
-    `quilon-debug-APP-${process.pid}-1`,
-  );
+test("tempBinaryPath: is case-insensitive on the .qn extension", () => {
+  const out = tempBinaryPath("/x/APP.QN", "1", "/t");
+  assert.equal(path.basename(out), `quilon-debug-APP-${process.pid}-1`);
 });
 
 test("toLldbConfiguration: resolves to a CodeLLDB launch of the built binary", () => {

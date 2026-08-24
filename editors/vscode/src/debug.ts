@@ -133,8 +133,7 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
     }
 
     const file = resolveSourceFile(config);
-    // `.ql` is deprecated but still compiles for this release, so it is still debuggable.
-    if (!file || !/\.(qn|ql)$/i.test(file)) {
+    if (!file || !/\.qn$/i.test(file)) {
       void vscode.window.showErrorMessage("Quilon: no active .qn file to debug.");
       return undefined;
     }

@@ -178,16 +178,17 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
-- **Source files are `.qn`; `.ql` is deprecated
+- **Source files are `.qn`; `.ql` is gone
   ([#172](https://github.com/assapir/quilon/issues/172)).** `.ql` is CodeQL's extension, and
   GitHub was attributing ~40% of this repository to CodeQL because of it — the language bar
   advertised someone else's language for every Quilon program in the tree. Every source file
-  is renamed (`git mv`, so history follows). `.qn` is unclaimed, so the misattribution stops
-  with the rename itself; a `.gitattributes` override (`*.qn linguist-language=Quilon`) asks
-  for the files to be labelled Quilon, which needs Quilon in Linguist proper to take effect. The compiler still accepts
-  `.ql` for this release, printing a deprecation warning on stderr and compiling as before;
-  the support goes away at 1.0. The VS Code extension registers both extensions through the
-  transition, so existing files keep highlighting.
+  is renamed (`git mv`, so history follows), and the compiler now accepts only `.qn`: a
+  program or a `<<`-imported module named anything else is rejected, by name, before it is
+  read. **This is a breaking change** — rename your `.ql` sources; nothing else about them
+  changes. `.qn` is unclaimed, so the misattribution stops with the rename itself; a
+  `.gitattributes` override (`*.qn linguist-language=Quilon`) asks for the files to be
+  labelled Quilon, which needs Quilon in Linguist proper to take effect. The VS Code
+  extension registers `.qn` only, to match.
 
 - **CI shows benchmark deltas against the previous run on the branch
   ([#162](https://github.com/assapir/quilon/issues/162)).** Both benchmark families print a

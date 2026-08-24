@@ -1,25 +1,20 @@
-//! Quilon's source file extension, and the transition off the one it used to have.
+//! Quilon's source file extension.
 //!
-//! A leaf module: the CLI front end and the module loader both name the extension, and
-//! neither owns it. When `.ql` support is dropped at 1.0, everything the compiler knows
-//! about the old extension is in this file.
+//! Sources are `.qn`. The language previously used `.ql`, which is CodeQL's — GitHub
+//! attributed Quilon programs to CodeQL because of it — and that spelling is simply not
+//! Quilon any more: a file the compiler is handed has to be named for what it is.
 
 /// Quilon's source extension.
 pub const EXTENSION: &str = ".qn";
 
-/// The extension Quilon shipped with, and CodeQL's — which is why it is going. Still
-/// compiles, with the warning below; the support goes away at 1.0.
-pub const LEGACY_EXTENSION: &str = ".ql";
-
-/// Warn, on stderr, that `path` uses the deprecated extension — once per source file read,
-/// and never fatal: a `.ql` program still compiles and runs exactly as it did. Deliberately
-/// outside the [`crate::diagnostic`] renderer, which reports a span within a source; this is
-/// about the file's *name*, so it has no line, column, or excerpt to point at.
-pub fn warn_if_legacy(path: &str) {
-    if let Some(stem) = path.strip_suffix(LEGACY_EXTENSION) {
-        eprintln!(
-            "warning: `{LEGACY_EXTENSION}` is deprecated as Quilon's source extension and \
-             stops working at 1.0 — rename `{path}` to `{stem}{EXTENSION}`"
-        );
+/// Accept `path` as a Quilon source, or say why it is not one. Applies to a program named
+/// on the command line and to a `<<`-imported module alike — one rule, so a file that
+/// cannot be a program cannot sneak in as an import either.
+pub fn require_source(path: &str) -> Result<(), String> {
+    if path.ends_with(EXTENSION) {
+        return Ok(());
     }
+    Err(format!(
+        "`{path}` is not a Quilon source: sources are named `{EXTENSION}`"
+    ))
 }

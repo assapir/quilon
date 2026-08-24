@@ -76,7 +76,7 @@ export function tempBinaryPath(
   uniquifier: string | number = Date.now(),
   tmpDir: string = os.tmpdir(),
 ): string {
-  const base = path.basename(file).replace(/\.(qn|ql)$/i, "") || "program";
+  const base = path.basename(file).replace(/\.qn$/i, "") || "program";
   return path.join(tmpDir, `quilon-debug-${base}-${process.pid}-${uniquifier}`);
 }
 

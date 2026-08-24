@@ -1051,9 +1051,9 @@ loadDashboard = (user :: Text) -> Text => <
 
 ## Compiling & running
 
-Source files are **`.qn`**. The compiler also accepts the older `.ql` — with a deprecation
-warning on stderr, for this release only; `.ql` stops working at 1.0. (It is CodeQL's
-extension, which is why it is going.)
+Source files are **`.qn`**, and the compiler rejects a source named anything else. (Quilon
+used `.ql` until 0.9.1; it is CodeQL's extension, so GitHub attributed Quilon programs to
+CodeQL. Rename a `.ql` file to `.qn` — nothing else about it changes.)
 
 ```bash
 quilon check   program.qn   # front-end only (lex + parse + resolve imports + typecheck)

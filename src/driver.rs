@@ -92,7 +92,7 @@ pub struct Checked {
 /// type-check the program at `file`.
 pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     let path = file.display().to_string();
-    crate::source_extension::warn_if_legacy(&path);
+    crate::source_extension::require_source(&path).map_err(FrontEndError::plain)?;
 
     let source = std::fs::read_to_string(file)
         .map_err(|e| FrontEndError::plain(format!("error reading {}: {}", path, e)))?;

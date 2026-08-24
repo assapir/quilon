@@ -83,6 +83,9 @@ impl Loader {
                 } else {
                     base_dir.join(p)
                 };
+                // An imported module never reaches the CLI front end, so the source-name
+                // rule is applied here too.
+                crate::source_extension::require_source(&full.to_string_lossy())?;
                 let source = std::fs::read_to_string(&full)
                     .map_err(|e| format!("cannot read module `{}`: {}", full.display(), e))?;
                 let next_base = full
@@ -102,10 +105,6 @@ impl Loader {
         if !self.visited.insert(canonical.clone()) {
             return Ok(());
         }
-
-        // A `<<`-imported module never reaches the CLI front end, so the deprecation of the
-        // old extension is said here — below the guard, so a diamond import says it once.
-        crate::source_extension::warn_if_legacy(&display);
 
         let file = self.next_file;
         self.next_file += 1;

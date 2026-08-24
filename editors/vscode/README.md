@@ -2,8 +2,7 @@
 
 Syntax highlighting and editor tasks for the [Quilon](../../README.md) programming
 language — a statically-typed, **symbol-based** language (no keywords) that
-compiles to native code via LLVM. Files use the `.qn` extension; `.ql`, which Quilon used
-before, stays registered through the transition so existing files keep highlighting.
+compiles to native code via LLVM. Files use the `.qn` extension.
 
 ## Features
 
