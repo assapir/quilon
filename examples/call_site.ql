@@ -19,14 +19,12 @@ callerFile = (site :: Site) -> Text => site.file
 callerSource = (site :: Site) -> Text => site.excerpt
 
 ~ A `Site` is read-only — a location is a value, not a variable, so `site.line := 9` is a
-~ compile error. That is what lets each call site lower to one shared constant, so filling
-~ one in costs nothing at run time.
+~ compile error.
 ~
 ~ A hop that FORWARDS its own site: the location stays the outermost caller's.
 throughAWrapper = (site :: Site) -> Num => callerLine(site)
 
-~ An assertion of your own, reporting the caller's location through `core.test`'s
-~ `failAt` — the same primitive `assert` and `assertEq` are built on.
+~ An assertion of your own, reporting its caller's location through `core.test`'s `failAt`.
 assertEven = (n :: Num, site :: Site) -> $ =>
   n % 2 == 0 ? $ : failAt("assertion failed: `n` is odd", site)
 

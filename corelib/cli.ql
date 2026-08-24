@@ -42,8 +42,8 @@
 ~ argv order). `NotOk(name)` is returned when no value is found — either the name
 ~ never appears, or it appears only as a trailing `--name` with nothing after it
 ~ (the `--name=value` form always supplies a value, even the empty one in `--name=`).
-~ Parsing is positional (no flag registry): the token right after a space-form
-~ `--name` is taken as its value even if that token itself looks like an option.
+~ Parsing is positional: the token right after a space-form `--name` is its value even if
+~ that token looks like an option itself.
 >> getOpt = (args :: []Text, name :: Text) -> Result => <
   wanted :: Text = name.slice(0, 2) == "--" ? name : "--" + name
   ~ The option name of a token: the text before the first `=`, else the whole token.

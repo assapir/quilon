@@ -23,30 +23,25 @@
 >> AssertOpts = { message :: Text }
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
-~ in the compiler's diagnostic frame, then exit 101 (distinct from the small result codes a
-~ program returns from `^`).
+~ in the compiler's diagnostic frame, then exit 101.
 >> failAt = (message :: Text, site :: Site) -> $ => <
   color = __color_enabled(stderr)
-  ~ ANSI styling, or nothing at all when the reader is not a terminal.
   position = color ? "\e[36m" : ""
   problem = color ? "\e[1;31m" : ""
   frame = color ? "\e[2m" : ""
   plain = color ? "\e[0m" : ""
 
-  ~ The line number sets the gutter width, so the `|` rules line up under it.
   number = "`site.line`"
   gutter = " ".repeat(number.length)
   lead = " ".repeat(site.column - 1)
   carets = "^".repeat(site.width)
 
-  ~ A path longer than this is shown from its END behind a `…`. Keep the width in step with
-  ~ `shorten_path` in the runtime, which shortens a fail-loud report's path the same way.
+  ~ Keep in step with `shorten_path` in the runtime, which shortens a path the same way.
   room = 60
   file = site.file.length > room
     ? "…" + site.file.slice(site.file.length - room + 1, site.file.length)
     : site.file
 
-  ~ Position first, then the message on its own line.
   eprint("`position``file`:`site.line`:`site.column`:`plain`")
   eprint("`problem``message``plain`")
   eprint("`frame``gutter` |`plain`")

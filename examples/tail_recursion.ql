@@ -1,10 +1,9 @@
 ~ Guaranteed self-tail-call optimization: a self-call in tail position runs in constant
 ~ stack, so this recurses 1,000,000 deep instead of overflowing.
 ~
-~ `count` tail-recurses with an accumulator (the recursive call is the whole value of
-~ the `:` branch — i.e. it is in tail position), counting `n` down to 0. `acc` cycles
-~ through 0..250 so the result stays small and deterministic: it equals (number of
-~ steps) mod 251 = 1_000_000 mod 251 = 16.
+~ `count` tail-recurses with an accumulator (the recursive call is the whole value of the
+~ `:` branch, so it is in tail position), counting `n` down to 0. `acc` cycles through
+~ 0..250, so the result is 1_000_000 mod 251 = 16.
 ~ `<< core.test` verifies the result; on success the program exits 0.
 << core.test
 

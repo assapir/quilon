@@ -6,5 +6,5 @@
 >> @sleep = (seconds :: Num) -> $ => $
 
 ~ Seconds on a monotonic clock (a fractional Num). Only DIFFERENCES between two `now()`
-~ readings are meaningful — that is exactly what measures an elapsed duration.
+~ readings are meaningful, which is what measures elapsed time.
 >> now = () -> Num => 0

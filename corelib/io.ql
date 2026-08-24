@@ -42,6 +42,5 @@
 ~ `@readStdin` is a leaf IO primitive (the `@` marker): calling it launches the read in the
 ~ background and hands back a DEFERRED Text immediately — the fiber only waits (forces) once
 ~ a strict operation reads the bytes (a comparison, `print`, a native call, ...). At
-~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder; the
-~ code generator lowers `@readStdin()` to the runtime read/force intrinsics.
+~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder.
 >> @readStdin = () -> Text => ""
