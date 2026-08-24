@@ -273,7 +273,9 @@ fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// Build the `NotOk(message)` a failed `@tcpRequest` yields: the failing `stage`
 /// (`resolve`/`connect`/`write`/`read`), the target `address`, and the underlying error.
 fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
-    QlResult::not_ok(&format!("@tcpRequest to {address} failed at {stage}: {error}"))
+    QlResult::not_ok(&format!(
+        "@tcpRequest to {address} failed at {stage}: {error}"
+    ))
 }
 
 /// Copy `len` bytes at `data` into an owned `Vec` (empty if null/empty), so the producer fiber
@@ -525,7 +527,7 @@ mod tests {
         // that connects to a real listener, writes the request, and reads the response until the
         // peer closes; a separate fiber FORCES the deferred value; the `Ok(responseBytes)` flows
         // back.
-        use crate::deferred::{RESULT_OK_TAG, __force_result};
+        use crate::deferred::{__force_result, RESULT_OK_TAG};
         use crate::mem::QlSlice;
         use std::io::{Read as _, Write as _};
         use std::net::TcpListener as StdListener;
@@ -582,7 +584,11 @@ mod tests {
         });
 
         server.join().unwrap();
-        assert_eq!(TAG.load(Ordering::SeqCst), RESULT_OK_TAG as usize, "Ok variant");
+        assert_eq!(
+            TAG.load(Ordering::SeqCst),
+            RESULT_OK_TAG as usize,
+            "Ok variant"
+        );
         assert_eq!(&*GOT.lock().unwrap(), b"PONG\n");
     }
 }

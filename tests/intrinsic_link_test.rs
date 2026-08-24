@@ -53,10 +53,13 @@ const EVERY_INTRINSIC: &str = r#"
   line = @readStdin()
   assert(line.length >= 0)
 
-  ~ __tcp_request_launch (the internal @tcpRequest socket primitive). Guarded by a
-  ~ runtime-false condition so codegen EMITS the call (the link/JIT gate sees the symbol)
-  ~ but it never opens a real connection here.
-  args.size > 1000000 ? @tcpRequest("127.0.0.1:1", "") : ""
+  ~ __tcp_request_launch (the internal @tcpRequest socket primitive) and __force_result (the
+  ~ `?` match FORCES the deferred Result). Guarded by a runtime-false condition so codegen
+  ~ EMITS both calls (the link/JIT gate sees the symbols) but it never opens a real connection.
+  reached = args.size > 1000000
+    ? @tcpRequest("127.0.0.1:1", "") ? | Ok(_) => true | NotOk(_) => true
+    : true
+  assert(reached)
 
   ~ __argv_to_text_array / __envp_to_pairs come from these parameters existing.
   assert(args.size >= 1)

@@ -53,7 +53,7 @@ pub use collections::{
     __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b, __set_len,
     __set_new, __set_union,
 };
-pub use deferred::{QlResult, __force_result, __force_text, __read_launch};
+pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use net::__tcp_request_launch;

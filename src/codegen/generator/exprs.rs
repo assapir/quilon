@@ -314,7 +314,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             .const_int(quilon_rt::deferred::DEFERRED_RESULT_TAG as u8 as u64, false);
         let is_deferred = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, tag, sentinel, "is_deferred_result")
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                sentinel,
+                "is_deferred_result",
+            )
             .map_err(ctx("Failed to test deferred Result tag"))?;
 
         let ready_block = self.builder.get_insert_block().unwrap();
