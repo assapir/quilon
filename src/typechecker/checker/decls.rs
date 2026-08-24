@@ -284,11 +284,6 @@ impl TypeChecker {
                         )?;
                     }
                 }
-
-                // A sum's optional `{ }` block holds methods only (the parser rejects a
-                // field there). `it` binds to the whole sum value — a method typically
-                // matches on it. Operator members register on their operator's overload set.
-                self.check_type_methods(&declaration.name, &sum_type, methods)?;
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
@@ -303,17 +298,6 @@ impl TypeChecker {
                 let record_fields = Rc::new(fields.clone());
                 let method_names: Rc<Vec<String>> =
                     Rc::new(methods.iter().map(|m| m.name.clone()).collect());
-
-                // `it` binds to the record; operator members register on their operator's
-                // overload set, other members become methods dispatched by receiver type.
-                let struct_type = Type::Named {
-                    name: declaration.name.clone(),
-                    fields: Rc::clone(&record_fields),
-                    methods: Rc::clone(&method_names),
-                };
-                self.check_type_methods(&declaration.name, &struct_type, methods)?;
-
-                // Create a Named type with methods
                 Type::Named {
                     name: declaration.name.clone(),
                     fields: record_fields,
@@ -322,14 +306,19 @@ impl TypeChecker {
             }
         };
 
-        // Register the type name in the environment
-        // For now, we treat types as values (not ideal but works)
+        // Register the type name in the environment BEFORE checking its methods, so a
+        // method body may name its own type (constructing it, an operator returning it).
+        // (Sum constructor lookup already went through `sum_types` above.)
         self.env.define(
             declaration.name.clone(),
-            type_value,
+            type_value.clone(),
             false,
             declaration.span.clone(),
         )?;
+
+        // `it` binds to the type; operator members register on their operator's overload
+        // set, every other member becomes a method dispatched by receiver type.
+        self.check_type_methods(&declaration.name, &type_value, declaration.type_definition.methods())?;
 
         Ok(())
     }
@@ -378,15 +367,10 @@ impl TypeChecker {
             for parameter in &method.parameters {
                 // Resolve the annotation so a user-type parameter (`other :: Color`) carries
                 // its fields/variants — field access and matching on it then resolve. The
-                // type being defined is not registered yet, so a parameter naming it (the
-                // usual case for an operator's right operand) resolves to `it`'s own type.
+                // type being defined is already registered (see `check_type_declaration`),
+                // so a parameter naming it (an operator's right operand) resolves too.
                 let parameter_type = match &parameter.type_annotation {
-                    Some(t) => match self.resolve_type(t) {
-                        Type::Named { name, .. } | Type::Sum { name, .. } if name == type_name => {
-                            self_type.clone()
-                        }
-                        resolved => resolved,
-                    },
+                    Some(t) => self.resolve_type(t),
                     None => Type::Num,
                 };
                 self.env.define(

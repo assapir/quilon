@@ -262,14 +262,13 @@ fn test_duplicate_overload_signature_is_error() {
 
 #[test]
 fn test_comparison_operator_overload_must_return_bool() {
-    // A `==` overload returning a non-Bool is rejected with a clear diagnostic.
-    let err = check_ok("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0")
+    // A `==` member returning a non-Bool is rejected with a clear diagnostic.
+    let err = check_ok("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0")
         .unwrap_err();
     assert!(matches!(err, TypeError::ComparisonOverloadNotBool { .. }));
     // `<=` too (a definable comparison operator).
     assert!(
-        check_ok("V = { x :: Num }\n<= = (a :: V, b :: V) -> Num => 1\n^ = () -> Num => 0")
-            .is_err()
+        check_ok("V = { x :: Num, <= = (other :: V) -> Num => 1 }\n^ = () -> Num => 0").is_err()
     );
 }
 
@@ -277,7 +276,7 @@ fn test_comparison_operator_overload_must_return_bool() {
 fn test_bool_returning_comparison_overload_is_accepted() {
     assert!(
         check_ok(
-            "V = { x :: Num }\n== = (a :: V, b :: V) -> Bool => a.x == b.x\n^ = () -> Num => V { x = 1 } == V { x = 1 } ? 1 : 0"
+            "V = { x :: Num, == = (other :: V) -> Bool => it.x == other.x }\n^ = () -> Num => V { x = 1 } == V { x = 1 } ? 1 : 0"
         )
         .is_ok()
     );
@@ -288,7 +287,7 @@ fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
     // No homogeneity rule on arithmetic operators: `V * Num -> V` is fine.
     assert!(
         check_ok(
-            "V = { x :: Num }\n* = (a :: V, k :: Num) -> V => V { x = a.x }\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
+            "V = { x :: Num, * = (k :: Num) -> V => V { x = it.x } }\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
         )
         .is_ok()
     );
@@ -298,7 +297,7 @@ fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
 fn test_user_operator_overload_typechecks() {
     assert!(
         check_ok(
-            "P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x\n^ = () -> Num => P { x = 1 } == P { x = 1 } ? 1 : 0"
+            "P = { x :: Num, == = (other :: P) -> Bool => it.x == other.x }\n^ = () -> Num => P { x = 1 } == P { x = 1 } ? 1 : 0"
         )
         .is_ok()
     );
@@ -556,7 +555,7 @@ fn test_unannotated_comparison_operator_overload_asks_for_the_annotation() {
     // actionable message wins: annotate it. Annotated non-Bool still gets the
     // comparison-specific error.
     let err =
-        check_ok("V = { x :: Num }\n== = (a :: V, b :: V) => a\n^ = () -> Num => 0").unwrap_err();
+        check_ok("V = { x :: Num, == = (other :: V) => it }\n^ = () -> Num => 0").unwrap_err();
     assert!(matches!(err, TypeError::UnannotatedOverloadMember { .. }));
 }
 
