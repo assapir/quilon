@@ -249,40 +249,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_int_compare(inkwell::IntPredicate::EQ, length, sentinel, "is_deferred")
             .map_err(ctx("Failed to test deferred sentinel"))?;
 
-        let ready_block = self.builder.get_insert_block().unwrap();
-        let function = ready_block.get_parent().unwrap();
-        let force_block = self.context.append_basic_block(function, "force");
-        let cont_block = self.context.append_basic_block(function, "force_cont");
-        self.builder
-            .build_conditional_branch(is_deferred, force_block, cont_block)
-            .map_err(ctx("Failed to branch on deferred sentinel"))?;
-
-        // Deferred: extract the promise pointer and force it (park-until-ready, memoized).
-        self.builder.position_at_end(force_block);
-        let promise = self
-            .builder
-            .build_extract_value(deferred, 0, "deferred_promise")
-            .map_err(ctx("Failed to read deferred promise"))?
-            .into_pointer_value();
-        let force_fn = self.get_intrinsic("__force_text")?;
-        let forced = Self::call_result_to_basic(
-            self.builder
-                .build_call(force_fn, &[promise.into()], "forced")
-                .map_err(ctx("Failed to call __force_text"))?,
-        )?;
-        let force_end_block = self.builder.get_insert_block().unwrap();
-        self.builder
-            .build_unconditional_branch(cont_block)
-            .map_err(ctx("Failed to branch out of force"))?;
-
-        // Join: the ready value (unchanged) or the forced value.
-        self.builder.position_at_end(cont_block);
-        let phi = self
-            .builder
-            .build_phi(text_ty, "forced_or_ready")
-            .map_err(ctx("Failed to build force phi"))?;
-        phi.add_incoming(&[(&value, ready_block), (&forced, force_end_block)]);
-        Ok(phi.as_basic_value())
+        self.emit_force_branch(value, is_deferred, |generator| {
+            // Deferred: extract the promise pointer and force it (park-until-ready, memoized).
+            let promise = generator
+                .builder
+                .build_extract_value(deferred, 0, "deferred_promise")
+                .map_err(ctx("Failed to read deferred promise"))?
+                .into_pointer_value();
+            let force_fn = generator.get_intrinsic("__force_text")?;
+            Self::call_result_to_basic(
+                generator
+                    .builder
+                    .build_call(force_fn, &[promise.into()], "forced")
+                    .map_err(ctx("Failed to call __force_text"))?,
+            )
+        })
     }
 
     /// Emit the force of a possibly-deferred `Result`: if `value`'s tag field is the deferred
@@ -322,50 +303,64 @@ impl<'ctx> CodeGenerator<'ctx> {
             )
             .map_err(ctx("Failed to test deferred Result tag"))?;
 
+        self.emit_force_branch(value, is_deferred, |generator| {
+            // Deferred: the promise pointer is the slot's `data` field (slot is `{ptr,i64}`, field
+            // 1 of the Result; its pointer is sub-field 0). Force it (park-until-ready, memoized).
+            let slot = generator
+                .builder
+                .build_extract_value(deferred, 1, "deferred_result_slot")
+                .map_err(ctx("Failed to read deferred Result slot"))?
+                .into_struct_value();
+            let promise = generator
+                .builder
+                .build_extract_value(slot, 0, "deferred_result_promise")
+                .map_err(ctx("Failed to read deferred Result promise"))?
+                .into_pointer_value();
+            let force_fn = generator.get_intrinsic("__force_result")?;
+            // A `Result` (24 bytes) crosses the FFI via an out-pointer, not an aggregate return.
+            let out = generator.create_entry_block_alloca("force_result_out", result_ty.into())?;
+            generator
+                .builder
+                .build_call(force_fn, &[out.into(), promise.into()], "")
+                .map_err(ctx("Failed to call __force_result"))?;
+            generator
+                .builder
+                .build_load(result_ty, out, "forced_result")
+                .map_err(ctx("Failed to load forced Result"))
+        })
+    }
+
+    /// The shared force scaffolding: given a runtime `is_deferred` flag, branch to a `force` block
+    /// where `emit_forced` builds the forced value, and phi it back with the untouched ready
+    /// `value` at the join. The force-site's block/phi plumbing lives here once; each caller
+    /// supplies only its own discriminant test (above) and its representation-specific force body.
+    fn emit_force_branch(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        is_deferred: inkwell::values::IntValue<'ctx>,
+        emit_forced: impl FnOnce(&mut Self) -> Result<BasicValueEnum<'ctx>, String>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let ready_block = self.builder.get_insert_block().unwrap();
         let function = ready_block.get_parent().unwrap();
-        let force_block = self.context.append_basic_block(function, "force_result");
-        let cont_block = self
-            .context
-            .append_basic_block(function, "force_result_cont");
+        let force_block = self.context.append_basic_block(function, "force");
+        let cont_block = self.context.append_basic_block(function, "force_cont");
         self.builder
             .build_conditional_branch(is_deferred, force_block, cont_block)
-            .map_err(ctx("Failed to branch on deferred Result tag"))?;
+            .map_err(ctx("Failed to branch on deferred value"))?;
 
-        // Deferred: the promise pointer is the slot's `data` field (slot is `{ptr,i64}`, field 1
-        // of the Result; its pointer is sub-field 0). Force it (park-until-ready, memoized).
         self.builder.position_at_end(force_block);
-        let slot = self
-            .builder
-            .build_extract_value(deferred, 1, "deferred_result_slot")
-            .map_err(ctx("Failed to read deferred Result slot"))?
-            .into_struct_value();
-        let promise = self
-            .builder
-            .build_extract_value(slot, 0, "deferred_result_promise")
-            .map_err(ctx("Failed to read deferred Result promise"))?
-            .into_pointer_value();
-        let force_fn = self.get_intrinsic("__force_result")?;
-        // A `Result` (24 bytes) crosses the FFI via an out-pointer, not an aggregate return.
-        let out = self.create_entry_block_alloca("force_result_out", result_ty.into())?;
-        self.builder
-            .build_call(force_fn, &[out.into(), promise.into()], "")
-            .map_err(ctx("Failed to call __force_result"))?;
-        let forced = self
-            .builder
-            .build_load(result_ty, out, "forced_result")
-            .map_err(ctx("Failed to load forced Result"))?;
+        let forced = emit_forced(self)?;
         let force_end_block = self.builder.get_insert_block().unwrap();
         self.builder
             .build_unconditional_branch(cont_block)
-            .map_err(ctx("Failed to branch out of Result force"))?;
+            .map_err(ctx("Failed to branch out of force"))?;
 
         // Join: the ready value (unchanged) or the forced value.
         self.builder.position_at_end(cont_block);
         let phi = self
             .builder
-            .build_phi(result_ty, "forced_or_ready_result")
-            .map_err(ctx("Failed to build Result force phi"))?;
+            .build_phi(value.get_type(), "forced_or_ready")
+            .map_err(ctx("Failed to build force phi"))?;
         phi.add_incoming(&[(&value, ready_block), (&forced, force_end_block)]);
         Ok(phi.as_basic_value())
     }
