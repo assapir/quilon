@@ -74,9 +74,13 @@ fn collect(
         Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
             collect(expr, local, outer, seen, out)
         }
-        Expr::Call { func, args, .. } => {
-            collect(func, local, outer, seen, out);
-            for a in args {
+        Expr::Call {
+            function,
+            arguments,
+            ..
+        } => {
+            collect(function, local, outer, seen, out);
+            for a in arguments {
                 collect(a, local, outer, seen, out);
             }
         }
@@ -127,9 +131,12 @@ fn collect(
             }
         }
         Expr::If {
-            cond, then, else_, ..
+            condition,
+            then,
+            else_,
+            ..
         } => {
-            collect(cond, local, outer, seen, out);
+            collect(condition, local, outer, seen, out);
             collect(then, local, outer, seen, out);
             collect(else_, local, outer, seen, out);
         }
@@ -174,8 +181,8 @@ fn bind_pattern(pattern: &Pattern, bound: &mut HashSet<String>) {
         Pattern::Ident { name, .. } => {
             bound.insert(name.clone());
         }
-        Pattern::Constructor { args, .. } => {
-            for a in args {
+        Pattern::Constructor { arguments, .. } => {
+            for a in arguments {
                 bind_pattern(a, bound);
             }
         }

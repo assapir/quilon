@@ -135,14 +135,18 @@ impl Taint {
             // A value-returning `@` primitive (`@readStdin`, `@tcpRequest`) is the only kind of
             // deferred-producing call; every other call delivers a ready value (its own body
             // forced its result). The callee expression and the arguments are all strict slots
-            // (a deferred value used inside `func` — e.g. a called lambda — or passed as an
+            // (a deferred value used inside `function` — e.g. a called lambda — or passed as an
             // argument is forced there).
-            Expr::Call { func, args, .. } => {
-                self.strict(func, env);
-                for arg in args {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => {
+                self.strict(function, env);
+                for arg in arguments {
                     self.strict(arg, env);
                 }
-                produces_deferred(func, args)
+                produces_deferred(function, arguments)
             }
 
             Expr::BinOp { left, right, .. } => {
@@ -215,9 +219,12 @@ impl Taint {
             // Lazy carriers: the arms/result flow the value through without forcing, so the
             // If/Match/Block delivers deferred iff any branch does — the parent slot forces it.
             Expr::If {
-                cond, then, else_, ..
+                condition,
+                then,
+                else_,
+                ..
             } => {
-                self.strict(cond, env);
+                self.strict(condition, env);
                 let then_deferred = self.visit(then, env);
                 let else_deferred = self.visit(else_, env);
                 then_deferred || else_deferred
@@ -291,18 +298,18 @@ impl Scope {
     }
 }
 
-/// Whether `func`/`args` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
-fn is_read_call(func: &Expr, args: &[Expr]) -> bool {
-    matches!(func, Expr::Ident { name, .. } if name == READ_PRIMITIVE) && args.is_empty()
+/// Whether `function`/`arguments` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
+fn is_read_call(function: &Expr, arguments: &[Expr]) -> bool {
+    matches!(function, Expr::Ident { name, .. } if name == READ_PRIMITIVE) && arguments.is_empty()
 }
 
-/// Whether `func`/`args` is a call to a value-returning `@` primitive — one that hands back a
-/// DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
+/// Whether `function`/`arguments` is a call to a value-returning `@` primitive — one that hands
+/// back a DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
 /// `@tcpRequest(addr, req)` (a deferred `Text` response). Effect-only primitives like `@sleep`
 /// (which yields `$`) are never deferred and so never appear here.
-fn produces_deferred(func: &Expr, args: &[Expr]) -> bool {
-    is_read_call(func, args)
-        || matches!(func, Expr::Ident { name, .. } if name == TCP_REQUEST_PRIMITIVE)
+fn produces_deferred(function: &Expr, arguments: &[Expr]) -> bool {
+    is_read_call(function, arguments)
+        || matches!(function, Expr::Ident { name, .. } if name == TCP_REQUEST_PRIMITIVE)
 }
 
 /// Apply `f` to `expr` and every sub-expression (pre-order). The one structural walk the
@@ -322,9 +329,13 @@ fn for_each_subexpr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
                 }
             }
         }
-        Expr::Call { func, args, .. } => {
-            for_each_subexpr(func, f);
-            for arg in args {
+        Expr::Call {
+            function,
+            arguments,
+            ..
+        } => {
+            for_each_subexpr(function, f);
+            for arg in arguments {
                 for_each_subexpr(arg, f);
             }
         }
@@ -349,9 +360,12 @@ fn for_each_subexpr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
             for_each_subexpr(index, f);
         }
         Expr::If {
-            cond, then, else_, ..
+            condition,
+            then,
+            else_,
+            ..
         } => {
-            for_each_subexpr(cond, f);
+            for_each_subexpr(condition, f);
             for_each_subexpr(then, f);
             for_each_subexpr(else_, f);
         }

@@ -58,7 +58,7 @@ impl<'a> Parser<'a> {
                 let span = self.span(expr.span().start, else_expr.span().end);
 
                 return Ok(Expr::If {
-                    cond: Box::new(expr),
+                    condition: Box::new(expr),
                     then: Box::new(then_expr),
                     else_: Box::new(else_expr),
                     span,
@@ -260,11 +260,11 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume '('
 
                     // Parse arguments
-                    let mut args = vec![expr]; // receiver is first argument
+                    let mut arguments = vec![expr]; // receiver is first argument
 
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
-                            args.push(self.parse_expr()?);
+                            arguments.push(self.parse_expr()?);
                             if !self.check(&TokenKind::Comma) {
                                 break;
                             }
@@ -273,15 +273,15 @@ impl<'a> Parser<'a> {
                     }
 
                     self.expect(&TokenKind::ParenClose)?;
-                    let span = self.span(args[0].span().start, self.previous_span().end);
+                    let span = self.span(arguments[0].span().start, self.previous_span().end);
 
                     // Create function call with method name
                     expr = Expr::Call {
-                        func: Box::new(Expr::Ident {
+                        function: Box::new(Expr::Ident {
                             name: field,
                             span: span.clone(),
                         }),
-                        args,
+                        arguments,
                         span,
                     };
                 } else {
@@ -307,11 +307,11 @@ impl<'a> Parser<'a> {
             } else if self.check_same_line(&TokenKind::ParenOpen) {
                 // Function call
                 self.advance();
-                let mut args = Vec::new();
+                let mut arguments = Vec::new();
 
                 if !self.check(&TokenKind::ParenClose) {
                     loop {
-                        args.push(self.parse_expr()?);
+                        arguments.push(self.parse_expr()?);
                         if !self.check(&TokenKind::Comma) {
                             break;
                         }
@@ -322,8 +322,8 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::ParenClose)?;
                 let span = self.span(expr.span().start, self.previous_span().end);
                 expr = Expr::Call {
-                    func: Box::new(expr),
-                    args,
+                    function: Box::new(expr),
+                    arguments,
                     span,
                 };
             } else {
@@ -437,7 +437,7 @@ impl<'a> Parser<'a> {
         let mut parts = Vec::with_capacity(chunks.len());
         for chunk in chunks {
             match chunk {
-                StrChunk::Lit(s) => parts.push(InterpPart::Lit(s)),
+                StrChunk::Lit(s) => parts.push(InterpPart::Literal(s)),
                 StrChunk::Hole { src, offset } => {
                     // `offset` is relative to the source THIS parser lexed; `span_base`
                     // lifts it to an absolute position in the file (0 for a whole-file

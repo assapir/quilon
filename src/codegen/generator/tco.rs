@@ -70,10 +70,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// is never a self-call. NB only the *callee identity* matters here; the arguments are
     /// generated normally by `generate_tail_expr`.
     pub(super) fn is_self_tail_call(&self, expr: &Expr, self_symbol: &str, arity: usize) -> bool {
-        let Expr::Call { func, args, .. } = expr else {
+        let Expr::Call {
+            function,
+            arguments,
+            ..
+        } = expr
+        else {
             return false;
         };
-        let Expr::Ident { name, .. } = func.as_ref() else {
+        let Expr::Ident { name, .. } = function.as_ref() else {
             return false;
         };
         // A self-call may leave off a trailing `Site` for the compiler to fill in, and it is
@@ -81,7 +86,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // is what keeps a recursive function that adopts the facility a LOOP: without it the
         // call is emitted as a real call, and the language's only iteration mechanism
         // silently starts overflowing the stack.
-        if args.len() != arity && !(args.len() + 1 == arity && self.fills_call_site(name, args)) {
+        if arguments.len() != arity
+            && !(arguments.len() + 1 == arity && self.fills_call_site(name, arguments))
+        {
             return false;
         }
         // A name shadowed by a sum-type constructor or an intrinsic is not a self-call.
@@ -96,7 +103,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return false;
         }
         let symbol = if self.overloads.contains_key(name.as_str()) {
-            let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+            let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
             match self.resolve_overload_symbol(name, &arg_types) {
                 Some(s) => s,
                 None => return false,
@@ -138,16 +145,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             // here (a call leaf), not on every tail node. A `Some` from
             // `emit_tail_self_call` means it declined the back-edge and emitted a plain
             // call instead, whose value is an ordinary tail value.
-            Expr::Call { args, span, .. } => {
+            Expr::Call {
+                arguments, span, ..
+            } => {
                 let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
                 if self.is_self_tail_call(expr, &self_symbol, arity) {
                     // A self-call that omitted its trailing `Site` gets one filled in for
                     // the loop's parameter slot, exactly as an ordinary call would.
-                    let site = match args.len() < arity {
+                    let site = match arguments.len() < arity {
                         true => Some(span.clone()),
                         false => None,
                     };
-                    self.emit_tail_self_call(args, site.as_ref())
+                    self.emit_tail_self_call(arguments, site.as_ref())
                 } else {
                     Ok(Some(self.generate_expr(expr)?))
                 }
@@ -174,8 +183,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Expr::If {
-                cond, then, else_, ..
-            } => self.generate_tail_if(cond, then, else_),
+                condition,
+                then,
+                else_,
+                ..
+            } => self.generate_tail_if(condition, then, else_),
 
             Expr::Match {
                 expr: scrutinee,
@@ -207,10 +219,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the conservative half of the trade.
     pub(super) fn emit_tail_self_call(
         &mut self,
-        args: &[Expr],
+        arguments: &[Expr],
         fill_site: Option<&Span>,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let mut new_vals: Vec<BasicValueEnum<'ctx>> = args
+        let mut new_vals: Vec<BasicValueEnum<'ctx>> = arguments
             .iter()
             .map(|a| self.generate_expr(a))
             .collect::<Result<Vec<_>, _>>()?;
@@ -253,12 +265,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// self-call, there is no merge value and we return `None`.
     pub(super) fn generate_tail_if(
         &mut self,
-        cond: &Expr,
+        condition: &Expr,
         then_expr: &Expr,
         else_expr: &Expr,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let cond_val = self.generate_expr(cond)?;
-        let BasicValueEnum::IntValue(cond_bool) = cond_val else {
+        let condition_val = self.generate_expr(condition)?;
+        let BasicValueEnum::IntValue(condition_bool) = condition_val else {
             return Err("Condition must be a boolean".to_string());
         };
         let function = self
@@ -270,7 +282,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let merge_bb = self.context.append_basic_block(function, "ifcont");
 
         self.builder
-            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .build_conditional_branch(condition_bool, then_bb, else_bb)
             .map_err(ctx("Failed to build conditional branch"))?;
 
         // Collect each non-tail-recursing arm's (value, originating block) for the phi.

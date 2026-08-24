@@ -61,7 +61,11 @@ impl TypeChecker {
 
             Expr::UnaryOp { op, expr, span } => self.check_unary_op(*op, expr, span),
 
-            Expr::Call { func, args, span } => self.check_call(func, args, span),
+            Expr::Call {
+                function,
+                arguments,
+                span,
+            } => self.check_call(function, arguments, span),
 
             Expr::Lambda {
                 params,
@@ -101,13 +105,13 @@ impl TypeChecker {
             }
 
             Expr::If {
-                cond,
+                condition,
                 then,
                 else_,
                 span,
             } => {
-                let cond_type = self.infer_expr(cond)?;
-                self.check_type_compatibility(&Type::Bool, &cond_type, span)?;
+                let condition_type = self.infer_expr(condition)?;
+                self.check_type_compatibility(&Type::Bool, &condition_type, span)?;
 
                 let then_type = self.infer_expr(then)?;
                 let else_type = self.infer_expr(else_)?;

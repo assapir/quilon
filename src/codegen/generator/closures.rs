@@ -131,16 +131,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
                 Self::collect_mutable_locals(expr, out)
             }
-            Expr::Call { func, args, .. } => {
-                Self::collect_mutable_locals(func, out);
-                for a in args {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => {
+                Self::collect_mutable_locals(function, out);
+                for a in arguments {
                     Self::collect_mutable_locals(a, out);
                 }
             }
             Expr::If {
-                cond, then, else_, ..
+                condition,
+                then,
+                else_,
+                ..
             } => {
-                Self::collect_mutable_locals(cond, out);
+                Self::collect_mutable_locals(condition, out);
                 Self::collect_mutable_locals(then, out);
                 Self::collect_mutable_locals(else_, out);
             }
@@ -247,9 +254,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
                 Self::walk_exprs(expr, f)
             }
-            Expr::Call { func, args, .. } => {
-                Self::walk_exprs(func, f);
-                for a in args {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => {
+                Self::walk_exprs(function, f);
+                for a in arguments {
                     Self::walk_exprs(a, f);
                 }
             }
@@ -266,9 +277,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expr::If {
-                cond, then, else_, ..
+                condition,
+                then,
+                else_,
+                ..
             } => {
-                Self::walk_exprs(cond, f);
+                Self::walk_exprs(condition, f);
                 Self::walk_exprs(then, f);
                 Self::walk_exprs(else_, f);
             }

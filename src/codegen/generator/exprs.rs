@@ -103,7 +103,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             Expr::UnaryOp { op, expr, .. } => self.generate_unary_op(*op, expr),
 
-            Expr::Call { func, args, span } => self.generate_call(func, args, span),
+            Expr::Call {
+                function,
+                arguments,
+                span,
+            } => self.generate_call(function, arguments, span),
 
             Expr::Lambda {
                 params,
@@ -113,8 +117,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             } => self.generate_lambda(params, return_type.as_ref(), body),
 
             Expr::If {
-                cond, then, else_, ..
-            } => self.generate_if(cond, then, else_),
+                condition,
+                then,
+                else_,
+                ..
+            } => self.generate_if(condition, then, else_),
 
             Expr::Block { stmts, span } => self.generate_block(stmts, span),
 

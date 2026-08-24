@@ -36,8 +36,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Unit { .. } => true,
             // An in-place field write `obj.field := v` is an effect; it yields `$`.
             Expr::FieldAssign { .. } => true,
-            Expr::Call { func, .. } => {
-                matches!(func.as_ref(), Expr::Ident { name, .. } if name == "print" || name == "eprint")
+            Expr::Call { function, .. } => {
+                matches!(function.as_ref(), Expr::Ident { name, .. } if name == "print" || name == "eprint")
             }
             Expr::Block { stmts, .. } => match stmts.last() {
                 Some(crate::ast::Statement::Expr(tail)) => self.expr_is_unit(tail),
@@ -136,14 +136,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.var_types.get(name).cloned().unwrap_or(Type::Num)
             }
             Expr::Constructor { type_name, .. } => self.sum_or_named(type_name),
-            Expr::Call { func, args, .. } => {
-                if let Expr::Ident { name, .. } = func.as_ref() {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => {
+                if let Expr::Ident { name, .. } = function.as_ref() {
                     // A constructor call yields its sum type.
                     if let Some((_, type_name)) = self.sum_variants.get(name) {
                         return self.sum_or_named(type_name);
                     }
                     // An overloaded function call yields its resolved member's return.
-                    let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                    let arg_types: Vec<Type> =
+                        arguments.iter().map(|a| self.infer_type(a)).collect();
                     if let Some((_, ret)) = self.matching_overload(name, &arg_types) {
                         return ret.clone();
                     }

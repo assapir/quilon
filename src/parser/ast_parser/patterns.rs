@@ -64,11 +64,11 @@ impl<'a> Parser<'a> {
                 // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {
                     self.advance();
-                    let mut args = Vec::new();
+                    let mut arguments = Vec::new();
 
                     if !self.check(&TokenKind::ParenClose) {
                         loop {
-                            args.push(self.parse_pattern()?);
+                            arguments.push(self.parse_pattern()?);
                             if !self.check(&TokenKind::Comma) {
                                 break;
                             }
@@ -81,7 +81,7 @@ impl<'a> Parser<'a> {
 
                     Ok(Pattern::Constructor {
                         name,
-                        args,
+                        arguments,
                         span: self.span(span.start, end),
                     })
                 } else if is_capitalized(&name) {
@@ -89,7 +89,7 @@ impl<'a> Parser<'a> {
                     // (e.g. `| Red =>`), not a binding. Lowercase names bind a value.
                     Ok(Pattern::Constructor {
                         name,
-                        args: vec![],
+                        arguments: vec![],
                         span,
                     })
                 } else {

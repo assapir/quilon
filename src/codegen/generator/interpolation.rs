@@ -16,7 +16,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut acc: Option<BasicValueEnum<'ctx>> = None;
         for part in parts {
             let piece = match part {
-                InterpPart::Lit(s) => self.text_literal(s)?,
+                InterpPart::Literal(s) => self.text_literal(s)?,
                 InterpPart::Hole(e) => self.render_expr(e)?,
             };
             acc = Some(match acc {

@@ -449,14 +449,19 @@ fn test_parse_method_call() {
 
     let program = result.unwrap();
     if let Item::VarDecl(var) = &program.items[0] {
-        // Should be desugared to a Call with Ident("getName") as func
-        if let Expr::Call { func, args, .. } = &var.value {
-            // func should be Ident("getName")
-            if let Expr::Ident { name, .. } = func.as_ref() {
+        // Should be desugared to a Call with Ident("getName") as the function
+        if let Expr::Call {
+            function,
+            arguments,
+            ..
+        } = &var.value
+        {
+            // function should be Ident("getName")
+            if let Expr::Ident { name, .. } = function.as_ref() {
                 assert_eq!(name, "getName");
                 // First arg should be the receiver (user)
-                assert_eq!(args.len(), 1);
-                if let Expr::Ident { name, .. } = &args[0] {
+                assert_eq!(arguments.len(), 1);
+                if let Expr::Ident { name, .. } = &arguments[0] {
                     assert_eq!(name, "user");
                 } else {
                     panic!("Expected receiver as first argument");
@@ -480,12 +485,16 @@ fn test_parse_method_call_with_args() {
 
     let program = result.unwrap();
     if let Item::VarDecl(var) = &program.items[0]
-        && let Expr::Call { func, args, .. } = &var.value
-        && let Expr::Ident { name, .. } = func.as_ref()
+        && let Expr::Call {
+            function,
+            arguments,
+            ..
+        } = &var.value
+        && let Expr::Ident { name, .. } = function.as_ref()
     {
         assert_eq!(name, "setAge");
         // Should have 2 args: receiver and the argument
-        assert_eq!(args.len(), 2);
+        assert_eq!(arguments.len(), 2);
     }
 }
 
@@ -601,14 +610,14 @@ fn test_line_first_paren_starts_new_statement() {
     let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
         panic!("expected `x = f()` as a VarDecl, got {:?}", stmts[0]);
     };
-    let Expr::Call { args, .. } = &decl.value else {
+    let Expr::Call { arguments, .. } = &decl.value else {
         panic!(
             "expected `x`'s value to be the call `f()`, got {:?}",
             decl.value
         );
     };
     assert!(
-        args.is_empty(),
+        arguments.is_empty(),
         "the call must not swallow `(1 + 2)` as an argument"
     );
     assert!(
@@ -695,10 +704,10 @@ fn test_multiline_call_arguments_still_one_call() {
     let Item::VarDecl(decl) = &program.items[0] else {
         panic!("expected a VarDecl");
     };
-    let Expr::Call { args, .. } = &decl.value else {
+    let Expr::Call { arguments, .. } = &decl.value else {
         panic!("expected a call, got {:?}", decl.value);
     };
-    assert_eq!(args.len(), 2);
+    assert_eq!(arguments.len(), 2);
 }
 
 #[test]
@@ -712,12 +721,17 @@ fn test_method_chain_across_lines_still_continues() {
         panic!("expected a VarDecl");
     };
     // `xs.map(f).filter(g)` desugars to `filter(map(xs, f), g)`.
-    let Expr::Call { func, args, .. } = &decl.value else {
+    let Expr::Call {
+        function,
+        arguments,
+        ..
+    } = &decl.value
+    else {
         panic!("expected the chained call, got {:?}", decl.value);
     };
     assert!(
-        matches!(func.as_ref(), Expr::Ident { name, .. } if name == "filter"),
+        matches!(function.as_ref(), Expr::Ident { name, .. } if name == "filter"),
         "outermost call should be `filter`"
     );
-    assert_eq!(args.len(), 2);
+    assert_eq!(arguments.len(), 2);
 }

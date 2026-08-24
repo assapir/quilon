@@ -67,7 +67,7 @@ fn parses_interpolation_node_with_hole_expr() {
         panic!("expected an interpolation node, got {body:?}");
     };
     assert_eq!(parts.len(), 2);
-    assert!(matches!(&parts[0], InterpPart::Lit(s) if s == "n "));
+    assert!(matches!(&parts[0], InterpPart::Literal(s) if s == "n "));
     assert!(matches!(&parts[1], InterpPart::Hole(Expr::BinOp { .. })));
 }
 

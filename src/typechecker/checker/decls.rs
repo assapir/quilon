@@ -418,11 +418,15 @@ impl TypeChecker {
                 Self::field_path_root_name(target).as_deref() == Some("it")
                     || self.body_mutates_receiver(type_name, value)
             }
-            Expr::Call { func, args, .. } => {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => {
                 // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter
                 // applied to `it` propagates "mutating" to the caller.
-                if let Expr::Ident { name, .. } = func.as_ref()
-                    && args.first().is_some_and(
+                if let Expr::Ident { name, .. } = function.as_ref()
+                    && arguments.first().is_some_and(
                         |recv| matches!(recv, Expr::Ident { name, .. } if name == "it"),
                     )
                     && self
@@ -431,7 +435,8 @@ impl TypeChecker {
                 {
                     return true;
                 }
-                args.iter()
+                arguments
+                    .iter()
                     .any(|a| self.body_mutates_receiver(type_name, a))
             }
             Expr::Block { stmts, .. } => stmts.iter().any(|s| match s {
@@ -442,9 +447,12 @@ impl TypeChecker {
                 crate::ast::Statement::Item(_) => false,
             }),
             Expr::If {
-                cond, then, else_, ..
+                condition,
+                then,
+                else_,
+                ..
             } => {
-                self.body_mutates_receiver(type_name, cond)
+                self.body_mutates_receiver(type_name, condition)
                     || self.body_mutates_receiver(type_name, then)
                     || self.body_mutates_receiver(type_name, else_)
             }

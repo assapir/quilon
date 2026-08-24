@@ -7,18 +7,18 @@
 use super::*;
 
 impl TypeChecker {
-    /// Whether `func(args)` is a `print`/`eprint` call on a single argument of a type with
+    /// Whether `function(arguments)` is a `print`/`eprint` call on a single argument of a type with
     /// no exact overload — the generic "render anything" path (result `$`). A function
     /// value is excluded (not a renderable value). Kept out of `check_call`'s frame.
     pub(super) fn is_generic_print_call(
         &self,
-        func: &Expr,
-        args: &[Expr],
+        function: &Expr,
+        arguments: &[Expr],
         first_ty: &Option<Type>,
     ) -> bool {
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && (name == "print" || name == "eprint")
-            && args.len() == 1
+            && arguments.len() == 1
             && let Some(arg_ty) = first_ty
             && !matches!(arg_ty, Type::Function { .. })
         {
@@ -30,76 +30,77 @@ impl TypeChecker {
 
     pub(super) fn check_call(
         &mut self,
-        func: &Expr,
-        args: &[Expr],
+        function: &Expr,
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
         // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.
         if let Expr::Ident {
             name: constructor_name,
             ..
-        } = func
-            && let Some(sum_type) = self.check_constructor_call(constructor_name, args, span)?
+        } = function
+            && let Some(sum_type) =
+                self.check_constructor_call(constructor_name, arguments, span)?
         {
             return Ok(sum_type);
         }
 
         // Infer the FIRST argument exactly once and reuse the result in every probe
         // and branch below. The receiver probes (array/Text/method dispatch) and the
-        // overload/fallback argument loops all need `args[0]`'s type; inferring it in
+        // overload/fallback argument loops all need `arguments[0]`'s type; inferring it in
         // each place made every nesting level infer its subtree twice — 2^depth work,
         // which visibly hung the checker on ~25-deep call chains (and `|>` pipelines,
         // which desugar to exactly that shape).
-        let first_ty = if let (Expr::Ident { .. }, false) = (func, args.is_empty()) {
-            Some(self.infer_expr(&args[0])?)
+        let first_ty = if let (Expr::Ident { .. }, false) = (function, arguments.is_empty()) {
+            Some(self.infer_expr(&arguments[0])?)
         } else {
             None
         };
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) take
         // precedence over any user overload of the same name: when the receiver
-        // (`args[0]`) is an array, the method is RESERVED and resolved here, before
+        // (`arguments[0]`) is an array, the method is RESERVED and resolved here, before
         // overload dispatch. (A user can still define e.g. `map` on a non-array type;
         // dispatch only diverts to the built-in when the receiver is an array.)
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && crate::ast::is_array_method(name)
             && let Some(Type::Array(elem_type)) = first_ty.clone()
         {
-            return self.check_array_method(name, *elem_type, args, span);
+            return self.check_array_method(name, *elem_type, arguments, span);
         }
 
         // Built-in `Text` methods (`split`/`trim`/`replace`/`contains`/`indexOf`/
         // `slice`/`toUpper`/`toLower`) — RESERVED on `Text`, exactly like the array
-        // methods above: when the receiver (`args[0]`) is a `Text`, the built-in is
+        // methods above: when the receiver (`arguments[0]`) is a `Text`, the built-in is
         // resolved here ahead of any same-named user overload. (A user may still define
         // e.g. `trim` on a non-Text type; dispatch only diverts on a Text receiver.)
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && crate::ast::is_text_method(name)
             && matches!(first_ty, Some(Type::Text))
         {
-            return self.check_text_method(name, args, span);
+            return self.check_text_method(name, arguments, span);
         }
 
         // Built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`) — RESERVED on
         // a `Map` receiver, exactly like the array/Text methods above.
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && crate::ast::is_map_method(name)
             && let Some(Type::Map(key_type, value_type)) = first_ty.clone()
         {
-            return self.check_map_method(name, *key_type, *value_type, args, span);
+            return self.check_map_method(name, *key_type, *value_type, arguments, span);
         }
 
         // Built-in `Set` methods (`has`/`add`/`items`/`each`) — RESERVED on a `Set`
         // receiver.
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && crate::ast::is_set_method(name)
             && let Some(Type::Set(elem_type)) = first_ty.clone()
         {
-            return self.check_set_method(name, *elem_type, args, span);
+            return self.check_set_method(name, *elem_type, arguments, span);
         }
 
-        // Check if this is a method call: func is Ident and first arg is a Named type
-        if let Expr::Ident { name, .. } = func
+        // Check if this is a method call: function is Ident and first arg is a Named type
+        if let Expr::Ident { name, .. } = function
             && let Some(first_arg_type) = &first_ty
         {
             // Check if first argument is a Named type with this method
@@ -118,13 +119,13 @@ impl TypeChecker {
                     let (method_params, method_return_type, _body) = method_sig;
 
                     // A mutating (setter) method requires a mutable (`:=`) receiver.
-                    // The receiver is args[0]; `it` (a method calling a sibling
+                    // The receiver is arguments[0]; `it` (a method calling a sibling
                     // setter on its own receiver) is allowed — its mutability is
                     // already enforced at the *outer* call site.
                     if self
                         .setter_methods
                         .contains(&(type_name.clone(), name.clone()))
-                        && let Some(recv_name) = self.immutable_mutation_root(&args[0])
+                        && let Some(recv_name) = self.immutable_mutation_root(&arguments[0])
                     {
                         return Err(TypeError::MutatingMethodOnImmutable {
                             method: name.clone(),
@@ -134,8 +135,8 @@ impl TypeChecker {
                     }
 
                     // Method parameters don't include the implicit receiver
-                    // But args[0] is the receiver, so we need args[1..] to match method_params
-                    let call_args = &args[1..];
+                    // But arguments[0] is the receiver, so we need arguments[1..] to match method_params
+                    let call_args = &arguments[1..];
 
                     if method_params.len() != call_args.len() {
                         return Err(TypeError::WrongNumberOfArguments {
@@ -164,7 +165,7 @@ impl TypeChecker {
         // `print`/`eprint` render ANY value through its `` ` `` operator, so a single
         // argument of any type is accepted and yields `$` (the probe is a separate method
         // so its locals stay out of this hot, deeply-recursive frame).
-        if self.is_generic_print_call(func, args, &first_ty) {
+        if self.is_generic_print_call(function, arguments, &first_ty) {
             return Ok(Type::Unit);
         }
 
@@ -172,7 +173,7 @@ impl TypeChecker {
         // every definition sits below this call. Say so, rather than falling through to
         // the plain-function path and reporting the name as undefined — it is defined,
         // just not yet.
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && self.overloaded_names.contains(name)
             && !self.overloads.contains_key(name)
         {
@@ -182,15 +183,15 @@ impl TypeChecker {
             });
         }
 
-        // Overload-set dispatch: if `func` names an overload set (a user overload set
+        // Overload-set dispatch: if `function` names an overload set (a user overload set
         // OR a built-in like `print`/`eprint`), resolve it by EXACT argument types.
         // This is the general mechanism that replaces the old `print` special-casing —
         // `print` is now just an overload set over Num/Text/Bool returning `$`.
-        if let Expr::Ident { name, .. } = func
+        if let Expr::Ident { name, .. } = function
             && self.overloads.contains_key(name)
         {
-            let mut arg_types = Vec::with_capacity(args.len());
-            for (i, arg) in args.iter().enumerate() {
+            let mut arg_types = Vec::with_capacity(arguments.len());
+            for (i, arg) in arguments.iter().enumerate() {
                 arg_types.push(match (i, &first_ty) {
                     (0, Some(ty)) => ty.clone(),
                     _ => self.infer_expr(arg)?,
@@ -200,7 +201,7 @@ impl TypeChecker {
         }
 
         // Fall back to regular function call
-        let func_type = self.infer_expr(func)?;
+        let func_type = self.infer_expr(function)?;
 
         match func_type {
             Type::Function {
@@ -210,16 +211,18 @@ impl TypeChecker {
                 // A trailing `Site` parameter receives the CALLER's location, which the
                 // compiler fills in (`CodeGenerator::site_value`), so a call may leave that
                 // last argument off — and the arity a caller sees excludes it.
-                if params.len() != args.len() && !crate::ast::fills_call_site(&params, args.len()) {
+                if params.len() != arguments.len()
+                    && !crate::ast::fills_call_site(&params, arguments.len())
+                {
                     return Err(TypeError::WrongNumberOfArguments {
                         expected: crate::ast::visible_params(&params).len(),
-                        got: args.len(),
+                        got: arguments.len(),
                         span: span.clone(),
                     });
                 }
 
                 // Type the arguments once, then check against the resolved signature.
-                for (i, (param_type, arg)) in params.iter().zip(args.iter()).enumerate() {
+                for (i, (param_type, arg)) in params.iter().zip(arguments.iter()).enumerate() {
                     let arg_type = match (i, &first_ty) {
                         (0, Some(ty)) => ty.clone(),
                         _ => self.infer_expr(arg)?,
@@ -235,8 +238,8 @@ impl TypeChecker {
         }
     }
 
-    /// Type-check a built-in array method call. `args[0]` is the receiver array (already
-    /// known to be `Array(_)`); the remaining args are the method's own arguments,
+    /// Type-check a built-in array method call. `arguments[0]` is the receiver array (already
+    /// known to be `Array(_)`); the remaining arguments are the method's own arguments,
     /// typically a lambda whose parameters bind to the element (or accumulator) type:
     ///   - `map(f: elem => R)`            -> `[]R`
     ///   - `filter(pred: elem => Bool)`   -> `[]elem`  (same element type)
@@ -248,12 +251,12 @@ impl TypeChecker {
         &mut self,
         method: &str,
         elem_type: Type,
-        args: &[Expr],
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        // `args[0]` (the receiver array) was already inferred by the dispatch guard in
+        // `arguments[0]` (the receiver array) was already inferred by the dispatch guard in
         // `check_call`, which passes its element type in — no need to re-infer it here.
-        let method_args = &args[1..];
+        let method_args = &arguments[1..];
 
         // Arity check for every method (the lambda/value argument count).
         let expected = match method {
@@ -308,8 +311,8 @@ impl TypeChecker {
         }
     }
 
-    /// Type-check a built-in `Map` method call. `args[0]` is the receiver map (already
-    /// known to be `Map(K, V)`); the remaining args are the method's own arguments.
+    /// Type-check a built-in `Map` method call. `arguments[0]` is the receiver map (already
+    /// known to be `Map(K, V)`); the remaining arguments are the method's own arguments.
     ///   - `get(k :: K)`        -> `Result` (`Ok(V)` / `NotOk`) — the safe lookup
     ///   - `has(k :: K)`        -> `Bool`
     ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (a NEW map; the receiver is unchanged)
@@ -321,10 +324,10 @@ impl TypeChecker {
         method: &str,
         key_type: Type,
         value_type: Type,
-        args: &[Expr],
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let method_args = &args[1..];
+        let method_args = &arguments[1..];
         let map_type = Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()));
 
         let expected = match method {
@@ -369,8 +372,8 @@ impl TypeChecker {
         }
     }
 
-    /// Type-check a built-in `Set` method call. `args[0]` is the receiver set (already
-    /// known to be `Set(T)`); the remaining args are the method's own arguments.
+    /// Type-check a built-in `Set` method call. `arguments[0]` is the receiver set (already
+    /// known to be `Set(T)`); the remaining arguments are the method's own arguments.
     ///   - `has(x :: T)`   -> `Bool`
     ///   - `add(x :: T)`   -> `Set(T)` (a NEW set; the receiver is unchanged)
     ///   - `items()`       -> `[]T`
@@ -379,10 +382,10 @@ impl TypeChecker {
         &mut self,
         method: &str,
         elem_type: Type,
-        args: &[Expr],
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let method_args = &args[1..];
+        let method_args = &arguments[1..];
         let set_type = Type::Set(Box::new(elem_type.clone()));
 
         let expected = match method {
@@ -417,8 +420,8 @@ impl TypeChecker {
         }
     }
 
-    /// Type-check a built-in `Text` method call. `args[0]` is the receiver (already
-    /// known to be `Text`); the remaining args are the method's own arguments. Signatures
+    /// Type-check a built-in `Text` method call. `arguments[0]` is the receiver (already
+    /// known to be `Text`); the remaining arguments are the method's own arguments. Signatures
     /// (see docs/LANGUAGE.md):
     ///   - `split(sep :: Text)`                 -> `[]Text`
     ///   - `trim()` / `trimStart()` / `trimEnd()` / `toUpper()` / `toLower()` -> `Text`
@@ -431,11 +434,11 @@ impl TypeChecker {
     pub(super) fn check_text_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        // `args[0]` (the receiver Text) was already inferred by the dispatch guard.
-        let method_args = &args[1..];
+        // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
+        let method_args = &arguments[1..];
 
         // Each method's expected parameter types and result type — the single table that
         // drives both the arity check and the per-argument type check below. `indexOf`
@@ -468,12 +471,12 @@ impl TypeChecker {
         // Fail-loud contract for `replace`/`replaceAll`: reject at COMPILE time whatever is
         // determinable from literals (the runtime aborts on the rest — no silent no-ops).
         if method == "replace" || method == "replaceAll" {
-            self.check_replace_literals(method, args, span)?;
+            self.check_replace_literals(method, arguments, span)?;
         }
         // Same contract for `repeat`: a literal count that is negative or fractional is a
         // compile error; a computed one is the runtime's to reject.
         if method == "repeat"
-            && let Some(count) = literal_number(&args[1])
+            && let Some(count) = literal_number(&arguments[1])
             && (count < 0.0 || count.fract() != 0.0)
         {
             return Err(TypeError::InvalidBuiltinArgument {
@@ -495,11 +498,11 @@ impl TypeChecker {
     ///   - when the receiver, `from`, and `count` are ALL literals, a `count` greater than
     ///     the occurrences actually present → error.
     ///
-    /// `args[0]` is the receiver; `args[1]` = `from`, `args[2]` = `to`, `args[3]` = `count`.
+    /// `arguments[0]` is the receiver; `arguments[1]` = `from`, `arguments[2]` = `to`, `arguments[3]` = `count`.
     pub(super) fn check_replace_literals(
         &self,
         method: &str,
-        args: &[Expr],
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<(), TypeError> {
         let err = |message: String| {
@@ -510,7 +513,7 @@ impl TypeChecker {
         };
 
         // Empty `from` — a literal "" is ill-defined for both methods.
-        if let Expr::String { value: from, .. } = &args[1]
+        if let Expr::String { value: from, .. } = &arguments[1]
             && from.is_empty()
         {
             return err("replace: `from` must not be empty".to_string());
@@ -519,7 +522,7 @@ impl TypeChecker {
         if method != "replace" {
             return Ok(());
         }
-        let Some(count) = literal_number(&args[3]) else {
+        let Some(count) = literal_number(&arguments[3]) else {
             return Ok(()); // non-literal count — checked at runtime
         };
         // Truncate toward zero, matching codegen/runtime integer handling.
@@ -533,7 +536,7 @@ impl TypeChecker {
         // All-literal case: count occurrences of the literal `from` in the literal receiver
         // and reject a count that exceeds them (non-overlapping, matching `str::replacen`).
         if let (Expr::String { value: hay, .. }, Expr::String { value: from, .. }) =
-            (&args[0], &args[1])
+            (&arguments[0], &arguments[1])
             && !from.is_empty()
         {
             let occurrences = hay.matches(from.as_str()).count() as f64;

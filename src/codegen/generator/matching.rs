@@ -205,7 +205,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
 
-            Pattern::Constructor { name, args, .. } => {
+            Pattern::Constructor {
+                name, arguments, ..
+            } => {
                 // Extract each payload field and bind it to the corresponding sub-pattern.
                 // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
                 // struct field `i + 1`. Only identifier sub-patterns bind a name; others
@@ -230,7 +232,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .sum_variants
                         .get(name.as_str())
                         .is_some_and(|(_, tn)| tn == "Result");
-                    for (i, arg) in args.iter().enumerate() {
+                    for (i, arg) in arguments.iter().enumerate() {
                         if let Pattern::Ident { name: arg_name, .. } = arg {
                             let payload_ty = [&concrete, &declared]
                                 .into_iter()

@@ -114,7 +114,11 @@ impl TypeChecker {
                 self.check_type_compatibility(&Type::Num, expected_type, pattern.span())
             }
             Pattern::Wildcard { .. } => Ok(()), // Wildcard matches anything
-            Pattern::Constructor { name, args, span } => {
+            Pattern::Constructor {
+                name,
+                arguments,
+                span,
+            } => {
                 // Check if the constructor matches the expected type
                 // For now, accept all constructors - proper sum type checking would verify
                 // that the constructor belongs to the expected sum type
@@ -125,10 +129,10 @@ impl TypeChecker {
 
                         if let Some(variant) = variant {
                             // Check that argument count matches
-                            if variant.fields.len() != args.len() {
+                            if variant.fields.len() != arguments.len() {
                                 return Err(TypeError::WrongNumberOfArguments {
                                     expected: variant.fields.len(),
-                                    got: args.len(),
+                                    got: arguments.len(),
                                     span: span.clone(),
                                 });
                             }
@@ -139,7 +143,7 @@ impl TypeChecker {
                             // silently ignored — the arm would match ANY payload of the
                             // variant, taking the wrong arm with no diagnostic. Reject
                             // it here until codegen tests payloads.
-                            for pattern_arg in args {
+                            for pattern_arg in arguments {
                                 match pattern_arg {
                                     Pattern::Ident { .. } | Pattern::Wildcard { .. } => {}
                                     Pattern::Number { .. } | Pattern::Constructor { .. } => {
@@ -181,21 +185,22 @@ impl TypeChecker {
             }
             Pattern::Constructor {
                 name: constructor_name,
-                args,
+                arguments,
                 ..
             } => {
-                // For sum type constructors, bind args with their field types
+                // For sum type constructors, bind arguments with their field types
                 if let Type::Sum { variants, .. } = type_ {
                     // Find the variant that matches this constructor
                     if let Some(variant) = variants.iter().find(|v| &v.name == constructor_name) {
                         // Bind each argument with its corresponding field type
-                        for (arg_pattern, field_type) in args.iter().zip(variant.fields.iter()) {
+                        for (arg_pattern, field_type) in arguments.iter().zip(variant.fields.iter())
+                        {
                             self.bind_pattern_vars(arg_pattern, field_type)?;
                         }
                     }
                 } else {
                     // Not a sum type - fall back to binding with the same type
-                    for arg in args {
+                    for arg in arguments {
                         self.bind_pattern_vars(arg, type_)?;
                     }
                 }

@@ -28,12 +28,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// parameter is a `Site` receives (see [`Self::site_value`]).
     pub(super) fn generate_call(
         &mut self,
-        func: &Expr,
-        args: &[Expr],
+        function: &Expr,
+        arguments: &[Expr],
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Get function name - only support direct calls for now
-        let func_name = if let Expr::Ident { name, .. } = func {
+        let function_name = if let Expr::Ident { name, .. } = function {
             name
         } else {
             return Err("Only direct function calls supported".to_string());
@@ -42,13 +42,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
         // into the name. Handled before every other dispatch — the name is not an
         // overload/method/constructor. The `@`-identifier span carries the call's launch site.
-        if let Some(primitive) = func_name.strip_prefix('@') {
-            return self.generate_at_primitive(primitive, args, func.span());
+        if let Some(primitive) = function_name.strip_prefix('@') {
+            return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
         // `core.time`'s `now()` — a plain (non-`@`) monotonic clock read, lowered to the
         // `__now` runtime intrinsic. Its corelib body is an inert placeholder.
-        if func_name == "now" && args.is_empty() {
+        if function_name == "now" && arguments.is_empty() {
             let now = self.get_intrinsic("__now")?;
             let call = self
                 .builder
@@ -62,7 +62,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // *user* overload of the same name (a different signature) is dispatched as a
         // mangled function below, so only use the intrinsic when no user overload
         // matches the argument types.
-        match func_name.as_str() {
+        match function_name.as_str() {
             "print" | "eprint" => {
                 // Any single argument renders through its `` ` `` operator (built-in
                 // default or user override); only an EXACT user overload of `print`/`eprint`
@@ -70,44 +70,44 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // function-typed argument is not a renderable value — the type checker
                 // already rejects `print(f)` (see `is_generic_print_call`), so it never
                 // reaches here and this gate needs no separate `Function` exclusion.
-                let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
                 let has_user_match = self
-                    .resolve_overload_symbol(func_name, &arg_types)
+                    .resolve_overload_symbol(function_name, &arg_types)
                     .is_some();
                 if arg_types.len() == 1 && !has_user_match {
-                    return self.generate_print(func_name, args);
+                    return self.generate_print(function_name, arguments);
                 }
             }
-            "write" => return self.generate_write(args),
-            "__color_enabled" => return self.generate_color_enabled(args),
+            "write" => return self.generate_write(arguments),
+            "__color_enabled" => return self.generate_color_enabled(arguments),
             // `__exit(code)` — the single native primitive `core.test` builds on,
             // lowered to the `__exit` runtime intrinsic (terminates the process).
-            "__exit" => return self.generate_exit(args),
+            "__exit" => return self.generate_exit(arguments),
             _ => {}
         }
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) — RESERVED
-        // on arrays. The method applies only when the receiver (`args[0]`) is an array;
+        // on arrays. The method applies only when the receiver (`arguments[0]`) is an array;
         // the oracle confirms its element type, so this never diverts a same-named user
         // overload on a non-array receiver. Method names are lowercase and so can never
         // collide with a (Capitalized) sum-constructor name — the relative order of this
         // check and the sum-constructor block below is therefore immaterial.
-        if crate::ast::is_array_method(func_name)
-            && !args.is_empty()
-            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Array(_)))
+        if crate::ast::is_array_method(function_name)
+            && !arguments.is_empty()
+            && matches!(self.oracle.expr_type(&arguments[0]), Some(Type::Array(_)))
         {
-            return self.generate_array_method(func_name, args);
+            return self.generate_array_method(function_name, arguments);
         }
 
         // Built-in Text methods — RESERVED on `Text`, mirroring the array-method block:
-        // dispatch only when the receiver (`args[0]`) is a `Text` (per the oracle), so a
+        // dispatch only when the receiver (`arguments[0]`) is a `Text` (per the oracle), so a
         // same-named user overload on another type is never diverted. Lowercase/camelCase
         // names never collide with (Capitalized) sum constructors.
-        if crate::ast::is_text_method(func_name)
-            && !args.is_empty()
-            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Text))
+        if crate::ast::is_text_method(function_name)
+            && !arguments.is_empty()
+            && matches!(self.oracle.expr_type(&arguments[0]), Some(Type::Text))
         {
-            return self.generate_text_method(func_name, args, span);
+            return self.generate_text_method(function_name, arguments, span);
         }
 
         // Built-in Map methods — RESERVED on a `Map` receiver, mirroring the array/Text
@@ -130,58 +130,58 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDef::Sum` declarations.
-        if let Some((tag, type_name)) = self.sum_variants.get(func_name.as_str()).cloned() {
-            return self.generate_sum_constructor(tag, &type_name, args);
+        if let Some((tag, type_name)) = self.sum_variants.get(function_name.as_str()).cloned() {
+            return self.generate_sum_constructor(tag, &type_name, arguments);
         }
 
         // A local variable bound to a closure value: call it indirectly, passing the
         // captured environment as the trailing argument. Recognized by the variable's
         // recorded closure signature (see `closure_sigs`). Checked before overload
         // dispatch — a local closure binding shadows any same-named top-level function.
-        if let Some((param_tys, ret_ty)) = self.closure_sigs.get(func_name.as_str()).cloned()
-            && self.variables.contains_key(func_name.as_str())
+        if let Some((param_tys, ret_ty)) = self.closure_sigs.get(function_name.as_str()).cloned()
+            && self.variables.contains_key(function_name.as_str())
         {
-            return self.generate_closure_call(func_name, &param_tys, ret_ty, args);
+            return self.generate_closure_call(function_name, &param_tys, ret_ty, arguments);
         }
 
         // Overloaded function call: dispatch to the per-signature mangled symbol chosen
         // by exact argument types (the type checker has already verified a unique match).
-        let overload_symbol = if self.overloads.contains_key(func_name.as_str()) {
-            let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
-            self.resolve_overload_symbol(func_name, &arg_types)
+        let overload_symbol = if self.overloads.contains_key(function_name.as_str()) {
+            let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
+            self.resolve_overload_symbol(function_name, &arg_types)
         } else {
             None
         };
 
         // Does this call leave off a trailing `Site` for the compiler to fill in? Asked
         // before the argument values are generated, so the answer is one immutable lookup.
-        let fills_call_site = self.fills_call_site(func_name, args);
+        let fills_call_site = self.fills_call_site(function_name, arguments);
 
         // Get the function from the module. If there is no plain top-level function with this
         // name, it may be a method call: the parser desugars `recv.method(a, b)` to
         // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
-        let function = if let Some(sym) = &overload_symbol {
+        let callee = if let Some(sym) = &overload_symbol {
             self.module
                 .get_function(sym)
                 .ok_or_else(|| format!("Overload not found: {}", sym))?
         } else {
-            match self.module.get_function(func_name) {
+            match self.module.get_function(function_name) {
                 Some(f) => f,
                 None => {
-                    let mangled = args
+                    let mangled = arguments
                         .first()
                         .and_then(|recv| self.receiver_type_name(recv))
-                        .map(|type_name| method_symbol(&type_name, func_name));
+                        .map(|type_name| method_symbol(&type_name, function_name));
                     match mangled.and_then(|m| self.module.get_function(&m)) {
                         Some(f) => f,
-                        None => return Err(format!("Function not found: {}", func_name)),
+                        None => return Err(format!("Function not found: {}", function_name)),
                     }
                 }
             }
         };
 
         // Generate argument values
-        let mut arg_values: Vec<BasicValueEnum> = args
+        let mut arg_values: Vec<BasicValueEnum> = arguments
             .iter()
             .map(|arg| self.generate_expr(arg))
             .collect::<Result<Vec<_>, _>>()?;
@@ -195,10 +195,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             arg_values.push(self.site_value(span)?);
         }
 
-        self.emit_call(function, &arg_values)
+        self.emit_call(callee, &arg_values)
     }
 
-    /// Whether a call to `name` passing `args` has its call site filled in — the callee's
+    /// Whether a call to `name` passing `arguments` has its call site filled in — the callee's
     /// last parameter is a `Site` and the call left exactly that argument off.
     ///
     /// The one place codegen asks the question, so argument lowering
@@ -206,14 +206,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// never disagree about it. The rule itself is [`ast::fills_call_site`]; here it is
     /// applied to whichever signature the name resolves to — a member of an overload set,
     /// or a plain top-level function.
-    pub(super) fn fills_call_site(&self, name: &str, args: &[Expr]) -> bool {
+    pub(super) fn fills_call_site(&self, name: &str, arguments: &[Expr]) -> bool {
         match self.overloads.contains_key(name) {
             true => {
-                let arg_types: Vec<Type> = args.iter().map(|a| self.infer_type(a)).collect();
+                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
                 self.matching_overload(name, &arg_types)
-                    .is_some_and(|(params, _)| crate::ast::fills_call_site(params, args.len()))
+                    .is_some_and(|(params, _)| crate::ast::fills_call_site(params, arguments.len()))
             }
-            false => self.fn_call_site_arity.get(name) == Some(&(args.len() + 1)),
+            false => self.fn_call_site_arity.get(name) == Some(&(arguments.len() + 1)),
         }
     }
 
@@ -343,18 +343,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_at_primitive(
         &mut self,
         primitive: &str,
-        args: &[Expr],
+        arguments: &[Expr],
         site: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match primitive {
             "sleep" => {
-                if args.len() != 1 {
+                if arguments.len() != 1 {
                     return Err(format!(
                         "@sleep expects exactly 1 argument, got {}",
-                        args.len()
+                        arguments.len()
                     ));
                 }
-                let BasicValueEnum::FloatValue(seconds) = self.generate_expr(&args[0])? else {
+                let BasicValueEnum::FloatValue(seconds) = self.generate_expr(&arguments[0])? else {
                     return Err("@sleep expects a Num (seconds)".to_string());
                 };
                 let sleep = self.get_intrinsic("__sleep")?;
@@ -365,10 +365,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.unit_value().into())
             }
             "readStdin" => {
-                if !args.is_empty() {
+                if !arguments.is_empty() {
                     return Err(format!(
                         "@readStdin expects no arguments, got {}",
-                        args.len()
+                        arguments.len()
                     ));
                 }
                 let launch_site = self.site_value(site)?;

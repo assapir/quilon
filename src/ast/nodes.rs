@@ -255,7 +255,7 @@ pub fn is_set_method(name: &str) -> bool {
 /// hole expression to render and splice in.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InterpPart {
-    Lit(String),
+    Literal(String),
     Hole(Expr),
 }
 
@@ -310,8 +310,8 @@ pub enum Expr {
 
     // Function call
     Call {
-        func: Box<Expr>,
-        args: Vec<Expr>,
+        function: Box<Expr>,
+        arguments: Vec<Expr>,
         span: Span,
     },
 
@@ -344,7 +344,7 @@ pub enum Expr {
 
     // If expression (ternary)
     If {
-        cond: Box<Expr>,
+        condition: Box<Expr>,
         then: Box<Expr>,
         else_: Box<Expr>,
         span: Span,
@@ -473,14 +473,18 @@ impl Expr {
     ///   `x |> f(a, b)` => `f(x, a, b)`
     /// Used by both the type checker and codegen so the two never diverge.
     pub fn desugar_pipeline(left: &Expr, right: &Expr, span: &Span) -> Expr {
-        let (func, mut args) = match right {
-            Expr::Call { func, args, .. } => ((**func).clone(), args.clone()),
+        let (function, mut arguments) = match right {
+            Expr::Call {
+                function,
+                arguments,
+                ..
+            } => ((**function).clone(), arguments.clone()),
             other => (other.clone(), Vec::new()),
         };
-        args.insert(0, left.clone());
+        arguments.insert(0, left.clone());
         Expr::Call {
-            func: Box::new(func),
-            args,
+            function: Box::new(function),
+            arguments,
             span: span.clone(),
         }
     }
@@ -505,7 +509,7 @@ pub enum Pattern {
     },
     Constructor {
         name: String,
-        args: Vec<Pattern>,
+        arguments: Vec<Pattern>,
         span: Span,
     },
     Wildcard {
@@ -614,7 +618,7 @@ pub enum Type {
     },
     Generic {
         name: String,
-        args: Vec<Type>,
+        arguments: Vec<Type>,
     },
     Function {
         params: Vec<Type>,

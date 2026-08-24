@@ -20,14 +20,14 @@ impl TypeChecker {
                     name: "Ok".to_string(),
                     fields: vec![Type::Generic {
                         name: "T".to_string(),
-                        args: vec![],
+                        arguments: vec![],
                     }],
                 },
                 SumVariant {
                     name: "NotOk".to_string(),
                     fields: vec![Type::Generic {
                         name: "E".to_string(),
-                        args: vec![],
+                        arguments: vec![],
                     }],
                 },
             ],

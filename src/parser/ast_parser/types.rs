@@ -55,7 +55,7 @@ impl<'a> Parser<'a> {
             }
             "Result" => {
                 self.advance();
-                // Optional generic args, e.g. `Result{T, E}` — consumed and
+                // Optional generic arguments, e.g. `Result{T, E}` — consumed and
                 // ignored for now (the builtin Result is monomorphic in codegen).
                 if self.check(&TokenKind::BraceOpen) {
                     let mut depth = 0usize;
@@ -86,14 +86,14 @@ impl<'a> Parser<'a> {
                             name: "Ok".to_string(),
                             fields: vec![crate::ast::Type::Generic {
                                 name: "T".to_string(),
-                                args: vec![],
+                                arguments: vec![],
                             }],
                         },
                         crate::ast::SumVariant {
                             name: "NotOk".to_string(),
                             fields: vec![crate::ast::Type::Generic {
                                 name: "E".to_string(),
-                                args: vec![],
+                                arguments: vec![],
                             }],
                         },
                     ],

@@ -128,9 +128,13 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
             out.push(field);
             mentions(expr, out);
         }
-        Expr::Call { func, args, .. } => {
-            mentions(func, out);
-            for a in args {
+        Expr::Call {
+            function,
+            arguments,
+            ..
+        } => {
+            mentions(function, out);
+            for a in arguments {
                 mentions(a, out);
             }
         }
@@ -152,9 +156,12 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
             }
         }
         Expr::If {
-            cond, then, else_, ..
+            condition,
+            then,
+            else_,
+            ..
         } => {
-            mentions(cond, out);
+            mentions(condition, out);
             mentions(then, out);
             mentions(else_, out);
         }
