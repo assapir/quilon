@@ -17,7 +17,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let field_names: Vec<String> = match &declaration.type_definition {
             TypeDefinition::Record { fields, .. } => {
                 let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                self.named_type_fields.insert(type_name.clone(), names.clone());
+                self.named_type_fields
+                    .insert(type_name.clone(), names.clone());
                 names
             }
             TypeDefinition::Sum { .. } => Vec::new(),

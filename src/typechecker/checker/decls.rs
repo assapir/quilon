@@ -318,7 +318,11 @@ impl TypeChecker {
 
         // `it` binds to the type; operator members register on their operator's overload
         // set, every other member becomes a method dispatched by receiver type.
-        self.check_type_methods(&declaration.name, &type_value, declaration.type_definition.methods())?;
+        self.check_type_methods(
+            &declaration.name,
+            &type_value,
+            declaration.type_definition.methods(),
+        )?;
 
         Ok(())
     }

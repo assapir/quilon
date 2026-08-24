@@ -106,8 +106,12 @@ impl TypeChecker {
             && let Some(first_arg_type) = &first_ty
         {
             // A record or a sum both carry methods, identified by their type name.
-            if let Type::Named { name: type_name, .. } | Type::Sum { name: type_name, .. } =
-                first_arg_type
+            if let Type::Named {
+                name: type_name, ..
+            }
+            | Type::Sum {
+                name: type_name, ..
+            } = first_arg_type
             {
                 // Look up method in the type's method list
                 if let Some(method_sig) = self

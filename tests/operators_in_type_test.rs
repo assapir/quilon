@@ -126,9 +126,7 @@ fn a_top_level_operator_definition_is_rejected() {
 #[test]
 fn a_field_in_a_sum_method_block_is_rejected() {
     // A sum has no fields — a field-like entry inside its `{ }` block is a compile error.
-    assert_parse_error(
-        "Shape = Circle(Num) / Rect(Num, Num) {\n  x :: Num\n}\n^ = () -> Num => 0",
-    );
+    assert_parse_error("Shape = Circle(Num) / Rect(Num, Num) {\n  x :: Num\n}\n^ = () -> Num => 0");
 }
 
 #[test]

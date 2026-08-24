@@ -6,6 +6,10 @@
 
 use super::*;
 
+/// A parsed `{ … }` member block: the fields (`name :: Type`) and methods, in order.
+/// A record uses both; a sum's block is methods only (a field there is rejected).
+type MemberBlock = (Vec<(String, crate::ast::Type)>, Vec<MethodDeclaration>);
+
 impl<'a> Parser<'a> {
     pub fn parse(tokens: &'a [Token]) -> Result<Program, ParseError> {
         let mut parser = Self::new(tokens);
@@ -314,9 +318,7 @@ impl<'a> Parser<'a> {
     /// (`==`, `+`, …, the binary operators) or by the render operator `` ` ``, both of
     /// which are always methods; every other member name is an ordinary identifier.
     /// Returns the fields and methods in declaration order.
-    pub(super) fn parse_member_block(
-        &mut self,
-    ) -> Result<(Vec<(String, crate::ast::Type)>, Vec<MethodDeclaration>), ParseError> {
+    pub(super) fn parse_member_block(&mut self) -> Result<MemberBlock, ParseError> {
         self.expect(&TokenKind::BraceOpen)?;
 
         let mut fields = Vec::new();

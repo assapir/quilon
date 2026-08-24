@@ -263,8 +263,8 @@ fn test_duplicate_overload_signature_is_error() {
 #[test]
 fn test_comparison_operator_overload_must_return_bool() {
     // A `==` member returning a non-Bool is rejected with a clear diagnostic.
-    let err = check_ok("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0")
-        .unwrap_err();
+    let err =
+        check_ok("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0").unwrap_err();
     assert!(matches!(err, TypeError::ComparisonOverloadNotBool { .. }));
     // `<=` too (a definable comparison operator).
     assert!(
