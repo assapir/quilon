@@ -174,7 +174,7 @@ impl TypeChecker {
 
         // Build the type from the definition
         let type_value = match &declaration.type_definition {
-            TypeDefinition::Sum { variants, methods } => {
+            TypeDefinition::Sum { variants, .. } => {
                 // Resolve and validate each variant's payload types. A payload is either a
                 // built-in type — `Num` / `Text` / `Bool` / `$` (Unit) — or a NAMED
                 // composite that resolves to an already-declared RECORD (no hoisting, so it
@@ -386,9 +386,12 @@ impl TypeChecker {
             // keeps call sites in agreement with codegen (an unannotated setter whose body
             // is a field write yields `$`, not Num).
             let body_type = self.infer_expression(&method.body)?;
-            let resolved_return_type = if let Some(ref return_type) = method.return_type {
-                self.check_type_compatibility(return_type, &body_type, &method.span)?;
-                return_type.clone()
+            let resolved_return_type = if let Some(return_type) = &method.return_type {
+                // Resolve the annotation so an operator/method returning its own user type
+                // (`-> V`) compares against the body's fully-resolved type, not a bare name.
+                let resolved = self.resolve_type(return_type);
+                self.check_type_compatibility(&resolved, &body_type, &method.span)?;
+                resolved
             } else {
                 body_type
             };

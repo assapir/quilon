@@ -103,6 +103,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return_type: method.return_type.clone(),
             body: method.body.clone(),
             exported: false,
+            from_corelib: false,
             span: method.span.clone(),
         };
         self.emit_module_function(&declaration)
