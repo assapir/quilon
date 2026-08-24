@@ -8,17 +8,21 @@ use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
     /// Lower `expression` to a value, then force it in place if the deferred-taint pass marked this
-    /// span a force site (a deferred `Text` sitting where a strict primitive reads its bytes).
-    /// The force is the ONE seam where deferral becomes visible to codegen; everywhere else a
-    /// deferred value is threaded as an ordinary `Text`. For a non-force-site span (every
-    /// expression in a pure program) this is a direct call — byte-identical to before.
+    /// span a force site (a deferred value sitting where a strict primitive reads it). The force
+    /// is the ONE seam where deferral becomes visible to codegen; everywhere else a deferred value
+    /// is threaded as its ordinary type. A deferred value is a `Text` (`@readStdin`) or a `Result`
+    /// (`@tcpRequest`); each force helper acts only on its own representation and passes everything
+    /// else — including an already-ready value — straight through, so chaining them forces exactly
+    /// the one that applies. For a non-force-site span (every expression in a pure program) this is
+    /// a direct call — byte-identical to before.
     pub(super) fn generate_expression(
         &mut self,
         expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let value = self.generate_expression_inner(expression)?;
         if self.defer.is_force_site(expression.span()) {
-            return self.force_deferred_text(value);
+            let value = self.force_deferred_text(value)?;
+            return self.force_deferred_result(value);
         }
         Ok(value)
     }
@@ -277,6 +281,82 @@ impl<'ctx> CodeGenerator<'ctx> {
             .builder
             .build_phi(text_ty, "forced_or_ready")
             .map_err(ctx("Failed to build force phi"))?;
+        phi.add_incoming(&[(&value, ready_block), (&forced, force_end_block)]);
+        Ok(phi.as_basic_value())
+    }
+
+    /// Emit the force of a possibly-deferred `Result`: if `value`'s tag field is the deferred
+    /// tag, its slot's `data` field is a promise pointer — call `__force_result` to park until
+    /// the value is ready and read its `{ tag, slot }` (memoized); otherwise pass the ready
+    /// `Result` straight through. A runtime branch, because a force site fed by a `?`/ternary can
+    /// be deferred on one path and ready on the other. Non-`Result` values pass through untouched,
+    /// so this is a no-op on the `Text` deferral path and on all pure code.
+    fn force_deferred_result(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let result_ty = self.sum_struct_type("Result");
+        let BasicValueEnum::StructValue(deferred) = value else {
+            return Ok(value);
+        };
+        if deferred.get_type() != result_ty {
+            return Ok(value);
+        }
+
+        let tag = self
+            .builder
+            .build_extract_value(deferred, 0, "deferred_result_tag")
+            .map_err(ctx("Failed to read deferred Result tag"))?
+            .into_int_value();
+        let sentinel = self
+            .context
+            .i8_type()
+            .const_int(quilon_rt::deferred::DEFERRED_RESULT_TAG as u8 as u64, false);
+        let is_deferred = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, tag, sentinel, "is_deferred_result")
+            .map_err(ctx("Failed to test deferred Result tag"))?;
+
+        let ready_block = self.builder.get_insert_block().unwrap();
+        let function = ready_block.get_parent().unwrap();
+        let force_block = self.context.append_basic_block(function, "force_result");
+        let cont_block = self
+            .context
+            .append_basic_block(function, "force_result_cont");
+        self.builder
+            .build_conditional_branch(is_deferred, force_block, cont_block)
+            .map_err(ctx("Failed to branch on deferred Result tag"))?;
+
+        // Deferred: the promise pointer is the slot's `data` field (slot is `{ptr,i64}`, field 1
+        // of the Result; its pointer is sub-field 0). Force it (park-until-ready, memoized).
+        self.builder.position_at_end(force_block);
+        let slot = self
+            .builder
+            .build_extract_value(deferred, 1, "deferred_result_slot")
+            .map_err(ctx("Failed to read deferred Result slot"))?
+            .into_struct_value();
+        let promise = self
+            .builder
+            .build_extract_value(slot, 0, "deferred_result_promise")
+            .map_err(ctx("Failed to read deferred Result promise"))?
+            .into_pointer_value();
+        let force_fn = self.get_intrinsic("__force_result")?;
+        let forced = Self::call_result_to_basic(
+            self.builder
+                .build_call(force_fn, &[promise.into()], "forced_result")
+                .map_err(ctx("Failed to call __force_result"))?,
+        )?;
+        let force_end_block = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_unconditional_branch(cont_block)
+            .map_err(ctx("Failed to branch out of Result force"))?;
+
+        // Join: the ready value (unchanged) or the forced value.
+        self.builder.position_at_end(cont_block);
+        let phi = self
+            .builder
+            .build_phi(result_ty, "forced_or_ready_result")
+            .map_err(ctx("Failed to build Result force phi"))?;
         phi.add_incoming(&[(&value, ready_block), (&forced, force_end_block)]);
         Ok(phi.as_basic_value())
     }

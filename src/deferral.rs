@@ -32,8 +32,11 @@ use std::collections::{HashMap, HashSet};
 const READ_PRIMITIVE: &str = "@readStdin";
 
 /// The internal name of the request-exchange socket primitive; `@tcpRequest(addr, req)`
-/// evaluates to a deferred `Text` (the response bytes), read once forced.
+/// evaluates to a deferred `Result` (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
 const TCP_REQUEST_PRIMITIVE: &str = "@tcpRequest";
+
+/// The argument count `@tcpRequest` takes (`address`, `requestBytes`).
+const TCP_REQUEST_ARITY: usize = 2;
 
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
@@ -312,13 +315,20 @@ fn is_read_call(function: &Expression, arguments: &[Expression]) -> bool {
         && arguments.is_empty()
 }
 
+/// Whether `function`/`arguments` is a call to the `@tcpRequest` primitive
+/// (`@tcpRequest(address, requestBytes)`, exactly two arguments).
+fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool {
+    matches!(function, Expression::Identifier { name, .. } if name == TCP_REQUEST_PRIMITIVE)
+        && arguments.len() == TCP_REQUEST_ARITY
+}
+
 /// Whether `function`/`arguments` is a call to a value-returning `@` primitive — one that hands
 /// back a DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
-/// `@tcpRequest(addr, req)` (a deferred `Text` response). Effect-only primitives like `@sleep`
-/// (which yields `$`) are never deferred and so never appear here.
+/// `@tcpRequest(addr, req)` (a deferred `Result`). Matched on name AND arity, so a call that does
+/// not fit the primitive's signature is not treated as deferred. Effect-only primitives like
+/// `@sleep` (which yields `$`) are never deferred and so never appear here.
 fn produces_deferred(function: &Expression, arguments: &[Expression]) -> bool {
-    is_read_call(function, arguments)
-        || matches!(function, Expression::Identifier { name, .. } if name == TCP_REQUEST_PRIMITIVE)
+    is_read_call(function, arguments) || is_tcp_request_call(function, arguments)
 }
 
 /// Apply `f` to `expression` and every sub-expression (pre-order). The one structural walk the
@@ -526,12 +536,20 @@ mod tests {
 
     #[test]
     fn bound_tcp_request_is_deferred_and_forced_at_a_strict_use() {
-        // `r = @tcpRequest(...)` binds a deferred Text (lazy); the comparison forces it once —
-        // the same shape as a bound `@readStdin`, proving the taint tracks both producers.
-        let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\", \"b\")\n  r == \"ok\" ? 0 : 1\n>";
+        // `r = @tcpRequest(...)` binds a deferred Result (lazy); the match forces it once — the
+        // same shape as a bound `@readStdin`, proving the taint tracks both producers.
+        let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\", \"b\")\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
         let i = info(src);
         assert!(i.uses_deferral);
         assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn tcp_request_with_wrong_arity_is_not_deferred() {
+        // A `@tcpRequest` reference that does not fit the primitive's two-argument signature is
+        // not treated as a deferred producer: no value flows out deferred, so nothing is forced.
+        let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\")\n  0\n>";
+        assert_eq!(force_count(src), 0);
     }
 
     #[test]

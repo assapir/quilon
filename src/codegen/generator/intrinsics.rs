@@ -145,16 +145,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
             // read fault is reported at.
             "__read_launch" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
-            // { ptr, i64 } __tcp_request_launch(i8* addr,i64, i8* request,i64) — the internal
+            // { i8, {ptr,i64} } __tcp_request_launch(i8* addr,i64, i8* request,i64) — the internal
             // `@tcpRequest` leaf IO primitive: launch a background TCP request exchange (connect,
-            // write the request, read until the peer closes) and return the DEFERRED response
-            // Text (`{ deferred, -1 }`) immediately. Backs the HTTP client; not user-facing.
+            // write the request, read until the peer closes) and return a DEFERRED `Result`
+            // immediately — `Ok(responseBytes)` on success, `NotOk(message)` on any network
+            // failure. Backs the HTTP client; not user-facing.
             "__tcp_request_launch" => self
-                .ptr_len_struct_type()
+                .sum_struct_type("Result")
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // { ptr, i64 } __force_text(i8* promise) — force a deferred Text: park until the
             // promise is fulfilled, then return its `{ ptr, i64 }` bytes (memoized).
             "__force_text" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // { i8, {ptr,i64} } __force_result(i8* promise) — force a deferred Result: park until
+            // the promise is fulfilled, then return its `{ i8 tag, {ptr,i64} slot }` value
+            // (memoized).
+            "__force_result" => self
+                .sum_struct_type("Result")
+                .fn_type(&[ptr.into()], false),
             // i32 __run_fiber_main(ptr entry, i32 argc, ptr argv, ptr envp) — run the
             // generated entry thunk (the C `main` signature) on a scheduler fiber, so any
             // `@` primitive it reaches has a fiber to park on. Returns the exit code.

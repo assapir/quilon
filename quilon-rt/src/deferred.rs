@@ -50,6 +50,46 @@ use std::ptr;
 /// The code generator's force check compares against this exact value.
 pub const DEFERRED_SENTINEL: i64 = -1;
 
+/// A Quilon `Result` whose payload is a `Text`, in the code generator's canonical layout
+/// (`{ i8 tag, {ptr,i64} slot }`): a `Text` is itself a `{ptr,i64}`, so it fills the slot
+/// directly with no boxing. `#[repr(C)]` puts the tag at offset 0 and the slot at offset 8 —
+/// the same offsets LLVM emits for `{ i8, {ptr,i64} }` — so the two representations agree by
+/// construction. The tags are the code generator's built-in Result discriminants.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct QlResult {
+    pub(crate) tag: i8,
+    pub(crate) slot: QlSlice,
+}
+
+/// The `Ok` discriminant — the code generator's built-in Result tag for the success variant.
+pub(crate) const RESULT_OK_TAG: i8 = 0;
+/// The `NotOk` discriminant — the code generator's built-in Result tag for the failure variant.
+pub(crate) const RESULT_NOTOK_TAG: i8 = 1;
+/// The tag a DEFERRED `Result` carries in place of `Ok`/`NotOk`, with the deferred cell pointer
+/// stashed in its slot's `data` field; the code generator's force check compares against it.
+/// Distinct from every real discriminant, so a ready `Result` is never mistaken for a deferred
+/// one.
+pub const DEFERRED_RESULT_TAG: i8 = -1;
+
+impl QlResult {
+    /// A ready `Ok(text)` carrying `bytes` as its `Text` payload.
+    pub(crate) fn ok(bytes: &[u8]) -> QlResult {
+        QlResult {
+            tag: RESULT_OK_TAG,
+            slot: alloc_text(bytes),
+        }
+    }
+
+    /// A ready `NotOk(message)` carrying `message` as its `Text` payload.
+    pub(crate) fn not_ok(message: &str) -> QlResult {
+        QlResult {
+            tag: RESULT_NOTOK_TAG,
+            slot: alloc_text(message.as_bytes()),
+        }
+    }
+}
+
 /// A deferred value's lifecycle. Carrying the resolved value INSIDE `Ready` makes
 /// "ready but value absent" unrepresentable — a whole class of bug a bool/flag plus a
 /// separate value field would allow. (Distinct from [`DEFERRED_SENTINEL`], which is the
@@ -157,6 +197,38 @@ pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QlSlice + 'static)
         data: cell as *const c_void,
         len: DEFERRED_SENTINEL,
     }
+}
+
+/// Launch a `Result`-producing IO on a background fiber and return its DEFERRED `Result`
+/// representation immediately — the C-ABI wrapper over the generic [`launch`] for a
+/// value-returning `@` primitive whose result is a `Result` (`@tcpRequest`), so its Ok/NotOk
+/// wrapping and force plumbing are shared, not re-copied. The deferred representation is a
+/// `Result` value tagged [`DEFERRED_RESULT_TAG`] with the deferred cell in its slot's `data`
+/// field; the result threads through the program as an ordinary `Result` and the code generator
+/// forces it (via [`__force_result`]) at the strict use that reads it.
+pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'static) -> QlResult {
+    let cell = launch(producer);
+    QlResult {
+        tag: DEFERRED_RESULT_TAG,
+        slot: QlSlice {
+            data: cell as *const c_void,
+            len: 0,
+        },
+    }
+}
+
+/// Force a deferred `Result`: the per-representation C-ABI wrapper over the generic [`force`].
+/// Only the code generator calls this, and only after its force check saw
+/// [`DEFERRED_RESULT_TAG`], so `deferred_ptr` is always a live `Result` deferred.
+///
+/// # Safety contract (upheld by the compiler)
+/// `deferred_ptr` is the slot `data` of a deferred `Result` produced by [`launch_deferred_result`]
+/// and is still reachable (the taint pass keeps it live to here).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __force_result(deferred_ptr: *const c_void) -> QlResult {
+    // SAFETY: per the contract, this is a live `Result` deferred (a `Deferred<QlResult>`).
+    unsafe { force(deferred_ptr as *mut Deferred<QlResult>) }
 }
 
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred

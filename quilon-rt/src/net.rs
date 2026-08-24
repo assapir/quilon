@@ -12,9 +12,10 @@
 //!
 //! [`__tcp_request_launch`] wires this tier to a Quilon `@` primitive: it backs the internal
 //! `@tcpRequest` request-exchange primitive (connect, write the request, read the response until
-//! the peer closes) as a background producer over the generic deferral core, returning the
-//! response bytes as a deferred `Text`. It is internal — the HTTP client sits on it; users do
-//! not import raw sockets.
+//! the peer closes) as a background producer over the generic deferral core, returning a deferred
+//! `Result` — `Ok(responseBytes)` on success, `NotOk(errorMessage)` on any network failure. No
+//! failure terminates the process; the outcome flows back to `.ql` code to match on. It is
+//! internal — the HTTP client sits on it; users do not import raw sockets.
 //!
 //! GC note: parking is transparent to the collector. A parked fiber's stack — with
 //! its live roots — is scanned by [`crate::gc`]'s `GC_push_other_roots` callback,
@@ -22,10 +23,7 @@
 //! *why* it is parked. A socket-blocked fiber is therefore covered identically to a
 //! sleeping one; `tests::socket_parked_fiber_roots_survive_collection` proves it.
 
-use crate::deferred::launch_deferred_text;
-use crate::io::write_to_fd;
-use crate::mem::{QlSlice, alloc_text};
-use crate::process::__exit;
+use crate::deferred::{QlResult, launch_deferred_result};
 use crate::scheduler::{
     deregister_readiness, park_on_readiness, register_readiness, reregister_readiness,
 };
@@ -173,13 +171,20 @@ impl Drop for TcpStream {
     }
 }
 
+/// The most bytes `@tcpRequest` buffers for one response. A close-delimited read has no length
+/// header, so without a bound a peer that never closes (or streams without end) would grow the
+/// buffer until memory ran out; past this cap the read fails and the exchange yields `NotOk`
+/// rather than exhausting memory. 16 MiB comfortably holds an HTTP response the one-shot client
+/// is meant for.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 /// `@tcpRequest(address, requestBytes)`: launch a one-shot TCP request exchange on a background
-/// fiber and return the deferred `Text` response immediately (the calling fiber does not park
-/// here). A THIN wrapper over the generic [`launch`], with a socket request-exchange producer:
-/// connect to `address`, write the request bytes, read the response until the peer closes
-/// (close-delimited — the model the one-connection-per-request HTTP client uses), and hand back
-/// all the response bytes. The result is a deferred `Text` (`{ deferred, -1 }`); the code
-/// generator forces it where a strict use reads the bytes.
+/// fiber and return the deferred `Result` immediately (the calling fiber does not park here). A
+/// THIN wrapper over the generic deferral core, with a socket request-exchange producer: connect
+/// to `address`, write the request bytes, read the response until the peer closes (close-delimited
+/// — the model the one-connection-per-request HTTP client uses), and hand back all the response
+/// bytes. The result is a deferred `Result` — `Ok(responseBytes)` on success, `NotOk(message)` on
+/// any failure; the code generator forces it where a strict use reads it.
 ///
 /// The address and request bytes are copied into owned buffers here, before the producer is
 /// spawned, so the producer fiber owns its inputs and never reads a `Text` that a later
@@ -195,69 +200,74 @@ pub extern "C" fn __tcp_request_launch(
     address_len: i64,
     request_data: *const u8,
     request_len: i64,
-) -> QlSlice {
+) -> QlResult {
     let address = bytes_to_string(address_data, address_len);
     let request = copy_bytes(request_data, request_len);
-    launch_deferred_text(move || tcp_request(&address, &request))
+    launch_deferred_result(move || tcp_request(&address, &request))
 }
 
 /// The `@tcpRequest` producer: perform the whole request exchange against `address` and return
-/// the response bytes as a `Text`. Any failure — address resolution, connect, write, or read —
-/// faults with the address (fail-loud), the same posture as the stdin reader.
-fn tcp_request(address: &str, request: &[u8]) -> QlSlice {
-    let target = resolve(address);
+/// its outcome as a `Result`. On success it yields `Ok(responseBytes)`; on ANY failure — address
+/// resolution, connect, write, read, or an over-cap response — it yields `NotOk(message)` naming
+/// the failing stage and the address. Fail-soft: no failure terminates the process.
+fn tcp_request(address: &str, request: &[u8]) -> QlResult {
+    let target = match resolve(address) {
+        Ok(target) => target,
+        Err(error) => return request_error(address, "resolve", &error),
+    };
     let mut stream = match TcpStream::connect(target) {
         Ok(stream) => stream,
-        Err(error) => fail_tcp(address, "connect", &error),
+        Err(error) => return request_error(address, "connect", &error),
     };
     if let Err(error) = stream.write_all(request) {
-        fail_tcp(address, "write", &error);
+        return request_error(address, "write", &error);
     }
     match read_to_close(&mut stream) {
-        Ok(response) => alloc_text(&response),
-        Err(error) => fail_tcp(address, "read", &error),
+        Ok(response) => QlResult::ok(&response),
+        Err(error) => request_error(address, "read", &error),
     }
 }
 
 /// Resolve `address` (`host:port`, e.g. `127.0.0.1:8080` or `example.com:80`) to a single
-/// [`SocketAddr`]. Faults if it names nothing. Note: [`ToSocketAddrs`] does a BLOCKING DNS
-/// lookup for a hostname; a numeric address (what the local round-trip uses) parses without any
-/// network call. Non-blocking DNS is a later refinement.
-fn resolve(address: &str) -> SocketAddr {
-    match address.to_socket_addrs() {
-        Ok(mut addrs) => match addrs.next() {
-            Some(addr) => addr,
-            None => fail_tcp(
-                address,
-                "resolve",
-                &io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint"),
-            ),
-        },
-        Err(error) => fail_tcp(address, "resolve", &error),
-    }
+/// [`SocketAddr`], erroring if it names nothing. Note: [`ToSocketAddrs`] does a BLOCKING DNS
+/// lookup for a hostname on this cooperative fiber thread; a numeric address (what the local
+/// round-trip uses) parses without any network call. Non-blocking DNS is a later refinement — it
+/// needs a resolver that can run off the reactor thread, so a slow lookup still stalls the
+/// scheduler for now.
+fn resolve(address: &str) -> io::Result<SocketAddr> {
+    address
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint"))
 }
 
-/// Read from `stream` until the peer closes the connection, returning every byte received. The
+/// Read from `stream` until the peer closes the connection, returning every byte received — the
 /// close-delimited read the one-connection-per-request exchange relies on: each partial read
-/// parks the fiber on socket readiness, and `Ok(0)` (EOF) ends the loop.
+/// parks the fiber on socket readiness, and `Ok(0)` (EOF) ends the loop. Errors once the response
+/// would exceed [`MAX_RESPONSE_BYTES`], so an unbounded peer cannot exhaust memory.
 fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut response = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(response),
-            Ok(count) => response.extend_from_slice(&chunk[..count]),
+            Ok(count) => {
+                response.extend_from_slice(&chunk[..count]);
+                if response.len() > MAX_RESPONSE_BYTES {
+                    return Err(io::Error::other(format!(
+                        "response exceeded the {MAX_RESPONSE_BYTES}-byte cap"
+                    )));
+                }
+            }
             Err(error) => return Err(error),
         }
     }
 }
 
-/// Report a fatal `@tcpRequest` error against the target `address` and the `stage` it failed at
-/// (`connect`/`write`/`read`/`resolve`), then terminate the process (fail-loud).
-fn fail_tcp(address: &str, stage: &str, error: &io::Error) -> ! {
-    let message = format!("runtime error: @tcpRequest to {address} failed at {stage}: {error}\n");
-    write_to_fd(2, message.as_bytes());
-    __exit(1)
+/// Build the `NotOk(message)` a failed `@tcpRequest` yields: the failing `stage`
+/// (`resolve`/`connect`/`write`/`read`), the target `address`, and the underlying error.
+fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
+    QlResult::not_ok(&format!("@tcpRequest to {address} failed at {stage}: {error}"))
 }
 
 /// Copy `len` bytes at `data` into an owned `Vec` (empty if null/empty), so the producer fiber
@@ -507,13 +517,16 @@ mod tests {
     fn tcp_request_round_trips_against_a_local_listener() {
         // The whole `@tcpRequest` path end to end: the primitive LAUNCHES a background producer
         // that connects to a real listener, writes the request, and reads the response until the
-        // peer closes; a separate fiber FORCES the deferred value; the response bytes flow back.
-        use crate::deferred::__force_text;
+        // peer closes; a separate fiber FORCES the deferred value; the `Ok(responseBytes)` flows
+        // back.
+        use crate::deferred::{RESULT_OK_TAG, __force_result};
         use std::io::{Read as _, Write as _};
         use std::net::TcpListener as StdListener;
 
         static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+        static TAG: AtomicUsize = AtomicUsize::new(0);
         GOT.lock().unwrap().clear();
+        TAG.store(usize::MAX, Ordering::SeqCst);
 
         // A blocking std listener on its own OS thread stands in for a peer: accept one
         // connection, read the request, write a fixed response, then close (close-delimited —
@@ -537,11 +550,15 @@ mod tests {
                     b"PING\n".as_ptr(),
                     5,
                 );
-                let deferred_ptr = deferred.data;
+                let deferred_ptr = deferred.slot.data;
                 spawn(move || {
-                    let forced = __force_text(deferred_ptr);
+                    let forced = __force_result(deferred_ptr);
+                    TAG.store(forced.tag as usize, Ordering::SeqCst);
                     let bytes = unsafe {
-                        std::slice::from_raw_parts(forced.data as *const u8, forced.len as usize)
+                        std::slice::from_raw_parts(
+                            forced.slot.data as *const u8,
+                            forced.slot.len as usize,
+                        )
                     };
                     *GOT.lock().unwrap() = bytes.to_vec();
                 });
@@ -549,6 +566,7 @@ mod tests {
         });
 
         server.join().unwrap();
+        assert_eq!(TAG.load(Ordering::SeqCst), RESULT_OK_TAG as usize, "Ok variant");
         assert_eq!(&*GOT.lock().unwrap(), b"PONG\n");
     }
 }

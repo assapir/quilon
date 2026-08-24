@@ -1012,11 +1012,12 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
 Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
 `print`/`eprint` force and write eagerly, per-fiber output stays in program order.
 
-`core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Text`** is a one-shot
+`core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Result`** is a one-shot
 request exchange: connect to `address` (`host:port`), write the request bytes, read the
-response until the peer closes (close-delimited), and hand back all of it as a deferred
-`Text`, forced on use like `@readStdin`. The HTTP client sits on it — framing and parsing
-happen in ordinary Quilon on the forced bytes.
+response until the peer closes (close-delimited), and hand back a deferred `Result` —
+`Ok(responseBytes)` on success or `NotOk(errorMessage)` on any network failure — forced on use
+like `@readStdin`. A failure is a value to match, never a crash; the response is capped at 16 MiB.
+The HTTP client sits on it — framing and parsing happen in ordinary Quilon on the forced bytes.
 
 ### Where it is headed
 

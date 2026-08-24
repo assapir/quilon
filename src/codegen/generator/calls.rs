@@ -418,7 +418,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         "tcp_request",
                     )
                     .map_err(ctx("Failed to call @tcpRequest"))?;
-                // A DEFERRED `Text` response (`{ deferred, -1 }`); forced at its strict-use site.
+                // A DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`), tagged deferred;
+                // forced at its strict-use site.
                 Self::call_result_to_basic(call)
             }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),

@@ -53,7 +53,7 @@ pub use collections::{
     __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b, __set_len,
     __set_new, __set_union,
 };
-pub use deferred::{__force_text, __read_launch};
+pub use deferred::{QlResult, __force_result, __force_text, __read_launch};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use net::__tcp_request_launch;
@@ -162,8 +162,9 @@ intrinsic_registry! {
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
-    __tcp_request_launch: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
+    __tcp_request_launch: extern "C" fn(*const u8, i64, *const u8, i64) -> QlResult,
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
+    __force_result: extern "C" fn(*const c_void) -> QlResult,
     __run_fiber_main: extern "C" fn(
         extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int,
         c_int,
