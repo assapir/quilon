@@ -11,46 +11,65 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         declaration: &TypeDeclaration,
     ) -> Result<(), String> {
-        if let TypeDefinition::Record { fields, methods } = &declaration.type_definition {
-            let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-            self.named_type_fields
-                .insert(declaration.name.clone(), field_names.clone());
+        let type_name = &declaration.name;
 
-            // Record which types override the render operator `` ` ``, so a render site
-            // dispatches to the override instead of the built-in (type-name) default.
-            if methods.iter().any(|m| m.name == "`") {
-                self.render_overrides.insert(declaration.name.clone());
+        // Record field names (a sum has none) — used by method bodies for `it.field`.
+        let field_names: Vec<String> = match &declaration.type_definition {
+            TypeDefinition::Record { fields, .. } => {
+                let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                self.named_type_fields.insert(type_name.clone(), names.clone());
+                names
             }
+            TypeDefinition::Sum { .. } => Vec::new(),
+        };
 
-            let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let methods = declaration.type_definition.methods();
 
-            // Pass 1: declare every method signature first, so a method body may reference
-            // sibling methods (or recurse) regardless of declaration order.
-            for method in methods {
-                let mangled = method_symbol(&declaration.name, &method.name);
-                if self.module.get_function(&mangled).is_some() {
-                    continue;
-                }
-                let mut parameter_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                    vec![ptr_type.into()];
-                for p in &method.parameters {
-                    let pt = self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num))?;
-                    parameter_types.push(pt.into());
-                }
-                // Unannotated return type defaults to Num, except a setter body whose
-                // tail is an in-place field write (`it.field := v`) yields `$` (i8).
-                let inferred_ret =
-                    self.default_return_type(method.return_type.as_ref(), &method.body);
-                let return_type = self.boundary_type(&inferred_ret)?;
-                let fn_type = return_type.fn_type(&parameter_types, false);
-                let method_fn = self.module.add_function(&mangled, fn_type, None);
-                // Internal linkage: method symbols are module-private (see generate_function_declaration).
-                method_fn.set_linkage(inkwell::module::Linkage::Internal);
+        // Record which types override the render operator `` ` ``, so a render site
+        // dispatches to the override instead of the built-in (type-name/variant) default.
+        if methods.iter().any(|m| m.name == "`") {
+            self.render_overrides.insert(type_name.clone());
+        }
+
+        // Parameter 0 of a receiver-dispatched method is the receiver `it`: a pointer for
+        // a record, the value struct for a sum. The shared boundary rule handles both
+        // (a bare `Named` name that is a registered sum lowers to the sum struct).
+        let receiver_llvm = self.boundary_type(&Type::named_ref(type_name))?;
+
+        // Pass 1: declare every RECEIVER-dispatched method (named methods and the render
+        // `` ` ``) first, so a body may call a sibling or recurse regardless of order.
+        // Operator members are not methods — they lower to overload functions below.
+        for method in methods {
+            if crate::ast::is_operator_symbol(&method.name) {
+                continue;
             }
+            let mangled = method_symbol(type_name, &method.name);
+            if self.module.get_function(&mangled).is_some() {
+                continue;
+            }
+            let mut parameter_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                vec![receiver_llvm.into()];
+            for p in &method.parameters {
+                let pt = self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num))?;
+                parameter_types.push(pt.into());
+            }
+            // Unannotated return type defaults to Num, except a setter body whose
+            // tail is an in-place field write (`it.field := v`) yields `$` (i8).
+            let inferred_ret = self.default_return_type(method.return_type.as_ref(), &method.body);
+            let return_type = self.boundary_type(&inferred_ret)?;
+            let fn_type = return_type.fn_type(&parameter_types, false);
+            let method_fn = self.module.add_function(&mangled, fn_type, None);
+            // Internal linkage: method symbols are module-private (see generate_function_declaration).
+            method_fn.set_linkage(inkwell::module::Linkage::Internal);
+        }
 
-            // Pass 2: generate each method body.
-            for method in methods {
-                self.generate_method(&declaration.name, &field_names, method)?;
+        // Pass 2: generate each receiver-dispatched method body, then lower each operator
+        // member to its overload function.
+        for method in methods {
+            if crate::ast::is_operator_symbol(&method.name) {
+                self.emit_operator_member(type_name, method)?;
+            } else {
+                self.generate_method(type_name, &field_names, method)?;
             }
         }
 
@@ -58,6 +77,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         // following global declaration is not mistaken for a local.
         self.current_function = None;
         Ok(())
+    }
+
+    /// Lower an operator MEMBER of a record or sum type to its overload function. The
+    /// operator lives inside the type it operates on, so we desugar it to a function whose
+    /// first parameter is the receiver `it` (the left operand) followed by the member's
+    /// explicit parameter (the right operand). `emit_module_function` mangles it on the
+    /// operator symbol (registered in `self.overloads`), so `a <op> b` dispatches to it
+    /// through the ordinary operator-overload path.
+    fn emit_operator_member(
+        &mut self,
+        type_name: &str,
+        method: &MethodDeclaration,
+    ) -> Result<(), String> {
+        let mut parameters = Vec::with_capacity(method.parameters.len() + 1);
+        parameters.push(crate::ast::Parameter {
+            name: "it".to_string(),
+            type_annotation: Some(Type::named_ref(type_name)),
+            span: method.span.clone(),
+        });
+        parameters.extend(method.parameters.iter().cloned());
+        let declaration = FunctionDeclaration {
+            name: method.name.clone(),
+            parameters,
+            return_type: method.return_type.clone(),
+            body: method.body.clone(),
+            exported: false,
+            span: method.span.clone(),
+        };
+        self.emit_module_function(&declaration)
     }
 
     /// Emit the body of a single method as the pre-declared `"{TypeName}_{method}"` function,

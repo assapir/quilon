@@ -514,6 +514,32 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        // Pre-pass: an operator overload now lives inside a type (as a member). Register
+        // each type's operator members as members of the operator's overload set, with the
+        // receiver `it` as the left operand — so `a <op> b` mangles to and dispatches
+        // through the same per-signature symbol the member is emitted under.
+        for item in &program.items {
+            if let Item::TypeDeclaration(declaration) = item {
+                let self_type = Type::named_ref(&declaration.name);
+                for method in declaration.type_definition.methods() {
+                    if is_operator_symbol(&method.name) && method.parameters.len() == 1 {
+                        let parameters = vec![
+                            self_type.clone(),
+                            method.parameters[0]
+                                .type_annotation
+                                .clone()
+                                .unwrap_or(Type::Num),
+                        ];
+                        let ret = method.return_type.clone().unwrap_or(Type::Num);
+                        self.overloads
+                            .entry(method.name.clone())
+                            .or_default()
+                            .push((parameters, ret));
+                    }
+                }
+            }
+        }
+
         // Pre-pass: record each NON-overloaded top-level function's declared return
         // type, so `infer_type` can give a call result its real type when it feeds an
         // overloaded call/operator (keeps codegen dispatch in sync with the checker).

@@ -474,9 +474,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Resolve the named record type of a method-call receiver, if known. Handles both a
     /// variable holding a constructed instance and a constructor expression used directly.
     pub(super) fn receiver_type_name(&self, expression: &Expression) -> Option<String> {
-        match expression {
-            Expression::Identifier { name, .. } => self.var_named_types.get(name).cloned(),
-            Expression::Constructor { type_name, .. } => Some(type_name.clone()),
+        if let Expression::Identifier { name, .. } = expression
+            && let Some(type_name) = self.var_named_types.get(name)
+        {
+            return Some(type_name.clone());
+        }
+        if let Expression::Constructor { type_name, .. } = expression {
+            return Some(type_name.clone());
+        }
+        // Fall back to the oracle: any record/sum-typed receiver — a sum constructor call
+        // (`Rect(6, 7).area()`), a field read, a match result — dispatches by its type name.
+        match self.oracle.expression_type(expression) {
+            Some(Type::Named { name, .. }) | Some(Type::Sum { name, .. }) => Some(name.clone()),
             _ => None,
         }
     }
