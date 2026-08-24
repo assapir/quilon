@@ -239,7 +239,7 @@ fn a_replace_misuse_reports_its_own_location() {
     );
     assert_eq!(code, 101);
     assert!(
-        stderr.contains(":3:3: replace: count 5 exceeds 3 occurrences"),
+        stderr.contains(":3:3:\nreplace: count 5 exceeds 3 occurrences"),
         "the report must locate the call, got: {stderr}"
     );
     assert!(
@@ -268,7 +268,7 @@ fn a_repeat_misuse_reports_its_own_location() {
         run_and_capture("^ = () -> Num => <\n  n = 1 - 4\n  x = \"ab\".repeat(n).size\n  x\n>");
     assert_eq!(code, 101);
     assert!(
-        stderr.contains(":3:7: repeat: `count` must be a whole number of 0 or more"),
+        stderr.contains(":3:7:\nrepeat: `count` must be a whole number of 0 or more"),
         "the report must locate the call at its column, got: {stderr}"
     );
 }

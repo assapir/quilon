@@ -1,9 +1,11 @@
 ~ core.test — assertions for self-verifying programs. Import with `<< core.test`.
 ~
 ~ A failing assertion says WHERE it failed: the file, line, and column of the call in
-~ YOUR code, the source line, and a caret under the call —
+~ YOUR code on one line, the message on the next, then the source line and a caret under
+~ the call —
 ~
-~   demo.ql:12:3: assertion failed: expected 42, got 41
+~   demo.ql:12:3:
+~   assertion failed: expected 42, got 41
 ~     |
 ~  12 |   assertEq(answer(), 42)
 ~     |   ^^^^^^^^^^^^^^^^^^^^^^
@@ -62,7 +64,18 @@
   lead = " ".repeat(site.column - 1)
   carets = "^".repeat(site.width)
 
-  eprint("`position``site.file`:`site.line`:`site.column`:`plain` `problem``message``plain`")
+  ~ A path longer than this is shown from its END behind a `…`: the file name and its
+  ~ nearest directories are what a reader needs, and a wrapped position line is hard to
+  ~ scan. Keep the width in step with `shorten_path` in the runtime, which does the same
+  ~ for a fail-loud runtime report.
+  room = 60
+  file = site.file.length > room
+    ? "…" + site.file.slice(site.file.length - room + 1, site.file.length)
+    : site.file
+
+  ~ Position first, then the message on its own line.
+  eprint("`position``file`:`site.line`:`site.column`:`plain`")
+  eprint("`problem``message``plain`")
   eprint("`frame``gutter` |`plain`")
   eprint("`frame``number` |`plain` `site.excerpt`")
   eprint("`frame``gutter` |`plain` `lead``problem``carets``plain`")

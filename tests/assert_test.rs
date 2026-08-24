@@ -238,7 +238,7 @@ fn failing_assert_reports_the_call_site_in_full() {
 
     let path = tmp_dir().join("site_full.ql");
     let expected = format!(
-        "{}:3:3: assertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
+        "{}:3:3:\nassertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
         path.display()
     );
     assert_eq!(stderr, expected, "unexpected failure report");
@@ -255,7 +255,7 @@ fn wrapper_reports_the_users_call_site_not_an_internal_hop() {
 
     let path = tmp_dir().join("site_wrapper.ql");
     assert!(
-        stderr.starts_with(&format!("{}:4:3: ", path.display())),
+        stderr.starts_with(&format!("{}:4:3:\n", path.display())),
         "must report the user's assertEq call (line 4, column 3), got: {stderr:?}"
     );
     assert!(
@@ -300,7 +300,7 @@ fn fail_at_reports_its_caller() {
     let path = tmp_dir().join("site_fail_at.ql");
     assert!(
         stderr.starts_with(&format!(
-            "{}:7:3: assertion failed: 3 is odd",
+            "{}:7:3:\nassertion failed: 3 is odd",
             path.display()
         )),
         "a custom assertion must report ITS caller (line 7), got: {stderr:?}"
@@ -331,7 +331,7 @@ fn a_failure_in_an_imported_module_reports_that_module() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.starts_with(&format!("{}:4:3: ", helper.display())),
+        stderr.starts_with(&format!("{}:4:3:\n", helper.display())),
         "the report must name the imported module and its line, got: {stderr:?}"
     );
     assert!(
@@ -401,7 +401,7 @@ fn native_aot_assert_exit_codes() {
         // does — no debug info, no unwinder, nothing to install.
         assert!(
             stderr.starts_with(&format!(
-                "{}:2:16: ",
+                "{}:2:16:\n",
                 tmp_dir().join(format!("aot_fail_{linker}.ql")).display()
             )),
             "native AOT ({linker}): failing assert must report its call site, got: {stderr:?}"

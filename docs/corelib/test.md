@@ -13,7 +13,8 @@ A failure says **where** it failed, in the same shape as a compiler
 [error](../LANGUAGE.md#error-messages) — position, message, source line, caret run:
 
 ```text
-demo.ql:12:3: assertion failed: expected 42, got 41
+demo.ql:12:3:
+assertion failed: expected 42, got 41
    |
 12 |   assertEq(answer(), 42)
    |   ^^^^^^^^^^^^^^^^^^^^^^

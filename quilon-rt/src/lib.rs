@@ -51,7 +51,7 @@ pub use deferred::{__force_text, __read_launch};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use process::{__argv_to_text_array, __envp_to_pairs, __exit};
-pub use report::QlSite;
+pub use report::{MAX_PATH_WIDTH, QlSite, shorten_path};
 pub use scheduler::__run_fiber_main;
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,

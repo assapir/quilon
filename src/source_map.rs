@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::lexer::{FileId, ROOT_FILE, Span};
+pub use quilon_rt::{MAX_PATH_WIDTH, shorten_path};
 
 /// Byte offset of the start of every line in one source text.
 ///

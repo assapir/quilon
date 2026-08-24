@@ -32,8 +32,9 @@ fn expected_frame(line: usize, column: usize, source_line: &str, width: usize) -
     )
 }
 
-/// A failing assertion and a failing bounds check frame their location identically — same
-/// gutter, same source line, same caret run — differing only in the message.
+/// A failing assertion and a failing bounds check frame their location identically — the
+/// position line, the message on its own line under it, then the same gutter, source line,
+/// and caret run — differing only in the message text.
 #[test]
 fn an_assertion_and_a_runtime_check_frame_alike() {
     let (assert_code, assert_stderr, assertion) = run_program(
@@ -44,7 +45,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         assert_stderr,
         format!(
-            "{}:3:3: assertion failed\n{}\n",
+            "{}:3:3:\nassertion failed\n{}\n",
             assertion.display(),
             expected_frame(3, 3, "  assert(1 == 2)", "assert(1 == 2)".len())
         )
@@ -58,7 +59,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         bounds_stderr,
         format!(
-            "{}:4:3: index 9 out of bounds for an array of size 1\n{}\n",
+            "{}:4:3:\nindex 9 out of bounds for an array of size 1\n{}\n",
             bounds.display(),
             expected_frame(4, 3, "  a[n]", "a[n]".len())
         )
@@ -118,7 +119,7 @@ fn a_native_build_reports_the_same_location() {
         "native and JIT reports must be identical"
     );
     assert!(
-        jit_stderr.contains(":4:3: index 5 out of bounds for an array of size 2"),
+        jit_stderr.contains(":4:3:\nindex 5 out of bounds for an array of size 2"),
         "the report must name the failing read, got: {jit_stderr}"
     );
 }

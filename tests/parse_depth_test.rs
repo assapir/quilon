@@ -31,7 +31,8 @@ fn check(name: &str, source: &str) -> Output {
 
 /// Assert the run failed *cleanly*: it exited with a normal non-zero status (not
 /// killed by a signal, which is how a stack overflow manifests), and its stderr
-/// carries the depth-guard diagnostic with a `:line:col: error:` header.
+/// carries the depth-guard diagnostic with a `:line:col:` position line and an `error:`
+/// message line under it.
 fn assert_clean_depth_error(out: &Output, what: &str) {
     // A stack overflow aborts via SIGABRT; on Unix that leaves `code()` == None.
     // A real diagnostic exits with a code (1). This is the crash-vs-diagnostic line.
@@ -48,8 +49,8 @@ fn assert_clean_depth_error(out: &Output, what: &str) {
         "{what}: missing depth-guard message; stderr was:\n{stderr}"
     );
     assert!(
-        stderr.contains(": error: "),
-        "{what}: missing rustc-style `: error:` header; stderr was:\n{stderr}"
+        stderr.contains("\nerror: "),
+        "{what}: missing the `error:` message line; stderr was:\n{stderr}"
     );
 }
 

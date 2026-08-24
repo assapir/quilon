@@ -33,6 +33,29 @@ pub struct QlSite {
     pub width: f64,
 }
 
+/// How wide a path may be in a report's position line before it is shortened. Wide enough
+/// for a realistic project-relative path, narrow enough that the line still fits a terminal
+/// beside the `line:column` that follows it.
+pub const MAX_PATH_WIDTH: usize = 60;
+
+/// A path shortened to fit a report, keeping its END — the file name and its nearest
+/// directories, which is the part a reader needs — behind a leading `…`.
+///
+/// A location prints the path as the compiler resolved it, which for an absolute path (or a
+/// temp directory, or a deeply nested module) can be longer than the terminal is wide, and a
+/// wrapped position line is much harder to scan than an elided one. Lives here rather than in
+/// the compiler because the runtime renders reports too and cannot depend on it.
+pub fn shorten_path(path: &str) -> String {
+    let width = path.chars().count();
+    match width > MAX_PATH_WIDTH {
+        false => path.to_string(),
+        true => {
+            let kept: String = path.chars().skip(width - (MAX_PATH_WIDTH - 1)).collect();
+            format!("…{kept}")
+        }
+    }
+}
+
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants
 /// it. Mirrors the four styles `core.test`'s `failAt` uses.
 #[derive(Default)]
@@ -63,7 +86,8 @@ impl Style {
 /// caret run under the failing expression:
 ///
 /// ```text
-/// demo.ql:5:11: index 7 out of bounds for an array of size 3
+/// demo.ql:5:11:
+/// index 7 out of bounds for an array of size 3
 ///   |
 /// 5 |   value = items[7]
 ///   |           ^^^^^^^^
@@ -89,13 +113,13 @@ pub(crate) fn fail_at(site: *const QlSite, message: &str, code: c_int) -> ! {
             let carets = "^".repeat(site.width.max(1.0) as usize);
 
             out.push_str(&format!(
-                "{}{file}:{line}:{}:{} {}{message}{}\n",
+                "{}{}:{line}:{}:{}\n",
                 style.position,
+                shorten_path(&file),
                 format_num(site.column),
-                style.plain,
-                style.problem,
                 style.plain
             ));
+            out.push_str(&format!("{}{message}{}\n", style.problem, style.plain));
             out.push_str(&format!("{}{gutter} |{}\n", style.frame, style.plain));
             out.push_str(&format!(
                 "{}{line} |{} {excerpt}\n",
@@ -113,4 +137,36 @@ pub(crate) fn fail_at(site: *const QlSite, message: &str, code: c_int) -> ! {
     }
     write_to_fd(2, out.as_bytes());
     __exit(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_path_is_left_alone() {
+        assert_eq!(shorten_path("examples/arrays.ql"), "examples/arrays.ql");
+    }
+
+    #[test]
+    fn a_long_path_keeps_its_end_behind_an_ellipsis() {
+        let long = format!("/{}/deeply/nested/module.ql", "a".repeat(80));
+        let short = shorten_path(&long);
+        assert_eq!(short.chars().count(), MAX_PATH_WIDTH);
+        assert!(short.starts_with('…'), "{short}");
+        assert!(
+            short.ends_with("/deeply/nested/module.ql"),
+            "the file name and its nearest directories must survive: {short}"
+        );
+    }
+
+    #[test]
+    fn shortening_counts_characters_not_bytes() {
+        // Measured in characters, so the result is never cut mid-character and is never
+        // shortened more than it has to be.
+        let path = format!("/{}/é.ql", "é".repeat(70));
+        let short = shorten_path(&path);
+        assert_eq!(short.chars().count(), MAX_PATH_WIDTH);
+        assert!(short.ends_with("/é.ql"), "{short}");
+    }
 }

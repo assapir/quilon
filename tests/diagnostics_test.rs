@@ -1,5 +1,6 @@
 //! End-to-end diagnostics gate: drives the real `quilon` binary on deliberately
-//! broken programs and asserts the rustc-style `path:line:col: error: …` report
+//! broken programs and asserts the `path:line:col:` position line, the `error: …` message
+//! line under it,
 //! (with the offending source line and a caret underline) reaches stderr, and
 //! that the process still exits non-zero.
 
@@ -35,10 +36,10 @@ fn type_error_reports_line_col_and_caret() {
     let (ok, stderr) = check("type", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
-    // line:column appears in the header.
+    // The position line, with the message on the line under it.
     assert!(
-        stderr.contains(":2:28: error:"),
-        "no line:col header: {stderr}"
+        stderr.contains(":2:28:\nerror:"),
+        "no line:col position line: {stderr}"
     );
     // `+` is now a visible overload set; a Num/Bool mix matches no member.
     assert!(
@@ -63,8 +64,8 @@ fn lexer_error_reports_line_col_and_caret() {
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains(":1:18: error:"),
-        "no line:col header: {stderr}"
+        stderr.contains(":1:18:\nerror:"),
+        "no line:col position line: {stderr}"
     );
     assert!(stderr.contains("Invalid token"), "no message: {stderr}");
     assert!(stderr.contains('^'), "no caret underline: {stderr}");
@@ -77,23 +78,27 @@ fn parse_error_reports_line_col() {
     let (ok, stderr) = check("parse", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
-    // The header follows the `:line:col: error:` shape for parse failures too.
+    // The position line + message shape holds for parse failures too.
     assert!(
-        stderr.lines().any(is_line_col_error_header),
-        "no `:line:col: error:` header: {stderr}"
+        position_line_followed_by_error(&stderr),
+        "no `:line:col:` position line with an `error:` line under it: {stderr}"
     );
 }
 
-/// Whether `line` ends in the `…:<line>:<col>: error: <message>` header shape.
-fn is_line_col_error_header(line: &str) -> bool {
-    let Some((location, rest)) = line.split_once(": error: ") else {
-        return false;
-    };
-    // The two segments immediately before `: error:` are the line and column.
-    let mut nums = location.rsplit(':');
-    let col = nums.next().and_then(|s| s.parse::<usize>().ok());
-    let row = nums.next().and_then(|s| s.parse::<usize>().ok());
-    row.is_some() && col.is_some() && !rest.is_empty()
+/// Whether `stderr` has a `…:<line>:<col>:` position line immediately followed by an
+/// `error: <message>` line — the two-line header every diagnostic opens with.
+fn position_line_followed_by_error(stderr: &str) -> bool {
+    let lines: Vec<&str> = stderr.lines().collect();
+    lines.windows(2).any(|pair| {
+        let Some(position) = pair[0].strip_suffix(':') else {
+            return false;
+        };
+        // The two segments at the end of the position line are the line and column.
+        let mut numbers = position.rsplit(':');
+        let column = numbers.next().and_then(|s| s.parse::<usize>().ok());
+        let row = numbers.next().and_then(|s| s.parse::<usize>().ok());
+        column.is_some() && row.is_some() && pair[1].starts_with("error: ")
+    })
 }
 
 /// A type error inside an IMPORTED module is reported against that module — its path, its
@@ -123,7 +128,7 @@ fn a_type_error_in_an_imported_module_names_that_module() {
 
     assert!(!out.status.success(), "the program must be rejected");
     assert!(
-        stderr.starts_with(&format!("{}:2:1: error:", module.display())),
+        stderr.starts_with(&format!("{}:2:1:\nerror:", module.display())),
         "the error must be reported against the imported module, got: {stderr:?}"
     );
     assert!(

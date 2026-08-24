@@ -5,14 +5,15 @@
 //! plus the original source text into a human- and tooling-friendly report:
 //!
 //! ```text
-//! path/to/file.ql:3:9: error: Type mismatch: expected Num, got Bool
+//! path/to/file.ql:3:9:
+//! error: Type mismatch: expected Num, got Bool
 //!   |
 //! 3 |     x = 1 + true
 //!   |         ^^^^^^^^
 //! ```
 
 use crate::lexer::Span;
-use crate::source_map::locate_in;
+use crate::source_map::{locate_in, shorten_path};
 
 /// How a diagnostic is labelled (`error`, `warning`, ...). Quilon only emits
 /// errors today, but the renderer is severity-agnostic.
@@ -39,8 +40,12 @@ impl Severity {
 /// span, only the first line is underlined).
 pub fn render(path: &str, source: &str, span: &Span, severity: Severity, message: &str) -> String {
     let loc = locate_in(path, source, span);
+    // Position first, then the message on its OWN line: the two are different questions
+    // ("where?" and "what?"), and a long message no longer pushes the position off the
+    // right edge. The path is shortened from the start if it would not fit.
     let mut out = format!(
-        "{path}:{}:{}: {}: {message}",
+        "{}:{}:{}:\n{}: {message}",
+        shorten_path(path),
         loc.line,
         loc.column,
         severity.label()
@@ -99,7 +104,8 @@ mod tests {
         // Underline "true" (bytes 10..14).
         let out = render("f.ql", src, &Span::in_root(10, 14), Severity::Error, "bad");
         let expected = "\
-f.ql:1:11: error: bad
+f.ql:1:11:
+error: bad
   |
 1 | add = 1 + true
   |           ^^^^";
@@ -110,7 +116,7 @@ f.ql:1:11: error: bad
     fn render_uses_the_spans_own_line() {
         let src = "line one\nx = oops\nline three";
         let out = render("f.ql", src, &Span::in_root(13, 17), Severity::Error, "boom");
-        assert!(out.contains("f.ql:2:5: error: boom"), "{out}");
+        assert!(out.contains("f.ql:2:5:\nerror: boom"), "{out}");
         assert!(out.contains("2 | x = oops"), "{out}");
         assert!(out.contains("    ^^^^"), "{out}");
     }
@@ -122,5 +128,16 @@ f.ql:1:11: error: bad
         let out = render("f.ql", src, &Span::in_root(0, 7), Severity::Error, "x");
         // 3 carets under "abc", not 7.
         assert!(out.ends_with("| ^^^"), "{out}");
+    }
+
+    #[test]
+    fn render_shortens_a_path_too_long_for_the_position_line() {
+        let path = format!("/{}/deep/module.ql", "d".repeat(80));
+        let out = render(&path, "x = 1", &Span::in_root(0, 1), Severity::Error, "bad");
+        let position = out.lines().next().unwrap_or_default();
+        assert!(
+            position.starts_with('…') && position.ends_with("/deep/module.ql:1:1:"),
+            "a long path is shown from its end: {position}"
+        );
     }
 }

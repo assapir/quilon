@@ -208,7 +208,8 @@ report names the read that failed, framed the way a compile error and a
 [failing assertion](corelib/test.md) are:
 
 ```text
-demo.ql:4:11: index 7 out of bounds for an array of size 3
+demo.ql:4:11:
+index 7 out of bounds for an array of size 3
    |
  4 |   value = items[wanted]
    |           ^^^^^^^^^^^^^
@@ -1115,8 +1116,10 @@ because a `Span` records only a byte offset and not which module file it came fr
 ### Error messages
 
 Compile errors — from the lexer, parser, and type checker — are reported in a
-rustc-style format: a `path:line:col: error: <message>` header, followed by the
-offending source line and a caret (`^`) underline beneath the exact span. Line
+rustc-style format: a `path:line:col:` position line, the `error: <message>` on the
+line under it, then the offending source line and a caret (`^`) underline beneath the
+exact span. A path too long for the position line is shown from its END behind a `…`,
+so the file name stays visible and the line does not wrap. Line
 and column are **1-based**, and the column counts characters (not bytes), so it
 is correct in the presence of multi-byte characters. For example, the program
 
@@ -1127,7 +1130,8 @@ add = (a :: Num) -> Num => a + true
 reports (since `+` is an [overload set](#overloading), a `Num + Bool` matches no member):
 
 ```
-program.ql:1:28: error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, Num), (Text, Text)
+program.ql:1:28:
+error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, Num), (Text, Text)
   |
 1 | add = (a :: Num) -> Num => a + true
   |                            ^^^^^^^^
