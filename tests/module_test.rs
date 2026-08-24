@@ -189,8 +189,8 @@ fn test_each_module_gets_its_own_file_identity() {
 
 fn item_span(item: &Item) -> &Span {
     match item {
-        Item::VarDecl(d) => &d.span,
-        Item::FunctionDecl(d) => &d.span,
-        Item::TypeDecl(d) => &d.span,
+        Item::VariableDeclaration(d) => &d.span,
+        Item::FunctionDeclaration(d) => &d.span,
+        Item::TypeDeclaration(d) => &d.span,
     }
 }

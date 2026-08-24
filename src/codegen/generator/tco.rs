@@ -18,67 +18,80 @@ impl<'ctx> CodeGenerator<'ctx> {
     // element, etc. — those consume the value, so a call there is not in tail position.
     //
     // `body_has_self_tail_call` is the pure analysis (no IR), used once to decide whether
-    // to set up the loop. `generate_tail_expr` is the codegen counterpart: it walks the
-    // SAME tail-position structure and, at a tail self-call, rewrites the param slots and
+    // to set up the loop. `generate_tail_expression` is the codegen counterpart: it walks the
+    // SAME tail-position structure and, at a tail self-call, rewrites the parameter slots and
     // branches to the loop header; everything else (and every non-tail subexpression) goes
-    // through the ordinary `generate_expr`. The two must agree on what "tail position" is.
+    // through the ordinary `generate_expression`. The two must agree on what "tail position" is.
 
-    /// Does `decl`'s body contain a self-call in tail position? Pure (emits no IR).
+    /// Does `declaration`'s body contain a self-call in tail position? Pure (emits no IR).
     /// `self_symbol` is the LLVM symbol the function is emitted under (mangled if
     /// overloaded) — passed in from `emit_module_function` so the "which symbol?" rule
     /// lives in one place, and a tail call is recognized as a SELF-call by matching it.
-    pub(super) fn body_has_self_tail_call(&self, decl: &FunctionDecl, self_symbol: &str) -> bool {
-        self.expr_has_self_tail_call(&decl.body, self_symbol, decl.params.len())
+    pub(super) fn body_has_self_tail_call(
+        &self,
+        declaration: &FunctionDeclaration,
+        self_symbol: &str,
+    ) -> bool {
+        self.expression_has_self_tail_call(
+            &declaration.body,
+            self_symbol,
+            declaration.parameters.len(),
+        )
     }
 
-    /// Whether `expr`, evaluated in tail position, contains a self-call (to `self_symbol`
+    /// Whether `expression`, evaluated in tail position, contains a self-call (to `self_symbol`
     /// with `arity` args). Recurses only through tail-position sub-expressions.
-    pub(super) fn expr_has_self_tail_call(
+    pub(super) fn expression_has_self_tail_call(
         &self,
-        expr: &Expr,
+        expression: &Expression,
         self_symbol: &str,
         arity: usize,
     ) -> bool {
-        match expr {
-            Expr::Call { .. } => self.is_self_tail_call(expr, self_symbol, arity),
-            Expr::Block { stmts, .. } => match stmts.last() {
-                Some(crate::ast::Statement::Expr(tail)) => {
-                    self.expr_has_self_tail_call(tail, self_symbol, arity)
+        match expression {
+            Expression::Call { .. } => self.is_self_tail_call(expression, self_symbol, arity),
+            Expression::Block { statements, .. } => match statements.last() {
+                Some(crate::ast::Statement::Expression(tail)) => {
+                    self.expression_has_self_tail_call(tail, self_symbol, arity)
                 }
                 _ => false,
             },
-            Expr::If { then, else_, .. } => {
-                self.expr_has_self_tail_call(then, self_symbol, arity)
-                    || self.expr_has_self_tail_call(else_, self_symbol, arity)
+            Expression::If { then, else_, .. } => {
+                self.expression_has_self_tail_call(then, self_symbol, arity)
+                    || self.expression_has_self_tail_call(else_, self_symbol, arity)
             }
-            Expr::Match { arms, .. } => arms
+            Expression::Match { arms, .. } => arms
                 .iter()
-                .any(|arm| self.expr_has_self_tail_call(&arm.body, self_symbol, arity)),
+                .any(|arm| self.expression_has_self_tail_call(&arm.body, self_symbol, arity)),
             // A pipeline desugars to a call; check the call it becomes.
-            Expr::Pipeline { left, right, span } => {
-                let call = Expr::desugar_pipeline(left, right, span);
+            Expression::Pipeline { left, right, span } => {
+                let call = Expression::desugar_pipeline(left, right, span);
                 self.is_self_tail_call(&call, self_symbol, arity)
             }
             _ => false,
         }
     }
 
-    /// Whether `expr` is a direct call that resolves to `self_symbol` with `arity` args —
+    /// Whether `expression` is a direct call that resolves to `self_symbol` with `arity` args —
     /// i.e. the function calling itself. Resolution mirrors `generate_call`'s: a plain
     /// name maps to itself, an overloaded name to its exact mangled member by argument
     /// types. A constructor/method/intrinsic call (which `generate_call` routes elsewhere)
     /// is never a self-call. NB only the *callee identity* matters here; the arguments are
-    /// generated normally by `generate_tail_expr`.
-    pub(super) fn is_self_tail_call(&self, expr: &Expr, self_symbol: &str, arity: usize) -> bool {
-        let Expr::Call {
+    /// generated normally by `generate_tail_expression`.
+    pub(super) fn is_self_tail_call(
+        &self,
+        expression: &Expression,
+        self_symbol: &str,
+        arity: usize,
+    ) -> bool {
+        let Expression::Call {
             function,
             arguments,
             ..
-        } = expr
+        } = expression
         else {
             return false;
         };
-        let Expr::Ident { name, .. } = function.as_ref() else {
+        let Expression::Identifier { name, .. } = function.as_ref() else {
             return false;
         };
         // A self-call may leave off a trailing `Site` for the compiler to fill in, and it is
@@ -114,30 +127,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         symbol == self_symbol
     }
 
-    /// Emit `expr` in tail position under an active [`Tco`] context. Returns `Some(value)`
+    /// Emit `expression` in tail position under an active [`Tco`] context. Returns `Some(value)`
     /// for an ordinary tail (the caller `ret`s it) or `None` when this path does not fall
     /// through to a normal return — every tail exit was a self-call. **Invariant:** on
     /// `None`, the current insert block is already TERMINATED (by the back-edge `br` of a
     /// tail self-call, or an `unreachable` for an if/match all of whose arms recurse), so
     /// the caller must not emit anything more into it. Walks the same tail-position
-    /// structure as `expr_has_self_tail_call`; any non-tail node falls through to
-    /// `generate_expr` (always `Some`).
-    pub(super) fn generate_tail_expr(
+    /// structure as `expression_has_self_tail_call`; any non-tail node falls through to
+    /// `generate_expression` (always `Some`).
+    pub(super) fn generate_tail_expression(
         &mut self,
-        expr: &Expr,
+        expression: &Expression,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let arity = self
             .tco
             .as_ref()
-            .expect("generate_tail_expr without a TCO context")
-            .param_slots
+            .expect("generate_tail_expression without a TCO context")
+            .parameter_slots
             .len();
 
-        match expr {
+        match expression {
             // A pipeline in tail position is its desugared call; lower that.
-            Expr::Pipeline { left, right, span } => {
-                let call = Expr::desugar_pipeline(left, right, span);
-                self.generate_tail_expr(&call)
+            Expression::Pipeline { left, right, span } => {
+                let call = Expression::desugar_pipeline(left, right, span);
+                self.generate_tail_expression(&call)
             }
 
             // A call in tail position: if it resolves to THIS function, lower it to the
@@ -145,11 +158,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // here (a call leaf), not on every tail node. A `Some` from
             // `emit_tail_self_call` means it declined the back-edge and emitted a plain
             // call instead, whose value is an ordinary tail value.
-            Expr::Call {
+            Expression::Call {
                 arguments, span, ..
             } => {
                 let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
-                if self.is_self_tail_call(expr, &self_symbol, arity) {
+                if self.is_self_tail_call(expression, &self_symbol, arity) {
                     // A self-call that omitted its trailing `Site` gets one filled in for
                     // the loop's parameter slot, exactly as an ordinary call would.
                     let site = match arguments.len() < arity {
@@ -158,45 +171,45 @@ impl<'ctx> CodeGenerator<'ctx> {
                     };
                     self.emit_tail_self_call(arguments, site.as_ref())
                 } else {
-                    Ok(Some(self.generate_expr(expr)?))
+                    Ok(Some(self.generate_expression(expression)?))
                 }
             }
 
-            Expr::Block { stmts, span } => {
+            Expression::Block { statements, span } => {
                 // Emit every statement normally except the tail expression, which stays in
-                // tail position. A non-`Expr`-tail block (ends in an item) has no tail call
+                // tail position. A non-`Expression`-tail block (ends in an item) has no tail call
                 // (the analysis returned false), so generating it whole is correct.
-                match stmts.split_last() {
-                    Some((crate::ast::Statement::Expr(tail), init)) => {
-                        for stmt in init {
-                            match stmt {
+                match statements.split_last() {
+                    Some((crate::ast::Statement::Expression(tail), init)) => {
+                        for statement in init {
+                            match statement {
                                 crate::ast::Statement::Item(item) => self.generate_item(item)?,
-                                crate::ast::Statement::Expr(e) => {
-                                    self.generate_expr(e)?;
+                                crate::ast::Statement::Expression(e) => {
+                                    self.generate_expression(e)?;
                                 }
                             }
                         }
-                        self.generate_tail_expr(tail)
+                        self.generate_tail_expression(tail)
                     }
-                    _ => Ok(Some(self.generate_block(stmts, span)?)),
+                    _ => Ok(Some(self.generate_block(statements, span)?)),
                 }
             }
 
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
                 ..
             } => self.generate_tail_if(condition, then, else_),
 
-            Expr::Match {
-                expr: scrutinee,
+            Expression::Match {
+                expression: scrutinee,
                 arms,
                 ..
-            } => self.generate_tail_match(expr, scrutinee, arms),
+            } => self.generate_tail_match(expression, scrutinee, arms),
 
             // Anything else in tail position is an ordinary value.
-            other => Ok(Some(self.generate_expr(other)?)),
+            other => Ok(Some(self.generate_expression(other)?)),
         }
     }
 
@@ -219,12 +232,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the conservative half of the trade.
     pub(super) fn emit_tail_self_call(
         &mut self,
-        arguments: &[Expr],
+        arguments: &[Expression],
         fill_site: Option<&Span>,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let mut new_vals: Vec<BasicValueEnum<'ctx>> = arguments
             .iter()
-            .map(|a| self.generate_expr(a))
+            .map(|a| self.generate_expression(a))
             .collect::<Result<Vec<_>, _>>()?;
         // The call's own location, for a callee (itself) whose last parameter is a `Site`.
         if let Some(span) = fill_site {
@@ -239,14 +252,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             .get_params()
             .iter()
             .zip(&new_vals)
-            .all(|(param, val)| val.get_type() == param.get_type());
+            .all(|(parameter, val)| val.get_type() == parameter.get_type());
         if !slots_fit {
             let function = tco.function;
             return self.emit_call(function, &new_vals).map(Some);
         }
         // Snapshot slots + header before the mutable stores (releases the `self.tco`
         // borrow so the `&mut self` builder calls below are allowed).
-        let slots: Vec<PointerValue<'ctx>> = tco.param_slots.clone();
+        let slots: Vec<PointerValue<'ctx>> = tco.parameter_slots.clone();
         let header = tco.header;
         for (slot, val) in slots.iter().zip(new_vals) {
             self.builder
@@ -265,11 +278,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// self-call, there is no merge value and we return `None`.
     pub(super) fn generate_tail_if(
         &mut self,
-        condition: &Expr,
-        then_expr: &Expr,
-        else_expr: &Expr,
+        condition: &Expression,
+        then_expression: &Expression,
+        else_expression: &Expression,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let condition_val = self.generate_expr(condition)?;
+        let condition_val = self.generate_expression(condition)?;
         let BasicValueEnum::IntValue(condition_bool) = condition_val else {
             return Err("Condition must be a boolean".to_string());
         };
@@ -290,7 +303,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Vec::new();
 
         self.builder.position_at_end(then_bb);
-        if let Some(v) = self.generate_tail_expr(then_expr)? {
+        if let Some(v) = self.generate_tail_expression(then_expression)? {
             let bb = self.builder.get_insert_block().unwrap();
             self.builder
                 .build_unconditional_branch(merge_bb)
@@ -299,7 +312,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         self.builder.position_at_end(else_bb);
-        if let Some(v) = self.generate_tail_expr(else_expr)? {
+        if let Some(v) = self.generate_tail_expression(else_expression)? {
             let bb = self.builder.get_insert_block().unwrap();
             self.builder
                 .build_unconditional_branch(merge_bb)
@@ -338,11 +351,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// unreachable and we return `None` (no result to load).
     pub(super) fn generate_tail_match(
         &mut self,
-        match_expr: &Expr,
-        scrutinee: &Expr,
+        match_expression: &Expression,
+        scrutinee: &Expression,
         arms: &[MatchArm],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let match_val = self.generate_expr(scrutinee)?;
+        let match_val = self.generate_expression(scrutinee)?;
         let function = self
             .current_function
             .ok_or_else(|| "Match expression must be in a function".to_string())?;
@@ -363,7 +376,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Result slot for the value-producing (non-tail-recursing) arms, sized from the
         // oracle exactly as `generate_match` does. Only written by arms that yield a value.
-        let result_llvm = self.oracle_value_type(match_expr)?;
+        let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
         self.builder
@@ -385,7 +398,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(arm_blocks[i]);
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
-            if let Some(arm_val) = self.generate_tail_expr(&arm.body)? {
+            if let Some(arm_val) = self.generate_tail_expression(&arm.body)? {
                 any_value_arm = true;
                 self.builder
                     .build_store(result_alloca, arm_val)

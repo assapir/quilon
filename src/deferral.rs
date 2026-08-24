@@ -21,7 +21,9 @@
 //! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 
-use crate::ast::{Expr, InterpPart, Item, MethodDecl, Program, Statement, TypeDef};
+use crate::ast::{
+    Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement, TypeDefinition,
+};
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -57,9 +59,9 @@ impl DeferInfo {
 /// force-set — the whole codegen-visible surface of the analysis.
 pub fn analyze(program: &Program) -> DeferInfo {
     let uses_deferral = program.items.iter().any(|item| match item {
-        Item::FunctionDecl(f) => references_at_primitive(&f.body),
-        Item::VarDecl(v) => references_at_primitive(&v.value),
-        Item::TypeDecl(_) => false,
+        Item::FunctionDeclaration(f) => references_at_primitive(&f.body),
+        Item::VariableDeclaration(v) => references_at_primitive(&v.value),
+        Item::TypeDeclaration(_) => false,
     });
 
     let mut taint = Taint::default();
@@ -73,13 +75,13 @@ pub fn analyze(program: &Program) -> DeferInfo {
     }
 }
 
-/// Whether any `@`-primitive reference appears anywhere in `expr`. An `@` name can only ever
+/// Whether any `@`-primitive reference appears anywhere in `expression`. An `@` name can only ever
 /// name a leaf IO primitive (the parser reserves the `@`), so any `@`-prefixed identifier —
 /// called directly, piped into, or otherwise — counts.
-fn references_at_primitive(expr: &Expr) -> bool {
+fn references_at_primitive(expression: &Expression) -> bool {
     let mut found = false;
-    for_each_subexpr(expr, &mut |e| {
-        if let Expr::Ident { name, .. } = e
+    for_each_subexpression(expression, &mut |e| {
+        if let Expression::Identifier { name, .. } = e
             && name.starts_with('@')
         {
             found = true;
@@ -99,10 +101,10 @@ impl Taint {
         match item {
             // A function/method body is a strict slot: forcing its result keeps a promise from
             // escaping across the call boundary.
-            Item::FunctionDecl(f) => self.strict(&f.body, &Scope::new()),
-            Item::VarDecl(v) => self.strict(&v.value, &Scope::new()),
-            Item::TypeDecl(t) => {
-                if let TypeDef::Record { methods, .. } = &t.type_def {
+            Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
+            Item::VariableDeclaration(v) => self.strict(&v.value, &Scope::new()),
+            Item::TypeDeclaration(t) => {
+                if let TypeDefinition::Record { methods, .. } = &t.type_definition {
                     for method in methods {
                         self.analyze_method(method);
                     }
@@ -111,33 +113,34 @@ impl Taint {
         }
     }
 
-    fn analyze_method(&mut self, method: &MethodDecl) {
+    fn analyze_method(&mut self, method: &MethodDeclaration) {
         self.strict(&method.body, &Scope::new());
     }
 
-    /// Visit `expr` in a STRICT slot: analyze it, and if its value is deferred, force it here.
-    fn strict(&mut self, expr: &Expr, env: &Scope) {
-        if self.visit(expr, env) {
-            self.force_sites.insert(expr.span().clone());
+    /// Visit `expression` in a STRICT slot: analyze it, and if its value is deferred, force it here.
+    fn strict(&mut self, expression: &Expression, env: &Scope) {
+        if self.visit(expression, env) {
+            self.force_sites.insert(expression.span().clone());
         }
     }
 
-    /// Analyze `expr`, recording forces for its own strict children, and return whether its
+    /// Analyze `expression`, recording forces for its own strict children, and return whether its
     /// value is delivered to the parent still deferred (i.e. it reached here through lazy
     /// carriers only). The parent decides whether to force it, via [`Self::strict`].
-    fn visit(&mut self, expr: &Expr, env: &Scope) -> bool {
-        match expr {
-            Expr::Number { .. } | Expr::String { .. } | Expr::Bool { .. } | Expr::Unit { .. } => {
-                false
-            }
-            Expr::Ident { name, .. } => env.is_deferred(name),
+    fn visit(&mut self, expression: &Expression, env: &Scope) -> bool {
+        match expression {
+            Expression::Number { .. }
+            | Expression::String { .. }
+            | Expression::Bool { .. }
+            | Expression::Unit { .. } => false,
+            Expression::Identifier { name, .. } => env.is_deferred(name),
 
             // A value-returning `@` primitive (`@readStdin`, `@tcpRequest`) is the only kind of
             // deferred-producing call; every other call delivers a ready value (its own body
             // forced its result). The callee expression and the arguments are all strict slots
             // (a deferred value used inside `function` — e.g. a called lambda — or passed as an
             // argument is forced there).
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 ..
@@ -149,61 +152,64 @@ impl Taint {
                 produces_deferred(function, arguments)
             }
 
-            Expr::BinOp { left, right, .. } => {
+            Expression::BinaryOperator { left, right, .. } => {
                 self.strict(left, env);
                 self.strict(right, env);
                 false
             }
-            Expr::Pipeline { left, right, .. } => {
+            Expression::Pipeline { left, right, .. } => {
                 self.strict(left, env);
                 self.strict(right, env);
                 false
             }
-            Expr::UnaryOp { expr, .. } | Expr::Spread { expr, .. } => {
-                self.strict(expr, env);
+            Expression::UnaryOperator { expression, .. }
+            | Expression::Spread { expression, .. } => {
+                self.strict(expression, env);
                 false
             }
-            Expr::FieldAccess { expr, .. } => {
-                self.strict(expr, env);
+            Expression::FieldAccess { expression, .. } => {
+                self.strict(expression, env);
                 false
             }
-            Expr::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. } => {
                 self.strict(target, env);
                 self.strict(value, env);
                 false
             }
-            Expr::Index { expr, index, .. } => {
-                self.strict(expr, env);
+            Expression::Index {
+                expression, index, ..
+            } => {
+                self.strict(expression, env);
                 self.strict(index, env);
                 false
             }
-            Expr::Range { start, end, .. } => {
+            Expression::Range { start, end, .. } => {
                 self.strict(start, env);
                 self.strict(end, env);
                 false
             }
-            Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
+            Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
                 for element in elements {
                     self.strict(element, env);
                 }
                 false
             }
-            Expr::MapLiteral { entries, .. } => {
+            Expression::MapLiteral { entries, .. } => {
                 for (key, value) in entries {
                     self.strict(key, env);
                     self.strict(value, env);
                 }
                 false
             }
-            Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+            Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
                 for (_, value) in fields {
                     self.strict(value, env);
                 }
                 false
             }
-            Expr::Interpolation { parts, .. } => {
+            Expression::Interpolation { parts, .. } => {
                 for part in parts {
-                    if let InterpPart::Hole(hole) = part {
+                    if let InterpolationPart::Hole(hole) = part {
                         self.strict(hole, env);
                     }
                 }
@@ -211,14 +217,14 @@ impl Taint {
             }
             // A lambda body result is strict (a closure never returns a promise). The outer
             // scope is visible so a captured deferred value used strictly inside is forced.
-            Expr::Lambda { body, .. } => {
+            Expression::Lambda { body, .. } => {
                 self.strict(body, env);
                 false
             }
 
             // Lazy carriers: the arms/result flow the value through without forcing, so the
             // If/Match/Block delivers deferred iff any branch does — the parent slot forces it.
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
@@ -229,36 +235,38 @@ impl Taint {
                 let else_deferred = self.visit(else_, env);
                 then_deferred || else_deferred
             }
-            Expr::Match { expr, arms, .. } => {
-                self.strict(expr, env);
+            Expression::Match {
+                expression, arms, ..
+            } => {
+                self.strict(expression, env);
                 let mut any = false;
                 for arm in arms {
                     any |= self.visit(&arm.body, env);
                 }
                 any
             }
-            Expr::Block { stmts, .. } => self.visit_block(stmts, env),
+            Expression::Block { statements, .. } => self.visit_block(statements, env),
         }
     }
 
     /// A block introduces a scope. Bindings carry their value's deferredness (a `=` is lazy);
     /// non-final statement values are discarded (not forced — the launch still runs); the
     /// final expression's value is the block's value, delivered to the block's own slot.
-    fn visit_block(&mut self, stmts: &[Statement], env: &Scope) -> bool {
+    fn visit_block(&mut self, statements: &[Statement], env: &Scope) -> bool {
         let mut local = env.child();
-        let last = stmts.len().saturating_sub(1);
+        let last = statements.len().saturating_sub(1);
         let mut result_deferred = false;
-        for (index, stmt) in stmts.iter().enumerate() {
-            match stmt {
-                Statement::Item(Item::VarDecl(v)) => {
+        for (index, statement) in statements.iter().enumerate() {
+            match statement {
+                Statement::Item(Item::VariableDeclaration(v)) => {
                     let deferred = self.visit(&v.value, &local);
                     local.bind(v.name.clone(), deferred);
                 }
-                Statement::Item(Item::FunctionDecl(f)) => {
+                Statement::Item(Item::FunctionDeclaration(f)) => {
                     self.strict(&f.body, &Scope::new());
                 }
-                Statement::Item(Item::TypeDecl(_)) => {}
-                Statement::Expr(e) => {
+                Statement::Item(Item::TypeDeclaration(_)) => {}
+                Statement::Expression(e) => {
                     if index == last {
                         result_deferred = self.visit(e, &local);
                     } else {
@@ -274,7 +282,7 @@ impl Taint {
 }
 
 /// A lexical scope mapping in-scope names to whether they hold a deferred value. Names absent
-/// from the map (params, pattern bindings from a forced scrutinee, globals) are ready.
+/// from the map (parameters, pattern bindings from a forced scrutinee, globals) are ready.
 #[derive(Clone, Default)]
 struct Scope {
     deferred_names: HashMap<String, bool>,
@@ -299,105 +307,117 @@ impl Scope {
 }
 
 /// Whether `function`/`arguments` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
-fn is_read_call(function: &Expr, arguments: &[Expr]) -> bool {
-    matches!(function, Expr::Ident { name, .. } if name == READ_PRIMITIVE) && arguments.is_empty()
+fn is_read_call(function: &Expression, arguments: &[Expression]) -> bool {
+    matches!(function, Expression::Identifier { name, .. } if name == READ_PRIMITIVE)
+        && arguments.is_empty()
 }
 
 /// Whether `function`/`arguments` is a call to a value-returning `@` primitive — one that hands
 /// back a DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
 /// `@tcpRequest(addr, req)` (a deferred `Text` response). Effect-only primitives like `@sleep`
 /// (which yields `$`) are never deferred and so never appear here.
-fn produces_deferred(function: &Expr, arguments: &[Expr]) -> bool {
+fn produces_deferred(function: &Expression, arguments: &[Expression]) -> bool {
     is_read_call(function, arguments)
-        || matches!(function, Expr::Ident { name, .. } if name == TCP_REQUEST_PRIMITIVE)
+        || matches!(function, Expression::Identifier { name, .. } if name == TCP_REQUEST_PRIMITIVE)
 }
 
-/// Apply `f` to `expr` and every sub-expression (pre-order). The one structural walk the
-/// small analyses here share, so a new `Expr` variant is handled in one place.
-fn for_each_subexpr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
-    f(expr);
-    match expr {
-        Expr::Number { .. }
-        | Expr::String { .. }
-        | Expr::Bool { .. }
-        | Expr::Unit { .. }
-        | Expr::Ident { .. } => {}
-        Expr::Interpolation { parts, .. } => {
+/// Apply `f` to `expression` and every sub-expression (pre-order). The one structural walk the
+/// small analyses here share, so a new `Expression` variant is handled in one place.
+fn for_each_subexpression(expression: &Expression, f: &mut impl FnMut(&Expression)) {
+    f(expression);
+    match expression {
+        Expression::Number { .. }
+        | Expression::String { .. }
+        | Expression::Bool { .. }
+        | Expression::Unit { .. }
+        | Expression::Identifier { .. } => {}
+        Expression::Interpolation { parts, .. } => {
             for part in parts {
-                if let InterpPart::Hole(hole) = part {
-                    for_each_subexpr(hole, f);
+                if let InterpolationPart::Hole(hole) = part {
+                    for_each_subexpression(hole, f);
                 }
             }
         }
-        Expr::Call {
+        Expression::Call {
             function,
             arguments,
             ..
         } => {
-            for_each_subexpr(function, f);
+            for_each_subexpression(function, f);
             for arg in arguments {
-                for_each_subexpr(arg, f);
+                for_each_subexpression(arg, f);
             }
         }
-        Expr::BinOp { left, right, .. } | Expr::Pipeline { left, right, .. } => {
-            for_each_subexpr(left, f);
-            for_each_subexpr(right, f);
+        Expression::BinaryOperator { left, right, .. }
+        | Expression::Pipeline { left, right, .. } => {
+            for_each_subexpression(left, f);
+            for_each_subexpression(right, f);
         }
-        Expr::Range { start, end, .. } => {
-            for_each_subexpr(start, f);
-            for_each_subexpr(end, f);
+        Expression::Range { start, end, .. } => {
+            for_each_subexpression(start, f);
+            for_each_subexpression(end, f);
         }
-        Expr::UnaryOp { expr, .. }
-        | Expr::FieldAccess { expr, .. }
-        | Expr::Spread { expr, .. }
-        | Expr::Lambda { body: expr, .. } => for_each_subexpr(expr, f),
-        Expr::FieldAssign { target, value, .. } => {
-            for_each_subexpr(target, f);
-            for_each_subexpr(value, f);
+        Expression::UnaryOperator { expression, .. }
+        | Expression::FieldAccess { expression, .. }
+        | Expression::Spread { expression, .. }
+        | Expression::Lambda {
+            body: expression, ..
+        } => for_each_subexpression(expression, f),
+        Expression::FieldAssign { target, value, .. } => {
+            for_each_subexpression(target, f);
+            for_each_subexpression(value, f);
         }
-        Expr::Index { expr, index, .. } => {
-            for_each_subexpr(expr, f);
-            for_each_subexpr(index, f);
+        Expression::Index {
+            expression, index, ..
+        } => {
+            for_each_subexpression(expression, f);
+            for_each_subexpression(index, f);
         }
-        Expr::If {
+        Expression::If {
             condition,
             then,
             else_,
             ..
         } => {
-            for_each_subexpr(condition, f);
-            for_each_subexpr(then, f);
-            for_each_subexpr(else_, f);
+            for_each_subexpression(condition, f);
+            for_each_subexpression(then, f);
+            for_each_subexpression(else_, f);
         }
-        Expr::Match { expr, arms, .. } => {
-            for_each_subexpr(expr, f);
+        Expression::Match {
+            expression, arms, ..
+        } => {
+            for_each_subexpression(expression, f);
             for arm in arms {
-                for_each_subexpr(&arm.body, f);
+                for_each_subexpression(&arm.body, f);
             }
         }
-        Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
+        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
             for element in elements {
-                for_each_subexpr(element, f);
+                for_each_subexpression(element, f);
             }
         }
-        Expr::MapLiteral { entries, .. } => {
+        Expression::MapLiteral { entries, .. } => {
             for (key, value) in entries {
-                for_each_subexpr(key, f);
-                for_each_subexpr(value, f);
+                for_each_subexpression(key, f);
+                for_each_subexpression(value, f);
             }
         }
-        Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
             for (_, value) in fields {
-                for_each_subexpr(value, f);
+                for_each_subexpression(value, f);
             }
         }
-        Expr::Block { stmts, .. } => {
-            for stmt in stmts {
-                match stmt {
-                    Statement::Expr(e) => for_each_subexpr(e, f),
-                    Statement::Item(Item::VarDecl(v)) => for_each_subexpr(&v.value, f),
-                    Statement::Item(Item::FunctionDecl(fun)) => for_each_subexpr(&fun.body, f),
-                    Statement::Item(Item::TypeDecl(_)) => {}
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                match statement {
+                    Statement::Expression(e) => for_each_subexpression(e, f),
+                    Statement::Item(Item::VariableDeclaration(v)) => {
+                        for_each_subexpression(&v.value, f)
+                    }
+                    Statement::Item(Item::FunctionDeclaration(fun)) => {
+                        for_each_subexpression(&fun.body, f)
+                    }
+                    Statement::Item(Item::TypeDeclaration(_)) => {}
                 }
             }
         }

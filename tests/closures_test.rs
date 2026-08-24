@@ -71,7 +71,7 @@ fn mixed_value_and_reference_capture() {
     );
 }
 
-// --- A closure parameter still shadows an outer binding of the same name (the param is
+// --- A closure parameter still shadows an outer binding of the same name (the parameter is
 //     not a capture). ---
 #[test]
 fn parameter_shadows_outer_binding() {

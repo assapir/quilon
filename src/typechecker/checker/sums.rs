@@ -67,7 +67,7 @@ impl TypeChecker {
     pub(super) fn check_constructor_call(
         &mut self,
         variant: &str,
-        args: &[Expr],
+        args: &[Expression],
         span: &Span,
     ) -> Result<Option<Type>, TypeError> {
         // Find the owning sum type and clone just what we need to drop the borrow.
@@ -93,7 +93,7 @@ impl TypeChecker {
         }
         let mut arg_types = Vec::with_capacity(args.len());
         for (field_type, arg) in field_types.iter().zip(args.iter()) {
-            let arg_type = self.infer_expr(arg)?;
+            let arg_type = self.infer_expression(arg)?;
             self.check_type_compatibility(field_type, &arg_type, span)?;
             arg_types.push(arg_type);
         }

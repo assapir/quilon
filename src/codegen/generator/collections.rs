@@ -28,19 +28,19 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `__map_set` per entry. The oracle gives the map's `Map(K, V)` type.
     pub(super) fn generate_map_literal(
         &mut self,
-        node: &Expr,
-        entries: &[(Expr, Expr)],
+        node: &Expression,
+        entries: &[(Expression, Expression)],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (key_ty, value_ty) = match self.oracle.expr_type(node) {
+        let (key_ty, value_ty) = match self.oracle.expression_type(node) {
             Some(Type::Map(k, v)) => ((**k).clone(), (**v).clone()),
             _ => return Err("map literal has no Map type in the oracle".to_string()),
         };
         let value_llvm = self.value_repr_type(&value_ty)?;
 
         let mut map = self.call_rt_ptr("__map_new", &[])?;
-        for (key_expr, value_expr) in entries {
-            let (tag, ka, kb) = self.key_words(key_expr, &key_ty)?;
-            let value = self.generate_expr(value_expr)?;
+        for (key_expression, value_expression) in entries {
+            let (tag, ka, kb) = self.key_words(key_expression, &key_ty)?;
+            let value = self.generate_expression(value_expression)?;
             let boxed = self.box_value(value, value_llvm)?;
             map = self.call_rt_ptr(
                 "__map_set",
@@ -53,10 +53,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `[|e1, e2, ...|]` — build a fresh set by `__set_new` then `__set_add` per element.
     pub(super) fn generate_set_literal(
         &mut self,
-        node: &Expr,
-        elements: &[Expr],
+        node: &Expression,
+        elements: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let elem_ty = match self.oracle.expr_type(node) {
+        let elem_ty = match self.oracle.expression_type(node) {
             Some(Type::Set(e)) => (**e).clone(),
             _ => return Err("set literal has no Set type in the oracle".to_string()),
         };
@@ -71,25 +71,27 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn generate_map_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        arguments: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (key_ty, value_ty) = match self.oracle.expr_type(&args[0]) {
+        let (key_ty, value_ty) = match self.oracle.expression_type(&arguments[0]) {
             Some(Type::Map(k, v)) => ((**k).clone(), (**v).clone()),
             _ => return Err("map method receiver is not a Map".to_string()),
         };
         let value_llvm = self.value_repr_type(&value_ty)?;
-        let map = self.generate_expr(&args[0])?.into_pointer_value();
+        let map = self
+            .generate_expression(&arguments[0])?
+            .into_pointer_value();
 
         match method {
             "has" => {
-                let (tag, ka, kb) = self.key_words(&args[1], &key_ty)?;
+                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
                 let found =
                     self.call_rt_int("__map_has", &[map.into(), tag.into(), ka.into(), kb.into()])?;
                 self.int_to_bool(found, "rt_bool")
             }
             "set" => {
-                let (tag, ka, kb) = self.key_words(&args[1], &key_ty)?;
-                let value = self.generate_expr(&args[2])?;
+                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
+                let value = self.generate_expression(&arguments[2])?;
                 let boxed = self.box_value(value, value_llvm)?;
                 let out = self.call_rt_ptr(
                     "__map_set",
@@ -97,11 +99,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 )?;
                 Ok(out.into())
             }
-            "get" => self.generate_map_get(map, &args[1], &key_ty, value_llvm),
+            "get" => self.generate_map_get(map, &arguments[1], &key_ty, value_llvm),
             "keys" => self.build_key_array(map, &key_ty),
             "values" => self.build_values_array(map, value_llvm),
             "each" => {
-                self.map_each(map, &args[1], &key_ty, value_llvm, &value_ty)?;
+                self.map_each(map, &arguments[1], &key_ty, value_llvm, &value_ty)?;
                 Ok(map.into())
             }
             other => Err(format!("unhandled map method {other}")),
@@ -113,11 +115,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_map_get(
         &mut self,
         map: PointerValue<'ctx>,
-        key_expr: &Expr,
+        key_expression: &Expression,
         key_ty: &Type,
         value_llvm: BasicTypeEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (tag, ka, kb) = self.key_words(key_expr, key_ty)?;
+        let (tag, ka, kb) = self.key_words(key_expression, key_ty)?;
         let i64t = self.context.i64_type();
         let found_slot = self.create_entry_block_alloca("mget_found", i64t.into())?;
         let boxed = self.call_rt_ptr(
@@ -212,7 +214,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn map_each(
         &mut self,
         map: PointerValue<'ctx>,
-        lambda: &Expr,
+        lambda: &Expression,
         key_ty: &Type,
         value_llvm: BasicTypeEnum<'ctx>,
         value_ty: &Type,
@@ -237,30 +239,32 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn generate_set_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        arguments: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let elem_ty = match self.oracle.expr_type(&args[0]) {
+        let elem_ty = match self.oracle.expression_type(&arguments[0]) {
             Some(Type::Set(e)) => (**e).clone(),
             _ => return Err("set method receiver is not a Set".to_string()),
         };
-        let set = self.generate_expr(&args[0])?.into_pointer_value();
+        let set = self
+            .generate_expression(&arguments[0])?
+            .into_pointer_value();
 
         match method {
             "has" => {
-                let (tag, a, b) = self.key_words(&args[1], &elem_ty)?;
+                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
                 let found =
                     self.call_rt_int("__set_has", &[set.into(), tag.into(), a.into(), b.into()])?;
                 self.int_to_bool(found, "rt_bool")
             }
             "add" => {
-                let (tag, a, b) = self.key_words(&args[1], &elem_ty)?;
+                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
                 let out =
                     self.call_rt_ptr("__set_add", &[set.into(), tag.into(), a.into(), b.into()])?;
                 Ok(out.into())
             }
             "items" => self.build_items_array(set, &elem_ty),
             "each" => {
-                self.set_each(set, &args[1], &elem_ty)?;
+                self.set_each(set, &arguments[1], &elem_ty)?;
                 Ok(set.into())
             }
             other => Err(format!("unhandled set method {other}")),
@@ -298,7 +302,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn set_each(
         &mut self,
         set: PointerValue<'ctx>,
-        lambda: &Expr,
+        lambda: &Expression,
         elem_ty: &Type,
     ) -> Result<(), String> {
         let n = self.call_rt_int("__set_len", &[set.into()])?;
@@ -316,10 +320,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `intrinsic` (`__map_len` / `__set_len`). Shared by `generate_field_access`.
     pub(super) fn generate_collection_size(
         &mut self,
-        receiver: &Expr,
+        receiver: &Expression,
         intrinsic: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let collection = self.generate_expr(receiver)?.into_pointer_value();
+        let collection = self.generate_expression(receiver)?.into_pointer_value();
         let len = self.call_rt_int(intrinsic, &[collection.into()])?;
         Ok(self
             .builder
@@ -331,18 +335,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `+` union, `-` difference, `+-`/`-+` intersection — each returns a NEW set.
     pub(super) fn generate_set_op(
         &mut self,
-        op: BinOp,
-        left: &Expr,
-        right: &Expr,
+        operator: BinaryOperator,
+        left: &Expression,
+        right: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let intrinsic = match op {
-            BinOp::Add => "__set_union",
-            BinOp::Sub => "__set_diff",
-            BinOp::SetIntersect => "__set_intersect",
-            _ => return Err(format!("{op:?} is not a set operator")),
+        let intrinsic = match operator {
+            BinaryOperator::Add => "__set_union",
+            BinaryOperator::Sub => "__set_diff",
+            BinaryOperator::SetIntersect => "__set_intersect",
+            _ => return Err(format!("{operator:?} is not a set operator")),
         };
-        let l = self.generate_expr(left)?.into_pointer_value();
-        let r = self.generate_expr(right)?.into_pointer_value();
+        let l = self.generate_expression(left)?.into_pointer_value();
+        let r = self.generate_expression(right)?.into_pointer_value();
         let out = self.call_rt_ptr(intrinsic, &[l.into(), r.into()])?;
         Ok(out.into())
     }
@@ -350,11 +354,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a key/element expression to the runtime ABI triple `(tag, a, b)` of `i64`s.
     fn key_words(
         &mut self,
-        key_expr: &Expr,
+        key_expression: &Expression,
         key_ty: &Type,
     ) -> Result<(IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>), String> {
         let i64t = self.context.i64_type();
-        let value = self.generate_expr(key_expr)?;
+        let value = self.generate_expression(key_expression)?;
         match key_ty {
             Type::Num => {
                 let bits = self
@@ -462,13 +466,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn call_rt_ptr(
         &mut self,
         name: &str,
-        args: &[BasicMetadataValueEnum<'ctx>],
+        arguments: &[BasicMetadataValueEnum<'ctx>],
     ) -> Result<PointerValue<'ctx>, String> {
         let f = self.get_intrinsic(name)?;
         use inkwell::values::AnyValue;
         Ok(self
             .builder
-            .build_call(f, args, "rt_call")
+            .build_call(f, arguments, "rt_call")
             .map_err(|e| format!("Failed to call {name}: {e:?}"))?
             .as_any_value_enum()
             .into_pointer_value())
@@ -478,13 +482,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn call_rt_int(
         &mut self,
         name: &str,
-        args: &[BasicMetadataValueEnum<'ctx>],
+        arguments: &[BasicMetadataValueEnum<'ctx>],
     ) -> Result<IntValue<'ctx>, String> {
         let f = self.get_intrinsic(name)?;
         use inkwell::values::AnyValue;
         Ok(self
             .builder
-            .build_call(f, args, "rt_call")
+            .build_call(f, arguments, "rt_call")
             .map_err(|e| format!("Failed to call {name}: {e:?}"))?
             .as_any_value_enum()
             .into_int_value())

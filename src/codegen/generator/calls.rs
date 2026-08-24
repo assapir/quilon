@@ -28,12 +28,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// parameter is a `Site` receives (see [`Self::site_value`]).
     pub(super) fn generate_call(
         &mut self,
-        function: &Expr,
-        arguments: &[Expr],
+        function: &Expression,
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Get function name - only support direct calls for now
-        let function_name = if let Expr::Ident { name, .. } = function {
+        let function_name = if let Expression::Identifier { name, .. } = function {
             name
         } else {
             return Err("Only direct function calls supported".to_string());
@@ -94,7 +94,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // check and the sum-constructor block below is therefore immaterial.
         if crate::ast::is_array_method(function_name)
             && !arguments.is_empty()
-            && matches!(self.oracle.expr_type(&arguments[0]), Some(Type::Array(_)))
+            && matches!(
+                self.oracle.expression_type(&arguments[0]),
+                Some(Type::Array(_))
+            )
         {
             return self.generate_array_method(function_name, arguments);
         }
@@ -105,31 +108,37 @@ impl<'ctx> CodeGenerator<'ctx> {
         // names never collide with (Capitalized) sum constructors.
         if crate::ast::is_text_method(function_name)
             && !arguments.is_empty()
-            && matches!(self.oracle.expr_type(&arguments[0]), Some(Type::Text))
+            && matches!(self.oracle.expression_type(&arguments[0]), Some(Type::Text))
         {
             return self.generate_text_method(function_name, arguments, span);
         }
 
         // Built-in Map methods — RESERVED on a `Map` receiver, mirroring the array/Text
         // blocks above.
-        if crate::ast::is_map_method(func_name)
-            && !args.is_empty()
-            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Map(_, _)))
+        if crate::ast::is_map_method(function_name)
+            && !arguments.is_empty()
+            && matches!(
+                self.oracle.expression_type(&arguments[0]),
+                Some(Type::Map(_, _))
+            )
         {
-            return self.generate_map_method(func_name, args);
+            return self.generate_map_method(function_name, arguments);
         }
 
         // Built-in Set methods — RESERVED on a `Set` receiver.
-        if crate::ast::is_set_method(func_name)
-            && !args.is_empty()
-            && matches!(self.oracle.expr_type(&args[0]), Some(Type::Set(_)))
+        if crate::ast::is_set_method(function_name)
+            && !arguments.is_empty()
+            && matches!(
+                self.oracle.expression_type(&arguments[0]),
+                Some(Type::Set(_))
+            )
         {
-            return self.generate_set_method(func_name, args);
+            return self.generate_set_method(function_name, arguments);
         }
 
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
-        // user `TypeDef::Sum` declarations.
+        // user `TypeDefinition::Sum` declarations.
         if let Some((tag, type_name)) = self.sum_variants.get(function_name.as_str()).cloned() {
             return self.generate_sum_constructor(tag, &type_name, arguments);
         }
@@ -138,10 +147,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // captured environment as the trailing argument. Recognized by the variable's
         // recorded closure signature (see `closure_sigs`). Checked before overload
         // dispatch — a local closure binding shadows any same-named top-level function.
-        if let Some((param_tys, ret_ty)) = self.closure_sigs.get(function_name.as_str()).cloned()
+        if let Some((parameter_tys, ret_ty)) =
+            self.closure_sigs.get(function_name.as_str()).cloned()
             && self.variables.contains_key(function_name.as_str())
         {
-            return self.generate_closure_call(function_name, &param_tys, ret_ty, arguments);
+            return self.generate_closure_call(function_name, &parameter_tys, ret_ty, arguments);
         }
 
         // Overloaded function call: dispatch to the per-signature mangled symbol chosen
@@ -183,7 +193,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Generate argument values
         let mut arg_values: Vec<BasicValueEnum> = arguments
             .iter()
-            .map(|arg| self.generate_expr(arg))
+            .map(|arg| self.generate_expression(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Fill in the caller's location when the callee's last parameter is a `Site` the
@@ -206,12 +216,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// never disagree about it. The rule itself is [`ast::fills_call_site`]; here it is
     /// applied to whichever signature the name resolves to — a member of an overload set,
     /// or a plain top-level function.
-    pub(super) fn fills_call_site(&self, name: &str, arguments: &[Expr]) -> bool {
+    pub(super) fn fills_call_site(&self, name: &str, arguments: &[Expression]) -> bool {
         match self.overloads.contains_key(name) {
             true => {
                 let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
                 self.matching_overload(name, &arg_types)
-                    .is_some_and(|(params, _)| crate::ast::fills_call_site(params, arguments.len()))
+                    .is_some_and(|(parameters, _)| {
+                        crate::ast::fills_call_site(parameters, arguments.len())
+                    })
             }
             false => self.fn_call_site_arity.get(name) == Some(&(arguments.len() + 1)),
         }
@@ -343,7 +355,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_at_primitive(
         &mut self,
         primitive: &str,
-        arguments: &[Expr],
+        arguments: &[Expression],
         site: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match primitive {
@@ -354,7 +366,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         arguments.len()
                     ));
                 }
-                let BasicValueEnum::FloatValue(seconds) = self.generate_expr(&arguments[0])? else {
+                let BasicValueEnum::FloatValue(seconds) =
+                    self.generate_expression(&arguments[0])?
+                else {
                     return Err("@sleep expects a Num (seconds)".to_string());
                 };
                 let sleep = self.get_intrinsic("__sleep")?;
@@ -382,14 +396,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::call_result_to_basic(call)
             }
             "tcpRequest" => {
-                if args.len() != 2 {
+                if arguments.len() != 2 {
                     return Err(format!(
                         "@tcpRequest expects exactly 2 arguments (address, requestBytes), got {}",
-                        args.len()
+                        arguments.len()
                     ));
                 }
-                let (addr_ptr, addr_len) = self.extract_text(&args[0])?;
-                let (req_ptr, req_len) = self.extract_text(&args[1])?;
+                let (addr_ptr, addr_len) = self.extract_text(&arguments[0])?;
+                let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
                 let request = self.get_intrinsic("__tcp_request_launch")?;
                 let call = self
                     .builder
@@ -431,10 +445,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Resolve the named record type of a method-call receiver, if known. Handles both a
     /// variable holding a constructed instance and a constructor expression used directly.
-    pub(super) fn receiver_type_name(&self, expr: &Expr) -> Option<String> {
-        match expr {
-            Expr::Ident { name, .. } => self.var_named_types.get(name).cloned(),
-            Expr::Constructor { type_name, .. } => Some(type_name.clone()),
+    pub(super) fn receiver_type_name(&self, expression: &Expression) -> Option<String> {
+        match expression {
+            Expression::Identifier { name, .. } => self.var_named_types.get(name).cloned(),
+            Expression::Constructor { type_name, .. } => Some(type_name.clone()),
             _ => None,
         }
     }

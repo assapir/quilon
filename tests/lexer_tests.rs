@@ -1,6 +1,6 @@
 // Integration tests for Quilon lexer
 
-use quilon::ast::{Expr, Item};
+use quilon::ast::{Expression, Item};
 use quilon::lexer::{Lexer, ROOT_FILE, TokenKind};
 use quilon::parser::parse;
 
@@ -71,7 +71,7 @@ fn test_mutable_variable() {
 }
 
 #[test]
-fn test_function_with_params() {
+fn test_function_with_parameters() {
     let source = "add = (a :: Num, b :: Num) -> Num => a + b";
     let tokens = Lexer::tokenize(source).unwrap();
 
@@ -246,15 +246,15 @@ fn test_spans_carry_the_file_they_came_from() {
 
 #[test]
 fn test_parsed_nodes_inherit_their_files_id() {
-    // Composed spans (a BinOp over two operands, a call over its arguments) are built
+    // Composed spans (a BinaryOperator over two operands, a call over its arguments) are built
     // by the parser rather than copied from a token, so they have to inherit the id too.
     let tokens = Lexer::tokenize_in_file("f = (a :: Num) -> Num => a + 1 * 2", 7).unwrap();
     let program = parse(&tokens).unwrap();
-    let Item::FunctionDecl(decl) = &program.items[0] else {
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
         panic!("expected a function declaration");
     };
-    let mut spans = vec![decl.body.span().clone()];
-    if let Expr::BinOp { left, right, .. } = &decl.body {
+    let mut spans = vec![declaration.body.span().clone()];
+    if let Expression::BinaryOperator { left, right, .. } = &declaration.body {
         spans.push(left.span().clone());
         spans.push(right.span().clone());
     } else {

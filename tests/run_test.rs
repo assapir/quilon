@@ -355,7 +355,7 @@ fn run_print_yields_unit_usable_where_unit_expected() {
 }
 
 #[test]
-fn run_eprint_returns_unit_as_last_expr() {
+fn run_eprint_returns_unit_as_last_expression() {
     // `eprint` returns `$`; as the entry point's last expression (no trailing 0)
     // the non-Num body coerces to exit 0.
     assert_exit_linked("<< core.io\n^ = () => eprint(\"oops\")", 0);
@@ -396,7 +396,7 @@ fn unit_is_incompatible_with_num() {
 
 #[test]
 fn block_level_annotated_bindings_parse_and_run() {
-    // `name :: Type = expr` must work INSIDE a block exactly as at top level. Covers
+    // `name :: Type = expression` must work INSIDE a block exactly as at top level. Covers
     // Num, Text, Bool, and an array (`[]Num`) annotation.
     assert_exit(
         "^ = () -> Num => <\n  n :: Num = 5\n  t :: Text = \"abcd\"\n  ok :: Bool = t.size == 4\n  xs :: []Num = [1, 2, 3]\n  ok ? n + t.size + xs.size : 0\n>",
@@ -648,7 +648,7 @@ fn run_ok_text_payload_constructs_and_dispatches() {
 }
 
 #[test]
-fn result_any_payload_crosses_a_generic_param() {
+fn result_any_payload_crosses_a_generic_parameter() {
     // The uniform Result layout (`{ i8 tag, {ptr,i64} slot }`) lets a Result carrying ANY
     // payload — Num, Text, []Text, a Num NotOk — pass through a generic `(r :: Result)`
     // parameter that only matches by TAG. `isOk` returns 1 for Ok, 0 for NotOk; summing the
@@ -703,7 +703,7 @@ fn result_bool_payload_round_trips() {
 #[test]
 fn result_user_sum_payload_boxes_crosses_and_extracts() {
     // A payload wider than the uniform `{ptr,i64}` slot — a user sum value `Circle(5)` — is
-    // BOXED into the slot, so `Ok(Circle(5))` still crosses a generic `(r :: Result)` param
+    // BOXED into the slot, so `Ok(Circle(5))` still crosses a generic `(r :: Result)` parameter
     // (isOk), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
     assert_exit(
         "Shape = Circle(Num) / Rect(Num, Num)\n\
@@ -720,7 +720,7 @@ fn result_user_sum_payload_boxes_crosses_and_extracts() {
 #[test]
 fn result_nested_result_payload_boxes_and_extracts() {
     // A nested `Result` payload (also wider than the slot) boxes and unboxes: `Ok(Ok(7))`
-    // crosses a generic param and the inner Num is extracted through both layers.
+    // crosses a generic parameter and the inner Num is extracted through both layers.
     assert_exit(
         "isOk = (r :: Result) -> Num => r ? | Ok(_) => 1 | NotOk(_) => 0\n\
          ^ = () -> Num => <\n\
@@ -786,14 +786,14 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
 // native tests in `tests/args_native_test.rs`.
 
 #[test]
-fn run_entry_with_args_param_typechecks_and_runs() {
+fn run_entry_with_args_parameter_typechecks_and_runs() {
     // `^(args :: []Text)` — `args.size` is always >= 1 (argv[0] is the program name),
     // so this is deterministic regardless of how the test harness was invoked.
     assert_exit("^ = (args :: []Text) -> Num => args.size >= 1 ? 7 : 0", 7);
 }
 
 #[test]
-fn run_entry_with_args_and_env_params_runs() {
+fn run_entry_with_args_and_env_parameters_runs() {
     // `^(args :: []Text, env :: [][]Text)` — touches both arrays; the result depends
     // only on invocation-independent facts (sizes), so it is deterministic.
     assert_exit(
@@ -890,7 +890,7 @@ fn legacy_numeric_argc_argv_entry_still_runs() {
 #[test]
 fn entry_with_non_text_array_param_is_rejected() {
     // The runtime builds `Text` elements for the argv array, so an `^` whose first
-    // param is `[]Num` (an array of a NON-`Text` element) must NOT be routed to the
+    // parameter is `[]Num` (an array of a NON-`Text` element) must NOT be routed to the
     // argv arm — that would hand it mis-sized elements. The type checker rejects it up
     // front (so `quilon check` and `quilon run`/`build` all report the same clear
     // diagnostic) rather than silently miscompiling.

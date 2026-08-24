@@ -1,8 +1,9 @@
 // LLVM code generator for Quilon
 
 use crate::ast::{
-    BinOp, Expr, FunctionDecl, InterpPart, Item, MatchArm, MethodDecl, Pattern, Program, Type,
-    TypeDecl, TypeDef, UnaryOp, VarDecl, is_operator_symbol,
+    BinaryOperator, Expression, FunctionDeclaration, InterpolationPart, Item, MatchArm,
+    MethodDeclaration, Pattern, Program, Type, TypeDeclaration, TypeDefinition, UnaryOperator,
+    VariableDeclaration, is_operator_symbol,
 };
 use crate::codegen::debug::DebugInfo;
 use crate::lexer::Span;
@@ -41,7 +42,7 @@ mod tests;
 mod text;
 
 use mangle::{
-    fmt_param_types, is_builtin_overload_name, mangle_overload, method_symbol, type_mangle,
+    fmt_parameter_types, is_builtin_overload_name, mangle_overload, method_symbol, type_mangle,
 };
 use oracle::zeroed;
 
@@ -86,7 +87,7 @@ struct Capture<'ctx> {
     value_ty: BasicTypeEnum<'ctx>,
     by_ref: bool,
     /// If the captured value is itself a closure, its recorded signature
-    /// (param types, return type) so the lifted body can re-register it and call it. A
+    /// (parameter types, return type) so the lifted body can re-register it and call it. A
     /// closure value is an opaque `{ ptr, ptr }` struct that does not encode its callee
     /// signature, and the lifted body starts with a cleared `closure_sigs`.
     closure_sig: Option<ClosureSig<'ctx>>,
@@ -120,7 +121,7 @@ pub struct CodeGenerator<'ctx> {
     // Track which named type a variable was constructed from: var name -> type name
     var_named_types: HashMap<String, String>,
     // Sum-type variant registry: variant (constructor) name -> (tag, owning type name).
-    // Built from user `TypeDef::Sum` declarations plus the built-in Result. The tag is
+    // Built from user `TypeDefinition::Sum` declarations plus the built-in Result. The tag is
     // the variant's declaration index. Drives constructor codegen and tag-based pattern
     // dispatch (generalizing the old hardcoded Ok=0/NotOk=1).
     sum_variants: HashMap<String, (u8, String)>,
@@ -180,9 +181,9 @@ pub struct CodeGenerator<'ctx> {
     // lowering; only USER operator overloads add an operator symbol to this map.
     // Each member is its `(parameter types, return type)`.
     overloads: HashMap<String, Vec<(Vec<Type>, Type)>>,
-    // Quilon type of each in-scope local/param, for argument-type inference at
+    // Quilon type of each in-scope local/parameter, for argument-type inference at
     // overloaded call sites (codegen lacks the type checker's full inference, so it
-    // tracks just enough — locals, params, and constructor results — to mangle).
+    // tracks just enough — locals, parameters, and constructor results — to mangle).
     var_types: HashMap<String, Type>,
     // Declared return type of each NON-overloaded top-level function, so `infer_type`
     // can give a call's result its real type (not a `Num` default) when that result is
@@ -190,10 +191,10 @@ pub struct CodeGenerator<'ctx> {
     // with the type checker. (Overloaded callees' returns come from `overloads`.)
     fn_return_types: HashMap<String, Type>,
     // Active self-tail-call optimization context for the function currently being
-    // emitted, set up by `generate_function_decl` only when the body has a self-call in
-    // tail position. A tail self-call then overwrites the param slots and branches back
+    // emitted, set up by `generate_function_declaration` only when the body has a self-call in
+    // tail position. A tail self-call then overwrites the parameter slots and branches back
     // to `loop_header` instead of emitting a stack-growing `call` + `ret` — guaranteeing
-    // self-tail-recursion runs in constant stack (see `Tco` / `generate_tail_expr`).
+    // self-tail-recursion runs in constant stack (see `Tco` / `generate_tail_expression`).
     tco: Option<Tco<'ctx>>,
     // Named types (records) that define their own `` ` `` render operator override. A
     // value of such a type renders via the user's `Type_op$backtick` method instead of the
@@ -252,7 +253,7 @@ pub struct CodeGenerator<'ctx> {
 /// The loop-lowering context for self-tail-call optimization of one function. Present
 /// (in `CodeGenerator::tco`) only while emitting a function whose body has at least one
 /// self-call in tail position. Classic TCO transform: the body's parameter `=`-bindings
-/// become mutable slots (`param_slots`), and a tail self-call stores its argument values
+/// become mutable slots (`parameter_slots`), and a tail self-call stores its argument values
 /// into those slots and `br`s back to `header` — turning the recursion into a loop.
 struct Tco<'ctx> {
     /// The LLVM symbol of the function being optimized (mangled if overloaded). A `Call`
@@ -265,7 +266,7 @@ struct Tco<'ctx> {
     function: FunctionValue<'ctx>,
     /// The function's parameter alloca slots, in declaration order. A tail self-call
     /// recomputes the args and rewrites these slots (its length is the arity).
-    param_slots: Vec<PointerValue<'ctx>>,
+    parameter_slots: Vec<PointerValue<'ctx>>,
     /// The loop header — the block a tail self-call branches back to. Positioned right
     /// after the parameter slots are (re)loaded into the `variables` map for the body.
     header: inkwell::basic_block::BasicBlock<'ctx>,
@@ -281,15 +282,15 @@ struct Tco<'ctx> {
 /// by the checker) through to the read sites.
 ///
 /// # API (for downstream M3 waves: array methods, spread, args/env)
-/// The single primitive is [`TypeOracle::expr_type`] — the inferred `Type` of any
+/// The single primitive is [`TypeOracle::expression_type`] — the inferred `Type` of any
 /// expression, looked up by its source `Span`. The checker records the *result* type of
-/// every node, so the element type of an `arr[i]` is `expr_type(<the Index node>)`, the
-/// type of `rec.field` is `expr_type(<the FieldAccess node>)`, and a `match`'s result is
-/// `expr_type(<the Match node>)` — there is no need for per-shape accessors, the read
+/// every node, so the element type of an `arr[i]` is `expression_type(<the Index node>)`, the
+/// type of `rec.field` is `expression_type(<the FieldAccess node>)`, and a `match`'s result is
+/// `expression_type(<the Match node>)` — there is no need for per-shape accessors, the read
 /// site just asks for the type of the whole node it is lowering.
 ///
 /// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
-/// additive: new expression kinds get types recorded automatically by `infer_expr`. A
+/// additive: new expression kinds get types recorded automatically by `infer_expression`. A
 /// `None` means the span wasn't recorded (e.g. the IR-only codegen tests that skip the
 /// type-check pass); callers fall back to their historical `f64` assumption.
 ///
@@ -367,7 +368,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// payload is PACKED into that slot at construction (`pack_result_payload`) and UNPACKED
     /// back to its concrete type at a match binding (`unpack_result_payload`); a Text/array
     /// payload is already `{ptr,i64}` and fills the slot directly. This uniform shape is what
-    /// lets a Result carrying any payload cross a generic `(r :: Result)` param/return.
+    /// lets a Result carrying any payload cross a generic `(r :: Result)` parameter/return.
     fn register_builtin_sum_types(&mut self) {
         self.sum_variants
             .insert("Ok".to_string(), (0u8, "Result".to_string()));
@@ -454,9 +455,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Pre-pass: register all user sum-type variants so constructors and pattern
         // dispatch resolve regardless of declaration order relative to their uses.
         for item in &program.items {
-            if let Item::TypeDecl(TypeDecl {
+            if let Item::TypeDeclaration(TypeDeclaration {
                 name,
-                type_def: TypeDef::Sum(variants),
+                type_definition: TypeDefinition::Sum(variants),
                 ..
             }) = item
             {
@@ -467,9 +468,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (`named_type_fields` keeps only names, which is all the non-debug paths need, so
             // this deep clone is skipped entirely when debug info is off).
             if self.debug.is_some()
-                && let Item::TypeDecl(TypeDecl {
+                && let Item::TypeDeclaration(TypeDeclaration {
                     name,
-                    type_def: TypeDef::Record { fields, .. },
+                    type_definition: TypeDefinition::Record { fields, .. },
                     ..
                 }) = item
             {
@@ -482,32 +483,36 @@ impl<'ctx> CodeGenerator<'ctx> {
         // type and dispatched by exact argument type at each call/operator site.
         let mut fn_counts: HashMap<&str, usize> = HashMap::new();
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && !decl.is_inert_io_placeholder()
+            if let Item::FunctionDeclaration(declaration) = item
+                && !declaration.is_inert_io_placeholder()
             {
-                *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
+                *fn_counts.entry(declaration.name.as_str()).or_insert(0) += 1;
             }
         }
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && !decl.is_inert_io_placeholder()
-                && (is_operator_symbol(&decl.name)
-                    || fn_counts.get(decl.name.as_str()).copied().unwrap_or(0) > 1
-                    || is_builtin_overload_name(&decl.name))
-                && decl.name != "^"
+            if let Item::FunctionDeclaration(declaration) = item
+                && !declaration.is_inert_io_placeholder()
+                && (is_operator_symbol(&declaration.name)
+                    || fn_counts
+                        .get(declaration.name.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                        > 1
+                    || is_builtin_overload_name(&declaration.name))
+                && declaration.name != "^"
             {
-                let params: Vec<Type> = decl
-                    .params
+                let parameters: Vec<Type> = declaration
+                    .parameters
                     .iter()
                     .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
                     .collect();
                 // The return type drives argument-type inference for a value bound to
                 // an overloaded call/operator (e.g. a user `+` returning a record).
-                let ret = decl.return_type.clone().unwrap_or(Type::Num);
+                let ret = declaration.return_type.clone().unwrap_or(Type::Num);
                 self.overloads
-                    .entry(decl.name.clone())
+                    .entry(declaration.name.clone())
                     .or_default()
-                    .push((params, ret));
+                    .push((parameters, ret));
             }
         }
 
@@ -515,21 +520,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         // type, so `infer_type` can give a call result its real type when it feeds an
         // overloaded call/operator (keeps codegen dispatch in sync with the checker).
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && !decl.is_inert_io_placeholder()
-                && !self.overloads.contains_key(&decl.name)
+            if let Item::FunctionDeclaration(declaration) = item
+                && !declaration.is_inert_io_placeholder()
+                && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = &decl.return_type {
-                    self.fn_return_types.insert(decl.name.clone(), ret.clone());
+                if let Some(ret) = &declaration.return_type {
+                    self.fn_return_types
+                        .insert(declaration.name.clone(), ret.clone());
                 }
-                let params: Vec<Type> = decl
-                    .params
+                let parameters: Vec<Type> = declaration
+                    .parameters
                     .iter()
                     .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
                     .collect();
-                if crate::ast::takes_call_site(&params) {
+                if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
-                        .insert(decl.name.clone(), params.len());
+                        .insert(declaration.name.clone(), parameters.len());
                 }
             }
         }
@@ -543,12 +549,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Generate code for all top-level items. Reset the current-function context
         // before each one: a top-level item is never nested, so codegen must not see a
-        // stale function left over from the previous top-level decl (which would make it
-        // look like a nested/local declaration — see `generate_function_decl`).
+        // stale function left over from the previous top-level declaration (which would make it
+        // look like a nested/local declaration — see `generate_function_declaration`).
         for (idx, item) in program.items.iter().enumerate() {
-            if let Item::FunctionDecl(decl) = item
+            if let Item::FunctionDeclaration(declaration) = item
                 && let Some(reachable) = reachable.as_ref()
-                && !reachable.contains(decl.name.as_str())
+                && !reachable.contains(declaration.name.as_str())
             {
                 continue;
             }
@@ -566,12 +572,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
-            let entry_params: Vec<Type> = program
+            let entry_parameters: Vec<Type> = program
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    Item::FunctionDecl(decl) if decl.name == "^" => Some(
-                        decl.params
+                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => Some(
+                        declaration
+                            .parameters
                             .iter()
                             .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
                             .collect(),
@@ -579,7 +586,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     _ => None,
                 })
                 .unwrap_or_default();
-            self.generate_main_wrapper(&entry_params)?;
+            self.generate_main_wrapper(&entry_parameters)?;
         }
 
         // Embed the provenance watermark as an `!llvm.ident` entry (harmless for the JIT
@@ -606,7 +613,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.module.print_to_string().to_string())
     }
 
-    fn generate_main_wrapper(&mut self, entry_params: &[Type]) -> Result<(), String> {
+    fn generate_main_wrapper(&mut self, entry_parameters: &[Type]) -> Result<(), String> {
         // Create C-compatible main: `int main(int argc, char** argv, char** envp)`.
         // The third (`envp`) parameter is the POSIX/glibc extension to C `main`; passing
         // it is harmless even for a program that only declares `args`, and it is how we
@@ -651,7 +658,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let thunk_block = self.context.append_basic_block(entry_fn, "entry");
             self.builder.position_at_end(thunk_block);
             let exit_code =
-                self.emit_entry_dispatch(entry_params, thunk_argc, thunk_argv, thunk_envp)?;
+                self.emit_entry_dispatch(entry_parameters, thunk_argc, thunk_argv, thunk_envp)?;
             self.builder
                 .build_return(Some(&exit_code))
                 .map_err(ctx("Failed to build entry-thunk return"))?;
@@ -676,7 +683,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .as_any_value_enum()
                 .into_int_value()
         } else {
-            self.emit_entry_dispatch(entry_params, argc, argv, envp)?
+            self.emit_entry_dispatch(entry_parameters, argc, argv, envp)?
         };
 
         self.builder
@@ -693,7 +700,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `__ql_entry` fiber thunk (deferral), so both dispatch identically.
     fn emit_entry_dispatch(
         &mut self,
-        entry_params: &[Type],
+        entry_parameters: &[Type],
         argc: inkwell::values::IntValue<'ctx>,
         argv: inkwell::values::PointerValue<'ctx>,
         envp: inkwell::values::PointerValue<'ctx>,
@@ -707,12 +714,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Dispatch on `^`'s DECLARED Quilon parameter types (not the lowered LLVM types:
         // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
-        // can't tell them apart — dispatching on it would silently call a `Text` param
+        // can't tell them apart — dispatching on it would silently call a `Text` parameter
         // with the argv array). The supported signatures are `^()`,
         // `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)` (plus the legacy
         // `^(argc :: Num, argv :: Num)`). We match on the EXACT element types — the
         // runtime builds `Text`/`[]Text` elements, so a `[]Num` (or any other element)
-        // param must NOT reach the array arms, or it would receive mis-sized elements.
+        // parameter must NOT reach the array arms, or it would receive mis-sized elements.
         let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
         let is_text_pairs = |t: &Type| matches!(t, Type::Array(e) if is_text_array(e.as_ref()));
 
@@ -753,11 +760,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                  Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
                  '(args :: []Text, env :: [][]Text) -> Num' \
                  (or legacy '(argc :: Num, argv :: Num) -> Num').",
-                fmt_param_types(entry_params)
+                fmt_parameter_types(entry_parameters)
             )
         };
 
-        let result = match entry_params {
+        let result = match entry_parameters {
             // `^() -> Num`
             [] => self
                 .builder
@@ -796,7 +803,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
             // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [][]Text)` without
-            // args, 3+ params) is rejected with a clear diagnostic instead of a silent
+            // args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
             // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
         };
@@ -821,9 +828,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_item(&mut self, item: &Item) -> Result<(), String> {
         match item {
-            Item::VarDecl(decl) => self.generate_var_decl(decl),
-            Item::FunctionDecl(decl) => self.generate_function_decl(decl),
-            Item::TypeDecl(decl) => self.generate_type_decl(decl),
+            Item::VariableDeclaration(declaration) => {
+                self.generate_variable_declaration(declaration)
+            }
+            Item::FunctionDeclaration(declaration) => {
+                self.generate_function_declaration(declaration)
+            }
+            Item::TypeDeclaration(declaration) => self.generate_type_declaration(declaration),
         }
     }
 

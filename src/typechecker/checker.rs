@@ -1,9 +1,10 @@
 // Type checker implementation
 
 use crate::ast::type_label;
-use crate::ast::{BinOp, UnaryOp};
+use crate::ast::{BinaryOperator, UnaryOperator};
 use crate::ast::{
-    Expr, FunctionDecl, InterpPart, Item, MatchArm, Param, Pattern, Program, Type, VarDecl,
+    Expression, FunctionDeclaration, InterpolationPart, Item, MatchArm, Parameter, Pattern,
+    Program, Type, VariableDeclaration,
 };
 use crate::lexer::Span;
 
@@ -88,7 +89,7 @@ pub enum TypeError {
     /// parameter types spelled out.
     OverloadMissingAnnotation {
         name: String,
-        param: String,
+        parameter: String,
         span: Span,
     },
     /// A write to a field of a `Site`. The type is read-only as a whole: a location is a
@@ -102,7 +103,7 @@ pub enum TypeError {
     /// A `Site` parameter (the built-in call-site record the compiler fills in) that could
     /// never be filled: one declared before the last parameter, or on a lambda or method,
     /// neither of which is called by name. `subject` names what declared it.
-    MisplacedSiteParam {
+    MisplacedSiteParameter {
         subject: String,
         span: Span,
     },
@@ -117,14 +118,14 @@ pub enum TypeError {
     /// place the missing annotation actually stops the program.
     UnannotatedOverloadCall {
         name: String,
-        params: Vec<Type>,
+        parameters: Vec<Type>,
         span: Span,
     },
     /// An overload member omitted its return type annotation and nothing calls it, so
     /// there is no call site to blame. Anchored at the definition.
     UnannotatedOverloadMember {
         name: String,
-        params: Vec<Type>,
+        parameters: Vec<Type>,
         span: Span,
     },
     /// A comparison/equality operator overload (`== != < <= > >=`) declared a non-`Bool`
@@ -178,8 +179,8 @@ pub enum TypeError {
 /// the inferred instance line up regardless of carried fields); a `Generic` payload
 /// slot (only Result's `Ok(T)`/`NotOk(E)`) matches anything, preserving the existing
 /// generic-Result behavior.
-pub(crate) fn types_match(param: &Type, arg: &Type) -> bool {
-    match (param, arg) {
+pub(crate) fn types_match(parameter: &Type, arg: &Type) -> bool {
+    match (parameter, arg) {
         // `Generic` is a not-yet-concrete type — only a sum payload binding (the `T` in
         // `Ok(T)`) produces one, since concrete sum-payload typing is a deferred 0.9
         // feature. For overload dispatch a `Generic` resolves as `Num`, the canonical
@@ -221,8 +222,8 @@ pub struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
 }
 
-/// A method's signature and body: (params, return type, body expression).
-type MethodDef = (Vec<Param>, Option<Type>, Expr);
+/// A method's signature and body: (parameters, return type, body expression).
+type MethodDef = (Vec<Parameter>, Option<Type>, Expression);
 
 /// The **type oracle**: a side-table mapping each expression's source `Span` to the
 /// `Type` the checker inferred for it. Produced by `check_program` and consumed by
@@ -247,7 +248,7 @@ pub type TypeTable = std::collections::HashMap<Span, Type>;
 /// it bites: at a call to the member, or at its definition if nothing calls it.
 #[derive(Debug, Clone)]
 pub struct Overload {
-    pub params: Vec<Type>,
+    pub parameters: Vec<Type>,
     pub ret: Option<Type>,
 }
 
@@ -271,7 +272,7 @@ pub struct TypeChecker {
     // Calling such a method requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
-    // populated as a side effect of `infer_expr` and returned by `check_program`.
+    // populated as a side effect of `infer_expression` and returned by `check_program`.
     type_table: TypeTable,
     // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
     // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use

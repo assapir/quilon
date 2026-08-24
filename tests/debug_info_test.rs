@@ -3,7 +3,7 @@
 //! Builds a small `.ql` program with `--debug` and shells out to `llvm-dwarfdump` to
 //! assert the emitted binary carries a DWARF compile unit that references the `.ql`
 //! source: a `.debug_line` file table naming the `.ql` file, and a `.debug_info`
-//! subprogram for the user's function decl-lined at its source line. Skips gracefully
+//! subprogram for the user's function declaration-lined at its source line. Skips gracefully
 //! when the C toolchain or `llvm-dwarfdump` is unavailable (mirrors the native-AOT tests).
 
 use inkwell::context::Context;
@@ -231,7 +231,7 @@ describe = (p :: Point) -> Num => <
     assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
     let out = String::from_utf8_lossy(&info.stdout);
 
-    // Every local/param is present with its own `DW_AT_type`, and the four distinct Quilon
+    // Every local/parameter is present with its own `DW_AT_type`, and the four distinct Quilon
     // types map to four distinct DWARF type names — which is the whole point of typed locals:
     // `Text`, `[]Num`, and the `Point` record all share the `{ptr, i64}`-ish LLVM shape yet
     // must NOT collapse to one DWARF type.

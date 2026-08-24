@@ -155,8 +155,12 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
 /// any. Used to reject a user-written `@` primitive declaration (they are corelib-only).
 fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
     program.items.iter().find_map(|item| match item {
-        ast::Item::FunctionDecl(d) if d.name.starts_with('@') => Some((&d.span, d.name.as_str())),
-        ast::Item::VarDecl(d) if d.name.starts_with('@') => Some((&d.span, d.name.as_str())),
+        ast::Item::FunctionDeclaration(d) if d.name.starts_with('@') => {
+            Some((&d.span, d.name.as_str()))
+        }
+        ast::Item::VariableDeclaration(d) if d.name.starts_with('@') => {
+            Some((&d.span, d.name.as_str()))
+        }
         _ => None,
     })
 }
@@ -166,7 +170,7 @@ pub fn has_entry_point(program: &ast::Program) -> bool {
     program
         .items
         .iter()
-        .any(|item| matches!(item, ast::Item::FunctionDecl(func) if func.name == "^"))
+        .any(|item| matches!(item, ast::Item::FunctionDeclaration(func) if func.name == "^"))
 }
 
 #[cfg(test)]

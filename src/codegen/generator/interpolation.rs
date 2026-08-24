@@ -7,17 +7,17 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Lower an `Expr::Interpolation`: render each hole to `Text` through its `` ` ``
+    /// Lower an `Expression::Interpolation`: render each hole to `Text` through its `` ` ``
     /// operator and concatenate the literal chunks and rendered holes left to right.
     pub(super) fn generate_interpolation(
         &mut self,
-        parts: &[InterpPart],
+        parts: &[InterpolationPart],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let mut acc: Option<BasicValueEnum<'ctx>> = None;
         for part in parts {
             let piece = match part {
-                InterpPart::Literal(s) => self.text_literal(s)?,
-                InterpPart::Hole(e) => self.render_expr(e)?,
+                InterpolationPart::Literal(s) => self.text_literal(s)?,
+                InterpolationPart::Hole(e) => self.render_expression(e)?,
             };
             acc = Some(match acc {
                 None => piece,
@@ -32,18 +32,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Render `expr` to a `Text` value: evaluate it, then dispatch on its authoritative
+    /// Render `expression` to a `Text` value: evaluate it, then dispatch on its authoritative
     /// Quilon type (via the oracle) to the right renderer. The single render path shared
     /// by string interpolation and `print`/`eprint`.
-    pub(super) fn render_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
-        let ty = self.infer_type(expr);
-        let value = self.generate_expr(expr)?;
+    pub(super) fn render_expression(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ty = self.infer_type(expression);
+        let value = self.generate_expression(expression)?;
         // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
         // own type's `` ` `` override would invoke that override forever. That one case
         // renders via the built-in default (the type name); a DIFFERENT value of the same
         // type — e.g. a child node `it.next` — still uses the override and terminates for
         // any finite structure.
-        if let Expr::Ident { name, .. } = expr
+        if let Expression::Identifier { name, .. } = expression
             && name == "it"
             && let Type::Named { name: ty_name, .. } = &ty
             && self.generating_backtick_for.as_deref() == Some(ty_name.as_str())
@@ -130,7 +133,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` (mirrors
-    /// `Expr::String` lowering): a global NUL-terminated byte constant plus its byte length.
+    /// `Expression::String` lowering): a global NUL-terminated byte constant plus its byte length.
     pub(super) fn text_literal(&mut self, s: &str) -> Result<BasicValueEnum<'ctx>, String> {
         let global = self
             .builder

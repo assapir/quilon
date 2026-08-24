@@ -12,22 +12,28 @@ impl TypeChecker {
     /// `+` on `Text` (concat) are just two members of the `+` overload set, etc.
     /// `print`/`eprint` get a member per printable built-in (`Num`/`Text`/`Bool`).
     pub(super) fn add_builtin_overloads(&mut self) {
-        let arith = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod];
-        for op in arith {
-            // Num op Num -> Num.
+        let arith = [
+            BinaryOperator::Add,
+            BinaryOperator::Sub,
+            BinaryOperator::Mul,
+            BinaryOperator::Div,
+            BinaryOperator::Mod,
+        ];
+        for operator in arith {
+            // Num operator Num -> Num.
             self.add_overload(
-                op.symbol(),
+                operator.symbol(),
                 Overload {
-                    params: vec![Type::Num, Type::Num],
+                    parameters: vec![Type::Num, Type::Num],
                     ret: Some(Type::Num),
                 },
             );
         }
         // `+` also concatenates Text.
         self.add_overload(
-            BinOp::Add.symbol(),
+            BinaryOperator::Add.symbol(),
             Overload {
-                params: vec![Type::Text, Type::Text],
+                parameters: vec![Type::Text, Type::Text],
                 ret: Some(Type::Text),
             },
         );
@@ -35,37 +41,42 @@ impl TypeChecker {
         // Comparisons. Equality (`==`/`!=`) over every built-in scalar; ordering
         // (`<`/`<=`/`>`/`>=`) over Num and Text (Text is lexicographic — the
         // concrete deliverable). All yield Bool.
-        let eq_ops = [BinOp::Eq, BinOp::Ne];
-        let ord_ops = [BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge];
-        for op in eq_ops {
+        let eq_ops = [BinaryOperator::Eq, BinaryOperator::Ne];
+        let ord_ops = [
+            BinaryOperator::Lt,
+            BinaryOperator::Le,
+            BinaryOperator::Gt,
+            BinaryOperator::Ge,
+        ];
+        for operator in eq_ops {
             for ty in [Type::Num, Type::Text, Type::Bool] {
                 self.add_overload(
-                    op.symbol(),
+                    operator.symbol(),
                     Overload {
-                        params: vec![ty.clone(), ty],
+                        parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
                     },
                 );
             }
         }
-        for op in ord_ops {
+        for operator in ord_ops {
             for ty in [Type::Num, Type::Text] {
                 self.add_overload(
-                    op.symbol(),
+                    operator.symbol(),
                     Overload {
-                        params: vec![ty.clone(), ty],
+                        parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
                     },
                 );
             }
         }
 
-        // Logical `&&`/`||`: Bool op Bool -> Bool.
-        for op in [BinOp::And, BinOp::Or] {
+        // Logical `&&`/`||`: Bool operator Bool -> Bool.
+        for operator in [BinaryOperator::And, BinaryOperator::Or] {
             self.add_overload(
-                op.symbol(),
+                operator.symbol(),
                 Overload {
-                    params: vec![Type::Bool, Type::Bool],
+                    parameters: vec![Type::Bool, Type::Bool],
                     ret: Some(Type::Bool),
                 },
             );
@@ -77,7 +88,7 @@ impl TypeChecker {
                 self.add_overload(
                     name,
                     Overload {
-                        params: vec![ty],
+                        parameters: vec![ty],
                         ret: Some(Type::Unit),
                     },
                 );
@@ -92,7 +103,7 @@ impl TypeChecker {
         self.add_overload(
             "__exit",
             Overload {
-                params: vec![Type::Num],
+                parameters: vec![Type::Num],
                 ret: Some(Type::Unit),
             },
         );
@@ -106,7 +117,7 @@ impl TypeChecker {
         self.add_overload(
             "__color_enabled",
             Overload {
-                params: vec![Type::Num],
+                parameters: vec![Type::Num],
                 ret: Some(Type::Bool),
             },
         );
@@ -128,7 +139,7 @@ impl TypeChecker {
     pub(super) fn has_exact_overload(&self, name: &str, arg_types: &[Type]) -> bool {
         self.overloads.get(name).is_some_and(|set| {
             set.iter()
-                .any(|o| crate::ast::params_accept(&o.params, arg_types, types_match))
+                .any(|o| crate::ast::parameters_accept(&o.parameters, arg_types, types_match))
         })
     }
 
@@ -145,14 +156,16 @@ impl TypeChecker {
         let matches: Vec<&Overload> = set
             .map(|s| {
                 s.iter()
-                    .filter(|o| crate::ast::params_accept(&o.params, arg_types, types_match))
+                    .filter(|o| {
+                        crate::ast::parameters_accept(&o.parameters, arg_types, types_match)
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
         // Candidate signatures are only needed to render an error, so build them lazily.
         let candidates = || -> Vec<Vec<Type>> {
-            set.map(|s| s.iter().map(|o| o.params.clone()).collect())
+            set.map(|s| s.iter().map(|o| o.parameters.clone()).collect())
                 .unwrap_or_default()
         };
 
@@ -171,7 +184,7 @@ impl TypeChecker {
                 Some(ret) => Ok(self.resolve_type(ret)),
                 None => Err(TypeError::UnannotatedOverloadCall {
                     name: name.to_string(),
-                    params: only.params.clone(),
+                    parameters: only.parameters.clone(),
                     span: span.clone(),
                 }),
             },
@@ -190,58 +203,70 @@ impl TypeChecker {
     /// before any body is checked, so an omitted return type is recorded as unknown
     /// (`ret: None`) and reported at the first call to the member, or at the definition
     /// if none exists (see `report_unannotated_overload_member`).
-    pub(super) fn register_overload_decl(&mut self, decl: &FunctionDecl) -> Result<(), TypeError> {
-        let mut params = Vec::with_capacity(decl.params.len());
-        for p in &decl.params {
+    pub(super) fn register_overload_declaration(
+        &mut self,
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), TypeError> {
+        let mut parameters = Vec::with_capacity(declaration.parameters.len());
+        for p in &declaration.parameters {
             match &p.type_annotation {
-                Some(t) => params.push(self.resolve_type(t)),
-                // Exact-type dispatch needs every overloaded member's params annotated.
+                Some(t) => parameters.push(self.resolve_type(t)),
+                // Exact-type dispatch needs every overloaded member's parameters annotated.
                 None => {
                     return Err(TypeError::OverloadMissingAnnotation {
-                        name: decl.name.clone(),
-                        param: p.name.clone(),
+                        name: declaration.name.clone(),
+                        parameter: p.name.clone(),
                         span: p.span.clone(),
                     });
                 }
             }
         }
-        let ret = decl.return_type.as_ref().map(|t| self.resolve_type(t));
+        let ret = declaration
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type(t));
 
         // A comparison/equality operator overload (`== != < <= > >=`) must return `Bool`:
         // these are predicates that feed `?`/`|` matching and conditionals. (Arithmetic
         // operators are unconstrained — e.g. `Vec * Num -> Vec` is fine.) An unannotated
         // one is left to the missing-return-annotation report, which says what to do.
-        if is_comparison_operator(&decl.name)
+        if is_comparison_operator(&declaration.name)
             && let Some(ret) = &ret
             && ret != &Type::Bool
         {
             return Err(TypeError::ComparisonOverloadNotBool {
-                operator: decl.name.clone(),
+                operator: declaration.name.clone(),
                 got: Box::new(ret.clone()),
-                span: decl.span.clone(),
+                span: declaration.span.clone(),
             });
         }
 
         // Reject an exact-duplicate signature (same parameter types) up front — it
         // would make every call to it ambiguous.
-        if let Some(set) = self.overloads.get(&decl.name)
+        if let Some(set) = self.overloads.get(&declaration.name)
             && set.iter().any(|o| {
-                o.params.len() == params.len()
-                    && o.params.iter().zip(&params).all(|(a, b)| types_match(a, b))
+                o.parameters.len() == parameters.len()
+                    && o.parameters
+                        .iter()
+                        .zip(&parameters)
+                        .all(|(a, b)| types_match(a, b))
             })
         {
             return Err(TypeError::DuplicateDefinition {
-                name: decl.name.clone(),
-                span: decl.span.clone(),
+                name: declaration.name.clone(),
+                span: declaration.span.clone(),
             });
         }
 
         if ret.is_none() && self.unannotated_overload_member.is_none() {
-            self.unannotated_overload_member =
-                Some((decl.name.clone(), params.clone(), decl.span.clone()));
+            self.unannotated_overload_member = Some((
+                declaration.name.clone(),
+                parameters.clone(),
+                declaration.span.clone(),
+            ));
         }
 
-        self.add_overload(&decl.name, Overload { params, ret });
+        self.add_overload(&declaration.name, Overload { parameters, ret });
         Ok(())
     }
 
@@ -251,9 +276,9 @@ impl TypeChecker {
     /// member nothing calls, where there is no better place to point.
     pub(super) fn report_unannotated_overload_member(&self) -> Result<(), TypeError> {
         match &self.unannotated_overload_member {
-            Some((name, params, span)) => Err(TypeError::UnannotatedOverloadMember {
+            Some((name, parameters, span)) => Err(TypeError::UnannotatedOverloadMember {
                 name: name.clone(),
-                params: params.clone(),
+                parameters: parameters.clone(),
                 span: span.clone(),
             }),
             None => Ok(()),

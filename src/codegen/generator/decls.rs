@@ -7,16 +7,19 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    pub(super) fn generate_type_decl(&mut self, decl: &TypeDecl) -> Result<(), String> {
-        if let TypeDef::Record { fields, methods } = &decl.type_def {
+    pub(super) fn generate_type_declaration(
+        &mut self,
+        declaration: &TypeDeclaration,
+    ) -> Result<(), String> {
+        if let TypeDefinition::Record { fields, methods } = &declaration.type_definition {
             let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
             self.named_type_fields
-                .insert(decl.name.clone(), field_names.clone());
+                .insert(declaration.name.clone(), field_names.clone());
 
             // Record which types override the render operator `` ` ``, so a render site
             // dispatches to the override instead of the built-in (type-name) default.
             if methods.iter().any(|m| m.name == "`") {
-                self.render_overrides.insert(decl.name.clone());
+                self.render_overrides.insert(declaration.name.clone());
             }
 
             let ptr_type = self.context.ptr_type(AddressSpace::default());
@@ -24,30 +27,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Pass 1: declare every method signature first, so a method body may reference
             // sibling methods (or recurse) regardless of declaration order.
             for method in methods {
-                let mangled = method_symbol(&decl.name, &method.name);
+                let mangled = method_symbol(&declaration.name, &method.name);
                 if self.module.get_function(&mangled).is_some() {
                     continue;
                 }
-                let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                let mut parameter_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     vec![ptr_type.into()];
-                for p in &method.params {
+                for p in &method.parameters {
                     let pt = self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num))?;
-                    param_types.push(pt.into());
+                    parameter_types.push(pt.into());
                 }
                 // Unannotated return type defaults to Num, except a setter body whose
                 // tail is an in-place field write (`it.field := v`) yields `$` (i8).
                 let inferred_ret =
                     self.default_return_type(method.return_type.as_ref(), &method.body);
                 let return_type = self.boundary_type(&inferred_ret)?;
-                let fn_type = return_type.fn_type(&param_types, false);
+                let fn_type = return_type.fn_type(&parameter_types, false);
                 let method_fn = self.module.add_function(&mangled, fn_type, None);
-                // Internal linkage: method symbols are module-private (see generate_function_decl).
+                // Internal linkage: method symbols are module-private (see generate_function_declaration).
                 method_fn.set_linkage(inkwell::module::Linkage::Internal);
             }
 
             // Pass 2: generate each method body.
             for method in methods {
-                self.generate_method(&decl.name, &field_names, method)?;
+                self.generate_method(&declaration.name, &field_names, method)?;
             }
         }
 
@@ -63,7 +66,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         type_name: &str,
         field_names: &[String],
-        method: &MethodDecl,
+        method: &MethodDeclaration,
     ) -> Result<(), String> {
         let mangled = method_symbol(type_name, &method.name);
         let function = self
@@ -85,13 +88,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         self.boxed_vars = self.compute_boxed_vars(&method.body);
 
-        // Param 0 is the implicit receiver `it` (a pointer to the record struct).
-        let it_param = function.get_nth_param(0).unwrap();
-        it_param.set_name("it");
-        let it_type = it_param.as_basic_value_enum().get_type();
+        // Parameter 0 is the implicit receiver `it` (a pointer to the record struct).
+        let it_parameter = function.get_nth_param(0).unwrap();
+        it_parameter.set_name("it");
+        let it_type = it_parameter.as_basic_value_enum().get_type();
         let it_alloca = self.create_entry_block_alloca("it", it_type)?;
         self.builder
-            .build_store(it_alloca, it_param)
+            .build_store(it_alloca, it_parameter)
             .map_err(ctx("Failed to store it"))?;
         self.variables
             .insert("it".to_string(), (it_alloca, it_type));
@@ -106,27 +109,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.declare_variable("it", it_alloca, &it_qty, &method.span, Some(1));
         }
 
-        // Remaining params follow the receiver.
-        for (i, param) in method.params.iter().enumerate() {
-            let llvm_param = function.get_nth_param((i + 1) as u32).unwrap();
-            llvm_param.set_name(&param.name);
-            let param_type = llvm_param.as_basic_value_enum().get_type();
-            let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
+        // Remaining parameters follow the receiver.
+        for (i, parameter) in method.parameters.iter().enumerate() {
+            let llvm_parameter = function.get_nth_param((i + 1) as u32).unwrap();
+            llvm_parameter.set_name(&parameter.name);
+            let parameter_type = llvm_parameter.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&parameter.name, parameter_type)?;
             self.builder
-                .build_store(alloca, llvm_param)
+                .build_store(alloca, llvm_parameter)
                 .map_err(ctx("Failed to build store"))?;
             self.variables
-                .insert(param.name.clone(), (alloca, param_type));
+                .insert(parameter.name.clone(), (alloca, parameter_type));
             self.declare_variable(
-                &param.name,
+                &parameter.name,
                 alloca,
-                param.type_annotation.as_ref().unwrap_or(&Type::Num),
-                &param.span,
+                parameter.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &parameter.span,
                 Some((i + 2) as u32),
             );
         }
 
-        let body_value = self.generate_expr(&method.body)?;
+        let body_value = self.generate_expression(&method.body)?;
         self.builder
             .build_return(Some(&body_value))
             .map_err(ctx("Failed to build return"))?;
@@ -136,18 +139,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    pub(super) fn generate_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
+    pub(super) fn generate_variable_declaration(
+        &mut self,
+        declaration: &VariableDeclaration,
+    ) -> Result<(), String> {
         // Check if this is a record literal to track field names. Prefer the oracle's
         // inferred type (authoritative field names/order, and it expands `<-` spreads);
         // a functional-update whose result is a NAMED type also tracks that name so
         // method calls on the binding resolve. Fall back to the literal's own field names
         // when the oracle has no entry (IR-only tests) — which never carry spreads.
-        if let Expr::Record { fields, .. } = &decl.value {
+        if let Expression::Record { fields, .. } = &declaration.value {
             // Field names in slot order: prefer the oracle's (it expands spreads and is
             // authoritative), else the literal's own names. Only a NAMED-type result also
             // records `var_named_types` so method calls on the binding resolve.
             let (field_names, named): (Vec<String>, Option<String>) =
-                match self.oracle.expr_type(&decl.value) {
+                match self.oracle.expression_type(&declaration.value) {
                     Some(Type::Named { name, fields, .. }) => (
                         fields.iter().map(|(n, _)| n.clone()).collect(),
                         Some(name.clone()),
@@ -157,46 +163,49 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                     _ => (fields.iter().map(|(n, _)| n.clone()).collect(), None),
                 };
-            self.record_types.insert(decl.name.clone(), field_names);
+            self.record_types
+                .insert(declaration.name.clone(), field_names);
             if let Some(name) = named {
-                self.var_named_types.insert(decl.name.clone(), name);
+                self.var_named_types.insert(declaration.name.clone(), name);
             }
         }
         // A named-type instance (e.g. `u = User { ... }`) — remember its type so method calls
         // on `u` can resolve to the mangled `User_method` functions.
-        if let Expr::Constructor {
+        if let Expression::Constructor {
             type_name, fields, ..
-        } = &decl.value
+        } = &declaration.value
         {
             let field_names: Vec<String> = self
                 .named_type_fields
                 .get(type_name)
                 .cloned()
                 .unwrap_or_else(|| fields.iter().map(|(name, _)| name.clone()).collect());
-            self.record_types.insert(decl.name.clone(), field_names);
+            self.record_types
+                .insert(declaration.name.clone(), field_names);
             self.var_named_types
-                .insert(decl.name.clone(), type_name.clone());
+                .insert(declaration.name.clone(), type_name.clone());
         }
         // Binding a function literal: remember its signature so a later `name(args)` can
         // recover the callee type for the indirect closure call (the closure value itself
         // does not encode it).
-        if let Expr::Lambda {
-            params,
+        if let Expression::Lambda {
+            parameters,
             return_type,
             body,
             ..
-        } = &decl.value
+        } = &declaration.value
         {
-            let sig = self.closure_signature(params, return_type.as_ref(), body)?;
-            self.closure_sigs.insert(decl.name.clone(), sig);
+            let sig = self.closure_signature(parameters, return_type.as_ref(), body)?;
+            self.closure_sigs.insert(declaration.name.clone(), sig);
         }
 
         // Remember the binding's Quilon type for overloaded-call argument mangling.
-        let inferred_qty = self.infer_type(&decl.value);
+        let inferred_qty = self.infer_type(&declaration.value);
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
-        self.track_named_record_binding(&decl.name, &inferred_qty);
-        self.var_types.insert(decl.name.clone(), inferred_qty);
+        self.track_named_record_binding(&declaration.name, &inferred_qty);
+        self.var_types
+            .insert(declaration.name.clone(), inferred_qty);
 
         // A top-level binding becomes a global, and a global's initializer must already be
         // a constant — there is no code before `^` in which to compute one. Refused BEFORE
@@ -207,17 +216,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         // the invariant even for callers that build IR without checking first.
         if self.current_function.is_none()
             && !matches!(
-                decl.value,
-                Expr::Number { .. } | Expr::Bool { .. } | Expr::Unit { .. } | Expr::Lambda { .. }
+                declaration.value,
+                Expression::Number { .. }
+                    | Expression::Bool { .. }
+                    | Expression::Unit { .. }
+                    | Expression::Lambda { .. }
             )
         {
             return Err(format!(
                 "top-level '{}' must hold a Num, Bool or $ literal, or a function",
-                decl.name
+                declaration.name
             ));
         }
 
-        let value = self.generate_expr(&decl.value)?;
+        let value = self.generate_expression(&declaration.value)?;
 
         if self.current_function.is_some() {
             let var_type = value.get_type();
@@ -227,8 +239,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             // what makes a `:=` capture escape-safe — the cell a closure shares is the
             // very cell later writes target — and it is equivalent to the old realloc for
             // ordinary straight-line code (reads always go through the latest slot).
-            if decl.mutable
-                && let Some((slot, _)) = self.variables.get(&decl.name).copied()
+            if declaration.mutable
+                && let Some((slot, _)) = self.variables.get(&declaration.name).copied()
             {
                 self.builder
                     .build_store(slot, value)
@@ -239,36 +251,42 @@ impl<'ctx> CodeGenerator<'ctx> {
             // A `:=` local captured by reference by some nested closure lives in a heap
             // GC cell (a "box"), so the closure and this frame share one mutable cell. Its
             // `variables` slot is the cell pointer; loads/stores work through it unchanged.
-            let slot = if decl.mutable && self.boxed_vars.contains(&decl.name) {
+            let slot = if declaration.mutable && self.boxed_vars.contains(&declaration.name) {
                 self.alloc_box(var_type)?
             } else {
-                self.create_entry_block_alloca(&decl.name, var_type)?
+                self.create_entry_block_alloca(&declaration.name, var_type)?
             };
             self.builder
                 .build_store(slot, value)
                 .map_err(ctx("Failed to build store"))?;
-            self.variables.insert(decl.name.clone(), (slot, var_type));
+            self.variables
+                .insert(declaration.name.clone(), (slot, var_type));
             // The binding's Quilon type is the one just recorded in `var_types` — borrow it
             // rather than keeping a separate clone alive across the whole binding.
-            if let Some(qty) = self.var_types.get(&decl.name) {
-                self.declare_variable(&decl.name, slot, qty, &decl.span, None);
+            if let Some(qty) = self.var_types.get(&declaration.name) {
+                self.declare_variable(&declaration.name, slot, qty, &declaration.span, None);
             }
         } else {
             // Global variable
-            let global =
-                self.module
-                    .add_global(value.get_type(), Some(AddressSpace::default()), &decl.name);
+            let global = self.module.add_global(
+                value.get_type(),
+                Some(AddressSpace::default()),
+                &declaration.name,
+            );
             global.set_initializer(&value);
         }
 
         Ok(())
     }
 
-    pub(super) fn generate_function_decl(&mut self, decl: &FunctionDecl) -> Result<(), String> {
+    pub(super) fn generate_function_declaration(
+        &mut self,
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), String> {
         // The inert core.io print/eprint placeholder is never emitted (the compiler
         // lowers print/eprint to runtime intrinsics). A leaf `@` primitive (`@sleep`) is
         // likewise a corelib placeholder lowered to a runtime intrinsic at its call site.
-        if decl.is_inert_io_placeholder() || decl.name.starts_with('@') {
+        if declaration.is_inert_io_placeholder() || declaration.name.starts_with('@') {
             return Ok(());
         }
 
@@ -283,14 +301,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             // clears the outer function's TCO context (`self.tco`). Snapshot and restore
             // it so a nested tail-recursive function does not clobber the OUTER function's
             // active context — otherwise the outer tail walk resuming after this nested
-            // decl would panic ("generate_tail_expr without a TCO context").
+            // declaration would panic ("generate_tail_expression without a TCO context").
             let saved_tco = self.tco.take();
-            let param_names: Vec<String> = decl.params.iter().map(|p| p.name.clone()).collect();
+            let parameter_names: Vec<String> = declaration
+                .parameters
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
             let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
-            let captures =
-                crate::ast::captures::lambda_free_idents(&param_names, &decl.body, &outer);
+            let captures = crate::ast::captures::lambda_free_idents(
+                &parameter_names,
+                &declaration.body,
+                &outer,
+            );
             let result = if !captures.is_empty() {
-                self.generate_local_closure(decl)
+                self.generate_local_closure(declaration)
             } else {
                 // No captures: emit a plain module function, but save/restore the
                 // enclosing per-function frame and builder state around it, since
@@ -299,7 +324,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let saved_function = self.current_function;
                 let saved_frame = self.take_frame();
 
-                let result = self.emit_module_function(decl);
+                let result = self.emit_module_function(declaration);
 
                 self.restore_frame(saved_frame);
                 self.current_function = saved_function;
@@ -312,20 +337,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             return result;
         }
 
-        self.emit_module_function(decl)
+        self.emit_module_function(declaration)
     }
 
-    /// Emit `decl` as a top-level/module function (internal linkage). Clears and
+    /// Emit `declaration` as a top-level/module function (internal linkage). Clears and
     /// repopulates the per-function emission state (`variables`, `closure_sigs`,
     /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
     /// implicit-0 treatment. Used for true top-level functions and for non-capturing
     /// nested functions (which can recurse, unlike a closure value).
-    pub(super) fn emit_module_function(&mut self, decl: &FunctionDecl) -> Result<(), String> {
+    pub(super) fn emit_module_function(
+        &mut self,
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), String> {
         // Convert parameter types to LLVM types via the shared boundary rule: an ARRAY
-        // param crosses as the `{ ptr, i64 }` VALUE struct (so `.size`/indexing work),
-        // everything else via `type_to_llvm` (a record/sum param stays by pointer/struct).
-        let param_types: Vec<BasicTypeEnum> = decl
-            .params
+        // parameter crosses as the `{ ptr, i64 }` VALUE struct (so `.size`/indexing work),
+        // everything else via `type_to_llvm` (a record/sum parameter stays by pointer/struct).
+        let parameter_types: Vec<BasicTypeEnum> = declaration
+            .parameters
             .iter()
             .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
@@ -333,20 +361,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Convert return type. The entry point `^` always returns a Num exit code at
         // the LLVM level (the C `main` wrapper expects an f64), regardless of its body
         // type — so a side-effecting main can omit the trailing `0`.
-        let return_type = if decl.name == "^" {
+        let return_type = if declaration.name == "^" {
             self.context.f64_type().into()
         } else {
             // An unannotated body defaults to `Num`, except a Unit (`$`) tail — e.g.
             // `log = m => print(m)` — which must be `i8`, not f64, or `build_return`
             // would emit `ret i8` into an f64 function and fail module verification.
             // The same boundary rule applies: an array return crosses as the value struct.
-            let inferred = self.default_return_type(decl.return_type.as_ref(), &decl.body);
+            let inferred =
+                self.default_return_type(declaration.return_type.as_ref(), &declaration.body);
             self.boundary_type(&inferred)?
         };
 
         // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
         let fn_type = return_type.fn_type(
-            &param_types
+            &parameter_types
                 .iter()
                 .map(|t| (*t).into())
                 .collect::<Vec<inkwell::types::BasicMetadataTypeEnum>>(),
@@ -362,20 +391,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         // An overloaded member (operator-named, or one of several same-named defs) is
         // emitted under a per-signature MANGLED name so the members don't collide; each
         // call site dispatches to the matching mangled symbol by exact argument type.
-        let symbol = if self.overloads.contains_key(&decl.name) {
-            let params: Vec<Type> = decl
-                .params
+        let symbol = if self.overloads.contains_key(&declaration.name) {
+            let parameters: Vec<Type> = declaration
+                .parameters
                 .iter()
                 .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
                 .collect();
-            mangle_overload(&decl.name, &params)
+            mangle_overload(&declaration.name, &parameters)
         } else {
-            decl.name.clone()
+            declaration.name.clone()
         };
         let function = self.module.add_function(&symbol, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
         self.current_function = Some(function);
-        let saved_scope = self.begin_di_function(function, &decl.name, &decl.span);
+        let saved_scope = self.begin_di_function(function, &declaration.name, &declaration.span);
 
         // Create entry block
         let entry = self.context.append_basic_block(function, "entry");
@@ -384,44 +413,51 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Store parameters in variables map
         self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
-        self.boxed_vars = self.compute_boxed_vars(&decl.body);
-        for (i, param) in decl.params.iter().enumerate() {
-            let llvm_param = function.get_nth_param(i as u32).unwrap();
-            llvm_param.set_name(&param.name);
+        self.boxed_vars = self.compute_boxed_vars(&declaration.body);
+        for (i, parameter) in declaration.parameters.iter().enumerate() {
+            let llvm_parameter = function.get_nth_param(i as u32).unwrap();
+            llvm_parameter.set_name(&parameter.name);
 
             // Allocate space for the parameter
-            let param_type = llvm_param.as_basic_value_enum().get_type();
-            let alloca = self.create_entry_block_alloca(&param.name, param_type)?;
+            let parameter_type = llvm_parameter.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&parameter.name, parameter_type)?;
             self.builder
-                .build_store(alloca, llvm_param)
+                .build_store(alloca, llvm_parameter)
                 .map_err(ctx("Failed to build store"))?;
 
             self.variables
-                .insert(param.name.clone(), (alloca, param_type));
+                .insert(parameter.name.clone(), (alloca, parameter_type));
             // Track the parameter's Quilon type for overloaded-call mangling, and so a
             // record/sum parameter's methods/fields resolve.
-            let qty = param.type_annotation.clone().unwrap_or(Type::Num);
+            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
             if let Type::Named { name, .. } | Type::Sum { name, .. } = &qty {
                 self.var_named_types
-                    .insert(param.name.clone(), name.clone());
+                    .insert(parameter.name.clone(), name.clone());
                 if let Some(fields) = self.named_type_fields.get(name) {
-                    self.record_types.insert(param.name.clone(), fields.clone());
+                    self.record_types
+                        .insert(parameter.name.clone(), fields.clone());
                 }
             }
-            self.declare_variable(&param.name, alloca, &qty, &param.span, Some((i + 1) as u32));
-            self.var_types.insert(param.name.clone(), qty);
+            self.declare_variable(
+                &parameter.name,
+                alloca,
+                &qty,
+                &parameter.span,
+                Some((i + 1) as u32),
+            );
+            self.var_types.insert(parameter.name.clone(), qty);
         }
 
         // Guaranteed self-tail-call optimization: if the body returns a call to THIS
         // function in tail position, lower the recursion to a loop instead of a
         // stack-growing `call` + `ret`. Set up a loop header (branched to from the entry
-        // block, after the param slots are populated) and a TCO context; a tail self-call
-        // then rewrites the param slots and `br`s back here. The param allocas created
+        // block, after the parameter slots are populated) and a TCO context; a tail self-call
+        // then rewrites the parameter slots and `br`s back here. The parameter allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(decl, &symbol) {
-            let param_slots: Vec<PointerValue<'ctx>> = decl
-                .params
+        let body_value = if self.body_has_self_tail_call(declaration, &symbol) {
+            let parameter_slots: Vec<PointerValue<'ctx>> = declaration
+                .parameters
                 .iter()
                 .map(|p| self.variables[&p.name].0)
                 .collect();
@@ -433,15 +469,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.tco = Some(Tco {
                 self_symbol: symbol.clone(),
                 function,
-                param_slots,
+                parameter_slots,
                 header,
             });
             // Emit the body in tail-aware mode. A `None` result means every tail exit was a
             // self-call (e.g. an unconditional `f(...)` body, or a match all of whose arms
             // tail-recurse): the function never falls through to a normal return, and
-            // `generate_tail_expr` has already terminated the current block (with the
+            // `generate_tail_expression` has already terminated the current block (with the
             // back-edge `br`, or an `unreachable`). In that case there is no `ret` to emit.
-            let result = self.generate_tail_expr(&decl.body)?;
+            let result = self.generate_tail_expression(&declaration.body)?;
             self.tco = None;
             match result {
                 Some(v) => v,
@@ -451,7 +487,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
         } else {
-            self.generate_expr(&decl.body)?
+            self.generate_expression(&declaration.body)?
         };
 
         // Entry point `^`: if the body's value isn't a Num (f64) — e.g. a side-effecting
@@ -459,7 +495,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // return 0 (C `main`-style success). A Num body is used as the exit code as
         // usual. Scoped to `^`; ordinary functions return their body's actual type.
         let return_value: inkwell::values::BasicValueEnum =
-            if decl.name == "^" && !body_value.is_float_value() {
+            if declaration.name == "^" && !body_value.is_float_value() {
                 self.context.f64_type().const_float(0.0).into()
             } else {
                 body_value

@@ -9,13 +9,16 @@ use super::*;
 impl TypeChecker {
     /// Type-check an interpolated string: every hole must type-check (any type is
     /// renderable via its `` ` `` operator — built-in default or user override), so the
-    /// whole expression is `Text`. Kept separate from `infer_expr_inner` so its loop
+    /// whole expression is `Text`. Kept separate from `infer_expression_inner` so its loop
     /// locals do not enlarge that hot, deeply-recursive frame (debug builds don't reuse
     /// stack slots, and deep call/pipeline chains recurse ~40 levels through it).
-    pub(super) fn check_interpolation(&mut self, parts: &[InterpPart]) -> Result<Type, TypeError> {
+    pub(super) fn check_interpolation(
+        &mut self,
+        parts: &[InterpolationPart],
+    ) -> Result<Type, TypeError> {
         for part in parts {
-            if let InterpPart::Hole(e) = part {
-                self.infer_expr(e)?;
+            if let InterpolationPart::Hole(e) = part {
+                self.infer_expression(e)?;
             }
         }
         Ok(Type::Text)
@@ -23,27 +26,31 @@ impl TypeChecker {
 
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
     /// keyed by the expression's source span. This is the public inference entry point;
-    /// the per-node logic lives in `infer_expr_inner`. The recorded side-table is what
+    /// the per-node logic lives in `infer_expression_inner`. The recorded side-table is what
     /// `check_program` returns and codegen consults to recover the precise element /
     /// field / match-result types it would otherwise lose at read sites (see
     /// `TypeOracle` in codegen). Only successfully-typed expressions are recorded.
-    pub(super) fn infer_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
-        let ty = self.infer_expr_inner(expr)?;
-        self.type_table.insert(expr.span().clone(), ty.clone());
+    pub(super) fn infer_expression(&mut self, expression: &Expression) -> Result<Type, TypeError> {
+        let ty = self.infer_expression_inner(expression)?;
+        self.type_table
+            .insert(expression.span().clone(), ty.clone());
         Ok(ty)
     }
 
-    pub(super) fn infer_expr_inner(&mut self, expr: &Expr) -> Result<Type, TypeError> {
-        match expr {
-            Expr::Number { .. } => Ok(Type::Num),
-            Expr::String { .. } => Ok(Type::Text),
+    pub(super) fn infer_expression_inner(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<Type, TypeError> {
+        match expression {
+            Expression::Number { .. } => Ok(Type::Num),
+            Expression::String { .. } => Ok(Type::Text),
             // Delegated to a separate method so its locals stay OUT of this hot,
             // deeply-recursive frame (debug builds don't reuse stack slots).
-            Expr::Interpolation { parts, .. } => self.check_interpolation(parts),
-            Expr::Bool { .. } => Ok(Type::Bool),
-            Expr::Unit { .. } => Ok(Type::Unit),
+            Expression::Interpolation { parts, .. } => self.check_interpolation(parts),
+            Expression::Bool { .. } => Ok(Type::Bool),
+            Expression::Unit { .. } => Ok(Type::Unit),
 
-            Expr::Ident { name, span } => {
+            Expression::Identifier { name, span } => {
                 self.env
                     .get_type(name)
                     .ok_or_else(|| TypeError::UndefinedVariable {
@@ -52,51 +59,58 @@ impl TypeChecker {
                     })
             }
 
-            Expr::BinOp {
+            Expression::BinaryOperator {
                 left,
-                op,
+                operator,
                 right,
                 span,
-            } => self.check_binop(left, *op, right, span),
+            } => self.check_binary_operator(left, *operator, right, span),
 
-            Expr::UnaryOp { op, expr, span } => self.check_unary_op(*op, expr, span),
+            Expression::UnaryOperator {
+                operator,
+                expression,
+                span,
+            } => self.check_unary_operator(*operator, expression, span),
 
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 span,
             } => self.check_call(function, arguments, span),
 
-            Expr::Lambda {
-                params,
+            Expression::Lambda {
+                parameters,
                 return_type,
                 body,
                 ..
-            } => self.check_lambda(params, return_type.as_ref(), body),
+            } => self.check_lambda(parameters, return_type.as_ref(), body),
 
-            Expr::Pipeline { left, right, span } => {
+            Expression::Pipeline { left, right, span } => {
                 // `left |> right` injects `left` as the first argument of the
                 // right-hand call: `x |> f` => `f(x)`, `x |> f(a)` => `f(x, a)`.
                 // Desugar and type-check the resulting call (shared with codegen).
-                let call = Expr::desugar_pipeline(left, right, span);
-                self.infer_expr(&call)
+                let call = Expression::desugar_pipeline(left, right, span);
+                self.infer_expression(&call)
             }
 
-            Expr::Block { stmts, span: _ } => {
-                if stmts.is_empty() {
+            Expression::Block {
+                statements,
+                span: _,
+            } => {
+                if statements.is_empty() {
                     return Ok(Type::Num); // Default to Num for empty blocks
                 }
 
                 // Process statements in order, last one is the result
                 let mut result_type = Type::Num;
 
-                for stmt in stmts.iter() {
-                    match stmt {
+                for statement in statements.iter() {
+                    match statement {
                         crate::ast::Statement::Item(item) => {
                             self.check_item(item, Nesting::Nested)?;
                         }
-                        crate::ast::Statement::Expr(expr) => {
-                            result_type = self.infer_expr(expr)?;
+                        crate::ast::Statement::Expression(expression) => {
+                            result_type = self.infer_expression(expression)?;
                         }
                     }
                 }
@@ -104,17 +118,17 @@ impl TypeChecker {
                 Ok(result_type)
             }
 
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
                 span,
             } => {
-                let condition_type = self.infer_expr(condition)?;
+                let condition_type = self.infer_expression(condition)?;
                 self.check_type_compatibility(&Type::Bool, &condition_type, span)?;
 
-                let then_type = self.infer_expr(then)?;
-                let else_type = self.infer_expr(else_)?;
+                let then_type = self.infer_expression(then)?;
+                let else_type = self.infer_expression(else_)?;
 
                 self.check_type_compatibility(&then_type, &else_type, span)?;
                 // Merge the branch types so a `Result` gets the concrete payload from
@@ -123,12 +137,20 @@ impl TypeChecker {
                 Ok(Self::merge_types(then_type, &else_type))
             }
 
-            Expr::Match { expr, arms, span } => self.check_match(expr, arms, span),
+            Expression::Match {
+                expression,
+                arms,
+                span,
+            } => self.check_match(expression, arms, span),
 
-            Expr::FieldAccess { expr, field, span } => {
-                let expr_type = self.infer_expr(expr)?;
+            Expression::FieldAccess {
+                expression,
+                field,
+                span,
+            } => {
+                let expression_type = self.infer_expression(expression)?;
 
-                match expr_type {
+                match expression_type {
                     Type::Record(fields) => {
                         for (f, t) in fields {
                             if f == *field {
@@ -189,13 +211,13 @@ impl TypeChecker {
                     }
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Record(vec![])),
-                        got: Box::new(expr_type),
+                        got: Box::new(expression_type),
                         span: span.clone(),
                     }),
                 }
             }
 
-            Expr::FieldAssign {
+            Expression::FieldAssign {
                 target,
                 value,
                 span,
@@ -207,14 +229,16 @@ impl TypeChecker {
                 // Infer the target first so an undefined root variable / unknown field
                 // surfaces its own diagnostic, rather than being misreported as an
                 // immutable write (an unknown name reads as "not mutable").
-                let field_type = self.infer_expr(target)?;
+                let field_type = self.infer_expression(target)?;
 
                 // A `Site` is a compile-time constant: codegen lowers each call site to a
                 // read-only global, so there is no storage to write to. Records are handles
                 // that alias, so this has to be refused however the value was reached —
                 // `s := site` then `s.line := 1` names the same constant.
-                if let Expr::FieldAccess { expr, field, .. } = target.as_ref()
-                    && let Some(base_type) = self.type_table.get(expr.span())
+                if let Expression::FieldAccess {
+                    expression, field, ..
+                } = target.as_ref()
+                    && let Some(base_type) = self.type_table.get(expression.span())
                     && crate::ast::is_site_type(base_type)
                 {
                     return Err(TypeError::SiteIsImmutable {
@@ -230,18 +254,22 @@ impl TypeChecker {
                     });
                 }
 
-                let value_type = self.infer_expr(value)?;
+                let value_type = self.infer_expression(value)?;
                 self.check_type_compatibility(&field_type, &value_type, span)?;
 
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
             }
 
-            Expr::Index { expr, index, span } => {
-                let expr_type = self.infer_expr(expr)?;
-                let index_type = self.infer_expr(index)?;
+            Expression::Index {
+                expression,
+                index,
+                span,
+            } => {
+                let expression_type = self.infer_expression(expression)?;
+                let index_type = self.infer_expression(index)?;
 
-                match expr_type {
+                match expression_type {
                     // `arr[i]` — index must be `Num`; yields the element type.
                     Type::Array(elem_type) => {
                         self.check_type_compatibility(&Type::Num, &index_type, span)?;
@@ -259,13 +287,13 @@ impl TypeChecker {
                     }),
                     _ => Err(TypeError::TypeMismatch {
                         expected: Box::new(Type::Array(Box::new(Type::Num))),
-                        got: Box::new(expr_type),
+                        got: Box::new(expression_type),
                         span: span.clone(),
                     }),
                 }
             }
 
-            Expr::Array { elements, span } => {
+            Expression::Array { elements, span } => {
                 if elements.is_empty() {
                     // Empty array - infer as Array(Num) for now
                     return Ok(Type::Array(Box::new(Type::Num)));
@@ -277,9 +305,12 @@ impl TypeChecker {
                 // mutually compatible, and the result is `[]elem`.
                 let mut elem_type: Option<Type> = None;
                 for elem in elements {
-                    let contributed = if let Expr::Spread { expr: src, .. } = elem {
+                    let contributed = if let Expression::Spread {
+                        expression: src, ..
+                    } = elem
+                    {
                         // Record the spread node's type (= the source array's type).
-                        let src_type = self.infer_expr(elem)?;
+                        let src_type = self.infer_expression(elem)?;
                         match src_type {
                             Type::Array(inner) => (*inner).clone(),
                             other => {
@@ -291,7 +322,7 @@ impl TypeChecker {
                             }
                         }
                     } else {
-                        self.infer_expr(elem)?
+                        self.infer_expression(elem)?
                     };
                     match &elem_type {
                         None => elem_type = Some(contributed),
@@ -302,21 +333,21 @@ impl TypeChecker {
                 Ok(Type::Array(Box::new(elem_type.unwrap_or(Type::Num))))
             }
 
-            Expr::MapLiteral { entries, span } => self.infer_map_literal(entries, span),
+            Expression::MapLiteral { entries, span } => self.infer_map_literal(entries, span),
 
-            Expr::SetLiteral { elements, span } => self.infer_set_literal(elements, span),
+            Expression::SetLiteral { elements, span } => self.infer_set_literal(elements, span),
 
-            Expr::Record { fields, .. } => self.infer_record(fields),
+            Expression::Record { fields, .. } => self.infer_record(fields),
 
-            Expr::Spread { expr, .. } => {
+            Expression::Spread { expression, .. } => {
                 // A spread's own type is the type of its source; the surrounding array /
                 // record literal interprets it (element splice / field merge). A bare
                 // spread outside a literal never reaches codegen (the parser only produces
                 // one inside `[ ]` / `{ }`), so recording the source type here suffices.
-                self.infer_expr(expr)
+                self.infer_expression(expression)
             }
 
-            Expr::Constructor {
+            Expression::Constructor {
                 type_name,
                 fields,
                 span,
@@ -337,15 +368,18 @@ impl TypeChecker {
                             // Type-check each field
                             let mut provided_fields = std::collections::HashSet::new();
 
-                            for (field_name, field_expr) in fields {
+                            for (field_name, field_expression) in fields {
                                 // A `<-source` entry fills every declared field at once.
                                 // The source must already BE this type, or be an
                                 // anonymous record of exactly its shape — a different
                                 // named type is not interchangeable with this one, and a
                                 // record cannot stand in for a type that has methods it
                                 // does not carry.
-                                if let Expr::Spread { expr: src, .. } = field_expr {
-                                    let src_type = self.infer_expr(src)?;
+                                if let Expression::Spread {
+                                    expression: src, ..
+                                } = field_expression
+                                {
+                                    let src_type = self.infer_expression(src)?;
                                     let fills = match &src_type {
                                         Type::Named { name: src_name, .. } => src_name == &name,
                                         Type::Record(src_fields) => {
@@ -389,7 +423,7 @@ impl TypeChecker {
                                     })?;
 
                                 // Type-check the field value
-                                let actual_type = self.infer_expr(field_expr)?;
+                                let actual_type = self.infer_expression(field_expression)?;
                                 self.check_type_compatibility(&expected_type, &actual_type, span)?;
                             }
 
@@ -427,11 +461,11 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Range { start, end, span } => {
+            Expression::Range { start, end, span } => {
                 // `lo <- hi` materializes an inclusive `[]Num`; both ends must be Num.
-                let start_type = self.infer_expr(start)?;
+                let start_type = self.infer_expression(start)?;
                 self.check_type_compatibility(&Type::Num, &start_type, span)?;
-                let end_type = self.infer_expr(end)?;
+                let end_type = self.infer_expression(end)?;
                 self.check_type_compatibility(&Type::Num, &end_type, span)?;
                 Ok(Type::Array(Box::new(Type::Num)))
             }
@@ -445,15 +479,21 @@ impl TypeChecker {
     /// spread source's declared field set is reproduced exactly by the merged result (same
     /// names, each type compatible, nothing added), the result KEEPS that named type — and
     /// therefore its methods; otherwise it is an anonymous record.
-    pub(super) fn infer_record(&mut self, fields: &[(String, Expr)]) -> Result<Type, TypeError> {
+    pub(super) fn infer_record(
+        &mut self,
+        fields: &[(String, Expression)],
+    ) -> Result<Type, TypeError> {
         let mut merged: Vec<(String, Type)> = Vec::new();
         // The named type of the FIRST named-record spread source, if any (holds its
         // declared fields + methods) — the candidate the result may keep.
         let mut named_identity: Option<Type> = None;
 
         for (name, value) in fields {
-            if let Expr::Spread { expr: src, .. } = value {
-                let src_type = self.infer_expr(value)?;
+            if let Expression::Spread {
+                expression: src, ..
+            } = value
+            {
+                let src_type = self.infer_expression(value)?;
                 let src_fields = match &src_type {
                     Type::Record(fs) => fs.clone(),
                     Type::Named { fields: fs, .. } => {
@@ -477,7 +517,7 @@ impl TypeChecker {
                     }
                 }
             } else {
-                let value_type = self.infer_expr(value)?;
+                let value_type = self.infer_expression(value)?;
                 match merged.iter_mut().find(|(n, _)| *n == *name) {
                     Some(slot) => slot.1 = value_type,
                     None => merged.push((name.clone(), value_type)),
@@ -488,12 +528,12 @@ impl TypeChecker {
         // Preserve the named type (and its methods) only if the merged field set is
         // exactly the named type's declared fields, each with a compatible type.
         if let Some(Type::Named {
-            fields: decl_fields,
+            fields: declaration_fields,
             ..
         }) = &named_identity
         {
-            let reproduces_named = merged.len() == decl_fields.len()
-                && decl_fields.iter().all(|(dn, dt)| {
+            let reproduces_named = merged.len() == declaration_fields.len()
+                && declaration_fields.iter().all(|(dn, dt)| {
                     merged
                         .iter()
                         .find(|(mn, _)| mn == dn)
@@ -519,13 +559,13 @@ impl TypeChecker {
     /// `Map(Num, Num)` (mirroring the empty-array default).
     pub(super) fn infer_map_literal(
         &mut self,
-        entries: &[(Expr, Expr)],
+        entries: &[(Expression, Expression)],
         span: &Span,
     ) -> Result<Type, TypeError> {
         let mut key_type: Option<Type> = None;
         let mut value_type: Option<Type> = None;
         for (key, value) in entries {
-            let k = self.infer_expr(key)?;
+            let k = self.infer_expression(key)?;
             if !Self::is_hashable_key(&k) {
                 return Err(TypeError::InvalidBuiltinArgument {
                     message: format!(
@@ -535,7 +575,7 @@ impl TypeChecker {
                     span: key.span().clone(),
                 });
             }
-            let v = self.infer_expr(value)?;
+            let v = self.infer_expression(value)?;
             match &key_type {
                 None => key_type = Some(k),
                 Some(first) => self.check_type_compatibility(first, &k, span)?,
@@ -555,12 +595,12 @@ impl TypeChecker {
     /// hashable type `T`. An empty `[||]` defaults to `Set(Num)`.
     pub(super) fn infer_set_literal(
         &mut self,
-        elements: &[Expr],
+        elements: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         let mut elem_type: Option<Type> = None;
         for elem in elements {
-            let t = self.infer_expr(elem)?;
+            let t = self.infer_expression(elem)?;
             if !Self::is_hashable_key(&t) {
                 return Err(TypeError::InvalidBuiltinArgument {
                     message: format!(
@@ -578,15 +618,15 @@ impl TypeChecker {
         Ok(Type::Set(Box::new(elem_type.unwrap_or(Type::Num))))
     }
 
-    pub(super) fn check_binop(
+    pub(super) fn check_binary_operator(
         &mut self,
-        left: &Expr,
-        op: BinOp,
-        right: &Expr,
+        left: &Expression,
+        operator: BinaryOperator,
+        right: &Expression,
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let left_type = self.infer_expr(left)?;
-        let right_type = self.infer_expr(right)?;
+        let left_type = self.infer_expression(left)?;
+        let right_type = self.infer_expression(right)?;
 
         // `+` on arrays always builds a NEW array (neither operand is mutated), in three
         // exact-type-dispatched forms — polymorphic over the element type `T`, so they
@@ -600,7 +640,7 @@ impl TypeChecker {
         // the right (`[]Num`) equals the element type and so binds as APPEND (a single
         // element), yielding `[][]Num`. Anything else involving an array operand (e.g.
         // mismatched element types) is a clear type error.
-        if op == BinOp::Add
+        if operator == BinaryOperator::Add
             && (matches!(left_type, Type::Array(_)) || matches!(right_type, Type::Array(_)))
         {
             match (&left_type, &right_type) {
@@ -630,8 +670,10 @@ impl TypeChecker {
         // immutable — a fresh set is returned). Resolved here, before overload dispatch,
         // because they are polymorphic over the element type `T` (like array `+`) and
         // because `+-` (`SetIntersect`) is not a named overload set at all.
-        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::SetIntersect)
-            && (matches!(left_type, Type::Set(_)) || matches!(right_type, Type::Set(_)))
+        if matches!(
+            operator,
+            BinaryOperator::Add | BinaryOperator::Sub | BinaryOperator::SetIntersect
+        ) && (matches!(left_type, Type::Set(_)) || matches!(right_type, Type::Set(_)))
         {
             if let (Type::Set(l_elem), Type::Set(r_elem)) = (&left_type, &right_type)
                 && types_match(l_elem, r_elem)
@@ -647,7 +689,7 @@ impl TypeChecker {
 
         // `+-` / `-+` (intersection) is only ever a set operator; reaching here means it
         // was applied to non-set operands.
-        if op == BinOp::SetIntersect {
+        if operator == BinaryOperator::SetIntersect {
             return Err(TypeError::TypeMismatch {
                 expected: Box::new(Type::Set(Box::new(Type::Num))),
                 got: Box::new(left_type),
@@ -659,24 +701,24 @@ impl TypeChecker {
         // against the operator's overload set, which holds the built-in members
         // (Num/Text `+`, the comparisons, …) PLUS any user-defined operator overloads
         // — so built-ins and user operators dispatch through the same mechanism.
-        self.resolve_overload(op.symbol(), &[left_type, right_type], span)
+        self.resolve_overload(operator.symbol(), &[left_type, right_type], span)
     }
 
-    pub(super) fn check_unary_op(
+    pub(super) fn check_unary_operator(
         &mut self,
-        op: UnaryOp,
-        expr: &Expr,
+        operator: UnaryOperator,
+        expression: &Expression,
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let expr_type = self.infer_expr(expr)?;
+        let expression_type = self.infer_expression(expression)?;
 
-        match op {
-            UnaryOp::Neg => {
-                self.check_type_compatibility(&Type::Num, &expr_type, span)?;
+        match operator {
+            UnaryOperator::Neg => {
+                self.check_type_compatibility(&Type::Num, &expression_type, span)?;
                 Ok(Type::Num)
             }
-            UnaryOp::Not => {
-                self.check_type_compatibility(&Type::Bool, &expr_type, span)?;
+            UnaryOperator::Not => {
+                self.check_type_compatibility(&Type::Bool, &expression_type, span)?;
                 Ok(Type::Bool)
             }
         }

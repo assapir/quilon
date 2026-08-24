@@ -20,7 +20,7 @@ impl TypeError {
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
-            | TypeError::MisplacedSiteParam { span, .. }
+            | TypeError::MisplacedSiteParameter { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
             | TypeError::UnannotatedOverloadCall { span, .. }
             | TypeError::UnannotatedOverloadMember { span, .. }
@@ -103,11 +103,13 @@ impl std::fmt::Display for TypeError {
                     fmt_candidates(candidates),
                 )
             }
-            TypeError::OverloadMissingAnnotation { name, param, .. } => {
+            TypeError::OverloadMissingAnnotation {
+                name, parameter, ..
+            } => {
                 write!(
                     f,
                     "Overloaded definition '{}' must annotate every parameter; '{}' has no type annotation",
-                    name, param
+                    name, parameter
                 )
             }
             TypeError::SiteIsImmutable { field, .. } => {
@@ -117,7 +119,7 @@ impl std::fmt::Display for TypeError {
                     field
                 )
             }
-            TypeError::MisplacedSiteParam { subject, .. } => {
+            TypeError::MisplacedSiteParameter { subject, .. } => {
                 write!(
                     f,
                     "{} declares a `Site` parameter that nothing can fill in — the compiler supplies a call site only as the LAST parameter of a top-level function",
@@ -131,20 +133,24 @@ impl std::fmt::Display for TypeError {
                     name
                 )
             }
-            TypeError::UnannotatedOverloadCall { name, params, .. } => {
+            TypeError::UnannotatedOverloadCall {
+                name, parameters, ..
+            } => {
                 write!(
                     f,
                     "cannot call '{}': its overload member ({}) has no return type annotation — annotate it, since exact dispatch needs the full signature",
                     name,
-                    fmt_type_list(params)
+                    fmt_type_list(parameters)
                 )
             }
-            TypeError::UnannotatedOverloadMember { name, params, .. } => {
+            TypeError::UnannotatedOverloadMember {
+                name, parameters, ..
+            } => {
                 write!(
                     f,
                     "overload member '{}' ({}) has no return type annotation — annotate it, since exact dispatch needs the full signature",
                     name,
-                    fmt_type_list(params)
+                    fmt_type_list(parameters)
                 )
             }
             TypeError::ComparisonOverloadNotBool { operator, got, .. } => {
@@ -204,7 +210,12 @@ pub(super) fn fmt_candidates(candidates: &[Vec<Type>]) -> String {
         // A trailing `Site` is filled in by the compiler and can never be written at a call
         // site, so a candidate list must not ask for it — `assertEq(1)` reports the
         // candidates as `(Num, Num)`, not `(Num, Num, Site)`.
-        .map(|params| format!("({})", fmt_type_list(crate::ast::visible_params(params))))
+        .map(|parameters| {
+            format!(
+                "({})",
+                fmt_type_list(crate::ast::visible_parameters(parameters))
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

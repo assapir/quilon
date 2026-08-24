@@ -66,7 +66,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_item(&mut self) -> Result<Item, ParseError> {
         // Three possibilities:
         // 1. Type declaration: Name = { fields and methods }
-        // 2. Function declaration: name = params => body
+        // 2. Function declaration: name = parameters => body
         // 3. Variable declaration: name = value
 
         let start = self.current_span();
@@ -85,7 +85,7 @@ impl<'a> Parser<'a> {
         if let Some(op_name) = self.operator_def_name() {
             self.advance();
             self.expect(&TokenKind::Assign)?;
-            return self.parse_function_decl(op_name, start, None, exported);
+            return self.parse_function_declaration(op_name, start, None, exported);
         }
 
         // A leaf IO primitive declaration names itself with a fused `@name` (`@sleep`),
@@ -119,9 +119,9 @@ impl<'a> Parser<'a> {
         // A `:=` binding is always a mutable value binding (or a reassignment of one);
         // it is never a type or function declaration.
         if mutable {
-            let value = self.parse_expr()?;
+            let value = self.parse_expression()?;
             let end = self.previous_span();
-            return Ok(Item::VarDecl(VarDecl {
+            return Ok(Item::VariableDeclaration(VariableDeclaration {
                 mutable: true,
                 name,
                 type_annotation,
@@ -135,12 +135,12 @@ impl<'a> Parser<'a> {
         // Type declarations can't be mutable and don't have type annotations
         // AND they must have field declarations (name :: Type) or methods (name = => ...)
         if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
-            // Lookahead to check if this is a type decl or record literal
-            // Type decl has: { name :: Type ... } or { name = => ... }
+            // Lookahead to check if this is a type declaration or record literal
+            // Type declaration has: { name :: Type ... } or { name = => ... }
             // Record literal has: { name = value ... }
 
             let mut idx = 1; // After {
-            let mut is_type_decl = false;
+            let mut is_type_declaration = false;
 
             // Skip to first field
             while idx < 10 {
@@ -150,13 +150,13 @@ impl<'a> Parser<'a> {
                     let next = self.peek_ahead(idx + 1);
                     if next.kind == TokenKind::TypeAnnotation {
                         // name :: Type - this is a field declaration
-                        is_type_decl = true;
+                        is_type_declaration = true;
                     } else if next.kind == TokenKind::Assign {
                         // name = ... - check if it's a method (name = => ...)
                         let after_assign = self.peek_ahead(idx + 2);
                         if after_assign.kind == TokenKind::Arrow {
                             // name = => ... - this is a method
-                            is_type_decl = true;
+                            is_type_declaration = true;
                         }
                         // else: name = value - this is a record literal
                     }
@@ -168,8 +168,8 @@ impl<'a> Parser<'a> {
                 idx += 1;
             }
 
-            if is_type_decl {
-                return self.parse_type_decl(name, start, exported);
+            if is_type_declaration {
+                return self.parse_type_declaration(name, start, exported);
             }
         }
 
@@ -179,14 +179,14 @@ impl<'a> Parser<'a> {
         // require the type name to be Capitalized and the RHS to be a `/`-separated list
         // of Capitalized constructors (each optionally taking a parenthesized payload list).
         // A single bare `Red` (no `/`) is a normal value binding, not a one-variant sum.
-        if type_annotation.is_none() && is_capitalized(&name) && self.looks_like_sum_decl() {
-            return self.parse_sum_type_decl(name, start, exported);
+        if type_annotation.is_none() && is_capitalized(&name) && self.looks_like_sum_declaration() {
+            return self.parse_sum_type_declaration(name, start, exported);
         }
 
         // Check if it's a function:
-        // - name = => ...  (no params)
-        // - name = (params) => ...
-        // - name = param => ...  (single param, no parens)
+        // - name = => ...  (no parameters)
+        // - name = (parameters) => ...
+        // - name = parameter => ...  (single parameter, no parens)
         // Need to be careful not to confuse with: result = (2 + 3) * 4
 
         let is_function = if self.check(&TokenKind::Arrow) {
@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
             }
             found_arrow
         } else if self.check(&TokenKind::Ident) {
-            // Single param without parens: followed by `=>` (body), `::` (param type),
+            // Single parameter without parens: followed by `=>` (body), `::` (parameter type),
             // or `->` (return type, e.g. `print = x -> $ => $`).
             let ahead = self.peek_ahead(1);
             ahead.kind == TokenKind::Arrow
@@ -231,12 +231,12 @@ impl<'a> Parser<'a> {
         };
 
         if is_function {
-            self.parse_function_decl(name, start, type_annotation, exported)
+            self.parse_function_declaration(name, start, type_annotation, exported)
         } else {
-            let value = self.parse_expr()?;
+            let value = self.parse_expression()?;
             let end = self.previous_span();
 
-            Ok(Item::VarDecl(VarDecl {
+            Ok(Item::VariableDeclaration(VariableDeclaration {
                 mutable,
                 name,
                 type_annotation,
@@ -247,15 +247,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(super) fn parse_function_decl(
+    pub(super) fn parse_function_declaration(
         &mut self,
         name: String,
         start: Span,
         return_type: Option<crate::ast::Type>,
         exported: bool,
     ) -> Result<Item, ParseError> {
-        // Parse parameters: (a, b) or (a :: Type, b :: Type) or single param or just =>
-        let params = self.parse_param_list()?;
+        // Parse parameters: (a, b) or (a :: Type, b :: Type) or single parameter or just =>
+        let parameters = self.parse_parameter_list()?;
 
         // Optional return type annotation with ->
         let return_type = if self.check(&TokenKind::ReturnArrow) {
@@ -272,14 +272,14 @@ impl<'a> Parser<'a> {
         let body = if self.check(&TokenKind::BlockOpen) {
             self.parse_block()?
         } else {
-            self.parse_expr()?
+            self.parse_expression()?
         };
 
         let end = self.previous_span();
 
-        Ok(Item::FunctionDecl(FunctionDecl {
+        Ok(Item::FunctionDeclaration(FunctionDeclaration {
             name,
-            params,
+            parameters,
             return_type,
             body,
             exported,
@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    pub(super) fn parse_type_decl(
+    pub(super) fn parse_type_declaration(
         &mut self,
         name: String,
         start: Span,
@@ -315,13 +315,13 @@ impl<'a> Parser<'a> {
                 let field_type = self.parse_type()?;
                 fields.push((field_name, field_type));
             } else if self.check(&TokenKind::Assign) {
-                // This is a method: name = params => body
+                // This is a method: name = parameters => body
                 self.advance();
 
                 let method_start = self.current_span();
                 // Identical grammar to a function's parameters, so it is the same rule
                 // ("it" is implicit and never listed here).
-                let params = self.parse_param_list()?;
+                let parameters = self.parse_parameter_list()?;
 
                 // Optional return type annotation
                 let return_type = if self.check(&TokenKind::ReturnArrow) {
@@ -338,14 +338,14 @@ impl<'a> Parser<'a> {
                 let body = if self.check(&TokenKind::BlockOpen) {
                     self.parse_block()?
                 } else {
-                    self.parse_expr()?
+                    self.parse_expression()?
                 };
 
                 let method_end = self.previous_span();
 
-                methods.push(MethodDecl {
+                methods.push(MethodDeclaration {
                     name: field_name,
-                    params,
+                    parameters,
                     return_type,
                     body,
                     span: self.span(method_start.start, method_end.end),
@@ -366,9 +366,9 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::BraceClose)?;
         let end = self.previous_span();
 
-        Ok(Item::TypeDecl(TypeDecl {
+        Ok(Item::TypeDeclaration(TypeDeclaration {
             name,
-            type_def: TypeDef::Record { fields, methods },
+            type_definition: TypeDefinition::Record { fields, methods },
             exported,
             span: self.span(start.start, end.end),
         }))
@@ -377,13 +377,13 @@ impl<'a> Parser<'a> {
     /// Parse a sum-type declaration: `Name = VariantA / VariantB(Num, Text) / ...`.
     /// Each variant is a Capitalized constructor name with an optional parenthesized
     /// list of payload types (built-in types only — enforced by the type checker).
-    pub(super) fn parse_sum_type_decl(
+    pub(super) fn parse_sum_type_declaration(
         &mut self,
         name: String,
         start: Span,
         exported: bool,
     ) -> Result<Item, ParseError> {
-        use crate::ast::{SumVariant, TypeDef};
+        use crate::ast::{SumVariant, TypeDefinition};
 
         let mut variants = Vec::new();
         loop {
@@ -428,9 +428,9 @@ impl<'a> Parser<'a> {
         }
 
         let end = self.previous_span();
-        Ok(Item::TypeDecl(TypeDecl {
+        Ok(Item::TypeDeclaration(TypeDeclaration {
             name,
-            type_def: TypeDef::Sum(variants),
+            type_definition: TypeDefinition::Sum(variants),
             exported,
             span: self.span(start.start, end.end),
         }))
@@ -439,19 +439,19 @@ impl<'a> Parser<'a> {
     /// Depth-guarded entry point for `< … >` blocks. A block may hold nested named
     /// function declarations whose bodies are themselves blocks
     /// (`f = () => < g = () => < … > >`); that recursion runs through
-    /// `parse_item`/`parse_function_decl` rather than `parse_expr`, so blocks get
+    /// `parse_item`/`parse_function_declaration` rather than `parse_expression`, so blocks get
     /// the `MAX_NESTING_DEPTH` bound here too.
-    pub(super) fn parse_block(&mut self) -> Result<Expr, ParseError> {
+    pub(super) fn parse_block(&mut self) -> Result<Expression, ParseError> {
         self.nested(Self::parse_block_inner)
     }
 
-    pub(super) fn parse_block_inner(&mut self) -> Result<Expr, ParseError> {
+    pub(super) fn parse_block_inner(&mut self) -> Result<Expression, ParseError> {
         use crate::ast::Statement;
 
         let start = self.current_span();
         self.expect(&TokenKind::BlockOpen)?;
 
-        let mut stmts = Vec::new();
+        let mut statements = Vec::new();
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
             // Try to parse as item first (for nested declarations / reassignments).
@@ -465,14 +465,14 @@ impl<'a> Parser<'a> {
                     TokenKind::Assign | TokenKind::MutAssign | TokenKind::TypeAnnotation
                 )
             {
-                // This looks like a declaration. A nested `name = params => body` stays an
-                // `Item::FunctionDecl`; codegen decides per-decl whether it is a capturing
+                // This looks like a declaration. A nested `name = parameters => body` stays an
+                // `Item::FunctionDeclaration`; codegen decides per-declaration whether it is a capturing
                 // CLOSURE or a plain (recursion-capable) local function, based on whether
                 // it actually references enclosing locals.
                 let item = self.parse_item()?;
-                stmts.push(Statement::Item(item));
+                statements.push(Statement::Item(item));
             } else {
-                stmts.push(Statement::Expr(self.parse_expr()?));
+                statements.push(Statement::Expression(self.parse_expression()?));
             }
 
             // Expressions in blocks can be separated by newlines (already skipped by lexer)
@@ -482,6 +482,6 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::BlockClose)?;
         let span = self.span(start.start, self.previous_span().end);
 
-        Ok(Expr::Block { stmts, span })
+        Ok(Expression::Block { statements, span })
     }
 }

@@ -11,17 +11,28 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// machinery (capturing enclosing locals per the `=`/`:=` rule) and store the
     /// resulting `{ ptr fn, ptr env }` in a local slot, recording its signature so
     /// `name(args)` resolves to an indirect closure call.
-    pub(super) fn generate_local_closure(&mut self, decl: &FunctionDecl) -> Result<(), String> {
-        let sig = self.closure_signature(&decl.params, decl.return_type.as_ref(), &decl.body)?;
-        self.closure_sigs.insert(decl.name.clone(), sig);
+    pub(super) fn generate_local_closure(
+        &mut self,
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), String> {
+        let sig = self.closure_signature(
+            &declaration.parameters,
+            declaration.return_type.as_ref(),
+            &declaration.body,
+        )?;
+        self.closure_sigs.insert(declaration.name.clone(), sig);
 
-        let closure = self.generate_lambda(&decl.params, decl.return_type.as_ref(), &decl.body)?;
-        let slot = self.create_entry_block_alloca(&decl.name, closure.get_type())?;
+        let closure = self.generate_lambda(
+            &declaration.parameters,
+            declaration.return_type.as_ref(),
+            &declaration.body,
+        )?;
+        let slot = self.create_entry_block_alloca(&declaration.name, closure.get_type())?;
         self.builder
             .build_store(slot, closure)
             .map_err(ctx("Failed to store closure"))?;
         self.variables
-            .insert(decl.name.clone(), (slot, closure.get_type()));
+            .insert(declaration.name.clone(), (slot, closure.get_type()));
         Ok(())
     }
 
@@ -85,7 +96,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// local must share a single cell with the closure. Computed by collecting the
     /// function's `:=` binding names and intersecting with the union of every nested
     /// lambda's free variables.
-    pub(super) fn compute_boxed_vars(&self, body: &Expr) -> std::collections::HashSet<String> {
+    pub(super) fn compute_boxed_vars(
+        &self,
+        body: &Expression,
+    ) -> std::collections::HashSet<String> {
         let mut mutable_locals = std::collections::HashSet::new();
         Self::collect_mutable_locals(body, &mut mutable_locals);
 
@@ -97,30 +111,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         captured
     }
 
-    /// Collect the names of all `:=` (mutable) `VarDecl`s bound in THIS function frame —
-    /// i.e. in `expr` and its nested control-flow, but NOT inside a nested lambda body (a
+    /// Collect the names of all `:=` (mutable) `VariableDeclaration`s bound in THIS function frame —
+    /// i.e. in `expression` and its nested control-flow, but NOT inside a nested lambda body (a
     /// lambda's own `:=` locals live in the lambda's frame, not ours).
-    pub(super) fn collect_mutable_locals(expr: &Expr, out: &mut std::collections::HashSet<String>) {
-        match expr {
+    pub(super) fn collect_mutable_locals(
+        expression: &Expression,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        match expression {
             // A nested function literal opens its own frame — do not descend.
-            Expr::Lambda { .. } => {}
-            Expr::Block { stmts, .. } => {
-                for stmt in stmts {
-                    match stmt {
-                        crate::ast::Statement::Expr(e) => Self::collect_mutable_locals(e, out),
-                        crate::ast::Statement::Item(Item::VarDecl(decl)) => {
-                            if decl.mutable {
-                                out.insert(decl.name.clone());
+            Expression::Lambda { .. } => {}
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    match statement {
+                        crate::ast::Statement::Expression(e) => {
+                            Self::collect_mutable_locals(e, out)
+                        }
+                        crate::ast::Statement::Item(Item::VariableDeclaration(declaration)) => {
+                            if declaration.mutable {
+                                out.insert(declaration.name.clone());
                             }
-                            Self::collect_mutable_locals(&decl.value, out);
+                            Self::collect_mutable_locals(&declaration.value, out);
                         }
                         crate::ast::Statement::Item(_) => {}
                     }
                 }
             }
-            Expr::BinOp { left, right, .. }
-            | Expr::Pipeline { left, right, .. }
-            | Expr::Range {
+            Expression::BinaryOperator { left, right, .. }
+            | Expression::Pipeline { left, right, .. }
+            | Expression::Range {
                 start: left,
                 end: right,
                 ..
@@ -128,10 +147,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::collect_mutable_locals(left, out);
                 Self::collect_mutable_locals(right, out);
             }
-            Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
-                Self::collect_mutable_locals(expr, out)
+            Expression::UnaryOperator { expression, .. }
+            | Expression::FieldAccess { expression, .. } => {
+                Self::collect_mutable_locals(expression, out)
             }
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 ..
@@ -141,7 +161,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::collect_mutable_locals(a, out);
                 }
             }
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
@@ -151,83 +171,94 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::collect_mutable_locals(then, out);
                 Self::collect_mutable_locals(else_, out);
             }
-            Expr::Match { expr, arms, .. } => {
-                Self::collect_mutable_locals(expr, out);
+            Expression::Match {
+                expression, arms, ..
+            } => {
+                Self::collect_mutable_locals(expression, out);
                 for arm in arms {
                     Self::collect_mutable_locals(&arm.body, out);
                 }
             }
-            Expr::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. } => {
                 Self::collect_mutable_locals(target, out);
                 Self::collect_mutable_locals(value, out);
             }
-            Expr::Index { expr, index, .. } => {
-                Self::collect_mutable_locals(expr, out);
+            Expression::Index {
+                expression, index, ..
+            } => {
+                Self::collect_mutable_locals(expression, out);
                 Self::collect_mutable_locals(index, out);
             }
-            Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
+            Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
                 for e in elements {
                     Self::collect_mutable_locals(e, out);
                 }
             }
-            Expr::MapLiteral { entries, .. } => {
+            Expression::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     Self::collect_mutable_locals(k, out);
                     Self::collect_mutable_locals(v, out);
                 }
             }
-            Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+            Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
                 for (_, e) in fields {
                     Self::collect_mutable_locals(e, out);
                 }
             }
-            Expr::Spread { expr, .. } => Self::collect_mutable_locals(expr, out),
-            Expr::Interpolation { parts, .. } => {
+            Expression::Spread { expression, .. } => Self::collect_mutable_locals(expression, out),
+            Expression::Interpolation { parts, .. } => {
                 for part in parts {
-                    if let crate::ast::InterpPart::Hole(e) = part {
+                    if let crate::ast::InterpolationPart::Hole(e) = part {
                         Self::collect_mutable_locals(e, out);
                     }
                 }
             }
-            Expr::Number { .. }
-            | Expr::String { .. }
-            | Expr::Bool { .. }
-            | Expr::Unit { .. }
-            | Expr::Ident { .. } => {}
+            Expression::Number { .. }
+            | Expression::String { .. }
+            | Expression::Bool { .. }
+            | Expression::Unit { .. }
+            | Expression::Identifier { .. } => {}
         }
     }
 
-    /// Union, over every lambda appearing (at any depth) in `expr`, of the names it
+    /// Union, over every lambda appearing (at any depth) in `expression`, of the names it
     /// captures from `outer`. Used to find which of the enclosing frame's mutable locals
     /// a closure shares (and so must be heap-boxed).
     pub(super) fn collect_lambda_captures(
-        expr: &Expr,
+        expression: &Expression,
         outer: &std::collections::HashSet<String>,
         out: &mut std::collections::HashSet<String>,
     ) {
-        Self::for_each_closure(expr, &mut |params, body| {
-            let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        Self::for_each_closure(expression, &mut |parameters, body| {
+            let names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
             for name in crate::ast::captures::lambda_free_idents(&names, body, outer) {
                 out.insert(name);
             }
         });
     }
 
-    /// Invoke `f(params, body)` for every closure appearing (at any depth) in `expr` — a
-    /// `Expr::Lambda` OR a nested `Item::FunctionDecl` (both are closures; the latter is
+    /// Invoke `f(parameters, body)` for every closure appearing (at any depth) in `expression` — a
+    /// `Expression::Lambda` OR a nested `Item::FunctionDeclaration` (both are closures; the latter is
     /// only resolved to a plain function at codegen when it captures nothing). Used to
     /// gather captures across all closures in a frame.
-    pub(super) fn for_each_closure(expr: &Expr, f: &mut impl FnMut(&[crate::ast::Param], &Expr)) {
-        Self::walk_exprs(expr, &mut |e| match e {
-            Expr::Lambda { params, body, .. } => f(params, body),
-            Expr::Block { stmts, .. } => {
-                for stmt in stmts {
-                    if let crate::ast::Statement::Item(Item::FunctionDecl(decl)) = stmt {
-                        f(&decl.params, &decl.body);
-                        // The function body is an expression position `walk_exprs` does
-                        // not enter (it only descends VarDecl initializers), so recurse to
+    pub(super) fn for_each_closure(
+        expression: &Expression,
+        f: &mut impl FnMut(&[crate::ast::Parameter], &Expression),
+    ) {
+        Self::walk_expressions(expression, &mut |e| match e {
+            Expression::Lambda {
+                parameters, body, ..
+            } => f(parameters, body),
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    if let crate::ast::Statement::Item(Item::FunctionDeclaration(declaration)) =
+                        statement
+                    {
+                        f(&declaration.parameters, &declaration.body);
+                        // The function body is an expression position `walk_expressions` does
+                        // not enter (it only descends VariableDeclaration initializers), so recurse to
                         // find closures nested inside this nested function too.
-                        Self::for_each_closure(&decl.body, f);
+                        Self::for_each_closure(&declaration.body, f);
                     }
                 }
             }
@@ -235,100 +266,103 @@ impl<'ctx> CodeGenerator<'ctx> {
         });
     }
 
-    /// Pre-order walk over every sub-expression of `expr`, invoking `f` on each. Used by
+    /// Pre-order walk over every sub-expression of `expression`, invoking `f` on each. Used by
     /// the closure pre-passes above. Does not descend into nested item declarations'
     /// signatures (only expression positions), which is all closure analysis needs.
-    pub(super) fn walk_exprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
-        f(expr);
-        match expr {
-            Expr::BinOp { left, right, .. }
-            | Expr::Pipeline { left, right, .. }
-            | Expr::Range {
+    pub(super) fn walk_expressions(expression: &Expression, f: &mut impl FnMut(&Expression)) {
+        f(expression);
+        match expression {
+            Expression::BinaryOperator { left, right, .. }
+            | Expression::Pipeline { left, right, .. }
+            | Expression::Range {
                 start: left,
                 end: right,
                 ..
             } => {
-                Self::walk_exprs(left, f);
-                Self::walk_exprs(right, f);
+                Self::walk_expressions(left, f);
+                Self::walk_expressions(right, f);
             }
-            Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
-                Self::walk_exprs(expr, f)
-            }
-            Expr::Call {
+            Expression::UnaryOperator { expression, .. }
+            | Expression::FieldAccess { expression, .. } => Self::walk_expressions(expression, f),
+            Expression::Call {
                 function,
                 arguments,
                 ..
             } => {
-                Self::walk_exprs(function, f);
+                Self::walk_expressions(function, f);
                 for a in arguments {
-                    Self::walk_exprs(a, f);
+                    Self::walk_expressions(a, f);
                 }
             }
-            Expr::Lambda { body, .. } => Self::walk_exprs(body, f),
-            Expr::Block { stmts, .. } => {
-                for stmt in stmts {
-                    match stmt {
-                        crate::ast::Statement::Expr(e) => Self::walk_exprs(e, f),
-                        crate::ast::Statement::Item(Item::VarDecl(d)) => {
-                            Self::walk_exprs(&d.value, f)
+            Expression::Lambda { body, .. } => Self::walk_expressions(body, f),
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    match statement {
+                        crate::ast::Statement::Expression(e) => Self::walk_expressions(e, f),
+                        crate::ast::Statement::Item(Item::VariableDeclaration(d)) => {
+                            Self::walk_expressions(&d.value, f)
                         }
                         crate::ast::Statement::Item(_) => {}
                     }
                 }
             }
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
                 ..
             } => {
-                Self::walk_exprs(condition, f);
-                Self::walk_exprs(then, f);
-                Self::walk_exprs(else_, f);
+                Self::walk_expressions(condition, f);
+                Self::walk_expressions(then, f);
+                Self::walk_expressions(else_, f);
             }
-            Expr::Match { expr, arms, .. } => {
-                Self::walk_exprs(expr, f);
+            Expression::Match {
+                expression, arms, ..
+            } => {
+                Self::walk_expressions(expression, f);
                 for arm in arms {
-                    Self::walk_exprs(&arm.body, f);
+                    Self::walk_expressions(&arm.body, f);
                 }
             }
-            Expr::FieldAssign { target, value, .. } => {
-                Self::walk_exprs(target, f);
-                Self::walk_exprs(value, f);
+            Expression::FieldAssign { target, value, .. } => {
+                Self::walk_expressions(target, f);
+                Self::walk_expressions(value, f);
             }
-            Expr::Index { expr, index, .. } => {
-                Self::walk_exprs(expr, f);
-                Self::walk_exprs(index, f);
+            Expression::Index {
+                expression, index, ..
+            } => {
+                Self::walk_expressions(expression, f);
+                Self::walk_expressions(index, f);
             }
-            Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
+            Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
                 for e in elements {
-                    Self::walk_exprs(e, f);
+                    Self::walk_expressions(e, f);
                 }
             }
-            Expr::MapLiteral { entries, .. } => {
+            Expression::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
-                    Self::walk_exprs(k, f);
-                    Self::walk_exprs(v, f);
+                    Self::walk_expressions(k, f);
+                    Self::walk_expressions(v, f);
                 }
             }
-            Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+            Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
                 for (_, e) in fields {
-                    Self::walk_exprs(e, f);
+                    Self::walk_expressions(e, f);
                 }
             }
-            Expr::Spread { expr, .. } => Self::walk_exprs(expr, f),
-            Expr::Interpolation { parts, .. } => {
+            Expression::Spread { expression, .. } => Self::walk_expressions(expression, f),
+            Expression::Interpolation { parts, .. } => {
                 for part in parts {
-                    if let crate::ast::InterpPart::Hole(e) = part {
-                        Self::walk_exprs(e, f);
+                    if let crate::ast::InterpolationPart::Hole(e) = part {
+                        Self::walk_expressions(e, f);
                     }
                 }
             }
-            Expr::Number { .. }
-            | Expr::String { .. }
-            | Expr::Bool { .. }
-            | Expr::Unit { .. }
-            | Expr::Ident { .. } => {}
+            Expression::Number { .. }
+            | Expression::String { .. }
+            | Expression::Bool { .. }
+            | Expression::Unit { .. }
+            | Expression::Identifier { .. } => {}
         }
     }
 
@@ -337,7 +371,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// for a Unit-tailed body, else `Num`. Codegen lacks the checker's full inference, so
     /// this picks the LLVM-level return type for an unannotated function/lambda/method.
     /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
-    pub(super) fn default_return_type(&self, return_type: Option<&Type>, body: &Expr) -> Type {
+    pub(super) fn default_return_type(
+        &self,
+        return_type: Option<&Type>,
+        body: &Expression,
+    ) -> Type {
         match return_type {
             // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
             // slots are type variables the language can't otherwise name — is refined to
@@ -346,18 +384,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             // generic `{ i8, double }`). Mirrors the checker refining a generic return.
             Some(t) if t.contains_generic() => self
                 .oracle
-                .expr_type(body)
+                .expression_type(body)
                 .cloned()
                 .unwrap_or_else(|| t.clone()),
             // A concrete annotation is authoritative.
             Some(t) => t.clone(),
-            None if self.expr_is_unit(body) => Type::Unit,
+            None if self.expression_is_unit(body) => Type::Unit,
             // Unannotated: the oracle holds the checker's inferred body type (concrete,
             // including a specialized Result payload such as `Result[Ok(Text)]`), so a
             // function returning `Ok("x")` lowers its return to the payload's real shape
             // and a downstream match binds it usably. Fall back to `Num` for the IR-only
             // codegen tests that run without a type-check pass.
-            None => self.oracle.expr_type(body).cloned().unwrap_or(Type::Num),
+            None => self
+                .oracle
+                .expression_type(body)
+                .cloned()
+                .unwrap_or(Type::Num),
         }
     }
 
@@ -366,16 +408,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// trailing env pointer (which is implicit to every closure call).
     pub(super) fn closure_signature(
         &self,
-        params: &[crate::ast::Param],
+        parameters: &[crate::ast::Parameter],
         return_type: Option<&Type>,
-        body: &Expr,
+        body: &Expression,
     ) -> Result<ClosureSig<'ctx>, String> {
-        let param_types: Vec<BasicTypeEnum> = params
+        let parameter_types: Vec<BasicTypeEnum> = parameters
             .iter()
             .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.default_return_type(return_type, body);
-        Ok((param_types, self.boundary_type(&ret)?))
+        Ok((parameter_types, self.boundary_type(&ret)?))
     }
 
     /// Lower a function literal to a value: lift its body into a fresh top-level function
@@ -389,18 +431,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///                   cell, surviving the closure outliving its defining frame.
     pub(super) fn generate_lambda(
         &mut self,
-        params: &[crate::ast::Param],
+        parameters: &[crate::ast::Parameter],
         return_type: Option<&Type>,
-        body: &Expr,
+        body: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         // 1. Determine the captured names: a lambda free variable that is actually a
         //    binding in the current frame. A by-reference capture is one whose name is in
         //    the current `boxed_vars` (its storage is a shared cell); the rest are by-value.
-        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        let parameter_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
         let outer: std::collections::HashSet<String> = self.variables.keys().cloned().collect();
-        let free = crate::ast::captures::lambda_free_idents(&param_names, body, &outer);
+        let free = crate::ast::captures::lambda_free_idents(&parameter_names, body, &outer);
         let mut captures: Vec<Capture<'ctx>> = Vec::new();
         for name in free {
             // Only names with a live local slot are captured; a free name that resolves to
@@ -453,9 +495,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             env
         };
 
-        // 4. Emit the lifted top-level function `__lambda_N(params..., ptr env)`.
+        // 4. Emit the lifted top-level function `__lambda_N(parameters..., ptr env)`.
         let fn_value =
-            self.emit_lambda_function(params, return_type, body, &captures, env_struct_ty)?;
+            self.emit_lambda_function(parameters, return_type, body, &captures, env_struct_ty)?;
 
         // 5. Assemble the closure value `{ fn_ptr, env_ptr }`.
         let closure_ty = self.closure_struct_type();
@@ -481,21 +523,22 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// boxed set, builder position) around the nested emission.
     pub(super) fn emit_lambda_function(
         &mut self,
-        params: &[crate::ast::Param],
+        parameters: &[crate::ast::Parameter],
         return_type: Option<&Type>,
-        body: &Expr,
+        body: &Expression,
         captures: &[Capture<'ctx>],
         env_struct_ty: inkwell::types::StructType<'ctx>,
     ) -> Result<FunctionValue<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        // Same (param types, return type) the call site reconstructs, plus the trailing
+        // Same (parameter types, return type) the call site reconstructs, plus the trailing
         // env pointer — keeping the emitted function and the indirect-call type in lockstep.
-        let (mut param_types, ret_ty) = self.closure_signature(params, return_type, body)?;
-        param_types.push(ptr_ty.into()); // trailing env pointer
+        let (mut parameter_types, ret_ty) =
+            self.closure_signature(parameters, return_type, body)?;
+        parameter_types.push(ptr_ty.into()); // trailing env pointer
 
         let fn_type = ret_ty.fn_type(
-            &param_types
+            &parameter_types
                 .iter()
                 .map(|t| (*t).into())
                 .collect::<Vec<inkwell::types::BasicMetadataTypeEnum>>(),
@@ -542,20 +585,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         // Bind source parameters (indices 0..n); the env pointer is the last parameter.
-        for (i, param) in params.iter().enumerate() {
-            let llvm_param = function.get_nth_param(i as u32).unwrap();
-            llvm_param.set_name(&param.name);
-            let pty = llvm_param.as_basic_value_enum().get_type();
-            let alloca = self.create_entry_block_alloca(&param.name, pty)?;
+        for (i, parameter) in parameters.iter().enumerate() {
+            let llvm_parameter = function.get_nth_param(i as u32).unwrap();
+            llvm_parameter.set_name(&parameter.name);
+            let pty = llvm_parameter.as_basic_value_enum().get_type();
+            let alloca = self.create_entry_block_alloca(&parameter.name, pty)?;
             self.builder
-                .build_store(alloca, llvm_param)
-                .map_err(ctx("Failed to store param"))?;
-            self.variables.insert(param.name.clone(), (alloca, pty));
+                .build_store(alloca, llvm_parameter)
+                .map_err(ctx("Failed to store parameter"))?;
+            self.variables.insert(parameter.name.clone(), (alloca, pty));
             self.declare_variable(
-                &param.name,
+                &parameter.name,
                 alloca,
-                param.type_annotation.as_ref().unwrap_or(&Type::Num),
-                &param.span,
+                parameter.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &parameter.span,
                 Some((i + 1) as u32),
             );
         }
@@ -563,7 +606,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Re-bind captures from the environment pointer (the trailing parameter).
         if !captures.is_empty() {
             let env_ptr = function
-                .get_nth_param(params.len() as u32)
+                .get_nth_param(parameters.len() as u32)
                 .unwrap()
                 .into_pointer_value();
             for (i, cap) in captures.iter().enumerate() {
@@ -617,7 +660,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        let body_value = self.generate_expr(body)?;
+        let body_value = self.generate_expression(body)?;
         self.builder
             .build_return(Some(&body_value))
             .map_err(ctx("Failed to build closure return"))?;
@@ -640,20 +683,20 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Call a closure value held in local variable `var_name`: extract the function and
     /// environment pointers from its `{ ptr fn, ptr env }` struct and emit an indirect
-    /// call passing the source arguments followed by the environment pointer. `param_tys`
-    /// / `ret_ty` are the closure's recorded signature (excluding the implicit env param).
+    /// call passing the source arguments followed by the environment pointer. `parameter_tys`
+    /// / `ret_ty` are the closure's recorded signature (excluding the implicit env parameter).
     pub(super) fn generate_closure_call(
         &mut self,
         var_name: &str,
-        param_tys: &[BasicTypeEnum<'ctx>],
+        parameter_tys: &[BasicTypeEnum<'ctx>],
         ret_ty: BasicTypeEnum<'ctx>,
-        args: &[Expr],
+        args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if args.len() != param_tys.len() {
+        if args.len() != parameter_tys.len() {
             return Err(format!(
                 "closure `{}` expects {} argument(s), got {}",
                 var_name,
-                param_tys.len(),
+                parameter_tys.len(),
                 args.len()
             ));
         }
@@ -682,15 +725,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
             Vec::with_capacity(args.len() + 1);
         for arg in args {
-            call_args.push(self.generate_expr(arg)?.into());
+            call_args.push(self.generate_expression(arg)?.into());
         }
         call_args.push(env_ptr.into());
 
-        // Reconstruct the callee function type: source params + trailing env ptr -> ret.
-        let mut metadata_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
-            param_tys.iter().map(|t| (*t).into()).collect();
-        metadata_params.push(ptr_ty.into());
-        let fn_type = ret_ty.fn_type(&metadata_params, false);
+        // Reconstruct the callee function type: source parameters + trailing env ptr -> ret.
+        let mut metadata_parameters: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            parameter_tys.iter().map(|t| (*t).into()).collect();
+        metadata_parameters.push(ptr_ty.into());
+        let fn_type = ret_ty.fn_type(&metadata_parameters, false);
 
         let call = self
             .builder

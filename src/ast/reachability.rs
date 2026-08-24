@@ -16,7 +16,10 @@
 //! What is NOT pruned: type declarations and their methods, and top-level bindings. Their
 //! bodies are therefore roots — a method that calls a helper keeps that helper.
 
-use super::nodes::{BinOp, Expr, InterpPart, Item, Program, Statement, TypeDef, UnaryOp};
+use super::nodes::{
+    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, TypeDefinition,
+    UnaryOperator,
+};
 use std::collections::{HashMap, HashSet};
 
 /// The names of every top-level function that program execution could reach, starting from
@@ -26,11 +29,9 @@ use std::collections::{HashMap, HashSet};
 /// own, where there is no entry point to be reachable from and every function is something
 /// a later program might call.
 pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
-    if !program
-        .items
-        .iter()
-        .any(|item| matches!(item, Item::FunctionDecl(decl) if decl.name == "^"))
-    {
+    if !program.items.iter().any(
+        |item| matches!(item, Item::FunctionDeclaration(declaration) if declaration.name == "^"),
+    ) {
         return None;
     }
 
@@ -40,16 +41,16 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
     // name up by walking the item list would make the analysis quadratic in the number of
     // functions, costing more on a large program than the emission it saves.
     let mut pending: Vec<&str> = vec!["^"];
-    let mut defined: HashMap<&str, Vec<&Expr>> = HashMap::new();
+    let mut defined: HashMap<&str, Vec<&Expression>> = HashMap::new();
     for item in &program.items {
         match item {
-            Item::FunctionDecl(decl) => defined
-                .entry(decl.name.as_str())
+            Item::FunctionDeclaration(declaration) => defined
+                .entry(declaration.name.as_str())
                 .or_default()
-                .push(&decl.body),
-            Item::VarDecl(decl) => mentions(&decl.value, &mut pending),
-            Item::TypeDecl(decl) => {
-                if let TypeDef::Record { methods, .. } = &decl.type_def {
+                .push(&declaration.body),
+            Item::VariableDeclaration(declaration) => mentions(&declaration.value, &mut pending),
+            Item::TypeDeclaration(declaration) => {
+                if let TypeDefinition::Record { methods, .. } = &declaration.type_definition {
                     for method in methods {
                         mentions(&method.body, &mut pending);
                     }
@@ -73,62 +74,74 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
     Some(reached)
 }
 
-/// Push every name `expr` mentions onto `out`: identifiers, the symbols of the operators it
+/// Push every name `expression` mentions onto `out`: identifiers, the symbols of the operators it
 /// applies (an operator is an overload set named with its symbol), and the field/method
 /// names it selects. Duplicates are fine — the caller de-duplicates as it walks. Names are
 /// borrowed from the AST rather than copied: on a large program this walk sees hundreds of
 /// thousands of mentions, and allocating for each one cost more than the emission it saves.
-fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
-    match expr {
-        Expr::Ident { name, .. } => out.push(name),
-        Expr::Number { .. } | Expr::String { .. } | Expr::Bool { .. } | Expr::Unit { .. } => {}
-        Expr::Interpolation { parts, .. } => {
+fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
+    match expression {
+        Expression::Identifier { name, .. } => out.push(name),
+        Expression::Number { .. }
+        | Expression::String { .. }
+        | Expression::Bool { .. }
+        | Expression::Unit { .. } => {}
+        Expression::Interpolation { parts, .. } => {
             // Every hole renders through the `` ` `` operator.
             out.push("`");
             for part in parts {
-                if let InterpPart::Hole(e) = part {
+                if let InterpolationPart::Hole(e) = part {
                     mentions(e, out);
                 }
             }
         }
-        Expr::BinOp {
-            left, op, right, ..
+        Expression::BinaryOperator {
+            left,
+            operator,
+            right,
+            ..
         } => {
-            out.push(op.symbol());
+            out.push(operator.symbol());
             mentions(left, out);
             mentions(right, out);
         }
-        Expr::UnaryOp { op, expr, .. } => {
-            if matches!(op, UnaryOp::Neg) {
-                out.push(BinOp::Sub.symbol());
+        Expression::UnaryOperator {
+            operator,
+            expression,
+            ..
+        } => {
+            if matches!(operator, UnaryOperator::Neg) {
+                out.push(BinaryOperator::Sub.symbol());
             }
-            mentions(expr, out);
+            mentions(expression, out);
         }
-        Expr::Pipeline { left, right, .. }
-        | Expr::Range {
+        Expression::Pipeline { left, right, .. }
+        | Expression::Range {
             start: left,
             end: right,
             ..
         }
-        | Expr::FieldAssign {
+        | Expression::FieldAssign {
             target: left,
             value: right,
             ..
         }
-        | Expr::Index {
-            expr: left,
+        | Expression::Index {
+            expression: left,
             index: right,
             ..
         } => {
             mentions(left, out);
             mentions(right, out);
         }
-        Expr::FieldAccess { expr, field, .. } => {
+        Expression::FieldAccess {
+            expression, field, ..
+        } => {
             // A method call is a call of a field access, so the method's name arrives here.
             out.push(field);
-            mentions(expr, out);
+            mentions(expression, out);
         }
-        Expr::Call {
+        Expression::Call {
             function,
             arguments,
             ..
@@ -138,15 +151,20 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
                 mentions(a, out);
             }
         }
-        Expr::Lambda { body, .. } => mentions(body, out),
-        Expr::Block { stmts, .. } => {
-            for stmt in stmts {
-                match stmt {
-                    Statement::Expr(e) => mentions(e, out),
-                    Statement::Item(Item::VarDecl(decl)) => mentions(&decl.value, out),
-                    Statement::Item(Item::FunctionDecl(decl)) => mentions(&decl.body, out),
-                    Statement::Item(Item::TypeDecl(decl)) => {
-                        if let TypeDef::Record { methods, .. } = &decl.type_def {
+        Expression::Lambda { body, .. } => mentions(body, out),
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                match statement {
+                    Statement::Expression(e) => mentions(e, out),
+                    Statement::Item(Item::VariableDeclaration(declaration)) => {
+                        mentions(&declaration.value, out)
+                    }
+                    Statement::Item(Item::FunctionDeclaration(declaration)) => {
+                        mentions(&declaration.body, out)
+                    }
+                    Statement::Item(Item::TypeDeclaration(declaration)) => {
+                        if let TypeDefinition::Record { methods, .. } = &declaration.type_definition
+                        {
                             for method in methods {
                                 mentions(&method.body, out);
                             }
@@ -155,7 +173,7 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
                 }
             }
         }
-        Expr::If {
+        Expression::If {
             condition,
             then,
             else_,
@@ -165,34 +183,36 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
             mentions(then, out);
             mentions(else_, out);
         }
-        Expr::Match { expr, arms, .. } => {
-            mentions(expr, out);
+        Expression::Match {
+            expression, arms, ..
+        } => {
+            mentions(expression, out);
             for arm in arms {
                 mentions(&arm.body, out);
             }
         }
-        Expr::Array { elements, .. } => {
+        Expression::Array { elements, .. } => {
             for e in elements {
                 mentions(e, out);
             }
         }
-        Expr::MapLiteral { entries, .. } => {
+        Expression::MapLiteral { entries, .. } => {
             for (key, value) in entries {
                 mentions(key, out);
                 mentions(value, out);
             }
         }
-        Expr::SetLiteral { elements, .. } => {
+        Expression::SetLiteral { elements, .. } => {
             for e in elements {
                 mentions(e, out);
             }
         }
-        Expr::Record { fields, .. } => {
+        Expression::Record { fields, .. } => {
             for (_, e) in fields {
                 mentions(e, out);
             }
         }
-        Expr::Constructor {
+        Expression::Constructor {
             type_name, fields, ..
         } => {
             out.push(type_name);
@@ -200,6 +220,6 @@ fn mentions<'a>(expr: &'a Expr, out: &mut Vec<&'a str>) {
                 mentions(e, out);
             }
         }
-        Expr::Spread { expr, .. } => mentions(expr, out),
+        Expression::Spread { expression, .. } => mentions(expression, out),
     }
 }

@@ -217,7 +217,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn generate_print(
         &mut self,
         name: &str,
-        args: &[Expr],
+        args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 1 {
             return Err(format!(
@@ -228,7 +228,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let fd = if name == "eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
-        let text = self.render_expr(&args[0])?;
+        let text = self.render_expression(&args[0])?;
         let data = self
             .builder
             .build_extract_value(text.into_struct_value(), 0, "print_data")
@@ -250,14 +250,17 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// e.g. a `< >` block statement or a ternary arm inside `assert` — without
     /// clashing with the surrounding construct's own terminator. The code after it is
     /// dead at runtime (the process has exited). Yields `$` (Unit).
-    pub(super) fn generate_exit(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+    pub(super) fn generate_exit(
+        &mut self,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 1 {
             return Err(format!(
                 "__exit expects exactly 1 argument, got {}",
                 args.len()
             ));
         }
-        let code = self.generate_expr(&args[0])?;
+        let code = self.generate_expression(&args[0])?;
         let BasicValueEnum::FloatValue(code_f) = code else {
             return Err("__exit expects a Num exit code".to_string());
         };
@@ -280,7 +283,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// raw file descriptor is not user-facing surface.
     pub(super) fn generate_color_enabled(
         &mut self,
-        args: &[Expr],
+        args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 1 {
             return Err(format!(
@@ -303,15 +306,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
     /// `content` to file descriptor `fd` (a `Num`), with no trailing newline.
     /// Yields `Num` (bytes written).
-    pub(super) fn generate_write(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+    pub(super) fn generate_write(
+        &mut self,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 2 {
             return Err(format!(
                 "write expects exactly 2 arguments (content, fd), got {}",
                 args.len()
             ));
         }
-        let content = self.generate_expr(&args[0])?;
-        let fd_num = self.generate_expr(&args[1])?;
+        let content = self.generate_expression(&args[0])?;
+        let fd_num = self.generate_expression(&args[1])?;
         // content must be a Text { ptr data, i64 byte_len }.
         let s = match content {
             BasicValueEnum::StructValue(s) => s,

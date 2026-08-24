@@ -11,19 +11,23 @@
 //! the set of enclosing names (`outer`): a `:=` to an outer name is a use (capture), a
 //! `:=` to a new name is a local. It never needs to resolve types.
 
-use super::nodes::{Expr, InterpPart, Item, Pattern, Statement};
+use super::nodes::{Expression, InterpolationPart, Item, Pattern, Statement};
 use std::collections::HashSet;
 
 /// The ordered, de-duplicated names a lambda captures: references in its body to names in
 /// `outer` (the enclosing scope) that the lambda has not shadowed with its own parameter
-/// or local binding. `params` are the lambda's parameter names (which shadow `outer`).
+/// or local binding. `parameters` are the lambda's parameter names (which shadow `outer`).
 /// Order follows first textual appearance, giving the closure environment a stable field
 /// layout.
-pub fn lambda_free_idents(params: &[String], body: &Expr, outer: &HashSet<String>) -> Vec<String> {
-    // `local` accumulates names bound INSIDE the lambda (params first); a read or write of
+pub fn lambda_free_idents(
+    parameters: &[String],
+    body: &Expression,
+    outer: &HashSet<String>,
+) -> Vec<String> {
+    // `local` accumulates names bound INSIDE the lambda (parameters first); a read or write of
     // a `local` name is never a capture. A name that is neither local nor outer is a
     // top-level/global reference, also not captured.
-    let mut local: HashSet<String> = params.iter().cloned().collect();
+    let mut local: HashSet<String> = parameters.iter().cloned().collect();
     let mut seen = HashSet::new();
     let mut ordered = Vec::new();
     collect(body, &mut local, outer, &mut seen, &mut ordered);
@@ -45,25 +49,28 @@ fn note(
 }
 
 fn collect(
-    expr: &Expr,
+    expression: &Expression,
     local: &mut HashSet<String>,
     outer: &HashSet<String>,
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
 ) {
-    match expr {
-        Expr::Ident { name, .. } => note(name, local, outer, seen, out),
-        Expr::Number { .. } | Expr::String { .. } | Expr::Bool { .. } | Expr::Unit { .. } => {}
-        Expr::Interpolation { parts, .. } => {
+    match expression {
+        Expression::Identifier { name, .. } => note(name, local, outer, seen, out),
+        Expression::Number { .. }
+        | Expression::String { .. }
+        | Expression::Bool { .. }
+        | Expression::Unit { .. } => {}
+        Expression::Interpolation { parts, .. } => {
             for part in parts {
-                if let InterpPart::Hole(e) = part {
+                if let InterpolationPart::Hole(e) = part {
                     collect(e, local, outer, seen, out);
                 }
             }
         }
-        Expr::BinOp { left, right, .. }
-        | Expr::Pipeline { left, right, .. }
-        | Expr::Range {
+        Expression::BinaryOperator { left, right, .. }
+        | Expression::Pipeline { left, right, .. }
+        | Expression::Range {
             start: left,
             end: right,
             ..
@@ -71,10 +78,11 @@ fn collect(
             collect(left, local, outer, seen, out);
             collect(right, local, outer, seen, out);
         }
-        Expr::UnaryOp { expr, .. } | Expr::FieldAccess { expr, .. } => {
-            collect(expr, local, outer, seen, out)
+        Expression::UnaryOperator { expression, .. }
+        | Expression::FieldAccess { expression, .. } => {
+            collect(expression, local, outer, seen, out)
         }
-        Expr::Call {
+        Expression::Call {
             function,
             arguments,
             ..
@@ -84,53 +92,55 @@ fn collect(
                 collect(a, local, outer, seen, out);
             }
         }
-        Expr::Lambda { params, body, .. } => {
+        Expression::Lambda {
+            parameters, body, ..
+        } => {
             // A nested lambda's parameters shadow within its own body; names it reads from
             // OUR scope are transitively free in us too. Its locals are its own — clone so
             // they don't leak back into ours.
             let mut inner = local.clone();
-            for p in params {
+            for p in parameters {
                 inner.insert(p.name.clone());
             }
             collect(body, &mut inner, outer, seen, out);
         }
-        Expr::Block { stmts, .. } => {
+        Expression::Block { statements, .. } => {
             // A block opens a nested scope; thread a forward-growing local set through it.
             let mut block_local = local.clone();
-            for stmt in stmts {
-                match stmt {
-                    Statement::Expr(e) => collect(e, &mut block_local, outer, seen, out),
-                    Statement::Item(Item::VarDecl(decl)) => {
+            for statement in statements {
+                match statement {
+                    Statement::Expression(e) => collect(e, &mut block_local, outer, seen, out),
+                    Statement::Item(Item::VariableDeclaration(declaration)) => {
                         // The initializer runs BEFORE the name binds.
-                        collect(&decl.value, &mut block_local, outer, seen, out);
+                        collect(&declaration.value, &mut block_local, outer, seen, out);
                         // `x := v` where `x` is an outer binding not yet shadowed locally
                         // is a REASSIGNMENT of the captured cell — a use, so capture `x`
                         // and do NOT shadow it. Any other binding introduces a local.
-                        let is_outer_reassign = decl.mutable
-                            && !block_local.contains(&decl.name)
-                            && outer.contains(&decl.name);
+                        let is_outer_reassign = declaration.mutable
+                            && !block_local.contains(&declaration.name)
+                            && outer.contains(&declaration.name);
                         if is_outer_reassign {
-                            note(&decl.name, &block_local, outer, seen, out);
+                            note(&declaration.name, &block_local, outer, seen, out);
                         } else {
-                            block_local.insert(decl.name.clone());
+                            block_local.insert(declaration.name.clone());
                         }
                     }
-                    Statement::Item(Item::FunctionDecl(decl)) => {
+                    Statement::Item(Item::FunctionDeclaration(declaration)) => {
                         // A nested function is itself a closure: names it reads from OUR
                         // scope are transitively free in us too. Analyze its body with its
                         // parameters shadowing (a cloned local set), then bind its name.
                         let mut inner = block_local.clone();
-                        for p in &decl.params {
+                        for p in &declaration.parameters {
                             inner.insert(p.name.clone());
                         }
-                        collect(&decl.body, &mut inner, outer, seen, out);
-                        block_local.insert(decl.name.clone());
+                        collect(&declaration.body, &mut inner, outer, seen, out);
+                        block_local.insert(declaration.name.clone());
                     }
-                    Statement::Item(Item::TypeDecl(_)) => {}
+                    Statement::Item(Item::TypeDeclaration(_)) => {}
                 }
             }
         }
-        Expr::If {
+        Expression::If {
             condition,
             then,
             else_,
@@ -140,45 +150,49 @@ fn collect(
             collect(then, local, outer, seen, out);
             collect(else_, local, outer, seen, out);
         }
-        Expr::Match { expr, arms, .. } => {
-            collect(expr, local, outer, seen, out);
+        Expression::Match {
+            expression, arms, ..
+        } => {
+            collect(expression, local, outer, seen, out);
             for arm in arms {
                 let mut arm_local = local.clone();
                 bind_pattern(&arm.pattern, &mut arm_local);
                 collect(&arm.body, &mut arm_local, outer, seen, out);
             }
         }
-        Expr::FieldAssign { target, value, .. } => {
+        Expression::FieldAssign { target, value, .. } => {
             collect(target, local, outer, seen, out);
             collect(value, local, outer, seen, out);
         }
-        Expr::Index { expr, index, .. } => {
-            collect(expr, local, outer, seen, out);
+        Expression::Index {
+            expression, index, ..
+        } => {
+            collect(expression, local, outer, seen, out);
             collect(index, local, outer, seen, out);
         }
-        Expr::Array { elements, .. } | Expr::SetLiteral { elements, .. } => {
+        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
             for e in elements {
                 collect(e, local, outer, seen, out);
             }
         }
-        Expr::MapLiteral { entries, .. } => {
+        Expression::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect(k, local, outer, seen, out);
                 collect(v, local, outer, seen, out);
             }
         }
-        Expr::Record { fields, .. } | Expr::Constructor { fields, .. } => {
+        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
             for (_, e) in fields {
                 collect(e, local, outer, seen, out);
             }
         }
-        Expr::Spread { expr, .. } => collect(expr, local, outer, seen, out),
+        Expression::Spread { expression, .. } => collect(expression, local, outer, seen, out),
     }
 }
 
 fn bind_pattern(pattern: &Pattern, bound: &mut HashSet<String>) {
     match pattern {
-        Pattern::Ident { name, .. } => {
+        Pattern::Identifier { name, .. } => {
             bound.insert(name.clone());
         }
         Pattern::Constructor { arguments, .. } => {

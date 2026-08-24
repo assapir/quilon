@@ -7,17 +7,17 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Lower a `match` (`scrutinee ? | pat => body ...`). `match_expr` is the whole
-    /// `Expr::Match` node (used only to look up the match's result type in the oracle);
+    /// Lower a `match` (`scrutinee ? | pat => body ...`). `match_expression` is the whole
+    /// `Expression::Match` node (used only to look up the match's result type in the oracle);
     /// `scrutinee` is the value being matched.
     pub(super) fn generate_match(
         &mut self,
-        match_expr: &Expr,
-        scrutinee: &Expr,
+        match_expression: &Expression,
+        scrutinee: &Expression,
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Evaluate the expression being matched
-        let match_val = self.generate_expr(scrutinee)?;
+        let match_val = self.generate_expression(scrutinee)?;
 
         // Get the current function
         let function = self
@@ -43,7 +43,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // the type oracle — NOT a hardcoded `f64` — so a match yielding `Text` (e.g. the
         // `Ok(text)` payload) allocates and loads a `Text` struct rather than corrupting
         // it through an f64 slot. Falls back to `f64` if the oracle didn't record it.
-        let result_llvm = self.oracle_value_type(match_expr)?;
+        let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
         // Jump to first check
@@ -78,7 +78,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Bind pattern variables
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
-            let arm_val = self.generate_expr(&arm.body)?;
+            let arm_val = self.generate_expression(&arm.body)?;
             self.builder
                 .build_store(result_alloca, arm_val)
                 .map_err(ctx("Failed to store result"))?;
@@ -108,7 +108,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.context.bool_type().const_all_ones())
             }
 
-            Pattern::Ident { .. } => {
+            Pattern::Identifier { .. } => {
                 // Identifier pattern always matches (binds the value)
                 Ok(self.context.bool_type().const_all_ones())
             }
@@ -175,10 +175,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// oracle has no concrete `Sum` type for the scrutinee.
     pub(super) fn scrutinee_payload_types(
         &self,
-        scrutinee: &Expr,
+        scrutinee: &Expression,
         variant: &str,
     ) -> Option<Vec<Type>> {
-        match self.oracle.expr_type(scrutinee)? {
+        match self.oracle.expression_type(scrutinee)? {
             Type::Sum { variants, .. } => variants
                 .iter()
                 .find(|v| v.name == variant)
@@ -191,10 +191,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         pattern: &Pattern,
         value: BasicValueEnum<'ctx>,
-        scrutinee: &Expr,
+        scrutinee: &Expression,
     ) -> Result<(), String> {
         match pattern {
-            Pattern::Ident { name, .. } => {
+            Pattern::Identifier { name, .. } => {
                 // Bind the value to the identifier
                 let alloca = self.create_entry_block_alloca(name, value.get_type())?;
                 self.builder
@@ -233,7 +233,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .get(name.as_str())
                         .is_some_and(|(_, tn)| tn == "Result");
                     for (i, arg) in arguments.iter().enumerate() {
-                        if let Pattern::Ident { name: arg_name, .. } = arg {
+                        if let Pattern::Identifier { name: arg_name, .. } = arg {
                             let payload_ty = [&concrete, &declared]
                                 .into_iter()
                                 .filter_map(|src| src.as_ref()?.get(i))

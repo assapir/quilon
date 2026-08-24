@@ -150,10 +150,10 @@ fn test_slash_remains_division_for_values() {
     // Disambiguation: `/` between lowercase values is division, NOT a sum type.
     let tokens = Lexer::tokenize("half = a / b").unwrap();
     let program = parse(&tokens).unwrap();
-    // Parses as a value binding (division), so it's a VarDecl, not a TypeDecl.
+    // Parses as a value binding (division), so it's a VariableDeclaration, not a TypeDeclaration.
     assert!(matches!(
         program.items.first(),
-        Some(quilon::ast::Item::VarDecl(_))
+        Some(quilon::ast::Item::VariableDeclaration(_))
     ));
 }
 
@@ -166,8 +166,11 @@ fn test_slash_with_capitalized_left_but_nonconstructor_right_is_division() {
         let tokens = Lexer::tokenize(src).unwrap();
         let program = parse(&tokens).unwrap();
         assert!(
-            matches!(program.items.first(), Some(quilon::ast::Item::VarDecl(_))),
-            "`{src}` should parse as division (a VarDecl), not a sum type"
+            matches!(
+                program.items.first(),
+                Some(quilon::ast::Item::VariableDeclaration(_))
+            ),
+            "`{src}` should parse as division (a VariableDeclaration), not a sum type"
         );
     }
 }

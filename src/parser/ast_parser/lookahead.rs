@@ -18,7 +18,7 @@ impl<'a> Parser<'a> {
     /// are division (right operand isn't a Capitalized name), and `a / b` never matches
     /// (left operand isn't Capitalized either). A single `A` alone (no `/`) is a value
     /// binding, not a one-variant sum type.
-    pub(super) fn looks_like_sum_decl(&self) -> bool {
+    pub(super) fn looks_like_sum_declaration(&self) -> bool {
         // The first token must be a Capitalized identifier (the first variant).
         if self.peek().kind != TokenKind::Ident || !is_capitalized(&self.peek().text) {
             return false;
@@ -64,7 +64,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether the current operator token actually begins a top-level operator
-    /// DEFINITION (`op = ...`) rather than continuing the current expression. The
+    /// DEFINITION (`operator = ...`) rather than continuing the current expression. The
     /// grammar is newline-insensitive, so without this an expression-bodied item
     /// followed by an operator overload — `x = 5` then `+ = (a, b) => …` — would let
     /// the additive parser swallow the `+` as `5 + …`. An operator immediately
@@ -100,7 +100,7 @@ impl<'a> Parser<'a> {
             TokenKind::TypeAnnotation => {
                 // `name :: <type> =>` — find the `=>` that closes the annotation. Types
                 // here are simple (a name with optional `{ … }` generic args); the first
-                // top-level `=>` after the `::` ends the param list of a lambda. A `<`
+                // top-level `=>` after the `::` ends the parameter list of a lambda. A `<`
                 // block or anything else means it was not a lambda parameter.
                 let mut idx = 2;
                 let mut brace_depth = 0i32;
@@ -111,7 +111,7 @@ impl<'a> Parser<'a> {
                         TokenKind::Arrow if brace_depth == 0 => return true,
                         TokenKind::Eof => return false,
                         // A return-arrow, block, comma, etc. at depth 0 means this `::`
-                        // was a binding annotation, not a lambda param — bail out.
+                        // was a binding annotation, not a lambda parameter — bail out.
                         TokenKind::BlockOpen | TokenKind::Comma if brace_depth == 0 => {
                             return false;
                         }
@@ -175,7 +175,7 @@ impl<'a> Parser<'a> {
             TokenKind::Ge => ">=",
             _ => return None,
         };
-        // Only a definition (`op = ...`); otherwise leave it for expression parsing.
+        // Only a definition (`operator = ...`); otherwise leave it for expression parsing.
         if self.peek_ahead(1).kind == TokenKind::Assign {
             Some(sym.to_string())
         } else {

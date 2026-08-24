@@ -49,15 +49,15 @@ fn test_parse_export_marker() {
     assert_eq!(program.items.len(), 2);
     // First item is exported, second is private.
     match &program.items[0] {
-        Item::FunctionDecl(f) => {
+        Item::FunctionDeclaration(f) => {
             assert_eq!(f.name, "add");
             assert!(f.exported, "`>> add` should be exported");
         }
-        other => panic!("expected FunctionDecl, got {:?}", other),
+        other => panic!("expected FunctionDeclaration, got {:?}", other),
     }
     match &program.items[1] {
-        Item::FunctionDecl(f) => assert!(!f.exported, "`helper` should be private"),
-        other => panic!("expected FunctionDecl, got {:?}", other),
+        Item::FunctionDeclaration(f) => assert!(!f.exported, "`helper` should be private"),
+        other => panic!("expected FunctionDeclaration, got {:?}", other),
     }
 }
 
@@ -75,11 +75,11 @@ fn test_parse_mutable() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(decl) = &program.items[0] {
-        assert!(decl.mutable);
-        assert_eq!(decl.name, "counter");
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        assert!(declaration.mutable);
+        assert_eq!(declaration.name, "counter");
     } else {
-        panic!("Expected VarDecl");
+        panic!("Expected VariableDeclaration");
     }
 }
 
@@ -92,23 +92,23 @@ fn test_parse_with_type() {
 
 #[test]
 fn test_parse_block_level_annotated_binding() {
-    // A `name :: Type = expr` binding INSIDE a `< >` block must parse and carry its
+    // A `name :: Type = expression` binding INSIDE a `< >` block must parse and carry its
     // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression:
     // the block parser used to only recognize `=`/`:=` bindings, choking on `::`.)
-    use crate::ast::{Expr, Statement};
+    use crate::ast::{Expression, Statement};
     let tokens = Lexer::tokenize("^ = () -> Num => <\n  n :: Num = 5\n  n\n>").unwrap();
     let program = parse(&tokens).expect("block-level annotated binding should parse");
-    let Item::FunctionDecl(func) = &program.items[0] else {
-        panic!("expected the `^` function decl");
+    let Item::FunctionDeclaration(func) = &program.items[0] else {
+        panic!("expected the `^` function declaration");
     };
-    let Expr::Block { stmts, .. } = &func.body else {
+    let Expression::Block { statements, .. } = &func.body else {
         panic!("expected a block body");
     };
-    let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
-        panic!("expected the first statement to be an annotated VarDecl");
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!("expected the first statement to be an annotated VariableDeclaration");
     };
-    assert_eq!(decl.name, "n");
-    assert_eq!(decl.type_annotation, Some(crate::ast::Type::Num));
+    assert_eq!(declaration.name, "n");
+    assert_eq!(declaration.type_annotation, Some(crate::ast::Type::Num));
 }
 
 #[test]
@@ -132,16 +132,28 @@ fn test_parse_comparison() {
 fn test_parse_bare_less_and_greater_than() {
     // `<` after a complete operand is `Lt`; a non-line-final `>` is `Gt`.
     let lt = parse(&Lexer::tokenize("flag = a < b").unwrap()).unwrap();
-    if let Item::VarDecl(d) = &lt.items[0] {
-        assert!(matches!(d.value, Expr::BinOp { op: BinOp::Lt, .. }));
+    if let Item::VariableDeclaration(d) = &lt.items[0] {
+        assert!(matches!(
+            d.value,
+            Expression::BinaryOperator {
+                operator: BinaryOperator::Lt,
+                ..
+            }
+        ));
     } else {
-        panic!("expected a var decl");
+        panic!("expected a var declaration");
     }
     let gt = parse(&Lexer::tokenize("flag = a > b").unwrap()).unwrap();
-    if let Item::VarDecl(d) = &gt.items[0] {
-        assert!(matches!(d.value, Expr::BinOp { op: BinOp::Gt, .. }));
+    if let Item::VariableDeclaration(d) = &gt.items[0] {
+        assert!(matches!(
+            d.value,
+            Expression::BinaryOperator {
+                operator: BinaryOperator::Gt,
+                ..
+            }
+        ));
     } else {
-        panic!("expected a var decl");
+        panic!("expected a var declaration");
     }
 }
 
@@ -151,13 +163,13 @@ fn test_parse_operator_definition() {
     let tokens =
         Lexer::tokenize("P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x").unwrap();
     let program = parse(&tokens).unwrap();
-    // Items: the type decl and the `==` operator function.
-    let op = program.items.iter().find_map(|i| match i {
-        Item::FunctionDecl(f) if f.name == "==" => Some(f),
+    // Items: the type declaration and the `==` operator function.
+    let operator = program.items.iter().find_map(|i| match i {
+        Item::FunctionDeclaration(f) if f.name == "==" => Some(f),
         _ => None,
     });
-    let op = op.expect("expected an `==` operator definition");
-    assert_eq!(op.params.len(), 2);
+    let operator = operator.expect("expected an `==` operator definition");
+    assert_eq!(operator.parameters.len(), 2);
 }
 
 #[test]
@@ -216,14 +228,14 @@ fn test_parse_pattern_match() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(decl) = &program.items[0] {
-        if let Expr::Match { arms, .. } = &decl.value {
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        if let Expression::Match { arms, .. } = &declaration.value {
             assert_eq!(arms.len(), 2);
         } else {
             panic!("Expected Match expression");
         }
     } else {
-        panic!("Expected VarDecl");
+        panic!("Expected VariableDeclaration");
     }
 }
 
@@ -241,14 +253,14 @@ fn test_parse_record() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(decl) = &program.items[0] {
-        if let Expr::Record { fields, .. } = &decl.value {
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        if let Expression::Record { fields, .. } = &declaration.value {
             assert_eq!(fields.len(), 2);
         } else {
             panic!("Expected Record expression");
         }
     } else {
-        panic!("Expected VarDecl");
+        panic!("Expected VariableDeclaration");
     }
 }
 
@@ -266,18 +278,21 @@ fn test_parse_constructor() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(decl) = &program.items[0] {
-        if let Expr::Constructor {
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        if let Expression::Constructor {
             type_name, fields, ..
-        } = &decl.value
+        } = &declaration.value
         {
             assert_eq!(type_name, "User");
             assert_eq!(fields.len(), 2);
         } else {
-            panic!("Expected Constructor expression, got {:?}", decl.value);
+            panic!(
+                "Expected Constructor expression, got {:?}",
+                declaration.value
+            );
         }
     } else {
-        panic!("Expected VarDecl");
+        panic!("Expected VariableDeclaration");
     }
 }
 
@@ -308,12 +323,16 @@ fn test_precedence() {
     let tokens = Lexer::tokenize("x = 2 + 3 * 4").unwrap();
     let program = parse(&tokens).unwrap();
 
-    if let Item::VarDecl(decl) = &program.items[0] {
-        // The root should be BinOp(Add)
-        if let Expr::BinOp { op: BinOp::Add, .. } = &decl.value {
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        // The root should be BinaryOperator(Add)
+        if let Expression::BinaryOperator {
+            operator: BinaryOperator::Add,
+            ..
+        } = &declaration.value
+        {
             // Correct precedence
         } else {
-            panic!("Expected Add at root, got {:?}", decl.value);
+            panic!("Expected Add at root, got {:?}", declaration.value);
         }
     }
 }
@@ -325,11 +344,11 @@ fn test_parse_simple_function() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::FunctionDecl(func) = &program.items[0] {
+    if let Item::FunctionDeclaration(func) = &program.items[0] {
         assert_eq!(func.name, "add");
-        assert_eq!(func.params.len(), 2);
-        assert_eq!(func.params[0].name, "a");
-        assert_eq!(func.params[1].name, "b");
+        assert_eq!(func.parameters.len(), 2);
+        assert_eq!(func.parameters[0].name, "a");
+        assert_eq!(func.parameters[1].name, "b");
     } else {
         panic!("Expected function declaration");
     }
@@ -345,9 +364,9 @@ fn test_parse_function_with_types() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::FunctionDecl(func) = &program.items[0] {
-        assert_eq!(func.params.len(), 2);
-        assert!(func.params[0].type_annotation.is_some());
+    if let Item::FunctionDeclaration(func) = &program.items[0] {
+        assert_eq!(func.parameters.len(), 2);
+        assert!(func.parameters[0].type_annotation.is_some());
         assert!(func.return_type.is_some());
     } else {
         panic!("Expected function declaration");
@@ -355,7 +374,7 @@ fn test_parse_function_with_types() {
 }
 
 #[test]
-fn test_parse_no_param_function() {
+fn test_parse_no_parameter_function() {
     let tokens = Lexer::tokenize("main = => 42").unwrap();
     let result = parse(&tokens);
     assert!(result.is_ok());
@@ -368,9 +387,9 @@ fn test_parse_block() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::FunctionDecl(func) = &program.items[0] {
-        if let Expr::Block { stmts, .. } = &func.body {
-            assert_eq!(stmts.len(), 2);
+    if let Item::FunctionDeclaration(func) = &program.items[0] {
+        if let Expression::Block { statements, .. } = &func.body {
+            assert_eq!(statements.len(), 2);
         } else {
             panic!("Expected block expression");
         }
@@ -385,7 +404,7 @@ fn test_parse_function_with_block() {
 }
 
 #[test]
-fn test_parse_no_param_function_with_return_type() {
+fn test_parse_no_parameter_function_with_return_type() {
     let tokens = Lexer::tokenize("greet = () -> Text => \"Hello\"").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
@@ -394,8 +413,8 @@ fn test_parse_no_param_function_with_return_type() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::FunctionDecl(func) = &program.items[0] {
-        assert_eq!(func.params.len(), 0);
+    if let Item::FunctionDeclaration(func) = &program.items[0] {
+        assert_eq!(func.parameters.len(), 0);
         assert!(func.return_type.is_some());
         if let Some(Type::Text) = func.return_type {
             // Success
@@ -403,23 +422,23 @@ fn test_parse_no_param_function_with_return_type() {
             panic!("Expected Text return type");
         }
     } else {
-        panic!("Expected FunctionDecl");
+        panic!("Expected FunctionDeclaration");
     }
 }
 
 #[test]
 fn test_parse_infix_range() {
-    // `1 <- 4` in general expression position parses as an Expr::Range.
+    // `1 <- 4` in general expression position parses as an Expression::Range.
     let tokens = Lexer::tokenize("r = 1 <- 4").unwrap();
     let program = parse(&tokens).expect("range should parse");
-    if let Item::VarDecl(v) = &program.items[0] {
+    if let Item::VariableDeclaration(v) = &program.items[0] {
         assert!(
-            matches!(v.value, Expr::Range { .. }),
-            "expected Expr::Range, got {:?}",
+            matches!(v.value, Expression::Range { .. }),
+            "expected Expression::Range, got {:?}",
             v.value
         );
     } else {
-        panic!("expected a var decl");
+        panic!("expected a var declaration");
     }
 }
 
@@ -430,11 +449,11 @@ fn test_for_is_now_a_plain_identifier() {
     // Here `for` is just a bound name.
     let tokens = Lexer::tokenize("for = 42").unwrap();
     let program = parse(&tokens).expect("`for` should parse as a plain binding");
-    if let Item::VarDecl(v) = &program.items[0] {
+    if let Item::VariableDeclaration(v) = &program.items[0] {
         assert_eq!(v.name, "for");
-        assert!(matches!(v.value, Expr::Number { .. }));
+        assert!(matches!(v.value, Expression::Number { .. }));
     } else {
-        panic!("expected a var decl binding the identifier `for`");
+        panic!("expected a var declaration binding the identifier `for`");
     }
 }
 
@@ -448,20 +467,20 @@ fn test_parse_method_call() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(var) = &program.items[0] {
+    if let Item::VariableDeclaration(var) = &program.items[0] {
         // Should be desugared to a Call with Ident("getName") as the function
-        if let Expr::Call {
+        if let Expression::Call {
             function,
             arguments,
             ..
         } = &var.value
         {
             // function should be Ident("getName")
-            if let Expr::Ident { name, .. } = function.as_ref() {
+            if let Expression::Identifier { name, .. } = function.as_ref() {
                 assert_eq!(name, "getName");
                 // First arg should be the receiver (user)
                 assert_eq!(arguments.len(), 1);
-                if let Expr::Ident { name, .. } = &arguments[0] {
+                if let Expression::Identifier { name, .. } = &arguments[0] {
                     assert_eq!(name, "user");
                 } else {
                     panic!("Expected receiver as first argument");
@@ -484,13 +503,13 @@ fn test_parse_method_call_with_args() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::VarDecl(var) = &program.items[0]
-        && let Expr::Call {
+    if let Item::VariableDeclaration(var) = &program.items[0]
+        && let Expression::Call {
             function,
             arguments,
             ..
         } = &var.value
-        && let Expr::Ident { name, .. } = function.as_ref()
+        && let Expression::Identifier { name, .. } = function.as_ref()
     {
         assert_eq!(name, "setAge");
         // Should have 2 args: receiver and the argument
@@ -509,7 +528,7 @@ fn test_parse_chained_method_calls() {
 }
 
 #[test]
-fn test_parse_type_decl_with_fields() {
+fn test_parse_type_declaration_with_fields() {
     let tokens = Lexer::tokenize("User = { name :: Text, age :: Num }").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
@@ -518,9 +537,9 @@ fn test_parse_type_decl_with_fields() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::TypeDecl(decl) = &program.items[0] {
-        assert_eq!(decl.name, "User");
-        if let TypeDef::Record { fields, methods } = &decl.type_def {
+    if let Item::TypeDeclaration(declaration) = &program.items[0] {
+        assert_eq!(declaration.name, "User");
+        if let TypeDefinition::Record { fields, methods } = &declaration.type_definition {
             assert_eq!(fields.len(), 2);
             assert_eq!(methods.len(), 0);
         } else {
@@ -532,7 +551,7 @@ fn test_parse_type_decl_with_fields() {
 }
 
 #[test]
-fn test_parse_type_decl_with_methods() {
+fn test_parse_type_declaration_with_methods() {
     let tokens = Lexer::tokenize(
         "User = {
   name :: Text,
@@ -547,13 +566,13 @@ fn test_parse_type_decl_with_methods() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::TypeDecl(decl) = &program.items[0] {
-        assert_eq!(decl.name, "User");
-        if let TypeDef::Record { fields, methods } = &decl.type_def {
+    if let Item::TypeDeclaration(declaration) = &program.items[0] {
+        assert_eq!(declaration.name, "User");
+        if let TypeDefinition::Record { fields, methods } = &declaration.type_definition {
             assert_eq!(fields.len(), 1);
             assert_eq!(methods.len(), 1);
             assert_eq!(methods[0].name, "getName");
-            assert_eq!(methods[0].params.len(), 0); // "it" is implicit
+            assert_eq!(methods[0].parameters.len(), 0); // "it" is implicit
         } else {
             panic!("Expected Record type definition");
         }
@@ -563,7 +582,7 @@ fn test_parse_type_decl_with_methods() {
 }
 
 #[test]
-fn test_parse_type_decl_method_with_params() {
+fn test_parse_type_declaration_method_with_parameters() {
     let tokens = Lexer::tokenize(
         "User = { 
   age :: Num,
@@ -578,26 +597,26 @@ fn test_parse_type_decl_method_with_params() {
     assert!(result.is_ok());
 
     let program = result.unwrap();
-    if let Item::TypeDecl(decl) = &program.items[0]
-        && let TypeDef::Record { fields: _, methods } = &decl.type_def
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields: _, methods } = &declaration.type_definition
     {
         assert_eq!(methods[0].name, "incrementAge");
-        assert_eq!(methods[0].params.len(), 1);
-        assert_eq!(methods[0].params[0].name, "amount");
+        assert_eq!(methods[0].parameters.len(), 1);
+        assert_eq!(methods[0].parameters[0].name, "amount");
     }
 }
 
 /// The body statements of the single `^` function in `src` (which must be a block).
-fn entry_block_stmts(src: &str) -> Vec<Statement> {
+fn entry_block_statements(src: &str) -> Vec<Statement> {
     let tokens = Lexer::tokenize(src).unwrap();
     let program = parse(&tokens).expect("program should parse");
-    let Item::FunctionDecl(func) = &program.items[0] else {
-        panic!("expected the `^` function decl");
+    let Item::FunctionDeclaration(func) = &program.items[0] else {
+        panic!("expected the `^` function declaration");
     };
-    let Expr::Block { stmts, .. } = &func.body else {
+    let Expression::Block { statements, .. } = &func.body else {
         panic!("expected a block body");
     };
-    stmts.clone()
+    statements.clone()
 }
 
 #[test]
@@ -605,15 +624,18 @@ fn test_line_first_paren_starts_new_statement() {
     // Statement-boundary rule: a `(` that opens a line never continues the previous
     // expression as a call. `x = f()` followed by a line `(1 + 2)` is TWO
     // statements, not the fused call `f()(1 + 2)`.
-    let stmts = entry_block_stmts("^ = () -> Num => <\n  x = f()\n  (1 + 2)\n  x\n>");
-    assert_eq!(stmts.len(), 3);
-    let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
-        panic!("expected `x = f()` as a VarDecl, got {:?}", stmts[0]);
+    let statements = entry_block_statements("^ = () -> Num => <\n  x = f()\n  (1 + 2)\n  x\n>");
+    assert_eq!(statements.len(), 3);
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!(
+            "expected `x = f()` as a VariableDeclaration, got {:?}",
+            statements[0]
+        );
     };
-    let Expr::Call { arguments, .. } = &decl.value else {
+    let Expression::Call { arguments, .. } = &declaration.value else {
         panic!(
             "expected `x`'s value to be the call `f()`, got {:?}",
-            decl.value
+            declaration.value
         );
     };
     assert!(
@@ -621,9 +643,12 @@ fn test_line_first_paren_starts_new_statement() {
         "the call must not swallow `(1 + 2)` as an argument"
     );
     assert!(
-        matches!(&stmts[1], Statement::Expr(Expr::BinOp { .. })),
+        matches!(
+            &statements[1],
+            Statement::Expression(Expression::BinaryOperator { .. })
+        ),
         "the line-first `(1 + 2)` must be its own statement, got {:?}",
-        stmts[1]
+        statements[1]
     );
 }
 
@@ -631,20 +656,27 @@ fn test_line_first_paren_starts_new_statement() {
 fn test_line_first_bracket_starts_new_statement() {
     // Same rule for `[`: `b = a` followed by a line `[3, 4].each(f)` is TWO
     // statements, not the fused index `a[3, 4]`.
-    let stmts = entry_block_stmts("^ = () -> Num => <\n  b = a\n  [3, 4].each(f)\n  b\n>");
-    assert_eq!(stmts.len(), 3);
-    let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
-        panic!("expected `b = a` as a VarDecl, got {:?}", stmts[0]);
+    let statements =
+        entry_block_statements("^ = () -> Num => <\n  b = a\n  [3, 4].each(f)\n  b\n>");
+    assert_eq!(statements.len(), 3);
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!(
+            "expected `b = a` as a VariableDeclaration, got {:?}",
+            statements[0]
+        );
     };
     assert!(
-        matches!(&decl.value, Expr::Ident { .. }),
+        matches!(&declaration.value, Expression::Identifier { .. }),
         "`b`'s value must stay the plain `a`, not become an index, got {:?}",
-        decl.value
+        declaration.value
     );
     assert!(
-        matches!(&stmts[1], Statement::Expr(Expr::Call { .. })),
+        matches!(
+            &statements[1],
+            Statement::Expression(Expression::Call { .. })
+        ),
         "the line-first `[3, 4].each(f)` must be its own statement, got {:?}",
-        stmts[1]
+        statements[1]
     );
 }
 
@@ -652,20 +684,26 @@ fn test_line_first_bracket_starts_new_statement() {
 fn test_line_first_brace_starts_new_statement() {
     // Same rule for `{`: `b = a` followed by a line `{ x = 1 }` is TWO statements,
     // not the fused record constructor `a { x = 1 }`.
-    let stmts = entry_block_stmts("^ = () -> Num => <\n  b = a\n  { x = 1 }\n  b\n>");
-    assert_eq!(stmts.len(), 3);
-    let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
-        panic!("expected `b = a` as a VarDecl, got {:?}", stmts[0]);
+    let statements = entry_block_statements("^ = () -> Num => <\n  b = a\n  { x = 1 }\n  b\n>");
+    assert_eq!(statements.len(), 3);
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!(
+            "expected `b = a` as a VariableDeclaration, got {:?}",
+            statements[0]
+        );
     };
     assert!(
-        matches!(&decl.value, Expr::Ident { .. }),
+        matches!(&declaration.value, Expression::Identifier { .. }),
         "`b`'s value must stay the plain `a`, not become a constructor, got {:?}",
-        decl.value
+        declaration.value
     );
     assert!(
-        matches!(&stmts[1], Statement::Expr(Expr::Record { .. })),
+        matches!(
+            &statements[1],
+            Statement::Expression(Expression::Record { .. })
+        ),
         "the line-first `{{ x = 1 }}` must be its own record statement, got {:?}",
-        stmts[1]
+        statements[1]
     );
 }
 
@@ -673,21 +711,22 @@ fn test_line_first_brace_starts_new_statement() {
 fn test_same_line_constructor_still_builds() {
     // The rule only gates a LINE-FIRST `{`. A `{` on the type's own line is still a
     // record constructor, and its field body may span lines.
-    let stmts =
-        entry_block_stmts("^ = () -> Num => <\n  p = Point {\n    x = 3,\n    y = 4\n  }\n  p\n>");
-    let Statement::Item(Item::VarDecl(decl)) = &stmts[0] else {
+    let statements = entry_block_statements(
+        "^ = () -> Num => <\n  p = Point {\n    x = 3,\n    y = 4\n  }\n  p\n>",
+    );
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
         panic!(
-            "expected `p = Point {{...}}` as a VarDecl, got {:?}",
-            stmts[0]
+            "expected `p = Point {{...}}` as a VariableDeclaration, got {:?}",
+            statements[0]
         );
     };
-    let Expr::Constructor {
+    let Expression::Constructor {
         type_name, fields, ..
-    } = &decl.value
+    } = &declaration.value
     else {
         panic!(
             "same-line `{{` must build a constructor, got {:?}",
-            decl.value
+            declaration.value
         );
     };
     assert_eq!(type_name, "Point");
@@ -701,11 +740,11 @@ fn test_multiline_call_arguments_still_one_call() {
     let tokens = Lexer::tokenize("x = add(40,\n  2)").unwrap();
     let program = parse(&tokens).expect("multi-line argument list should parse");
     assert_eq!(program.items.len(), 1);
-    let Item::VarDecl(decl) = &program.items[0] else {
-        panic!("expected a VarDecl");
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a VariableDeclaration");
     };
-    let Expr::Call { arguments, .. } = &decl.value else {
-        panic!("expected a call, got {:?}", decl.value);
+    let Expression::Call { arguments, .. } = &declaration.value else {
+        panic!("expected a call, got {:?}", declaration.value);
     };
     assert_eq!(arguments.len(), 2);
 }
@@ -717,20 +756,20 @@ fn test_method_chain_across_lines_still_continues() {
     let tokens = Lexer::tokenize("x = xs.map(f)\n  .filter(g)").unwrap();
     let program = parse(&tokens).expect("a `.`-led continuation line should parse");
     assert_eq!(program.items.len(), 1);
-    let Item::VarDecl(decl) = &program.items[0] else {
-        panic!("expected a VarDecl");
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a VariableDeclaration");
     };
     // `xs.map(f).filter(g)` desugars to `filter(map(xs, f), g)`.
-    let Expr::Call {
+    let Expression::Call {
         function,
         arguments,
         ..
-    } = &decl.value
+    } = &declaration.value
     else {
-        panic!("expected the chained call, got {:?}", decl.value);
+        panic!("expected the chained call, got {:?}", declaration.value);
     };
     assert!(
-        matches!(function.as_ref(), Expr::Ident { name, .. } if name == "filter"),
+        matches!(function.as_ref(), Expression::Identifier { name, .. } if name == "filter"),
         "outermost call should be `filter`"
     );
     assert_eq!(arguments.len(), 2);

@@ -11,7 +11,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         tag: u8,
         type_name: &str,
-        args: &[Expr],
+        args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Tagged-union value: { i8 tag, slot0, slot1, ... }. Every sum type has a registered
         // canonical layout (`sum_layouts`), so EVERY value of the type shares one struct shape
@@ -41,7 +41,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let is_result = type_name == "Result";
         let mut payload_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
         for (pos, arg) in args.iter().enumerate() {
-            let arg_val = self.generate_expr(arg)?;
+            let arg_val = self.generate_expression(arg)?;
             if is_result {
                 // Result has a single canonical `{ptr,i64}` slot; PACK the payload into it
                 // (a Text/array fills it directly, a scalar goes into one field) so every
@@ -55,7 +55,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // zero-sized and defaults to the canonical `double` slot.
             let slot_ty = match registered_layout.as_ref().and_then(|l| l.get(pos).copied()) {
                 Some(ty) => ty,
-                None if self.expr_is_unit(arg) => f64_type.into(),
+                None if self.expression_is_unit(arg) => f64_type.into(),
                 None => self.payload_slot_type(arg_val),
             };
             payload_vals.push(self.coerce_payload(arg_val, slot_ty)?);

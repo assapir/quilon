@@ -10,7 +10,7 @@
 // drive the full pipeline (lex -> parse -> typecheck -> codegen -> JIT) for the runtime
 // ones.
 
-use quilon::ast::Expr;
+use quilon::ast::Expression;
 use quilon::lexer::Lexer;
 use quilon::parser;
 
@@ -18,21 +18,21 @@ use quilon::parser;
 // Parser-level disambiguation: same `<-` token, two meanings, by position.
 // ---------------------------------------------------------------------------
 
-/// Parse the initializer expression of the single `x = <expr>` binding in `src`.
+/// Parse the initializer expression of the single `x = <expression>` binding in `src`.
 mod common;
 use common::{assert_exit, assert_type_error};
 
-fn parse_binding_value(src: &str) -> Expr {
+fn parse_binding_value(src: &str) -> Expression {
     use quilon::ast::{Item, Statement};
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    // Find the `x = ...` var decl (top-level or inside the first block).
+    // Find the `x = ...` var declaration (top-level or inside the first block).
     for item in &program.items {
-        if let Item::FunctionDecl(f) = item
-            && let Expr::Block { stmts, .. } = &f.body
+        if let Item::FunctionDeclaration(f) = item
+            && let Expression::Block { statements, .. } = &f.body
         {
-            for stmt in stmts {
-                if let Statement::Item(Item::VarDecl(d)) = stmt
+            for statement in statements {
+                if let Statement::Item(Item::VariableDeclaration(d)) = statement
                     && d.name == "x"
                 {
                     return d.value.clone();
@@ -48,12 +48,12 @@ fn parse_binding_value(src: &str) -> Expr {
 #[test]
 fn bracket_range_is_a_one_element_array_of_a_range() {
     let v = parse_binding_value("^ = () -> Num => <\n  x = [1 <- 4]\n  0\n>");
-    let Expr::Array { elements, .. } = v else {
+    let Expression::Array { elements, .. } = v else {
         panic!("expected an array literal, got {v:?}");
     };
     assert_eq!(elements.len(), 1, "should be a single element (the range)");
     assert!(
-        matches!(elements[0], Expr::Range { .. }),
+        matches!(elements[0], Expression::Range { .. }),
         "the element should be a Range, got {:?}",
         elements[0]
     );
@@ -63,17 +63,17 @@ fn bracket_range_is_a_one_element_array_of_a_range() {
 #[test]
 fn bracket_leading_arrow_is_a_spread() {
     let v = parse_binding_value("^ = () -> Num => <\n  xs = [1]\n  x = [<-xs, 4]\n  0\n>");
-    let Expr::Array { elements, .. } = v else {
+    let Expression::Array { elements, .. } = v else {
         panic!("expected an array literal, got {v:?}");
     };
     assert_eq!(elements.len(), 2);
     assert!(
-        matches!(elements[0], Expr::Spread { .. }),
+        matches!(elements[0], Expression::Spread { .. }),
         "first element should be a Spread, got {:?}",
         elements[0]
     );
     assert!(
-        !matches!(elements[1], Expr::Spread { .. }),
+        !matches!(elements[1], Expression::Spread { .. }),
         "second element should be an ordinary element"
     );
 }
@@ -83,12 +83,12 @@ fn bracket_leading_arrow_is_a_spread() {
 fn brace_leading_arrow_is_a_record_spread() {
     let v =
         parse_binding_value("^ = () -> Num => <\n  p = { a = 1 }\n  x = { <-p, a = 9 }\n  0\n>");
-    let Expr::Record { fields, .. } = v else {
+    let Expression::Record { fields, .. } = v else {
         panic!("expected a record literal, got {v:?}");
     };
     assert_eq!(fields.len(), 2);
     assert!(
-        matches!(fields[0].1, Expr::Spread { .. }),
+        matches!(fields[0].1, Expression::Spread { .. }),
         "first field should be a Spread, got {:?}",
         fields[0].1
     );

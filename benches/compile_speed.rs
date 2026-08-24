@@ -285,13 +285,13 @@ fn flat_program(count: usize) -> String {
 /// checker's walk, expression lowering). Depth stays under the parser's nesting ceiling,
 /// so the corpus gets its size from repeating the expression rather than nesting further.
 fn deep_program(functions: usize, depth: usize) -> String {
-    let mut expr = String::from("1");
+    let mut expression = String::from("1");
     for i in 0..depth {
-        expr = format!("({expr} + {i})");
+        expression = format!("({expression} + {i})");
     }
     let mut src = String::new();
     for i in 0..functions {
-        let _ = writeln!(src, "d{i} = () -> Num => {expr}");
+        let _ = writeln!(src, "d{i} = () -> Num => {expression}");
     }
     let _ = writeln!(src, "^ = () -> Num => <");
     for i in 0..functions {

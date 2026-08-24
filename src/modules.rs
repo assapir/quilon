@@ -172,9 +172,9 @@ pub fn is_corelib_source(source: &str) -> bool {
 
 fn item_is_exported(item: &Item) -> bool {
     match item {
-        Item::VarDecl(d) => d.exported,
-        Item::FunctionDecl(d) => d.exported,
-        Item::TypeDecl(d) => d.exported,
+        Item::VariableDeclaration(d) => d.exported,
+        Item::FunctionDeclaration(d) => d.exported,
+        Item::TypeDeclaration(d) => d.exported,
     }
 }
 

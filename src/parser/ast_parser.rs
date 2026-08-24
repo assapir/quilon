@@ -1,8 +1,9 @@
 // Parser implementation - simple recursive descent
 
 use crate::ast::{
-    BinOp, Expr, FunctionDecl, Import, InterpPart, Item, MethodDecl, ModulePath, Param, Program,
-    TypeDecl, TypeDef, UnaryOp, VarDecl,
+    BinaryOperator, Expression, FunctionDeclaration, Import, InterpolationPart, Item,
+    MethodDeclaration, ModulePath, Parameter, Program, TypeDeclaration, TypeDefinition,
+    UnaryOperator, VariableDeclaration,
 };
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span, StrChunk, Token, TokenKind};
 
@@ -91,7 +92,7 @@ impl<'a> Parser<'a> {
 
     /// Run `f` one recursion level deeper, or fail loud if that would nest deeper
     /// than `MAX_NESTING_DEPTH`. Every parser entry point that can re-enter itself
-    /// an unbounded number of times (`parse_expr`, `parse_type`, `parse_pattern`)
+    /// an unbounded number of times (`parse_expression`, `parse_type`, `parse_pattern`)
     /// routes through here, which pairs the depth increment with its matching
     /// decrement so no caller can leak or forget it. Returning a `ParseError`
     /// instead of recursing is what turns a would-be native stack overflow (abort +

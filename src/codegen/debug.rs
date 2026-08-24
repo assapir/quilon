@@ -436,13 +436,13 @@ impl<'ctx> DebugInfo<'ctx> {
         use inkwell::values::AsValueRef;
 
         // An empty DWARF expression: the variable's value IS the contents at `slot`.
-        let expr = self.builder.create_expression(vec![]);
+        let expression = self.builder.create_expression(vec![]);
         unsafe {
             LLVMDIBuilderInsertDeclareRecordAtEnd(
                 self.builder.as_mut_ptr(),
                 slot.as_value_ref(),
                 var.as_mut_ptr(),
-                expr.as_mut_ptr(),
+                expression.as_mut_ptr(),
                 loc.as_mut_ptr(),
                 block.as_mut_ptr(),
             );

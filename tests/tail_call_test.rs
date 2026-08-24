@@ -188,12 +188,12 @@ fn nested_tail_recursive_function_does_not_clobber_outer_tco() {
     );
 }
 
-/// A tail self-call evaluates ALL its arguments against the CURRENT iteration's params
+/// A tail self-call evaluates ALL its arguments against the CURRENT iteration's parameters
 /// before overwriting any slot. Here the second arg reads `n`, which the first arg also
 /// rebinds — a naive in-order overwrite would corrupt it. Sum 1..5 with a swap-style
 /// dependency: count(5, 0) -> ... -> 15.
 #[test]
-fn tail_call_args_use_pre_update_param_values() {
+fn tail_call_args_use_pre_update_parameter_values() {
     assert_exit(
         "count = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : count(n - 1, acc + n)\n\
          ^ = () -> Num => count(5, 0)",

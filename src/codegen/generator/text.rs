@@ -17,7 +17,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn generate_text_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        args: &[Expression],
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
@@ -81,7 +81,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // `count` copies of the receiver. Passed as a Num (double): the runtime
                 // rejects a negative/fractional count instead of truncating it, and the
                 // checker already rejected a literal one.
-                let count = self.generate_expr(&args[1])?.into_float_value();
+                let count = self.generate_expression(&args[1])?.into_float_value();
                 let site = self.site_value(span)?;
                 call_struct(
                     self,
@@ -168,9 +168,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// as its two fields (mirrors the extraction in `generate_text_compare`).
     pub(super) fn extract_text(
         &mut self,
-        expr: &Expr,
+        expression: &Expression,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
-        let val = self.generate_expr(expr)?;
+        let val = self.generate_expression(expression)?;
         let BasicValueEnum::StructValue(s) = val else {
             return Err("Text method receiver/argument must be a Text value".to_string());
         };
@@ -210,10 +210,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub(super) fn text_index_arg(
         &mut self,
-        expr: &Expr,
+        expression: &Expression,
         name: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let f = self.generate_expr(expr)?.into_float_value();
+        let f = self.generate_expression(expression)?.into_float_value();
         self.builder
             .build_float_to_signed_int(f, self.context.i64_type(), name)
             .map_err(ctx("Failed to convert text index"))
@@ -226,7 +226,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         recv_ptr: PointerValue<'ctx>,
         recv_len: inkwell::values::IntValue<'ctx>,
-        sub: &Expr,
+        sub: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
         let (sp, sl) = self.extract_text(sub)?;
@@ -346,11 +346,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Lower a `Text`-vs-`Text` comparison: call `__text_cmp(aptr, alen, bptr, blen)`
     /// (returns -1/0/1, memcmp-style with the shorter string ordering first on a common
-    /// prefix), then compare that i32 result against 0 with the predicate matching `op`.
+    /// prefix), then compare that i32 result against 0 with the predicate matching `operator`.
     /// Backs `Text` equality and lexicographic ordering (`==`/`!=`/`<`/`<=`/`>`/`>=`).
     pub(super) fn generate_text_compare(
         &mut self,
-        op: BinOp,
+        operator: BinaryOperator,
         lhs: BasicValueEnum<'ctx>,
         rhs: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
@@ -383,13 +383,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .as_any_value_enum()
             .into_int_value();
 
-        let pred = match op {
-            BinOp::Eq => inkwell::IntPredicate::EQ,
-            BinOp::Ne => inkwell::IntPredicate::NE,
-            BinOp::Lt => inkwell::IntPredicate::SLT,
-            BinOp::Le => inkwell::IntPredicate::SLE,
-            BinOp::Gt => inkwell::IntPredicate::SGT,
-            BinOp::Ge => inkwell::IntPredicate::SGE,
+        let pred = match operator {
+            BinaryOperator::Eq => inkwell::IntPredicate::EQ,
+            BinaryOperator::Ne => inkwell::IntPredicate::NE,
+            BinaryOperator::Lt => inkwell::IntPredicate::SLT,
+            BinaryOperator::Le => inkwell::IntPredicate::SLE,
+            BinaryOperator::Gt => inkwell::IntPredicate::SGT,
+            BinaryOperator::Ge => inkwell::IntPredicate::SGE,
             _ => return Err("non-comparison operator in text compare".to_string()),
         };
         let zero = cmp.get_type().const_zero();

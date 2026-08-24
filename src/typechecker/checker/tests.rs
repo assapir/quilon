@@ -105,7 +105,7 @@ fn test_record() {
 }
 
 #[test]
-fn test_if_expr() {
+fn test_if_expression() {
     let tokens =
         Lexer::tokenize("^ = () -> Num => <\n  result = true ? 1 : 0\n  result\n>").unwrap();
     let program = parse(&tokens).unwrap();
@@ -151,11 +151,11 @@ fn test_inferred_return_type() {
     // Verify the function type was inferred correctly
     let func_type = checker.env.get_type("double").unwrap();
     if let Type::Function {
-        params,
+        parameters,
         return_type,
     } = func_type
     {
-        assert_eq!(params, vec![Type::Num]);
+        assert_eq!(parameters, vec![Type::Num]);
         assert_eq!(*return_type, Type::Num);
     } else {
         panic!("Expected function type");
@@ -163,7 +163,7 @@ fn test_inferred_return_type() {
 }
 
 #[test]
-fn test_inferred_param_types() {
+fn test_inferred_parameter_types() {
     // Function without parameter type annotations - defaults to Num
     let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
     let program = parse(&tokens).unwrap();
@@ -431,9 +431,11 @@ fn test_overload_member_must_annotate_its_return_type() {
     )
     .unwrap_err();
     match err {
-        TypeError::UnannotatedOverloadCall { name, params, .. } => {
+        TypeError::UnannotatedOverloadCall {
+            name, parameters, ..
+        } => {
             assert_eq!(name, "g");
-            assert_eq!(params, vec![Type::Num]);
+            assert_eq!(parameters, vec![Type::Num]);
         }
         other => panic!(
             "expected an unannotated-overload-call error, got {:?}",
@@ -458,9 +460,11 @@ fn test_uncalled_overload_member_missing_return_is_reported_at_its_definition() 
         check_ok("g = (n :: Num) => 1\ng = (t :: Text) -> Num => 2\n^ = () -> Num => g(\"x\")")
             .unwrap_err();
     match err {
-        TypeError::UnannotatedOverloadMember { name, params, .. } => {
+        TypeError::UnannotatedOverloadMember {
+            name, parameters, ..
+        } => {
             assert_eq!(name, "g");
-            assert_eq!(params, vec![Type::Num]);
+            assert_eq!(parameters, vec![Type::Num]);
         }
         other => panic!(
             "expected an unannotated-overload-member error, got {:?}",

@@ -3,7 +3,7 @@
 // the value's `` ` `` operator (built-in default or user override) and concatenates.
 
 use inkwell::context::Context;
-use quilon::ast::{Expr, InterpPart};
+use quilon::ast::{Expression, InterpolationPart};
 use quilon::codegen::CodeGenerator;
 use quilon::lexer::{Lexer, StrChunk, TokenKind};
 use quilon::parser::parse;
@@ -52,23 +52,26 @@ fn bare_backtick_is_the_render_operator_token() {
 // ---- parser ------------------------------------------------------------------------
 
 #[test]
-fn parses_interpolation_node_with_hole_expr() {
+fn parses_interpolation_node_with_hole_expression() {
     let program = parse(&Lexer::tokenize("^ = () -> Text => \"n `1 + 2`\"").unwrap()).unwrap();
     // Dig out the entry-point body expression.
     let body = program
         .items
         .iter()
         .find_map(|item| match item {
-            quilon::ast::Item::FunctionDecl(f) if f.name == "^" => Some(&f.body),
+            quilon::ast::Item::FunctionDeclaration(f) if f.name == "^" => Some(&f.body),
             _ => None,
         })
         .expect("entry point");
-    let Expr::Interpolation { parts, .. } = body else {
+    let Expression::Interpolation { parts, .. } = body else {
         panic!("expected an interpolation node, got {body:?}");
     };
     assert_eq!(parts.len(), 2);
-    assert!(matches!(&parts[0], InterpPart::Literal(s) if s == "n "));
-    assert!(matches!(&parts[1], InterpPart::Hole(Expr::BinOp { .. })));
+    assert!(matches!(&parts[0], InterpolationPart::Literal(s) if s == "n "));
+    assert!(matches!(
+        &parts[1],
+        InterpolationPart::Hole(Expression::BinaryOperator { .. })
+    ));
 }
 
 #[test]
@@ -78,11 +81,11 @@ fn plain_string_stays_a_string_node() {
         .items
         .iter()
         .find_map(|item| match item {
-            quilon::ast::Item::FunctionDecl(f) if f.name == "^" => Some(&f.body),
+            quilon::ast::Item::FunctionDeclaration(f) if f.name == "^" => Some(&f.body),
             _ => None,
         })
         .unwrap();
-    assert!(matches!(body, Expr::String { .. }));
+    assert!(matches!(body, Expression::String { .. }));
 }
 
 // ---- typechecker -------------------------------------------------------------------
@@ -131,10 +134,10 @@ fn codegen_emits_render_intrinsics_for_holes() {
 
 // ---- run (JIT) ---------------------------------------------------------------------
 
-/// A program that exits 1 iff the interpolation `interp` renders exactly to `expected`.
-fn assert_renders(interp: &str, expected: &str) {
+/// A program that exits 1 iff the interpolation `interpolation` renders exactly to `expected`.
+fn assert_renders(interpolation: &str, expected: &str) {
     assert_exit(
-        &format!("^ = () -> Num => ({interp} == \"{expected}\" ? 1 : 0)"),
+        &format!("^ = () -> Num => ({interpolation} == \"{expected}\" ? 1 : 0)"),
         1,
     );
 }

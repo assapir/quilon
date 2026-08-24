@@ -108,7 +108,7 @@ fn deeply_nested_patterns_error_instead_of_crashing() {
 #[test]
 fn deeply_chained_prefix_operators_error_instead_of_crashing() {
     // Chained prefix operators (`---…x`) re-enter `parse_unary` directly, outside
-    // the `parse_expr` funnel — another independent, lighter recursion.
+    // the `parse_expression` funnel — another independent, lighter recursion.
     let n = 100_000;
     let src = format!("^ = () -> Num => {}1\n", "-".repeat(n));
     let out = check("unary", &src);
@@ -118,7 +118,7 @@ fn deeply_chained_prefix_operators_error_instead_of_crashing() {
 #[test]
 fn deeply_chained_field_assignments_error_instead_of_crashing() {
     // A `:=` chain (`a.x := b.y := …`) re-enters `parse_assignment` directly,
-    // bypassing the `parse_expr` funnel.
+    // bypassing the `parse_expression` funnel.
     let n = 100_000;
     let src = format!("^ = () -> Num => < a := 0\n{}0\n0 >\n", "a.b := ".repeat(n));
     let out = check("assign", &src);
@@ -129,7 +129,7 @@ fn deeply_chained_field_assignments_error_instead_of_crashing() {
 fn deeply_nested_block_functions_error_instead_of_crashing() {
     // Nested named functions whose bodies are blocks
     // (`f = () => < g = () => < … > >`) recurse through
-    // `parse_block`/`parse_item`/`parse_function_decl`, not `parse_expr`.
+    // `parse_block`/`parse_item`/`parse_function_declaration`, not `parse_expression`.
     let n = 20_000;
     let src = format!(
         "^ = () -> Num => {}1{}\n",

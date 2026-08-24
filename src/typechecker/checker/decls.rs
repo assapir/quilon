@@ -19,10 +19,10 @@ impl TypeChecker {
         let mut fn_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && !decl.is_inert_io_placeholder()
+            if let Item::FunctionDeclaration(declaration) = item
+                && !declaration.is_inert_io_placeholder()
             {
-                *fn_counts.entry(decl.name.as_str()).or_insert(0) += 1;
+                *fn_counts.entry(declaration.name.as_str()).or_insert(0) += 1;
             }
         }
         // A name forms an overload set if it is operator-named, has 2+ definitions, OR
@@ -47,11 +47,11 @@ impl TypeChecker {
         // its own body); what it rules out is a call reaching forward to a definition
         // below — which the checker used to accept and codegen then had no symbol for.
         for item in &program.items {
-            if let Item::FunctionDecl(decl) = item
-                && self.overloaded_names.contains(&decl.name)
-                && !decl.is_inert_io_placeholder()
+            if let Item::FunctionDeclaration(declaration) = item
+                && self.overloaded_names.contains(&declaration.name)
+                && !declaration.is_inert_io_placeholder()
             {
-                self.register_overload_decl(decl)?;
+                self.register_overload_declaration(declaration)?;
             }
             self.check_item(item, Nesting::TopLevel)?;
         }
@@ -65,12 +65,12 @@ impl TypeChecker {
         // diagnostic (rather than passing the check and failing later in codegen).
         for item in &program.items {
             match item {
-                Item::FunctionDecl(decl) if decl.name == "^" => {
-                    Self::check_entry_point_signature(decl)?;
+                Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
+                    Self::check_entry_point_signature(declaration)?;
                 }
                 // Same reason: a top-level binding that has to be computed used to pass
                 // the check and then break codegen from the inside.
-                Item::VarDecl(decl) => Self::check_global_binding(decl)?,
+                Item::VariableDeclaration(declaration) => Self::check_global_binding(declaration)?,
                 _ => {}
             }
         }
@@ -85,15 +85,17 @@ impl TypeChecker {
     /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
     /// elements. An unannotated parameter defaults to `Num` (matching codegen), so
     /// `^(x)` is the legacy shape only if it has exactly two such parameters.
-    pub(super) fn check_entry_point_signature(decl: &FunctionDecl) -> Result<(), TypeError> {
-        let params: Vec<Type> = decl
-            .params
+    pub(super) fn check_entry_point_signature(
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), TypeError> {
+        let parameters: Vec<Type> = declaration
+            .parameters
             .iter()
             .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
             .collect();
         let text_array = Type::Array(Box::new(Type::Text));
         let text_pairs = Type::Array(Box::new(text_array.clone()));
-        let ok = match params.as_slice() {
+        let ok = match parameters.as_slice() {
             [] => true,
             [a] => *a == text_array,
             [a, b] => {
@@ -105,8 +107,8 @@ impl TypeChecker {
             Ok(())
         } else {
             Err(TypeError::InvalidEntryPointSignature {
-                got: params,
-                span: decl.span.clone(),
+                got: parameters,
+                span: declaration.span.clone(),
             })
         }
     }
@@ -122,39 +124,47 @@ impl TypeChecker {
     /// and `x = f(1)` silently appended a call to the previously emitted function, leaving
     /// a block with no terminator and failing module verification. Both passed
     /// `quilon check` first.
-    pub(super) fn check_global_binding(decl: &VarDecl) -> Result<(), TypeError> {
+    pub(super) fn check_global_binding(declaration: &VariableDeclaration) -> Result<(), TypeError> {
         let constant = matches!(
-            decl.value,
-            Expr::Number { .. } | Expr::Bool { .. } | Expr::Unit { .. } | Expr::Lambda { .. }
+            declaration.value,
+            Expression::Number { .. }
+                | Expression::Bool { .. }
+                | Expression::Unit { .. }
+                | Expression::Lambda { .. }
         );
         if constant {
             Ok(())
         } else {
             Err(TypeError::ComputedGlobalBinding {
-                name: decl.name.clone(),
-                span: decl.span.clone(),
+                name: declaration.name.clone(),
+                span: declaration.span.clone(),
             })
         }
     }
 
     /// Check one declaration. `nesting` says whether it sits at the top level of a module
     /// or inside some body — which is what decides whether it may take a `Site` parameter
-    /// (see [`Self::reject_unfillable_site_params`]). It is an argument rather than checker
+    /// (see [`Self::reject_unfillable_site_parameters`]). It is an argument rather than checker
     /// state so that a body-descending path cannot forget to set it.
     pub(super) fn check_item(&mut self, item: &Item, nesting: Nesting) -> Result<(), TypeError> {
         match item {
-            Item::VarDecl(decl) => self.check_var_decl(decl),
-            Item::FunctionDecl(decl) => self.check_function_decl(decl, nesting),
-            Item::TypeDecl(decl) => self.check_type_decl(decl),
+            Item::VariableDeclaration(declaration) => self.check_variable_declaration(declaration),
+            Item::FunctionDeclaration(declaration) => {
+                self.check_function_declaration(declaration, nesting)
+            }
+            Item::TypeDeclaration(declaration) => self.check_type_declaration(declaration),
         }
     }
 
-    pub(super) fn check_type_decl(&mut self, decl: &crate::ast::TypeDecl) -> Result<(), TypeError> {
-        use crate::ast::{SumVariant, Type, TypeDef};
+    pub(super) fn check_type_declaration(
+        &mut self,
+        declaration: &crate::ast::TypeDeclaration,
+    ) -> Result<(), TypeError> {
+        use crate::ast::{SumVariant, Type, TypeDefinition};
 
         // Build the type from the definition
-        let type_value = match &decl.type_def {
-            TypeDef::Sum(variants) => {
+        let type_value = match &declaration.type_definition {
+            TypeDefinition::Sum(variants) => {
                 // Resolve and validate each variant's payload types. A payload is either a
                 // built-in type — `Num` / `Text` / `Bool` / `$` (Unit) — or a NAMED
                 // composite that resolves to an already-declared RECORD (no hoisting, so it
@@ -184,7 +194,7 @@ impl TypeChecker {
                             return Err(TypeError::TypeMismatch {
                                 expected: Box::new(Type::Num),
                                 got: Box::new(field.clone()),
-                                span: decl.span.clone(),
+                                span: declaration.span.clone(),
                             });
                         }
                         fields.push(resolved);
@@ -219,7 +229,7 @@ impl TypeChecker {
                                     return Err(TypeError::TypeMismatch {
                                         expected: Box::new(prev.clone()),
                                         got: Box::new(field.clone()),
-                                        span: decl.span.clone(),
+                                        span: declaration.span.clone(),
                                     });
                                 }
                                 Some(_) => {}
@@ -237,17 +247,18 @@ impl TypeChecker {
                     {
                         return Err(TypeError::DuplicateDefinition {
                             name: variant.name.clone(),
-                            span: decl.span.clone(),
+                            span: declaration.span.clone(),
                         });
                     }
                 }
 
                 let sum_type = Type::Sum {
-                    name: decl.name.clone(),
+                    name: declaration.name.clone(),
                     variants: resolved_variants,
                 };
                 // Register the sum type for constructor lookup
-                self.sum_types.insert(decl.name.clone(), sum_type.clone());
+                self.sum_types
+                    .insert(declaration.name.clone(), sum_type.clone());
 
                 // Bind each nullary variant as a value of the sum type, so a bare
                 // `Red` resolves as an expression. (Variants with payloads are
@@ -259,18 +270,18 @@ impl TypeChecker {
                             variant.name.clone(),
                             sum_type.clone(),
                             false,
-                            decl.span.clone(),
+                            declaration.span.clone(),
                         )?;
                     }
                 }
                 sum_type
             }
-            TypeDef::Record { fields, methods } => {
+            TypeDefinition::Record { fields, methods } => {
                 // Infer which methods mutate the receiver in place ("setters"), so
                 // a later call-site can require a `:=` receiver. A method is a setter
                 // iff its body writes `it.field := …` or calls a sibling setter on
                 // `it`. The latter is resolved to a fixpoint (setters calling setters).
-                self.infer_setter_methods(&decl.name, methods);
+                self.infer_setter_methods(&declaration.name, methods);
 
                 // The declaration itself, built once: every method's `it` binding and the
                 // registered type are the same record, so they share one copy of it.
@@ -285,7 +296,7 @@ impl TypeChecker {
 
                     // Bind implicit "it" parameter to the struct type
                     let struct_type = Type::Named {
-                        name: decl.name.clone(),
+                        name: declaration.name.clone(),
                         fields: Rc::clone(&record_fields),
                         methods: Rc::clone(&method_names),
                     };
@@ -295,31 +306,31 @@ impl TypeChecker {
 
                     // A method is dispatched on its receiver's type rather than called by
                     // name, so it never receives a call site — its last parameter included.
-                    let method_param_types: Vec<Type> = method
-                        .params
+                    let method_parameter_types: Vec<Type> = method
+                        .parameters
                         .iter()
                         .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
                         .collect();
-                    self.reject_unfillable_site_params(
-                        &format!("method `{}.{}`", decl.name, method.name),
-                        &method.params,
-                        &method_param_types,
+                    self.reject_unfillable_site_parameters(
+                        &format!("method `{}.{}`", declaration.name, method.name),
+                        &method.parameters,
+                        &method_parameter_types,
                         false,
                     )?;
 
                     // Bind method parameters
-                    for param in &method.params {
-                        let param_type = param.type_annotation.clone().unwrap_or(Type::Num); // Default to Num if no type annotation
+                    for parameter in &method.parameters {
+                        let parameter_type = parameter.type_annotation.clone().unwrap_or(Type::Num); // Default to Num if no type annotation
                         self.env.define(
-                            param.name.clone(),
-                            param_type,
+                            parameter.name.clone(),
+                            parameter_type,
                             false,
-                            param.span.clone(),
+                            parameter.span.clone(),
                         )?;
                     }
 
                     // Type-check method body
-                    let body_type = self.infer_expr(&method.body)?;
+                    let body_type = self.infer_expression(&method.body)?;
 
                     // Check return type if specified, and resolve the method's actual
                     // result type: the annotation when present, otherwise the inferred
@@ -337,7 +348,7 @@ impl TypeChecker {
                     // implicit `it` receiver (interpolation/`print` call it with no extra
                     // arguments).
                     if method.name == "`" {
-                        if !method.params.is_empty() {
+                        if !method.parameters.is_empty() {
                             return Err(TypeError::InvalidBuiltinArgument {
                                 message: "the `` ` `` render operator takes no parameters (only its implicit `it` receiver)".to_string(),
                                 span: method.span.clone(),
@@ -358,9 +369,9 @@ impl TypeChecker {
 
                     // Store method for later lookup
                     self.methods.insert(
-                        (decl.name.clone(), method.name.clone()),
+                        (declaration.name.clone(), method.name.clone()),
                         (
-                            method.params.clone(),
+                            method.parameters.clone(),
                             Some(resolved_return_type),
                             method.body.clone(),
                         ),
@@ -369,7 +380,7 @@ impl TypeChecker {
 
                 // Create a Named type with methods
                 Type::Named {
-                    name: decl.name.clone(),
+                    name: declaration.name.clone(),
                     fields: record_fields,
                     methods: method_names,
                 }
@@ -378,8 +389,12 @@ impl TypeChecker {
 
         // Register the type name in the environment
         // For now, we treat types as values (not ideal but works)
-        self.env
-            .define(decl.name.clone(), type_value, false, decl.span.clone())?;
+        self.env.define(
+            declaration.name.clone(),
+            type_value,
+            false,
+            declaration.span.clone(),
+        )?;
 
         Ok(())
     }
@@ -391,7 +406,7 @@ impl TypeChecker {
     pub(super) fn infer_setter_methods(
         &mut self,
         type_name: &str,
-        methods: &[crate::ast::MethodDecl],
+        methods: &[crate::ast::MethodDeclaration],
     ) {
         let mut changed = true;
         while changed {
@@ -409,25 +424,25 @@ impl TypeChecker {
         }
     }
 
-    /// Does `expr` (a method body) mutate the receiver `it`? True if it contains a
+    /// Does `expression` (a method body) mutate the receiver `it`? True if it contains a
     /// field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a call to a
     /// sibling method already known to be a setter, applied to `it`.
-    pub(super) fn body_mutates_receiver(&self, type_name: &str, expr: &Expr) -> bool {
-        match expr {
-            Expr::FieldAssign { target, value, .. } => {
+    pub(super) fn body_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
+        match expression {
+            Expression::FieldAssign { target, value, .. } => {
                 Self::field_path_root_name(target).as_deref() == Some("it")
                     || self.body_mutates_receiver(type_name, value)
             }
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 ..
             } => {
                 // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter
                 // applied to `it` propagates "mutating" to the caller.
-                if let Expr::Ident { name, .. } = function.as_ref()
+                if let Expression::Identifier { name, .. } = function.as_ref()
                     && arguments.first().is_some_and(
-                        |recv| matches!(recv, Expr::Ident { name, .. } if name == "it"),
+                        |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
                     )
                     && self
                         .setter_methods
@@ -439,14 +454,14 @@ impl TypeChecker {
                     .iter()
                     .any(|a| self.body_mutates_receiver(type_name, a))
             }
-            Expr::Block { stmts, .. } => stmts.iter().any(|s| match s {
-                crate::ast::Statement::Expr(e) => self.body_mutates_receiver(type_name, e),
-                crate::ast::Statement::Item(Item::VarDecl(d)) => {
+            Expression::Block { statements, .. } => statements.iter().any(|s| match s {
+                crate::ast::Statement::Expression(e) => self.body_mutates_receiver(type_name, e),
+                crate::ast::Statement::Item(Item::VariableDeclaration(d)) => {
                     self.body_mutates_receiver(type_name, &d.value)
                 }
                 crate::ast::Statement::Item(_) => false,
             }),
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
@@ -456,18 +471,22 @@ impl TypeChecker {
                     || self.body_mutates_receiver(type_name, then)
                     || self.body_mutates_receiver(type_name, else_)
             }
-            Expr::Match { expr, arms, .. } => {
-                self.body_mutates_receiver(type_name, expr)
+            Expression::Match {
+                expression, arms, ..
+            } => {
+                self.body_mutates_receiver(type_name, expression)
                     || arms
                         .iter()
                         .any(|a| self.body_mutates_receiver(type_name, &a.body))
             }
-            Expr::BinOp { left, right, .. } => {
+            Expression::BinaryOperator { left, right, .. } => {
                 self.body_mutates_receiver(type_name, left)
                     || self.body_mutates_receiver(type_name, right)
             }
-            Expr::UnaryOp { expr, .. } => self.body_mutates_receiver(type_name, expr),
-            Expr::Pipeline { left, right, .. } => {
+            Expression::UnaryOperator { expression, .. } => {
+                self.body_mutates_receiver(type_name, expression)
+            }
+            Expression::Pipeline { left, right, .. } => {
                 self.body_mutates_receiver(type_name, left)
                     || self.body_mutates_receiver(type_name, right)
             }
@@ -477,10 +496,10 @@ impl TypeChecker {
 
     /// The name of the variable at the root of a field-access path, if any:
     /// `a.b.c` -> `Some("a")`. Returns `None` if the root isn't a plain ident.
-    pub(super) fn field_path_root_name(target: &Expr) -> Option<String> {
+    pub(super) fn field_path_root_name(target: &Expression) -> Option<String> {
         match target {
-            Expr::FieldAccess { expr, .. } => Self::field_path_root_name(expr),
-            Expr::Ident { name, .. } => Some(name.clone()),
+            Expression::FieldAccess { expression, .. } => Self::field_path_root_name(expression),
+            Expression::Identifier { name, .. } => Some(name.clone()),
             _ => None,
         }
     }
@@ -490,7 +509,7 @@ impl TypeChecker {
     /// receiver and the method receiver `it` (whose mutability is enforced at the
     /// outer call site) are both allowed. Shared by the field-write and
     /// setter-call mutability gates so they can never diverge.
-    pub(super) fn immutable_mutation_root(&self, receiver: &Expr) -> Option<String> {
+    pub(super) fn immutable_mutation_root(&self, receiver: &Expression) -> Option<String> {
         let name = Self::field_path_root_name(receiver)?;
         if name != "it" && !self.env.is_mutable(&name) {
             Some(name)
@@ -499,39 +518,50 @@ impl TypeChecker {
         }
     }
 
-    pub(super) fn check_var_decl(&mut self, decl: &VarDecl) -> Result<(), TypeError> {
+    pub(super) fn check_variable_declaration(
+        &mut self,
+        declaration: &VariableDeclaration,
+    ) -> Result<(), TypeError> {
         // Infer or check the type of the value
-        let value_type = self.infer_expr(&decl.value)?;
+        let value_type = self.infer_expression(&declaration.value)?;
 
         // If type annotation exists, check it matches
-        let final_type = if let Some(ref annotated_type) = decl.type_annotation {
+        let final_type = if let Some(ref annotated_type) = declaration.type_annotation {
             let annotated_type = self.resolve_type(annotated_type);
-            self.check_type_compatibility(&annotated_type, &value_type, &decl.span)?;
+            self.check_type_compatibility(&annotated_type, &value_type, &declaration.span)?;
             annotated_type
         } else {
             value_type
         };
 
-        if decl.mutable {
+        if declaration.mutable {
             // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
-            if let Some(existing_type) = self.env.get_type(&decl.name) {
-                if !self.env.is_mutable(&decl.name) {
+            if let Some(existing_type) = self.env.get_type(&declaration.name) {
+                if !self.env.is_mutable(&declaration.name) {
                     return Err(TypeError::ImmutableAssignment {
-                        name: decl.name.clone(),
-                        span: decl.span.clone(),
+                        name: declaration.name.clone(),
+                        span: declaration.span.clone(),
                     });
                 }
                 // Reassignment: the new value must match the binding's type.
-                self.check_type_compatibility(&existing_type, &final_type, &decl.span)?;
+                self.check_type_compatibility(&existing_type, &final_type, &declaration.span)?;
                 Ok(())
             } else {
-                self.env
-                    .define(decl.name.clone(), final_type, true, decl.span.clone())
+                self.env.define(
+                    declaration.name.clone(),
+                    final_type,
+                    true,
+                    declaration.span.clone(),
+                )
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.
-            self.env
-                .define(decl.name.clone(), final_type, false, decl.span.clone())
+            self.env.define(
+                declaration.name.clone(),
+                final_type,
+                false,
+                declaration.span.clone(),
+            )
         }
     }
 
@@ -544,45 +574,45 @@ impl TypeChecker {
     /// called by name at all (a lambda and a capturing nested declaration are function
     /// VALUES, and a method dispatches on its receiver's type). `trailing_is_fillable` is
     /// the one thing that differs between those cases.
-    fn reject_unfillable_site_params(
+    fn reject_unfillable_site_parameters(
         &self,
         subject: &str,
-        params: &[Param],
-        param_types: &[Type],
+        parameters: &[Parameter],
+        parameter_types: &[Type],
         trailing_is_fillable: bool,
     ) -> Result<(), TypeError> {
         let unfillable = match trailing_is_fillable {
-            true => param_types.len().saturating_sub(1),
-            false => param_types.len(),
+            true => parameter_types.len().saturating_sub(1),
+            false => parameter_types.len(),
         };
-        match params
+        match parameters
             .iter()
-            .zip(param_types)
+            .zip(parameter_types)
             .take(unfillable)
             .find(|(_, ty)| crate::ast::is_site_type(ty))
         {
-            Some((param, _)) => Err(TypeError::MisplacedSiteParam {
+            Some((parameter, _)) => Err(TypeError::MisplacedSiteParameter {
                 subject: subject.to_string(),
-                span: param.span.clone(),
+                span: parameter.span.clone(),
             }),
             None => Ok(()),
         }
     }
 
-    pub(super) fn check_function_decl(
+    pub(super) fn check_function_declaration(
         &mut self,
-        decl: &FunctionDecl,
+        declaration: &FunctionDeclaration,
         nesting: Nesting,
     ) -> Result<(), TypeError> {
         // The inert core.io `print`/`eprint` placeholder is fully provided by the
         // compiler as a built-in overload; ignore its declaration entirely.
-        if decl.is_inert_io_placeholder() {
+        if declaration.is_inert_io_placeholder() {
             return Ok(());
         }
 
         // Build function type from parameters and return type
-        let param_types: Vec<Type> = decl
-            .params
+        let parameter_types: Vec<Type> = declaration
+            .parameters
             .iter()
             .map(|p| {
                 p.type_annotation
@@ -593,17 +623,17 @@ impl TypeChecker {
             .collect();
 
         // Only a top-level function's LAST parameter can receive a call site.
-        self.reject_unfillable_site_params(
-            &format!("function `{}`", decl.name),
-            &decl.params,
-            &param_types,
+        self.reject_unfillable_site_parameters(
+            &format!("function `{}`", declaration.name),
+            &declaration.parameters,
+            &parameter_types,
             nesting == Nesting::TopLevel,
         )?;
 
         // For recursion support, we need to add the function to the environment
         // BEFORE checking its body. We'll use the annotated return type if available,
         // or default to Num (which we'll verify later)
-        let preliminary_return_type = decl
+        let preliminary_return_type = declaration
             .return_type
             .as_ref()
             .map(|t| self.resolve_type(t))
@@ -613,40 +643,45 @@ impl TypeChecker {
         // a single `env` binding — its signature already lives in the overload set
         // (registered in the pre-pass). We only type-check its body here, then refine
         // that member's return type from the inferred body when it wasn't annotated.
-        let is_overloaded = self.overloaded_names.contains(&decl.name);
+        let is_overloaded = self.overloaded_names.contains(&declaration.name);
 
         if !is_overloaded {
             let func_type = Type::Function {
-                params: param_types.clone(),
+                parameters: parameter_types.clone(),
                 return_type: Box::new(preliminary_return_type.clone()),
             };
             // Define the function in current scope BEFORE checking body (enables recursion)
-            self.env
-                .define(decl.name.clone(), func_type, false, decl.span.clone())?;
+            self.env.define(
+                declaration.name.clone(),
+                func_type,
+                false,
+                declaration.span.clone(),
+            )?;
         }
 
         // Push scope for body type checking
         self.env.push_scope();
 
         // Add parameters to scope
-        for (param, param_type) in decl.params.iter().zip(param_types.iter()) {
+        for (parameter, parameter_type) in declaration.parameters.iter().zip(parameter_types.iter())
+        {
             self.env.define(
-                param.name.clone(),
-                param_type.clone(),
+                parameter.name.clone(),
+                parameter_type.clone(),
                 false,
-                param.span.clone(),
+                parameter.span.clone(),
             )?;
         }
 
         // Check body and infer return type
-        let body_type = self.infer_expr(&decl.body)?;
+        let body_type = self.infer_expression(&declaration.body)?;
 
         self.env.pop_scope();
 
         // Verify the return type matches if annotated
-        if let Some(ref annotated_type) = decl.return_type {
+        if let Some(ref annotated_type) = declaration.return_type {
             let annotated_type = self.resolve_type(annotated_type);
-            self.check_type_compatibility(&annotated_type, &body_type, &decl.span)?;
+            self.check_type_compatibility(&annotated_type, &body_type, &declaration.span)?;
             // A GENERIC return annotation — in practice only `-> Result`, whose
             // `Ok(T)`/`NotOk(E)` payload slots are type variables the language cannot
             // otherwise name — is refined to the inferred body type, so a caller of
@@ -661,10 +696,10 @@ impl TypeChecker {
             // and an overloaded member keeps its per-member registered return.
             if !is_overloaded && annotated_type.contains_generic() {
                 let refined = Type::Function {
-                    params: param_types.clone(),
+                    parameters: parameter_types.clone(),
                     return_type: Box::new(body_type.clone()),
                 };
-                let _ = self.env.update_type(&decl.name, refined);
+                let _ = self.env.update_type(&declaration.name, refined);
             }
         } else if is_overloaded {
             // An overload member's return type is its annotation, never its inferred body
@@ -676,10 +711,10 @@ impl TypeChecker {
         } else if body_type != preliminary_return_type {
             // Update the function type with the inferred return type
             let correct_func_type = Type::Function {
-                params: param_types,
+                parameters: parameter_types,
                 return_type: Box::new(body_type.clone()),
             };
-            let _ = self.env.update_type(&decl.name, correct_func_type);
+            let _ = self.env.update_type(&declaration.name, correct_func_type);
         }
 
         Ok(())
@@ -698,11 +733,11 @@ impl TypeChecker {
     /// closures + defunctionalization are deferred to M4.
     pub(super) fn check_lambda(
         &mut self,
-        params: &[Param],
+        parameters: &[Parameter],
         return_type: Option<&Type>,
-        body: &Expr,
+        body: &Expression,
     ) -> Result<Type, TypeError> {
-        let param_types: Vec<Type> = params
+        let parameter_types: Vec<Type> = parameters
             .iter()
             .map(|p| {
                 p.type_annotation
@@ -714,18 +749,18 @@ impl TypeChecker {
 
         // A lambda is a function VALUE, called through its binding rather than by name, so
         // no parameter of it — last included — can receive a call site.
-        self.reject_unfillable_site_params("a lambda", params, &param_types, false)?;
+        self.reject_unfillable_site_parameters("a lambda", parameters, &parameter_types, false)?;
 
         self.env.push_scope();
-        for (param, param_type) in params.iter().zip(param_types.iter()) {
+        for (parameter, parameter_type) in parameters.iter().zip(parameter_types.iter()) {
             self.env.define(
-                param.name.clone(),
-                param_type.clone(),
+                parameter.name.clone(),
+                parameter_type.clone(),
                 false,
-                param.span.clone(),
+                parameter.span.clone(),
             )?;
         }
-        let body_type = self.infer_expr(body)?;
+        let body_type = self.infer_expression(body)?;
         self.env.pop_scope();
 
         // Honor an explicit `-> Type` annotation; otherwise the body's inferred type is
@@ -740,7 +775,7 @@ impl TypeChecker {
         };
 
         Ok(Type::Function {
-            params: param_types,
+            parameters: parameter_types,
             return_type: Box::new(ret),
         })
     }

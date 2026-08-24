@@ -12,11 +12,11 @@ impl TypeChecker {
     /// value is excluded (not a renderable value). Kept out of `check_call`'s frame.
     pub(super) fn is_generic_print_call(
         &self,
-        function: &Expr,
-        arguments: &[Expr],
+        function: &Expression,
+        arguments: &[Expression],
         first_ty: &Option<Type>,
     ) -> bool {
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && (name == "print" || name == "eprint")
             && arguments.len() == 1
             && let Some(arg_ty) = first_ty
@@ -30,12 +30,12 @@ impl TypeChecker {
 
     pub(super) fn check_call(
         &mut self,
-        function: &Expr,
-        arguments: &[Expr],
+        function: &Expression,
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.
-        if let Expr::Ident {
+        if let Expression::Identifier {
             name: constructor_name,
             ..
         } = function
@@ -51,18 +51,19 @@ impl TypeChecker {
         // each place made every nesting level infer its subtree twice — 2^depth work,
         // which visibly hung the checker on ~25-deep call chains (and `|>` pipelines,
         // which desugar to exactly that shape).
-        let first_ty = if let (Expr::Ident { .. }, false) = (function, arguments.is_empty()) {
-            Some(self.infer_expr(&arguments[0])?)
-        } else {
-            None
-        };
+        let first_ty =
+            if let (Expression::Identifier { .. }, false) = (function, arguments.is_empty()) {
+                Some(self.infer_expression(&arguments[0])?)
+            } else {
+                None
+            };
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) take
         // precedence over any user overload of the same name: when the receiver
         // (`arguments[0]`) is an array, the method is RESERVED and resolved here, before
         // overload dispatch. (A user can still define e.g. `map` on a non-array type;
         // dispatch only diverts to the built-in when the receiver is an array.)
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && crate::ast::is_array_method(name)
             && let Some(Type::Array(elem_type)) = first_ty.clone()
         {
@@ -74,7 +75,7 @@ impl TypeChecker {
         // methods above: when the receiver (`arguments[0]`) is a `Text`, the built-in is
         // resolved here ahead of any same-named user overload. (A user may still define
         // e.g. `trim` on a non-Text type; dispatch only diverts on a Text receiver.)
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && crate::ast::is_text_method(name)
             && matches!(first_ty, Some(Type::Text))
         {
@@ -83,7 +84,7 @@ impl TypeChecker {
 
         // Built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`) — RESERVED on
         // a `Map` receiver, exactly like the array/Text methods above.
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && crate::ast::is_map_method(name)
             && let Some(Type::Map(key_type, value_type)) = first_ty.clone()
         {
@@ -92,7 +93,7 @@ impl TypeChecker {
 
         // Built-in `Set` methods (`has`/`add`/`items`/`each`) — RESERVED on a `Set`
         // receiver.
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && crate::ast::is_set_method(name)
             && let Some(Type::Set(elem_type)) = first_ty.clone()
         {
@@ -100,7 +101,7 @@ impl TypeChecker {
         }
 
         // Check if this is a method call: function is Ident and first arg is a Named type
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && let Some(first_arg_type) = &first_ty
         {
             // Check if first argument is a Named type with this method
@@ -116,7 +117,7 @@ impl TypeChecker {
                     .get(&(type_name.clone(), name.clone()))
                     .cloned()
                 {
-                    let (method_params, method_return_type, _body) = method_sig;
+                    let (method_parameters, method_return_type, _body) = method_sig;
 
                     // A mutating (setter) method requires a mutable (`:=`) receiver.
                     // The receiver is arguments[0]; `it` (a method calling a sibling
@@ -135,23 +136,23 @@ impl TypeChecker {
                     }
 
                     // Method parameters don't include the implicit receiver
-                    // But arguments[0] is the receiver, so we need arguments[1..] to match method_params
+                    // But arguments[0] is the receiver, so we need arguments[1..] to match method_parameters
                     let call_args = &arguments[1..];
 
-                    if method_params.len() != call_args.len() {
+                    if method_parameters.len() != call_args.len() {
                         return Err(TypeError::WrongNumberOfArguments {
-                            expected: method_params.len(),
+                            expected: method_parameters.len(),
                             got: call_args.len(),
                             span: span.clone(),
                         });
                     }
 
                     // Type check arguments
-                    for (param, arg) in method_params.iter().zip(call_args.iter()) {
-                        let arg_type = self.infer_expr(arg)?;
-                        // Extract the type from the Param
-                        if let Some(param_type) = &param.type_annotation {
-                            self.check_type_compatibility(param_type, &arg_type, span)?;
+                    for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
+                        let arg_type = self.infer_expression(arg)?;
+                        // Extract the type from the Parameter
+                        if let Some(parameter_type) = &parameter.type_annotation {
+                            self.check_type_compatibility(parameter_type, &arg_type, span)?;
                         }
                         // If no type annotation, we can't check (would need inference)
                     }
@@ -173,7 +174,7 @@ impl TypeChecker {
         // every definition sits below this call. Say so, rather than falling through to
         // the plain-function path and reporting the name as undefined — it is defined,
         // just not yet.
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && self.overloaded_names.contains(name)
             && !self.overloads.contains_key(name)
         {
@@ -187,47 +188,49 @@ impl TypeChecker {
         // OR a built-in like `print`/`eprint`), resolve it by EXACT argument types.
         // This is the general mechanism that replaces the old `print` special-casing —
         // `print` is now just an overload set over Num/Text/Bool returning `$`.
-        if let Expr::Ident { name, .. } = function
+        if let Expression::Identifier { name, .. } = function
             && self.overloads.contains_key(name)
         {
             let mut arg_types = Vec::with_capacity(arguments.len());
             for (i, arg) in arguments.iter().enumerate() {
                 arg_types.push(match (i, &first_ty) {
                     (0, Some(ty)) => ty.clone(),
-                    _ => self.infer_expr(arg)?,
+                    _ => self.infer_expression(arg)?,
                 });
             }
             return self.resolve_overload(name, &arg_types, span);
         }
 
         // Fall back to regular function call
-        let func_type = self.infer_expr(function)?;
+        let func_type = self.infer_expression(function)?;
 
         match func_type {
             Type::Function {
-                params,
+                parameters,
                 return_type,
             } => {
                 // A trailing `Site` parameter receives the CALLER's location, which the
                 // compiler fills in (`CodeGenerator::site_value`), so a call may leave that
                 // last argument off — and the arity a caller sees excludes it.
-                if params.len() != arguments.len()
-                    && !crate::ast::fills_call_site(&params, arguments.len())
+                if parameters.len() != arguments.len()
+                    && !crate::ast::fills_call_site(&parameters, arguments.len())
                 {
                     return Err(TypeError::WrongNumberOfArguments {
-                        expected: crate::ast::visible_params(&params).len(),
+                        expected: crate::ast::visible_parameters(&parameters).len(),
                         got: arguments.len(),
                         span: span.clone(),
                     });
                 }
 
                 // Type the arguments once, then check against the resolved signature.
-                for (i, (param_type, arg)) in params.iter().zip(arguments.iter()).enumerate() {
+                for (i, (parameter_type, arg)) in
+                    parameters.iter().zip(arguments.iter()).enumerate()
+                {
                     let arg_type = match (i, &first_ty) {
                         (0, Some(ty)) => ty.clone(),
-                        _ => self.infer_expr(arg)?,
+                        _ => self.infer_expression(arg)?,
                     };
-                    self.check_type_compatibility(param_type, &arg_type, span)?;
+                    self.check_type_compatibility(parameter_type, &arg_type, span)?;
                 }
                 Ok(*return_type)
             }
@@ -251,7 +254,7 @@ impl TypeChecker {
         &mut self,
         method: &str,
         elem_type: Type,
-        arguments: &[Expr],
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         // `arguments[0]` (the receiver array) was already inferred by the dispatch guard in
@@ -283,7 +286,7 @@ impl TypeChecker {
                 Ok(Type::Array(Box::new(elem_type)))
             }
             "reduce" => {
-                let init_type = self.infer_expr(&method_args[0])?;
+                let init_type = self.infer_expression(&method_args[0])?;
                 let ret =
                     self.check_lambda_arg(&method_args[1], &[init_type.clone(), elem_type], span)?;
                 // The accumulator/result type is the init's type; the reducer must agree.
@@ -303,7 +306,7 @@ impl TypeChecker {
                 Ok(result_of(elem_type))
             }
             "at" => {
-                let idx_type = self.infer_expr(&method_args[0])?;
+                let idx_type = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&Type::Num, &idx_type, span)?;
                 Ok(result_of(elem_type))
             }
@@ -324,7 +327,7 @@ impl TypeChecker {
         method: &str,
         key_type: Type,
         value_type: Type,
-        arguments: &[Expr],
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         let method_args = &arguments[1..];
@@ -345,19 +348,19 @@ impl TypeChecker {
 
         match method {
             "get" => {
-                let k = self.infer_expr(&method_args[0])?;
+                let k = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&key_type, &k, span)?;
                 Ok(result_of(value_type))
             }
             "has" => {
-                let k = self.infer_expr(&method_args[0])?;
+                let k = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&key_type, &k, span)?;
                 Ok(Type::Bool)
             }
             "set" => {
-                let k = self.infer_expr(&method_args[0])?;
+                let k = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&key_type, &k, span)?;
-                let v = self.infer_expr(&method_args[1])?;
+                let v = self.infer_expression(&method_args[1])?;
                 self.check_type_compatibility(&value_type, &v, span)?;
                 Ok(map_type)
             }
@@ -382,7 +385,7 @@ impl TypeChecker {
         &mut self,
         method: &str,
         elem_type: Type,
-        arguments: &[Expr],
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         let method_args = &arguments[1..];
@@ -402,12 +405,12 @@ impl TypeChecker {
 
         match method {
             "has" => {
-                let x = self.infer_expr(&method_args[0])?;
+                let x = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&elem_type, &x, span)?;
                 Ok(Type::Bool)
             }
             "add" => {
-                let x = self.infer_expr(&method_args[0])?;
+                let x = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&elem_type, &x, span)?;
                 Ok(set_type)
             }
@@ -434,7 +437,7 @@ impl TypeChecker {
     pub(super) fn check_text_method(
         &mut self,
         method: &str,
-        arguments: &[Expr],
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
         // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
@@ -444,7 +447,7 @@ impl TypeChecker {
         // drives both the arity check and the per-argument type check below. `indexOf`
         // returns `Ok(Num)`/`NotOk` (no -1 sentinel); `split` returns `[]Text`.
         use Type::{Bool, Num, Text};
-        let (params, result): (Vec<Type>, Type) = match method {
+        let (parameters, result): (Vec<Type>, Type) = match method {
             "trim" | "trimStart" | "trimEnd" | "toUpper" | "toLower" => (vec![], Text),
             "split" => (vec![Text], Type::Array(Box::new(Text))),
             "contains" => (vec![Text], Bool),
@@ -456,16 +459,16 @@ impl TypeChecker {
             other => unreachable!("unhandled text method {other}"),
         };
 
-        if method_args.len() != params.len() {
+        if method_args.len() != parameters.len() {
             return Err(TypeError::WrongNumberOfArguments {
-                expected: params.len(),
+                expected: parameters.len(),
                 got: method_args.len(),
                 span: span.clone(),
             });
         }
-        for (arg, param_ty) in method_args.iter().zip(&params) {
-            let arg_type = self.infer_expr(arg)?;
-            self.check_type_compatibility(param_ty, &arg_type, span)?;
+        for (arg, parameter_ty) in method_args.iter().zip(&parameters) {
+            let arg_type = self.infer_expression(arg)?;
+            self.check_type_compatibility(parameter_ty, &arg_type, span)?;
         }
 
         // Fail-loud contract for `replace`/`replaceAll`: reject at COMPILE time whatever is
@@ -502,7 +505,7 @@ impl TypeChecker {
     pub(super) fn check_replace_literals(
         &self,
         method: &str,
-        arguments: &[Expr],
+        arguments: &[Expression],
         span: &Span,
     ) -> Result<(), TypeError> {
         let err = |message: String| {
@@ -513,7 +516,7 @@ impl TypeChecker {
         };
 
         // Empty `from` — a literal "" is ill-defined for both methods.
-        if let Expr::String { value: from, .. } = &arguments[1]
+        if let Expression::String { value: from, .. } = &arguments[1]
             && from.is_empty()
         {
             return err("replace: `from` must not be empty".to_string());
@@ -535,7 +538,7 @@ impl TypeChecker {
         }
         // All-literal case: count occurrences of the literal `from` in the literal receiver
         // and reject a count that exceeds them (non-overlapping, matching `str::replacen`).
-        if let (Expr::String { value: hay, .. }, Expr::String { value: from, .. }) =
+        if let (Expression::String { value: hay, .. }, Expression::String { value: from, .. }) =
             (&arguments[0], &arguments[1])
             && !from.is_empty()
         {
@@ -552,39 +555,46 @@ impl TypeChecker {
     /// Type-check a lambda argument to an array method by binding its parameters to the
     /// given types and inferring the body. Records the lambda body's type in the type
     /// table (so codegen's oracle can size the inlined result). The lambda must declare
-    /// exactly `param_types.len()` parameters; any parameter type annotation it carries
+    /// exactly `parameter_types.len()` parameters; any parameter type annotation it carries
     /// must agree with the expected type. Returns the inferred body type.
     pub(super) fn check_lambda_arg(
         &mut self,
-        arg: &Expr,
-        param_types: &[Type],
+        arg: &Expression,
+        parameter_types: &[Type],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let Expr::Lambda { params, body, .. } = arg else {
+        let Expression::Lambda {
+            parameters, body, ..
+        } = arg
+        else {
             // An array method expects a *literal* lambda here, which it inlines per
             // element. Passing anything else (e.g. a bare name or a closure value) is
             // not supported in this position — higher-order values aren't accepted.
             return Err(TypeError::NotAFunction {
-                got: self.infer_expr(arg)?,
+                got: self.infer_expression(arg)?,
                 span: arg.span().clone(),
             });
         };
-        if params.len() != param_types.len() {
+        if parameters.len() != parameter_types.len() {
             return Err(TypeError::WrongNumberOfArguments {
-                expected: param_types.len(),
-                got: params.len(),
+                expected: parameter_types.len(),
+                got: parameters.len(),
                 span: span.clone(),
             });
         }
         self.env.push_scope();
-        for (param, ty) in params.iter().zip(param_types) {
-            if let Some(ann) = &param.type_annotation {
-                self.check_type_compatibility(ann, ty, &param.span)?;
+        for (parameter, ty) in parameters.iter().zip(parameter_types) {
+            if let Some(ann) = &parameter.type_annotation {
+                self.check_type_compatibility(ann, ty, &parameter.span)?;
             }
-            self.env
-                .define(param.name.clone(), ty.clone(), false, param.span.clone())?;
+            self.env.define(
+                parameter.name.clone(),
+                ty.clone(),
+                false,
+                parameter.span.clone(),
+            )?;
         }
-        let body_type = self.infer_expr(body);
+        let body_type = self.infer_expression(body);
         self.env.pop_scope();
         let body_type = body_type?;
         // Record the lambda node's own type as its body type, for completeness.
@@ -596,15 +606,15 @@ impl TypeChecker {
 
 /// A literal `Num` argument's value: a `Number`, or a negated one (`-2` parses as
 /// `Neg(2)`). `None` for anything computed, which only the runtime can check.
-fn literal_number(expr: &Expr) -> Option<f64> {
-    match expr {
-        Expr::Number { value, .. } => Some(*value),
-        Expr::UnaryOp {
-            op: crate::ast::UnaryOp::Neg,
-            expr,
+fn literal_number(expression: &Expression) -> Option<f64> {
+    match expression {
+        Expression::Number { value, .. } => Some(*value),
+        Expression::UnaryOperator {
+            operator: crate::ast::UnaryOperator::Neg,
+            expression,
             ..
-        } => match expr.as_ref() {
-            Expr::Number { value, .. } => Some(-value),
+        } => match expression.as_ref() {
+            Expression::Number { value, .. } => Some(-value),
             _ => None,
         },
         _ => None,

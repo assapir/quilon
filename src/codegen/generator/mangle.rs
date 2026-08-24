@@ -38,8 +38,8 @@ pub(super) fn type_mangle(ty: &Type) -> String {
 /// (comma-joined `Num`/`Text`/`[]Text`-style labels) for the unsupported-signature
 /// diagnostic. `()` renders as an empty string. Uses the shared `ast::type_label` so
 /// codegen and the type checker render types identically.
-pub(super) fn fmt_param_types(params: &[Type]) -> String {
-    params
+pub(super) fn fmt_parameter_types(parameters: &[Type]) -> String {
+    parameters
         .iter()
         .map(crate::ast::type_label)
         .collect::<Vec<_>>()
@@ -48,13 +48,13 @@ pub(super) fn fmt_param_types(params: &[Type]) -> String {
 
 /// The distinct LLVM symbol for one overload member: its name plus a per-parameter
 /// type tag. Operator symbols (which aren't valid LLVM identifiers) are spelled out so
-/// e.g. `+` on `(Point, Point)` becomes `op.add$named$Point$named$Point`.
-pub(super) fn mangle_overload(name: &str, params: &[Type]) -> String {
+/// e.g. `+` on `(Point, Point)` becomes `operator.add$named$Point$named$Point`.
+pub(super) fn mangle_overload(name: &str, parameters: &[Type]) -> String {
     let base = operator_word(name)
         .map(|w| format!("op.{}", w))
         .unwrap_or_else(|| name.to_string());
     let mut s = base;
-    for p in params {
+    for p in parameters {
         s.push('$');
         s.push_str(&type_mangle(p));
     }

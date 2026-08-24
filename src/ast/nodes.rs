@@ -26,73 +26,71 @@ pub enum ModulePath {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-// The `*Decl` suffix mirrors the AST node names (VarDecl/FunctionDecl/TypeDecl);
-// renaming would churn the whole codebase for no clarity gain.
 #[allow(clippy::enum_variant_names)]
 pub enum Item {
-    VarDecl(VarDecl),
-    FunctionDecl(FunctionDecl),
-    TypeDecl(TypeDecl),
+    VariableDeclaration(VariableDeclaration),
+    FunctionDeclaration(FunctionDeclaration),
+    TypeDeclaration(TypeDeclaration),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeDecl {
+pub struct TypeDeclaration {
     pub name: String,
-    pub type_def: TypeDef,
+    pub type_definition: TypeDefinition,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeDef {
+pub enum TypeDefinition {
     /// A user-defined sum type: `Color = Red / Green / Blue`,
     /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`.
     Sum(Vec<SumVariant>),
     Record {
         fields: Vec<(String, Type)>,
-        methods: Vec<MethodDecl>,
+        methods: Vec<MethodDeclaration>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MethodDecl {
+pub struct MethodDeclaration {
     pub name: String,
-    pub params: Vec<Param>, // Does not include implicit "it" parameter
+    pub parameters: Vec<Parameter>, // Does not include implicit "it" parameter
     pub return_type: Option<Type>,
-    pub body: Expr,
+    pub body: Expression,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Item(Item),
-    Expr(Expr),
+    Expression(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct VarDecl {
+pub struct VariableDeclaration {
     pub mutable: bool,
     pub name: String,
     pub type_annotation: Option<Type>,
-    pub value: Expr,
+    pub value: Expression,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunctionDecl {
+pub struct FunctionDeclaration {
     pub name: String,
-    pub params: Vec<Param>,
+    pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
-    pub body: Expr,
+    pub body: Expression,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
     pub span: Span,
 }
 
-impl FunctionDecl {
+impl FunctionDeclaration {
     /// Whether this is the inert `core.io` `print`/`eprint` placeholder: a single
     /// UNannotated parameter with an inert body. The compiler fully provides
     /// `print`/`eprint` as built-in overloads (lowered to runtime intrinsics), so the
@@ -102,13 +100,13 @@ impl FunctionDecl {
     /// checker and codegen so the two never disagree on what to skip.
     pub fn is_inert_io_placeholder(&self) -> bool {
         (self.name == "print" || self.name == "eprint")
-            && self.params.len() == 1
-            && self.params[0].type_annotation.is_none()
+            && self.parameters.len() == 1
+            && self.parameters[0].type_annotation.is_none()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Param {
+pub struct Parameter {
     pub name: String,
     pub type_annotation: Option<Type>,
     pub span: Span,
@@ -192,13 +190,13 @@ pub fn is_site_type(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, .. } if name == SITE_TYPE_NAME)
 }
 
-/// Whether `params` ends in a `Site` parameter — i.e. the callee wants its caller's
+/// Whether `parameters` ends in a `Site` parameter — i.e. the callee wants its caller's
 /// location, and a call may leave that last argument off.
-pub fn takes_call_site(params: &[Type]) -> bool {
-    params.last().is_some_and(is_site_type)
+pub fn takes_call_site(parameters: &[Type]) -> bool {
+    parameters.last().is_some_and(is_site_type)
 }
 
-/// Whether a call passing `arg_count` arguments to a callee with `params` has its call site
+/// Whether a call passing `arg_count` arguments to a callee with `parameters` has its call site
 /// FILLED IN: the callee's last parameter is a `Site` and the call left exactly that one
 /// argument off.
 ///
@@ -206,34 +204,37 @@ pub fn takes_call_site(params: &[Type]) -> bool {
 /// here — the checker's arity check and overload matching, codegen's argument lowering, and
 /// tail-call detection (a self-call that omits its own trailing `Site` is still a self-call,
 /// and must still become a loop).
-pub fn fills_call_site(params: &[Type], arg_count: usize) -> bool {
-    params.len() == arg_count + 1 && takes_call_site(params)
+pub fn fills_call_site(parameters: &[Type], arg_count: usize) -> bool {
+    parameters.len() == arg_count + 1 && takes_call_site(parameters)
 }
 
 /// The parameters a CALLER sees: a trailing `Site` is filled in by the compiler, so it is
 /// never part of the signature a call has to satisfy. Used wherever a signature is shown to
 /// a person (an arity error, a candidate list), so no diagnostic asks for an argument the
 /// language does not let anyone pass.
-pub fn visible_params(params: &[Type]) -> &[Type] {
-    match takes_call_site(params) {
-        true => &params[..params.len() - 1],
-        false => params,
+pub fn visible_parameters(parameters: &[Type]) -> &[Type] {
+    match takes_call_site(parameters) {
+        true => &parameters[..parameters.len() - 1],
+        false => parameters,
     }
 }
 
-/// Whether a callee with `params` accepts a call passing `args` argument types: either an
+/// Whether a callee with `parameters` accepts a call passing `args` argument types: either an
 /// exact match, or one argument short of a trailing `Site` the compiler fills in. `matches`
 /// compares one parameter against one argument (the checker and codegen each pass their
 /// own comparison — resolved types vs. mangling tags).
-pub fn params_accept(
-    params: &[Type],
+pub fn parameters_accept(
+    parameters: &[Type],
     args: &[Type],
     matches: impl Fn(&Type, &Type) -> bool,
 ) -> bool {
-    if params.len() != args.len() && !fills_call_site(params, args.len()) {
+    if parameters.len() != args.len() && !fills_call_site(parameters, args.len()) {
         return false;
     }
-    params.iter().zip(args.iter()).all(|(p, a)| matches(p, a))
+    parameters
+        .iter()
+        .zip(args.iter())
+        .all(|(p, a)| matches(p, a))
 }
 
 /// The reserved built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`).
@@ -251,16 +252,16 @@ pub fn is_set_method(name: &str) -> bool {
     matches!(name, "has" | "add" | "items" | "each")
 }
 
-/// One piece of an interpolated string (`Expr::Interpolation`): either literal text or a
+/// One piece of an interpolated string (`Expression::Interpolation`): either literal text or a
 /// hole expression to render and splice in.
 #[derive(Debug, Clone, PartialEq)]
-pub enum InterpPart {
+pub enum InterpolationPart {
     Literal(String),
-    Hole(Expr),
+    Hole(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expression {
     // Literals
     Number {
         value: f64,
@@ -272,9 +273,9 @@ pub enum Expr {
     },
     /// A string with interpolation holes: literal chunks interleaved with hole
     /// expressions, e.g. `"hi `user.name`!"`. Renders each hole to `Text` via its `` ` ``
-    /// operator and concatenates. A plain (hole-free) literal stays an `Expr::String`.
+    /// operator and concatenates. A plain (hole-free) literal stays an `Expression::String`.
     Interpolation {
-        parts: Vec<InterpPart>,
+        parts: Vec<InterpolationPart>,
         span: Span,
     },
     Bool {
@@ -288,78 +289,78 @@ pub enum Expr {
     },
 
     // Variables
-    Ident {
+    Identifier {
         name: String,
         span: Span,
     },
 
     // Binary operations
-    BinOp {
-        left: Box<Expr>,
-        op: BinOp,
-        right: Box<Expr>,
+    BinaryOperator {
+        left: Box<Expression>,
+        operator: BinaryOperator,
+        right: Box<Expression>,
         span: Span,
     },
 
     // Unary operations
-    UnaryOp {
-        op: UnaryOp,
-        expr: Box<Expr>,
+    UnaryOperator {
+        operator: UnaryOperator,
+        expression: Box<Expression>,
         span: Span,
     },
 
     // Function call
     Call {
-        function: Box<Expr>,
-        arguments: Vec<Expr>,
+        function: Box<Expression>,
+        arguments: Vec<Expression>,
         span: Span,
     },
 
     // Function literal (lambda / closure): `x => x + 1`, `(a, b) => a + b`, `() => 0`.
-    // A first-class value, distinct from a top-level `FunctionDecl`. When its body
+    // A first-class value, distinct from a top-level `FunctionDeclaration`. When its body
     // references names bound in an enclosing scope, those are *captured*: a name bound
     // with `=` is captured by value (read-only copy), one bound with `:=` is captured
     // by reference (a shared, mutable GC cell). Capture is inferred entirely from the
     // binding operator — there is no capture list. Closures are monomorphic in M3:
-    // params/captures are concrete-typed; generic closures are deferred to M4.
+    // parameters/captures are concrete-typed; generic closures are deferred to M4.
     Lambda {
-        params: Vec<Param>,
+        parameters: Vec<Parameter>,
         return_type: Option<Type>,
-        body: Box<Expr>,
+        body: Box<Expression>,
         span: Span,
     },
 
     // Pipeline
     Pipeline {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: Box<Expression>,
+        right: Box<Expression>,
         span: Span,
     },
 
     // Block
     Block {
-        stmts: Vec<Statement>,
+        statements: Vec<Statement>,
         span: Span,
     },
 
     // If expression (ternary)
     If {
-        condition: Box<Expr>,
-        then: Box<Expr>,
-        else_: Box<Expr>,
+        condition: Box<Expression>,
+        then: Box<Expression>,
+        else_: Box<Expression>,
         span: Span,
     },
 
     // Pattern match
     Match {
-        expr: Box<Expr>,
+        expression: Box<Expression>,
         arms: Vec<MatchArm>,
         span: Span,
     },
 
     // Field access
     FieldAccess {
-        expr: Box<Expr>,
+        expression: Box<Expression>,
         field: String,
         span: Span,
     },
@@ -370,48 +371,48 @@ pub enum Expr {
     // enforces this. (Nested records aren't representable yet, so the type checker
     // rejects deeper paths like `a.b.c := …` before codegen.)
     FieldAssign {
-        target: Box<Expr>,
-        value: Box<Expr>,
+        target: Box<Expression>,
+        value: Box<Expression>,
         span: Span,
     },
 
     // Array indexing
     Index {
-        expr: Box<Expr>,
-        index: Box<Expr>,
+        expression: Box<Expression>,
+        index: Box<Expression>,
         span: Span,
     },
 
     // Array literal
     Array {
-        elements: Vec<Expr>,
+        elements: Vec<Expression>,
         span: Span,
     },
 
     // Map literal, pipe-fenced: `[|"a" => 1, "b" => 2|]`. Empty is `[|=>|]`.
     // Each entry is a (key, value) expression pair. Iteration order is unspecified.
     MapLiteral {
-        entries: Vec<(Expr, Expr)>,
+        entries: Vec<(Expression, Expression)>,
         span: Span,
     },
 
     // Set literal, pipe-fenced: `[|"a", "b"|]`. Empty is `[||]`. The fence keeps a set
     // literal distinct from an array literal (`[1, 2, 3]`). Iteration order unspecified.
     SetLiteral {
-        elements: Vec<Expr>,
+        elements: Vec<Expression>,
         span: Span,
     },
 
     // Record literal
     Record {
-        fields: Vec<(String, Expr)>,
+        fields: Vec<(String, Expression)>,
         span: Span,
     },
 
     // Type constructor (e.g., User { name = "Alice", age = 30 })
     Constructor {
         type_name: String,
-        fields: Vec<(String, Expr)>,
+        fields: Vec<(String, Expression)>,
         span: Span,
     },
 
@@ -420,8 +421,8 @@ pub enum Expr {
     // There is no distinct Range type — the result IS a `[]Num`, so it composes
     // with array ops / `.size` / indexing.
     Range {
-        start: Box<Expr>,
-        end: Box<Expr>,
+        start: Box<Expression>,
+        end: Box<Expression>,
         span: Span,
     },
 
@@ -432,38 +433,38 @@ pub enum Expr {
     // from the infix range `lo <- hi` purely by position: a `<-` that BEGINS a literal
     // element/field is a spread; a `<-` between two complete expressions is a range.
     Spread {
-        expr: Box<Expr>,
+        expression: Box<Expression>,
         span: Span,
     },
 }
 
-impl Expr {
+impl Expression {
     pub fn span(&self) -> &Span {
         match self {
-            Expr::Number { span, .. } => span,
-            Expr::String { span, .. } => span,
-            Expr::Interpolation { span, .. } => span,
-            Expr::Bool { span, .. } => span,
-            Expr::Unit { span, .. } => span,
-            Expr::Ident { span, .. } => span,
-            Expr::BinOp { span, .. } => span,
-            Expr::UnaryOp { span, .. } => span,
-            Expr::Call { span, .. } => span,
-            Expr::Lambda { span, .. } => span,
-            Expr::Pipeline { span, .. } => span,
-            Expr::Block { span, .. } => span,
-            Expr::If { span, .. } => span,
-            Expr::Match { span, .. } => span,
-            Expr::FieldAccess { span, .. } => span,
-            Expr::FieldAssign { span, .. } => span,
-            Expr::Index { span, .. } => span,
-            Expr::Array { span, .. } => span,
-            Expr::MapLiteral { span, .. } => span,
-            Expr::SetLiteral { span, .. } => span,
-            Expr::Record { span, .. } => span,
-            Expr::Constructor { span, .. } => span,
-            Expr::Range { span, .. } => span,
-            Expr::Spread { span, .. } => span,
+            Expression::Number { span, .. } => span,
+            Expression::String { span, .. } => span,
+            Expression::Interpolation { span, .. } => span,
+            Expression::Bool { span, .. } => span,
+            Expression::Unit { span, .. } => span,
+            Expression::Identifier { span, .. } => span,
+            Expression::BinaryOperator { span, .. } => span,
+            Expression::UnaryOperator { span, .. } => span,
+            Expression::Call { span, .. } => span,
+            Expression::Lambda { span, .. } => span,
+            Expression::Pipeline { span, .. } => span,
+            Expression::Block { span, .. } => span,
+            Expression::If { span, .. } => span,
+            Expression::Match { span, .. } => span,
+            Expression::FieldAccess { span, .. } => span,
+            Expression::FieldAssign { span, .. } => span,
+            Expression::Index { span, .. } => span,
+            Expression::Array { span, .. } => span,
+            Expression::MapLiteral { span, .. } => span,
+            Expression::SetLiteral { span, .. } => span,
+            Expression::Record { span, .. } => span,
+            Expression::Constructor { span, .. } => span,
+            Expression::Range { span, .. } => span,
+            Expression::Spread { span, .. } => span,
         }
     }
 
@@ -472,9 +473,9 @@ impl Expr {
     ///   `x |> f`      => `f(x)`
     ///   `x |> f(a, b)` => `f(x, a, b)`
     /// Used by both the type checker and codegen so the two never diverge.
-    pub fn desugar_pipeline(left: &Expr, right: &Expr, span: &Span) -> Expr {
+    pub fn desugar_pipeline(left: &Expression, right: &Expression, span: &Span) -> Expression {
         let (function, mut arguments) = match right {
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 ..
@@ -482,7 +483,7 @@ impl Expr {
             other => (other.clone(), Vec::new()),
         };
         arguments.insert(0, left.clone());
-        Expr::Call {
+        Expression::Call {
             function: Box::new(function),
             arguments,
             span: span.clone(),
@@ -493,13 +494,13 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
-    pub body: Expr,
+    pub body: Expression,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    Ident {
+    Identifier {
         name: String,
         span: Span,
     },
@@ -520,7 +521,7 @@ pub enum Pattern {
 impl Pattern {
     pub fn span(&self) -> &Span {
         match self {
-            Pattern::Ident { span, .. } => span,
+            Pattern::Identifier { span, .. } => span,
             Pattern::Number { span, .. } => span,
             Pattern::Constructor { span, .. } => span,
             Pattern::Wildcard { span } => span,
@@ -529,7 +530,7 @@ impl Pattern {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOp {
+pub enum BinaryOperator {
     Add,
     Sub,
     Mul,
@@ -551,26 +552,26 @@ pub enum BinOp {
     Or,
 }
 
-impl BinOp {
+impl BinaryOperator {
     /// The operator's source symbol, which doubles as its overload-set name (an
     /// operator is just a named overload set under the hood). Shared by the type
     /// checker and codegen so a user operator overload is keyed identically in both.
     pub fn symbol(self) -> &'static str {
         match self {
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
-            BinOp::Div => "/",
-            BinOp::Mod => "%",
-            BinOp::SetIntersect => "+-",
-            BinOp::Eq => "==",
-            BinOp::Ne => "!=",
-            BinOp::Lt => "<",
-            BinOp::Le => "<=",
-            BinOp::Gt => ">",
-            BinOp::Ge => ">=",
-            BinOp::And => "&&",
-            BinOp::Or => "||",
+            BinaryOperator::Add => "+",
+            BinaryOperator::Sub => "-",
+            BinaryOperator::Mul => "*",
+            BinaryOperator::Div => "/",
+            BinaryOperator::Mod => "%",
+            BinaryOperator::SetIntersect => "+-",
+            BinaryOperator::Eq => "==",
+            BinaryOperator::Ne => "!=",
+            BinaryOperator::Lt => "<",
+            BinaryOperator::Le => "<=",
+            BinaryOperator::Gt => ">",
+            BinaryOperator::Ge => ">=",
+            BinaryOperator::And => "&&",
+            BinaryOperator::Or => "||",
         }
     }
 }
@@ -586,7 +587,7 @@ pub fn is_operator_symbol(name: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
+pub enum UnaryOperator {
     Neg,
     Not,
 }
@@ -621,7 +622,7 @@ pub enum Type {
         arguments: Vec<Type>,
     },
     Function {
-        params: Vec<Type>,
+        parameters: Vec<Type>,
         return_type: Box<Type>,
     },
     // Sum types (algebraic data types)

@@ -9,32 +9,32 @@ use super::*;
 impl TypeChecker {
     pub(super) fn check_match(
         &mut self,
-        expr: &Expr,
+        expression: &Expression,
         arms: &[MatchArm],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        let expr_type = self.infer_expr(expr)?;
+        let expression_type = self.infer_expression(expression)?;
 
         if arms.is_empty() {
             return Err(TypeError::NonExhaustiveMatch { span: span.clone() });
         }
 
         // Check exhaustiveness for sum types
-        if let Type::Sum { ref variants, .. } = expr_type {
+        if let Type::Sum { ref variants, .. } = expression_type {
             self.check_exhaustiveness(variants, arms, span)?;
         }
 
-        // Check each arm's pattern against expr_type
+        // Check each arm's pattern against expression_type
         let mut result_type = None;
 
         for arm in arms {
-            self.check_pattern(&arm.pattern, &expr_type)?;
+            self.check_pattern(&arm.pattern, &expression_type)?;
 
             // Bind pattern variables and check body
             self.env.push_scope();
-            self.bind_pattern_vars(&arm.pattern, &expr_type)?;
+            self.bind_pattern_vars(&arm.pattern, &expression_type)?;
 
-            let body_type = self.infer_expr(&arm.body)?;
+            let body_type = self.infer_expression(&arm.body)?;
 
             self.env.pop_scope();
 
@@ -78,7 +78,7 @@ impl TypeChecker {
 
         for arm in arms {
             match &arm.pattern {
-                Pattern::Wildcard { .. } | Pattern::Ident { .. } => {
+                Pattern::Wildcard { .. } | Pattern::Identifier { .. } => {
                     has_wildcard = true;
                 }
                 Pattern::Constructor { name, .. } => {
@@ -109,7 +109,7 @@ impl TypeChecker {
         expected_type: &Type,
     ) -> Result<(), TypeError> {
         match pattern {
-            Pattern::Ident { .. } => Ok(()), // Any type can bind to ident
+            Pattern::Identifier { .. } => Ok(()), // Any type can bind to ident
             Pattern::Number { .. } => {
                 self.check_type_compatibility(&Type::Num, expected_type, pattern.span())
             }
@@ -145,7 +145,7 @@ impl TypeChecker {
                             // it here until codegen tests payloads.
                             for pattern_arg in arguments {
                                 match pattern_arg {
-                                    Pattern::Ident { .. } | Pattern::Wildcard { .. } => {}
+                                    Pattern::Identifier { .. } | Pattern::Wildcard { .. } => {}
                                     Pattern::Number { .. } | Pattern::Constructor { .. } => {
                                         return Err(TypeError::RefutableConstructorArg {
                                             constructor: name.clone(),
@@ -178,7 +178,7 @@ impl TypeChecker {
         type_: &Type,
     ) -> Result<(), TypeError> {
         match pattern {
-            Pattern::Ident { name, span } => {
+            Pattern::Identifier { name, span } => {
                 self.env
                     .define(name.clone(), type_.clone(), false, span.clone())?;
                 Ok(())

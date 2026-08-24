@@ -7,30 +7,36 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Lower `expr` to a value, then force it in place if the deferred-taint pass marked this
+    /// Lower `expression` to a value, then force it in place if the deferred-taint pass marked this
     /// span a force site (a deferred `Text` sitting where a strict primitive reads its bytes).
     /// The force is the ONE seam where deferral becomes visible to codegen; everywhere else a
     /// deferred value is threaded as an ordinary `Text`. For a non-force-site span (every
     /// expression in a pure program) this is a direct call — byte-identical to before.
-    pub(super) fn generate_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
-        let value = self.generate_expr_inner(expr)?;
-        if self.defer.is_force_site(expr.span()) {
+    pub(super) fn generate_expression(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let value = self.generate_expression_inner(expression)?;
+        if self.defer.is_force_site(expression.span()) {
             return self.force_deferred_text(value);
         }
         Ok(value)
     }
 
-    fn generate_expr_inner(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    fn generate_expression_inner(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         // Attribute the instructions this expression lowers to its source location, so the
         // DWARF line table maps generated code back to the `.ql` line (no-op without debug).
-        self.set_debug_loc(expr.span());
-        match expr {
-            Expr::Number { value, .. } => {
+        self.set_debug_loc(expression.span());
+        match expression {
+            Expression::Number { value, .. } => {
                 // For now, use f64 for all numbers
                 Ok(self.context.f64_type().const_float(*value).into())
             }
 
-            Expr::String { value, .. } => {
+            Expression::String { value, .. } => {
                 // Text is { ptr data, i64 byte_len }. `data` points at a global,
                 // NUL-terminated C string (so `print` can treat it as a C string);
                 // `byte_len` is the UTF-8 byte length, excluding the terminator.
@@ -54,9 +60,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(text.into())
             }
 
-            Expr::Interpolation { parts, .. } => self.generate_interpolation(parts),
+            Expression::Interpolation { parts, .. } => self.generate_interpolation(parts),
 
-            Expr::Bool { value, .. } => Ok(self
+            Expression::Bool { value, .. } => Ok(self
                 .context
                 .bool_type()
                 .const_int(*value as u64, false)
@@ -64,9 +70,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // The unit value `$`: a zero `i8` placeholder. The value is never
             // inspected; it just needs a concrete, single-inhabitant representation.
-            Expr::Unit { .. } => Ok(self.unit_value().into()),
+            Expression::Unit { .. } => Ok(self.unit_value().into()),
 
-            Expr::Ident { name, .. } => {
+            Expression::Identifier { name, .. } => {
                 // A bare nullary sum-type constructor (e.g. `Red`) builds its tagged
                 // struct here. Payload-carrying constructors are calls, handled above.
                 // (We only treat it as a constructor when it isn't a bound variable.)
@@ -97,58 +103,74 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Err(format!("Undefined variable: {}", name))
             }
 
-            Expr::BinOp {
-                left, op, right, ..
-            } => self.generate_binop(left, *op, right),
+            Expression::BinaryOperator {
+                left,
+                operator,
+                right,
+                ..
+            } => self.generate_binary_operator(left, *operator, right),
 
-            Expr::UnaryOp { op, expr, .. } => self.generate_unary_op(*op, expr),
+            Expression::UnaryOperator {
+                operator,
+                expression,
+                ..
+            } => self.generate_unary_operator(*operator, expression),
 
-            Expr::Call {
+            Expression::Call {
                 function,
                 arguments,
                 span,
             } => self.generate_call(function, arguments, span),
 
-            Expr::Lambda {
-                params,
+            Expression::Lambda {
+                parameters,
                 return_type,
                 body,
                 ..
-            } => self.generate_lambda(params, return_type.as_ref(), body),
+            } => self.generate_lambda(parameters, return_type.as_ref(), body),
 
-            Expr::If {
+            Expression::If {
                 condition,
                 then,
                 else_,
                 ..
             } => self.generate_if(condition, then, else_),
 
-            Expr::Block { stmts, span } => self.generate_block(stmts, span),
+            Expression::Block { statements, span } => self.generate_block(statements, span),
 
-            Expr::Array { elements, .. } => self.generate_array(expr, elements),
+            Expression::Array { elements, .. } => self.generate_array(expression, elements),
 
-            Expr::MapLiteral { entries, .. } => self.generate_map_literal(expr, entries),
+            Expression::MapLiteral { entries, .. } => {
+                self.generate_map_literal(expression, entries)
+            }
 
-            Expr::SetLiteral { elements, .. } => self.generate_set_literal(expr, elements),
+            Expression::SetLiteral { elements, .. } => {
+                self.generate_set_literal(expression, elements)
+            }
 
-            Expr::Record { fields, .. } => self.generate_record_expr(expr, fields),
+            Expression::Record { fields, .. } => {
+                self.generate_record_expression(expression, fields)
+            }
 
             // A bare spread never survives to codegen on its own — the parser only
             // produces one as an element of an array literal or a field of a record
-            // literal, where `generate_array` / `generate_record_expr` consume it.
-            Expr::Spread { .. } => {
+            // literal, where `generate_array` / `generate_record_expression` consume it.
+            Expression::Spread { .. } => {
                 Err("spread `<-` is only valid inside an array or record literal".to_string())
             }
 
-            Expr::Constructor {
+            Expression::Constructor {
                 type_name, fields, ..
             } => {
                 // A `<-source` entry fills the fields it is not overriding, exactly as in
                 // an anonymous literal — and the update lowering already builds its result
                 // from the whole literal's oracle type, which here is this named type, so
                 // the slots land in declaration order with the type's methods intact.
-                if fields.iter().any(|(_, v)| matches!(v, Expr::Spread { .. })) {
-                    return self.generate_record_update(expr, fields);
+                if fields
+                    .iter()
+                    .any(|(_, v)| matches!(v, Expression::Spread { .. }))
+                {
+                    return self.generate_record_update(expression, fields);
                 }
                 // A named-type instance has the same struct representation as a record,
                 // but its field SLOTS follow the type's DECLARATION order — which is the
@@ -156,31 +178,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // The constructor call may list fields in any order, so reorder them to
                 // declaration order before lowering; otherwise a later `obj.field` read
                 // would GEP the wrong slot (silent corruption once fields differ in type).
-                let ordered = self.constructor_fields_in_decl_order(type_name, fields);
+                let ordered = self.constructor_fields_in_declaration_order(type_name, fields);
                 self.generate_record(&ordered)
             }
 
-            Expr::FieldAccess { expr, field, .. } => self.generate_field_access(expr, field),
+            Expression::FieldAccess {
+                expression, field, ..
+            } => self.generate_field_access(expression, field),
 
-            Expr::FieldAssign { target, value, .. } => self.generate_field_assign(target, value),
+            Expression::FieldAssign { target, value, .. } => {
+                self.generate_field_assign(target, value)
+            }
 
-            Expr::Index {
-                expr: array, index, ..
-            } => self.generate_index(expr, array, index),
+            Expression::Index {
+                expression: array,
+                index,
+                ..
+            } => self.generate_index(expression, array, index),
 
-            Expr::Match {
-                expr: scrutinee,
+            Expression::Match {
+                expression: scrutinee,
                 arms,
                 ..
-            } => self.generate_match(expr, scrutinee, arms),
+            } => self.generate_match(expression, scrutinee, arms),
 
-            Expr::Range { start, end, .. } => self.generate_range(start, end),
+            Expression::Range { start, end, .. } => self.generate_range(start, end),
 
             // `left |> right` desugars to a call with `left` as the first arg
             // (must match the type checker's desugaring exactly).
-            Expr::Pipeline { left, right, span } => {
-                let call = Expr::desugar_pipeline(left, right, span);
-                self.generate_expr(&call)
+            Expression::Pipeline { left, right, span } => {
+                let call = Expression::desugar_pipeline(left, right, span);
+                self.generate_expression(&call)
             }
         }
     }
@@ -253,22 +281,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(phi.as_basic_value())
     }
 
-    pub(super) fn generate_binop(
+    pub(super) fn generate_binary_operator(
         &mut self,
-        left: &Expr,
-        op: BinOp,
-        right: &Expr,
+        left: &Expression,
+        operator: BinaryOperator,
+        right: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // A USER operator overload (e.g. `+`/`==` on a record type) lowers to a direct
         // call to its mangled function — the operator is just a named overload set.
         // Built-in operators (Num arithmetic/compare, Text `+`/comparison) keep their
         // inline lowering below; they are not entered in `self.overloads`.
-        let sym = op.symbol();
+        let sym = operator.symbol();
         if self.overloads.contains_key(sym) {
             let arg_types = [self.infer_type(left), self.infer_type(right)];
             if let Some(symbol) = self.resolve_overload_symbol(sym, &arg_types) {
-                let l = self.generate_expr(left)?;
-                let r = self.generate_expr(right)?;
+                let l = self.generate_expression(left)?;
+                let r = self.generate_expression(right)?;
                 return self.build_direct_call(&symbol, &[l, r]);
             }
         }
@@ -278,9 +306,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // oracle's Quilon type and route BEFORE the generic StructValue path below (which
         // is Text concat). Triggered when either operand is an array: `[]T + []T`,
         // `[]T + T` (append), or `T + []T` (prepend).
-        if op == BinOp::Add
-            && (matches!(self.oracle.expr_type(left), Some(Type::Array(_)))
-                || matches!(self.oracle.expr_type(right), Some(Type::Array(_))))
+        if operator == BinaryOperator::Add
+            && (matches!(self.oracle.expression_type(left), Some(Type::Array(_)))
+                || matches!(self.oracle.expression_type(right), Some(Type::Array(_))))
         {
             return self.generate_array_concat(left, right);
         }
@@ -289,12 +317,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         // NEW set. Distinguished from numeric `+`/`-` by the oracle type; `SetIntersect`
         // (`+-`/`-+`) is only ever a set operator. Routed BEFORE eager operand evaluation
         // so a set operand isn't mistaken for a Num.
-        if op == BinOp::SetIntersect
-            || (matches!(op, BinOp::Add | BinOp::Sub)
-                && (matches!(self.oracle.expr_type(left), Some(Type::Set(_)))
-                    || matches!(self.oracle.expr_type(right), Some(Type::Set(_)))))
+        if operator == BinaryOperator::SetIntersect
+            || (matches!(operator, BinaryOperator::Add | BinaryOperator::Sub)
+                && (matches!(self.oracle.expression_type(left), Some(Type::Set(_)))
+                    || matches!(self.oracle.expression_type(right), Some(Type::Set(_)))))
         {
-            return self.generate_set_op(op, left, right);
+            return self.generate_set_op(operator, left, right);
         }
 
         // `&&`/`||` are SHORT-CIRCUIT (docs/LANGUAGE.md "Logical: `&& || !` (short-circuit)"):
@@ -302,28 +330,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         // result — `i < a.size && a[i] == k` must never index out of bounds, and a
         // side-effecting right operand must not run. Lower with control flow BEFORE the
         // eager operand evaluation below.
-        if matches!(op, BinOp::And | BinOp::Or) {
-            return self.generate_short_circuit(op, left, right);
+        if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
+            return self.generate_short_circuit(operator, left, right);
         }
 
-        let lhs = self.generate_expr(left)?;
-        let rhs = self.generate_expr(right)?;
+        let lhs = self.generate_expression(left)?;
+        let rhs = self.generate_expression(right)?;
 
         // Text comparison: both operands are `Text` { ptr, i64 } structs. Lower
         // equality and lexicographic ordering via the `__text_cmp` runtime intrinsic
         // (returns -1/0/1), then compare its result against 0 with the matching
         // integer predicate. (Num operands fall through to the float paths below.)
         if matches!(
-            op,
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+            operator,
+            BinaryOperator::Eq
+                | BinaryOperator::Ne
+                | BinaryOperator::Lt
+                | BinaryOperator::Le
+                | BinaryOperator::Gt
+                | BinaryOperator::Ge
         ) && matches!(lhs, BasicValueEnum::StructValue(_))
             && matches!(rhs, BasicValueEnum::StructValue(_))
         {
-            return self.generate_text_compare(op, lhs, rhs);
+            return self.generate_text_compare(operator, lhs, rhs);
         }
 
-        match op {
-            BinOp::Add => match (lhs, rhs) {
+        match operator {
+            BinaryOperator::Add => match (lhs, rhs) {
                 (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                     .builder
                     .build_float_add(l, r, "addtmp")
@@ -335,7 +368,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 _ => Err("Add requires two Nums or two Texts".to_string()),
             },
-            BinOp::Sub => {
+            BinaryOperator::Sub => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -346,7 +379,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Sub operation requires float values".to_string())
                 }
             }
-            BinOp::Mul => {
+            BinaryOperator::Mul => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -357,7 +390,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Mul operation requires float values".to_string())
                 }
             }
-            BinOp::Div => {
+            BinaryOperator::Div => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -368,7 +401,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Div operation requires float values".to_string())
                 }
             }
-            BinOp::Mod => {
+            BinaryOperator::Mod => {
                 // f64 remainder (LLVM `frem` == C `fmod`): the result takes the
                 // DIVIDEND's sign — `7 % 3` is 1, `-7 % 3` is -1, `7 % -3` is 1.
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
@@ -381,7 +414,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Mod operation requires float values".to_string())
                 }
             }
-            BinOp::Eq => match (lhs, rhs) {
+            BinaryOperator::Eq => match (lhs, rhs) {
                 (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                     .builder
                     .build_float_compare(inkwell::FloatPredicate::OEQ, l, r, "eqtmp")
@@ -395,7 +428,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .into()),
                 _ => Err("Eq requires two Nums or two Bools".to_string()),
             },
-            BinOp::Ne => match (lhs, rhs) {
+            BinaryOperator::Ne => match (lhs, rhs) {
                 (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                     .builder
                     .build_float_compare(inkwell::FloatPredicate::ONE, l, r, "netmp")
@@ -408,7 +441,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .into()),
                 _ => Err("Ne requires two Nums or two Bools".to_string()),
             },
-            BinOp::Lt => {
+            BinaryOperator::Lt => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -419,7 +452,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Lt operation requires float values".to_string())
                 }
             }
-            BinOp::Le => {
+            BinaryOperator::Le => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -430,7 +463,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Le operation requires float values".to_string())
                 }
             }
-            BinOp::Gt => {
+            BinaryOperator::Gt => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -441,7 +474,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Gt operation requires float values".to_string())
                 }
             }
-            BinOp::Ge => {
+            BinaryOperator::Ge => {
                 if let (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) = (lhs, rhs) {
                     Ok(self
                         .builder
@@ -452,9 +485,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Ge operation requires float values".to_string())
                 }
             }
-            // `&&`/`||` never reach here — `generate_binop` routes them to
+            // `&&`/`||` never reach here — `generate_binary_operator` routes them to
             // `generate_short_circuit` before operand evaluation.
-            _ => Err(format!("Unsupported binary operation: {:?}", op)),
+            _ => Err(format!("Unsupported binary operation: {:?}", operator)),
         }
     }
 
@@ -465,15 +498,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `generate_if`.
     pub(super) fn generate_short_circuit(
         &mut self,
-        op: BinOp,
-        left: &Expr,
-        right: &Expr,
+        operator: BinaryOperator,
+        left: &Expression,
+        right: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let function = self
             .current_function
             .ok_or_else(|| "Logical operator outside of function".to_string())?;
 
-        let lhs_val = self.generate_expr(left)?;
+        let lhs_val = self.generate_expression(left)?;
         let lhs_bool = self.value_to_boolean(lhs_val)?;
         // The left operand may itself have emitted branches; the phi's incoming edge is
         // the block we END in, not the one we started in.
@@ -487,8 +520,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // `&&`: a true left falls through to the right, a false left decides.
         // `||`: a false left falls through to the right, a true left decides.
-        let (true_bb, false_bb) = match op {
-            BinOp::And => (rhs_bb, merge_bb),
+        let (true_bb, false_bb) = match operator {
+            BinaryOperator::And => (rhs_bb, merge_bb),
             _ => (merge_bb, rhs_bb),
         };
         self.builder
@@ -496,7 +529,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build branch"))?;
 
         self.builder.position_at_end(rhs_bb);
-        let rhs_val = self.generate_expr(right)?;
+        let rhs_val = self.generate_expression(right)?;
         let rhs_bool = self.value_to_boolean(rhs_val)?;
         self.builder
             .build_unconditional_branch(merge_bb)
@@ -555,15 +588,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    pub(super) fn generate_unary_op(
+    pub(super) fn generate_unary_operator(
         &mut self,
-        op: UnaryOp,
-        expr: &Expr,
+        operator: UnaryOperator,
+        expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let val = self.generate_expr(expr)?;
+        let val = self.generate_expression(expression)?;
 
-        match op {
-            UnaryOp::Neg => {
+        match operator {
+            UnaryOperator::Neg => {
                 if let BasicValueEnum::FloatValue(f) = val {
                     Ok(self
                         .builder
@@ -574,7 +607,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Err("Neg operation requires float value".to_string())
                 }
             }
-            UnaryOp::Not => {
+            UnaryOperator::Not => {
                 if let BasicValueEnum::IntValue(i) = val {
                     Ok(self
                         .builder
@@ -590,11 +623,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub(super) fn generate_if(
         &mut self,
-        cond: &Expr,
-        then_expr: &Expr,
-        else_expr: &Expr,
+        cond: &Expression,
+        then_expression: &Expression,
+        else_expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let cond_val = self.generate_expr(cond)?;
+        let cond_val = self.generate_expression(cond)?;
 
         let cond_bool = if let BasicValueEnum::IntValue(i) = cond_val {
             i
@@ -618,7 +651,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Generate then block
         self.builder.position_at_end(then_bb);
-        let then_val = self.generate_expr(then_expr)?;
+        let then_val = self.generate_expression(then_expression)?;
         self.builder
             .build_unconditional_branch(merge_bb)
             .map_err(ctx("Failed to build branch"))?;
@@ -626,7 +659,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Generate else block
         self.builder.position_at_end(else_bb);
-        let else_val = self.generate_expr(else_expr)?;
+        let else_val = self.generate_expression(else_expression)?;
         self.builder
             .build_unconditional_branch(merge_bb)
             .map_err(ctx("Failed to build branch"))?;
@@ -645,7 +678,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub(super) fn generate_block(
         &mut self,
-        stmts: &[crate::ast::Statement],
+        statements: &[crate::ast::Statement],
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Under `--debug`, a `{ }` block introduces a nested lexical scope so its locals nest
@@ -653,13 +686,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let saved_scope = self.begin_di_lexical_block(span);
         let mut result = self.context.f64_type().const_float(0.0).into();
 
-        for stmt in stmts {
-            match stmt {
+        for statement in statements {
+            match statement {
                 crate::ast::Statement::Item(item) => {
                     self.generate_item(item)?;
                 }
-                crate::ast::Statement::Expr(expr) => {
-                    result = self.generate_expr(expr)?;
+                crate::ast::Statement::Expression(expression) => {
+                    result = self.generate_expression(expression)?;
                 }
             }
         }
@@ -668,22 +701,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(result)
     }
 
-    /// Lower an array index `array[index]`. `index_node` is the whole `Expr::Index`
+    /// Lower an array index `array[index]`. `index_node` is the whole `Expression::Index`
     /// (used to look up the element type in the oracle — the checker records an index
-    /// expression's type as its element type); `array` and `index_expr` are its parts.
+    /// expression's type as its element type); `array` and `index_expression` are its parts.
     /// Only arrays are indexable; the checker rejects `map[key]` (maps are read via
     /// `.get`), so a map value never reaches here.
     pub(super) fn generate_index(
         &mut self,
-        index_node: &Expr,
-        array: &Expr,
-        index_expr: &Expr,
+        index_node: &Expression,
+        array: &Expression,
+        index_expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Generate the array expression
-        let array_val = self.generate_expr(array)?;
+        let array_val = self.generate_expression(array)?;
 
         // Generate the index expression
-        let index_val = self.generate_expr(index_expr)?;
+        let index_val = self.generate_expression(index_expression)?;
 
         // An array is a `{ ptr data, i64 size }` struct. To index it: read the data ptr and
         // size fields, bounds-check the index, convert it f64->i64, then GEP + load the elem.

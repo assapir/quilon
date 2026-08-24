@@ -12,15 +12,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the lowered struct's slot order matches what `record_types` and the type oracle
     /// use to index fields. Falls back to the provided order if the type's field list
     /// isn't registered. (The expressions are cloned — constructor field lists are tiny.)
-    pub(super) fn constructor_fields_in_decl_order(
+    pub(super) fn constructor_fields_in_declaration_order(
         &self,
         type_name: &str,
-        fields: &[(String, Expr)],
-    ) -> Vec<(String, Expr)> {
-        let Some(decl_order) = self.named_type_fields.get(type_name) else {
+        fields: &[(String, Expression)],
+    ) -> Vec<(String, Expression)> {
+        let Some(declaration_order) = self.named_type_fields.get(type_name) else {
             return fields.to_vec();
         };
-        decl_order
+        declaration_order
             .iter()
             .filter_map(|fname| {
                 fields
@@ -34,13 +34,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a record literal, routing a functional-update literal (`{<-p, x = 9}`,
     /// containing one or more `<-` spreads) to [`generate_record_update`] and an ordinary
     /// literal to [`generate_record`].
-    pub(super) fn generate_record_expr(
+    pub(super) fn generate_record_expression(
         &mut self,
-        record_expr: &Expr,
-        fields: &[(String, Expr)],
+        record_expression: &Expression,
+        fields: &[(String, Expression)],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if fields.iter().any(|(_, v)| matches!(v, Expr::Spread { .. })) {
-            self.generate_record_update(record_expr, fields)
+        if fields
+            .iter()
+            .any(|(_, v)| matches!(v, Expression::Spread { .. }))
+        {
+            self.generate_record_update(record_expression, fields)
         } else {
             self.generate_record(fields)
         }
@@ -54,8 +57,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// so later entries override earlier ones, left-to-right.
     pub(super) fn generate_record_update(
         &mut self,
-        record_expr: &Expr,
-        fields: &[(String, Expr)],
+        record_expression: &Expression,
+        fields: &[(String, Expression)],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if self.current_function.is_none() {
             return Err("Global records not yet implemented".to_string());
@@ -63,16 +66,17 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Result layout (ordered fields + types) from the oracle — authoritative for both
         // the struct shape and which slot each name occupies.
-        let result_fields: Rc<Vec<(String, Type)>> = match self.oracle.expr_type(record_expr) {
-            Some(Type::Named { fields, .. }) => Rc::clone(fields),
-            Some(Type::Record(fields)) => Rc::new(fields.clone()),
-            _ => {
-                return Err(
-                    "record functional-update requires type information (missing oracle entry)"
-                        .to_string(),
-                );
-            }
-        };
+        let result_fields: Rc<Vec<(String, Type)>> =
+            match self.oracle.expression_type(record_expression) {
+                Some(Type::Named { fields, .. }) => Rc::clone(fields),
+                Some(Type::Record(fields)) => Rc::new(fields.clone()),
+                _ => {
+                    return Err(
+                        "record functional-update requires type information (missing oracle entry)"
+                            .to_string(),
+                    );
+                }
+            };
 
         // Evaluate the literal's parts in source order (left-to-right), recording for each
         // field name its LATEST provider — so precedence follows source order exactly:
@@ -95,8 +99,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut provider: HashMap<String, Provider<'ctx>> = HashMap::new();
 
         for (name, value) in fields {
-            if let Expr::Spread { expr: src, .. } = value {
-                let layout: Rc<Vec<(String, Type)>> = match self.oracle.expr_type(src) {
+            if let Expression::Spread {
+                expression: src, ..
+            } = value
+            {
+                let layout: Rc<Vec<(String, Type)>> = match self.oracle.expression_type(src) {
                     Some(Type::Named { fields, .. }) => Rc::clone(fields),
                     Some(Type::Record(fields)) => Rc::new(fields.clone()),
                     _ => {
@@ -105,7 +112,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 };
                 let fnames: Vec<String> = layout.iter().map(|(n, _)| n.clone()).collect();
                 let struct_type = self.record_struct_type(&layout)?;
-                let ptr = self.generate_expr(src)?.into_pointer_value();
+                let ptr = self.generate_expression(src)?.into_pointer_value();
                 let idx = sources.len();
                 sources.push(Source {
                     ptr,
@@ -116,7 +123,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     provider.insert(fname, Provider::Spread(idx));
                 }
             } else {
-                let v = self.generate_expr(value)?;
+                let v = self.generate_expression(value)?;
                 provider.insert(name.clone(), Provider::Override(v));
             }
         }
@@ -187,7 +194,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub(super) fn generate_record(
         &mut self,
-        fields: &[(String, Expr)],
+        fields: &[(String, Expression)],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if fields.is_empty() {
             // Empty record - create empty struct
@@ -197,8 +204,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Generate all field values
         let mut field_values: Vec<BasicValueEnum> = Vec::new();
-        for (_name, expr) in fields {
-            field_values.push(self.generate_expr(expr)?);
+        for (_name, expression) in fields {
+            field_values.push(self.generate_expression(expression)?);
         }
 
         // Get field types
@@ -245,7 +252,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub(super) fn generate_field_access(
         &mut self,
-        expr: &Expr,
+        expression: &Expression,
         field_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // A record may legitimately have a field literally named `size`/`length`.
@@ -253,7 +260,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // which dispatches on static type) so they don't collide with the Text/array
         // `.size`/`.length` struct-shape handling below. Text/array values are never
         // tracked in `record_types`, so this only diverts genuine record fields.
-        let is_named_record_field = matches!(expr, Expr::Ident { name, .. }
+        let is_named_record_field = matches!(expression, Expression::Identifier { name, .. }
             if self
                 .record_types
                 .get(name)
@@ -263,13 +270,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // a map/set value is an opaque pointer, so dispatch on the oracle's receiver type
         // before the array/Text struct-shape handling below (see `generate_collection_size`).
         if !is_named_record_field && field_name == "size" {
-            let count_intrinsic = match self.oracle.expr_type(expr) {
+            let count_intrinsic = match self.oracle.expression_type(expression) {
                 Some(Type::Map(_, _)) => Some("__map_len"),
                 Some(Type::Set(_)) => Some("__set_len"),
                 _ => None,
             };
             if let Some(intrinsic) = count_intrinsic {
-                return self.generate_collection_size(expr, intrinsic);
+                return self.generate_collection_size(expression, intrinsic);
             }
         }
 
@@ -277,7 +284,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         if !is_named_record_field && field_name == "size" {
             // For arrays (which are structs {ptr, i64}), we need special handling
             // Check if it's an identifier - we can directly work with the alloca
-            if let Expr::Ident { name, .. } = expr
+            if let Expression::Identifier { name, .. } = expression
                 && let Some((var_ptr, var_type)) = self.variables.get(name).cloned()
             {
                 // Check if this is a struct type (could be an array)
@@ -310,7 +317,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Text); `.length` is the grapheme count (Text only — the checker rejects
         // `.length` on arrays). Handles non-identifier receivers like `("a"+"b").size`.
         if !is_named_record_field && (field_name == "size" || field_name == "length") {
-            let val = self.generate_expr(expr)?;
+            let val = self.generate_expression(expression)?;
             if let BasicValueEnum::StructValue(s) = val {
                 let len = self
                     .builder
@@ -350,7 +357,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // record's memory (shared by the in-place field-write path) and load it with the
         // field's declared LLVM type from the oracle (NOT a hardcoded `f64`), so a
         // `Text`/array field reads back correctly.
-        if let Some((field_ptr, field_llvm)) = self.record_field_pointer(expr, field_name)? {
+        if let Some((field_ptr, field_llvm)) = self.record_field_pointer(expression, field_name)? {
             return self
                 .builder
                 .build_load(field_llvm, field_ptr, field_name)
@@ -370,15 +377,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// type checker's `Unit` result for a field write.
     pub(super) fn generate_field_assign(
         &mut self,
-        target: &Expr,
-        value: &Expr,
+        target: &Expression,
+        value: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let Expr::FieldAccess { expr, field, .. } = target else {
+        let Expression::FieldAccess {
+            expression, field, ..
+        } = target
+        else {
             return Err("Field-write target must be a field access".to_string());
         };
-        let new_value = self.generate_expr(value)?;
+        let new_value = self.generate_expression(value)?;
         let (field_ptr, _field_llvm) = self
-            .record_field_pointer(expr, field)?
+            .record_field_pointer(expression, field)?
             .ok_or_else(|| format!("Unknown record for field write: {}", field))?;
         self.builder
             .build_store(field_ptr, new_value)
@@ -404,10 +414,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// (so the read path can fall through to its Text/array `.size` handling).
     pub(super) fn record_field_pointer(
         &mut self,
-        base: &Expr,
+        base: &Expression,
         field: &str,
     ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>, String> {
-        let Expr::Ident { name, .. } = base else {
+        let Expression::Identifier { name, .. } = base else {
             return Ok(None);
         };
         let Some(field_names) = self.record_types.get(name).cloned() else {
@@ -422,7 +432,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // construction. Fall back to all-`f64` only if the oracle has no record type for
         // `base` (it always should for a tracked record) — preserving the historical
         // numeric layout. The loaded field's own LLVM type is then just the indexed slot.
-        let struct_type = match self.oracle.expr_type(base) {
+        let struct_type = match self.oracle.expression_type(base) {
             // Cloned out of the oracle (an `Rc` bump for a named type, whose declaration
             // is shared) so the borrow ends before `record_struct_type` takes `&self`.
             Some(Type::Record(fields)) => {
