@@ -21,7 +21,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | ⬜ Planned (partly 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC ([#98]) | ⬜ Planned — **core** |
-| **M7** | Polish — formatter/linter, standard library, debug info | ⬜ Planned |
+| **M7** | Polish — formatter/linter, corelib, debug info | ⬜ Planned |
 | **M8** | **Web — a native HTTP server built on the M6 runtime** | ⬜ Planned |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
@@ -111,7 +111,7 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | `quilon fmt` / linter | ⬜ |
-| Standard library | ⬜ |
+| Corelib | ⬜ |
 | Debug info (→ real VS Code debugging) | ⬜ |
 | Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
