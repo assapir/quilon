@@ -50,7 +50,7 @@ fn available_linker() -> Option<&'static str> {
     ["clang", "gcc"].into_iter().find(|t| tool_available(t))
 }
 
-/// `quilon build examples/hello_world.ql -o out --linker <linker>` with
+/// `quilon build examples/hello_world.qn -o out --linker <linker>` with
 /// `configure` applied to the command (env tweaks etc.), asserting the build
 /// succeeds; then run the produced binary and return its exit code
 /// (hello_world is self-asserting, so on success it exits 0).
@@ -63,7 +63,7 @@ fn build_hello_and_run(
 ) -> Option<i32> {
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
-        .join("hello_world.ql");
+        .join("hello_world.qn");
     let mut cmd = Command::new(quilon);
     cmd.args(["build", example.to_str().unwrap()])
         .args(["--linker", linker])

@@ -15,27 +15,27 @@ import {
 
 test("InFlightBuilds: first acquire wins, a concurrent one for the same key is refused", () => {
   const inFlight = new InFlightBuilds();
-  assert.equal(inFlight.tryAcquire("/w/a.ql"), true);
-  assert.equal(inFlight.tryAcquire("/w/a.ql"), false);
+  assert.equal(inFlight.tryAcquire("/w/a.qn"), true);
+  assert.equal(inFlight.tryAcquire("/w/a.qn"), false);
 });
 
 test("InFlightBuilds: a different key is independent", () => {
   const inFlight = new InFlightBuilds();
-  assert.equal(inFlight.tryAcquire("/w/a.ql"), true);
-  assert.equal(inFlight.tryAcquire("/w/b.ql"), true);
+  assert.equal(inFlight.tryAcquire("/w/a.qn"), true);
+  assert.equal(inFlight.tryAcquire("/w/b.qn"), true);
 });
 
 test("InFlightBuilds: release lets the key be acquired again (success/error path)", () => {
   const inFlight = new InFlightBuilds();
-  inFlight.tryAcquire("/w/a.ql");
-  inFlight.release("/w/a.ql");
-  assert.equal(inFlight.tryAcquire("/w/a.ql"), true);
+  inFlight.tryAcquire("/w/a.qn");
+  inFlight.release("/w/a.qn");
+  assert.equal(inFlight.tryAcquire("/w/a.qn"), true);
 });
 
 test("InFlightBuilds: release is idempotent and safe when nothing is held", () => {
   const inFlight = new InFlightBuilds();
-  inFlight.release("/w/a.ql");
-  assert.equal(inFlight.tryAcquire("/w/a.ql"), true);
+  inFlight.release("/w/a.qn");
+  assert.equal(inFlight.tryAcquire("/w/a.qn"), true);
 });
 
 test("firstNonEmptyLine: skips leading blank lines and trims", () => {
@@ -59,35 +59,41 @@ test("splitCommand: empty/whitespace falls back to quilon", () => {
 });
 
 test("buildArgs: emits a `build --debug <file> -o <out>` invocation", () => {
-  assert.deepEqual(buildArgs([], "/w/app.ql", "/tmp/app"), [
+  assert.deepEqual(buildArgs([], "/w/app.qn", "/tmp/app"), [
     "build",
     "--debug",
-    "/w/app.ql",
+    "/w/app.qn",
     "-o",
     "/tmp/app",
   ]);
 });
 
 test("buildArgs: preserves base args from the command setting", () => {
-  assert.deepEqual(buildArgs(["run", "--"], "/w/app.ql", "/tmp/app"), [
+  assert.deepEqual(buildArgs(["run", "--"], "/w/app.qn", "/tmp/app"), [
     "run",
     "--",
     "build",
     "--debug",
-    "/w/app.ql",
+    "/w/app.qn",
     "-o",
     "/tmp/app",
   ]);
 });
 
-test("tempBinaryPath: strips .ql, embeds base name + pid + uniquifier, honors tmpDir", () => {
-  const out = tempBinaryPath("/some/where/factorial.ql", "abc", "/mytmp");
+test("tempBinaryPath: strips .qn, embeds base name + pid + uniquifier, honors tmpDir", () => {
+  const out = tempBinaryPath("/some/where/factorial.qn", "abc", "/mytmp");
   assert.equal(out, path.join("/mytmp", `quilon-debug-factorial-${process.pid}-abc`));
 });
 
-test("tempBinaryPath: is case-insensitive on the .ql extension", () => {
-  const out = tempBinaryPath("/x/APP.QL", "1", "/t");
-  assert.equal(path.basename(out), `quilon-debug-APP-${process.pid}-1`);
+test("tempBinaryPath: strips either extension, case-insensitively", () => {
+  assert.equal(
+    path.basename(tempBinaryPath("/x/APP.QN", "1", "/t")),
+    `quilon-debug-APP-${process.pid}-1`,
+  );
+  assert.equal(
+    path.basename(tempBinaryPath("/x/APP.QL", "1", "/t")),
+    `quilon-debug-APP-${process.pid}-1`,
+  );
 });
 
 test("toLldbConfiguration: resolves to a CodeLLDB launch of the built binary", () => {

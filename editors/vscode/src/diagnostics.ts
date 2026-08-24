@@ -2,12 +2,12 @@
 //
 // The compiler reports each error as a header line of the form
 //
-//   path/to/file.ql:LINE:COL: error: <message>
+//   path/to/file.qn:LINE:COL: error: <message>
 //
 // optionally followed by a source-context block (a gutter line, the offending
 // source line, and a caret underline) such as:
 //
-//   examples/type_error.ql:5:5: error: Unexpected token: TypeAnnotation
+//   examples/type_error.qn:5:5: error: Unexpected token: TypeAnnotation
 //     |
 //   5 |   x :: Num = "not a number"
 //     |     ^^

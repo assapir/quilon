@@ -15,7 +15,7 @@ use common::{
 
 #[test]
 fn run_simple_arithmetic() {
-    // examples/simple.ql
+    // examples/simple.qn
     assert_exit("^ = () -> Num => <\n  a = 5\n  b = 7\n  a + b\n>", 12);
 }
 
@@ -58,7 +58,7 @@ fn run_arithmetic_precedence_and_parentheses() {
 
 #[test]
 fn run_factorial() {
-    // examples/factorial.ql -> factorial(5) = 120
+    // examples/factorial.qn -> factorial(5) = 120
     assert_exit(
         "factorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)\n\n^ = () -> Num => factorial(5)",
         120,
@@ -67,7 +67,7 @@ fn run_factorial() {
 
 #[test]
 fn run_fibonacci() {
-    // examples/fibonacci.ql -> fib(10) = 55
+    // examples/fibonacci.qn -> fib(10) = 55
     assert_exit(
         "fib = (n :: Num) -> Num => n <= 1 ? n : fib(n - 1) + fib(n - 2)\n\n^ = () -> Num => fib(10)",
         55,
@@ -76,7 +76,7 @@ fn run_fibonacci() {
 
 #[test]
 fn run_array_size() {
-    // examples/array_size.ql -> [1,2,3,4,5].size = 5
+    // examples/array_size.qn -> [1,2,3,4,5].size = 5
     assert_exit(
         "^ = () -> Num => <\n  nums = [1, 2, 3, 4, 5]\n  nums.size\n>",
         5,
@@ -85,7 +85,7 @@ fn run_array_size() {
 
 #[test]
 fn run_pattern_match_number() {
-    // examples/option.ql -> matches the `5` arm
+    // examples/option.qn -> matches the `5` arm
     assert_exit(
         "^ = () -> Num => <\n  value = 5\n  result = value ?\n    | 5 => 50\n    | 3 => 30\n    | _ => 0\n  result\n>",
         50,
@@ -94,7 +94,7 @@ fn run_pattern_match_number() {
 
 #[test]
 fn run_pattern_match_wildcard() {
-    // examples/pattern_wildcard.ql -> falls through to `_`
+    // examples/pattern_wildcard.qn -> falls through to `_`
     assert_exit(
         "^ = () -> Num => <\n  value = 7\n  result = value ?\n    | 5 => 50\n    | 3 => 30\n    | _ => 99\n  result\n>",
         99,
@@ -828,9 +828,9 @@ fn jit_uses_caller_supplied_argv() {
         .check_program(&program)
         .expect("type checking failed");
 
-    // `[<file>, a, b, c]` — exactly what `main.rs` builds for `quilon run f.ql a b c`.
+    // `[<file>, a, b, c]` — exactly what `main.rs` builds for `quilon run f.qn a b c`.
     let argv = [
-        "f.ql".to_string(),
+        "f.qn".to_string(),
         "a".to_string(),
         "b".to_string(),
         "c".to_string(),
@@ -855,7 +855,7 @@ fn jit_uses_caller_supplied_argv() {
         types,
         defer,
         common::no_sources(),
-        &["f.ql".to_string()],
+        &["f.qn".to_string()],
     )
     .expect("execution failed");
     assert_eq!(code, 1, "bare argv -> args.size == 1 (argv[0] only)");
@@ -1217,14 +1217,14 @@ fn run_multiline_arguments_and_dot_chains_still_work() {
 #[test]
 fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let module_src = std::fs::read_to_string(fixtures.join("span_twin.ql")).unwrap();
+    let module_src = std::fs::read_to_string(fixtures.join("span_twin.qn")).unwrap();
     // The `v` argument of the module's `kind(v)` — the span to collide with.
     let target = module_src.find("kind(v)").expect("fixture shape changed") + "kind(".len();
 
     // Everything that precedes the `n` which has to land on `target`, with a comment
     // padded to push it exactly there. The padding is measured off the emitted prefix
     // itself, so the two cannot drift apart.
-    let mut prefix = String::from("<< \"span_twin.ql\"\n^ = () -> Num => <\n  n = 7\n  ~ ");
+    let mut prefix = String::from("<< \"span_twin.qn\"\n^ = () -> Num => <\n  n = 7\n  ~ ");
     let assign = "\n  q = ";
     let pad = target
         .checked_sub(prefix.len() + assign.len())

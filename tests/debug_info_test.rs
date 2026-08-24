@@ -1,8 +1,8 @@
 //! DWARF line-number debug-info test for `quilon build --debug`.
 //!
-//! Builds a small `.ql` program with `--debug` and shells out to `llvm-dwarfdump` to
-//! assert the emitted binary carries a DWARF compile unit that references the `.ql`
-//! source: a `.debug_line` file table naming the `.ql` file, and a `.debug_info`
+//! Builds a small `.qn` program with `--debug` and shells out to `llvm-dwarfdump` to
+//! assert the emitted binary carries a DWARF compile unit that references the `.qn`
+//! source: a `.debug_line` file table naming the `.qn` file, and a `.debug_info`
 //! subprogram for the user's function declaration-lined at its source line. Skips gracefully
 //! when the C toolchain or `llvm-dwarfdump` is unavailable (mirrors the native-AOT tests).
 
@@ -44,7 +44,7 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
 ";
     let dir = std::env::temp_dir().join(format!("quilon_dbgdefer_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("defer.ql");
+    let ql = dir.join("defer.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let checked = front_end(&ql).unwrap_or_else(|e| panic!("front end failed: {e}"));
@@ -88,7 +88,7 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let src = "\nfactorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)\n^ = () -> Num => factorial(5)\n";
     let dir = std::env::temp_dir().join(format!("quilon_dbg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.ql");
+    let ql = dir.join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
     let bin = dir.join("prog");
 
@@ -112,7 +112,7 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
         "debug build changed program behavior"
     );
 
-    // `.debug_line`: the line-number program must name the `.ql` source file.
+    // `.debug_line`: the line-number program must name the `.qn` source file.
     let line = Command::new("llvm-dwarfdump")
         .arg("--debug-line")
         .arg(&bin)
@@ -121,11 +121,11 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     assert!(line.status.success(), "llvm-dwarfdump --debug-line failed");
     let line_out = String::from_utf8_lossy(&line.stdout);
     assert!(
-        line_out.contains("prog.ql"),
-        "expected the `.ql` file in the DWARF line table, got:\n{line_out}"
+        line_out.contains("prog.qn"),
+        "expected the `.qn` file in the DWARF line table, got:\n{line_out}"
     );
 
-    // `.debug_info`: a subprogram for `factorial`, attributed to the `.ql` file at line 2.
+    // `.debug_info`: a subprogram for `factorial`, attributed to the `.qn` file at line 2.
     let info = Command::new("llvm-dwarfdump")
         .arg("--debug-info")
         .arg(&bin)
@@ -138,8 +138,8 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
         "expected at least one subprogram in the DWARF info, got:\n{info_out}"
     );
     assert!(
-        info_out.contains("prog.ql"),
-        "expected the `.ql` file referenced by a subprogram's DW_AT_decl_file"
+        info_out.contains("prog.qn"),
+        "expected the `.qn` file referenced by a subprogram's DW_AT_decl_file"
     );
     assert!(
         info_out.contains("\"factorial\""),
@@ -203,7 +203,7 @@ describe = (p :: Point) -> Num => <
 ";
     let dir = std::env::temp_dir().join(format!("quilon_dbgvars_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("vars.ql");
+    let ql = dir.join("vars.qn");
     std::fs::write(&ql, src).expect("write temp source");
     let bin = dir.join("vars");
 
@@ -323,7 +323,7 @@ Color = Red / Green / Blue
 ";
     let dir = std::env::temp_dir().join(format!("quilon_dbgsum_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("sum.ql");
+    let ql = dir.join("sum.qn");
     std::fs::write(&ql, src).expect("write temp source");
     let bin = dir.join("sum");
 
@@ -418,7 +418,7 @@ fn non_debug_build_has_no_ql_debug_info() {
     let src = "^ = () -> Num => 7\n";
     let dir = std::env::temp_dir().join(format!("quilon_nodbg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("plain.ql");
+    let ql = dir.join("plain.qn");
     std::fs::write(&ql, src).expect("write temp source");
     let bin = dir.join("plain");
 
@@ -434,8 +434,8 @@ fn non_debug_build_has_no_ql_debug_info() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    // Without `--debug`, no compile unit should reference the `.ql` source. (The Rust
-    // runtime's own debug info may be present, but it never names a `.ql` file.)
+    // Without `--debug`, no compile unit should reference the `.qn` source. (The Rust
+    // runtime's own debug info may be present, but it never names a `.qn` file.)
     let info = Command::new("llvm-dwarfdump")
         .arg("--debug-info")
         .arg(&bin)
@@ -443,8 +443,8 @@ fn non_debug_build_has_no_ql_debug_info() {
         .expect("run llvm-dwarfdump --debug-info");
     let info_out = String::from_utf8_lossy(&info.stdout);
     assert!(
-        !info_out.contains("plain.ql"),
-        "a non-debug build must not carry `.ql` debug info, got:\n{info_out}"
+        !info_out.contains("plain.qn"),
+        "a non-debug build must not carry `.qn` debug info, got:\n{info_out}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

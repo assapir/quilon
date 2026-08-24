@@ -14,7 +14,7 @@
 //! `@tcpRequest` request-exchange primitive (connect, write the request, read the response until
 //! the peer closes) as a background producer over the generic deferral core, returning a deferred
 //! `Result` — `Ok(responseBytes)` on success, `NotOk(errorMessage)` on any network failure. No
-//! failure terminates the process; the outcome flows back to `.ql` code to match on. It is
+//! failure terminates the process; the outcome flows back to `.qn` code to match on. It is
 //! internal — the HTTP client sits on it; users do not import raw sockets.
 //!
 //! GC note: parking is transparent to the collector. A parked fiber's stack — with

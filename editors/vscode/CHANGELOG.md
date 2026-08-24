@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Quilon source is `.qn`; `.ql` is deprecated.** The language's extension changed (`.ql` is
+  CodeQL's — see the compiler's changelog), so `.qn` is what the extension highlights, runs,
+  checks, and debugs. `.ql` stays registered for the same transition the compiler gives it, so
+  existing files keep working; the file icon is contributed per *language*, so it covers both.
+
 ### Added
 
 - **Debugging** via [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
   (declared as an extension dependency). A `quilon` debug type builds the active
-  `.ql` with `quilon build --debug` and launches the native binary under
-  CodeLLDB, so breakpoints set in the `.ql` source and single-stepping resolve
+  `.qn` with `quilon build --debug` and launches the native binary under
+  CodeLLDB, so breakpoints set in the `.qn` source and single-stepping resolve
   against the source through the compiler's DWARF line table.
 - **▶ Debug CodeLens** above every `^` entry point, next to **▶ Run**, plus a
   **Quilon: Debug Current File** command and a contributed default `launch.json`

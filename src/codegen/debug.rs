@@ -6,7 +6,7 @@
 //! node carries a `Span` of byte offsets) into a 1-based `(line, column)`.
 //!
 //! The line table comes first: a `DISubprogram` per function plus per-instruction source
-//! locations, which a debugger needs to map a program counter back to a `.ql` line.
+//! locations, which a debugger needs to map a program counter back to a `.qn` line.
 //!
 //! On top of that this module emits **debug types and local variables**. The DWARF-type
 //! builders below map the Quilon type system onto distinct DWARF entries: `Num`/`Bool` are
@@ -105,7 +105,7 @@ impl<'ctx> DebugInfo<'ctx> {
         );
 
         // Split the path into a directory + filename for the DIFile. Both are recorded in
-        // the line table so a debugger can locate the `.ql` source.
+        // the line table so a debugger can locate the `.qn` source.
         let directory = file_path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())

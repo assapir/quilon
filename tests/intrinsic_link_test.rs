@@ -121,7 +121,7 @@ const EVERY_INTRINSIC: &str = r#"
 /// failure is reported with the linker's own diagnostic, since "undefined reference to
 /// __something" is the whole point of this test.
 fn build_and_run(quilon: &Path, linker: &str, dir: &Path) -> i32 {
-    let source = dir.join(format!("every_intrinsic_{linker}.ql"));
+    let source = dir.join(format!("every_intrinsic_{linker}.qn"));
     std::fs::write(&source, EVERY_INTRINSIC).expect("writing the test program");
     let out = dir.join(format!("every_intrinsic_{linker}"));
 
@@ -185,7 +185,7 @@ fn every_intrinsic_resolves_under_the_jit() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     let dir = std::env::temp_dir().join(format!("quilon-intrinsic-jit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("creating the work directory");
-    let source = dir.join("every_intrinsic.ql");
+    let source = dir.join("every_intrinsic.qn");
     std::fs::write(&source, EVERY_INTRINSIC).expect("writing the test program");
 
     let run = Command::new(&quilon)
@@ -210,7 +210,7 @@ fn the_smoke_program_reaches_every_intrinsic() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     let dir = std::env::temp_dir().join(format!("quilon-intrinsic-cover-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("creating the work directory");
-    let source = dir.join("every_intrinsic.ql");
+    let source = dir.join("every_intrinsic.qn");
     std::fs::write(&source, EVERY_INTRINSIC).expect("writing the test program");
 
     let compile = Command::new(&quilon)

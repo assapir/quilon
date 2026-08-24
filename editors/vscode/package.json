@@ -1,7 +1,7 @@
 {
   "name": "quilon",
   "displayName": "Quilon",
-  "description": "Syntax highlighting and editor tasks for the Quilon programming language (.ql).",
+  "description": "Syntax highlighting and editor tasks for the Quilon programming language (.qn).",
   "version": "0.9.1",
   "publisher": "assapir",
   "icon": "icon.png",
@@ -27,7 +27,7 @@
   ],
   "keywords": [
     "quilon",
-    "ql",
+    "qn",
     "language"
   ],
   "main": "./out/extension.js",
@@ -59,12 +59,13 @@
           "quilon"
         ],
         "extensions": [
+          ".qn",
           ".ql"
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icons/ql-light.png",
-          "dark": "./icons/ql-dark.png"
+          "light": "./icons/qn-light.png",
+          "dark": "./icons/qn-dark.png"
         }
       }
     ],
@@ -111,7 +112,7 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Path to the .ql file to build with debug info and launch. Defaults to the active file.",
+                "description": "Path to the .qn file to build with debug info and launch. Defaults to the active file.",
                 "default": "${file}"
               },
               "args": {
@@ -137,7 +138,7 @@
         "configurationSnippets": [
           {
             "label": "Quilon: Debug current file",
-            "description": "Build the active .ql with debug info and debug it under CodeLLDB.",
+            "description": "Build the active .qn with debug info and debug it under CodeLLDB.",
             "body": {
               "type": "quilon",
               "request": "launch",

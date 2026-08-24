@@ -146,7 +146,7 @@ fn regenerate() {
         ("call_sites", call_site_program(2000)),
         ("array_reads", array_read_program(2000)),
     ] {
-        let path = dir.join(format!("{stem}.ql"));
+        let path = dir.join(format!("{stem}.qn"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
         println!("wrote {}", path.display());
     }
@@ -195,8 +195,8 @@ impl Corpus {
     fn read(name: &'static str, shape: &'static str) -> Self {
         let path = match name {
             // A multi-file corpus is a directory; its root imports the siblings beside it.
-            "many_modules" => corpus_dir().join("many_modules").join("root.ql"),
-            _ => corpus_dir().join(format!("{name}.ql")),
+            "many_modules" => corpus_dir().join("many_modules").join("root.qn"),
+            _ => corpus_dir().join(format!("{name}.qn")),
         };
         let source = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!("reading corpus {path:?}: {e} — run `cargo bench -- --regen` to rebuild it")
@@ -232,7 +232,7 @@ impl Corpus {
             // The corpus's own text, under the name the table shows. Codegen resolves a
             // call site through this map, so WITHOUT it every `Site` a corpus asks for
             // would take the "unknown location" path and the work would not be measured.
-            sources.set_root(format!("{}.ql", self.name), self.source.clone());
+            sources.set_root(format!("{}.qn", self.name), self.source.clone());
             let sources = std::rc::Rc::new(sources);
 
             let start = Instant::now();
@@ -370,7 +370,7 @@ fn array_read_program(count: usize) -> String {
 /// plumbing, and checking every export whether or not the root uses it.
 ///
 /// The modules are named after plausible subjects and their exports after what each
-/// function would do, so a failure that names one (`cannot read module "pricing.ql"`,
+/// function would do, so a failure that names one (`cannot read module "pricing.qn"`,
 /// or a span inside `geometry_scale`) says where to look. The bodies are arithmetic
 /// stand-ins: the corpus measures the module machinery, not the code inside.
 fn many_modules_program(count: usize) -> Vec<(String, String)> {
@@ -448,12 +448,12 @@ fn many_modules_program(count: usize) -> Vec<(String, String)> {
                 ">> {subject}_{operation} = (x :: Num) -> Num => x + {step}"
             );
         }
-        files.push((format!("{subject}.ql"), module));
+        files.push((format!("{subject}.qn"), module));
     }
 
     let mut root = String::new();
     for i in 0..count {
-        let _ = writeln!(root, "<< \"{}.ql\"", subject_of(i));
+        let _ = writeln!(root, "<< \"{}.qn\"", subject_of(i));
     }
     let _ = writeln!(root, "\n^ = () -> Num => <");
     for i in 0..count {
@@ -462,7 +462,7 @@ fn many_modules_program(count: usize) -> Vec<(String, String)> {
         }
     }
     let _ = writeln!(root, "  0\n>");
-    files.push(("root.ql".to_string(), root));
+    files.push(("root.qn".to_string(), root));
     files
 }
 

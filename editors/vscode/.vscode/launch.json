@@ -12,7 +12,7 @@
     },
     {
       "name": "Quilon: debug current file",
-      "comment": "Builds the active .ql with `quilon build --debug` and debugs it under CodeLLDB. Breakpoints set in the .ql source are hit via the DWARF line table.",
+      "comment": "Builds the active .qn with `quilon build --debug` and debugs it under CodeLLDB. Breakpoints set in the .qn source are hit via the DWARF line table.",
       "type": "quilon",
       "request": "launch",
       "program": "${file}",

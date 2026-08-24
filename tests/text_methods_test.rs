@@ -35,7 +35,7 @@ fn run_and_capture(src: &str) -> (i32, String) {
     let dir =
         std::env::temp_dir().join(format!("quilon_replace_abort_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join("prog.ql");
+    let file = dir.join("prog.qn");
     std::fs::write(&file, src).expect("write temp program");
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])

@@ -1,6 +1,6 @@
 # `Map` — keyed collection
 
-A built-in, no-import type. See the [Language reference](../LANGUAGE.md#maps) and `examples/maps.ql`.
+A built-in, no-import type. See the [Language reference](../LANGUAGE.md#maps) and `examples/maps.qn`.
 
 A `Map` is written `[|K => V|]` (`=>` reads "maps to"). `Map` is a **built-in parametric
 collection** — like `[]T`, not a user-defined generic — written with a **pipe fence**
@@ -48,4 +48,4 @@ Removal is deferred (not in the initial surface), as are user-defined key types 
 `%` hash hook). Like the empty array `[]` (which is `[]Num`), an **empty** map literal
 defaults to `Num` key/value types and cannot yet be annotated to another type.
 
-(See `examples/maps.ql`.)
+(See `examples/maps.qn`.)

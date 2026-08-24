@@ -89,18 +89,18 @@ fn spawn_pong_server(connections: usize) -> (String, JoinHandle<()>) {
     (address, handle)
 }
 
-/// Write `source` to a unique temp `.ql` file and return its path.
+/// Write `source` to a unique temp `.qn` file and return its path.
 fn temp_ql(tag: &str, source: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "quilon_tcp_{tag}_{}_{}.ql",
+        "quilon_tcp_{tag}_{}_{}.qn",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::write(&path, source).expect("write temp .ql");
+    std::fs::write(&path, source).expect("write temp .qn");
     path
 }
 

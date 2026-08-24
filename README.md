@@ -2,7 +2,7 @@
 
 **A statically-typed, symbol-based language that compiles to native and should make me laugh. Colorless implicit futures on cooperative fibers — concurrency follows data dependence, not program order.**
 
-Quilon (`.ql`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
+Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
 > **Status: 0.9.1 — "stable basics."** The core language compiles, runs, and is tested end-to-end, but it is **not** feature-complete. For what is and isn't implemented, see the feature matrix in **[LANGUAGE.md](./docs/LANGUAGE.md)**.
 
@@ -51,10 +51,10 @@ The `quilon` binary is otherwise **self-contained**: `libquilon_rt.a` is embedde
 
 ```bash
 cargo build --release                        # binary at target/release/quilon
-./target/release/quilon run   program.ql [args...]   # JIT-compile & execute (args pass through to the program, mirroring ./program args...)
-./target/release/quilon build program.ql     # build a native executable (links libquilon_rt + libgc)
-./target/release/quilon build program.ql --debug   # + DWARF line info, local variables & types for gdb/lldb source-level debugging (alias -g)
-./target/release/quilon check program.ql     # typecheck only
+./target/release/quilon run   program.qn [args...]   # JIT-compile & execute (args pass through to the program, mirroring ./program args...)
+./target/release/quilon build program.qn     # build a native executable (links libquilon_rt + libgc)
+./target/release/quilon build program.qn --debug   # + DWARF line info, local variables & types for gdb/lldb source-level debugging (alias -g)
+./target/release/quilon check program.qn     # typecheck only
 ```
 
 Native builds link with `clang` by default; pass `--linker gcc` for gcc.

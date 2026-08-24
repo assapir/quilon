@@ -32,7 +32,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Attribute the instructions this expression lowers to its source location, so the
-        // DWARF line table maps generated code back to the `.ql` line (no-op without debug).
+        // DWARF line table maps generated code back to the `.qn` line (no-op without debug).
         self.set_debug_loc(expression.span());
         match expression {
             Expression::Number { value, .. } => {

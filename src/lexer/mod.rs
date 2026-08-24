@@ -1,5 +1,5 @@
 // Lexer module for Quilon
-// Handles tokenization of .ql source files
+// Handles tokenization of .qn source files
 
 #[allow(clippy::module_inception)] // lexer::lexer holds the Lexer impl; layout is intentional
 pub mod lexer;

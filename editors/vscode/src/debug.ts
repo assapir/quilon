@@ -2,9 +2,9 @@
 //
 // Debugging is delegated to CodeLLDB (`vadimcn.vscode-lldb`, a declared
 // extension dependency). We contribute a `quilon` debug type whose
-// DebugConfigurationProvider, when a session starts, builds the active `.ql`
+// DebugConfigurationProvider, when a session starts, builds the active `.qn`
 // with `<command> build --debug <file> -o <tmpbin>` and then resolves into a
-// CodeLLDB (`type: "lldb"`) launch of that binary. Breakpoints set in the `.ql`
+// CodeLLDB (`type: "lldb"`) launch of that binary. Breakpoints set in the `.qn`
 // source are hit through the DWARF line table the `--debug` build emits.
 //
 // Value rendering (Text as a string, `[]T` as an indexed list) is provided by
@@ -40,9 +40,9 @@ function formatterPath(context: vscode.ExtensionContext): string | undefined {
 }
 
 /**
- * Resolve the `.ql` source to debug from the launch config and the active
+ * Resolve the `.qn` source to debug from the launch config and the active
  * editor. A configured `program` wins (variables are already substituted by the
- * time this runs); otherwise fall back to the active `.ql` editor so a bare F5
+ * time this runs); otherwise fall back to the active `.qn` editor so a bare F5
  * or the Debug CodeLens works without a launch.json.
  */
 function resolveSourceFile(config: vscode.DebugConfiguration): string | undefined {
@@ -133,8 +133,9 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
     }
 
     const file = resolveSourceFile(config);
-    if (!file || !/\.ql$/i.test(file)) {
-      void vscode.window.showErrorMessage("Quilon: no active .ql file to debug.");
+    // `.ql` is deprecated but still compiles for this release, so it is still debuggable.
+    if (!file || !/\.(qn|ql)$/i.test(file)) {
+      void vscode.window.showErrorMessage("Quilon: no active .qn file to debug.");
       return undefined;
     }
     const base = path.basename(file);
@@ -224,7 +225,7 @@ export function registerDebug(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("quilon.debug", () => {
       // `${file}` resolves to the active editor; the provider owns validation
-      // and the "no active .ql file" error, so this stays a thin trigger.
+      // and the "no active .qn file" error, so this stays a thin trigger.
       const doc = vscode.window.activeTextEditor?.document;
       const folder = doc ? vscode.workspace.getWorkspaceFolder(doc.uri) : undefined;
       void vscode.debug.startDebugging(folder, defaultDebugConfiguration());

@@ -49,7 +49,7 @@ impl LineIndex {
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     /// The file as a reader should see it named — the path as given on the command line
-    /// for the root file, the resolved path for a `<< "file.ql"` import, and the dotted
+    /// for the root file, the resolved path for a `<< "file.qn"` import, and the dotted
     /// module name (`core.test`) for a bundled built-in module.
     pub path: String,
     pub text: String,
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn locate_reports_line_column_excerpt_and_width() {
         let src = "line one\nx = oops\nline three";
-        let loc = locate_in("f.ql", src, &Span::in_root(13, 17));
+        let loc = locate_in("f.qn", src, &Span::in_root(13, 17));
         assert_eq!(loc.line, 2);
         assert_eq!(loc.column, 5);
         assert_eq!(loc.excerpt.as_deref(), Some("x = oops"));
@@ -248,7 +248,7 @@ mod tests {
         // A byte offset landing mid-character must not panic. Bytes 1..3 are the single
         // character `é`, so an offset of 2 is inside it.
         let src = "aé b";
-        let inside = locate_in("f.ql", src, &Span::in_root(2, 3));
+        let inside = locate_in("f.qn", src, &Span::in_root(2, 3));
         assert_eq!((inside.line, inside.column), (1, Span::line_col(src, 2).1));
         assert_eq!(inside.excerpt.as_deref(), Some("aé b"));
     }
@@ -259,7 +259,7 @@ mod tests {
         // `Site` would then point at different places in the same file.
         let src = "a = 1\nbé = 2\n\nc = 3";
         for offset in 0..=src.len() {
-            let loc = locate_in("f.ql", src, &Span::in_root(offset as u32, offset as u32));
+            let loc = locate_in("f.qn", src, &Span::in_root(offset as u32, offset as u32));
             assert_eq!(
                 (loc.line, loc.column),
                 Span::line_col(src, offset),
@@ -270,20 +270,20 @@ mod tests {
 
     #[test]
     fn locate_clamps_a_multiline_span_to_its_first_line() {
-        let loc = locate_in("f.ql", "abc\ndef", &Span::in_root(0, 7));
+        let loc = locate_in("f.qn", "abc\ndef", &Span::in_root(0, 7));
         assert_eq!(loc.width, 3);
     }
 
     #[test]
     fn locate_widens_a_zero_width_span_to_one_caret() {
-        let loc = locate_in("f.ql", "abc", &Span::in_root(1, 1));
+        let loc = locate_in("f.qn", "abc", &Span::in_root(1, 1));
         assert_eq!(loc.width, 1);
     }
 
     #[test]
     fn a_position_past_the_last_line_has_no_excerpt() {
         // Just after the trailing newline: there is no line to show.
-        let loc = locate_in("f.ql", "abc\n", &Span::in_root(4, 4));
+        let loc = locate_in("f.qn", "abc\n", &Span::in_root(4, 4));
         assert_eq!(loc.excerpt, None);
         assert_eq!(loc.line, 2);
     }
@@ -291,9 +291,9 @@ mod tests {
     #[test]
     fn map_resolves_a_span_by_its_file_id() {
         let mut map = SourceMap::default();
-        map.set_root("root.ql", "a = 1\n");
+        map.set_root("root.qn", "a = 1\n");
         map.insert(7, "core.test", "b = 2\nc = 3\n");
-        assert_eq!(map.locate(&Span::in_root(0, 1)).unwrap().path, "root.ql");
+        assert_eq!(map.locate(&Span::in_root(0, 1)).unwrap().path, "root.qn");
         let imported = map.locate(&Span::in_file(6, 7, 7)).unwrap();
         assert_eq!((imported.path.as_str(), imported.line), ("core.test", 2));
         assert!(map.locate(&Span::in_file(0, 1, 99)).is_none());
@@ -302,10 +302,10 @@ mod tests {
     #[test]
     fn locate_or_root_falls_back_to_the_file_being_compiled() {
         let mut map = SourceMap::default();
-        map.set_root("root.ql", "a = 1\n");
+        map.set_root("root.qn", "a = 1\n");
         let unknown_file = Span::in_file(0, 1, 42);
         assert!(map.locate(&unknown_file).is_none());
-        assert_eq!(map.locate_or_root(&unknown_file).unwrap().path, "root.ql");
+        assert_eq!(map.locate_or_root(&unknown_file).unwrap().path, "root.qn");
         assert!(SourceMap::default().locate_or_root(&unknown_file).is_none());
     }
 

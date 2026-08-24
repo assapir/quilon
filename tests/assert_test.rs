@@ -33,11 +33,11 @@ fn tmp_dir() -> PathBuf {
     dir
 }
 
-/// Write `src` to a uniquely-named `.ql` file under the per-process temp dir.
+/// Write `src` to a uniquely-named `.qn` file under the per-process temp dir.
 fn write_program(tag: &str, src: &str) -> PathBuf {
-    let path = tmp_dir().join(format!("{tag}.ql"));
-    let mut f = std::fs::File::create(&path).expect("create .ql");
-    f.write_all(src.as_bytes()).expect("write .ql");
+    let path = tmp_dir().join(format!("{tag}.qn"));
+    let mut f = std::fs::File::create(&path).expect("create .qn");
+    f.write_all(src.as_bytes()).expect("write .qn");
     path
 }
 
@@ -236,7 +236,7 @@ fn failing_assert_reports_the_call_site_in_full() {
     let (code, stderr) = run_jit("site_full", src);
     assert_eq!(code, FAIL_CODE);
 
-    let path = tmp_dir().join("site_full.ql");
+    let path = tmp_dir().join("site_full.qn");
     let expected = format!(
         "{}:3:3:\nassertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
         path.display()
@@ -253,7 +253,7 @@ fn wrapper_reports_the_users_call_site_not_an_internal_hop() {
     let (code, stderr) = run_jit("site_wrapper", src);
     assert_eq!(code, FAIL_CODE);
 
-    let path = tmp_dir().join("site_wrapper.ql");
+    let path = tmp_dir().join("site_wrapper.qn");
     assert!(
         stderr.starts_with(&format!("{}:4:3:\n", path.display())),
         "must report the user's assertEq call (line 4, column 3), got: {stderr:?}"
@@ -297,7 +297,7 @@ fn fail_at_reports_its_caller() {
     let (code, stderr) = run_jit("site_fail_at", src);
     assert_eq!(code, FAIL_CODE);
 
-    let path = tmp_dir().join("site_fail_at.ql");
+    let path = tmp_dir().join("site_fail_at.qn");
     assert!(
         stderr.starts_with(&format!(
             "{}:7:3:\nassertion failed: 3 is odd",
@@ -321,7 +321,7 @@ fn a_failure_in_an_imported_module_reports_that_module() {
     );
     let main = write_program(
         "site_importer",
-        "<< \"site_helper.ql\"\n<< core.test\n\n^ = () -> $ => <\n  checkDouble(2)\n>\n",
+        "<< \"site_helper.qn\"\n<< core.test\n\n^ = () -> $ => <\n  checkDouble(2)\n>\n",
     );
     let out = Command::new(quilon())
         .args(["run", main.to_str().unwrap()])
@@ -402,7 +402,7 @@ fn native_aot_assert_exit_codes() {
         assert!(
             stderr.starts_with(&format!(
                 "{}:2:16:\n",
-                tmp_dir().join(format!("aot_fail_{linker}.ql")).display()
+                tmp_dir().join(format!("aot_fail_{linker}.qn")).display()
             )),
             "native AOT ({linker}): failing assert must report its call site, got: {stderr:?}"
         );

@@ -1,5 +1,5 @@
 ~ A library module. Items prefixed with `>>` are exported; everything else is
-~ private to the module. Imported elsewhere with `<< "mathlib.ql"`.
+~ private to the module. Imported elsewhere with `<< "mathlib.qn"`.
 
 >> add = (a :: Num, b :: Num) -> Num => a + b
 

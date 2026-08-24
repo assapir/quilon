@@ -6,14 +6,14 @@
 //!
 //! Resolution:
 //! - `<< core.io` resolves to bundled built-in module source (embedded via `include_str!`).
-//! - `<< "path/to.ql"` reads a user module from disk (relative to the importing file, or
+//! - `<< "path/to.qn"` reads a user module from disk (relative to the importing file, or
 //!   absolute); `\` is normalised to `/` for cross-platform paths.
 //!
 //! Visibility: only items marked exported (`>>` prefix) are merged. Non-exported items are
 //! module-private, so referencing them from an importer surfaces as a normal "undefined"
 //! error. NOTE (minimal release): an exported item that depends on a *private* sibling item
 //! is therefore not yet supported across the merge — core-lib exports instead bottom out in
-//! compiler intrinsics (`__print`, …), not private `.ql` helpers.
+//! compiler intrinsics (`__print`, …), not private `.qn` helpers.
 
 use crate::ast::{Import, Item, ModulePath, Program};
 use crate::lexer::{FileId, Lexer, ROOT_FILE};
@@ -103,6 +103,10 @@ impl Loader {
             return Ok(());
         }
 
+        // A `<<`-imported module never reaches the CLI front end, so the deprecation of the
+        // old extension is said here — below the guard, so a diamond import says it once.
+        crate::source_extension::warn_if_legacy(&display);
+
         let file = self.next_file;
         self.next_file += 1;
         self.sources.insert(file, display, source.clone());
@@ -131,11 +135,11 @@ impl Loader {
 // The bundled corelib module sources, embedded at compile time. Named once here so both the
 // import resolver (`builtin_source`) and the trusted-origin check (`is_corelib_source`) draw
 // from the same strings — they cannot drift.
-const CORE_IO: &str = include_str!("../corelib/io.ql");
-const CORE_TEST: &str = include_str!("../corelib/test.ql");
-const CORE_CLI: &str = include_str!("../corelib/cli.ql");
-const CORE_TIME: &str = include_str!("../corelib/time.ql");
-const CORE_NET: &str = include_str!("../corelib/net.ql");
+const CORE_IO: &str = include_str!("../corelib/io.qn");
+const CORE_TEST: &str = include_str!("../corelib/test.qn");
+const CORE_CLI: &str = include_str!("../corelib/cli.qn");
+const CORE_TIME: &str = include_str!("../corelib/time.qn");
+const CORE_NET: &str = include_str!("../corelib/net.qn");
 
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
@@ -170,7 +174,7 @@ fn builtin_source(name: &str) -> Option<&'static str> {
 
 /// Whether `source` is verbatim one of the bundled corelib modules. The corelib is the one
 /// place allowed to DECLARE `@` leaf IO primitives; the front-end uses this to trust a file
-/// it is asked to check directly (e.g. `quilon check corelib/time.ql`) while still rejecting
+/// it is asked to check directly (e.g. `quilon check corelib/time.qn`) while still rejecting
 /// an `@` declaration in ordinary user code. Matching by content, not path, identifies the
 /// real corelib no matter where it is checked from and never mistakes user code for it.
 pub fn is_corelib_source(source: &str) -> bool {

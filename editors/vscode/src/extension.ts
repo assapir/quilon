@@ -1,9 +1,9 @@
 // Quilon VS Code extension.
 //
 // Two responsibilities:
-//   1. Commands that run the Quilon compiler on the active .ql file in a terminal
+//   1. Commands that run the Quilon compiler on the active .qn file in a terminal
 //      ("Quilon: Check / Run Current File").
-//   2. Inline diagnostics: on open/save of a .ql file, run `<command> check` on
+//   2. Inline diagnostics: on open/save of a .qn file, run `<command> check` on
 //      it, parse the rustc-style `path:line:col: error: message` output, and
 //      surface each as an editor squiggle in a shared DiagnosticCollection.
 
@@ -24,7 +24,7 @@ export function quilonCommand(): string {
 function runOnActiveFile(subcommand: string): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "quilon") {
-    void vscode.window.showErrorMessage("Quilon: no active .ql file.");
+    void vscode.window.showErrorMessage("Quilon: no active .qn file.");
     return;
   }
   const document = editor.document;
@@ -187,7 +187,7 @@ function unparsedFailureDiagnostic(output: string): vscode.Diagnostic {
  * on the active editor — and since the lenses live in that document, clicking
  * one (which focuses the doc) targets the right file without threading the URI
  * through. Debug builds the file with `--debug` and launches it under CodeLLDB
- * so breakpoints in the `.ql` source are hit.
+ * so breakpoints in the `.qn` source are hit.
  */
 class EntryPointCodeLensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {

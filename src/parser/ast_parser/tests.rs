@@ -33,11 +33,11 @@ fn test_parse_builtin_import() {
 
 #[test]
 fn test_parse_file_path_import() {
-    let tokens = Lexer::tokenize("<< \"lib/math.ql\"\n^ = () -> Num => 0").unwrap();
+    let tokens = Lexer::tokenize("<< \"lib/math.qn\"\n^ = () -> Num => 0").unwrap();
     let program = parse(&tokens).unwrap();
     assert_eq!(program.imports.len(), 1);
     match &program.imports[0].path {
-        ModulePath::FilePath(p) => assert_eq!(p, "lib/math.ql"),
+        ModulePath::FilePath(p) => assert_eq!(p, "lib/math.qn"),
         other => panic!("expected FilePath, got {:?}", other),
     }
 }

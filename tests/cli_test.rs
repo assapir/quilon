@@ -5,7 +5,7 @@
 //!
 //! (These use plain `Num` returns rather than `core.test` asserts on purpose: a failing
 //! assert calls `__exit`, which would abort the in-process test runner. The self-asserting
-//! end-to-end example lives at `examples/cli.ql`, exercised by the examples gate.)
+//! end-to-end example lives at `examples/cli.qn`, exercised by the examples gate.)
 
 use quilon::lexer::Lexer;
 use quilon::modules;

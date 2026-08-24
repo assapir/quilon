@@ -14,7 +14,7 @@ All notable changes to Quilon are documented here.
   instead of a bare stderr line:
 
   ```text
-  demo.ql:4:11:
+  demo.qn:4:11:
   index 7 out of bounds for an array of size 3
      |
    4 |   value = items[wanted]
@@ -23,15 +23,15 @@ All notable changes to Quilon are documented here.
 
   Same frame as a compile error and a failing assertion — one shape now covers every located
   failure a program can produce, and all three shorten a path too long for the position line
-  from its START (`…/deep/module.ql:4:11:`) so the file name stays visible and the line does
+  from its START (`…/deep/module.qn:4:11:`) so the file name stays visible and the line does
   not wrap — and a program with several array reads no longer leaves you
   hunting for which one it was. Exit codes are unchanged (`1` for a bad index, `101` for a
   `Text` contract), and a redirected report stays plain. The location is compiled in — each
   fallible intrinsic takes the read's `Site` constant — so a native build reports exactly
   what `quilon run` does, with no debug info and no unwinder. `tests/fail_loud_location_test.rs`
   pins compile errors, assertions, and runtime checks to the same framing, since the
-  assertion renderer lives in Quilon (`corelib/test.ql`) and the runtime one in Rust
-  (`quilon-rt`'s `report`). `examples/array_methods.ql` shows the non-aborting alternative:
+  assertion renderer lives in Quilon (`corelib/test.qn`) and the runtime one in Rust
+  (`quilon-rt`'s `report`). `examples/array_methods.qn` shows the non-aborting alternative:
   `at(n)` hands an out-of-range index back as `NotOk` instead of stopping the program.
 
 - **Built-in `Map` and `Set` collections ([#72](https://github.com/assapir/quilon/issues/72)).**
@@ -51,7 +51,7 @@ All notable changes to Quilon are documented here.
   fixed-seed hasher so a program is reproducible run-to-run, but the order is unspecified by
   contract, not insertion order. User-defined key hashing (the `%`/`==` hooks), `remove`,
   and handing `^`'s env over as a `[|Text => Text|]` map are deferred to a later slice. See
-  `examples/maps.ql` and `examples/sets.ql`.
+  `examples/maps.qn` and `examples/sets.qn`.
 - **Deferred values — the `@readStdin` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The value-returning half of the colorless implicit-futures model. `@readStdin()` (in
   `core.io`) reads one line from stdin and returns a **deferred** `Text`: calling it
@@ -70,9 +70,9 @@ All notable changes to Quilon are documented here.
   the operation, never the type. The promise records its `@readStdin` launch site so a read
   fault reports where the IO was called; a scope runs its launched reads to completion
   before it exits (effects never vanish). Also fixes checking a corelib file directly
-  (`quilon check corelib/time.ql`): the front-end now trusts a bundled corelib source to
+  (`quilon check corelib/time.qn`): the front-end now trusts a bundled corelib source to
   declare `@` primitives while still rejecting them in user code. See
-  `examples/readStdin.ql` (pipe it a line to watch a real value flow); cross-source *overlap*
+  `examples/readStdin.qn` (pipe it a line to watch a real value flow); cross-source *overlap*
   is demonstrated later with a networked primitive.
 - **Failing assertions say where they failed, and a general call-site facility to build
   that on ([#65](https://github.com/assapir/quilon/issues/65)).** A failing `core.test`
@@ -81,7 +81,7 @@ All notable changes to Quilon are documented here.
   run under the call:
 
   ```text
-  demo.ql:12:3:
+  demo.qn:12:3:
   assertion failed: expected 42, got 41
      |
   12 |   assertEq(answer(), 42)
@@ -108,13 +108,13 @@ All notable changes to Quilon are documented here.
   and no debug info to keep, and `quilon run` (JIT) and native builds report identically. A
   `Site` parameter that nothing could fill in — before another parameter, or on a lambda, a
   nested declaration, or a record method — is a compile error rather than a silent demand
-  for an explicit location. See `examples/call_site.ql`.
+  for an explicit location. See `examples/call_site.qn`.
 
   Supporting surface, all documented: `core.test`'s **`failAt(message)`** (the reporting
   primitive the assertions are built from, and what a custom assertion of your own
   forwards its own `site` to), **`Text.repeat(count)`** (`count` copies; fail-loud on a
   negative or fractional count, at compile time when literal), and the **`\e`** string
-  escape for the ESC byte, without which `.ql` code could not write an ANSI sequence at
+  escape for the ESC byte, without which `.qn` code could not write an ANSI sequence at
   all. The terminal check behind the coloring is an INTERNAL primitive
   (`__color_enabled`, alongside `__exit`): raw file descriptors gain no user-facing API,
   since the language's IO direction is `@` leaf primitives rather than `fd`-taking
@@ -136,7 +136,7 @@ All notable changes to Quilon are documented here.
   `Future` type). This lands the runtime surface; the *deferred value* story — a
   value-returning primitive whose result threads lazily and is forced at a strict
   operation, giving automatic overlap — arrives with a later primitive (`@readStdin`). See
-  `examples/sleep.ql`.
+  `examples/sleep.qn`.
 - **Uniform `Result` layout — a `Result` of any payload flows through a generic
   `(r :: Result)` parameter/return.** Every `Result` now has a single canonical LLVM
   shape `{ i8 tag, {ptr,i64} slot }`: a `Text` or array payload fills the slot
@@ -146,7 +146,7 @@ All notable changes to Quilon are documented here.
   different LLVM type from the `{ i8, double }` a generic `(r :: Result)` parameter
   expected, and the call was rejected by the verifier. With one shape, `assertOk` /
   `assertNotOk` (`core.test`) now accept a `Result` of **any** payload — including the
-  composite-payload results of `getEnv` / `getOpt` — so `examples/cli.ql` asserts them
+  composite-payload results of `getEnv` / `getOpt` — so `examples/cli.qn` asserts them
   directly instead of bridging through a `match → Bool`. Matching by variant (`Ok` vs
   `NotOk`) works on any `Result` anywhere; extracting a payload still needs its concrete
   type in scope at the match site (there are no generics). Debug (`--debug`) DWARF and
@@ -158,7 +158,7 @@ All notable changes to Quilon are documented here.
   fields and types, nothing extra). A different named type is never accepted, however
   similar — `Point` and `Other` remain distinct — and an anonymous record cannot fill a
   type that declares methods, since it carries none. Every declared field must end up
-  provided, by the spread or by an override. See `examples/spread.ql`.
+  provided, by the spread or by an override. See `examples/spread.qn`.
 - **String interpolation / format strings.** A string literal may contain
   **interpolation holes** — an arbitrary expression wrapped in backticks — which
   are rendered to `Text` and spliced in: `` "hi `user.name`" ``,
@@ -173,10 +173,21 @@ All notable changes to Quilon are documented here.
   `Text` and may itself interpolate). `print`/`eprint` now render **any** value
   through the same `` ` `` path, so `print(user)` and `` "`user`" `` agree — and
   `assertEq`/`assertNotEq` failure messages now render records, sum types, and
-  arrays too. There are no format specifiers. (See `examples/interpolation.ql`.)
+  arrays too. There are no format specifiers. (See `examples/interpolation.qn`.)
   (#101)
 
 ### Changed
+
+- **Source files are `.qn`; `.ql` is deprecated
+  ([#172](https://github.com/assapir/quilon/issues/172)).** `.ql` is CodeQL's extension, and
+  GitHub was attributing ~40% of this repository to CodeQL because of it — the language bar
+  advertised someone else's language for every Quilon program in the tree. Every source file
+  is renamed (`git mv`, so history follows). `.qn` is unclaimed, so the misattribution stops
+  with the rename itself; a `.gitattributes` override (`*.qn linguist-language=Quilon`) asks
+  for the files to be labelled Quilon, which needs Quilon in Linguist proper to take effect. The compiler still accepts
+  `.ql` for this release, printing a deprecation warning on stderr and compiling as before;
+  the support goes away at 1.0. The VS Code extension registers both extensions through the
+  transition, so existing files keep highlighting.
 
 - **CI shows benchmark deltas against the previous run on the branch
   ([#162](https://github.com/assapir/quilon/issues/162)).** Both benchmark families print a
@@ -196,7 +207,7 @@ All notable changes to Quilon are documented here.
   and the message separately:
 
   ```text
-  demo.ql:2:7:
+  demo.qn:2:7:
   error: No overload of '+' matches argument types (Num, Bool)
     |
   2 |   x = 1 + true
@@ -205,7 +216,7 @@ All notable changes to Quilon are documented here.
 
   "Where" and "what" are different questions, and a long message no longer pushes the
   position off the right edge. A path wider than 60 characters is shown from its END behind a
-  `…` (`…/scratch/demo/bounds.ql:7:11:`), so the file name stays visible instead of the line
+  `…` (`…/scratch/demo/bounds.qn:7:11:`), so the file name stays visible instead of the line
   wrapping — absolute paths and temp directories made that routine. **Anything parsing
   compiler output for `: error: ` on the position line needs updating**; the position line
   now ends at the colon.
@@ -216,7 +227,7 @@ All notable changes to Quilon are documented here.
   `quilon run`, JIT-compiled — whether the program called one or none. Across the
   examples that was more than half of every function emitted (533 down to 323).
   `quilon run` is now 9–14% faster on programs that import the core library
-  (`examples/hello_world.ql` 11.3 ms → 10.0 ms), and the benchmark's
+  (`examples/hello_world.qn` 11.3 ms → 10.0 ms), and the benchmark's
   library-importing one-liner drops from 10.8 ms to 9.6 ms; emitting the code for
   such a program takes a tenth of the time it did (the `corelib` corpus's codegen
   phase, 1.1 ms → 0.1 ms). Nothing changes for a program with no unused code: the
@@ -275,7 +286,7 @@ All notable changes to Quilon are documented here.
   the definition above this call`). A definition is still in scope for its own body, so
   self-recursion is unaffected; mutual recursion between top-level functions is not
   expressible (it never worked — it only appeared to type-check). See
-  `examples/overload_dispatch.ql` and docs/LANGUAGE.md's "Names resolve top to bottom".
+  `examples/overload_dispatch.qn` and docs/LANGUAGE.md's "Names resolve top to bottom".
 
 ### Fixed
 
@@ -292,8 +303,8 @@ All notable changes to Quilon are documented here.
   written, naming the supported forms and the fix, so `check`, `run` and `build` agree.
   A `Num`/`Bool`/`$` literal, a function value, and a mutable (`:=`) global all still
   work, and everything is unrestricted inside a function. Computing a global's value at
-  startup remains unimplemented — see `examples/globals.ql` and
-  `examples/global_computed.ql`, and docs/LANGUAGE.md's "A top-level binding must be a
+  startup remains unimplemented — see `examples/globals.qn` and
+  `examples/global_computed.qn`, and docs/LANGUAGE.md's "A top-level binding must be a
   constant or a function".
 
 ## 0.9.1 "Towel" — 2026-08-14 — "Stable basics, hardened"

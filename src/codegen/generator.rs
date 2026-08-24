@@ -206,7 +206,7 @@ pub struct CodeGenerator<'ctx> {
     // DWARF line-number debug info, installed only for a `--debug` native build (via
     // [`enable_debug`]). When present, each emitted function gets a `DISubprogram` and every
     // expression sets a source location before lowering, so `llvm-dwarfdump` and debuggers
-    // can map machine code back to `.ql` lines. `None` on every other path (JIT, `compile`,
+    // can map machine code back to `.qn` lines. `None` on every other path (JIT, `compile`,
     // IR-only tests), which keeps the non-debug output unchanged.
     debug: Option<DebugInfo<'ctx>>,
     // The `DISubprogram` scope of the function currently being emitted, as a `DIScope`.
@@ -214,7 +214,7 @@ pub struct CodeGenerator<'ctx> {
     // location is always attributed to the right function. `None` unless `debug` is set.
     di_scope: Option<DIScope<'ctx>>,
     // Number of leading top-level items that came from imported modules. Their byte spans
-    // are relative to their own module source, which the single `.ql` line index cannot map,
+    // are relative to their own module source, which the single `.qn` line index cannot map,
     // so debug info is suppressed while emitting them (see `di_suppressed`).
     di_imported_boundary: usize,
     // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`

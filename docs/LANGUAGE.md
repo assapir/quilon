@@ -2,7 +2,7 @@
 
 **Version:** 0.9.1 (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.ql` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.qn` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
 ---
 
@@ -128,7 +128,7 @@ negative or fractional `repeat` count. Literal cases are compile errors (`"a".re
 diagnostic](#error-messages) at run time, exit `101`. Use `replaceAll` for "replace
 everything"; `replace(count)` means exactly that many.
 
-(See `examples/text.ql` and `examples/text_methods.ql`.)
+(See `examples/text.qn` and `examples/text_methods.qn`.)
 
 #### String interpolation and the render operator (`` ` ``)
 
@@ -175,7 +175,7 @@ back to the default rather than recursing forever.)
 | sum type | the **variant/constructor name** (unless overridden) | `Green`, `Ok` |
 | array | length **≤ 10** → full `[a, b, c]` (each element via its own `` ` ``); length **> 10** → truncated `[first <- last]` | `[1, 2, 3]`, `[1 <- 100]` |
 
-There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.ql`.)
+There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.qn`.)
 
 ### `Bool`
 `true` / `false` (the literals are lowercase; note that a `Bool` *renders* as capitalized
@@ -197,7 +197,7 @@ nums  = [1, 2, 3, 4, 5]
 count = nums.size      ~ → 5
 first = nums[0]        ~ → 1
 ```
-Arrays are `{ ptr, size }` internally. (See `examples/arrays.ql`.)
+Arrays are `{ ptr, size }` internally. (See `examples/arrays.qn`.)
 
 Indexing is **checked** (fail loud, never silent): an out-of-bounds, negative, or NaN index
 is a runtime error naming the read that failed ([shape](#error-messages)), exit status 1 —
@@ -205,7 +205,7 @@ never a raw memory read. A **fractional** in-range index truncates toward zero (
 reads `nums[1]`); with one unified `Num`, index arithmetic like `size / 2` legitimately
 produces fractions. Use [`at(n)`](#array-methods) for the non-aborting `Ok`/`NotOk` form when
 an index might be out of range — see the computed-index case at the end of
-`examples/array_methods.ql`.
+`examples/array_methods.qn`.
 
 #### Array methods
 
@@ -245,7 +245,7 @@ third = nums.at(2) ?             ~ Ok(3)
 These methods are **reserved on arrays**: a user can define a same-named function/overload
 (e.g. a `map` on a `Num`), but on an *array receiver* the built-in always wins — it is
 resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
-(e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.ql`.)
+(e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.qn`.)
 
 #### Array concatenation — `+`
 
@@ -271,14 +271,14 @@ element `T`), so even nested arrays disambiguate cleanly: `[][]Num + []Num` is a
 **append** (the `[]Num` is a single new row → `[][]Num`), while `[][]Num + [][]Num` is a
 **concat**. `[]T + []T` is the same as the spread `[<-a, <-b]` and shares its element-copy
 lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays alike.
-(See `examples/array_concat.ql`.)
+(See `examples/array_concat.qn`.)
 
 ### Maps
 
 A `Map` is a **built-in parametric collection** — like `[]T`, not a user-defined generic —
 written with a **pipe fence** `[|K => V|]` (`=>` reads "maps to"). It is immutable, keyed by
 `Num`/`Text`/`Bool`, and read through `.get` (which returns a `Result` — there is no bracket
-indexing on a map). Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.ql`).
+indexing on a map). Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
 
 ### Sets
 
@@ -286,7 +286,7 @@ A `Set` is a **built-in parametric collection** — like `[]T`, not a user-defin
 written with the same **pipe fence** `[|T|]` (which keeps a set literal distinct from an array).
 It is immutable, holds unique `Num`/`Text`/`Bool` elements, and supports set algebra
 (`+` union, `-` difference, `+-`/`-+` intersection). Full reference:
-[`docs/collections/set.md`](collections/set.md) (and `examples/sets.ql`).
+[`docs/collections/set.md`](collections/set.md) (and `examples/sets.qn`).
 
 ### Records
 Anonymous structs with named fields:
@@ -295,8 +295,8 @@ user = { name = "Alice", age = 30 }
 n    = user.name
 ```
 Fields may hold any type — `Text`, arrays, nested arrays, etc. — and read back at
-their real type (no numeric-only restriction). (See `examples/records.ql` and
-`examples/composites.ql`, which exercises a `Text` record field, an array of `Text`,
+their real type (no numeric-only restriction). (See `examples/records.qn` and
+`examples/composites.qn`, which exercises a `Text` record field, an array of `Text`,
 and a nested array together.)
 
 ### Named record types with methods
@@ -313,7 +313,7 @@ u = User { name = "Alice", age = 30 }
 g = u.greet()          ~ "Hello, Alice"
 a = u.olderBy(5)       ~ 35
 ```
-(See `examples/methods.ql`.)
+(See `examples/methods.qn`.)
 
 A method is a **setter** (mutating) iff its body writes `it.field := …` (or calls
 another setter on `it`); there is no marker — the visible `:=` *is* the signal.
@@ -334,7 +334,7 @@ Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
   where `Body` is a record. The record must be declared **above** the sum (no hoisting),
   and a match arm binds it at its full type, so `Post(b) => b.payload` reads its fields
   and calls its methods. (Nesting another **sum** as a payload is not yet supported; see
-  `examples/nested_composites.ql`.)
+  `examples/nested_composites.qn`.)
 - At a given payload position, every variant with a concrete (non-`$`) field there must
   agree on its type — including the named-record case; `$` may coexist with a concrete
   type at the same position (`Done($) / Pending(Num)` is fine, `A(Num) / B(Text)` and
@@ -350,7 +350,7 @@ area = (s :: Shape) -> Num => s ?
   | Rect(w, h) => w * h          ~ binds both payload fields
 ```
 A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
-(or a lowercase binding) wildcard. (See `examples/sum_types.ql`.)
+(or a lowercase binding) wildcard. (See `examples/sum_types.qn`.)
 
 #### `Result` is a normal sum type
 `Result` is just a predefined sum type — there is no special case:
@@ -370,14 +370,14 @@ Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 fallback). This holds across a function boundary too: a function returning `Ok("x")`
 (whether its return type is inferred or annotated `-> Result`) hands the caller a usable
 `Text` payload, and a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the
-`getEnv`/`getOpt` shape — carries **both** arms' payloads. (See `examples/result.ql` and
-`examples/result_payload.ql`.)
+`getEnv`/`getOpt` shape — carries **both** arms' payloads. (See `examples/result.qn` and
+`examples/result_payload.qn`.)
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
 `(r :: Result)` parameter or return. This is what lets `assertOk` / `assertNotOk`
 ([`core.test`](#coretest--assertions)) accept a `Result` of any shape, including the
-composite-payload results of `getEnv` / `getOpt` (see `examples/cli.ql`). Extracting a
+composite-payload results of `getEnv` / `getOpt` (see `examples/cli.qn`). Extracting a
 payload still needs its concrete type in scope at the match site (there are no generics),
 but *matching by variant* (`Ok` vs `NotOk`) works on any `Result` anywhere.
 
@@ -433,7 +433,7 @@ origin = { x = 0 }      ~ error: so is a record
 
 A rejected binding reports what it is and how to fix it — move the work into the function
 that uses it. Anything computed is perfectly ordinary *inside* a function; the restriction
-is only about globals. (See `examples/globals.ql` and `examples/global_computed.ql`.)
+is only about globals. (See `examples/globals.qn` and `examples/global_computed.qn`.)
 
 ---
 
@@ -471,7 +471,7 @@ c.bump(5)                     ~ error: cannot call mutating method `bump` on imm
 ```
 
 Getter methods carry no `it.field := …`, so they are callable on `=` instances too. (See
-`examples/mutation.ql`.)
+`examples/mutation.qn`.)
 
 ---
 
@@ -494,7 +494,7 @@ Functions may recurse; a recursive function needs a `-> Type` annotation:
 ```quilon
 factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
-(See `examples/factorial.ql`, `examples/fibonacci.ql`.)
+(See `examples/factorial.qn`, `examples/fibonacci.qn`.)
 
 ### Names resolve top to bottom
 
@@ -532,7 +532,7 @@ arms, `if`/ternary branches, the tail of a `< >` block, and a `|>` pipeline. A s
 **not** in tail position (e.g. `n * fact(n - 1)`, whose result is multiplied first) stays
 ordinary recursion, as does a tail call to a *different* function (general/mutual tail
 calls are a later follow-up). This is codegen-only — there is no surface syntax for it.
-(See `examples/tail_recursion.ql`, which recurses 1,000,000 deep.)
+(See `examples/tail_recursion.qn`, which recurses 1,000,000 deep.)
 
 ### Closures — capture by `=` (value) vs `:=` (reference)
 
@@ -569,7 +569,7 @@ every level), and a closure value may itself be captured by another closure and 
 
 Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing a
 polymorphic value, generic closures, and passing or returning a closure across frames are
-deferred — see [Known limitations](#known-limitations). (See `examples/closures.ql`.)
+deferred — see [Known limitations](#known-limitations). (See `examples/closures.qn`.)
 
 ---
 
@@ -645,7 +645,7 @@ a compile error. **Arithmetic** operators (`+ - * / %`) are unconstrained: an ov
 returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `Vec * Vec
 -> Num` dot product are all legal).
 
-(See `examples/overloading.ql`, and `examples/overload_dispatch.ql` for dispatch on
+(See `examples/overloading.qn`, and `examples/overload_dispatch.qn` for dispatch on
 argument types that come out of an array element, a match, a call, or a lambda.)
 
 ---
@@ -691,7 +691,7 @@ argument types that come out of an array element, a match, a call, or a lambda.)
 > x = f
 > (10)                                  ~ NOT the call `f(10)`: `(10)` is a new statement
 > ```
-> (See `examples/statements.ql`.)
+> (See `examples/statements.qn`.)
 - **Ternary:** `cond ? then : else`.
 - **Blocks:** `< stmt… last >` are expressions that evaluate to their last expression — usable anywhere a value is, not just as a function body:
 ```quilon
@@ -709,7 +709,7 @@ x |> f          ~ ≡ f(x)
 x |> f(a)       ~ ≡ f(x, a)
 10 |> double |> addFive   ~ ≡ addFive(double(10))
 ```
-(See `examples/pipeline.ql`.)
+(See `examples/pipeline.qn`.)
 
 ### Iteration — array methods + recursion
 Quilon has **no `for`/`while` loop**. A collection is iterated with the built-in
@@ -726,7 +726,7 @@ sum = nums
 ```
 When iteration doesn't fit a method, use **recursion**: a self-tail-call is
 [guaranteed to be lowered to a loop](#tail-self-recursion-is-optimized-to-a-loop-guaranteed),
-so even deep recursion runs in constant stack. (See `examples/iteration.ql`.)
+so even deep recursion runs in constant stack. (See `examples/iteration.qn`.)
 
 ### Ranges — infix `lo <- hi`
 The infix `<-` operator builds an **inclusive** `[]Num`:
@@ -744,7 +744,7 @@ first = r[0]    ~ 2
 r.each(x => print(x))   ~ a range iterates with `.each` like any array
 ```
 Both ends are full `Num` expressions (they may be dynamic, not just literals); the
-direction (ascending vs descending) is decided at runtime. (See `examples/ranges.ql`.)
+direction (ascending vs descending) is decided at runtime. (See `examples/ranges.qn`.)
 
 ### Spread in literals
 The **prefix** `<-` splices a source's contents into an array or record literal:
@@ -787,7 +787,7 @@ spread, following a complete expression is the range. So:
 - Inside a spread the source is a full expression, so `[<-1 <- 4]` spreads the range
   `1 <- 4` — i.e. `[1, 2, 3, 4]`.
 
-(See `examples/spread.ql`.)
+(See `examples/spread.qn`.)
 
 ---
 
@@ -801,7 +801,7 @@ result = value ?
   | NotOk(e) => 0
   | _        => "other"      ~ wildcard
 ```
-The type checker verifies matches are exhaustive (use `_` to cover the rest). (See `examples/pattern_match.ql`.)
+The type checker verifies matches are exhaustive (use `_` to cover the rest). (See `examples/pattern_match.qn`.)
 
 ---
 
@@ -809,7 +809,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 ```quilon
 << core.io                 ~ import the built-in IO module
-<< "lib/math.ql"           ~ import a user module by path (/ or \)
+<< "lib/math.qn"           ~ import a user module by path (/ or \)
 
 >> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
@@ -817,7 +817,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
-(See `examples/use_module.ql`, which imports `examples/mathlib.ql`.)
+(See `examples/use_module.qn`, which imports `examples/mathlib.qn`.)
 
 ---
 
@@ -848,7 +848,7 @@ call that leaves that argument off has it **filled in by the compiler**:
 whereAmI = (site :: Site) -> Text => "`site.file`:`site.line`:`site.column`"
 
 ^ = () -> $ => <
-  print(whereAmI())        ~ prints e.g. demo.ql:4:9 — the location of THIS call
+  print(whereAmI())        ~ prints e.g. demo.qn:4:9 — the location of THIS call
 >
 ```
 
@@ -893,7 +893,7 @@ call site is a read-only constant whose address the call passes — no allocatio
 no debug info, and JIT and native builds report identically. Assert as often as you like, in
 the hottest loop you have. (A site does cost image space: the record plus two relocations for
 its `Text` fields.) [`core.test`'s assertions](corelib/test.md) are built on this; nothing
-about it is specific to them. See `examples/call_site.ql`.
+about it is specific to them. See `examples/call_site.qn`.
 
 ---
 
@@ -919,8 +919,8 @@ an element bound out of one is a full `Text`: the whole `Text` API, and
 [overload](#overloading) dispatch by its concrete type.
 `quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
 program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
-the `.ql` path becomes `argv[0]`), so `quilon run f.ql a b c` gives the same `args.size`
-and trailing arguments as a native `./f a b c` — `argv[0]` is the `.ql` path rather than
+the `.qn` path becomes `argv[0]`), so `quilon run f.qn a b c` gives the same `args.size`
+and trailing arguments as a native `./f a b c` — `argv[0]` is the `.qn` path rather than
 the compiled binary's path, but everything the program indexes past it matches. (The
 legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
 compiles for backward compatibility but is superseded by `args :: []Text`.) Any other
@@ -929,7 +929,7 @@ compile-time error, reported by `check` as well as `run`/`build`.
 
 **Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
 
-(See `examples/hello_world.ql` and `examples/args.ql`.)
+(See `examples/hello_world.qn` and `examples/args.qn`.)
 
 ---
 
@@ -991,7 +991,7 @@ programs are byte-identical (zero overhead).
 waits right there on the current fiber, then execution continues in program order. It carries
 no value, so nothing defers or forces. **`now()`** reads a **monotonic** clock in seconds;
 only *differences* between readings are meaningful. It is a plain (non-`@`) primitive —
-reading the clock is instant and never parks. (See `examples/sleep.ql`.)
+reading the clock is instant and never parks. (See `examples/sleep.qn`.)
 
 ```quilon
 << core.time
@@ -1006,7 +1006,7 @@ reading the clock is instant and never parks. (See `examples/sleep.ql`.)
 `core.io` — **`@readStdin() -> Text`** reads one line from stdin. Being value-returning makes
 it the deferred one: it launches the read, returns immediately, and is forced only where a
 strict operation reads its bytes. At end-of-input it yields `""`. (See
-`examples/readStdin.ql`.)
+`examples/readStdin.qn`.)
 
 ```quilon
 << core.io
@@ -1017,7 +1017,7 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
   assertEq(line, "")      ~ the comparison FORCES it; "" at end-of-input (no piped input)
   0
 >
-~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.ql
+~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.qn
 ```
 
 Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
@@ -1051,28 +1051,32 @@ loadDashboard = (user :: Text) -> Text => <
 
 ## Compiling & running
 
+Source files are **`.qn`**. The compiler also accepts the older `.ql` — with a deprecation
+warning on stderr, for this release only; `.ql` stops working at 1.0. (It is CodeQL's
+extension, which is why it is going.)
+
 ```bash
-quilon check   program.ql   # front-end only (lex + parse + resolve imports + typecheck)
-quilon run     program.ql   # front-end, then JIT-execute in-process (exit code = ^'s result)
-quilon build   program.ql   # produce a native executable
-quilon compile program.ql   # emit LLVM IR → program.ll (for inspection)
+quilon check   program.qn   # front-end only (lex + parse + resolve imports + typecheck)
+quilon run     program.qn   # front-end, then JIT-execute in-process (exit code = ^'s result)
+quilon build   program.qn   # produce a native executable
+quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 ```
 
 `quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt` and the GC `libgc`) into a native executable:
 ```bash
-quilon build program.ql -o program       # default linker: clang
-quilon build program.ql --linker gcc      # gcc also supported (CI checks both)
+quilon build program.qn -o program       # default linker: clang
+quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
 
 Add `--debug` (or `-g`) to emit **DWARF debug info** for source-level debugging — a
 debugger (`gdb`/`lldb`) can then set breakpoints, step, show backtraces in terms of
-`.ql` lines, and **inspect local variables with their Quilon types**:
+`.qn` lines, and **inspect local variables with their Quilon types**:
 ```bash
-quilon build program.ql --debug -o program
-llvm-dwarfdump --debug-line program        # lists the .ql file + its line table
+quilon build program.qn --debug -o program
+llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
-gdb ./program                              # break/step by .ql line, print locals
+gdb ./program                              # break/step by .qn line, print locals
 ```
 Debug info is opt-in: without `--debug` the binary carries none. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types** — every `=`/`:=` local and
@@ -1084,7 +1088,7 @@ program's own source is attributed — functions from imported modules (`<<`) ca
 info yet, since emission builds one `DIFile` from the root source. Multi-file line info is a
 follow-up.
 
-(During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.ql`.)
+(During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)
 
 ### Error messages
 
@@ -1101,7 +1105,7 @@ add = (a :: Num) -> Num => a + true
 reports (since `+` is an [overload set](#overloading), a `Num + Bool` matches no member):
 
 ```
-program.ql:1:28:
+program.qn:1:28:
 error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, Num), (Text, Text)
   |
 1 | add = (a :: Num) -> Num => a + true
@@ -1171,7 +1175,7 @@ pathological input.
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
-| Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.ql` | ✅ |
+| Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |

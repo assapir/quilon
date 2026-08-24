@@ -15,18 +15,18 @@ struct Cli {
 enum Commands {
     /// Run a Quilon program
     Run {
-        /// Path to the .ql file
+        /// Path to the .qn file
         file: PathBuf,
         /// Arguments passed through to the program itself (available via `^`'s
         /// `args`). Everything after the file path is forwarded verbatim, so
-        /// `quilon run f.ql --flag x` gives the program `[f.ql, --flag, x]` and
+        /// `quilon run f.qn --flag x` gives the program `[f.qn, --flag, x]` and
         /// behaves like `./f --flag x`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
     /// Compile a Quilon program
     Compile {
-        /// Path to the .ql file
+        /// Path to the .qn file
         file: PathBuf,
         /// Output file path
         #[arg(short, long)]
@@ -34,22 +34,22 @@ enum Commands {
     },
     /// Build a Quilon program into a native executable
     Build {
-        /// Path to the .ql file
+        /// Path to the .qn file
         file: PathBuf,
-        /// Output executable path (defaults to the source name without `.ql`)
+        /// Output executable path (defaults to the source name without `.qn`)
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Linker to drive the final link (clang is natural for LLVM objects)
         #[arg(long, default_value = "clang")]
         linker: String,
         /// Emit DWARF line-number debug info (source-level debugging: gdb/lldb line
-        /// stepping, backtraces referencing `.ql` lines). Builds are already unoptimized.
+        /// stepping, backtraces referencing `.qn` lines). Builds are already unoptimized.
         #[arg(short = 'g', long)]
         debug: bool,
     },
     /// Check a Quilon program for errors without running
     Check {
-        /// Path to the .ql file
+        /// Path to the .qn file
         file: PathBuf,
     },
 }
@@ -87,10 +87,10 @@ fn main() {
             require_entry_point(&checked.program);
 
             // Mirror the argv a native build receives: `argv[0]` is the program
-            // (here, the `.ql` file path as typed), followed by the user's
-            // trailing args. This keeps `quilon run f.ql a b c` and `./f a b c`
+            // (here, the `.qn` file path as typed), followed by the user's
+            // trailing args. This keeps `quilon run f.qn a b c` and `./f a b c`
             // in agreement on `^`'s `args` — same `args.size` and same trailing
-            // arguments (argv[0] is the `.ql` path rather than the binary path).
+            // arguments (argv[0] is the `.qn` path rather than the binary path).
             // Keeps the JIT from leaking the `quilon run` CLI prefix.
             let mut argv = Vec::with_capacity(args.len() + 1);
             argv.push(file.to_string_lossy().into_owned());
@@ -176,7 +176,7 @@ fn main() {
             let program = checked.program;
             require_entry_point(&program);
 
-            // Default the output to the source name without its `.ql` extension.
+            // Default the output to the source name without its `.qn` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
             let debug_source = debug_imported_items.map(|imported_items| build::DebugSource {

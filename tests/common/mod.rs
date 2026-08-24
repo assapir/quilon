@@ -75,20 +75,46 @@ pub fn assert_type_error(src: &str) {
 /// ran in-process — so any test asserting on a failure's output has to spawn. `tag` names
 /// the file, which matters because the location the program reports IS that path.
 pub fn run_program(tag: &str, src: &str) -> (i32, String, std::path::PathBuf) {
+    let run = run_program_named(
+        &format!("{tag}{}", quilon::source_extension::EXTENSION),
+        src,
+    );
+    (run.code, run.stderr, run.path)
+}
+
+/// What a spawned program did.
+pub struct Run {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    /// Where the source was written — the path the program reports itself under.
+    pub path: std::path::PathBuf,
+}
+
+/// Like [`run_program`], but the caller names the file (extension included) and gets the
+/// program's stdout as well. Writing `src` under a chosen name is what lets a test say
+/// something about the name itself — that a deprecated extension still runs, say.
+pub fn run_program_named(file_name: &str, src: &str) -> Run {
     let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("quilon_run_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join(format!("{tag}.ql"));
+    let file = dir.join(file_name);
     std::fs::write(&file, src).expect("write temp program");
+    run_file(&file)
+}
+
+/// `quilon run` an existing file, capturing what it produced.
+pub fn run_file(file: &Path) -> Run {
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.to_str().expect("a UTF-8 path")])
         .output()
         .expect("spawn quilon run");
-    (
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-        file,
-    )
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        path: file.to_path_buf(),
+    }
 }
 
 /// Build `src` into a native executable with `quilon build` and run it, returning
@@ -101,7 +127,7 @@ pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
     let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("quilon_build_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join(format!("{tag}.ql"));
+    let file = dir.join(format!("{tag}.qn"));
     std::fs::write(&file, src).expect("write temp program");
     let binary = dir.join(tag);
 
@@ -179,8 +205,8 @@ fn front_end(
 }
 
 /// The path an in-memory test program is reported under — what a failing assertion in a
-/// test source prints as its `file` (`test.ql:3:5: ...`).
-pub const TEST_FILE: &str = "test.ql";
+/// test source prints as its `file` (`test.qn:3:5: ...`).
+pub const TEST_FILE: &str = "test.qn";
 
 /// An empty source map, for a test that builds its program by hand and does not care where
 /// a call site resolves to. A call site then reports the documented "unknown" location

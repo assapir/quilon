@@ -88,7 +88,7 @@ fn test_function_with_parameters() {
 }
 
 /// `\e` is the ESC byte — the lead-in of an ANSI sequence, and the one control character
-/// a `.ql` source cannot otherwise write (a raw ESC in a file is invisible).
+/// a `.qn` source cannot otherwise write (a raw ESC in a file is invisible).
 #[test]
 fn test_escape_e_is_the_esc_byte() {
     let tokens = Lexer::tokenize(r#""\e[1;31mred\e[0m""#).unwrap();

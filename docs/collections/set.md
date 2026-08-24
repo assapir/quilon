@@ -1,6 +1,6 @@
 # `Set` — unordered unique collection
 
-A built-in, no-import type. See the [Language reference](../LANGUAGE.md#sets) and `examples/sets.ql`.
+A built-in, no-import type. See the [Language reference](../LANGUAGE.md#sets) and `examples/sets.qn`.
 
 A `Set` is written `[|T|]`. `Set` is a **built-in parametric collection** — like `[]T`,
 not a user-defined generic — written with the same **pipe fence** `[| … |]`; the fence is
@@ -44,4 +44,4 @@ Like the empty array `[]` (which is `[]Num`), an **empty** set literal defaults 
 element type and cannot yet be annotated to another type. User-defined element types (via a
 `%` hash hook) and element removal are deferred (not in the initial surface).
 
-(See `examples/sets.ql`.)
+(See `examples/sets.qn`.)

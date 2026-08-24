@@ -17,15 +17,19 @@ fn examples_dir() -> PathBuf {
 }
 
 /// Examples that are intentionally rejected by the compiler (negative examples).
-const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.ql", "global_computed.ql"];
+const EXPECT_COMPILE_ERROR: &[&str] = &["type_error.qn", "global_computed.qn"];
 
 fn ql_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
         .expect("examples/ should exist")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "ql"))
+        .filter(|p| p.extension().is_some_and(|x| x == "qn"))
         .collect();
     files.sort();
+    assert!(
+        !files.is_empty(),
+        "no Quilon sources found in examples/ — the gate would pass by iterating nothing"
+    );
     files
 }
 
@@ -36,7 +40,7 @@ fn defines_entry(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// The runnable examples: every `.ql` that defines `^` and is not a negative example. Every
+/// The runnable examples: every `.qn` that defines `^` and is not a negative example. Every
 /// one of them must RUN and exit 0 — an example that cannot run is not an example. A new one
 /// is picked up automatically, with no per-file registration.
 fn runnable_examples() -> Vec<PathBuf> {
@@ -49,7 +53,7 @@ fn runnable_examples() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Every `.ql` in examples/ must either compile, or (if a known negative) fail to.
+/// Every `.qn` in examples/ must either compile, or (if a known negative) fail to.
 /// This is the gate: a new example is covered automatically.
 #[test]
 fn all_examples_compile() {

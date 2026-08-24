@@ -1,6 +1,6 @@
 # `core.io` — I/O
 
-Import with `<< core.io`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/io.ql`.
+Import with `<< core.io`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/io.qn`.
 
 | Function | Effect |
 |----------|--------|
@@ -22,4 +22,4 @@ with another signature adds a member rather than shadowing the built-in.
   0
 >
 ```
-There is no `println` — `print` owns the newline; `write` is the raw form. (See `examples/io.ql`.)
+There is no `println` — `print` owns the newline; `write` is the raw form. (See `examples/io.qn`.)

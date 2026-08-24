@@ -104,7 +104,7 @@ fn test_core_test_module_resolves_and_type_checks() {
 #[test]
 fn test_file_path_import_exported_item_usable() {
     let source = r#"
-        << "mathlib.ql"
+        << "mathlib.qn"
         ^ = () -> Num => add(2, 3)
     "#;
     let result = check_with_base(source, &fixtures_dir());
@@ -113,9 +113,9 @@ fn test_file_path_import_exported_item_usable() {
 
 #[test]
 fn test_non_exported_name_is_not_visible() {
-    // `secret` exists in mathlib.ql but is not exported -> must NOT be visible.
+    // `secret` exists in mathlib.qn but is not exported -> must NOT be visible.
     let source = r#"
-        << "mathlib.ql"
+        << "mathlib.qn"
         ^ = () -> Num => secret(3)
     "#;
     let result = check_with_base(source, &fixtures_dir());
@@ -143,7 +143,7 @@ fn test_unknown_builtin_module_errors() {
 #[test]
 fn test_missing_file_module_errors() {
     let source = r#"
-        << "does_not_exist.ql"
+        << "does_not_exist.qn"
         ^ = () -> Num => 0
     "#;
     let result = check_with_base(source, &fixtures_dir());
@@ -170,8 +170,8 @@ fn test_each_module_gets_its_own_file_identity() {
     // distinct, non-root id. That id is what makes two modules' identical byte
     // ranges distinguishable downstream.
     let source = r#"
-        << "mathlib.ql"
-        << "span_twin.ql"
+        << "mathlib.qn"
+        << "span_twin.qn"
         ^ = () -> Num => add(2, 3)
     "#;
     let tokens = Lexer::tokenize(source).unwrap();

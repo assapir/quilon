@@ -7,14 +7,14 @@
 use std::io::Write;
 use std::process::Command;
 
-/// Write `source` to a temp `.ql` file, run `quilon check` on it, and return
+/// Write `source` to a temp `.qn` file, run `quilon check` on it, and return
 /// `(exit_success, stderr)`. The file lives under the cargo target tmp dir so
 /// parallel test runs don't collide.
 fn check(name: &str, source: &str) -> (bool, String) {
     let mut path = std::env::temp_dir();
-    path.push(format!("quilon_diag_{}_{}.ql", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .ql");
-    f.write_all(source.as_bytes()).expect("write temp .ql");
+    path.push(format!("quilon_diag_{}_{}.qn", std::process::id(), name));
+    let mut f = std::fs::File::create(&path).expect("create temp .qn");
+    f.write_all(source.as_bytes()).expect("write temp .qn");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")
@@ -110,14 +110,14 @@ fn position_line_followed_by_error(stderr: &str) -> bool {
 fn a_type_error_in_an_imported_module_names_that_module() {
     let dir = std::env::temp_dir().join(format!("quilon_diag_import_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let module = dir.join("broken_lib.ql");
+    let module = dir.join("broken_lib.qn");
     std::fs::write(
         &module,
         "~ a module with a type error\n>> broken = (n :: Num) -> Text => n\n",
     )
     .expect("write module");
-    let main = dir.join("importer.ql");
-    std::fs::write(&main, "<< \"broken_lib.ql\"\n^ = () -> Num => 0\n").expect("write main");
+    let main = dir.join("importer.qn");
+    std::fs::write(&main, "<< \"broken_lib.qn\"\n^ = () -> Num => 0\n").expect("write main");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")

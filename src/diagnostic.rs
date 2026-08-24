@@ -5,7 +5,7 @@
 //! plus the original source text into a human- and tooling-friendly report:
 //!
 //! ```text
-//! path/to/file.ql:3:9:
+//! path/to/file.qn:3:9:
 //! error: Type mismatch: expected Num, got Bool
 //!   |
 //! 3 |     x = 1 + true
@@ -102,9 +102,9 @@ mod tests {
     fn render_points_at_the_span() {
         let src = "add = 1 + true";
         // Underline "true" (bytes 10..14).
-        let out = render("f.ql", src, &Span::in_root(10, 14), Severity::Error, "bad");
+        let out = render("f.qn", src, &Span::in_root(10, 14), Severity::Error, "bad");
         let expected = "\
-f.ql:1:11:
+f.qn:1:11:
 error: bad
   |
 1 | add = 1 + true
@@ -115,8 +115,8 @@ error: bad
     #[test]
     fn render_uses_the_spans_own_line() {
         let src = "line one\nx = oops\nline three";
-        let out = render("f.ql", src, &Span::in_root(13, 17), Severity::Error, "boom");
-        assert!(out.contains("f.ql:2:5:\nerror: boom"), "{out}");
+        let out = render("f.qn", src, &Span::in_root(13, 17), Severity::Error, "boom");
+        assert!(out.contains("f.qn:2:5:\nerror: boom"), "{out}");
         assert!(out.contains("2 | x = oops"), "{out}");
         assert!(out.contains("    ^^^^"), "{out}");
     }
@@ -125,18 +125,18 @@ error: bad
     fn render_clamps_multiline_span_to_first_line() {
         // A span that runs off the end of its line only underlines line one.
         let src = "abc\ndef";
-        let out = render("f.ql", src, &Span::in_root(0, 7), Severity::Error, "x");
+        let out = render("f.qn", src, &Span::in_root(0, 7), Severity::Error, "x");
         // 3 carets under "abc", not 7.
         assert!(out.ends_with("| ^^^"), "{out}");
     }
 
     #[test]
     fn render_shortens_a_path_too_long_for_the_position_line() {
-        let path = format!("/{}/deep/module.ql", "d".repeat(80));
+        let path = format!("/{}/deep/module.qn", "d".repeat(80));
         let out = render(&path, "x = 1", &Span::in_root(0, 1), Severity::Error, "bad");
         let position = out.lines().next().unwrap_or_default();
         assert!(
-            position.starts_with('…') && position.ends_with("/deep/module.ql:1:1:"),
+            position.starts_with('…') && position.ends_with("/deep/module.qn:1:1:"),
             "a long path is shown from its end: {position}"
         );
     }

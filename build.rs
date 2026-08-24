@@ -2,7 +2,7 @@
 //!
 //! NOTE: this is the *cargo build script* (runs at `cargo build` time). It is a
 //! different file from `src/build.rs`, which implements the `quilon build`
-//! subcommand (native AOT of a `.ql` program). Don't confuse the two.
+//! subcommand (native AOT of a `.qn` program). Don't confuse the two.
 //!
 //! Two jobs:
 //!

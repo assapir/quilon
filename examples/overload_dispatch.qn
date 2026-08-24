@@ -1,7 +1,7 @@
 ~ Overload dispatch on argument types the compiler has to recover, not just read off
 ~ a literal. Every call below picks its member from the STATIC type of an argument
 ~ that is the result of something: an array element, a match, a call, a concatenation.
-~ Run: cargo run -- run examples/overload_dispatch.ql   (exits 0; assertions abort)
+~ Run: cargo run -- run examples/overload_dispatch.qn   (exits 0; assertions abort)
 
 << core.test
 

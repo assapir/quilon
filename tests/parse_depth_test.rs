@@ -10,14 +10,14 @@
 use std::io::Write;
 use std::process::{Command, Output};
 
-/// Write `source` to a temp `.ql` file and run `quilon check` on it. The file
+/// Write `source` to a temp `.qn` file and run `quilon check` on it. The file
 /// lives under the system temp dir, namespaced by pid + `name` so parallel test
 /// runs don't collide.
 fn check(name: &str, source: &str) -> Output {
     let mut path = std::env::temp_dir();
-    path.push(format!("quilon_depth_{}_{}.ql", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .ql");
-    f.write_all(source.as_bytes()).expect("write temp .ql");
+    path.push(format!("quilon_depth_{}_{}.qn", std::process::id(), name));
+    let mut f = std::fs::File::create(&path).expect("create temp .qn");
+    f.write_all(source.as_bytes()).expect("write temp .qn");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")

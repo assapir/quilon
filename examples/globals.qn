@@ -2,7 +2,7 @@
 ~ global's initializer has to be a constant already: nothing runs before `^` in which to
 ~ compute one. So the value may be a `Num`, `Bool` or `$` literal, or a function — and a
 ~ computed one (a call, an operator, an array, a record, `Text`) is a compile error that
-~ says so and names the fix. See `examples/global_computed.ql` for the rejected form.
+~ says so and names the fix. See `examples/global_computed.qn` for the rejected form.
 ~ Every assertion below holds, so the program exits 0.
 << core.test
 

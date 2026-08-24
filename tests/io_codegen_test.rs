@@ -111,7 +111,7 @@ fn main_wrapper_initializes_gc() {
 fn color_enabled_lowers_to_the_color_intrinsic() {
     // `__color_enabled(fd)` is an INTERNAL compiler-lowered primitive (like `__exit`, and
     // exported by no module): it becomes a `__color_enabled` call, so `core.test` does not
-    // have to guess at terminal detection in `.ql`.
+    // have to guess at terminal detection in `.qn`.
     let ir = gen_ir("^ = () -> Num => __color_enabled(2) ? 1 : 0");
     assert!(
         ir.contains("declare i64 @__color_enabled(i64)"),

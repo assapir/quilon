@@ -27,13 +27,13 @@ impl<'a> Parser<'a> {
         Ok(Program { imports, items })
     }
 
-    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.ql"` (file path).
+    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).
     pub(super) fn parse_import(&mut self) -> Result<Import, ParseError> {
         let start = self.current_span();
         self.expect(&TokenKind::Import)?;
 
         let path = if let TokenKind::String(chunks) = self.peek().kind.clone() {
-            // File-path import: << "some/path.ql". A path is a plain literal — an
+            // File-path import: << "some/path.qn". A path is a plain literal — an
             // interpolation hole here is meaningless, so reject it clearly.
             let span = self.peek().span.clone();
             self.advance();

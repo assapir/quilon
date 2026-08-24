@@ -7,13 +7,13 @@
 use std::io::Write;
 use std::process::Command;
 
-/// Write `source` to a temp `.ql` file, `quilon run` it, and return
+/// Write `source` to a temp `.qn` file, `quilon run` it, and return
 /// `(exit_code, stderr)`.
 fn run(name: &str, source: &str) -> (i32, String) {
     let mut path = std::env::temp_dir();
-    path.push(format!("quilon_idx_{}_{}.ql", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .ql");
-    f.write_all(source.as_bytes()).expect("write temp .ql");
+    path.push(format!("quilon_idx_{}_{}.qn", std::process::id(), name));
+    let mut f = std::fs::File::create(&path).expect("create temp .qn");
+    f.write_all(source.as_bytes()).expect("write temp .qn");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("run")

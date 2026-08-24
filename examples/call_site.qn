@@ -4,7 +4,7 @@
 ~ that argument off. Forwarding a received `site` on reports the ORIGINAL caller rather
 ~ than the hop, which is how `core.test`'s assertions blame your `assertEq` call.
 ~
-~ Run: cargo run -- run examples/call_site.ql    ~ exits 0 — it checks itself
+~ Run: cargo run -- run examples/call_site.qn    ~ exits 0 — it checks itself
 << core.test
 
 ~ The line the call to this function is on.
@@ -44,7 +44,7 @@ assertEven = (n :: Num, site :: Site) -> $ =>
   assertEq(callerWidth(), "callerWidth()".length)
 
   ~ The file is this example, and the source line is the one the call is written on.
-  assert(callerFile().contains("call_site.ql"))
+  assert(callerFile().contains("call_site.qn"))
   assert(callerSource().contains("callerSource()"))
 
   ~ A custom assertion holds without a peep, and would report right here if it failed.

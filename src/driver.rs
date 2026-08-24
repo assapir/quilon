@@ -92,6 +92,7 @@ pub struct Checked {
 /// type-check the program at `file`.
 pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     let path = file.display().to_string();
+    crate::source_extension::warn_if_legacy(&path);
 
     let source = std::fs::read_to_string(file)
         .map_err(|e| FrontEndError::plain(format!("error reading {}: {}", path, e)))?;
@@ -102,7 +103,7 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     let mut program = parser::parse(&tokens)
         .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
 
-    // Checking a corelib file directly (`quilon check corelib/io.ql`) is legitimate, and
+    // Checking a corelib file directly (`quilon check corelib/io.qn`) is legitimate, and
     // its declarations are the corelib's own wherever they are read from — including the
     // inert placeholders for compiler-provided names, which are ignored on that basis.
     if modules::is_corelib_source(&source) {
@@ -118,7 +119,7 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
     // program's own source with a source-located diagnostic (a bare parse error would be
     // cryptic). Checked before `link` so only the user's items are scanned, never a
     // built-in module's — and skipped entirely when the file IS a corelib source (checking
-    // `corelib/io.ql`/`corelib/time.ql` directly is legitimate; the corelib is the one place
+    // `corelib/io.qn`/`corelib/time.qn` directly is legitimate; the corelib is the one place
     // `@` primitives are declared).
     if !modules::is_corelib_source(&source)
         && let Some((span, name)) = first_at_declaration(&program)
@@ -195,11 +196,11 @@ mod tests {
             .join(name)
     }
 
-    /// Write `source` to a unique temp `.ql` file and return its path.
-    fn temp_ql(source: &str) -> PathBuf {
+    /// Write `source` to a unique temp `.qn` file and return its path.
+    fn temp_source(source: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         let unique = format!(
-            "quilon_at_decl_{}_{}.ql",
+            "quilon_at_decl_{}_{}.qn",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -207,7 +208,7 @@ mod tests {
                 .as_nanos()
         );
         path.push(unique);
-        std::fs::write(&path, source).expect("write temp .ql");
+        std::fs::write(&path, source).expect("write temp .qn");
         path
     }
 
@@ -216,18 +217,18 @@ mod tests {
         // Checking a corelib file DIRECTLY is legitimate — it is the one place `@` primitives
         // are declared, so the front-end must not reject its own `@sleep` / `@readStdin`.
         assert!(
-            front_end(&corelib_file("time.ql")).is_ok(),
+            front_end(&corelib_file("time.qn")).is_ok(),
             "corelib core.time should check clean"
         );
         assert!(
-            front_end(&corelib_file("io.ql")).is_ok(),
+            front_end(&corelib_file("io.qn")).is_ok(),
             "corelib core.io should check clean"
         );
     }
 
     #[test]
     fn user_source_may_not_declare_an_at_primitive() {
-        let path = temp_ql("@bad = () -> Num => 0\n^ = () -> Num => 0\n");
+        let path = temp_source("@bad = () -> Num => 0\n^ = () -> Num => 0\n");
         let result = front_end(&path);
         let _ = std::fs::remove_file(&path);
         match result {

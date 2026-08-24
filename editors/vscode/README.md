@@ -2,7 +2,8 @@
 
 Syntax highlighting and editor tasks for the [Quilon](../../README.md) programming
 language — a statically-typed, **symbol-based** language (no keywords) that
-compiles to native code via LLVM. Files use the `.ql` extension.
+compiles to native code via LLVM. Files use the `.qn` extension; `.ql`, which Quilon used
+before, stays registered through the transition so existing files keep highlighting.
 
 ## Features
 
@@ -30,7 +31,7 @@ compiles to native code via LLVM. Files use the `.ql` extension.
 - **Editor tasks & commands** to run the compiler on the active file.
 - **CodeLens** — **▶ Run** and **▶ Debug** actions appear above each `^`
   entry-point definition (see [Running the compiler](#running-the-compiler-from-the-editor)).
-- **Debugging** — set breakpoints in `.ql` source and step through a native
+- **Debugging** — set breakpoints in `.qn` source and step through a native
   build under [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
   (see [Debugging](#debugging)).
 
@@ -54,7 +55,7 @@ This extension is not published to the Marketplace. To try it from this checkout
 1. Open the `editors/vscode/` folder in VS Code.
 2. Press `F5` ("Run Extension"). The `compile` preLaunchTask builds the
    TypeScript, then a new "Extension Development Host" window opens.
-3. Open any `.ql` file (e.g. one from `examples/`) — highlighting is active.
+3. Open any `.qn` file (e.g. one from `examples/`) — highlighting is active.
 
 Use `pnpm run watch` for incremental recompiles while iterating.
 
@@ -104,14 +105,14 @@ To verify the **inline diagnostics** end-to-end manually:
 
 1. Set `quilon.command` to a working compiler (e.g. `"cargo run --"` from a
    checkout, or `"quilon"` if it's on your `PATH`).
-2. Launch the Extension Development Host (`F5`) and open a `.ql` file with a
-   type error (e.g. `examples/type_error.ql`) — a red squiggle should appear at
+2. Launch the Extension Development Host (`F5`) and open a `.qn` file with a
+   type error (e.g. `examples/type_error.qn`) — a red squiggle should appear at
    the reported span, with the message in the Problems panel.
 3. Fix the error and save — the squiggle clears.
-4. Point `quilon.command` at a non-existent binary and reopen a `.ql` file — a
+4. Point `quilon.command` at a non-existent binary and reopen a `.qn` file — a
    single warning notification appears (it does not repeat).
 
-To verify **`$` highlighting**, open `examples/unit.ql`: both the `-> $` return
+To verify **`$` highlighting**, open `examples/unit.qn`: both the `-> $` return
 type and the `$` value are colored like the built-in types (`Num`/`Text`/`Bool`).
 
 ## Running the compiler from the editor
@@ -141,7 +142,7 @@ actions:
 
 - **▶ Run** — invokes **Quilon: Run Current File** (`quilon run <file>`).
 - **▶ Debug** — builds the file with `quilon build --debug` and launches it
-  under CodeLLDB, so breakpoints set in the `.ql` source are hit (see
+  under CodeLLDB, so breakpoints set in the `.qn` source are hit (see
   [Debugging](#debugging)).
 
 Both act on the file containing the lens.
@@ -152,7 +153,7 @@ Both act on the file containing the lens.
 
 ## Diagnostics
 
-- **Inline diagnostics (squiggles).** When you open or save a `.ql` file, the
+- **Inline diagnostics (squiggles).** When you open or save a `.qn` file, the
   extension runs `<quilon.command> check <file>` in the background and surfaces
   any compile errors as editor squiggles in the Problems panel. The compiler
   reports errors as `path:line:col: error: <message>` with a caret underline;
@@ -170,11 +171,11 @@ declared as an extension dependency so VS Code installs it alongside Quilon.
 
 The `quilon` debug type does two things when a session starts:
 
-1. Builds the active `.ql` with `<quilon.command> build --debug <file> -o <tmp>`,
+1. Builds the active `.qn` with `<quilon.command> build --debug <file> -o <tmp>`,
    which emits DWARF line info into the native binary.
 2. Launches that binary under CodeLLDB (`type: "lldb"`).
 
-Because the binary's DWARF line table references the `.ql` source, breakpoints
+Because the binary's DWARF line table references the `.qn` source, breakpoints
 you set in the source and single-stepping both work. Start a session with the
 **▶ Debug** CodeLens above `^`, the **Quilon: Debug Current File** command, or a
 `launch.json` entry:

@@ -3,7 +3,7 @@
 //! Located fail-loud reports: the runtime half of the call-site machinery.
 //!
 //! A failing `core.test` assertion reports its call site as a framed diagnostic, composed
-//! in Quilon (`corelib/test.ql`'s `failAt`). The runtime's OWN fail-loud checks — an
+//! in Quilon (`corelib/test.qn`'s `failAt`). The runtime's OWN fail-loud checks — an
 //! invalid `arr[i]`, a `Text.replace`/`repeat` contract violation — have no Quilon frame to
 //! compose from: they abort from inside an intrinsic. This module renders the same shape for
 //! them, from the [`QlSite`] the code generator hands in at each check.
@@ -86,7 +86,7 @@ impl Style {
 /// caret run under the failing expression:
 ///
 /// ```text
-/// demo.ql:5:11:
+/// demo.qn:5:11:
 /// index 7 out of bounds for an array of size 3
 ///   |
 /// 5 |   value = items[7]
@@ -145,17 +145,17 @@ mod tests {
 
     #[test]
     fn a_short_path_is_left_alone() {
-        assert_eq!(shorten_path("examples/arrays.ql"), "examples/arrays.ql");
+        assert_eq!(shorten_path("examples/arrays.qn"), "examples/arrays.qn");
     }
 
     #[test]
     fn a_long_path_keeps_its_end_behind_an_ellipsis() {
-        let long = format!("/{}/deeply/nested/module.ql", "a".repeat(80));
+        let long = format!("/{}/deeply/nested/module.qn", "a".repeat(80));
         let short = shorten_path(&long);
         assert_eq!(short.chars().count(), MAX_PATH_WIDTH);
         assert!(short.starts_with('…'), "{short}");
         assert!(
-            short.ends_with("/deeply/nested/module.ql"),
+            short.ends_with("/deeply/nested/module.qn"),
             "the file name and its nearest directories must survive: {short}"
         );
     }
@@ -164,9 +164,9 @@ mod tests {
     fn shortening_counts_characters_not_bytes() {
         // Measured in characters, so the result is never cut mid-character and is never
         // shortened more than it has to be.
-        let path = format!("/{}/é.ql", "é".repeat(70));
+        let path = format!("/{}/é.qn", "é".repeat(70));
         let short = shorten_path(&path);
         assert_eq!(short.chars().count(), MAX_PATH_WIDTH);
-        assert!(short.ends_with("/é.ql"), "{short}");
+        assert!(short.ends_with("/é.qn"), "{short}");
     }
 }

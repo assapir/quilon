@@ -22,7 +22,7 @@ use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
 use std::rc::Rc;
 
-/// What DWARF line-number emission needs beyond the source map: the `.ql` file's path as
+/// What DWARF line-number emission needs beyond the source map: the `.qn` file's path as
 /// the user named it (recorded in the DWARF `DIFile`), and the import boundary.
 ///
 /// The file's TEXT is not here — it comes from the `SourceMap` the build already carries,
@@ -56,7 +56,7 @@ fn emit_object(
     generator.set_defer_info(defer);
     generator.set_source_map(Rc::clone(&sources));
     // Turn on DWARF line-number emission before codegen so every function/expression is
-    // attributed to its `.ql` source location.
+    // attributed to its `.qn` source location.
     if let Some(d) = debug {
         generator.enable_debug(d.file, sources.root_text(), d.imported_items);
     }

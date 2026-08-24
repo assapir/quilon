@@ -11,5 +11,6 @@ pub mod lexer;
 pub mod modules;
 pub mod parser;
 pub mod runtime;
+pub mod source_extension;
 pub mod source_map;
 pub mod typechecker;

@@ -66,7 +66,7 @@ fn main() {
     println!("{header}");
     println!("{rule}");
     for (stem, shape) in PROGRAMS {
-        let source = runtime_dir().join(format!("{stem}.ql"));
+        let source = runtime_dir().join(format!("{stem}.qn"));
         let binary = workdir.join(stem);
 
         let build = measure(Command::new(quilon).args([
@@ -123,7 +123,7 @@ fn main() {
 /// links straight against the build tree's archive and never consults a cache at all —
 /// which is exactly what made the first version of this table report two warm rows.
 fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
-    let tiny = workdir.join("tiny.ql");
+    let tiny = workdir.join("tiny.qn");
     std::fs::write(&tiny, "^ = () -> Num => 0\n").expect("writing the latency program");
     let out = workdir.join("tiny");
 
@@ -135,7 +135,7 @@ fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
     // is a different cost: importing pulls the module's whole source through the front end
     // and (before emission-side pruning) emitted every function it defined. The import-free
     // row above cannot see any of that, so it stays as the floor and this one sits beside it.
-    let tiny_import = workdir.join("tiny_import.ql");
+    let tiny_import = workdir.join("tiny_import.qn");
     std::fs::write(
         &tiny_import,
         "<< core.test\n^ = () -> $ => assertEq(1 + 1, 2)\n",
@@ -344,7 +344,7 @@ fn regenerate() {
         ("text_loop", text_loop(400_000)),
         ("gc_churn", gc_churn(3_000_000)),
     ] {
-        let path = dir.join(format!("{stem}.ql"));
+        let path = dir.join(format!("{stem}.qn"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
         println!("wrote {}", path.display());
     }

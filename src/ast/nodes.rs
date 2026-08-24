@@ -9,7 +9,7 @@ pub struct Program {
     pub items: Vec<Item>,
 }
 
-/// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.ql"` (file path).
+/// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 /// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
@@ -124,7 +124,7 @@ pub struct BuiltinOverload {
 /// picks by exact argument types like any other set.
 ///
 /// The `__`-prefixed entries are internal primitives (`core.test` builds its `assert` on
-/// them) that no module exports and no `.ql` declares. They are members on the same terms
+/// them) that no module exports and no `.qn` declares. They are members on the same terms
 /// all the same, so the one rule covers them too.
 ///
 /// This is the single table the type checker registers from, codegen mangles and dispatches

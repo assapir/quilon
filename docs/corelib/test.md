@@ -1,6 +1,6 @@
 # `core.test` — Assertions
 
-Import with `<< core.test`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/assert_demo.ql`.
+Import with `<< core.test`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/assert_demo.qn`.
 
 In-language assertions for **self-verifying programs and examples**. A holding assertion does
 nothing; a failing one reports to stderr and exits **101** (the Rust-panic convention), so a
@@ -38,4 +38,4 @@ rather than `^`.
 `assertEq`/`assertNotEq` show their values
 [rendered](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
 directly, and records, sum types, and arrays through their `` ` `` render operator. (See
-`examples/assert_demo.ql`.)
+`examples/assert_demo.qn`.)

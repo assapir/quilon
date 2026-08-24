@@ -31,7 +31,7 @@ fn build_native(quilon: &str, src: &str, out: &Path) -> bool {
     };
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let tmp_src = out.with_extension("ql");
+    let tmp_src = out.with_extension("qn");
     std::fs::write(&tmp_src, src).expect("write temp source");
     let build = Command::new(quilon)
         .args(["build", tmp_src.to_str().unwrap(), "--linker", linker])
@@ -73,12 +73,12 @@ fn native_args_size_reflects_passed_argv() {
     );
 
     let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(bin.with_extension("ql"));
+    let _ = std::fs::remove_file(bin.with_extension("qn"));
 }
 
 #[test]
 fn jit_and_aot_argv_agree() {
-    // `quilon run f.ql a b c` must give `^`'s `args` the same shape a native
+    // `quilon run f.qn a b c` must give `^`'s `args` the same shape a native
     // `./f a b c` gets — `[<file>, a, b, c]` — instead of leaking the `quilon run` CLI
     // prefix. Drive BOTH paths through the actual binary and assert they agree on
     // `args.size` for the same trailing user args, including a leading `--flag` (which
@@ -89,7 +89,7 @@ fn jit_and_aot_argv_agree() {
     if !build_native(quilon, src, &bin) {
         return;
     }
-    let ql_src = bin.with_extension("ql"); // build_native wrote the source here.
+    let source = bin.with_extension("qn"); // build_native wrote the source here.
 
     // Each case: the trailing user args. Expected `args.size` is 1 (argv[0]) + len.
     let cases: &[&[&str]] = &[&[], &["a", "b", "c"], &["--flag", "x"]];
@@ -98,7 +98,7 @@ fn jit_and_aot_argv_agree() {
 
         let jit = Command::new(quilon)
             .arg("run")
-            .arg(&ql_src)
+            .arg(&source)
             .args(*user_args)
             .output()
             .expect("run quilon run");
@@ -123,7 +123,7 @@ fn jit_and_aot_argv_agree() {
     }
 
     let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(&ql_src);
+    let _ = std::fs::remove_file(&source);
 }
 
 #[test]
@@ -162,5 +162,5 @@ fn native_env_pairs_split_on_first_equals() {
     );
 
     let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(bin.with_extension("ql"));
+    let _ = std::fs::remove_file(bin.with_extension("qn"));
 }

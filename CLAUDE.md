@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## What this is
 
-Quilon is a compiler for a statically-typed, **symbol-based** language (`.ql` files) that compiles to native code via LLVM, written in Rust. It is at **0.9 — "stable basics"**: the core works end-to-end (verified by run tests), but it is not feature-complete. **`docs/LANGUAGE.md` is the authoritative reference and feature matrix** — consult it for what's implemented; don't duplicate that list here.
+Quilon is a compiler for a statically-typed, **symbol-based** language (`.qn` files) that compiles to native code via LLVM, written in Rust. It is at **0.9 — "stable basics"**: the core works end-to-end (verified by run tests), but it is not feature-complete. **`docs/LANGUAGE.md` is the authoritative reference and feature matrix** — consult it for what's implemented; don't duplicate that list here.
 
 **Planning & process docs (read these when working toward 1.0):**
 - **`docs/ROADMAP.md`** — the authoritative plan: milestone roadmap (M1–M7 + status) and the locked language-design decisions (1–20). What's decided, done, and next. Do not relitigate a locked decision without asking the user.
@@ -52,15 +52,15 @@ a corpus when a change has a cost profile the existing ones don't cover.
 
 **Strict CI:** the workflow fails on any warning — it runs `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo build`/`cargo test` under `RUSTFLAGS=-D warnings`. Keep changes warning-clean.
 
-## Compiling & running `.ql` programs
+## Compiling & running `.qn` programs
 
 All four subcommands share one front-end (`src/driver.rs`): read → lex → parse → resolve `<<` imports → typecheck.
 
 ```bash
-cargo run -- check   examples/hello_world.ql   # front-end only
-cargo run -- run     examples/hello_world.ql   # front-end + JIT execute (in-process LLVM)
-cargo run -- build   examples/hello_world.ql   # native executable (see below)
-cargo run -- compile examples/hello_world.ql   # emit LLVM IR -> .ll (for inspection)
+cargo run -- check   examples/hello_world.qn   # front-end only
+cargo run -- run     examples/hello_world.qn   # front-end + JIT execute (in-process LLVM)
+cargo run -- build   examples/hello_world.qn   # native executable (see below)
+cargo run -- compile examples/hello_world.qn   # emit LLVM IR -> .ll (for inspection)
 ```
 
 `quilon run` is implemented (in-process JIT). A program's `^` entry point return value is its exit code (e.g. `factorial(5)` → 120) — this is how most run tests verify behavior. (The exit code is the `^` body's `Num` value, or 0 if the body isn't a `Num`.)
@@ -68,8 +68,8 @@ cargo run -- compile examples/hello_world.ql   # emit LLVM IR -> .ll (for inspec
 `quilon build` is a first-class Rust command (`src/build.rs`): it emits an object file in-process and links it with `libquilon_rt` (the runtime) and `libgc` into a native executable. `clang` is installed and is the **default** linker; `gcc` is also supported (CI checks both). There is no `scripts/aot.sh` and no manual `llc`/link step.
 
 ```bash
-cargo run -- build examples/hello_world.ql -o hello       # default linker: clang
-cargo run -- build examples/hello_world.ql --linker gcc
+cargo run -- build examples/hello_world.qn -o hello       # default linker: clang
+cargo run -- build examples/hello_world.qn --linker gcc
 ./hello; echo "exit: $?"
 ```
 
@@ -102,4 +102,4 @@ Classic multi-pass pipeline; `src/driver.rs::front_end` wires the passes for the
 
 - `docs/LANGUAGE.md` — authoritative language reference, syntax, and the ✅/🚧/❌ feature matrix. Keep it in sync when you change language behavior.
 - `README.md` — high-level pitch + aspirational vision (implicit parallelism, deep immutability — not yet built).
-- `examples/*.ql` — runnable programs referenced from `docs/LANGUAGE.md`; each is exercised by the test suite. The `.ll`/`.o`/binary artifacts alongside them are gitignored.
+- `examples/*.qn` — runnable programs referenced from `docs/LANGUAGE.md`; each is exercised by the test suite. The `.ll`/`.o`/binary artifacts alongside them are gitignored.

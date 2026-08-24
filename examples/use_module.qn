@@ -1,6 +1,6 @@
 ~ Import a local module by relative path and use its exported `add`.
 ~ `<< core.test` verifies the imported function's result; on success the program exits 0.
-<< "mathlib.ql"
+<< "mathlib.qn"
 << core.test
 
 ^ = () -> $ => <

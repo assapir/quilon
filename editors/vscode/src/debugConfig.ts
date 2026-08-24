@@ -1,9 +1,9 @@
 // Pure helpers for the Quilon debug integration, kept free of any `vscode`
 // import so they run under plain Node and are unit-testable.
 //
-// The debug flow is: build the active `.ql` with `<command> build --debug
+// The debug flow is: build the active `.qn` with `<command> build --debug
 // <file> -o <tmpbin>`, then hand `<tmpbin>` to CodeLLDB (debug type "lldb").
-// Breakpoints placed in the `.ql` source are hit through the DWARF line table
+// Breakpoints placed in the `.qn` source are hit through the DWARF line table
 // the compiler's `--debug` build emits. These functions produce the compiler
 // argv and the resolved CodeLLDB configuration; the `vscode`-facing provider in
 // `debug.ts` wires them to the editor.
@@ -60,7 +60,7 @@ export function firstNonEmptyLine(output: string): string | undefined {
  * The compiler argv that builds `file` into `output` with DWARF line info.
  * `baseArgs` are the leading args from `splitCommand` (e.g. `["run", "--"]` for
  * the `cargo run --` setting). `--debug` is what makes breakpoints/stepping
- * resolve against `.ql` source lines.
+ * resolve against `.qn` source lines.
  */
 export function buildArgs(baseArgs: string[], file: string, output: string): string[] {
   return [...baseArgs, "build", "--debug", file, "-o", output];
@@ -76,7 +76,7 @@ export function tempBinaryPath(
   uniquifier: string | number = Date.now(),
   tmpDir: string = os.tmpdir(),
 ): string {
-  const base = path.basename(file).replace(/\.ql$/i, "") || "program";
+  const base = path.basename(file).replace(/\.(qn|ql)$/i, "") || "program";
   return path.join(tmpDir, `quilon-debug-${base}-${process.pid}-${uniquifier}`);
 }
 

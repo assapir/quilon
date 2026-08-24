@@ -29,4 +29,4 @@ scheduler (a numeric `host:port` skips it); non-blocking DNS is a later refineme
 Being deferred, independent requests on one fiber overlap automatically — each forces where
 its outcome is first read. See the
 [Concurrency model](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress), and
-`examples/net_request.ql` for a real HTTP GET over `core.net`.
+`examples/net_request.qn` for a real HTTP GET over `core.net`.

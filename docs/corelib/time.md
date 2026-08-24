@@ -1,6 +1,6 @@
 # `core.time` — Time
 
-Import with `<< core.time`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/sleep.ql`.
+Import with `<< core.time`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/sleep.qn`.
 
 The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock.
 
@@ -24,4 +24,4 @@ adds a member rather than shadowing the clock.
 
 Only the leaf `@sleep` is marked — `^` and any helper it calls carry nothing. See the
 [Concurrency model](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) and
-`examples/sleep.ql`.
+`examples/sleep.qn`.
