@@ -256,7 +256,7 @@ impl TypeChecker {
     pub(super) fn register_operator_member(
         &mut self,
         self_type: &Type,
-        method: &MethodDeclaration,
+        method: &crate::ast::MethodDeclaration,
     ) -> Result<(), TypeError> {
         // A binary operator member takes exactly one explicit parameter (the right operand).
         if method.parameters.len() != 1 {

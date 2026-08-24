@@ -17,8 +17,7 @@
 //! bodies are therefore roots — a method that calls a helper keeps that helper.
 
 use super::nodes::{
-    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, TypeDefinition,
-    UnaryOperator,
+    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, UnaryOperator,
 };
 use std::collections::{HashMap, HashSet};
 

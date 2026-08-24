@@ -51,6 +51,16 @@ impl TypeChecker {
                 && self.overloaded_names.contains(&declaration.name)
                 && !declaration.is_inert_corelib_placeholder()
             {
+                // An operator overload now lives inside a type (as a member), not at the
+                // top level: `it` is the left operand. Reject a top-level operator-symbol
+                // definition and point to the member form. (Ordinary function overload
+                // sets are unaffected — only operator symbols move.)
+                if crate::ast::is_operator_symbol(&declaration.name) {
+                    return Err(TypeError::OperatorMustBeMember {
+                        operator: declaration.name.clone(),
+                        span: declaration.span.clone(),
+                    });
+                }
                 self.register_overload_declaration(declaration)?;
             }
             self.check_item(item, Nesting::TopLevel)?;
@@ -164,7 +174,7 @@ impl TypeChecker {
 
         // Build the type from the definition
         let type_value = match &declaration.type_definition {
-            TypeDefinition::Sum(variants) => {
+            TypeDefinition::Sum { variants, methods } => {
                 // Resolve and validate each variant's payload types. A payload is either a
                 // built-in type — `Num` / `Text` / `Bool` / `$` (Unit) — or a NAMED
                 // composite that resolves to an already-declared RECORD (no hoisting, so it
@@ -274,6 +284,11 @@ impl TypeChecker {
                         )?;
                     }
                 }
+
+                // A sum's optional `{ }` block holds methods only (the parser rejects a
+                // field there). `it` binds to the whole sum value — a method typically
+                // matches on it. Operator members register on their operator's overload set.
+                self.check_type_methods(&declaration.name, &sum_type, methods)?;
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
@@ -289,94 +304,14 @@ impl TypeChecker {
                 let method_names: Rc<Vec<String>> =
                     Rc::new(methods.iter().map(|m| m.name.clone()).collect());
 
-                // Type-check each method
-                for method in methods {
-                    // Create a new scope for the method
-                    self.env.push_scope();
-
-                    // Bind implicit "it" parameter to the struct type
-                    let struct_type = Type::Named {
-                        name: declaration.name.clone(),
-                        fields: Rc::clone(&record_fields),
-                        methods: Rc::clone(&method_names),
-                    };
-
-                    self.env
-                        .define("it".to_string(), struct_type, false, method.span.clone())?;
-
-                    // A method is dispatched on its receiver's type rather than called by
-                    // name, so it never receives a call site — its last parameter included.
-                    let method_parameter_types: Vec<Type> = method
-                        .parameters
-                        .iter()
-                        .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                        .collect();
-                    self.reject_unfillable_site_parameters(
-                        &format!("method `{}.{}`", declaration.name, method.name),
-                        &method.parameters,
-                        &method_parameter_types,
-                        false,
-                    )?;
-
-                    // Bind method parameters
-                    for parameter in &method.parameters {
-                        let parameter_type = parameter.type_annotation.clone().unwrap_or(Type::Num); // Default to Num if no type annotation
-                        self.env.define(
-                            parameter.name.clone(),
-                            parameter_type,
-                            false,
-                            parameter.span.clone(),
-                        )?;
-                    }
-
-                    // Type-check method body
-                    let body_type = self.infer_expression(&method.body)?;
-
-                    // Check return type if specified, and resolve the method's actual
-                    // result type: the annotation when present, otherwise the inferred
-                    // body type. Storing the *resolved* type (not the raw annotation)
-                    // keeps call sites in agreement with codegen — e.g. an unannotated
-                    // setter whose body is a field write yields `$` (Unit), not Num.
-                    let resolved_return_type = if let Some(ref return_type) = method.return_type {
-                        self.check_type_compatibility(return_type, &body_type, &method.span)?;
-                        return_type.clone()
-                    } else {
-                        body_type
-                    };
-
-                    // The render operator `` ` `` must render to `Text` and take only its
-                    // implicit `it` receiver (interpolation/`print` call it with no extra
-                    // arguments).
-                    if method.name == "`" {
-                        if !method.parameters.is_empty() {
-                            return Err(TypeError::InvalidBuiltinArgument {
-                                message: "the `` ` `` render operator takes no parameters (only its implicit `it` receiver)".to_string(),
-                                span: method.span.clone(),
-                            });
-                        }
-                        if resolved_return_type != Type::Text {
-                            return Err(TypeError::InvalidBuiltinArgument {
-                                message: format!(
-                                    "the `` ` `` render operator must return Text, but returns {}",
-                                    type_label(&resolved_return_type)
-                                ),
-                                span: method.span.clone(),
-                            });
-                        }
-                    }
-
-                    self.env.pop_scope();
-
-                    // Store method for later lookup
-                    self.methods.insert(
-                        (declaration.name.clone(), method.name.clone()),
-                        (
-                            method.parameters.clone(),
-                            Some(resolved_return_type),
-                            method.body.clone(),
-                        ),
-                    );
-                }
+                // `it` binds to the record; operator members register on their operator's
+                // overload set, other members become methods dispatched by receiver type.
+                let struct_type = Type::Named {
+                    name: declaration.name.clone(),
+                    fields: Rc::clone(&record_fields),
+                    methods: Rc::clone(&method_names),
+                };
+                self.check_type_methods(&declaration.name, &struct_type, methods)?;
 
                 // Create a Named type with methods
                 Type::Named {
@@ -396,6 +331,115 @@ impl TypeChecker {
             declaration.span.clone(),
         )?;
 
+        Ok(())
+    }
+
+    /// Type-check a type's methods (a record's members or a sum's `{ }` block). `self_type`
+    /// is what `it` binds to — the record for a record, the whole sum value for a sum.
+    /// An operator-symbol member (`==`, `+`, …) registers on its operator's overload set
+    /// (`it` = left operand, the one explicit parameter = right); every other member — a
+    /// named method or the render `` ` `` — becomes a receiver-dispatched method. Operator
+    /// members register FIRST so a body may use the type's own operator.
+    pub(super) fn check_type_methods(
+        &mut self,
+        type_name: &str,
+        self_type: &Type,
+        methods: &[crate::ast::MethodDeclaration],
+    ) -> Result<(), TypeError> {
+        for method in methods {
+            if crate::ast::is_operator_symbol(&method.name) {
+                self.register_operator_member(self_type, method)?;
+            }
+        }
+
+        for method in methods {
+            self.env.push_scope();
+            self.env.define(
+                "it".to_string(),
+                self_type.clone(),
+                false,
+                method.span.clone(),
+            )?;
+
+            // A method is dispatched on its receiver's type rather than called by name, so
+            // it never receives a call site — its last parameter included.
+            let method_parameter_types: Vec<Type> = method
+                .parameters
+                .iter()
+                .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+                .collect();
+            self.reject_unfillable_site_parameters(
+                &format!("method `{}.{}`", type_name, method.name),
+                &method.parameters,
+                &method_parameter_types,
+                false,
+            )?;
+
+            for parameter in &method.parameters {
+                // Resolve the annotation so a user-type parameter (`other :: Color`) carries
+                // its fields/variants — field access and matching on it then resolve. The
+                // type being defined is not registered yet, so a parameter naming it (the
+                // usual case for an operator's right operand) resolves to `it`'s own type.
+                let parameter_type = match &parameter.type_annotation {
+                    Some(t) => match self.resolve_type(t) {
+                        Type::Named { name, .. } | Type::Sum { name, .. } if name == type_name => {
+                            self_type.clone()
+                        }
+                        resolved => resolved,
+                    },
+                    None => Type::Num,
+                };
+                self.env.define(
+                    parameter.name.clone(),
+                    parameter_type,
+                    false,
+                    parameter.span.clone(),
+                )?;
+            }
+
+            // Type-check the body, then resolve the method's result type: the annotation
+            // when present, otherwise the inferred body type. Storing the *resolved* type
+            // keeps call sites in agreement with codegen (an unannotated setter whose body
+            // is a field write yields `$`, not Num).
+            let body_type = self.infer_expression(&method.body)?;
+            let resolved_return_type = if let Some(ref return_type) = method.return_type {
+                self.check_type_compatibility(return_type, &body_type, &method.span)?;
+                return_type.clone()
+            } else {
+                body_type
+            };
+
+            // The render operator `` ` `` must render to `Text` and take only its implicit
+            // `it` receiver (interpolation/`print` call it with no extra arguments).
+            if method.name == "`" {
+                if !method.parameters.is_empty() {
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: "the `` ` `` render operator takes no parameters (only its implicit `it` receiver)".to_string(),
+                        span: method.span.clone(),
+                    });
+                }
+                if resolved_return_type != Type::Text {
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: format!(
+                            "the `` ` `` render operator must return Text, but returns {}",
+                            type_label(&resolved_return_type)
+                        ),
+                        span: method.span.clone(),
+                    });
+                }
+            }
+
+            self.env.pop_scope();
+
+            self.methods.insert(
+                (type_name.to_string(), method.name.clone()),
+                (
+                    method.parameters.clone(),
+                    Some(resolved_return_type),
+                    method.body.clone(),
+                ),
+            );
+        }
         Ok(())
     }
 

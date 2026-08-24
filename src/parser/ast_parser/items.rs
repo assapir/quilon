@@ -316,7 +316,7 @@ impl<'a> Parser<'a> {
     /// Returns the fields and methods in declaration order.
     pub(super) fn parse_member_block(
         &mut self,
-    ) -> Result<(Vec<(String, Type)>, Vec<MethodDeclaration>), ParseError> {
+    ) -> Result<(Vec<(String, crate::ast::Type)>, Vec<MethodDeclaration>), ParseError> {
         self.expect(&TokenKind::BraceOpen)?;
 
         let mut fields = Vec::new();

@@ -100,16 +100,14 @@ impl TypeChecker {
             return self.check_set_method(name, *elem_type, arguments, span);
         }
 
-        // Check if this is a method call: function is Ident and first arg is a Named type
+        // Check if this is a method call: function is Ident and the first argument is a
+        // user type (record or sum) that declares this method.
         if let Expression::Identifier { name, .. } = function
             && let Some(first_arg_type) = &first_ty
         {
-            // Check if first argument is a Named type with this method
-            if let Type::Named {
-                name: type_name,
-                fields: _,
-                methods: _,
-            } = first_arg_type
+            // A record or a sum both carry methods, identified by their type name.
+            if let Type::Named { name: type_name, .. } | Type::Sum { name: type_name, .. } =
+                first_arg_type
             {
                 // Look up method in the type's method list
                 if let Some(method_sig) = self
