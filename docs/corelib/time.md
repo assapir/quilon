@@ -2,7 +2,7 @@
 
 Import with `<< core.time`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/sleep.ql`.
 
-The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock, both compiler-lowered to runtime intrinsics.
+The [`@sleep`](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) leaf IO primitive (a pause) and the monotonic `now()` clock.
 
 | Function | Effect |
 |----------|--------|

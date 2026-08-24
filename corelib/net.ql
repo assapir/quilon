@@ -8,6 +8,5 @@
 ~ `@tcpRequest` is a leaf IO primitive (the `@` marker): calling it launches the exchange in
 ~ the background and hands back a DEFERRED Text immediately — the fiber only waits (forces)
 ~ once a strict operation reads the bytes (a comparison, `print`, a native call, ...). The
-~ body below is an inert placeholder; the code generator lowers `@tcpRequest(...)` to the
-~ runtime launch/force intrinsics.
+~ body below is an inert placeholder — the call is compiler-lowered.
 >> @tcpRequest = (address :: Text, requestBytes :: Text) -> Text => ""

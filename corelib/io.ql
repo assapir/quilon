@@ -17,11 +17,8 @@
 ~     0
 ~   >
 ~
-~ These are part of the core library's public surface (exported with the `>>`
-~ prefix) but are *compiler-lowered*: the code generator recognizes calls to
-~ `print`/`eprint`/`write` and emits the matching runtime intrinsic (see
-~ src/runtime/intrinsics.rs and CodeGenerator::generate_print / generate_write).
-~ The function bodies below are inert placeholders; the lowering never emits them.
+~ `print`/`eprint`/`write` are compiler-lowered to runtime intrinsics, so the bodies below
+~ are inert placeholders — never emitted, and not the place to change behavior.
 ~ `stdout`/`stderr` are ordinary Num constants (file descriptors).
 
 ~ Standard output / error file descriptors.

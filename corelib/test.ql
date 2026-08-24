@@ -1,8 +1,7 @@
 ~ core.test — assertions for self-verifying programs. Import with `<< core.test`.
 ~ Reference: docs/corelib/test.md.
 ~
-~ A failing assertion reports at YOUR call site — the compiler fills in each assertion's
-~ trailing `site :: Site`, and every wrapper forwards it — then exits 101.
+~ A failing assertion reports at YOUR call site, then exits 101.
 ~
 ~   assert(cond)          on a false `cond`, report a default message and exit 101;
 ~                         on true, do nothing. Returns `$` (Unit).

@@ -1,5 +1,5 @@
 ~ core.time — time primitives. `@sleep` is a leaf IO primitive (the `@` marker);
-~ `now` is a plain clock read. Both are compiler-lowered to runtime intrinsics.
+~ `now` is a plain clock read.
 ~ Import with `<< core.time`.
 
 ~ Pause the current fiber for `seconds` seconds (a fractional Num), then continue.

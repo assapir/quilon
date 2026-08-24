@@ -8,11 +8,6 @@
 ~ Everything is pipe-friendly: the data is the FIRST parameter, so
 ~ `env |> getEnv("PATH")` and `args |> hasFlag("-v")` read naturally.
 ~
-~ This module is pure Quilon — built entirely from the array methods
-~ (`.find` / `.filter` / `.reduce` / `.size`), array indexing, ranges (`<-`),
-~ and the `Text` methods (`==` / `+` / `.slice` / `.indexOf` / `.contains`). It
-~ adds no compiler intrinsics.
-~
 ~ Example:
 ~   << core.cli
 ~   ^ = (args :: []Text, env :: [][]Text) -> Num => <

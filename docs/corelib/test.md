@@ -8,12 +8,9 @@ broken program fails loudly in CI. Every example in `examples/` is written this 
 asserts each result it demonstrates and exits 0 — and the examples gate runs them all under
 the JIT and native AOT.
 
-A failure reports in the standard [error frame](../LANGUAGE.md#error-messages), at **your**
-call site rather than an internal hop: `assertEq` fails several calls deep inside `core.test`
-and still points at the line where your program called it, including inside a helper rather
-than `^`. Each assertion takes a trailing
-[`site :: Site`](../LANGUAGE.md#call-site-locations--site) that the compiler fills in and the
-wrappers forward.
+A failure reports in the standard [error frame](../LANGUAGE.md#error-messages) at **your**
+call site — the line where your program called the assertion, including inside a helper
+rather than `^`.
 
 | Function | Effect |
 |----------|--------|
@@ -24,7 +21,7 @@ wrappers forward.
 | `assertNotEq(a, b) -> $` | Assert `a != b`; the report names the (equal) value. Overloaded over `Num`/`Text`/`Bool`. |
 | `assertOk(r :: Result) -> $` | Assert `r` is `Ok`; fail on `NotOk`. |
 | `assertNotOk(r :: Result) -> $` | Assert `r` is `NotOk`; fail on `Ok`. |
-| `failAt(message :: Text) -> $` | Fail outright: report `message` at the caller's location and exit `101`. The primitive the assertions above are built from, and what an assertion of your own calls — take a trailing `site :: Site` and forward it, and yours reports ITS caller too. |
+| `failAt(message :: Text) -> $` | Fail outright: report `message` at the caller's location and exit `101`. Use it to build an assertion of your own that reports ITS caller — take a trailing [`site :: Site`](../LANGUAGE.md#call-site-locations--site) and forward it. |
 
 ```quilon
 << core.test
@@ -38,9 +35,7 @@ wrappers forward.
 >
 ```
 
-`assertEq`/`assertNotEq` build their message with
-[interpolation](../LANGUAGE.md#string-interpolation-and-the-render-operator-), so values appear
-rendered — `Num`/`Text`/`Bool` directly, and records, sum types, and arrays through their
-`` ` `` render operator. The module is pure Quilon (`corelib/test.ql`), composing the report
-in-language from the `Site` fields; its only native primitives are the internal process-exit
-and terminal-detection intrinsics. (See `examples/assert_demo.ql`.)
+`assertEq`/`assertNotEq` show their values
+[rendered](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
+directly, and records, sum types, and arrays through their `` ` `` render operator. (See
+`examples/assert_demo.ql`.)

@@ -22,7 +22,4 @@ Thin, pipe-friendly helpers over the [entry point](../LANGUAGE.md#entry-point)'s
 >
 ```
 
-The whole module is pure Quilon (`corelib/cli.ql`) — built only from the array
-methods (`.find`/`.filter`/`.reduce`), array indexing, ranges (`<-`), and the `Text`
-methods (`.slice`/`.indexOf`/`.contains`/`==`/`+`); it adds no compiler intrinsics.
 (See `examples/cli.ql`.)
