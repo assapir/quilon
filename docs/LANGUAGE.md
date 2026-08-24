@@ -147,9 +147,9 @@ starts a hole). A plain string with no holes is an ordinary `Text` literal.
 
 **One render path.** Both interpolation and `print`/`eprint` render a value by invoking
 its `` ` `` (backtick) operator. Every built-in type has a **default** `` ` ``; **any**
-user type may **override** its rendering by defining its own `` ` `` operator — declared
-method-style (like other [record methods](#named-record-types-with-methods)), with `it`
-bound to the instance, returning `Text`, and free to use interpolation itself:
+user type may **override** its rendering by defining its own `` ` `` operator — a member of
+the [record](#named-record-types-with-methods) or [sum](#methods--the-optional---block),
+with `it` bound to the value, returning `Text`, and free to use interpolation itself:
 
 ```quilon
 User = {
@@ -351,6 +351,22 @@ area = (s :: Shape) -> Num => s ?
 ```
 A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
 (or a lowercase binding) wildcard. (See `examples/sum_types.qn`.)
+
+#### Methods — the optional `{ }` block
+A sum type may carry a trailing `{ }` block of **methods** (the block is optional — a sum
+with no methods is written exactly as above). `it` is the whole sum value, so a method
+typically matches on it. A member is a named method, an
+[operator](#operator-overloading), or the render `` ` ``. The block holds **methods only**
+— a sum has no fields, so a field-like entry there is a compile error.
+```quilon
+Shape = Circle(Num) / Rect(Num, Num) {
+  area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
+  == = (other :: Shape) -> Bool => it.area() == other.area()      ~ operator member
+  ` = () -> Text => it ? | Circle(r) => "Circle(`r`)" | Rect(w, h) => "Rect(`w`x`h`)"
+}
+Rect(6, 7).area()                ~ 42
+```
+(See `examples/sum_methods.qn`.)
 
 #### `Result` is a normal sum type
 `Result` is just a predefined sum type — there is no special case:
@@ -620,33 +636,35 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
 
 ### Operator overloading
 
-Operators are user-overloadable — `+ - * / %`, `== != < <= > >=` — because **an operator
-is just a named overload set** under the hood. The standard operators are *visible*
-overloads (e.g. `+` on `Num` and `+` on `Text`), not compiler magic, and a user
-definition adds a member for a user type. Define one by naming it with the operator
-symbol:
+An operator is user-overloadable — `+ - * / %`, `== != < <= > >=` — as a **member of the
+type it operates on** (a [record](#named-record-types-with-methods) or a
+[sum](#sum-types--)). `it` is the **left** operand; a **binary** operator member takes one
+explicit parameter (the **right** operand), a unary one (the render `` ` ``) takes none:
 
 ```quilon
-Vec = { x :: Num, y :: Num }
-+ = (a :: Vec, b :: Vec) -> Vec => Vec { x = a.x + b.x, y = a.y + b.y }
+Vec = {
+  x :: Num, y :: Num,
+  + = (other :: Vec) -> Vec => Vec { x = it.x + other.x, y = it.y + other.y }
+  == = (other :: Vec) -> Bool => it.x == other.x && it.y == other.y
+}
 
-v = Vec { x = 1, y = 2 } + Vec { x = 3, y = 4 }   ~ resolves to the user `+`
+v = Vec { x = 1, y = 2 } + Vec { x = 3, y = 4 }   ~ resolves to Vec's `+`
 ```
 
-A user operator overload is resolved exactly like a function overload (by argument
-types) and lowers to a direct call. `==` over `Text` (equality) and `<`/`>`/`<=`/`>=`
-over `Text` (lexicographic order) are built-in overloads, so text comparisons work out
-of the box: `"abc" < "abd"`, `"hi" == "hi"`. (Defining `<`/`>` is reserved — a top-level
-`<`/`>` would read as a block; overload the others, or use `<=`/`>=`.)
+`a <op> b` resolves the operator from the **left operand's** type; the right operand need
+not be the same type (`Vec * Num -> Vec`). Resolution is exact-typed like any overload, and
+lowers to a direct call. The built-in operators (`Num`/`Text` `+`, `==` over any scalar,
+`<`/`>`/`<=`/`>=` over `Num`/`Text`) are members of the same sets, so `"abc" < "abd"` works
+out of the box. (`<`/`>` are not definable as members — a `<`/`>` at member-name position
+would read as a block; use `<=`/`>=`.)
 
-A **comparison/equality** operator overload (`== != < <= > >=`) **must return `Bool`** —
-these are predicates that feed `?`/`|` matching and conditionals; a non-`Bool` return is
-a compile error. **Arithmetic** operators (`+ - * / %`) are unconstrained: an overload
-returns whatever it declares (so `Vec + Vec -> Vec`, `Vec * Num -> Vec`, or a `Vec * Vec
--> Num` dot product are all legal).
+A **comparison/equality** member (`== != < <= > >=`) **must return `Bool`**; **arithmetic**
+members (`+ - * / %`) return whatever they declare. A **top-level** operator definition is
+rejected — the operator must be a member of its type.
 
-(See `examples/overloading.qn`, and `examples/overload_dispatch.qn` for dispatch on
-argument types that come out of an array element, a match, a call, or a lambda.)
+(See `examples/overloading.qn` and `examples/sum_methods.qn`, and
+`examples/overload_dispatch.qn` for dispatch on argument types out of an array element, a
+match, a call, or a lambda.)
 
 ---
 
@@ -1145,7 +1163,7 @@ pathological input.
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
 | `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | Ad-hoc overloading: same-named typed defs, exact-type dispatch | ✅ |
-| Operator overloading (`+`, comparisons, … on user types); built-ins as overloads | ✅ |
+| Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads | ✅ |
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]` | ✅ |
@@ -1165,6 +1183,7 @@ pathological input.
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
+| Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
