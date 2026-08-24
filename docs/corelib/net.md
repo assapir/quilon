@@ -21,3 +21,6 @@ Because `@tcpRequest` returns a deferred value, independent requests launched on
 fiber overlap automatically — each forces only where its bytes are first read. See the
 [Concurrency model](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress) for
 how `@` leaf primitives, deferred values, and force-at-strict-op fit together.
+
+For a runnable end-to-end program that makes a real HTTP GET over `core.net`, see
+`examples/net_request.ql`.
