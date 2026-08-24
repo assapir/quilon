@@ -33,6 +33,7 @@ the receiver is a Map):
 | `get(k)` | `Ok(v)` / `NotOk` | the safe, `Result`-returning lookup (the only way to read a value) |
 | `has(k)` | `Bool` | membership |
 | `set(k, v)` | new `[\|K => V\|]` | a fresh map with `k` bound to `v` (persistent) |
+| `remove(k)` | new `[\|K => V\|]` | a fresh map without `k` (persistent); removing an absent key is a no-op |
 | `keys()` | `[]K` | the keys as an array (order unspecified) |
 | `values()` | `[]V` | the values as an array (same order as `keys()`) |
 | `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains) |
@@ -44,8 +45,7 @@ total = m.values().reduce(0, (acc, x) => acc + x)   ~ 3
 m.get("a") ? | Ok(v) => v | NotOk(_) => 0           ~ 1
 ```
 
-Removal is deferred (not in the initial surface), as are user-defined key types (via a
-`%` hash hook). Like the empty array `[]` (which is `[]Num`), an **empty** map literal
-defaults to `Num` key/value types and cannot yet be annotated to another type.
+Like the empty array `[]` (which is `[]Num`), an **empty** map literal defaults to `Num`
+key/value types and cannot yet be annotated to another type.
 
 (See `examples/maps.qn`.)

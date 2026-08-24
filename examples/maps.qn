@@ -1,5 +1,5 @@
 ~ Built-in Map collection type, pipe-fenced: `[|K => V|]` (`=>` reads "maps to").
-~   Map: get / has / set / keys / values / size / each.
+~   Map: get / has / set / remove / keys / values / size / each.
 ~ Values are read only through `.get`, which returns `Ok(value)` when the key is present
 ~   and `NotOk` when it is absent — there is no bracket indexing on a map.
 ~ Maps are IMMUTABLE — every mutator returns a NEW map. Iteration order is UNSPECIFIED
@@ -34,6 +34,14 @@
     | NotOk(_) => 0
   assertEq(originalAge, 36)
   assertEq(updatedAge, 37)
+
+  ~ remove is persistent too: a NEW map without the key, receiver untouched.
+  fewer :: [|Text => Num|] = ages.remove("ada")
+  assertEq(ages.size, 3)
+  assertEq(fewer.size, 2)
+  assertNotOk(fewer.get("ada"))
+  ~ removing an absent key is a no-op (still a fresh, equal-size map).
+  assertEq(ages.remove("nobody").size, 3)
 
   ~ keys / values are plain arrays (order unspecified), so array methods compose.
   total :: Num = ages.values().reduce(0, (acc, x) => acc + x)

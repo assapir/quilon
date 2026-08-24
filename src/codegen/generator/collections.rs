@@ -99,6 +99,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 )?;
                 Ok(out.into())
             }
+            "remove" => {
+                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
+                let out = self.call_rt_ptr(
+                    "__map_remove",
+                    &[map.into(), tag.into(), ka.into(), kb.into()],
+                )?;
+                Ok(out.into())
+            }
             "get" => self.generate_map_get(map, &arguments[1], &key_ty, value_llvm),
             "keys" => self.build_key_array(map, &key_ty),
             "values" => self.build_values_array(map, value_llvm),
@@ -260,6 +268,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
                 let out =
                     self.call_rt_ptr("__set_add", &[set.into(), tag.into(), a.into(), b.into()])?;
+                Ok(out.into())
+            }
+            "remove" => {
+                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
+                let out = self.call_rt_ptr(
+                    "__set_remove",
+                    &[set.into(), tag.into(), a.into(), b.into()],
+                )?;
                 Ok(out.into())
             }
             "items" => self.build_items_array(set, &elem_ty),

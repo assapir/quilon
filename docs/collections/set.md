@@ -29,6 +29,7 @@ the receiver is a Set):
 |------------|--------|-------|
 | `has(x)` | `Bool` | membership |
 | `add(x)` | new `[\|T\|]` | a fresh set with `x` added (persistent) |
+| `remove(x)` | new `[\|T\|]` | a fresh set without `x` (persistent); removing an absent element is a no-op |
 | `items()` | `[]T` | the elements as an array (order unspecified) |
 | `each(x => …)` | **the receiver set** | runs the body per element for effect, then returns the set (chains) |
 
@@ -41,7 +42,6 @@ the receiver is a Set):
 ```
 
 Like the empty array `[]` (which is `[]Num`), an **empty** set literal defaults to `Num`
-element type and cannot yet be annotated to another type. User-defined element types (via a
-`%` hash hook) and element removal are deferred (not in the initial surface).
+element type and cannot yet be annotated to another type.
 
 (See `examples/sets.qn`.)

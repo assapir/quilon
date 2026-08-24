@@ -35,9 +35,10 @@ mod map;
 mod set;
 
 pub use map::{
-    __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_set, __map_val,
+    __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_remove, __map_set,
+    __map_val,
 };
 pub use set::{
     __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b, __set_len,
-    __set_new, __set_union,
+    __set_new, __set_remove, __set_union,
 };

@@ -69,6 +69,14 @@ pub extern "C" fn __map_set(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __map_remove(map: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+    let map = map as *const QlMap;
+    let mut table = unsafe { (*map).table.clone() };
+    table.remove(&QlKey::new(tag, a, b));
+    unsafe { build_map(table) as *mut c_void }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __map_get(
     map: *const c_void,
     tag: i64,

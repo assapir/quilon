@@ -1151,9 +1151,9 @@ pathological input.
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
-| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
-| Sets `[\|T\|]`: literals, `.size`, `has`/`add`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection); immutable | ✅ |
-| Map/Set removal, and user-defined key types (via a `%` hash hook) | ❌ |
+| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`remove`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
+| Sets `[\|T\|]`: literals, `.size`, `has`/`add`/`remove`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection); immutable | ✅ |
+| Map/Set user-defined key types (via a `%` hash hook) | ❌ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |

@@ -78,6 +78,34 @@ fn map_set_new_key_grows() {
     );
 }
 
+/// `.remove` returns a NEW map without the key; the receiver is unchanged (persistent).
+#[test]
+fn map_remove_is_persistent() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"b\" => 2|]\n  m2 :: [|Text => Num|] = m.remove(\"a\")\n  m.size * 10 + m2.size\n>",
+        // original keeps 2 entries, m2 drops to 1 -> 21
+        21,
+    );
+}
+
+/// `.remove` of an absent key is a no-op that still returns a NEW (equal-size) map.
+#[test]
+fn map_remove_absent_key_is_noop() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"b\" => 2|]\n  m.remove(\"z\").size\n>",
+        2,
+    );
+}
+
+/// After `.remove`, the key is gone: `.get` on it yields `NotOk`.
+#[test]
+fn map_remove_then_get_is_notok() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m.remove(\"a\").get(\"a\") ?\n    | Ok(v)    => v\n    | NotOk(_) => 42\n>",
+        42,
+    );
+}
+
 /// `.keys()` and `.values()` are arrays; `.values().reduce` folds them.
 #[test]
 fn map_keys_and_values_are_arrays() {
@@ -163,6 +191,34 @@ fn set_add_is_persistent() {
     assert_exit(
         "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  s2 :: [|Num|] = s.add(3)\n  s.size * 10 + s2.size\n>",
         23,
+    );
+}
+
+/// `.remove` returns a NEW set without the element; the receiver is unchanged.
+#[test]
+fn set_remove_is_persistent() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2, 3|]\n  s2 :: [|Num|] = s.remove(2)\n  s.size * 10 + s2.size\n>",
+        // original keeps 3, s2 drops to 2 -> 32
+        32,
+    );
+}
+
+/// `.remove` of an absent element is a no-op that still returns a NEW (equal-size) set.
+#[test]
+fn set_remove_absent_element_is_noop() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2, 3|]\n  s.remove(9).size\n>",
+        3,
+    );
+}
+
+/// After `.remove`, membership reports the element gone.
+#[test]
+fn set_remove_then_has_is_false() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  s.remove(1).has(1) ? 5 : 0\n>",
+        0,
     );
 }
 

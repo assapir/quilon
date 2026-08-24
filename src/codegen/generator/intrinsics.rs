@@ -195,6 +195,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ],
                 false,
             ),
+            // Persistent removal, returning a new table without the key/element.
+            "__map_remove" | "__set_remove" => {
+                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
+            }
             // Membership, as 0/1.
             "__map_has" | "__set_has" => {
                 i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)

@@ -343,14 +343,17 @@ pub fn parameters_accept(
 /// these are resolved ahead of any user overload when the receiver is a `Map`, so this
 /// predicate is the single source of truth shared by the type checker and codegen.
 pub fn is_map_method(name: &str) -> bool {
-    matches!(name, "get" | "has" | "set" | "keys" | "values" | "each")
+    matches!(
+        name,
+        "get" | "has" | "set" | "remove" | "keys" | "values" | "each"
+    )
 }
 
 /// The reserved built-in `Set` methods (`has`/`add`/`items`/`each`). (`size` is a field.)
 /// The single source of truth shared by the type checker and codegen, like the array and
 /// map method predicates.
 pub fn is_set_method(name: &str) -> bool {
-    matches!(name, "has" | "add" | "items" | "each")
+    matches!(name, "has" | "add" | "remove" | "items" | "each")
 }
 
 /// One piece of an interpolated string (`Expression::Interpolation`): either literal text or a

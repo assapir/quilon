@@ -49,9 +49,9 @@ pub mod text;
 pub mod time;
 
 pub use collections::{
-    __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_set, __map_val,
-    __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b, __set_len,
-    __set_new, __set_union,
+    __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_remove, __map_set,
+    __map_val, __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b,
+    __set_len, __set_new, __set_remove, __set_union,
 };
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
@@ -173,6 +173,7 @@ intrinsic_registry! {
     ) -> c_int,
     __map_new: extern "C" fn() -> *mut c_void,
     __map_set: extern "C" fn(*const c_void, i64, i64, i64, *const c_void) -> *mut c_void,
+    __map_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
     __map_get: extern "C" fn(*const c_void, i64, i64, i64, *mut i64) -> *const c_void,
     __map_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
     __map_len: extern "C" fn(*const c_void) -> i64,
@@ -181,6 +182,7 @@ intrinsic_registry! {
     __map_val: extern "C" fn(*const c_void, i64) -> *const c_void,
     __set_new: extern "C" fn() -> *mut c_void,
     __set_add: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
+    __set_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
     __set_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
     __set_len: extern "C" fn(*const c_void) -> i64,
     __set_item_a: extern "C" fn(*const c_void, i64) -> i64,

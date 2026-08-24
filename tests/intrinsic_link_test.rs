@@ -101,6 +101,7 @@ const EVERY_INTRINSIC: &str = r#"
   grown :: [|Text => Num|] = counts.set("c", 3)
   assertEq(grown.keys().size, 3)
   assertEq(grown.values().size, 3)
+  assertEq(grown.remove("c").size, 2)
   assertOk(counts.get("a"))
   counts.each((k, v) => v)
 
@@ -110,6 +111,7 @@ const EVERY_INTRINSIC: &str = r#"
   odds.each(x => x)
   assert(odds.has(1))
   assertEq(odds.add(7).size, 4)
+  assertEq(odds.remove(1).size, 2)
   assertEq(odds.items().size, 3)
   assertEq((odds + evens).size, 4)
   assertEq((odds - evens).size, 1)

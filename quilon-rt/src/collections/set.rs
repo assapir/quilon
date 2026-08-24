@@ -58,6 +58,14 @@ pub extern "C" fn __set_add(set: *const c_void, tag: i64, a: i64, b: i64) -> *mu
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __set_remove(set: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+    let set = set as *const QlSet;
+    let mut table = unsafe { (*set).table.clone() };
+    table.remove(&QlKey::new(tag, a, b));
+    unsafe { build_set(table) as *mut c_void }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __set_has(set: *const c_void, tag: i64, a: i64, b: i64) -> i64 {
     let set = set as *const QlSet;
     unsafe { (*set).table.contains(&QlKey::new(tag, a, b)) as i64 }

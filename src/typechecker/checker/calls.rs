@@ -319,6 +319,7 @@ impl TypeChecker {
     ///   - `get(k :: K)`        -> `Result` (`Ok(V)` / `NotOk`) — the safe lookup
     ///   - `has(k :: K)`        -> `Bool`
     ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (a NEW map; the receiver is unchanged)
+    ///   - `remove(k :: K)`     -> `Map(K, V)` (a NEW map without `k`; the receiver is unchanged)
     ///   - `keys()`             -> `[]K`
     ///   - `values()`           -> `[]V`
     ///   - `each(f: (K, V) => _)` -> the receiver map (so `.each` chains)
@@ -362,6 +363,11 @@ impl TypeChecker {
                 self.check_type_compatibility(&key_type, &k, span)?;
                 let v = self.infer_expression(&method_args[1])?;
                 self.check_type_compatibility(&value_type, &v, span)?;
+                Ok(map_type)
+            }
+            "remove" => {
+                let k = self.infer_expression(&method_args[0])?;
+                self.check_type_compatibility(&key_type, &k, span)?;
                 Ok(map_type)
             }
             "keys" => Ok(Type::Array(Box::new(key_type))),
@@ -410,6 +416,11 @@ impl TypeChecker {
                 Ok(Type::Bool)
             }
             "add" => {
+                let x = self.infer_expression(&method_args[0])?;
+                self.check_type_compatibility(&elem_type, &x, span)?;
+                Ok(set_type)
+            }
+            "remove" => {
                 let x = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&elem_type, &x, span)?;
                 Ok(set_type)
