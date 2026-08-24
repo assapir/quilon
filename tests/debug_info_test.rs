@@ -57,7 +57,7 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
     let mut generator = CodeGenerator::new(&context, "main");
     generator.set_type_table(checked.types);
     generator.set_defer_info(checked.defer);
-    generator.enable_debug(&ql, checked.sources.root_text(), checked.imported_items);
+    generator.enable_debug(&ql, &checked.sources);
     generator.set_source_map(checked.sources);
 
     // `generate` runs `module.verify()` internally, so an Err here IS the verifier failure.

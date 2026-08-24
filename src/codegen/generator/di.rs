@@ -7,34 +7,24 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Turn on DWARF line-number debug-info emission for this module, using `source`
-    /// (the text compiled from `file_path`) to map span byte offsets to `(line, column)`.
+    /// Turn on DWARF line-number debug-info emission for this module. `file_path` is the root
+    /// `.qn` source; `sources` carries the text and display path of it and every imported
+    /// module, so each gets a `DIFile` + line table and a span maps to whichever file it
+    /// belongs to — an imported/corelib function's debug info points at that module's source.
     /// Only the native `--debug` build path calls this; without it the generator emits no
-    /// debug info at all. `imported_item_count` is how many leading top-level items came from
-    /// imported modules (their spans can't be mapped to this file, so they get no debug
-    /// info). Must be called before [`generate`].
+    /// debug info at all. Must be called before [`generate`].
     pub fn enable_debug(
         &mut self,
         file_path: &std::path::Path,
-        source: &str,
-        imported_item_count: usize,
+        sources: &crate::source_map::SourceMap,
     ) {
-        self.debug = Some(DebugInfo::new(
-            &self.module,
-            self.context,
-            file_path,
-            source,
-        ));
-        self.di_imported_boundary = imported_item_count;
+        self.debug = Some(DebugInfo::new(&self.module, self.context, file_path, sources));
     }
 
     /// Point the builder's current debug location at `span` within the function currently
     /// being emitted. A no-op unless debug info is on and a function scope is active — so
     /// call sites need no `if debug` guard of their own.
     pub(super) fn set_debug_loc(&self, span: &Span) {
-        if self.di_suppressed {
-            return;
-        }
         if let (Some(debug), Some(scope)) = (self.debug.as_ref(), self.di_scope) {
             let loc = debug.location(self.context, span, scope);
             self.builder.set_current_debug_location(loc);
@@ -54,15 +44,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         span: &Span,
     ) -> Option<DIScope<'ctx>> {
         let saved = self.di_scope;
-        if self.di_suppressed {
-            return saved;
-        }
         if let Some(debug) = self.debug.as_ref() {
             let subprogram = debug.create_function(name, span);
             function.set_subprogram(subprogram);
             self.di_scope = Some(subprogram.as_debug_info_scope());
             // Seed the body's leading instructions (parameter stores, TCO back-edge) with a
             // location at the function header, before per-expression locations take over.
+            self.set_debug_loc(span);
+        }
+        saved
+    }
+
+    /// Like [`begin_di_function`], but for a generated entry shim (the C `main` wrapper or the
+    /// `__ql_entry` fiber thunk): its `DISubprogram` is named for the user's `^` entry point and
+    /// marked artificial, so a backtrace attributes the entry frame to `^` and treats the shim
+    /// as compiler glue rather than showing the internal `main`/thunk symbol as user code.
+    pub(super) fn begin_di_entry_shim(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        span: &Span,
+    ) -> Option<DIScope<'ctx>> {
+        let saved = self.di_scope;
+        if let Some(debug) = self.debug.as_ref() {
+            let subprogram = debug.create_entry_shim("^", span);
+            function.set_subprogram(subprogram);
+            self.di_scope = Some(subprogram.as_debug_info_scope());
             self.set_debug_loc(span);
         }
         saved
@@ -76,12 +82,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Enter a nested lexical scope for a `{ }` block starting at `span`, so variables it
     /// introduces nest under a `DW_TAG_lexical_block` rather than the function directly.
     /// Returns the scope to restore via [`end_di_scope`]; a no-op (returns the current scope)
-    /// when debug info is off/suppressed.
+    /// when debug info is off.
     pub(super) fn begin_di_lexical_block(&mut self, span: &Span) -> Option<DIScope<'ctx>> {
         let saved = self.di_scope;
-        if self.di_suppressed {
-            return saved;
-        }
         if let (Some(debug), Some(parent)) = (self.debug.as_ref(), self.di_scope) {
             self.di_scope = Some(debug.lexical_block(parent, span));
         }
@@ -273,7 +276,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Emit a `DILocalVariable` + `llvm.dbg.declare` for a parameter or `=`/`:=` local named
     /// `name`, stored at `slot`, of Quilon type `qty`, declared at `span`. `arg_no` is the
     /// 1-based parameter index for a parameter, or `None` for a local. A no-op unless debug
-    /// info is on, not suppressed, and a function scope is active — so call sites stay guard-free.
+    /// info is on and a function scope is active — so call sites stay guard-free.
     pub(super) fn declare_variable(
         &self,
         name: &str,
@@ -282,9 +285,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         span: &Span,
         arg_no: Option<u32>,
     ) {
-        if self.di_suppressed {
-            return;
-        }
         let (Some(debug), Some(scope)) = (self.debug.as_ref(), self.di_scope) else {
             return;
         };
