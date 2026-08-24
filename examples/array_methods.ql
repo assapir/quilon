@@ -38,4 +38,13 @@
   assertEq(third, 6)
   assertOk(doubled.at(2))
   assertNotOk(doubled.at(42))
+
+  ~ `at` is the form to reach for when an index MIGHT be out of range: a direct
+  ~ `doubled[wanted]` is checked too, but a bad index there fails loudly — the program
+  ~ stops with a report naming that read. `at` hands the decision back to you instead.
+  wanted :: Num = doubled.size + 5
+  fallback :: Num = doubled.at(wanted) ?
+    | Ok(v)    => v
+    | NotOk(_) => -1
+  assertEq(fallback, -1)
 >

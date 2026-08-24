@@ -214,12 +214,11 @@ demo.ql:4:11: index 7 out of bounds for an array of size 3
    |           ^^^^^^^^^^^^^
 ```
 
-(`examples/index_out_of_bounds.ql` is exactly this, failing on purpose.)
-
 A **fractional** in-range index
 truncates toward zero (`nums[1.7]` reads `nums[1]`) — with one unified `Num`, index
 arithmetic like `size / 2` legitimately produces fractions. Use [`at(n)`](#array-methods)
-for the non-aborting form (`Ok`/`NotOk`).
+for the non-aborting form (`Ok`/`NotOk`) when an index might be out of range — see the
+computed-index case at the end of `examples/array_methods.ql`.
 
 #### Array methods
 

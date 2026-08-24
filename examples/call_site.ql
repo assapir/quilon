@@ -4,8 +4,7 @@
 ~ that argument off: file, line, column, the text of the line, and how wide the call is.
 ~ Forwarding a received `site` on to another such function reports the ORIGINAL caller
 ~ instead of the hop — which is how `core.test`'s assertions blame your `assertEq` call
-~ rather than their own internals. See `examples/assert_location.ql` for what a failure
-~ built on this looks like.
+~ rather than their own internals.
 ~
 ~ Run: cargo run -- run examples/call_site.ql    ~ exits 0 — it checks itself
 << core.test

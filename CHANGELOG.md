@@ -27,8 +27,8 @@ All notable changes to Quilon are documented here.
   what `quilon run` does, with no debug info and no unwinder. `tests/fail_loud_location_test.rs`
   pins compile errors, assertions, and runtime checks to the same framing, since the
   assertion renderer lives in Quilon (`corelib/test.ql`) and the runtime one in Rust
-  (`quilon-rt`'s `report`). See `examples/index_out_of_bounds.ql`, which fails on purpose to
-  show the report.
+  (`quilon-rt`'s `report`). `examples/array_methods.ql` shows the non-aborting alternative:
+  `at(n)` hands an out-of-range index back as `NotOk` instead of stopping the program.
 
 - **Deferred values — the `@readStdin` leaf IO primitive ([#120](https://github.com/assapir/quilon/issues/120)).**
   The value-returning half of the colorless implicit-futures model. `@readStdin()` (in
@@ -84,8 +84,7 @@ All notable changes to Quilon are documented here.
   and no debug info to keep, and `quilon run` (JIT) and native builds report identically. A
   `Site` parameter that nothing could fill in — before another parameter, or on a lambda, a
   nested declaration, or a record method — is a compile error rather than a silent demand
-  for an explicit location. See `examples/call_site.ql`, and `examples/assert_location.ql`, which
-  fails on purpose to show the report.
+  for an explicit location. See `examples/call_site.ql`.
 
   Supporting surface, all documented: `core.test`'s **`failAt(message)`** (the reporting
   primitive the assertions are built from, and what a custom assertion of your own
