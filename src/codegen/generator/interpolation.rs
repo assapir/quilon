@@ -116,8 +116,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Call a user type's `` ` `` render override — the `Type_op$backtick` method — with the
-    /// receiver value (a record pointer or a sum value), yielding the rendered `Text`.
+    /// Invoke a user type's `` ` `` render override (the `Type_op$backtick` method) — the
+    /// receiver crosses as a record pointer or a sum value, matching the method's emission.
     pub(super) fn call_render_override(
         &mut self,
         name: &str,

@@ -80,12 +80,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// Lower an operator MEMBER of a record or sum type to its overload function. The
-    /// operator lives inside the type it operates on, so we desugar it to a function whose
-    /// first parameter is the receiver `it` (the left operand) followed by the member's
-    /// explicit parameter (the right operand). `emit_module_function` mangles it on the
-    /// operator symbol (registered in `self.overloads`), so `a <op> b` dispatches to it
-    /// through the ordinary operator-overload path.
+    /// Lower an operator member to its overload function: a function with the receiver `it`
+    /// prepended as the first parameter. `emit_module_function` mangles it on the operator
+    /// symbol (registered in `self.overloads`), so `a <op> b` dispatches to it.
     fn emit_operator_member(
         &mut self,
         type_name: &str,
