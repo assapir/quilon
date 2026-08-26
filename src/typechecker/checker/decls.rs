@@ -717,6 +717,21 @@ impl TypeChecker {
 
         self.env.pop_scope();
 
+        // Returning a function value is deferred: a function may TAKE a function as a
+        // parameter, but handing one back across the call boundary is not supported yet.
+        // Checked on both the annotation and the inferred body so neither slips through.
+        let returns_function = matches!(body_type, Type::Function { .. })
+            || declaration
+                .return_type
+                .as_ref()
+                .is_some_and(|t| matches!(self.resolve_type(t), Type::Function { .. }));
+        if returns_function {
+            return Err(TypeError::UnsupportedFunctionReturn {
+                function: declaration.name.clone(),
+                span: declaration.span.clone(),
+            });
+        }
+
         // Verify the return type matches if annotated
         if let Some(ref annotated_type) = declaration.return_type {
             let annotated_type = self.resolve_type(annotated_type);

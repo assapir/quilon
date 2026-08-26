@@ -82,6 +82,12 @@ fn unannotated_parameter_is_rejected() {
 }
 
 #[test]
+fn returning_a_function_is_rejected() {
+    // Taking a function is supported; handing one back across the call boundary is deferred.
+    assert_type_error("pick = (f :: (Num) -> Num) => f\n^ = () -> Num => 0");
+}
+
+#[test]
 fn function_typed_parameter_typechecks_and_calls() {
     // apply's `f` is a function value; calling it in the body is well-typed.
     assert_exit(
