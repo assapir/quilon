@@ -14,6 +14,9 @@ Counter = {
 
   ~ A getter: no `it.field := …`, so it is callable on `=` instances too.
   peek = => it.value
+
+  ~ Also a setter: the write is inside a lambda, but it still lands on `it`.
+  bumpEach = (steps :: []Num) => steps.each(s => it.value := it.value + s)
 }
 
 ^ = () -> $ => <
@@ -22,4 +25,6 @@ Counter = {
   assertEq(c.peek(), 35)
   c.value := c.value + 7         ~ direct field write: value = 42
   assertEq(c.peek(), 42)
+  c.bumpEach([1, 2, 3])          ~ setter writing from inside a lambda: value = 48
+  assertEq(c.peek(), 48)
 >

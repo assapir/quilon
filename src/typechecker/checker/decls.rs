@@ -5,6 +5,7 @@
 //! run against.
 
 use super::*;
+use crate::ast::walk::for_each_subexpression;
 use std::rc::Rc;
 
 impl TypeChecker {
@@ -459,71 +460,43 @@ impl TypeChecker {
         }
     }
 
-    /// Does `expression` (a method body) mutate the receiver `it`? True if it contains a
-    /// field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a call to a
-    /// sibling method already known to be a setter, applied to `it`.
+    /// Does `expression` (a method body) mutate the receiver `it`? True if any
+    /// sub-expression is a field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a
+    /// call to a sibling method already known to be a setter, applied to `it`.
+    ///
+    /// A write anywhere in the body makes the method a setter — nested in a lambda, an
+    /// array or record literal, a match arm, an argument list, or a locally declared
+    /// function's body. Missing one is not cosmetic: an unclassified setter stays callable
+    /// on an `=`-bound receiver and mutates it. Both signals are node-local, so this is a
+    /// flat predicate over the shared structural walk, which is the one place that has to
+    /// know every expression form.
     pub(super) fn body_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
+        let mut mutates = false;
+        for_each_subexpression(expression, &mut |e| {
+            mutates = mutates || self.node_mutates_receiver(type_name, e);
+        });
+        mutates
+    }
+
+    /// Is THIS expression itself a mutation of `it` — ignoring its sub-expressions, which
+    /// the caller's walk visits separately?
+    fn node_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
         match expression {
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, .. } => {
                 Self::field_path_root_name(target).as_deref() == Some("it")
-                    || self.body_mutates_receiver(type_name, value)
             }
+            // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter applied to
+            // `it` propagates "mutating" to the caller.
             Expression::Call {
                 function,
                 arguments,
                 ..
             } => {
-                // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter
-                // applied to `it` propagates "mutating" to the caller.
-                if let Expression::Identifier { name, .. } = function.as_ref()
+                matches!(function.as_ref(), Expression::Identifier { name, .. }
+                    if self.setter_methods.contains(&(type_name.to_string(), name.clone())))
                     && arguments.first().is_some_and(
                         |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
                     )
-                    && self
-                        .setter_methods
-                        .contains(&(type_name.to_string(), name.clone()))
-                {
-                    return true;
-                }
-                arguments
-                    .iter()
-                    .any(|a| self.body_mutates_receiver(type_name, a))
-            }
-            Expression::Block { statements, .. } => statements.iter().any(|s| match s {
-                crate::ast::Statement::Expression(e) => self.body_mutates_receiver(type_name, e),
-                crate::ast::Statement::Item(Item::VariableDeclaration(d)) => {
-                    self.body_mutates_receiver(type_name, &d.value)
-                }
-                crate::ast::Statement::Item(_) => false,
-            }),
-            Expression::If {
-                condition,
-                then,
-                else_,
-                ..
-            } => {
-                self.body_mutates_receiver(type_name, condition)
-                    || self.body_mutates_receiver(type_name, then)
-                    || self.body_mutates_receiver(type_name, else_)
-            }
-            Expression::Match {
-                expression, arms, ..
-            } => {
-                self.body_mutates_receiver(type_name, expression)
-                    || arms
-                        .iter()
-                        .any(|a| self.body_mutates_receiver(type_name, &a.body))
-            }
-            Expression::BinaryOperator { left, right, .. } => {
-                self.body_mutates_receiver(type_name, left)
-                    || self.body_mutates_receiver(type_name, right)
-            }
-            Expression::UnaryOperator { expression, .. } => {
-                self.body_mutates_receiver(type_name, expression)
-            }
-            Expression::Pipeline { left, right, .. } => {
-                self.body_mutates_receiver(type_name, left)
-                    || self.body_mutates_receiver(type_name, right)
             }
             _ => false,
         }

@@ -322,6 +322,10 @@ A method is a **setter** (mutating) iff its body writes `it.field := …` (or ca
 another setter on `it`); there is no marker — the visible `:=` *is* the signal.
 Calling a setter requires a mutable (`:=`) receiver (see [Mutation](#mutation-in-place-field-writes--setters)).
 
+An unannotated method parameter defaults to `Num` (as in any [ordinary
+definition](#overloading--ad-hoc-and-explicit)), and call sites are held to that default:
+`t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
+
 ### Sum types — `/`
 A sum type (tagged union / enum) is a set of named **variants**, declared with `/`
 as the separator. Variants may be **nullary** or carry a payload:
@@ -481,7 +485,11 @@ c.value := c.value + 7         ~ direct field write    -> value = 42
 ```
 
 A method is a **setter** iff its body writes `it.field := …` (or calls another setter on
-`it`) — no marker; the `:=` is the signal. A setter call requires a `:=` receiver:
+`it`) — no marker; the `:=` is the signal. The write counts **wherever it appears in the
+body**, including nested inside a lambda, an array or record literal, a match arm, an
+argument list, or a function declared inside the body: `steps.each(s => it.value := s)`
+makes the method a setter just as a top-level `it.value := s` does. Nesting does not
+launder a mutation. A setter call requires a `:=` receiver:
 
 ```quilon
 c = Counter { value = 30 }   ~ `=` -> immutable

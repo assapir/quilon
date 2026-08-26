@@ -4,6 +4,31 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **Method checking: an immutability bypass and an unchecked call site.** Two soundness
+  holes in how methods were checked, both of which let a broken program past the checker.
+
+  A method that mutated `it` from **inside a lambda** — `steps.each(s => it.value := s)` —
+  was not classified a setter, because the walk that looks for the write had no case for a
+  lambda (nor for array, record, index, field-access or spread forms). An unclassified
+  setter stays callable on an `=`-bound receiver, which it then mutates: the headline
+  immutability promise, breakable in four lines. The same was true of a write inside a
+  function *declared* in the body. Setter classification is now a flat per-node predicate
+  over the AST's shared structural walk — one traversal that every analysis uses, exhaustive
+  with no catch-all arm, so a new expression form cannot silently reopen the hole: it fails
+  to compile until it is classified. (That walk moved from `deferral.rs` to `src/ast/walk.rs`
+  to be reachable from the checker.) The transitive rule (a method that calls another setter
+  is a setter) composes on top as before, so a setter reached only through a lambda-writing
+  sibling is caught too.
+
+  Separately, a method parameter with **no type annotation** defaults to `Num` when the body
+  is checked, but the call site skipped those arguments entirely. `t.add("hello")` on
+  `add = (x) => it.v + x` passed the checker and then died in codegen, printing a raw LLVM
+  verifier dump at the user. Call sites now hold arguments to the same `Num` the body was
+  checked against — which is what a plain function's unannotated parameter already did, so
+  this makes methods consistent rather than introducing a rule.
+
 ### Changed
 
 - **`quilon build` binaries are self-contained: the Boehm GC is linked statically

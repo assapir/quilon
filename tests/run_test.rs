@@ -301,6 +301,62 @@ fn setter_call_on_immutable_instance_is_a_type_error() {
 }
 
 #[test]
+fn setter_writing_through_a_lambda_is_still_a_setter() {
+    // A method that writes `it.field := …` from INSIDE a lambda is a setter just as
+    // surely as one that writes it directly — the write happens on the same receiver.
+    // Missing this made the method read as a getter, which left it callable on an
+    // `=`-bound instance that it then mutated: an immutability bypass, not a cosmetic
+    // misclassification.
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn setter_writing_through_a_locally_declared_function_is_still_a_setter() {
+    // The write can also sit in a function DECLARED inside the body. That body is still
+    // code the method runs on the same receiver, so it makes the method a setter too —
+    // the traversal must descend into a block's item declarations, not just its
+    // expression statements.
+    let src = "T = {\n  v :: Num\n  bump = () -> Num => <\n    helper = () -> $ => it.v := 99\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn setter_writing_through_a_lambda_still_composes_transitively() {
+    // The calls-another-setter rule must keep composing once the lambda write is seen:
+    // `viaBump` only calls `bump`, so it is a setter because `bump` is one.
+    let src = "T = {\n  v :: Num\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n  viaBump = () -> Num => it.bump()\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.viaBump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn a_lambda_writing_setter_runs_on_a_mutable_receiver() {
+    // The other half of the rule: classifying it as a setter must not make it
+    // uncallable. On a `:=` receiver it runs and mutates, leaving v = 2.
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_exit(src, 2);
+}
+
+#[test]
+fn unannotated_method_parameter_is_checked_as_num_at_the_call_site() {
+    // An unannotated method parameter defaults to `Num` when the BODY is checked, so
+    // the call site must hold arguments to that same commitment — exactly as a plain
+    // function's unannotated parameter already does. Leaving these unchecked let a
+    // `Text` argument through to codegen, where it surfaced as a raw LLVM verifier
+    // dump instead of a type error.
+    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => it.v + x\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(\"hello\")\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn unannotated_method_parameter_still_accepts_a_num() {
+    // The tightening must not reject the case it defaulted for: a `Num` argument is
+    // exactly what the body was checked against.
+    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => it.v + x\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(41)\n>";
+    assert_exit(src, 42);
+}
+
+#[test]
 fn setter_call_result_is_unit_not_num() {
     // A setter's body is a field write, which yields `$` (Unit) — so an unannotated
     // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
