@@ -173,82 +173,12 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
-  # This asset is the one that is NOT self-contained, and Arch leaves no way to make
-  # it so: its `llvm` package builds against the shared `libLLVM.so` and ships no
-  # static LLVM, and the upstream static package cannot be linked here either — it
-  # names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a Debian layout,
-  # and Arch's `zstd` ships no static archive at all (the same gap that made the
-  # collector a vendored submodule). So the asset links `libLLVM.so.22.1` and needs
-  # Arch's `llvm` installed. The portable Linux asset above needs nothing and runs
-  # here too.
-  arch:
-    name: Build x86_64-unknown-linux-gnu (Arch)
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-
-    env:
-      ASSET: quilon-x86_64-unknown-linux-gnu-arch
-      # Arch installs LLVM into /usr, not Debian's versioned prefix.
-      LLVM_SYS_221_PREFIX: /usr
-
-    steps:
-      # Before `actions/checkout`: without `git` in the image it falls back to
-      # downloading a source tarball, which would silently omit the bdwgc
-      # submodule. `safe.directory` keeps git from refusing the workspace it did
-      # not create — the container runs as root over a mounted host directory.
-      - name: Install toolchain
-        run: |
-          set -euxo pipefail
-          pacman -Syu --noconfirm git base-devel llvm curl
-          git config --global --add safe.directory '*'
-          llvm-config --version
-
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build release
-        run: |
-          set -euxo pipefail
-          cargo build --release --bin quilon
-          mv target/release/quilon "$ASSET"
-
-      - name: Record what the asset links
-        run: |
-          set -euo pipefail
-          file "$ASSET"
-          ldd "$ASSET"
-          ./"$ASSET" check examples/hello_world.qn
-          {
-            echo "### \`$ASSET\`"
-            echo
-            echo "Needs Arch's \`llvm\` package (LLVM 22) installed: it links"
-            echo "\`libLLVM.so.22.1\` and the libraries that package pulls in. The"
-            echo "portable \`quilon-x86_64-unknown-linux-gnu\` asset needs none of them"
-            echo "and runs on Arch as well."
-            echo
-            echo '```'
-            file "$ASSET"
-            ldd "$ASSET"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload asset
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
-          if-no-files-found: error
-
   # Every asset or none: a release that quietly omits a platform it advertises is
-  # worse than a tag whose build failed in the open and can be re-run.
+  # worse than a tag whose build failed in the open and can be re-run. Neither build
+  # job is `continue-on-error` for the same reason.
   publish:
     if: github.event_name == 'push'
-    needs: [linux, macos, arch]
+    needs: [linux, macos]
     runs-on: ubuntu-latest
 
     steps:

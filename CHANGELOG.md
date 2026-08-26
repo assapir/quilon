@@ -8,39 +8,39 @@ All notable changes to Quilon are documented here.
 
 - **The release publishes a binary per platform, under a new name each
   ([#49](https://github.com/assapir/quilon/issues/49)).** A release used to carry one asset,
-  named `quilon`, built on Ubuntu. It now carries three, and every one of them is named for
-  what it runs on — which **breaks any script or link that fetched the old bare `quilon`
-  asset**:
+  named `quilon`, built on Ubuntu. It now carries two, each named for what it runs on —
+  which **breaks any script or link that fetched the old bare `quilon` asset**:
 
-  | Platform | Asset | Needs installed |
-  | --- | --- | --- |
-  | Linux, x86_64, glibc 2.39+ | `quilon-x86_64-unknown-linux-gnu` | nothing |
-  | macOS, Apple silicon | `quilon-aarch64-apple-darwin` | nothing |
-  | Arch Linux, x86_64 | `quilon-x86_64-unknown-linux-gnu-arch` | `pacman -S llvm` |
+  | Platform | Asset |
+  | --- | --- |
+  | Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
+  | macOS, Apple silicon | `quilon-aarch64-apple-darwin` |
 
   Intel Macs are not covered: `macos-latest` is Apple silicon, and the asset is arm64 only.
 
-  The first two are self-contained — LLVM is linked into them, as the collector already was.
-  That took work on macOS, where Homebrew's `llvm@22` ships no static LLVM at all (it is
-  built `LLVM_LINK_LLVM_DYLIB=ON`, and a binary linked against it starts only where that
-  formula is installed): the job links the static archives from the upstream LLVM release
-  package instead.
+  Both are self-contained — LLVM is linked into them, as the collector already was, so they
+  run on a machine that has neither. That took work on macOS, where Homebrew's `llvm@22`
+  ships no static LLVM at all (it is built `LLVM_LINK_LLVM_DYLIB=ON`, and a binary linked
+  against it starts only where that formula is installed): the job links the static archives
+  from the upstream LLVM release package instead.
 
-  **The Arch asset is not self-contained**, and Arch leaves no way to make it so: its `llvm`
-  package also ships only a shared `libLLVM.so`, and the upstream static package cannot be
-  linked there either — it names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a
-  Debian layout, and Arch ships no static `zstd` (the same gap that made the collector a
-  vendored submodule). So it links `libLLVM.so.22.1` and needs Arch's `llvm` (LLVM 22)
-  installed, which also means it stops working when Arch moves to LLVM 23. The portable
-  Linux asset needs nothing and runs on Arch too.
+  There is no separate Arch asset, because there is nothing for it to do. The Linux asset is
+  built against an older glibc than a rolling distro carries and glibc runs binaries built
+  against older versions of itself, so it is the portable one everywhere — Arch included,
+  where it was checked by hand. A native Arch build would be the opposite: Arch's `llvm`
+  ships only a shared `libLLVM.so`, and the upstream static package cannot be linked there
+  either (it names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a Debian layout,
+  and Arch ships no static `zstd` — the same gap that made the collector a vendored
+  submodule), so it would have named `libLLVM.so.22.1` and needed LLVM 22 installed. CI
+  still builds and tests on Arch.
 
-  Each job proves its result rather than asserting it: it runs `ldd`/`otool -L` on the
-  binary it built and type-checks a program with it, publishes that output to the job
-  summary, and — for the two that promise self-containment — fails the release if an LLVM,
-  or on macOS anything outside the system libraries, is named there.
+  Neither claim is asserted on trust: each job runs `ldd`/`otool -L` on the binary it built
+  and type-checks a program with it, publishes that output to the job summary, and fails the
+  release if an LLVM — or on macOS anything outside the system libraries — is named there.
+  Neither job is allowed to fail quietly either, so a release carries both assets or none.
 
-  A manual run of the workflow builds all three and stops before publishing, so the matrix
-  can be exercised without spending a version number.
+  A manual run of the workflow builds both and stops before publishing, so the matrix can be
+  exercised without spending a version number.
 
 - **`quilon build` works on macOS, and CI covers macOS and Arch Linux
   ([#49](https://github.com/assapir/quilon/issues/49)).** The AOT link line was GNU-ld

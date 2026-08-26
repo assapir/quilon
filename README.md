@@ -43,15 +43,14 @@ The full list lives in **[LANGUAGE.md](./docs/LANGUAGE.md#design-principles)**.
 
 Download a binary from the [latest release](https://github.com/assapir/quilon/releases/latest), `chmod +x`, run:
 
-| Platform | Asset | Needs installed |
-| --- | --- | --- |
-| Linux, x86_64, glibc 2.39+ | `quilon-x86_64-unknown-linux-gnu` | nothing |
-| macOS, Apple silicon | `quilon-aarch64-apple-darwin` | nothing |
-| Arch Linux, x86_64 | `quilon-x86_64-unknown-linux-gnu-arch` | `pacman -S llvm` |
+| Platform | Asset |
+| --- | --- |
+| Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
+| macOS, Apple silicon | `quilon-aarch64-apple-darwin` |
 
-The first two are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither.
+Both are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither. Every release publishes the `ldd`/`otool -L` of each asset in its job summary, so that is checkable rather than promised.
 
-The Arch asset is the exception, and Arch is the reason: its `llvm` package ships only the shared `libLLVM.so`, with no static LLVM to link, so that binary names `libLLVM.so.22.1` and needs Arch's `llvm` (LLVM **22**) present — it stops working when Arch moves to LLVM 23. It is the native build for people who want it; **the portable Linux asset needs nothing and runs on Arch too**, so prefer that one. Every release publishes the `ldd`/`otool -L` of each asset in its job summary, so this is checkable rather than promised.
+The Linux asset is the one to use on **any** glibc distro, Arch included: it is built on Ubuntu, against an older glibc than a rolling distro carries, and glibc runs binaries built against older versions of itself — the reverse does not hold, which is why the portable build is the Ubuntu one.
 
 **Intel Macs are not covered** — the macOS asset is arm64 only. Build from source on one.
 
