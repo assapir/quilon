@@ -5,7 +5,8 @@
 //! run against.
 
 use super::*;
-use crate::ast::walk::for_each_subexpression;
+use crate::ast::walk::try_for_each_subexpression;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 impl TypeChecker {
@@ -471,11 +472,13 @@ impl TypeChecker {
     /// flat predicate over the shared structural walk, which is the one place that has to
     /// know every expression form.
     pub(super) fn body_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
-        let mut mutates = false;
-        for_each_subexpression(expression, &mut |e| {
-            mutates = mutates || self.node_mutates_receiver(type_name, e);
-        });
-        mutates
+        try_for_each_subexpression(expression, &mut |e| match self
+            .node_mutates_receiver(type_name, e)
+        {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
+        })
+        .is_break()
     }
 
     /// Is THIS expression itself a mutation of `it` — ignoring its sub-expressions, which
@@ -492,11 +495,12 @@ impl TypeChecker {
                 arguments,
                 ..
             } => {
-                matches!(function.as_ref(), Expression::Identifier { name, .. }
+                // The receiver test is free; the set probe allocates a key, so it goes
+                // second — this runs on every call node in every method body.
+                arguments.first().is_some_and(
+                    |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
+                ) && matches!(function.as_ref(), Expression::Identifier { name, .. }
                     if self.setter_methods.contains(&(type_name.to_string(), name.clone())))
-                    && arguments.first().is_some_and(
-                        |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
-                    )
             }
             _ => false,
         }
