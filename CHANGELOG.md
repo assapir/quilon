@@ -23,6 +23,10 @@ All notable changes to Quilon are documented here.
   `--recurse-submodules` (or `git submodule update --init`) — the build stops with exactly
   that instruction when the submodule is absent, rather than a wall of compiler errors.
 
+  `THIRD-PARTY-NOTICES.md` carries bdwgc's copyright and permission notice verbatim: the
+  collector's sources arrive as a submodule, so a source archive of this repository would
+  otherwise ship none of its notice text.
+
   The collector is built with upstream's configure defaults for a threaded POSIX build, so
   its behaviour is unchanged; `ALL_INTERIOR_POINTERS` is load bearing, since Quilon's
   `Text`/array values are `{ ptr, len }` pairs whose pointer may be interior. Costs, measured
