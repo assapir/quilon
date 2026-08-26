@@ -91,6 +91,30 @@ All notable changes to Quilon are documented here.
   (+2.8%). Runtime is flat to faster — `gc_churn` -6.0%, `text_loop` -7.1% — with peak RSS
   unchanged.
 
+### Fixed
+
+- **Debugging works from a GUI-launched editor, and from any directory
+  ([#200](https://github.com/assapir/quilon/issues/200)).** Two independent reasons a debug
+  session could not start:
+
+  The VS Code extension ran a bare `quilon`, so it only worked when the editor's process had
+  inherited a `PATH` containing it. An editor started from a desktop launcher usually has
+  not — `~/.cargo/bin` is added by a shell rc file — so an installed compiler still produced
+  `debug build failed: could not run "quilon"`. When `quilon.command` is left at its default
+  the extension now looks for the compiler itself: `PATH`, then the usual install directories
+  (`~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), then a
+  `target/release`|`debug` build in an open folder, then `cargo run --quiet --` when an open
+  folder is a checkout of this repository. An explicitly configured `quilon.command` is still
+  used verbatim (bar a bare `"quilon"`, which is the value that fails in the first place),
+  and when nothing can be spawned the notification says where it looked and
+  opens the setting.
+
+  A `--debug` build recorded the source directory exactly as typed, so
+  `quilon build --debug examples/hello.qn` wrote a relative `DW_AT_comp_dir` of `examples`.
+  A debugger resolves that against its own working directory, so the source only opened for a
+  debugger that happened to run from the directory the build did. The `DIFile` directory is
+  now absolute.
+
 ## 0.9.2 "Hegemon" — 2026-08-24
 
 ### Added

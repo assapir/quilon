@@ -120,15 +120,7 @@ impl<'ctx> DebugInfo<'ctx> {
 
         // Split the path into a directory + filename for the DIFile. Both are recorded in
         // the line table so a debugger can locate the `.qn` source.
-        let directory = file_path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| ".".to_string());
-        let filename = file_path
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| file_path.display().to_string());
+        let (directory, filename) = split_source_path(file_path);
 
         let (builder, compile_unit) = module.create_debug_info_builder(
             true,
@@ -544,26 +536,36 @@ impl<'ctx> DebugInfo<'ctx> {
     }
 }
 
+/// Split a `.qn` path into the `(directory, filename)` a DWARF `DIFile` records.
+///
+/// The directory is made **absolute** (against the compiling process's working directory)
+/// because a debugger resolves a relative `DW_AT_comp_dir` against its own working directory,
+/// which is rarely the one the build ran in: `quilon build -g examples/hello.qn` recorded
+/// `examples`, so an lldb started anywhere else could not open the source.
+fn split_source_path(path: &Path) -> (String, String) {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let directory = absolute
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let filename = absolute
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| absolute.display().to_string());
+    (directory, filename)
+}
+
 /// Split a source map display path into the `(directory, filename)` a DWARF `DIFile` records.
 ///
-/// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) splits
-/// into its parent directory and file name. A bundled built-in module is named by its dotted
-/// module path (`core.test`) rather than a file path; its source lives at `corelib/<leaf>.qn`
-/// in the repository, so it maps there — which is what lets a debugger open `corelib/test.qn`
-/// when a step lands in a corelib function in the in-repo dev flow.
+/// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) goes
+/// through [`split_source_path`]. A bundled built-in module is named by its dotted module path
+/// (`core.test`) rather than a file path; its source lives at `corelib/<leaf>.qn` in the
+/// repository, so it maps there — which is what lets a debugger open `corelib/test.qn` when a
+/// step lands in a corelib function in the in-repo dev flow.
 fn dwarf_file_location(path: &str) -> (String, String) {
     if path.ends_with(".qn") {
-        let p = Path::new(path);
-        let directory = p
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .map(|d| d.display().to_string())
-            .unwrap_or_else(|| ".".to_string());
-        let filename = p
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string());
-        (directory, filename)
+        split_source_path(Path::new(path))
     } else {
         let leaf = path.rsplit('.').next().unwrap_or(path);
         ("corelib".to_string(), format!("{leaf}.qn"))

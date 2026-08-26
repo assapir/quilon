@@ -16,15 +16,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { type ResolvedCompiler } from "./compilerCommand";
 import {
   buildArgs,
   firstNonEmptyLine,
   InFlightBuilds,
-  splitCommand,
   tempBinaryPath,
   toLldbConfiguration,
 } from "./debugConfig";
-import { quilonCommand } from "./extension";
+import { forgetResolvedCompiler, resolvedQuilonCompiler, showMissingCompiler } from "./extension";
 
 /** The CodeLLDB extension we delegate to; also declared in extensionDependencies. */
 const CODELLDB_ID = "vadimcn.vscode-lldb";
@@ -78,18 +78,26 @@ async function saveIfDirty(file: string): Promise<boolean> {
   }
 }
 
+/** Thrown when the compiler itself could not be spawned, as opposed to failing to build. */
+class CompilerMissing extends Error {
+  constructor(readonly compiler: ResolvedCompiler) {
+    super("compiler not found");
+  }
+}
+
 /** Build `file` into `output` with DWARF line info; reject with the compiler's message on failure. */
-function buildDebugBinary(file: string, output: string, cwd: string | undefined): Promise<void> {
-  const { exe, baseArgs } = splitCommand(quilonCommand());
+function buildDebugBinary(
+  compiler: ResolvedCompiler,
+  file: string,
+  output: string,
+  cwd: string | undefined,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(exe, buildArgs(baseArgs, file, output), { cwd }, (error, _stdout, stderr) => {
+    const args = buildArgs(compiler.baseArgs, file, output);
+    execFile(compiler.exe, args, { cwd }, (error, _stdout, stderr) => {
       if (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          reject(
-            new Error(
-              `could not run "${exe}". Set "quilon.command" to your compiler (e.g. "cargo run --").`,
-            ),
-          );
+          reject(new CompilerMissing(compiler));
           return;
         }
         reject(new Error(firstNonEmptyLine(stderr) ?? error.message));
@@ -158,6 +166,7 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
         vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file))?.uri.fsPath;
       const output = tempBinaryPath(file);
 
+      const compiler = resolvedQuilonCompiler();
       try {
         await vscode.window.withProgress(
           {
@@ -165,12 +174,19 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
             title: `Quilon: building ${base} for debug…`,
             cancellable: false,
           },
-          () => buildDebugBinary(file, output, cwd),
+          () => buildDebugBinary(compiler, file, output, cwd),
         );
       } catch (error) {
-        void vscode.window.showErrorMessage(
-          `Quilon: debug build failed: ${(error as Error).message}`,
-        );
+        // A compiler we couldn't spawn is a setup problem, not a build failure:
+        // say how to fix it, and re-resolve in case one is installed meanwhile.
+        if (error instanceof CompilerMissing) {
+          forgetResolvedCompiler();
+          showMissingCompiler(error.compiler, "cannot debug — ");
+        } else {
+          void vscode.window.showErrorMessage(
+            `Quilon: debug build failed: ${(error as Error).message}`,
+          );
+        }
         return undefined;
       }
 

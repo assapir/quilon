@@ -658,3 +658,44 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A relative source path must still be recorded absolutely. A debugger resolves a
+/// relative `DW_AT_comp_dir` against *its own* working directory, so `quilon build --debug
+/// examples/hello_world.qn` used to produce a binary whose source only opened when lldb
+/// happened to run from the same directory the build did.
+#[test]
+fn a_relative_source_path_is_recorded_absolutely() {
+    // Cargo runs integration tests with the crate root as the working directory, so this
+    // relative path is the same shape a user types.
+    let relative = Path::new("examples/hello_world.qn");
+    assert!(relative.exists(), "the example this test builds must exist");
+
+    let checked = front_end(relative).unwrap_or_else(|e| panic!("front end failed: {e}"));
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "main");
+    generator.set_type_table(checked.types);
+    generator.set_defer_info(checked.defer);
+    generator.enable_debug(relative, &checked.sources);
+    generator.set_source_map(checked.sources);
+    let ir = generator
+        .generate(&checked.program)
+        .unwrap_or_else(|e| panic!("debug codegen failed: {e}"));
+
+    let file = ir
+        .lines()
+        .find(|line| line.contains("!DIFile(filename: \"hello_world.qn\""))
+        .unwrap_or_else(|| panic!("no !DIFile for the root source in:\n{ir}"));
+    let directory = file
+        .split("directory: \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no directory in {file:?}"));
+    assert!(
+        Path::new(directory).is_absolute(),
+        "the DIFile directory must be absolute, got {directory:?}"
+    );
+    assert!(
+        Path::new(directory).ends_with("examples"),
+        "the DIFile directory must still name the source's own directory, got {directory:?}"
+    );
+}

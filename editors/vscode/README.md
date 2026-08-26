@@ -86,10 +86,13 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests (`pnpm test`) cover three things, all kept free of any `vscode`
+Unit tests (`pnpm test`) cover four things, all kept free of any `vscode`
 import so they run under plain Node:
 
 - the diagnostic-output parser (`src/diagnostics.ts` ↔ `src/diagnostics.test.ts`);
+- compiler resolution (`src/compilerCommand.ts` ↔ `src/compilerCommand.test.ts`) —
+  the search order above, over an injected view of a make-believe machine
+  (`PATH`, install directories, open folders, `PATHEXT` on Windows);
 - the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
   `src/entryPoints.test.ts`);
 - **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
@@ -102,14 +105,15 @@ import so they run under plain Node:
 
 To verify the **inline diagnostics** end-to-end manually:
 
-1. Set `quilon.command` to a working compiler (e.g. `"cargo run --"` from a
-   checkout, or `"quilon"` if it's on your `PATH`).
+1. Have a working compiler — installed (`cargo install --path .`), built in the
+   open checkout, or named by `quilon.command` (e.g. `"cargo run --"`).
 2. Launch the Extension Development Host (`F5`) and open a `.qn` file with a
    type error (e.g. `examples/type_error.qn`) — a red squiggle should appear at
    the reported span, with the message in the Problems panel.
 3. Fix the error and save — the squiggle clears.
 4. Point `quilon.command` at a non-existent binary and reopen a `.qn` file — a
-   single warning notification appears (it does not repeat).
+   single warning notification appears (it does not repeat), naming that setting
+   and offering **Open Settings**.
 
 To verify **`$` highlighting**, open `examples/unit.qn`: both the `-> $` return
 type and the `$` value are colored like the built-in types (`Num`/`Text`/`Bool`).
@@ -121,14 +125,38 @@ Two commands are contributed (open the Command Palette, `Ctrl/Cmd+Shift+P`):
 - **Quilon: Check Current File** → runs `quilon check <file>`
 - **Quilon: Run Current File** → runs `quilon run <file>`
 
-They run in an integrated terminal named "Quilon". By default they invoke a
-`quilon` binary on your `PATH`. If you are working from a checkout of the
-compiler instead, set:
+They run in an integrated terminal named "Quilon".
+
+### Which compiler gets run
+
+Left at its default, `quilon.command` is not a literal command — the extension
+locates a compiler itself, taking the first of:
+
+1. `quilon` on the `PATH` the editor's process inherited;
+2. `quilon` in a usual install directory — `~/.cargo/bin`, `~/.local/bin`,
+   `/usr/local/bin`, `/opt/homebrew/bin`;
+3. a `target/release/quilon` or `target/debug/quilon` built in an open folder;
+4. `cargo run --quiet --`, when an open folder is a checkout of the compiler repo
+   (its `Cargo.toml` names the crate) and `cargo` is available.
+
+Step 2 is what makes an editor started from a desktop launcher work: a GUI
+process inherits no `PATH` from your shell rc, so a `cargo install`ed compiler is
+on none of it.
+
+To pin the invocation instead, set the setting — it is then used verbatim, with
+no search (a bare `"quilon"` is the exception: it says nothing the default
+doesn't, so it searches too):
 
 ```jsonc
 // settings.json
 "quilon.command": "cargo run --"
 ```
+
+Every feature that runs the compiler — diagnostics, Check, Run, and the debug
+build — uses the one resolution, so they never disagree about which compiler
+this workspace has. If none can be spawned, the notification says where it
+looked and offers to open the setting; installing one afterwards is picked up on
+the next check or debug, with no reload.
 
 The bundled `.vscode/tasks.json` also provides **quilon: check current file**
 and **quilon: run current file** tasks (`Terminal → Run Task…`).
@@ -145,10 +173,6 @@ actions:
   [Debugging](#debugging)).
 
 Both act on the file containing the lens.
-
-> The `quilon run` subcommand must exist in your toolchain. Depending on your
-> build it may instead be `compile` + manual `llc`/link — see the repo's
-> `CLAUDE.md` / `docs/LANGUAGE.md`.
 
 ## Diagnostics
 
