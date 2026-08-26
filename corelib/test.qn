@@ -22,7 +22,7 @@
 ~ ── The harness ────────────────────────────────────────────────────────────────────
 ~ `quilon test` runs a file's top-level `describe` blocks; every other command compiles
 ~ the file without them. A test file has no `^`. A case asserts with the assertions
-~ above, so the FIRST failure ends the run — see docs/corelib/test.md.
+~ above, so the first failure ends its suite — see docs/corelib/test.md.
 ~
 ~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
 ~   it(name, body)        one case, reported once it has run.
@@ -33,7 +33,7 @@
 ~   )
 ~
 ~ ── Reporters ──────────────────────────────────────────────────────────────────────
-~ What a run LOOKS like is decided here, not in the compiler: the harness records what
+~ What a run looks like is decided here, not in the compiler: the harness records what
 ~ happened through the reporter-agnostic registry (`__test_*`) and renders through the
 ~ `report*` functions below. A reporter of your own defines the same three, and the
 ~ entry `quilon test` synthesizes calls `reportSummary()` last, for the exit code.
