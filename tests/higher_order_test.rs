@@ -108,6 +108,26 @@ fn closure_passed_to_higher_order_function() {
 }
 
 #[test]
+fn capturing_nested_higher_order_function() {
+    // A nested higher-order function that ALSO captures an outer binding is lifted through
+    // the closure machinery; its function-typed parameter must still be callable there.
+    assert_exit(
+        "^ = () -> Num => <\n  base = 1\n  g = (h :: (Num) -> Num) -> Num => h(base)\n  g((n :: Num) => n + 41)\n>",
+        42,
+    );
+}
+
+#[test]
+fn method_with_function_typed_parameter() {
+    // A record method may take a function value and call it on a field of the receiver.
+    assert_exit(
+        "Calc = {\n  factor :: Num,\n  applyTo = (f :: (Num) -> Num) -> Num => f(it.factor)\n}\n\
+         ^ = () -> Num => <\n  c = Calc { factor = 41 }\n  c.applyTo((n :: Num) => n + 1)\n>",
+        42,
+    );
+}
+
+#[test]
 fn predicate_typed_parameter() {
     // A `(Num) -> Bool` parameter used in a conditional.
     assert_exit(

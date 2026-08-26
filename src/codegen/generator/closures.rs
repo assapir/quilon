@@ -594,10 +594,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(alloca, llvm_parameter)
                 .map_err(ctx("Failed to store parameter"))?;
             self.variables.insert(parameter.name.clone(), (alloca, pty));
+            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
+            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,
-                parameter.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &qty,
                 &parameter.span,
                 Some((i + 1) as u32),
             );

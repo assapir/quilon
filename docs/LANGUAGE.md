@@ -502,9 +502,10 @@ double = (x :: Num) => x * 2               ~ one param
 add    = (a :: Num, b :: Num) => a + b     ~ multiple params
 typed  = (a :: Num, b :: Num) -> Num => a + b
 ```
-Every parameter must be annotated — there is no default type. A parameter whose type
-cannot be filled in from context (a lambda argument gets its parameter types from the
-call it is passed into) is a compile error that names the parameter.
+Every function and method parameter must be annotated — there is no default type; an
+unannotated parameter is a compile error that names it. The one exception is a lambda
+passed to a built-in collection method (`.map` / `.filter` / `.reduce` / `.each`), whose
+parameter type is taken from the element type of the receiver.
 Multi-statement bodies use `< >` blocks (the last expression is the value):
 ```quilon
 compute = (x :: Num) => <
