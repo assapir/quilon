@@ -82,10 +82,10 @@ pub struct Checked {
     /// value, and whether any `@` primitive launch is reachable. Codegen reads it to emit
     /// the promise representation and forces; empty for pure programs.
     pub defer: crate::deferral::DeferInfo,
-    /// The file held nothing but test blocks and imports — no declarations of its own. It
-    /// is therefore not a compilation unit at all, which `run`/`compile`/`build` answer by
-    /// passing over it in silence. Recorded before the link, since `program.items` picks up
-    /// every imported module's exports.
+    /// The file is a test suite rather than a program: it has top-level test blocks and no
+    /// `^` of its own (whatever fixtures its cases need are fine). Stripping the blocks
+    /// leaves nothing to run, so `run`/`compile`/`build` pass over it in silence. Recorded
+    /// before the link, which merges an `^` from nowhere but would blur "of its own".
     pub tests_only: bool,
 }
 

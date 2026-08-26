@@ -73,10 +73,10 @@ fn checked(file: &Path) -> driver::Checked {
     }
 }
 
-/// [`checked`], exiting 0 without a word when the file holds nothing but test blocks. Such
-/// a file is not a compilation unit — stripping its tests leaves nothing to compile — so
-/// `run`, `compile`, and `build` pass over it rather than reporting a missing `^`;
-/// `quilon test` is what runs it. Call it before printing anything, so the skip is silent.
+/// [`checked`], exiting 0 without a word when the file is a test suite rather than a
+/// program. Stripping its blocks leaves nothing to run, so `run`, `compile`, and `build`
+/// pass over it rather than reporting a missing `^`; `quilon test` is what runs it. Call it
+/// before printing anything, so the skip is silent.
 fn checked_program_to_emit(file: &Path) -> driver::Checked {
     let checked = checked(file);
     if checked.tests_only {
