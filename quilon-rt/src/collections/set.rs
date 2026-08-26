@@ -6,7 +6,7 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, gc_alloc};
+use super::common::{FixedState, QlKey, debug_check_user_key, gc_alloc};
 use std::collections::HashSet;
 use std::os::raw::c_void;
 
@@ -50,25 +50,48 @@ pub extern "C" fn __set_new() -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __set_add(set: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+pub extern "C" fn __set_add(
+    set: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> *mut c_void {
     let set = set as *const QlSet;
     let mut table = unsafe { (*set).table.clone() };
-    table.insert(QlKey::new(tag, a, b));
+    let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
+    debug_check_user_key(table.iter(), &key);
+    table.insert(key);
     unsafe { build_set(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __set_remove(set: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+pub extern "C" fn __set_remove(
+    set: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> *mut c_void {
     let set = set as *const QlSet;
     let mut table = unsafe { (*set).table.clone() };
-    table.remove(&QlKey::new(tag, a, b));
+    table.remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
     unsafe { build_set(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __set_has(set: *const c_void, tag: i64, a: i64, b: i64) -> i64 {
+pub extern "C" fn __set_has(
+    set: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> i64 {
     let set = set as *const QlSet;
-    unsafe { (*set).table.contains(&QlKey::new(tag, a, b)) as i64 }
+    unsafe { (*set).table.contains(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64 }
 }
 
 #[unsafe(no_mangle)]
