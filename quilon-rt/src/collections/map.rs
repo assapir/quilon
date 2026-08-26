@@ -5,7 +5,7 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, gc_alloc};
+use super::common::{FixedState, QlKey, debug_check_user_key, gc_alloc};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
@@ -55,37 +55,52 @@ pub extern "C" fn __map_new() -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "C" fn __map_set(
     map: *const c_void,
     tag: i64,
     a: i64,
     b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
     value: *const c_void,
 ) -> *mut c_void {
     let map = map as *const QlMap;
     let mut table = unsafe { (*map).table.clone() };
-    table.insert(QlKey::new(tag, a, b), value);
+    let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
+    debug_check_user_key(table.keys(), &key);
+    table.insert(key, value);
     unsafe { build_map(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __map_remove(map: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+pub extern "C" fn __map_remove(
+    map: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> *mut c_void {
     let map = map as *const QlMap;
     let mut table = unsafe { (*map).table.clone() };
-    table.remove(&QlKey::new(tag, a, b));
+    table.remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
     unsafe { build_map(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "C" fn __map_get(
     map: *const c_void,
     tag: i64,
     a: i64,
     b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
     found_out: *mut i64,
 ) -> *const c_void {
     let map = map as *const QlMap;
-    match unsafe { (*map).table.get(&QlKey::new(tag, a, b)) } {
+    match unsafe { (*map).table.get(&QlKey::new(tag, a, b, hash_fn, eq_fn)) } {
         Some(value) => {
             unsafe { *found_out = 1 };
             *value
@@ -98,9 +113,20 @@ pub extern "C" fn __map_get(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __map_has(map: *const c_void, tag: i64, a: i64, b: i64) -> i64 {
+pub extern "C" fn __map_has(
+    map: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> i64 {
     let map = map as *const QlMap;
-    unsafe { (*map).table.contains_key(&QlKey::new(tag, a, b)) as i64 }
+    unsafe {
+        (*map)
+            .table
+            .contains_key(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64
+    }
 }
 
 #[unsafe(no_mangle)]

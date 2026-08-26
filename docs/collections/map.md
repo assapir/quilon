@@ -11,9 +11,32 @@ ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41|]   ~ a Map
 empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 ```
 
-**Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`. A
-map is **immutable / persistent**: every mutator (`set`) returns a **new** map and never
-touches the receiver.
+**Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or a
+**user type that opts in** (see below). A map is **immutable / persistent**: every mutator
+(`set`) returns a **new** map and never touches the receiver.
+
+## User-defined key types
+
+A record or sum type becomes a key by defining two members (see
+[operator members](../LANGUAGE.md#operators)):
+
+- a **`%` hash hook** — a unary member `% = () -> Num => …` (`it` is the value) returning a
+  `Num` hash;
+- an **`==` member** — the usual equality, `== = (other :: T) -> Bool => …`.
+
+Both are required: a type used as a key with only one is a compile error. Keys are hashed
+and compared through these members, so `%` and `==` must agree — two keys that are `==`
+must return the same `%` (debug builds check this and fail loud on a violation). The `%`
+hook has no call syntax of its own; the collections invoke it.
+
+```quilon
+Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+grid :: [|Point => Text|] = [|Point { x = 0, y = 0 } => "origin"|]
+```
 
 **Iteration order is UNSPECIFIED** — conceptually a map is unordered, so never rely on the
 order of `keys`/`values`/`each`. (It is the hash order, *not* insertion order. A fixed-seed

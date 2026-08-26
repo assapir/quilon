@@ -2,10 +2,18 @@
 ~   Map: get / has / set / remove / keys / values / size / each.
 ~ Values are read only through `.get`, which returns `Ok(value)` when the key is present
 ~   and `NotOk` when it is absent — there is no bracket indexing on a map.
+~ Keys are Num/Text/Bool, or a user type that defines both a `%` hash hook (unary,
+~   `it` the value, returning a Num) and an `==` equality — see the `Point` map below.
 ~ Maps are IMMUTABLE — every mutator returns a NEW map. Iteration order is UNSPECIFIED
 ~   (reproducible run-to-run via a fixed-seed hasher, but never rely on it).
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
+
+Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
 
 ^ = () -> $ => <
   ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41, "grace" => 45|]
@@ -55,4 +63,22 @@
   >
   )
   assertEq(sum, 122)
+
+  ~ A Map keyed by a user record type hashes and compares keys through `%`/`==`.
+  grid :: [|Point => Text|] = [|
+    Point { x = 0, y = 0 } => "origin",
+    Point { x = 1, y = 2 } => "here"
+  |]
+  assert(grid.has(Point { x = 0, y = 0 }))
+  assert(!grid.has(Point { x = 9, y = 9 }))
+  assertEq(grid.size, 2)
+
+  ~ `.get` looks up by value equality, returning a Result.
+  label :: Text = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
+  assertEq(label, "here")
+
+  ~ Mutators return a NEW collection (the receiver is immutable).
+  bigger :: [|Point => Text|] = grid.set(Point { x = 3, y = 4 }, "new")
+  assertEq(bigger.size, 3)
+  assertEq(grid.size, 2)
 >
