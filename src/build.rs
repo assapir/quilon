@@ -205,37 +205,45 @@ const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
 #[cfg(not(target_os = "macos"))]
 const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 
-/// Linker arguments that pull EVERY object out of `libquilon_rt.a`, not just the
-/// members that resolve an already-undefined symbol.
+/// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
+/// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
+/// the emitted LLVM IR — that a plain archive scan could otherwise drop (nondeterministically,
+/// depending on the staticlib's codegen-unit split and archive member order), surfacing as an
+/// `undefined reference`.
 ///
-/// The Rust staticlib splits the `#[no_mangle]` runtime intrinsics across
-/// codegen-unit objects (and their order in the archive is unspecified), so a
-/// single linker pass over the archive can miss an intrinsic the program
-/// references (e.g. `__text_cmp`) when its defining object sits earlier than the
-/// object that first pulled the archive in — manifesting as an `undefined
-/// reference` only under whatever CU split CI happens to produce. Forcing the
-/// whole archive in makes inclusion deterministic.
+/// On GNU ld the retention is narrow: one `-u <symbol>` per intrinsic seeds an undefined
+/// reference the archive scan resolves, pinning exactly those members and pulling the rest in on
+/// demand. This replaces a former blanket `--whole-archive` — which force-included every object,
+/// unreferenced compiler-support and std objects among them — and drops roughly a tenth of a
+/// hello-world's size. The set is driven from `quilon_rt::INTRINSICS`, the one registry of
+/// intrinsic names, so it cannot drift from what the code generator emits.
 ///
-/// The two linkers spell this differently, and neither accepts the other's form:
-/// GNU ld brackets the archive with `--whole-archive` / `--no-whole-archive` (the
-/// closing flag restores normal on-demand linking for the system libs that
-/// follow), while Apple's ld64 takes one `-force_load` per archive.
+/// It does NOT drop the concurrency runtime (scheduler, `mio` reactor, `corosensei` stacks) from
+/// a program that never blocks, and cannot: rustc partitions the staticlib into codegen-unit
+/// objects freely, co-locating a generic instantiation an always-used intrinsic needs (`__exit`
+/// reaches `drop_glue::<Vec<u8>>`) in the same object as concurrency code, so pulling that object
+/// pulls the concurrency machinery transitively — no per-intrinsic `-u` partition changes that.
+/// Dropping it needs `--gc-sections` (with function-sections in the runtime build) or splitting
+/// the concurrency runtime into its own crate; both carry conservative-GC and retained-symbol
+/// correctness questions and are left as follow-up.
 ///
-/// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted
-/// copy carries a content-hash suffix in its filename, which `-l` name lookup
-/// could not address.
-fn whole_archive_args(rt_lib: &Path) -> Vec<std::ffi::OsString> {
-    let archive = rt_lib.as_os_str().to_os_string();
+/// ld64 (macOS) keeps the whole-archive form: a per-intrinsic `-u` would need each name spelled
+/// with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a hard link error, so
+/// `-force_load` on the archive path is both correct and unconditionally safe there. The narrow
+/// retention is the GNU-ld win; extending it to ld64 is follow-up.
+///
+/// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted copy carries a
+/// content-hash suffix in its filename, which `-l` name lookup could not address.
+fn append_runtime_link_args(command: &mut Command, rt_lib: &Path) {
     if cfg!(target_os = "macos") {
         let mut forced = std::ffi::OsString::from("-Wl,-force_load,");
-        forced.push(&archive);
-        vec![forced]
+        forced.push(rt_lib.as_os_str());
+        command.arg(forced);
     } else {
-        vec![
-            "-Wl,--whole-archive".into(),
-            archive,
-            "-Wl,--no-whole-archive".into(),
-        ]
+        for (name, _) in quilon_rt::INTRINSICS {
+            command.arg("-u").arg(name);
+        }
+        command.arg(rt_lib);
     }
 }
 
@@ -254,22 +262,21 @@ pub fn build_native(
     emit_object(program, types, defer, sources, &obj, debug)?;
     let rt_lib = runtime_lib_path()?;
 
-    let status = Command::new(linker)
-        .arg(&obj)
-        .args(whole_archive_args(&rt_lib))
-        .args(SYSTEM_LIBS)
-        .arg("-o")
-        .arg(out)
-        .status()
-        .map_err(|e| match e.kind() {
-            // Name the missing binary instead of a bare "No such file or
-            // directory (os error 2)".
-            std::io::ErrorKind::NotFound => format!(
-                "linker `{linker}` not found on PATH. Install it, or pass \
+    let mut command = Command::new(linker);
+    command.arg(&obj);
+    append_runtime_link_args(&mut command, &rt_lib);
+    command.args(SYSTEM_LIBS);
+    command.arg("-o").arg(out);
+
+    let status = command.status().map_err(|e| match e.kind() {
+        // Name the missing binary instead of a bare "No such file or
+        // directory (os error 2)".
+        std::io::ErrorKind::NotFound => format!(
+            "linker `{linker}` not found on PATH. Install it, or pass \
                  `--linker <name>` (e.g. `--linker gcc`)."
-            ),
-            _ => format!("failed to invoke linker `{linker}`: {e}"),
-        });
+        ),
+        _ => format!("failed to invoke linker `{linker}`: {e}"),
+    });
 
     // Drop the intermediate object whether or not linking succeeded.
     let _ = std::fs::remove_file(&obj);

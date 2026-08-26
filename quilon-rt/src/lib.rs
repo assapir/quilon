@@ -101,9 +101,9 @@ macro_rules! intrinsic_registry {
         /// though nothing in this crate calls them (they are only ever called from the
         /// LLVM IR the code generator emits, which rustc never sees). Without an in-crate
         /// reference, the staticlib's link step could dead-strip an intrinsic, and this
-        /// `#[used]` table is the reachability root that pins all of them; the AOT link
-        /// then wraps the archive in `--whole-archive`, so every object in it is pulled
-        /// into the executable.
+        /// `#[used]` table is the reachability root that pins all of them into the archive; the
+        /// AOT link then retains those members again at the executable link — under GNU ld with a
+        /// narrow `-u <symbol>` per intrinsic, under ld64 by force-loading the archive.
         ///
         /// What checks that this still works is `tests/intrinsic_link_test.rs`: it builds
         /// a program reaching every intrinsic and links it under both linkers, so a
