@@ -36,15 +36,24 @@ struct KeyAbi<'ctx> {
 }
 
 impl<'ctx> KeyAbi<'ctx> {
-    /// The five ABI words in order, for splicing into a runtime call's argument list.
-    fn arguments(&self) -> [BasicMetadataValueEnum<'ctx>; 5] {
-        [
+    /// A runtime key-op call's argument list: the `leading` collection pointer, the five key
+    /// ABI words `(tag, a, b, hash_fn, eq_fn)`, then any `trailing` arguments (a boxed value
+    /// for `set`, the found-out slot for `get`).
+    fn call_arguments(
+        &self,
+        leading: BasicMetadataValueEnum<'ctx>,
+        trailing: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Vec<BasicMetadataValueEnum<'ctx>> {
+        let mut arguments = vec![
+            leading,
             self.tag.into(),
             self.a.into(),
             self.b.into(),
             self.hash_fn.into(),
             self.eq_fn.into(),
-        ]
+        ];
+        arguments.extend_from_slice(trailing);
+        arguments
     }
 }
 
@@ -67,10 +76,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let key = self.key_abi(key_expression, &key_ty)?;
             let value = self.generate_expression(value_expression)?;
             let boxed = self.box_value(value, value_llvm)?;
-            let mut arguments = vec![map.into()];
-            arguments.extend(key.arguments());
-            arguments.push(boxed.into());
-            map = self.call_rt_ptr("__map_set", &arguments)?;
+            map = self.call_rt_ptr(
+                "__map_set",
+                &key.call_arguments(map.into(), &[boxed.into()]),
+            )?;
         }
         Ok(map.into())
     }
@@ -88,9 +97,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut set = self.call_rt_ptr("__set_new", &[])?;
         for elem in elements {
             let key = self.key_abi(elem, &elem_ty)?;
-            let mut arguments = vec![set.into()];
-            arguments.extend(key.arguments());
-            set = self.call_rt_ptr("__set_add", &arguments)?;
+            set = self.call_rt_ptr("__set_add", &key.call_arguments(set.into(), &[]))?;
         }
         Ok(set.into())
     }
@@ -112,26 +119,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         match method {
             "has" => {
                 let key = self.key_abi(&arguments[1], &key_ty)?;
-                let mut call_arguments = vec![map.into()];
-                call_arguments.extend(key.arguments());
-                let found = self.call_rt_int("__map_has", &call_arguments)?;
+                let found = self.call_rt_int("__map_has", &key.call_arguments(map.into(), &[]))?;
                 self.int_to_bool(found, "rt_bool")
             }
             "set" => {
                 let key = self.key_abi(&arguments[1], &key_ty)?;
                 let value = self.generate_expression(&arguments[2])?;
                 let boxed = self.box_value(value, value_llvm)?;
-                let mut call_arguments = vec![map.into()];
-                call_arguments.extend(key.arguments());
-                call_arguments.push(boxed.into());
-                let out = self.call_rt_ptr("__map_set", &call_arguments)?;
+                let out = self.call_rt_ptr(
+                    "__map_set",
+                    &key.call_arguments(map.into(), &[boxed.into()]),
+                )?;
                 Ok(out.into())
             }
             "remove" => {
                 let key = self.key_abi(&arguments[1], &key_ty)?;
-                let mut call_arguments = vec![map.into()];
-                call_arguments.extend(key.arguments());
-                let out = self.call_rt_ptr("__map_remove", &call_arguments)?;
+                let out = self.call_rt_ptr("__map_remove", &key.call_arguments(map.into(), &[]))?;
                 Ok(out.into())
             }
             "get" => self.generate_map_get(map, &arguments[1], &key_ty, value_llvm),
@@ -157,10 +160,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let key = self.key_abi(key_expression, key_ty)?;
         let i64t = self.context.i64_type();
         let found_slot = self.create_entry_block_alloca("mget_found", i64t.into())?;
-        let mut call_arguments = vec![map.into()];
-        call_arguments.extend(key.arguments());
-        call_arguments.push(found_slot.into());
-        let boxed = self.call_rt_ptr("__map_get", &call_arguments)?;
+        let boxed = self.call_rt_ptr(
+            "__map_get",
+            &key.call_arguments(map.into(), &[found_slot.into()]),
+        )?;
         let found = self
             .builder
             .build_load(i64t, found_slot, "mget_found_v")
@@ -281,23 +284,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         match method {
             "has" => {
                 let key = self.key_abi(&arguments[1], &elem_ty)?;
-                let mut call_arguments = vec![set.into()];
-                call_arguments.extend(key.arguments());
-                let found = self.call_rt_int("__set_has", &call_arguments)?;
+                let found = self.call_rt_int("__set_has", &key.call_arguments(set.into(), &[]))?;
                 self.int_to_bool(found, "rt_bool")
             }
             "add" => {
                 let key = self.key_abi(&arguments[1], &elem_ty)?;
-                let mut call_arguments = vec![set.into()];
-                call_arguments.extend(key.arguments());
-                let out = self.call_rt_ptr("__set_add", &call_arguments)?;
+                let out = self.call_rt_ptr("__set_add", &key.call_arguments(set.into(), &[]))?;
                 Ok(out.into())
             }
             "remove" => {
                 let key = self.key_abi(&arguments[1], &elem_ty)?;
-                let mut call_arguments = vec![set.into()];
-                call_arguments.extend(key.arguments());
-                let out = self.call_rt_ptr("__set_remove", &call_arguments)?;
+                let out = self.call_rt_ptr("__set_remove", &key.call_arguments(set.into(), &[]))?;
                 Ok(out.into())
             }
             "items" => self.build_items_array(set, &elem_ty),
