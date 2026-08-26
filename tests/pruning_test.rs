@@ -69,11 +69,11 @@ fn reachability_follows_a_chain_of_calls() {
 
 #[test]
 fn an_operator_overload_reached_only_by_the_operator_survives() {
-    // `p + q` is the sole mention of the `+` member: no call by name anywhere.
+    // `p + q` is the sole mention of the `+` member: no call by name anywhere. The
+    // operator is a member of `Money`, and a type's members ride along with it.
     assert_exit(
         concat!(
-            "Money = { amount :: Num }\n",
-            "+ = (a :: Money, b :: Money) -> Money => Money { amount = a.amount + b.amount }\n",
+            "Money = { amount :: Num, + = (other :: Money) -> Money => Money { amount = it.amount + other.amount } }\n",
             "^ = () -> Num => <\n",
             "  total = Money { amount = 40 } + Money { amount = 2 }\n",
             "  total.amount\n",

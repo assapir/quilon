@@ -337,6 +337,12 @@ impl<'a> Parser<'a> {
 
     // Match helper functions
     pub(super) fn match_equality(&mut self) -> Option<BinaryOperator> {
+        // A trailing `== =`/`!= =` is an operator MEMBER definition (e.g. inside a type's
+        // `{ }` block), not `expr == …` — stop so `parse_member_block` picks it up. The
+        // other operator levels guard the same way.
+        if self.at_operator_definition() {
+            return None;
+        }
         if self.check(&TokenKind::Eq) {
             self.advance();
             Some(BinaryOperator::Eq)

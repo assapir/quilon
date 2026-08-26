@@ -68,6 +68,15 @@ pub fn assert_type_error(src: &str) {
     );
 }
 
+/// Assert `src` is REJECTED by the parser (a syntactic error, before type checking).
+pub fn assert_parse_error(src: &str) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    assert!(
+        parser::parse(&tokens).is_err(),
+        "expected a parse error for source:\n{src}"
+    );
+}
+
 /// Compile and run `src` as a SUBPROCESS (`quilon run`), returning `(exit code, stderr)`
 /// and the path it was written to.
 ///

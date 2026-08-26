@@ -425,28 +425,29 @@ fn run_overload_set_resolves_by_argument_type() {
 
 #[test]
 fn run_operator_overload_on_user_type() {
-    // A user `==` overload on a record type; resolved like any operator overload and
-    // lowered to a direct call. Returns Bool, used in a ternary.
+    // A `==` operator MEMBER of a record type (`it` = left operand, the one parameter =
+    // right); resolved like any operator overload and lowered to a direct call. Returns
+    // Bool, used in a ternary.
     assert_exit(
-        "P = { x :: Num, y :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x && a.y == b.y\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? 42 : 0",
+        "P = { x :: Num, y :: Num, == = (other :: P) -> Bool => it.x == other.x && it.y == other.y }\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? 42 : 0",
         42,
     );
 }
 
 #[test]
 fn comparison_operator_overload_must_return_bool() {
-    // A comparison/equality operator overload is a predicate — a non-Bool return type
+    // A comparison/equality operator member is a predicate — a non-Bool return type
     // is a compile error. (Arithmetic operators have no such constraint.)
-    assert_type_error("V = { x :: Num }\n== = (a :: V, b :: V) -> V => a\n^ = () -> Num => 0");
+    assert_type_error("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0");
 }
 
 #[test]
 fn run_operator_overload_returning_record_survives_frame() {
-    // A user `+` overload that RETURNS a record: the record is GC-allocated, so its
+    // A `+` operator member that RETURNS a record: the record is GC-allocated, so its
     // fields are still readable after the operator call returns (would dangle if it
     // were a stack alloca). Subsequent expressions must not corrupt it.
     assert_exit(
-        "V = { x :: Num, y :: Num }\n+ = (a :: V, b :: V) -> V => V { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  v = V { x = 1, y = 2 } + V { x = 30, y = 9 }\n  pad = 5 > 1 ? 0 : 99\n  v.x + v.y + pad\n>",
+        "V = { x :: Num, y :: Num, + = (other :: V) -> V => V { x = it.x + other.x, y = it.y + other.y } }\n^ = () -> Num => <\n  v = V { x = 1, y = 2 } + V { x = 30, y = 9 }\n  pad = 5 > 1 ? 0 : 99\n  v.x + v.y + pad\n>",
         42,
     );
 }
@@ -457,19 +458,19 @@ fn run_overloaded_operator_dispatch_uses_callee_return_type() {
     // declared return type, not default to Num — so `mkv(..) + mkv(..)` resolves the
     // user `(V, V)` `+` overload (it would otherwise fall to the numeric `+` and fail).
     assert_exit(
-        "V = { x :: Num, y :: Num }\nmkv = (n :: Num) -> V => V { x = n, y = n }\n+ = (a :: V, b :: V) -> V => V { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  w = mkv(1) + mkv(20)\n  w.x + w.y\n>",
+        "V = { x :: Num, y :: Num, + = (other :: V) -> V => V { x = it.x + other.x, y = it.y + other.y } }\nmkv = (n :: Num) -> V => V { x = n, y = n }\n^ = () -> Num => <\n  w = mkv(1) + mkv(20)\n  w.x + w.y\n>",
         42,
     );
 }
 
 #[test]
-fn run_operator_definition_after_expression_bodied_item_parses() {
-    // Regression (review BUG2): an operator definition on its own line must NOT be
-    // absorbed as a binary operator continuing the previous expression-bodied item.
-    // Here `k = 5` is followed by a top-level `+` overload; both must parse and run.
+fn run_operator_member_after_expression_bodied_member_parses() {
+    // An operator MEMBER on its own line, right after a method whose body is an
+    // expression, must NOT be absorbed as a binary operator continuing that body — the
+    // parser stops the member's body at the trailing `== =` / `+ =`.
     assert_exit(
-        "P = { x :: Num, y :: Num }\nk = 5\n+ = (a :: P, b :: P) -> P => P { x = a.x + b.x, y = a.y + b.y }\n^ = () -> Num => <\n  p = P { x = 1, y = 2 } + P { x = 30, y = 9 }\n  p.x + p.y + k\n>",
-        47,
+        "P = { x :: Num, y :: Num,\n  sum = () -> Num => it.x + it.y\n  == = (other :: P) -> Bool => it.x == other.x && it.y == other.y\n}\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? P { x = 40, y = 2 }.sum() : 0",
+        42,
     );
 }
 

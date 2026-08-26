@@ -29,7 +29,9 @@ impl TypeError {
             | TypeError::NonExhaustiveMatch { span }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. }
-            | TypeError::ComputedGlobalBinding { span, .. } => span,
+            | TypeError::ComputedGlobalBinding { span, .. }
+            | TypeError::OperatorMustBeMember { span, .. }
+            | TypeError::OperatorMemberArity { span, .. } => span,
         }
     }
 }
@@ -184,6 +186,18 @@ impl std::fmt::Display for TypeError {
             }
             TypeError::InvalidBuiltinArgument { message, .. } => {
                 write!(f, "{}", message)
+            }
+            TypeError::OperatorMustBeMember { operator, .. } => {
+                write!(
+                    f,
+                    "operator '{operator}' cannot be defined at the top level — define it as a member of the record or sum type it operates on, where 'it' is the left operand (e.g. inside the type's '{{ }}')",
+                )
+            }
+            TypeError::OperatorMemberArity { operator, got, .. } => {
+                write!(
+                    f,
+                    "operator member '{operator}' takes exactly one parameter (the right operand; 'it' is the left operand), but has {got}",
+                )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(

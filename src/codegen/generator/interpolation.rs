@@ -43,16 +43,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         let value = self.generate_expression(expression)?;
         // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
         // own type's `` ` `` override would invoke that override forever. That one case
-        // renders via the built-in default (the type name); a DIFFERENT value of the same
-        // type — e.g. a child node `it.next` — still uses the override and terminates for
-        // any finite structure.
+        // renders via the built-in default (a record's type name, a sum's variant name); a
+        // DIFFERENT value of the same type — e.g. a child node `it.next` — still uses the
+        // override and terminates for any finite structure.
         if let Expression::Identifier { name, .. } = expression
             && name == "it"
-            && let Type::Named { name: ty_name, .. } = &ty
+            && let Type::Named { name: ty_name, .. } | Type::Sum { name: ty_name, .. } = &ty
             && self.generating_backtick_for.as_deref() == Some(ty_name.as_str())
         {
-            let ty_name = ty_name.clone();
-            return self.text_literal(&ty_name);
+            return self.render_builtin_default(&ty, value);
         }
         self.render_value(&ty, value)
     }
@@ -88,24 +87,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             // type name.
             Type::Named { name, .. } => {
                 if self.render_overrides.contains(name) {
-                    let sym = method_symbol(name, "`");
-                    let f = self
-                        .module
-                        .get_function(&sym)
-                        .ok_or_else(|| format!("render override not declared: {}", sym))?;
-                    let call = self
-                        .builder
-                        .build_call(f, &[value.into()], "render")
-                        .map_err(ctx("Failed to call render override"))?;
-                    Self::call_result_to_basic(call)
+                    self.call_render_override(name, value)
                 } else {
                     self.text_literal(name)
                 }
             }
             // An anonymous record has no name to show.
             Type::Record(_) => self.text_literal("record"),
-            // A sum value renders as its variant/constructor name.
-            Type::Sum { name, .. } => self.render_sum_variant(name, value),
+            // A sum value: its own `` ` `` override (called with the sum value), else the
+            // variant/constructor name.
+            Type::Sum { name, .. } => {
+                if self.render_overrides.contains(name) {
+                    self.call_render_override(name, value)
+                } else {
+                    self.render_sum_variant(name, value)
+                }
+            }
             // An array renders its elements (truncated past 10, see `render_array`).
             Type::Array(elem) => self.render_array(elem, value),
             // Maps and Sets render as their type label (element-by-element rendering of a
@@ -116,6 +113,47 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             Type::Function { .. } => self.text_literal("<function>"),
         }
+    }
+
+    /// Render `value` with the type's BUILT-IN default `` ` ``, bypassing any user override —
+    /// used to terminate an override that renders its own receiver `it` wholesale. A record
+    /// renders as its type name, a sum as its variant name; any other type has only its one
+    /// built-in rendering, so it takes the normal path.
+    fn render_builtin_default(
+        &mut self,
+        ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match ty {
+            Type::Named { name, .. } => {
+                let name = name.clone();
+                self.text_literal(&name)
+            }
+            Type::Sum { name, .. } => {
+                let name = name.clone();
+                self.render_sum_variant(&name, value)
+            }
+            _ => self.render_value(ty, value),
+        }
+    }
+
+    /// Invoke a user type's `` ` `` render override (the `Type_op$backtick` method) — the
+    /// receiver crosses as a record pointer or a sum value, matching the method's emission.
+    pub(super) fn call_render_override(
+        &mut self,
+        name: &str,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let sym = method_symbol(name, "`");
+        let f = self
+            .module
+            .get_function(&sym)
+            .ok_or_else(|| format!("render override not declared: {}", sym))?;
+        let call = self
+            .builder
+            .build_call(f, &[value.into()], "render")
+            .map_err(ctx("Failed to call render override"))?;
+        Self::call_result_to_basic(call)
     }
 
     /// Call a `f64|i64 -> {ptr,i64}` render intrinsic (`__num_to_text` / `__bool_to_text`).

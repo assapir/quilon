@@ -17,8 +17,7 @@
 //! bodies are therefore roots — a method that calls a helper keeps that helper.
 
 use super::nodes::{
-    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, TypeDefinition,
-    UnaryOperator,
+    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, UnaryOperator,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -50,10 +49,8 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
                 .push(&declaration.body),
             Item::VariableDeclaration(declaration) => mentions(&declaration.value, &mut pending),
             Item::TypeDeclaration(declaration) => {
-                if let TypeDefinition::Record { methods, .. } = &declaration.type_definition {
-                    for method in methods {
-                        mentions(&method.body, &mut pending);
-                    }
+                for method in declaration.type_definition.methods() {
+                    mentions(&method.body, &mut pending);
                 }
             }
         }
@@ -163,11 +160,8 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
                         mentions(&declaration.body, out)
                     }
                     Statement::Item(Item::TypeDeclaration(declaration)) => {
-                        if let TypeDefinition::Record { methods, .. } = &declaration.type_definition
-                        {
-                            for method in methods {
-                                mentions(&method.body, out);
-                            }
+                        for method in declaration.type_definition.methods() {
+                            mentions(&method.body, out);
                         }
                     }
                 }
