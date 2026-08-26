@@ -72,9 +72,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__argv_to_text_array" => self
                 .ptr_len_struct_type()
                 .fn_type(&[i64t.into(), ptr.into()], false),
-            // { ptr, i64 } __envp_to_pairs(i8** envp) — build a `[][]Text` (array of
-            // 2-element `[]Text` `[key, value]` pairs) from the C envp.
-            "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // ptr __envp_to_map(i8** envp) — build a `[|Text => Text|]` Map (an opaque
+            // native-map pointer, the same representation `[|…|]` literals lower to) from
+            // the C envp.
+            "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
             // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
             // { ptr, i64 } trimStart / trimEnd / toUpper / toLower (i8*, i64). `trim` is
@@ -170,8 +171,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 false,
             ),
             // Map/Set collection intrinsics. A Map/Set/value-box is an opaque `ptr`; keys
-            // and elements cross as the ABI triple `(i64 tag, i64 a, i64 b)`. See
-            // `quilon-rt/src/collections.rs` and `codegen/generator/collections.rs`.
+            // and elements cross as the ABI triple `(i64 tag, i64 a, i64 b)` followed by two
+            // `ptr`s: a key type's monomorphized `%` hash and `==` (both null for the
+            // built-in Num/Text/Bool keys). See `quilon-rt/src/collections/` and
+            // `codegen/generator/collections.rs`.
             "__map_new" | "__set_new" => ptr.fn_type(&[], false),
             // Persistent insert, returning a new table.
             "__map_set" => ptr.fn_type(
@@ -180,6 +183,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     i64t.into(),
                     i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
                     ptr.into(),
                 ],
                 false,
@@ -192,17 +197,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     i64t.into(),
                     ptr.into(),
+                    ptr.into(),
+                    ptr.into(),
                 ],
                 false,
             ),
             // Persistent removal, returning a new table without the key/element.
-            "__map_remove" | "__set_remove" => {
-                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
+            "__map_remove" | "__set_remove" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             // Membership, as 0/1.
-            "__map_has" | "__set_has" => {
-                i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
+            "__map_has" | "__set_has" => i64t.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             "__map_len" | "__set_len" => i64t.fn_type(&[ptr.into()], false),
             // The `a`/`b` key words of the i-th entry, in iteration order.
             "__map_key_a" | "__map_key_b" | "__set_item_a" | "__set_item_b" => {
@@ -211,7 +234,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Value box of the i-th entry.
             "__map_val" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
             // Persistent insert, returning a new set.
-            "__set_add" => ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
+            "__set_add" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             "__set_union" | "__set_diff" | "__set_intersect" => {
                 ptr.fn_type(&[ptr.into(), ptr.into()], false)
             }

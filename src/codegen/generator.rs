@@ -213,13 +213,6 @@ pub struct CodeGenerator<'ctx> {
     // Saved/restored around nested function emission (closures, local fns) so a source
     // location is always attributed to the right function. `None` unless `debug` is set.
     di_scope: Option<DIScope<'ctx>>,
-    // Number of leading top-level items that came from imported modules. Their byte spans
-    // are relative to their own module source, which the single `.qn` line index cannot map,
-    // so debug info is suppressed while emitting them (see `di_suppressed`).
-    di_imported_boundary: usize,
-    // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`
-    // emit no debug info for it — only the user's own file gets DWARF line info.
-    di_suppressed: bool,
     // DWARF debug types (only under `--debug`). Full field types of every record type
     // (`named_type_fields` keeps only names), and each sum type's variant list — both needed
     // to build a composite type's members/payload slots. Populated by a pre-pass in
@@ -343,8 +336,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             generating_backtick_for: None,
             debug: None,
             di_scope: None,
-            di_imported_boundary: 0,
-            di_suppressed: false,
             record_field_types: HashMap::new(),
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
@@ -522,20 +513,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             if let Item::TypeDeclaration(declaration) = item {
                 let self_type = Type::named_ref(&declaration.name);
                 for method in declaration.type_definition.methods() {
-                    if is_operator_symbol(&method.name) && method.parameters.len() == 1 {
-                        let parameters = vec![
+                    if !is_operator_symbol(&method.name) {
+                        continue;
+                    }
+                    // The `%` hash hook is a UNARY member (`it` only) whose overload takes
+                    // just the receiver; every other operator member is binary (`it` + one
+                    // explicit right operand).
+                    let parameters = if method.name == "%" && method.parameters.is_empty() {
+                        vec![self_type.clone()]
+                    } else if method.parameters.len() == 1 {
+                        vec![
                             self_type.clone(),
                             method.parameters[0]
                                 .type_annotation
                                 .clone()
                                 .unwrap_or(Type::Num),
-                        ];
-                        let ret = method.return_type.clone().unwrap_or(Type::Num);
-                        self.overloads
-                            .entry(method.name.clone())
-                            .or_default()
-                            .push((parameters, ret));
-                    }
+                        ]
+                    } else {
+                        continue;
+                    };
+                    let ret = method.return_type.clone().unwrap_or(Type::Num);
+                    self.overloads
+                        .entry(method.name.clone())
+                        .or_default()
+                        .push((parameters, ret));
                 }
             }
         }
@@ -575,7 +576,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level declaration (which would make it
         // look like a nested/local declaration — see `generate_function_declaration`).
-        for (idx, item) in program.items.iter().enumerate() {
+        for item in program.items.iter() {
             if let Item::FunctionDeclaration(declaration) = item
                 && let Some(reachable) = reachable.as_ref()
                 && !reachable.contains(declaration.name.as_str())
@@ -583,16 +584,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 continue;
             }
             self.current_function = None;
-            // Imported-module items (the leading `di_imported_boundary` items) get no debug
-            // info: their byte spans are relative to their own module source, not this file.
-            self.di_suppressed = idx < self.di_imported_boundary;
             self.generate_item(item)?;
         }
-        self.di_suppressed = false;
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
-        // real types (`[]Text` / `[][]Text` / legacy `Num`) — the lowered LLVM types are
+        // real types (`[]Text` / `[|Text => Text|]` / legacy `Num`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
@@ -653,7 +650,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // its instructions (GC init, the call into `^`) carry a valid debug location — the
         // verifier requires one on a call to a function that itself has debug info.
         let main_span = Span::in_root(0, 0);
-        let saved_scope = self.begin_di_function(main_fn, "main", &main_span);
+        let saved_scope = self.begin_di_entry_shim(main_fn, &main_span);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
         let envp = main_fn.get_nth_param(2).unwrap().into_pointer_value();
@@ -675,7 +672,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inline in `main`, byte-identical to before this feature existed.
         let return_val = if self.defer.uses_deferral {
             let entry_fn = self.module.add_function("__ql_entry", main_type, None);
-            let thunk_scope = self.begin_di_function(entry_fn, "__ql_entry", &main_span);
+            let thunk_scope = self.begin_di_entry_shim(entry_fn, &main_span);
             let thunk_argc = entry_fn.get_nth_param(0).unwrap().into_int_value();
             let thunk_argv = entry_fn.get_nth_param(1).unwrap().into_pointer_value();
             let thunk_envp = entry_fn.get_nth_param(2).unwrap().into_pointer_value();
@@ -740,12 +737,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
         // can't tell them apart — dispatching on it would silently call a `Text` parameter
         // with the argv array). The supported signatures are `^()`,
-        // `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)` (plus the legacy
-        // `^(argc :: Num, argv :: Num)`). We match on the EXACT element types — the
-        // runtime builds `Text`/`[]Text` elements, so a `[]Num` (or any other element)
-        // parameter must NOT reach the array arms, or it would receive mis-sized elements.
+        // `^(args :: []Text)`, and `^(args :: []Text, env :: [|Text => Text|])` (plus the
+        // legacy `^(argc :: Num, argv :: Num)`). We match on the EXACT element/key/value
+        // types — the runtime builds `Text` args and a `Text => Text` env Map, so a
+        // `[]Num` (or any other element) parameter must NOT reach the array arm.
         let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
-        let is_text_pairs = |t: &Type| matches!(t, Type::Array(e) if is_text_array(e.as_ref()));
+        let is_text_map =
+            |t: &Type| matches!(t, Type::Map(k, v) if **k == Type::Text && **v == Type::Text);
 
         // `argc` arrives as the C `int` (i32); widen it to the i64 the runtime expects.
         let argc_i64 = self
@@ -765,16 +763,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .into_struct_value()
                 .into())
         };
-        // Build the real `env :: [][]Text` from envp (used by the 2-arg modern form).
+        // Build the real `env :: [|Text => Text|]` Map from envp (used by the 2-arg modern
+        // form). A Map value is a single opaque pointer to its runtime representation.
         let build_env = |me: &Self| -> Result<BasicValueEnum<'ctx>, String> {
-            let f = me.get_intrinsic("__envp_to_pairs")?;
+            let f = me.get_intrinsic("__envp_to_map")?;
             use inkwell::values::AnyValue;
             Ok(me
                 .builder
-                .build_call(f, &[envp.into()], "env_pairs")
-                .map_err(ctx("Failed to build envp pairs"))?
+                .build_call(f, &[envp.into()], "env_map")
+                .map_err(ctx("Failed to build envp map"))?
                 .as_any_value_enum()
-                .into_struct_value()
+                .into_pointer_value()
                 .into())
         };
 
@@ -782,7 +781,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             format!(
                 "Entry point ^ has an unsupported signature ({}). \
                  Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
-                 '(args :: []Text, env :: [][]Text) -> Num' \
+                 '(args :: []Text, env :: [|Text => Text|]) -> Num' \
                  (or legacy '(argc :: Num, argv :: Num) -> Num').",
                 fmt_parameter_types(entry_parameters)
             )
@@ -801,8 +800,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_call(user_entry, &[args.into()], "entry_result")
                     .map_err(ctx("Failed to call entry point"))?
             }
-            // `^(args :: []Text, env :: [][]Text) -> Num`
-            [a, e] if is_text_array(a) && is_text_pairs(e) => {
+            // `^(args :: []Text, env :: [|Text => Text|]) -> Num`
+            [a, e] if is_text_array(a) && is_text_map(e) => {
                 let args = build_args(self)?;
                 let env = build_env(self)?;
                 self.builder
@@ -826,8 +825,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to call entry point"))?
             }
             // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
-            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [][]Text)` without
-            // args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
+            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [|Text => Text|])`
+            // without args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
             // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
         };

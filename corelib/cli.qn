@@ -1,5 +1,5 @@
 ~ core.cli — helpers over the `^` entry point's `args :: []Text` and
-~ `env :: [][]Text` (env is an array of `[key, value]` pairs). Import with
+~ `env :: [|Text => Text|]` (env is a `Text => Text` Map). Import with
 ~ `<< core.cli`. Exposes:
 ~   getEnv(env, key)    look up an environment variable by name
 ~   hasFlag(args, flag) is a bare flag present in argv?
@@ -10,20 +10,16 @@
 ~
 ~ Example:
 ~   << core.cli
-~   ^ = (args :: []Text, env :: [][]Text) -> Num => <
+~   ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
 ~     home :: Text = env |> getEnv("HOME") ? | Ok(v) => v | NotOk(_) => "?"
 ~     args |> hasFlag("-v") ? 0 : 1
 ~     args |> getOpt("--out") ? | Ok(_) => 0 | NotOk(_) => 1
 ~   >
 
-~ Look up `key` in the `[][]Text` env (each inner array is a `[name, value]`
-~ pair). Returns `Ok(value)` (the pair's `[1]`) when a pair's `[0]` equals `key`,
-~ else `NotOk`.
->> getEnv = (env :: [][]Text, key :: Text) -> Result => <
-  env.find(pair => pair[0] == key) ?
-    | Ok(pair) => Ok(pair[1])
-    | NotOk(_) => NotOk($)
->
+~ Look up `key` in the env Map: `Ok(value)` when the variable is set, else
+~ `NotOk`. The documented ergonomic name for the Map's own safe lookup, so both
+~ `env |> getEnv("HOME")` and `env.get("HOME")` read the environment.
+>> getEnv = (env :: [|Text => Text|], key :: Text) -> Result => env.get(key)
 
 ~ True when the bare flag `flag` appears in `args`. The flag name works WITH or
 ~ WITHOUT a leading `--`, so `hasFlag(args, "verbose")` and

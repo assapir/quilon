@@ -146,3 +146,105 @@ jobs:
         with:
           path: bench-series.tsv
           key: bench-series-${{ github.ref_name }}-${{ github.sha }}
+
+  # macOS: the same build and test gate, on the other platform Quilon targets.
+  # Non-blocking to start (`continue-on-error`) — it is visible on every run, but a
+  # macOS-only failure does not hold up a merge until the job has proven itself
+  # stable. Deliberately narrower than the Linux job: `fmt` and `clippy` are
+  # platform-independent and already gate there, and the benchmarks stay
+  # Linux-only so the series compares like with like (and to keep the 10x runner
+  # cost off every push).
+  macos-build-and-test:
+    runs-on: macos-latest
+    continue-on-error: true
+
+    env:
+      # Homebrew's prefix, not Debian's — resolved in the install step below,
+      # since it differs between the Intel and Apple-silicon runner images.
+      LLVM_SYS_221_PREFIX: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
+          # crate's build script compiles it from source. Nothing else to install
+          # for it — there is no `brew install bdw-gc` here.
+          submodules: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM 22
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install llvm@22
+          # inkwell's llvm-sys finds the toolchain through this prefix.
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --workspace --all-targets --verbose
+
+      # Covers the macOS-specific link path in `quilon build`: ld64 takes
+      # `-force_load` where GNU ld takes `--whole-archive`, and has no `-ldl`.
+      - name: Test
+        run: cargo test --workspace --verbose
+
+  # Arch Linux, in a container on the Ubuntu runner. Arch is the maintainer's own
+  # environment, and the one that forced the vendored collector: its `gc` package
+  # ships only `libgc.so*`, with no static `libgc.a` to link. Covering it here keeps
+  # that class of distro difference from being discovered by hand again.
+  #
+  # Non-blocking to start, like the macOS job. No benchmarks: the series is kept
+  # per-branch and only comparable when every run measures the same runner shape.
+  arch-build-and-test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    continue-on-error: true
+
+    env:
+      # Arch installs LLVM into /usr, not Debian's versioned prefix. Its `llvm`
+      # package builds against the shared `libLLVM.so`, so llvm-sys links
+      # dynamically and needs no separate static-Polly package.
+      LLVM_SYS_221_PREFIX: /usr
+
+    steps:
+      # Before `actions/checkout`: without `git` in the image it falls back to
+      # downloading a source tarball, which would silently omit the bdwgc
+      # submodule. `safe.directory` keeps git from refusing the workspace it did
+      # not create — the container runs as root over a mounted host directory.
+      - name: Install toolchain
+        run: |
+          set -euxo pipefail
+          pacman -Syu --noconfirm git base-devel llvm clang curl
+          git config --global --add safe.directory '*'
+          # inkwell pins LLVM 22; Arch tracks upstream closely, so a major bump
+          # there is a real incompatibility and should fail loudly rather than
+          # produce a confusing llvm-sys error.
+          llvm-config --version
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: Test
+        run: cargo test --workspace --verbose

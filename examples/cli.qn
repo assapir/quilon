@@ -1,16 +1,16 @@
-~ core.cli — getEnv / hasFlag / getOpt over `args :: []Text` and `env :: [][]Text`.
+~ core.cli — getEnv / hasFlag / getOpt over `args :: []Text` and `env :: [|Text => Text|]`.
 ~ Verified with `core.test` assertions: every assertion holds, so the program runs
 ~ to completion and exits 0. A failing assertion prints to stderr and exits 101.
 ~ Fixtures stand in for the `^` entry point's real args/env so the run is deterministic.
-~   getEnv(env, key)    -> Ok(value) / NotOk        (env is [key, value] pairs)
+~   getEnv(env, key)    -> Ok(value) / NotOk        (env is a Text => Text Map)
 ~   hasFlag(args, flag) -> Bool                      (flag name with or without `--`)
 ~   getOpt(args, name)  -> Ok([]Text) / NotOk(name)  (--name value and --name=value)
 << core.cli
 << core.test
 
 ^ = () -> $ => <
-  ~ getEnv: find a [key, value] pair by its key; Ok(value) when present, NotOk otherwise.
-  env :: [][]Text = [["HOME", "/home/quilon"], ["PATH", "/usr/bin"], ["EMPTY", ""]]
+  ~ getEnv: look a variable up in the env Map; Ok(value) when set, NotOk otherwise.
+  env = [|"HOME" => "/home/quilon", "PATH" => "/usr/bin", "EMPTY" => ""|]
   home :: Text = getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
   assertEq(home, "/home/quilon")
   empty :: Text = getEnv(env, "EMPTY") ? | Ok(v) => v | NotOk(_) => "?"

@@ -121,6 +121,13 @@ impl SourceMap {
         self.files.get(&file)
     }
 
+    /// Every file in the map, as `(FileId, &SourceFile)` pairs in no particular order. Used by
+    /// debug-info emission to build a `DIFile` and line table for each source a span can point
+    /// into — the root file and every imported module.
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
+        self.files.iter().map(|(id, file)| (*id, file))
+    }
+
     /// One file's text, or `None` when that file is not in the map.
     pub fn get_text(&self, file: FileId) -> Option<&str> {
         self.get(file).map(|f| f.text.as_str())

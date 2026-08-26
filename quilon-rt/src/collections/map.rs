@@ -5,7 +5,8 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, gc_alloc};
+use super::common::{FixedState, QlKey, TAG_TEXT, debug_check_user_key, gc_alloc};
+use crate::mem::{QlSlice, alloc_text};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
@@ -54,38 +55,87 @@ pub extern "C" fn __map_new() -> *mut c_void {
     unsafe { build_map(HashMap::with_hasher(FixedState)) as *mut c_void }
 }
 
+/// Build a `Text => Text` Map from `(key, value)` byte-slice pairs, in the exact native
+/// representation a `[|k => v|]` literal lowers to: each key a content-hashed `Text` key
+/// (`TAG_TEXT`), each value a GC-boxed `Text` the compiler loads back as a `Text` value.
+/// Backs the `^` entry point's `env :: [|Text => Text|]`.
+pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> *mut c_void {
+    // Until `build_map` builds the snapshot arrays, each inserted entry's key bytes and value
+    // box are reachable ONLY from the system-heap HashMap, which the conservative collector
+    // does not scan. Every `alloc_text`/`gc_alloc` below can trigger a collection, so pause
+    // collection across the whole construction — otherwise a mid-build GC could reclaim an
+    // already-inserted entry. Re-enable once the finished header's snapshots anchor everything.
+    unsafe extern "C" {
+        fn GC_disable();
+        fn GC_enable();
+    }
+    unsafe { GC_disable() };
+    let mut table = HashMap::with_hasher(FixedState);
+    for (key_bytes, value_bytes) in pairs {
+        let key_text = alloc_text(key_bytes);
+        let key = QlKey::new(
+            TAG_TEXT as i64,
+            key_text.data as i64,
+            key_text.len,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        let value_box = unsafe { gc_alloc::<QlSlice>(1) };
+        unsafe { std::ptr::write(value_box, alloc_text(value_bytes)) };
+        table.insert(key, value_box as *const c_void);
+    }
+    let map = unsafe { build_map(table) as *mut c_void };
+    unsafe { GC_enable() };
+    map
+}
+
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "C" fn __map_set(
     map: *const c_void,
     tag: i64,
     a: i64,
     b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
     value: *const c_void,
 ) -> *mut c_void {
     let map = map as *const QlMap;
     let mut table = unsafe { (*map).table.clone() };
-    table.insert(QlKey::new(tag, a, b), value);
+    let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
+    debug_check_user_key(table.keys(), &key);
+    table.insert(key, value);
     unsafe { build_map(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __map_remove(map: *const c_void, tag: i64, a: i64, b: i64) -> *mut c_void {
+pub extern "C" fn __map_remove(
+    map: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> *mut c_void {
     let map = map as *const QlMap;
     let mut table = unsafe { (*map).table.clone() };
-    table.remove(&QlKey::new(tag, a, b));
+    table.remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
     unsafe { build_map(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "C" fn __map_get(
     map: *const c_void,
     tag: i64,
     a: i64,
     b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
     found_out: *mut i64,
 ) -> *const c_void {
     let map = map as *const QlMap;
-    match unsafe { (*map).table.get(&QlKey::new(tag, a, b)) } {
+    match unsafe { (*map).table.get(&QlKey::new(tag, a, b, hash_fn, eq_fn)) } {
         Some(value) => {
             unsafe { *found_out = 1 };
             *value
@@ -98,9 +148,20 @@ pub extern "C" fn __map_get(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __map_has(map: *const c_void, tag: i64, a: i64, b: i64) -> i64 {
+pub extern "C" fn __map_has(
+    map: *const c_void,
+    tag: i64,
+    a: i64,
+    b: i64,
+    hash_fn: *const c_void,
+    eq_fn: *const c_void,
+) -> i64 {
     let map = map as *const QlMap;
-    unsafe { (*map).table.contains_key(&QlKey::new(tag, a, b)) as i64 }
+    unsafe {
+        (*map)
+            .table
+            .contains_key(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64
+    }
 }
 
 #[unsafe(no_mangle)]

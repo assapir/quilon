@@ -1,9 +1,17 @@
 ~ Built-in Set collection type, pipe-fenced: `[|T|]`.
 ~   Set: has / add / remove / items / size / each ; `+` union, `-` difference, `+-`/`-+` intersect.
+~ Elements are Num/Text/Bool, or a user type that defines both a `%` hash hook (unary,
+~   `it` the value, returning a Num) and an `==` equality — see the `Point` set below.
 ~ Sets are IMMUTABLE — every mutator returns a NEW set. Iteration order is UNSPECIFIED
 ~   (reproducible run-to-run via a fixed-seed hasher, but never rely on it).
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
+
+Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
 
 ^ = () -> $ => <
   primes :: [|Num|] = [|2, 3, 5, 7|]
@@ -44,4 +52,9 @@
   >
   )
   assertEq(count, 4)
+
+  ~ A Set of a user record type deduplicates by `%`/`==`.
+  seen :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
+  assertEq(seen.size, 2)
+  assert(seen.has(Point { x = 2, y = 2 }))
 >

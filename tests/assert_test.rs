@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
-use common::ensure_runtime_lib;
+use common::{ensure_runtime_lib, position};
 
 const FAIL_CODE: i32 = 101;
 
@@ -238,8 +238,8 @@ fn failing_assert_reports_the_call_site_in_full() {
 
     let path = tmp_dir().join("site_full.qn");
     let expected = format!(
-        "{}:3:3:\nassertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
-        path.display()
+        "{}\nassertion failed: expected 41, got 42\n  |\n3 |   assertEq(6 * 7, 41)\n  |   ^^^^^^^^^^^^^^^^^^^\n",
+        position(&path, 3, 3)
     );
     assert_eq!(stderr, expected, "unexpected failure report");
 }
@@ -255,7 +255,7 @@ fn wrapper_reports_the_users_call_site_not_an_internal_hop() {
 
     let path = tmp_dir().join("site_wrapper.qn");
     assert!(
-        stderr.starts_with(&format!("{}:4:3:\n", path.display())),
+        stderr.starts_with(&format!("{}\n", position(&path, 4, 3))),
         "must report the user's assertEq call (line 4, column 3), got: {stderr:?}"
     );
     assert!(
@@ -300,8 +300,8 @@ fn fail_at_reports_its_caller() {
     let path = tmp_dir().join("site_fail_at.qn");
     assert!(
         stderr.starts_with(&format!(
-            "{}:7:3:\nassertion failed: 3 is odd",
-            path.display()
+            "{}\nassertion failed: 3 is odd",
+            position(&path, 7, 3)
         )),
         "a custom assertion must report ITS caller (line 7), got: {stderr:?}"
     );
@@ -331,7 +331,7 @@ fn a_failure_in_an_imported_module_reports_that_module() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.starts_with(&format!("{}:4:3:\n", helper.display())),
+        stderr.starts_with(&format!("{}\n", position(&helper, 4, 3))),
         "the report must name the imported module and its line, got: {stderr:?}"
     );
     assert!(
@@ -401,8 +401,8 @@ fn native_aot_assert_exit_codes() {
         // does — no debug info, no unwinder, nothing to install.
         assert!(
             stderr.starts_with(&format!(
-                "{}:2:16:\n",
-                tmp_dir().join(format!("aot_fail_{linker}.qn")).display()
+                "{}\n",
+                position(&tmp_dir().join(format!("aot_fail_{linker}.qn")), 2, 16)
             )),
             "native AOT ({linker}): failing assert must report its call site, got: {stderr:?}"
         );

@@ -58,7 +58,7 @@ pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use net::__tcp_request_launch;
-pub use process::{__argv_to_text_array, __envp_to_pairs, __exit};
+pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{MAX_PATH_WIDTH, QlSite, shorten_path};
 pub use scheduler::__run_fiber_main;
 pub use text::{
@@ -138,7 +138,7 @@ intrinsic_registry! {
     __print_text_fd: extern "C" fn(i64, *const c_char),
     __color_enabled: extern "C" fn(i64) -> i64,
     __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
-    __envp_to_pairs: extern "C" fn(*const *const c_char) -> QlSlice,
+    __envp_to_map: extern "C" fn(*const *const c_char) -> *mut c_void,
     __text_repeat: extern "C" fn(*const u8, i64, f64, *const QlSite) -> QlSlice,
     __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
@@ -173,18 +173,39 @@ intrinsic_registry! {
         *const *const c_char,
     ) -> c_int,
     __map_new: extern "C" fn() -> *mut c_void,
-    __map_set: extern "C" fn(*const c_void, i64, i64, i64, *const c_void) -> *mut c_void,
-    __map_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __map_get: extern "C" fn(*const c_void, i64, i64, i64, *mut i64) -> *const c_void,
-    __map_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __map_set: extern "C" fn(
+        *const c_void,
+        i64,
+        i64,
+        i64,
+        *const c_void,
+        *const c_void,
+        *const c_void,
+    ) -> *mut c_void,
+    __map_remove:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __map_get: extern "C" fn(
+        *const c_void,
+        i64,
+        i64,
+        i64,
+        *const c_void,
+        *const c_void,
+        *mut i64,
+    ) -> *const c_void,
+    __map_has:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> i64,
     __map_len: extern "C" fn(*const c_void) -> i64,
     __map_key_a: extern "C" fn(*const c_void, i64) -> i64,
     __map_key_b: extern "C" fn(*const c_void, i64) -> i64,
     __map_val: extern "C" fn(*const c_void, i64) -> *const c_void,
     __set_new: extern "C" fn() -> *mut c_void,
-    __set_add: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __set_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __set_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __set_add:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __set_remove:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __set_has:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> i64,
     __set_len: extern "C" fn(*const c_void) -> i64,
     __set_item_a: extern "C" fn(*const c_void, i64) -> i64,
     __set_item_b: extern "C" fn(*const c_void, i64) -> i64,

@@ -31,6 +31,63 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **The release publishes a binary per platform, under a new name each
+  ([#49](https://github.com/assapir/quilon/issues/49)).** A release used to carry one asset,
+  named `quilon`, built on Ubuntu. It now carries two, each named for what it runs on —
+  which **breaks any script or link that fetched the old bare `quilon` asset**:
+
+  | Platform | Asset |
+  | --- | --- |
+  | Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
+  | macOS, Apple silicon | `quilon-aarch64-apple-darwin` |
+
+  Intel Macs are not covered: `macos-latest` is Apple silicon, and the asset is arm64 only.
+
+  Both are self-contained — LLVM is linked into them, as the collector already was, so they
+  run on a machine that has neither. That took work on macOS, where Homebrew's `llvm@22`
+  ships no static LLVM at all (it is built `LLVM_LINK_LLVM_DYLIB=ON`, and a binary linked
+  against it starts only where that formula is installed): the job links the static archives
+  from the upstream LLVM release package instead.
+
+  There is no separate Arch asset, because there is nothing for it to do. The Linux asset is
+  built against an older glibc than a rolling distro carries and glibc runs binaries built
+  against older versions of itself, so it is the portable one everywhere — Arch included,
+  where it was checked by hand. A native Arch build would be the opposite: Arch's `llvm`
+  ships only a shared `libLLVM.so`, and the upstream static package cannot be linked there
+  either (it names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a Debian layout,
+  and Arch ships no static `zstd` — the same gap that made the collector a vendored
+  submodule), so it would have named `libLLVM.so.22.1` and needed LLVM 22 installed. CI
+  still builds and tests on Arch.
+
+  Neither claim is asserted on trust: each job runs `ldd`/`otool -L` on the binary it built
+  and type-checks a program with it, publishes that output to the job summary, and fails the
+  release if an LLVM — or on macOS anything outside the system libraries — is named there.
+  Neither job is allowed to fail quietly either, so a release carries both assets or none.
+
+  A manual run of the workflow builds both and stops before publishing, so the matrix can be
+  exercised without spending a version number.
+
+- **`quilon build` works on macOS, and CI covers macOS and Arch Linux
+  ([#49](https://github.com/assapir/quilon/issues/49)).** The AOT link line was GNU-ld
+  shaped and Apple's ld64 rejects it: `--whole-archive` is not a flag it knows, and there is
+  no `-ldl` to link against (libSystem provides `dlopen`). `src/build.rs` now picks the
+  right spelling per platform — `-Wl,-force_load,<archive>` on macOS, the
+  `--whole-archive`/`--no-whole-archive` bracket elsewhere — so forcing every runtime object
+  in stays deterministic on both.
+
+  Two new jobs build and test on every run, both non-blocking until they have proven
+  themselves stable: `macos-latest` (Homebrew `llvm@22`), and Arch Linux in an
+  `archlinux:latest` container — the distro whose lack of a static `libgc.a` is why the
+  collector is vendored at all, and the maintainer's own environment. `fmt`/`clippy` are
+  platform-independent and keep gating on Ubuntu only, as do the benchmarks so the series
+  compares like with like.
+
+  Windows remains unreachable, and the blocker is the runtime rather than the GC —
+  `quilon-rt` does not compile for `x86_64-pc-windows-msvc` (stdin readiness via
+  `mio::unix::SourceFd`, `fcntl`/`sysconf`, and the collector's pthread threading model).
+  Tracked with the full error list in
+  [#183](https://github.com/assapir/quilon/issues/183) rather than shipped as a red job.
+
 - **`quilon build` binaries are self-contained: the Boehm GC is linked statically
   ([#49](https://github.com/assapir/quilon/issues/49)).** A compiled Quilon program used to
   name `libgc.so` among its dynamic dependencies, so shipping it anywhere meant shipping —

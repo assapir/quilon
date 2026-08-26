@@ -166,12 +166,10 @@ fn main() {
         } => {
             println!("🔨 Building: {}", file.display());
 
-            // A `--debug` build also needs the import boundary, so only the user's own
-            // functions get DWARF line info; the source text comes from the source map the
-            // build already carries.
+            // The source text and every file's path come from the source map the build already
+            // carries; a `--debug` build additionally needs the root file's path (below).
             let checked = checked(&file);
             let sources = checked.sources;
-            let debug_imported_items = debug.then_some(checked.imported_items);
             let defer = checked.defer;
             let program = checked.program;
             require_entry_point(&program);
@@ -179,10 +177,7 @@ fn main() {
             // Default the output to the source name without its `.qn` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
-            let debug_source = debug_imported_items.map(|imported_items| build::DebugSource {
-                file: &file,
-                imported_items,
-            });
+            let debug_source = debug.then(|| build::DebugSource { file: &file });
 
             match build::build_native(
                 &program,

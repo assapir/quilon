@@ -7,6 +7,9 @@
 use std::io::Write;
 use std::process::Command;
 
+mod common;
+use common::position;
+
 /// Write `source` to a temp `.qn` file, run `quilon check` on it, and return
 /// `(exit_success, stderr)`. The file lives under the cargo target tmp dir so
 /// parallel test runs don't collide.
@@ -128,7 +131,7 @@ fn a_type_error_in_an_imported_module_names_that_module() {
 
     assert!(!out.status.success(), "the program must be rejected");
     assert!(
-        stderr.starts_with(&format!("{}:2:1:\nerror:", module.display())),
+        stderr.starts_with(&format!("{}\nerror:", position(&module, 2, 1))),
         "the error must be reported against the imported module, got: {stderr:?}"
     );
     assert!(

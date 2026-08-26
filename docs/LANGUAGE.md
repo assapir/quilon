@@ -280,14 +280,16 @@ lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays
 
 A `Map` is a **built-in parametric collection** — like `[]T`, not a user-defined generic —
 written with a **pipe fence** `[|K => V|]` (`=>` reads "maps to"). It is immutable, keyed by
-`Num`/`Text`/`Bool`, and read through `.get` (which returns a `Result` — there is no bracket
-indexing on a map). Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
+`Num`/`Text`/`Bool` or a **user type** that defines both a `%` hash hook and an `==` member,
+and read through `.get` (which returns a `Result` — there is no bracket indexing on a map).
+Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
 
 ### Sets
 
 A `Set` is a **built-in parametric collection** — like `[]T`, not a user-defined generic —
 written with the same **pipe fence** `[|T|]` (which keeps a set literal distinct from an array).
-It is immutable, holds unique `Num`/`Text`/`Bool` elements, and supports set algebra
+It is immutable, holds unique `Num`/`Text`/`Bool` elements (or a **user type** defining both
+a `%` hash hook and an `==` member), and supports set algebra
 (`+` union, `-` difference, `+-`/`-+` intersection). Full reference:
 [`docs/collections/set.md`](collections/set.md) (and `examples/sets.qn`).
 
@@ -673,9 +675,15 @@ A **comparison/equality** member (`== != < <= > >=`) **must return `Bool`**; **a
 members (`+ - * / %`) return whatever they declare. A **top-level** operator definition is
 rejected — the operator must be a member of its type.
 
-(See `examples/overloading.qn` and `examples/sum_methods.qn`, and
-`examples/overload_dispatch.qn` for dispatch on argument types out of an array element, a
-match, a call, or a lambda.)
+**The `%` hash hook.** A **unary** `% = () -> Num => …` member (`it` the value, no explicit
+parameter) is the type's **hash**, letting it be a [Map/Set key](#maps) alongside its `==`
+member. Both are required together, and `%`/`==` must agree (equal values hash the same).
+This unary `%` is distinct from the binary `%` remainder operator (which takes one
+parameter), and has no call syntax of its own — the collections invoke it.
+
+(See `examples/overloading.qn`, `examples/sum_methods.qn`, `examples/maps.qn`,
+`examples/sets.qn`, and `examples/overload_dispatch.qn` for dispatch on argument types out
+of an array element, a match, a call, or a lambda.)
 
 ---
 
@@ -954,20 +962,21 @@ Every executable defines `^` (main); the compiler generates a C-compatible `main
 ```quilon
 ^ = () -> Num => 42                              ~ no args/env
 ^ = (args :: []Text) -> Num => args.size         ~ command-line arguments
-^ = (args :: []Text, env :: [][]Text) -> Num => args.size   ~ args + environment
+^ = (args :: []Text, env :: [|Text => Text|]) -> Num => env.get("HOME")   ~ args + environment
 ```
 **Arguments & environment.** `^` may declare, in order, two typed parameters that the
 generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
 - `args :: []Text` — the command-line arguments (argv), **including** `argv[0]` (the
   program name), so `args.size` is always at least 1, and `args[i]` is the *i*-th
   argument as a `Text`.
-- `env :: [][]Text` — the environment, as an array of `[key, value]` pairs. Each inner
-  array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
-  (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
+- `env :: [|Text => Text|]` — the environment, as a Map from each variable's name to its
+  value. An entry `KEY=val` is split on its **first** `=` (so `KEY=a=b` maps `KEY` to
+  `a=b`); an entry with no `=` maps the whole string to `""`. Read a variable with
+  `env.get("HOME")` (or `<< core.cli`'s `getEnv`), both giving `Ok(value)`/`NotOk`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them — and
-an element bound out of one is a full `Text`: the whole `Text` API, and
-[overload](#overloading) dispatch by its concrete type.
+`args` is a real Quilon array (`.size`, `[index]`, the array methods) and `env` a real Map
+(`.get`/`.has`/`.keys`/`.size`); a value read out of either is a full `Text`: the whole
+`Text` API, and [overload](#overloading) dispatch by its concrete type.
 `quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
 program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
 the `.qn` path becomes `argv[0]`), so `quilon run f.qn a b c` gives the same `args.size`
@@ -1134,10 +1143,12 @@ per-function scopes, and **locals, parameters, and debug types** — every `=`/`
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. Each Quilon type gets a distinct DWARF entry: `Num`/`Bool` as base types,
 and `Text`, arrays (`[]T`), records, and sum types as distinctly-named composites, so a
-debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Only the
-program's own source is attributed — functions from imported modules (`<<`) carry no line
-info yet, since emission builds one `DIFile` from the root source. Multi-file line info is a
-follow-up.
+debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Line info is
+multi-file: a function from an imported module (`<<`) — corelib included — is attributed to
+its OWN source, so a debugger steps into it. The entry frame reads `^` (the generated C
+`main` shim is named for the entry point and marked artificial). The leaf `@` primitives and
+the inert built-in placeholders (`print`/`now`/…) lower to intrinsics and emit no subprogram,
+so a debugger steps over them.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)
 
@@ -1202,9 +1213,9 @@ pathological input.
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
-| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`remove`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
+| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`remove`/`keys`/`values`/`each`; keys Num/Text/Bool or a user type; immutable | ✅ |
 | Sets `[\|T\|]`: literals, `.size`, `has`/`add`/`remove`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection); immutable | ✅ |
-| Map/Set user-defined key types (via a `%` hash hook) | ❌ |
+| Map/Set user-defined key types (via a `%` hash hook + `==` member) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
@@ -1231,7 +1242,7 @@ pathological input.
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
-| `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
+| `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
 | Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |

@@ -22,16 +22,13 @@ use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
 use std::rc::Rc;
 
-/// What DWARF line-number emission needs beyond the source map: the `.qn` file's path as
-/// the user named it (recorded in the DWARF `DIFile`), and the import boundary.
+/// What DWARF line-number emission needs beyond the source map: the root `.qn` file's path as
+/// the user named it (recorded in the DWARF `DIFile`).
 ///
 /// The file's TEXT is not here — it comes from the `SourceMap` the build already carries,
 /// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
-    /// How many leading program items came from imported modules (import linking prepends
-    /// them); those get no debug info, as their spans are relative to their own module source.
-    pub imported_items: usize,
 }
 
 /// Emit a native object file for `program` at `obj_path` using LLVM's
@@ -58,7 +55,7 @@ fn emit_object(
     // Turn on DWARF line-number emission before codegen so every function/expression is
     // attributed to its `.qn` source location.
     if let Some(d) = debug {
-        generator.enable_debug(d.file, sources.root_text(), d.imported_items);
+        generator.enable_debug(d.file, &sources);
     }
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
@@ -198,6 +195,50 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
         .map_err(|e| format!("failed to extract the embedded runtime archive: {e}"))
 }
 
+/// System libraries the Rust staticlib needs. The Boehm GC is not among them:
+/// `quilon-rt`'s build script compiles it statically, so it is already inside the
+/// runtime archive — which is what makes a produced binary runnable on a machine
+/// with no libgc installed. Apple's libSystem provides `dlopen` and friends, so
+/// there is no `-ldl` to ask for there (and asking is a hard error).
+#[cfg(target_os = "macos")]
+const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
+#[cfg(not(target_os = "macos"))]
+const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
+
+/// Linker arguments that pull EVERY object out of `libquilon_rt.a`, not just the
+/// members that resolve an already-undefined symbol.
+///
+/// The Rust staticlib splits the `#[no_mangle]` runtime intrinsics across
+/// codegen-unit objects (and their order in the archive is unspecified), so a
+/// single linker pass over the archive can miss an intrinsic the program
+/// references (e.g. `__text_cmp`) when its defining object sits earlier than the
+/// object that first pulled the archive in — manifesting as an `undefined
+/// reference` only under whatever CU split CI happens to produce. Forcing the
+/// whole archive in makes inclusion deterministic.
+///
+/// The two linkers spell this differently, and neither accepts the other's form:
+/// GNU ld brackets the archive with `--whole-archive` / `--no-whole-archive` (the
+/// closing flag restores normal on-demand linking for the system libs that
+/// follow), while Apple's ld64 takes one `-force_load` per archive.
+///
+/// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted
+/// copy carries a content-hash suffix in its filename, which `-l` name lookup
+/// could not address.
+fn whole_archive_args(rt_lib: &Path) -> Vec<std::ffi::OsString> {
+    let archive = rt_lib.as_os_str().to_os_string();
+    if cfg!(target_os = "macos") {
+        let mut forced = std::ffi::OsString::from("-Wl,-force_load,");
+        forced.push(&archive);
+        vec![forced]
+    } else {
+        vec![
+            "-Wl,--whole-archive".into(),
+            archive,
+            "-Wl,--no-whole-archive".into(),
+        ]
+    }
+}
+
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC.
 pub fn build_native(
@@ -215,25 +256,8 @@ pub fn build_native(
 
     let status = Command::new(linker)
         .arg(&obj)
-        // Pull EVERY object out of `libquilon_rt.a`, not just the members that resolve
-        // an already-undefined symbol. The Rust staticlib splits the `#[no_mangle]`
-        // runtime intrinsics across codegen-unit objects (and their order in the archive
-        // is unspecified), so a single linker pass over the archive can miss an
-        // intrinsic the program references (e.g. `__text_cmp`) when its defining object
-        // sits earlier than the object that first pulled the archive in — manifesting as
-        // an `undefined reference` only under whatever CU split CI happens to produce.
-        // `--whole-archive` makes inclusion deterministic; `--no-whole-archive` restores
-        // normal (on-demand) linking for the system libs that follow. The archive is
-        // passed by path (not `-L`/`-l`): the cache-extracted copy carries a content-hash
-        // suffix in its filename, which `-l` name lookup couldn't address.
-        .arg("-Wl,--whole-archive")
-        .arg(&rt_lib)
-        .arg("-Wl,--no-whole-archive")
-        // System libs the Rust staticlib needs. The Boehm GC is not among them:
-        // `quilon-rt`'s build script compiles it statically, so it is already
-        // inside the archive above — which is what makes a produced binary
-        // runnable on a machine with no libgc installed.
-        .args(["-lpthread", "-ldl", "-lm"])
+        .args(whole_archive_args(&rt_lib))
+        .args(SYSTEM_LIBS)
         .arg("-o")
         .arg(out)
         .status()

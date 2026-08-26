@@ -152,7 +152,7 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // Depends transitively on core.io (its wrappers render values via `eprint`).
         "core.test" => Some(CORE_TEST),
         // core.cli — thin, pure-Quilon helpers over the `^` entry point's
-        // `args :: []Text` and `env :: [][]Text`.
+        // `args :: []Text` and `env :: [|Text => Text|]`.
         "core.cli" => Some(CORE_CLI),
         // core.time — time-related leaf IO primitives (`@sleep`). Documentation-only:
         // `@sleep` is a compiler-provided built-in (lowered to the runtime scheduler),

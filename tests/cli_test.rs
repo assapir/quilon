@@ -24,7 +24,7 @@ fn get_env_found_and_missing() {
     let src = r#"
         << core.cli
         ^ = () -> Num => <
-          env :: [][]Text = [["A", "xyz"], ["B", "12"]]
+          env = [|"A" => "xyz", "B" => "12"|]
           hit :: Num = getEnv(env, "A") ? | Ok(v) => v.size | NotOk(_) => 99
           miss :: Num = getEnv(env, "Z") ? | Ok(_) => 99 | NotOk(_) => 1
           hit * 10 + miss
@@ -35,11 +35,11 @@ fn get_env_found_and_missing() {
 
 #[test]
 fn get_env_matches_key_not_value() {
-    // The lookup keys on pair[0]; a query equal to a VALUE (not a key) must miss.
+    // The lookup keys on the variable NAME; a query equal to a VALUE (not a key) must miss.
     let src = r#"
         << core.cli
         ^ = () -> Num => <
-          env :: [][]Text = [["KEY", "VAL"]]
+          env = [|"KEY" => "VAL"|]
           byKey :: Num = getEnv(env, "KEY") ? | Ok(v) => v.size | NotOk(_) => 99
           byVal :: Num = getEnv(env, "VAL") ? | Ok(_) => 99 | NotOk(_) => 1
           byKey * 10 + byVal
@@ -55,7 +55,7 @@ fn get_env_empty_value_is_present() {
     let src = r#"
         << core.cli
         ^ = () -> Num => <
-          env :: [][]Text = [["E", ""]]
+          env = [|"E" => ""|]
           present :: Num = getEnv(env, "E") ? | Ok(_) => 1 | NotOk(_) => 0
           v :: Text = getEnv(env, "E") ? | Ok(x) => x | NotOk(_) => "?"
           present * 10 + v.size
@@ -193,7 +193,7 @@ fn core_cli_resolves_and_type_checks() {
     // `<< core.cli` is a registered built-in; all three functions must resolve/type-check.
     let src = r#"
         << core.cli
-        ^ = (args :: []Text, env :: [][]Text) -> Num => <
+        ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
           hit :: Num = env |> getEnv("HOME") ? | Ok(_) => 1 | NotOk(_) => 0
           flag :: Num = args |> hasFlag("-v") ? 1 : 0
           opt :: Num = args |> getOpt("--out") ? | Ok(_) => 1 | NotOk(_) => 0
