@@ -78,10 +78,6 @@ pub struct Checked {
     /// back to a path, line, and column. Shared (`Rc`) because codegen keeps it for the
     /// whole emission while the caller may still read the root text from it.
     pub sources: Rc<SourceMap>,
-    /// How many leading items came from `<<` imports — `link` prepends them, so anything
-    /// before this index belongs to another file. A `--debug` build uses it to attribute
-    /// DWARF line info to the user's own source only.
-    pub imported_items: usize,
     /// The deferred-value coloring: which expressions evaluate to a deferred (promise)
     /// value, and whether any `@` primitive launch is reachable. Codegen reads it to emit
     /// the promise representation and forces; empty for pure programs.
@@ -136,13 +132,9 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
         ));
     }
 
-    // The source file's own item count, captured before linking prepends imported items.
-    let own_item_count = program.items.len();
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let (program, mut sources) = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
     sources.set_root(path.clone(), source.clone());
-    // `link` prepends imported items, so everything before the source's own items is imported.
-    let imported_items = program.items.len() - own_item_count;
 
     let types = typechecker::TypeChecker::new()
         .check_program(&program)
@@ -158,7 +150,6 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
         program,
         types,
         sources: Rc::new(sources),
-        imported_items,
         defer,
     })
 }

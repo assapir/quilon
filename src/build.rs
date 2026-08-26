@@ -22,16 +22,13 @@ use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
 use std::rc::Rc;
 
-/// What DWARF line-number emission needs beyond the source map: the `.qn` file's path as
-/// the user named it (recorded in the DWARF `DIFile`), and the import boundary.
+/// What DWARF line-number emission needs beyond the source map: the root `.qn` file's path as
+/// the user named it (recorded in the DWARF `DIFile`).
 ///
 /// The file's TEXT is not here — it comes from the `SourceMap` the build already carries,
 /// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
-    /// How many leading program items came from imported modules (import linking prepends
-    /// them); those get no debug info, as their spans are relative to their own module source.
-    pub imported_items: usize,
 }
 
 /// Emit a native object file for `program` at `obj_path` using LLVM's
@@ -58,7 +55,7 @@ fn emit_object(
     // Turn on DWARF line-number emission before codegen so every function/expression is
     // attributed to its `.qn` source location.
     if let Some(d) = debug {
-        generator.enable_debug(d.file, sources.root_text(), d.imported_items);
+        generator.enable_debug(d.file, &sources);
     }
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;

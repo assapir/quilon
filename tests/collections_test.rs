@@ -316,3 +316,139 @@ fn intersection_on_nums_rejected() {
 fn set_union_mismatched_elem_types_rejected() {
     assert_type_error("^ = () -> Num => <\n  ([|1, 2|] + [|\"a\", \"b\"|]).size\n>");
 }
+
+// --- User-defined key types: a type with both a `%` hash hook and an `==` member ---
+
+/// A Map keyed by a user record type: `.has`/`.get`/`.set` resolve by the key's `%`/`==`.
+#[test]
+fn map_user_record_key() {
+    assert_exit(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+^ = () -> Num => <
+  m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 10, Point { x = 3, y = 4 } => 20|]
+  hit :: Num = m.get(Point { x = 3, y = 4 }) ? | Ok(v) => v | NotOk(_) => 0
+  m.size * 1000 + hit * 10 + (m.has(Point { x = 9, y = 9 }) ? 1 : 0)
+>"#,
+        2200,
+    );
+}
+
+/// A user-record key survives a persistent `.set` (new key grows) and `.remove`.
+#[test]
+fn map_user_record_key_set_and_remove() {
+    assert_exit(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+^ = () -> Num => <
+  m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 10|]
+  grown :: [|Point => Num|] = m.set(Point { x = 5, y = 6 }, 30)
+  gone :: [|Point => Num|] = m.remove(Point { x = 1, y = 2 })
+  grown.size * 100 + gone.size * 10 + (gone.has(Point { x = 1, y = 2 }) ? 1 : 0)
+>"#,
+        200,
+    );
+}
+
+/// A Set of a user record type deduplicates and removes by `%`/`==`.
+#[test]
+fn set_user_record_key_dedup_and_remove() {
+    assert_exit(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+^ = () -> Num => <
+  s :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
+  s2 :: [|Point|] = s.remove(Point { x = 1, y = 1 })
+  s.size * 100 + s2.size * 10 + (s2.has(Point { x = 2, y = 2 }) ? 1 : 0)
+>"#,
+        211,
+    );
+}
+
+/// A Map keyed by a user SUM type crosses the ABI by-value struct (not by-pointer).
+#[test]
+fn map_user_sum_key() {
+    assert_exit(
+        r#"Shape = Circle(Num) / Rect(Num, Num) {
+  area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
+  == = (other :: Shape) -> Bool => it.area() == other.area()
+  % = () -> Num => it.area()
+}
+^ = () -> Num => <
+  m :: [|Shape => Num|] = [|Circle(4) => 10, Rect(6, 7) => 20|]
+  v :: Num = m.get(Rect(6, 7)) ? | Ok(n) => n | NotOk(_) => 0
+  m.size * 100 + v
+>"#,
+        220,
+    );
+}
+
+/// A key type defining `%` but no `==` is rejected (both are required).
+#[test]
+fn map_key_type_missing_equality_rejected() {
+    assert_type_error(
+        r#"Point = {
+  x :: Num, y :: Num,
+  % = () -> Num => it.x * 31 + it.y
+}
+^ = () -> Num => <
+  m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 1|]
+  m.size
+>"#,
+    );
+}
+
+/// A key type defining `==` but no `%` hash hook is rejected (both are required).
+#[test]
+fn set_key_type_missing_hash_rejected() {
+    assert_type_error(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y
+}
+^ = () -> Num => <
+  s :: [|Point|] = [|Point { x = 1, y = 2 }|]
+  s.size
+>"#,
+    );
+}
+
+/// The `%` hash hook must return Num.
+#[test]
+fn hash_hook_non_num_return_rejected() {
+    assert_type_error(
+        r#"Point = {
+  x :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x,
+  % = () -> Text => "nope"
+}
+^ = () -> Num => <
+  [|Point { x = 1 }|].size
+>"#,
+    );
+}
+
+/// A binary `%` (modulo) is NOT the unary hash hook: a type defining it (plus `==`) as a
+/// key is rejected at the type checker — a clean pairing error, not a codegen symbol miss.
+#[test]
+fn binary_mod_is_not_a_hash_hook_rejected() {
+    assert_type_error(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = (other :: Point) -> Point => Point { x = it.x, y = it.y }
+}
+^ = () -> Num => <
+  [|Point { x = 1, y = 2 } => 1|].size
+>"#,
+    );
+}
