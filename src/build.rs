@@ -229,16 +229,18 @@ const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 ///
 /// ld64 (macOS) keeps the whole-archive form: a per-intrinsic `-u` would need each name spelled
 /// with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a hard link error, so
-/// `-force_load` on the archive path is both correct and unconditionally safe there. The narrow
-/// retention is the GNU-ld win; extending it to ld64 is follow-up.
+/// `-force_load` on the archive path is both correct and unconditionally safe there.
 ///
 /// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted copy carries a
-/// content-hash suffix in its filename, which `-l` name lookup could not address.
+/// content-hash suffix in its filename, which `-l` name lookup could not address. On the ld64 path
+/// the path goes through `-Xlinker`, one argument each, rather than a `-Wl,` list: the driver
+/// splits a `-Wl,` argument on commas, so a comma anywhere in the archive path — the cache location
+/// follows `XDG_CACHE_HOME`/`HOME`, and a home directory may contain one — would arrive at the
+/// linker as two mangled flags.
 fn append_runtime_link_args(command: &mut Command, rt_lib: &Path) {
     if cfg!(target_os = "macos") {
-        let mut forced = std::ffi::OsString::from("-Wl,-force_load,");
-        forced.push(rt_lib.as_os_str());
-        command.arg(forced);
+        command.arg("-Xlinker").arg("-force_load");
+        command.arg("-Xlinker").arg(rt_lib);
     } else {
         for (name, _) in quilon_rt::INTRINSICS {
             command.arg("-u").arg(name);

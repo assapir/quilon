@@ -14,6 +14,8 @@
 //! between them: what `clang` pulls out of an archive and what `gcc` pulls are separately
 //! observed behaviours, and the project supports both.
 
+#[cfg(not(target_os = "macos"))]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -238,5 +240,181 @@ fn the_smoke_program_reaches_every_intrinsic() {
          notice those being dropped — extend the program to use them again"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A program that reaches almost nothing: whatever it links beyond these few intrinsics was
+/// retained on purpose, not because the program asked for it.
+#[cfg(not(target_os = "macos"))]
+const BARELY_ANY_INTRINSIC: &str = r#"
+<< core.io
+
+^ = () -> $ => <
+  print("linked")
+>
+"#;
+
+/// The symbols a binary or archive DEFINES, as `nm` reports them. `None` when `nm` cannot
+/// read the file at all, so a caller can skip rather than fail.
+#[cfg(not(target_os = "macos"))]
+fn defined_symbols(path: &Path) -> Option<HashSet<String>> {
+    let listing = Command::new("nm")
+        .arg("--defined-only")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !listing.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .filter_map(|line| line.split_whitespace().last())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// The `libquilon_rt.a` the compiler under test links, resolved the way `quilon build`
+/// resolves it in a test run: the `QUILON_RT_LIB` override, else the copy the cargo build
+/// script leaves beside the binary.
+#[cfg(not(target_os = "macos"))]
+fn runtime_archive(quilon: &Path) -> Option<PathBuf> {
+    let candidate = match std::env::var("QUILON_RT_LIB") {
+        Ok(over) if !over.is_empty() => PathBuf::from(over),
+        _ => quilon.parent()?.join("libquilon_rt.a"),
+    };
+    candidate.exists().then_some(candidate)
+}
+
+/// Which intrinsics an archive scan drops when only `__gc_init` is asked for — the set the
+/// AOT link has to force back in. Built by linking a C stub against the real archive with
+/// no `-u` flags at all, so it measures this linker on this archive rather than assuming.
+#[cfg(not(target_os = "macos"))]
+fn intrinsics_a_plain_scan_drops(linker: &str, archive: &Path, dir: &Path) -> HashSet<String> {
+    let stub = dir.join(format!("plain_scan_{linker}.c"));
+    std::fs::write(
+        &stub,
+        "extern void __gc_init(void);\nint main(void) { __gc_init(); return 0; }\n",
+    )
+    .expect("writing the control stub");
+    let control = dir.join(format!("plain_scan_{linker}"));
+
+    let link = Command::new(linker)
+        .arg(&stub)
+        .arg(archive)
+        .args(["-lpthread", "-ldl", "-lm"])
+        .arg("-o")
+        .arg(&control)
+        .output()
+        .expect("linking the control stub");
+    assert!(
+        link.status.success(),
+        "the control stub must link against libquilon_rt.a (linker={linker}):\n{}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let retained = defined_symbols(&control).unwrap_or_default();
+    quilon_rt::INTRINSICS
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .filter(|name| !retained.contains(name))
+        .collect()
+}
+
+/// The `-u` mechanism itself, not the archive's contents.
+///
+/// The every-intrinsic program above references every symbol from its own object, so the
+/// `-u <intrinsic>` flags `quilon build` passes on the GNU-ld path are redundant there: it
+/// would link just as well if the compiler emitted none of them. This builds a program that
+/// references almost nothing and asserts the intrinsics it never mentions are in the binary
+/// anyway — which only the forced undefined references can explain.
+///
+/// A C stub linked against the same archive with no `-u` establishes what an on-demand scan
+/// leaves behind, so the assertion is about symbols this linker demonstrably drops without
+/// help. ld64 is excluded: it takes `-force_load` on the whole archive instead, and spells
+/// symbols with a leading underscore.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn unreferenced_intrinsics_are_forced_into_the_binary() {
+    let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
+    if !tool_available("nm") {
+        eprintln!("skipping: nm is not on PATH, so the binary's symbols cannot be read");
+        return;
+    }
+    let Some(archive) = runtime_archive(&quilon) else {
+        eprintln!("skipping: no libquilon_rt.a to link the control against");
+        return;
+    };
+
+    let dir = std::env::temp_dir().join(format!("quilon-intrinsic-forced-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("creating the work directory");
+    let source = dir.join("barely_any_intrinsic.qn");
+    std::fs::write(&source, BARELY_ANY_INTRINSIC).expect("writing the test program");
+
+    // What the program actually reaches, read off its IR — the rest is what has to be forced.
+    let compile = Command::new(&quilon)
+        .arg("compile")
+        .arg(&source)
+        .output()
+        .expect("running quilon compile");
+    assert!(
+        compile.status.success(),
+        "compiling the minimal program failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let ir = std::fs::read_to_string(source.with_extension("ll")).expect("reading the emitted IR");
+
+    let mut checked = Vec::new();
+    for linker in ["clang", "gcc"] {
+        if !tool_available(linker) {
+            eprintln!("skipping the {linker} link: not on PATH");
+            continue;
+        }
+
+        let droppable = intrinsics_a_plain_scan_drops(linker, &archive, &dir);
+        let mut must_be_forced: Vec<&String> = droppable
+            .iter()
+            .filter(|name| !ir.contains(&format!("@{name}")))
+            .collect();
+        must_be_forced.sort();
+        assert!(
+            !must_be_forced.is_empty(),
+            "{linker} retained every intrinsic from a plain archive scan, so this test cannot \
+             observe the -u mechanism — the control stub or the archive layout needs revisiting"
+        );
+
+        let out = dir.join(format!("barely_any_intrinsic_{linker}"));
+        let build = Command::new(&quilon)
+            .arg("build")
+            .arg(&source)
+            .args(["-o".as_ref(), out.as_os_str()])
+            .args(["--linker", linker])
+            .output()
+            .expect("running quilon build");
+        assert!(
+            build.status.success(),
+            "linking the minimal program with {linker} failed:\n{}\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let linked = defined_symbols(&out).expect("reading the built binary's symbols with nm");
+        let dropped: Vec<&&String> = must_be_forced
+            .iter()
+            .filter(|name| !linked.contains(**name))
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "{dropped:?} are missing from a binary built with {linker}, though the program never \
+             references them — the per-intrinsic `-u` flags are no longer forcing them in"
+        );
+        checked.push(linker);
+    }
+
+    assert!(
+        !checked.is_empty(),
+        "no C toolchain on PATH, so nothing was linked — this gate needs clang or gcc"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
