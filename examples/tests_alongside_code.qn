@@ -1,0 +1,31 @@
+~ Tests beside the code they test: the `>>` exports and the `describe` blocks that check
+~ them share one file. Only `quilon test` compiles those blocks — `check`, `compile`,
+~ `build`, and `run` strip them, so the line printed below can never reach a build.
+~ `uses_tested_module.qn` is the program that imports these exports.
+<< core.io
+<< core.test
+
+>> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
+
+>> wordCount = (line :: Text) -> Num => line.trim().split(" ").size
+
+describe("slugify", () => <
+  it("lowercases and hyphenates", () => assertEq(slugify("  Hello World  "), "hello-world"))
+  it("leaves one lowercase word alone", () => assertEq(slugify("quilon"), "quilon"))
+>
+)
+
+describe("wordCount", () => <
+  it("counts the words of a line", () => assertEq(wordCount(" one two three "), 3))
+>
+)
+
+describe("the stripped block", () => <
+  ~ The proof that stripping is real: a normal build never prints this line.
+  it("runs under quilon test and nowhere else", () => <
+    print("STRIPPED-TEST-BLOCK-RAN")
+    assertEq(slugify("Both Halves"), "both-halves")
+  >
+  )
+>
+)
