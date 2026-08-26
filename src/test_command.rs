@@ -27,6 +27,13 @@ const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules"];
 /// A single suite runs here, in this process, under its own path as a heading. Several run
 /// one process each (see the module docs), and a closing line tallies them.
 pub fn run(root: &Path) -> usize {
+    // A path that is not there is a failure, not an empty run: a mistyped path in a CI
+    // invocation must not report success.
+    if !root.exists() {
+        eprintln!("❌ no such file or directory: {}", root.display());
+        return 1;
+    }
+
     let suites = discover(root);
     match suites.as_slice() {
         [] => {

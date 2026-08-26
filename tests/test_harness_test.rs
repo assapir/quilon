@@ -336,7 +336,19 @@ fn a_suite_without_a_reporter_is_reported_at_its_own_describe() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The failure that would be silent: a suite whose SYNTAX is broken. It has no parseable
+/// A mistyped path in a CI invocation must not report success.
+#[test]
+fn a_path_that_does_not_exist_fails_the_run() {
+    let out = quilon(&["test", "no/such/directory"]);
+    assert_ne!(out.code, 0, "a missing path must fail:\n{}", out.stdout);
+    assert!(
+        out.stderr.contains("no such file or directory"),
+        "unexpected diagnostic:\n{}",
+        out.stderr
+    );
+}
+
+/// The failure that would be silent: a suite whose syntax is broken. It has no parseable
 /// `describe` to be recognized by, so passing over it would report success on a suite
 /// somebody had just broken.
 #[test]
