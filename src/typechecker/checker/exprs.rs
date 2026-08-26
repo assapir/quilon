@@ -549,20 +549,27 @@ impl TypeChecker {
 
     /// Verify `ty` may be used as a Map/Set key. The built-in hashable types are `Num`,
     /// `Text` (hashed by content), and `Bool`. A user type qualifies when it defines BOTH a
-    /// `%` hash hook and an `==` member — defining only one is a compile error (equal keys
-    /// that hash apart, or distinct keys forced equal, would corrupt the table).
+    /// unary `%` hash hook (`() -> Num`) and an `==` member (`(Self) -> Bool`) — defining
+    /// only one is a compile error (equal keys that hash apart, or distinct keys forced
+    /// equal, would corrupt the table). The two members are detected as the exact
+    /// monomorphized overloads codegen dispatches the key through, so a wrong-shape `%`
+    /// (e.g. a binary modulo) or `==` (a non-`Self` right operand) is reported here rather
+    /// than surfacing later as a missing-symbol error.
     pub(super) fn check_key_type(&self, ty: &Type, span: &Span) -> Result<(), TypeError> {
         if matches!(ty, Type::Num | Type::Text | Type::Bool) {
             return Ok(());
         }
-        if let Some((name, has_hash, has_equality)) = self.key_type_operators(ty) {
+        if matches!(ty, Type::Named { .. } | Type::Sum { .. }) {
+            let has_hash = self.has_exact_overload("%", std::slice::from_ref(ty));
+            let has_equality = self.has_exact_overload("==", &[ty.clone(), ty.clone()]);
             match (has_hash, has_equality) {
                 (true, true) => return Ok(()),
                 (true, false) => {
                     return Err(TypeError::InvalidBuiltinArgument {
                         message: format!(
-                            "type {name} is used as a Map/Set key and defines a `%` hash hook \
-                             but no `==` member; a key type needs both",
+                            "type {} is used as a Map/Set key and defines a `%` hash hook but no \
+                             matching `==` member (`== = (other :: {0}) -> Bool`); a key type needs both",
+                            crate::ast::type_label(ty)
                         ),
                         span: span.clone(),
                     });
@@ -570,8 +577,9 @@ impl TypeChecker {
                 (false, true) => {
                     return Err(TypeError::InvalidBuiltinArgument {
                         message: format!(
-                            "type {name} is used as a Map/Set key and defines an `==` member \
-                             but no `%` hash hook; a key type needs both",
+                            "type {} is used as a Map/Set key and defines an `==` member but no \
+                             `%` hash hook (`% = () -> Num`); a key type needs both",
+                            crate::ast::type_label(ty)
                         ),
                         span: span.clone(),
                     });
@@ -587,25 +595,6 @@ impl TypeChecker {
             ),
             span: span.clone(),
         })
-    }
-
-    /// For a user type, its name and whether it defines a `%` hash hook and an `==` member.
-    /// A record carries its member names inline; a sum's are looked up in the method registry
-    /// (both are populated by the time a later key site is checked — names resolve top down).
-    fn key_type_operators(&self, ty: &Type) -> Option<(String, bool, bool)> {
-        let has = |name: &str, member: &str| {
-            self.methods
-                .contains_key(&(name.to_string(), member.to_string()))
-        };
-        match ty {
-            Type::Named { name, methods, .. } => Some((
-                name.clone(),
-                methods.iter().any(|m| m == "%") || has(name, "%"),
-                methods.iter().any(|m| m == "==") || has(name, "=="),
-            )),
-            Type::Sum { name, .. } => Some((name.clone(), has(name, "%"), has(name, "=="))),
-            _ => None,
-        }
     }
 
     /// Infer a map literal `[|k1 => v1, ...|]` as `Map(K, V)`. Every key must share one

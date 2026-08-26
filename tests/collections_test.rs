@@ -436,3 +436,19 @@ fn hash_hook_non_num_return_rejected() {
 >"#,
     );
 }
+
+/// A binary `%` (modulo) is NOT the unary hash hook: a type defining it (plus `==`) as a
+/// key is rejected at the type checker — a clean pairing error, not a codegen symbol miss.
+#[test]
+fn binary_mod_is_not_a_hash_hook_rejected() {
+    assert_type_error(
+        r#"Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = (other :: Point) -> Point => Point { x = it.x, y = it.y }
+}
+^ = () -> Num => <
+  [|Point { x = 1, y = 2 } => 1|].size
+>"#,
+    );
+}
