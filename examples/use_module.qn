@@ -4,5 +4,5 @@
 << core.test
 
 ^ = () -> $ => <
-  assertEq(add(2, 3), 5)
+  assert(add(2, 3), equals(5))
 >

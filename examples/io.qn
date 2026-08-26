@@ -15,7 +15,7 @@ write = (content :: Text) -> Num => write(content, stdout)
 ^ = () -> $ => <
   print("hello")            ~ stdout: hello\n
   written :: Num = "raw" |> write(stdout)   ~ stdout: raw   (no newline)
-  assertEq(written, 3)      ~ "raw" is 3 bytes
-  assertEq(write("!"), 1)   ~ the one-argument member, picked by its type
+  assert(written, equals(3))      ~ "raw" is 3 bytes
+  assert(write("!"), equals(1))   ~ the one-argument member, picked by its type
   eprint("done")            ~ stderr: done\n
 >

@@ -21,18 +21,18 @@ Color = {
 
 ^ = () -> $ => <
   ~ Overload dispatch by argument type:
-  assertEq(score(41), 42)      ~ Num overload
-  assertEq(score("abcd"), 4)   ~ Text overload
+  assert(score(41), equals(42))      ~ Num overload
+  assert(score("abcd"), equals(4))   ~ Text overload
 
   ~ User operator overload (`==` on Color), resolved from Color's members:
-  assert(Color { r = 1, g = 2 } == Color { r = 1, g = 2 })
-  assert(!(Color { r = 1, g = 2 } == Color { r = 9, g = 2 }))
+  assert(Color { r = 1, g = 2 }, equals(Color { r = 1, g = 2 }))
+  assert(!(Color { r = 1, g = 2 } == Color { r = 9, g = 2 }), equals(true))
 
   ~ The `` ` `` member renders a Color (via interpolation, and via `print`):
-  assertEq("`Color { r = 1, g = 2 }`", "Color(1, 2)")
+  assert("`Color { r = 1, g = 2 }`", equals("Color(1, 2)"))
 
   ~ Built-in Text comparison overloads — equality and lexicographic ordering:
-  assert("quilon" == "quilon")
-  assert("abc" < "abd")        ~ lexicographic: 'c' < 'd'
-  assert("b" > "a")            ~ bare `>` works on one line
+  assert("quilon", equals("quilon"))
+  assert("abc" < "abd", equals(true))        ~ lexicographic: 'c' < 'd'
+  assert("b" > "a", equals(true))            ~ bare `>` works on one line
 >

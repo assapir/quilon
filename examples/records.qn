@@ -6,5 +6,5 @@
 ^ = () -> $ => <
   rect = { width = 4, height = 7 }
   area :: Num = rect.width * rect.height
-  assertEq(area, 28)
+  assert(area, equals(28))
 >

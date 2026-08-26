@@ -11,5 +11,5 @@ count = (n :: Num, acc :: Num) -> Num =>
   n == 0 ? acc : count(n - 1, acc == 250 ? 0 : acc + 1)
 
 ^ = () -> $ => <
-  assertEq(count(1000000, 0), 16)   ~ 1_000_000 mod 251 = 16
+  assert(count(1000000, 0), equals(16))   ~ 1_000_000 mod 251 = 16
 >

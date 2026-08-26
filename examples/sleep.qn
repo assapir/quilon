@@ -18,12 +18,12 @@ now = (scale :: Num) -> Num => now() * scale
   start = now()
   @sleep(0.05)                    ~ pause ~50ms
   ~ A sleep waits AT LEAST its duration, so this bound is deterministic (never flaky).
-  assert(now() - start >= 0.05)
-  assert(now(1000) - start * 1000 >= 50)   ~ the same bound in milliseconds
+  assert(now() - start >= 0.05, equals(true))
+  assert(now(1000) - start * 1000 >= 50, equals(true))   ~ the same bound in milliseconds
 
   ~ Ordinary code runs after the pause, computing a ready value.
   answer = 6 * 7
-  assertEq(answer, 42)
+  assert(answer, equals(42))
 
   0
 >

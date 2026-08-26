@@ -2,7 +2,7 @@
 ~ `@readStdin()` is a value-returning leaf IO primitive: it LAUNCHES a stdin line read in the
 ~ background and hands back a DEFERRED Text immediately. The value threads through the `line`
 ~ binding untouched (promise pipelining); the fiber only WAITS (forces) at the first strict
-~ operation that reads its bytes — here the `==` inside `assertEq`.
+~ operation that reads its bytes — here the `==` behind `equals`.
 ~
 ~ With no piped input (as in the examples gate) stdin is at end-of-input, so `@readStdin()`
 ~ yields the empty Text "" immediately — the assertion below holds and the program exits 0.
@@ -14,6 +14,6 @@
 
 ^ = () -> Num => <
   line = @readStdin()         ~ launches the read, returns a deferred Text (no wait here)
-  assertEq(line, "")          ~ the comparison FORCES the value; empty at end-of-input
+  assert(line, equals(""))          ~ the comparison FORCES the value; empty at end-of-input
   0
 >

@@ -7,5 +7,5 @@
 ^ = () -> $ => <
   greeting :: Text = "Hello, " + "Quilon" + "!"
   print(greeting)                       ~ stdout: Hello, Quilon!
-  assertEq(greeting, "Hello, Quilon!")
+  assert(greeting, equals("Hello, Quilon!"))
 >

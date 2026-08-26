@@ -11,17 +11,17 @@
   desc :: []Num = 4 <- 1                ~ [4, 3, 2, 1]
 
   ~ Inclusive count = |hi - lo| + 1.
-  assertEq(asc.size, 4)
+  assert(asc.size, equals(4))
 
   ~ Ascending: first endpoint is the small end, last is the large end.
-  assertEq(asc[0], 1)
-  assertEq(asc[3], 4)
+  assert(asc[0], equals(1))
+  assert(asc[3], equals(4))
 
   ~ Descending: the order is reversed — desc[0] is the larger end.
-  assertEq(desc[0], 4)
-  assertEq(desc[3], 1)
+  assert(desc[0], equals(4))
+  assert(desc[3], equals(1))
 
   ~ A range iterates with `.each`, since it's just a `[]Num`.
   asc.each(n => print(n))               ~ prints 1, 2, 3, 4
-  assertEq(asc[1], 2)
+  assert(asc[1], equals(2))
 >

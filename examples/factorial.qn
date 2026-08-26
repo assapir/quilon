@@ -5,6 +5,6 @@
 factorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)
 
 ^ = () -> $ => <
-  assertEq(factorial(5), 120)   ~ 5! = 120
-  assertEq(factorial(0), 1)     ~ base case
+  assert(factorial(5), equals(120))   ~ 5! = 120
+  assert(factorial(0), equals(1))     ~ base case
 >

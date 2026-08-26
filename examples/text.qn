@@ -8,6 +8,6 @@
 
 ^ = () -> $ => <
   s :: Text = "héllo" + " 🌍"
-  assertEq(s.length, 7)   ~ 7 grapheme clusters
-  assertEq(s.size, 11)    ~ 11 UTF-8 bytes
+  assert(s.length, equals(7))   ~ 7 grapheme clusters
+  assert(s.size, equals(11))    ~ 11 UTF-8 bytes
 >

@@ -10,28 +10,28 @@
 << core.test
 
 describe("Text", () => <
-  it("trims both ends", () => assertEq("  padded  ".trim(), "padded"))
-  it("finds a part", () => assert("haystack".contains("stack")))
-  it("counts graphemes, not bytes", () => assertEq("héllo".length, 5))
+  it("trims both ends", () => assert("  padded  ".trim(), equals("padded")))
+  it("finds a part", () => assert("haystack".contains("stack"), equals(true)))
+  it("counts graphemes, not bytes", () => assert("héllo".length, equals(5)))
 
   ~ `describe` nests: the reporter indents by depth.
   describe("splitting", () => <
-    it("splits on a separator", () => assertEq("a,b,c".split(",").size, 3))
+    it("splits on a separator", () => assert("a,b,c".split(",").size, equals(3)))
     it("keeps the whole text when the separator is absent", () =>
-      assertEq("a,b,c".split(";").size, 1))
+      assert("a,b,c".split(";").size, equals(1)))
   >
   )
 >
 )
 
 describe("Num", () => <
-  it("adds", () => assertEq(2 + 2, 4))
-  it("compares", () => assert(7 > 3))
+  it("adds", () => assert(2 + 2, equals(4)))
+  it("compares", () => assert(7 > 3, equals(true)))
 >
 )
 
 describe("Result", () => <
-  it("is Ok in bounds", () => assertOk([10, 20].at(0)))
-  it("is NotOk out of bounds", () => assertNotOk([10, 20].at(9)))
+  it("is Ok in bounds", () => assert([10, 20].at(0), isOk()))
+  it("is NotOk out of bounds", () => assert([10, 20].at(9), isNotOk()))
 >
 )

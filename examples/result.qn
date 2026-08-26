@@ -9,6 +9,6 @@
   doubled :: Num = outcome ?
     | Ok(x)    => x * 2       ~ 42 * 2 = 84
     | NotOk(e) => 0
-  assertEq(doubled, 84)
-  assertOk(outcome)
+  assert(doubled, equals(84))
+  assert(outcome, isOk())
 >

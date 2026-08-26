@@ -20,12 +20,12 @@ applyTo = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
 
 ^ = () -> $ => <
   result :: Num = 10 |> double |> addFive   ~ addFive(double(10)) = 25
-  assertEq(result, 25)
+  assert(result, equals(25))
 
   ~ Multi-argument piping: 1 |> addThree(2, 3) is addThree(1, 2, 3).
-  assertEq(1 |> addThree(2, 3), 6)
+  assert(1 |> addThree(2, 3), equals(6))
 
   ~ Piping into a higher-order call: 5 |> applyTo(f) is applyTo(5, f) is f(5).
   ~ This composes the pipe with a function-valued argument.
-  assertEq(5 |> applyTo((n :: Num) => n * 10), 50)
+  assert(5 |> applyTo((n :: Num) => n * 10), equals(50))
 >

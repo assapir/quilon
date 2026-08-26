@@ -26,11 +26,11 @@ sizeOf = (m :: Method) -> Num => m ?
   post = Post(Body { payload = "hello" })
 
   ~ The bound record keeps its type: its Text field round-trips (5 graphemes)...
-  assertEq(sizeOf(post), 5)
+  assert(sizeOf(post), equals(5))
   ~ ...and reads back byte-for-byte.
-  assertEq(describe(post), "hello")
+  assert(describe(post), equals("hello"))
 
   ~ The nullary sibling still dispatches by tag alone.
-  assertEq(sizeOf(Get), 0)
-  assertEq(describe(Get), "GET")
+  assert(sizeOf(Get), equals(0))
+  assert(describe(Get), equals("GET"))
 >

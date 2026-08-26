@@ -15,24 +15,24 @@
   b = true  || bump(2)   ~ left decides (true)  -> bump must NOT run
   c = true  && bump(4)   ~ undecided            -> bump runs
   d = false || bump(8)   ~ undecided            -> bump runs
-  assertEq(hits, 12)
-  assert(!a)
-  assert(b)
-  assert(c)
-  assert(d)
+  assert(hits, equals(12))
+  assert(!a, equals(true))
+  assert(b, equals(true))
+  assert(c, equals(true))
+  assert(d, equals(true))
 
   ~ The values are the ordinary truth table.
-  assert(true && true)
-  assert(!(true && false))
-  assert(!(false && false))
-  assert(true || false)
-  assert(false || true)
-  assert(!(false || false))
+  assert(true && true, equals(true))
+  assert(!(true && false), equals(true))
+  assert(!(false && false), equals(true))
+  assert(true || false, equals(true))
+  assert(false || true, equals(true))
+  assert(!(false || false), equals(true))
 
   ~ Short-circuit makes guarded indexing safe: with i out of range, the left
   ~ side is false and `xs[i]` is never evaluated.
   xs = [10, 20, 30]
   i = 5
-  assert(!(i < xs.size && xs[i] == 10))
+  assert(!(i < xs.size && xs[i] == 10), equals(true))
   $
 >
