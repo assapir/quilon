@@ -82,24 +82,23 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __envp_to_map(envp: *const *const c_char) -> *mut c_void {
-    // Decode every entry to owned bytes, split on the first '=', then hand the pairs to the
-    // Map builder (which copies each into GC memory). Collecting first keeps the borrow the
-    // builder's iterator needs alive.
-    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // Borrow each entry's bytes straight from the C `envp` (valid for the whole call) and
+    // split on the first '='; `build_text_map` copies every key/value into GC memory before
+    // it returns, so nothing needs to be owned here.
+    let mut entries: Vec<(&[u8], &[u8])> = Vec::new();
     if !envp.is_null() {
         let mut i = 0usize;
         while !unsafe { *envp.add(i) }.is_null() {
             // SAFETY: entry `i` is non-null per the loop condition.
-            let bytes = cstr_to_str_bytes(unsafe { *envp.add(i) });
-            let (key, value) = match bytes.iter().position(|&b| b == b'=') {
-                Some(eq) => (bytes[..eq].to_vec(), bytes[eq + 1..].to_vec()),
-                None => (bytes, Vec::new()),
-            };
-            entries.push((key, value));
+            let bytes = unsafe { CStr::from_ptr(*envp.add(i)) }.to_bytes();
+            entries.push(match bytes.iter().position(|&b| b == b'=') {
+                Some(eq) => (&bytes[..eq], &bytes[eq + 1..]),
+                None => (bytes, &[] as &[u8]),
+            });
             i += 1;
         }
     }
-    crate::collections::build_text_map(entries.iter().map(|(k, v)| (k.as_slice(), v.as_slice())))
+    crate::collections::build_text_map(entries.into_iter())
 }
 
 /// The bytes of a NUL-terminated C string (empty for null). Used to copy `argv`/`envp`

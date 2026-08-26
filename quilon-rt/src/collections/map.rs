@@ -60,6 +60,16 @@ pub extern "C" fn __map_new() -> *mut c_void {
 /// (`TAG_TEXT`), each value a GC-boxed `Text` the compiler loads back as a `Text` value.
 /// Backs the `^` entry point's `env :: [|Text => Text|]`.
 pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> *mut c_void {
+    // Until `build_map` builds the snapshot arrays, each inserted entry's key bytes and value
+    // box are reachable ONLY from the system-heap HashMap, which the conservative collector
+    // does not scan. Every `alloc_text`/`gc_alloc` below can trigger a collection, so pause
+    // collection across the whole construction — otherwise a mid-build GC could reclaim an
+    // already-inserted entry. Re-enable once the finished header's snapshots anchor everything.
+    unsafe extern "C" {
+        fn GC_disable();
+        fn GC_enable();
+    }
+    unsafe { GC_disable() };
     let mut table = HashMap::with_hasher(FixedState);
     for (key_bytes, value_bytes) in pairs {
         let key_text = alloc_text(key_bytes);
@@ -74,7 +84,9 @@ pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8]
         unsafe { std::ptr::write(value_box, alloc_text(value_bytes)) };
         table.insert(key, value_box as *const c_void);
     }
-    unsafe { build_map(table) as *mut c_void }
+    let map = unsafe { build_map(table) as *mut c_void };
+    unsafe { GC_enable() };
+    map
 }
 
 #[unsafe(no_mangle)]

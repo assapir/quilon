@@ -85,7 +85,7 @@ pub fn run_program(
     }
 
     // Build the real `argv`/`envp` the JIT'd `main` will thread into an `^` that
-    // declares `args :: []Text` / `env :: [][]Text`. These mirror the C arrays a
+    // declares `args :: []Text` / `env :: [|Text => Text|]`. These mirror the C arrays a
     // native `main` receives: NULL-terminated arrays of NUL-terminated C strings. The
     // owning `CString`/pointer `Vec`s must outlive the `main.call` below (the runtime
     // copies their bytes into GC memory during the call), so they are bound here.

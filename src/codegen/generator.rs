@@ -589,7 +589,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
-        // real types (`[]Text` / `[][]Text` / legacy `Num`) — the lowered LLVM types are
+        // real types (`[]Text` / `[|Text => Text|]` / legacy `Num`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
