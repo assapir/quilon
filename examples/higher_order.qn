@@ -1,0 +1,38 @@
+~ Higher-order functions: a function whose parameter is itself a function. A function
+~ type is written with the arrow — `(Num) -> Num`, `(Num) -> Bool`, `() -> $` — and the
+~ value passed in is a closure (here a lambda literal). The body calls it like any other
+~ function. `<< core.test` verifies each result; on success the program exits 0.
+<< core.test
+
+~ `f` is a function value; `apply` calls it on `x`.
+apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
+
+~ Calls `f` on its own result: f(f(x)).
+twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+
+~ A predicate parameter `(Num) -> Bool`: keep `x` when it holds, else 0.
+keepIf = (p :: (Num) -> Bool, x :: Num) -> Num => p(x) ? x : 0
+
+~ A `() -> $` parameter, called purely for effect: `run` invokes `action` twice.
+run = (action :: () -> $) -> $ => <
+  action()
+  action()
+>
+
+^ = () -> $ => <
+  assertEq(apply((n :: Num) => n + 1, 10), 11)
+  assertEq(twice((n :: Num) => n * 3, 2), 18)
+
+  assertEq(keepIf((n :: Num) => n > 5, 9), 9)
+  assertEq(keepIf((n :: Num) => n > 5, 3), 0)
+
+  ~ A named closure captures `total` by reference, so its writes escape and accumulate
+  ~ across the two calls `run` makes. Passing it by name hands `run` the closure value.
+  total := 0
+  tick = () -> $ => <
+    total := total + 5
+    $
+  >
+  run(tick)
+  assertEq(total, 10)
+>

@@ -8,7 +8,7 @@
 
 limit = 10
 enabled = true
-scale = n => n * 3
+scale = (n :: Num) => n * 3
 
 ~ `$` is a value like any other, so a top-level binding may hold it. There is nothing to
 ~ assert about it — it has exactly one inhabitant.

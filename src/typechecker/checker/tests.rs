@@ -163,12 +163,16 @@ fn test_inferred_return_type() {
 }
 
 #[test]
-fn test_inferred_parameter_types() {
-    // Function without parameter type annotations - defaults to Num
+fn test_unannotated_parameter_is_rejected() {
+    // A function parameter with no annotation cannot be inferred from context, so it is
+    // a compile error rather than silently defaulting to Num.
     let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
+    assert!(matches!(
+        checker.check_program(&program),
+        Err(TypeError::UnannotatedParameter { .. })
+    ));
 }
 
 #[test]
@@ -384,7 +388,7 @@ test = => <
 fn test_method_call_with_args() {
     // Test method calls with additional arguments
     let tokens = Lexer::tokenize(
-        "add = (self, x) => self + x
+        "add = (self :: Num, x :: Num) => self + x
 test = => <
   result = (5).add(10)
   result
@@ -404,7 +408,7 @@ test = => <
 fn test_method_vs_function_call() {
     // Both method and function call syntax should work
     let tokens = Lexer::tokenize(
-        "double = x => x * 2
+        "double = (x :: Num) => x * 2
 test = => <
   a = (5).double()     ~ Method syntax
   b = double(5)         ~ Function syntax
