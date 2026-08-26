@@ -24,41 +24,41 @@ Vec = {
   xs :: []Num = [1, 2, 3]
   ys :: []Num = [<-xs, 4, 5]           ~ [1, 2, 3, 4, 5]
   zs :: []Num = [0, <-xs, <-ys]        ~ [0, 1,2,3, 1,2,3,4,5]  (two spreads, left-to-right)
-  assertEq(ys.size, 5)
-  assertEq(zs.size, 9)
+  assert(ys.size, equals(5))
+  assert(zs.size, equals(9))
 
   ~ --- Array spread ([]Text) — repr-correct, not just Num ---
   hello :: []Text = ["h", "e"]
   word  :: []Text = [<-hello, "l", "l", "o"]   ~ ["h","e","l","l","o"]
   word.each(c => print(c))                     ~ prints h e l l o, one per line
-  assertEq(word.size, 5)
-  assertEq(word[4], "o")
+  assert(word.size, equals(5))
+  assert(word[4], equals("o"))
 
   ~ --- range vs spread disambiguation ---
   ranges :: [][]Num = [1 <- 4]         ~ ONE element: the range [1,2,3,4]
-  assertEq(ranges.size, 1)
-  assertEq(ranges[0].size, 4)
+  assert(ranges.size, equals(1))
+  assert(ranges[0].size, equals(4))
 
   ~ --- Record functional update (named type + methods preserved) ---
   a :: Vec = Vec { x = 10, y = 20 }
   b :: Vec = { <-a, x = 5 }            ~ keeps Vec: b.sum() available
-  assertEq(b.sum(), 25)                ~ 5 + 20
+  assert(b.sum(), equals(25))                ~ 5 + 20
 
   ~ --- Functional update naming the type: `Vec { <-a, ... }` ---
   ~ The source must already be that type, or an anonymous record of exactly its shape
   ~ (which a type with methods, like Vec, never has).
   c :: Vec = Vec { <-a, y = 2 }        ~ named source: keeps Vec, so c.sum() works
-  assertEq(c.sum(), 12)                ~ 10 + 2
+  assert(c.sum(), equals(12))                ~ 10 + 2
 
   parts = { x = 3, y = 4 }             ~ an anonymous record of exactly Pair's shape
   pair :: Pair = Pair { <-parts }      ~ Pair declares no methods, so the shape fills it
-  assertEq(pair.x + pair.y, 7)
+  assert(pair.x + pair.y, equals(7))
   overridden :: Pair = Pair { <-parts, y = 40 }
-  assertEq(overridden.y, 40)
+  assert(overridden.y, equals(40))
 
   ~ --- Record functional update (anonymous, override + add a field) ---
   p = { name = "Ada", tag = 1 }
   q = { <-p, tag = 3, extra = 4 }      ~ override `tag`, add `extra`
-  assertEq(q.tag, 3)
-  assertEq(q.extra, 4)
+  assert(q.tag, equals(3))
+  assert(q.extra, equals(4))
 >

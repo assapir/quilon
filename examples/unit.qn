@@ -14,5 +14,5 @@ log = (m :: Text) -> $ => print(m)
   log("done")
   ~ A genuine, verifiable result computed alongside the `$`-typed effects.
   total :: Num = "started".size + "done".size   ~ 7 + 4
-  assertEq(total, 11)
+  assert(total, equals(11))
 >

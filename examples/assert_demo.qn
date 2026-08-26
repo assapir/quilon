@@ -1,32 +1,42 @@
-~ Assertions — `<< core.test`. Every assertion below holds, so the program runs to
-~ completion and exits 0. A failing assertion prints a message to stderr and exits 101.
+~ Assertions — the value under test first, a matcher second. Every assertion below holds,
+~ so the program runs to completion and exits 0; a failing one reports at its own call site
+~ and exits 101. `assert` needs no import: the compiler provides it, and the matchers with it.
 ~
-~   assert(cond)                ~ fail (exit 101) if cond is false
-~   assert(cond, opts)          ~ same, with a custom message via AssertOpts
-~   assertEq(actual, expected)  ~ fail unless actual == expected (prints both on failure)
-~   assertNotEq(a, b)           ~ fail unless a != b
-~   assertOk(r) / assertNotOk(r)~ fail unless the Result is Ok / NotOk
+~   assert(actual, equals(expected))  ~ fail unless `actual == expected`
+~   assert(actual, contains(part))    ~ a part of a Text, or an element of an array
+~   assert(actual, not(matcher))      ~ negation, around any matcher
+~   assert(result, isOk())            ~ a Result is Ok / NotOk
 ~
-~ assertEq/assertNotEq work over Num, Text, and Bool.
-<< core.test
+~ `expect(actual, matcher)` is the same vocabulary for a test case: it records the failure
+~ with the reporter instead of exiting, so the suite carries on. See examples/test_suite.qn.
+
+Version = {
+  major :: Num,
+  minor :: Num,
+  == = (other :: Version) -> Bool => it.major == other.major && it.minor == other.minor,
+  ` = => "v`it.major`.`it.minor`"
+}
 
 ^ = () -> $ => <
-  ~ The primitive, over a plain Bool.
-  assert(1 + 1 == 2)
+  ~ Equality over each built-in type, through the same `==` the operator uses.
+  assert(6 * 7, equals(42))
+  assert("qui" + "lon", equals("quilon"))
+  assert(2 < 3, equals(true))
 
-  ~ With a custom failure message (options record, constructed by name).
-  assert(2 * 2 == 4, AssertOpts { message = "arithmetic is broken" })
+  ~ And over a user type, through the `==` member it declares. A failure renders both
+  ~ values with the type's own `` ` ``.
+  assert(Version { major = 0, minor = 9 }, equals(Version { major = 0, minor = 9 }))
 
-  ~ Equality across each scalar type.
-  assertEq(6 * 7, 42)
-  assertEq("qui" + "lon", "quilon")
-  assertEq(2 < 3, true)
+  ~ Containment: a substring of a Text, an element of an array.
+  assert("assertions and matchers", contains("matcher"))
+  assert([2, 4, 6], contains(4))
 
-  ~ Inequality.
-  assertNotEq(1, 2)
-  assertNotEq("a", "b")
+  ~ Negation wraps any matcher.
+  assert(1, not(equals(2)))
+  assert("a", not(equals("b")))
+  assert([2, 4, 6], not(contains(5)))
 
   ~ Results, via the absent-safe `at` (Ok in bounds, NotOk out of bounds).
-  assertOk([10, 20, 30].at(0))
-  assertNotOk([10, 20, 30].at(9))
+  assert([10, 20, 30].at(0), isOk())
+  assert([10, 20, 30].at(9), isNotOk())
 >

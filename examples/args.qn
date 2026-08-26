@@ -9,7 +9,7 @@
 << core.test
 
 ^ = (args :: []Text, env :: [|Text => Text|]) -> $ => <
-  assert(args.size >= 1)        ~ argv[0] is always present -> args is non-empty
+  assert(args.size >= 1, equals(true))        ~ argv[0] is always present -> args is non-empty
 
   ~ Read argv[0] back as a Text and count the env's entries, exercising the `[]Text` and
   ~ `[|Text => Text|]` entry-point paths. Both are invocation-dependent, so they are

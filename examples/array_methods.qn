@@ -17,7 +17,7 @@
     .map(x => x * 2)              ~ [2, 4, 6, 8, 10, 12]
     .filter(x => x > 4)           ~ [6, 8, 10, 12]
     .reduce(0, (acc, x) => acc + x)   ~ 6+8+10+12
-  assertEq(sum, 36)
+  assert(sum, equals(36))
 
   doubled :: []Num = nums.map(x => x * 2)  ~ [2, 4, 6, 8, 10, 12]
 
@@ -25,19 +25,19 @@
   hit :: Num = doubled.find(x => x > 8) ?
     | Ok(v)    => v
     | NotOk(_) => 0
-  assertEq(hit, 10)
+  assert(hit, equals(10))
 
   ~ find with no match -> NotOk path.
   miss :: Result = doubled.find(x => x > 99)
-  assertNotOk(miss)
+  assert(miss, isNotOk())
 
   ~ at: in-bounds Ok, then out-of-bounds NotOk.
   third :: Num = doubled.at(2) ?         ~ doubled[2] = 6
     | Ok(v)    => v
     | NotOk(_) => 0
-  assertEq(third, 6)
-  assertOk(doubled.at(2))
-  assertNotOk(doubled.at(42))
+  assert(third, equals(6))
+  assert(doubled.at(2), isOk())
+  assert(doubled.at(42), isNotOk())
 
   ~ `at` is the form to reach for when an index MIGHT be out of range: a direct
   ~ `doubled[wanted]` is checked too, but a bad index there fails loudly — the program
@@ -46,5 +46,5 @@
   fallback :: Num = doubled.at(wanted) ?
     | Ok(v)    => v
     | NotOk(_) => -1
-  assertEq(fallback, -1)
+  assert(fallback, equals(-1))
 >

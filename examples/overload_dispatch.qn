@@ -30,27 +30,27 @@ walk = (n :: Num) -> Text => n == 0 ? "done" : walk(step(n))
   nums :: []Num = [10, 20]
 
   ~ An element read carries the array's element type, not a numeric default.
-  assertEq(kind(words[0]), 2)
-  assertEq(kind(nums[1]), 1)
-  assertEq(kind(words[1] + "!"), 2)
+  assert(kind(words[0]), equals(2))
+  assert(kind(nums[1]), equals(1))
+  assert(kind(words[1] + "!"), equals(2))
 
   ~ A match result, a call result, and a negation each keep their own type.
   found = [1, 2].at(0) ? | Ok(_) => true | NotOk(_) => false
-  assertEq(kind(found), 3)
-  assertEq(kind(!found), 3)
-  assertEq(kind(double(4)), 1)
+  assert(kind(found), equals(3))
+  assert(kind(!found), equals(3))
+  assert(kind(double(4)), equals(1))
 
   ~ …including through a lambda and an array method.
   lengths = words.map(w => w.size)
-  assertEq(kind(lengths[0]), 1)
-  assertEq(lengths[0], 5)
+  assert(kind(lengths[0]), equals(1))
+  assert(lengths[0], equals(5))
 
   ~ Deep enough that a stack-growing recursion would abort: the self-call is a loop.
-  assertEq(countdown(1000000), 7)
-  assertEq(countdown("stop"), 0)
+  assert(countdown(1000000), equals(7))
+  assert(countdown("stop"), equals(0))
 
   ~ Dispatch through a member defined above, and a recursive member reaching itself.
-  assertEq(walk(3), "done")
-  assertEq(walk("kept"), "kept")
-  assertEq(kind(walk(1)), 2)
+  assert(walk(3), equals("done"))
+  assert(walk("kept"), equals("kept"))
+  assert(kind(walk(1)), equals(2))
 >
