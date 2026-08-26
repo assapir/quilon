@@ -213,13 +213,6 @@ pub struct CodeGenerator<'ctx> {
     // Saved/restored around nested function emission (closures, local fns) so a source
     // location is always attributed to the right function. `None` unless `debug` is set.
     di_scope: Option<DIScope<'ctx>>,
-    // Number of leading top-level items that came from imported modules. Their byte spans
-    // are relative to their own module source, which the single `.qn` line index cannot map,
-    // so debug info is suppressed while emitting them (see `di_suppressed`).
-    di_imported_boundary: usize,
-    // Set while emitting an imported-module item, so `begin_di_function`/`set_debug_loc`
-    // emit no debug info for it — only the user's own file gets DWARF line info.
-    di_suppressed: bool,
     // DWARF debug types (only under `--debug`). Full field types of every record type
     // (`named_type_fields` keeps only names), and each sum type's variant list — both needed
     // to build a composite type's members/payload slots. Populated by a pre-pass in
@@ -343,8 +336,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             generating_backtick_for: None,
             debug: None,
             di_scope: None,
-            di_imported_boundary: 0,
-            di_suppressed: false,
             record_field_types: HashMap::new(),
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
@@ -575,7 +566,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level declaration (which would make it
         // look like a nested/local declaration — see `generate_function_declaration`).
-        for (idx, item) in program.items.iter().enumerate() {
+        for item in program.items.iter() {
             if let Item::FunctionDeclaration(declaration) = item
                 && let Some(reachable) = reachable.as_ref()
                 && !reachable.contains(declaration.name.as_str())
@@ -583,12 +574,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 continue;
             }
             self.current_function = None;
-            // Imported-module items (the leading `di_imported_boundary` items) get no debug
-            // info: their byte spans are relative to their own module source, not this file.
-            self.di_suppressed = idx < self.di_imported_boundary;
             self.generate_item(item)?;
         }
-        self.di_suppressed = false;
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
@@ -653,7 +640,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // its instructions (GC init, the call into `^`) carry a valid debug location — the
         // verifier requires one on a call to a function that itself has debug info.
         let main_span = Span::in_root(0, 0);
-        let saved_scope = self.begin_di_function(main_fn, "main", &main_span);
+        let saved_scope = self.begin_di_entry_shim(main_fn, &main_span);
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
         let argv = main_fn.get_nth_param(1).unwrap().into_pointer_value();
         let envp = main_fn.get_nth_param(2).unwrap().into_pointer_value();
@@ -675,7 +662,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inline in `main`, byte-identical to before this feature existed.
         let return_val = if self.defer.uses_deferral {
             let entry_fn = self.module.add_function("__ql_entry", main_type, None);
-            let thunk_scope = self.begin_di_function(entry_fn, "__ql_entry", &main_span);
+            let thunk_scope = self.begin_di_entry_shim(entry_fn, &main_span);
             let thunk_argc = entry_fn.get_nth_param(0).unwrap().into_int_value();
             let thunk_argv = entry_fn.get_nth_param(1).unwrap().into_pointer_value();
             let thunk_envp = entry_fn.get_nth_param(2).unwrap().into_pointer_value();

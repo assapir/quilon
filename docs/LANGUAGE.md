@@ -1126,10 +1126,12 @@ per-function scopes, and **locals, parameters, and debug types** — every `=`/`
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. Each Quilon type gets a distinct DWARF entry: `Num`/`Bool` as base types,
 and `Text`, arrays (`[]T`), records, and sum types as distinctly-named composites, so a
-debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Only the
-program's own source is attributed — functions from imported modules (`<<`) carry no line
-info yet, since emission builds one `DIFile` from the root source. Multi-file line info is a
-follow-up.
+debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Line info is
+multi-file: a function from an imported module (`<<`) — corelib included — is attributed to
+its OWN source, so a debugger steps into it. The entry frame reads `^` (the generated C
+`main` shim is named for the entry point and marked artificial). The leaf `@` primitives and
+the inert built-in placeholders (`print`/`now`/…) lower to intrinsics and emit no subprogram,
+so a debugger steps over them.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)
 
