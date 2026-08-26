@@ -1,6 +1,5 @@
-~ The program half of the pair: it imports `tests_alongside_code.qn` and uses its exports.
-~ That module's `describe` blocks are no part of this build, so the marker below is the only
-~ line this program prints.
+~ Imports `tests_alongside_code.qn` and uses its exports. That module's `describe` blocks are
+~ no part of this build, so the marker below is the only line this program prints.
 << "tests_alongside_code.qn"
 << core.io
 << core.test

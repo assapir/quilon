@@ -1,7 +1,7 @@
-~ Tests beside the code they test: the `>>` exports and the `describe` blocks that check
-~ them share one file. Only `quilon test` compiles those blocks — `check`, `compile`,
-~ `build`, and `run` strip them, so the line printed below can never reach a build.
-~ `uses_tested_module.qn` is the program that imports these exports.
+~ Tests beside the code they test: the `>>` exports and the `describe` blocks checking them
+~ share one file. Only `quilon test` compiles those blocks — every other command strips them,
+~ so the line one case prints below reaches no build. `use_tested_module.qn` imports the
+~ exports.
 << core.io
 << core.test
 
@@ -21,7 +21,6 @@ describe("wordCount", () => <
 )
 
 describe("the stripped block", () => <
-  ~ The proof that stripping is real: a normal build never prints this line.
   it("runs under quilon test and nowhere else", () => <
     print("STRIPPED-TEST-BLOCK-RAN")
     assertEq(slugify("Both Halves"), "both-halves")
