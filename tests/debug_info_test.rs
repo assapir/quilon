@@ -593,3 +593,68 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A `<< "path.qn"` user-file import is attributed to that file's real on-disk path, so a
+/// debugger can open it. The source map records a file import under a `file:`-prefixed
+/// canonical key but a CLEAN display path; the `DW_AT_decl_file` must be the clean path (no
+/// `file:` scheme prefix), or a debugger would look for a file that does not exist.
+#[test]
+fn debug_build_attributes_user_file_import_to_its_real_path() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping file-import debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping file-import debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let dir = std::env::temp_dir().join(format!("quilon_dbgimport_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("lib")).expect("create temp lib dir");
+    std::fs::write(
+        dir.join("lib/util.qn"),
+        ">> triple = (n :: Num) -> Num => n * 3\n",
+    )
+    .expect("write imported module");
+    let ql = dir.join("main.qn");
+    std::fs::write(&ql, "<< \"lib/util.qn\"\n\n^ = () -> Num => triple(4)\n")
+        .expect("write root source");
+    let bin = dir.join("main");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(12), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    let out = String::from_utf8_lossy(&info.stdout);
+    let subs = subprograms(&out);
+
+    let triple = subs
+        .iter()
+        .find(|(name, _, _)| name == "triple")
+        .unwrap_or_else(|| panic!("expected a `triple` subprogram, got:\n{subs:#?}"));
+    assert!(
+        triple.1.ends_with("lib/util.qn") && !triple.1.contains("file:"),
+        "the imported function must be attributed to its real path, got {:?}",
+        triple.1
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
