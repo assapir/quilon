@@ -41,14 +41,11 @@ impl<'a> Parser<'a> {
     /// Whether the cursor is on a top-level test block: a CALL to
     /// [`crate::ast::TEST_BLOCK_MARKER`] (`describe("…", () => < … >)`). A `describe`
     /// followed by anything but an argument list — `describe = …`, which is how
-    /// `core.test` DEFINES it — is an ordinary item.
+    /// `core.test` defines it — is an ordinary item.
     fn at_test_block(&self) -> bool {
         self.check(&TokenKind::Ident)
             && self.peek().text == crate::ast::TEST_BLOCK_MARKER
-            && self
-                .tokens
-                .get(self.pos + 1)
-                .is_some_and(|next| next.kind == TokenKind::ParenOpen && !next.first_on_line)
+            && self.check_same_line_at(1, &TokenKind::ParenOpen)
     }
 
     /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).

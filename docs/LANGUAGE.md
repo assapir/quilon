@@ -951,7 +951,7 @@ signatures, behavior, and a small example per function.
 | Module | Import | What it gives you |
 |--------|--------|-------------------|
 | [`core.io`](corelib/io.md) | `<< core.io` | Output to file descriptors and stdin: `print` / `eprint` / `write`, the `stdout` / `stderr` descriptors, and the deferred `@readStdin` line read. |
-| [`core.test`](corelib/test.md) | `<< core.test` | Assertions for self-verifying programs, reporting the caller's `file:line:column`: `assert` (+ `AssertOpts`) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt` (fail → exit 101). Plus the [test harness](corelib/test.md#the-test-harness) `quilon test` runs: `describe` / `it` / `expect`. |
+| [`core.test`](corelib/test.md) | `<< core.test` | Assertions for self-verifying programs, reporting the caller's `file:line:column`: `assert` (+ `AssertOpts`) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt` (fail → exit 101). Plus the [test harness](corelib/test.md#the-test-harness) `quilon test` runs: `describe` / `it`. |
 | [`core.cli`](corelib/cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](corelib/time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
 | [`core.net`](corelib/net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
@@ -1186,8 +1186,8 @@ quilon test    [path]       # run the test suites under a file or directory (def
 ```
 
 `quilon test` is JIT-only, and exits non-zero if any case failed. It runs a file's top-level
-`describe` blocks — which every other command above strips, so a suite costs a release build
-nothing. See [`core.test`](corelib/test.md#the-test-harness).
+`describe` blocks — which `run`, `compile`, and `build` strip, so a suite costs a release
+build nothing. See [`core.test`](corelib/test.md#the-test-harness).
 
 `quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt`, which carries the GC) into a native executable:
 ```bash
@@ -1304,7 +1304,7 @@ pathological input.
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |
-| Test harness: `quilon test` over top-level `describe` / `it` / `expect` blocks — render-and-continue matchers, a pass/fail tree, a summary, non-zero exit on any failure; the blocks are stripped from every other command | ✅ |
+| Test harness: [`quilon test`](corelib/test.md#the-test-harness) over top-level `describe` / `it` blocks; the blocks are stripped from every other command | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |

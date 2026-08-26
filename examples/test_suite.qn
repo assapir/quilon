@@ -1,4 +1,5 @@
-~ A test suite: `describe` groups, `it` cases, and `expect` matchers from `core.test`.
+~ A test suite: `describe` groups and `it` cases from `core.test`, each case checking
+~ itself with the module's assertions.
 ~
 ~ Run: cargo run -- test examples/test_suite.qn    ~ exits 0 — every case passes
 ~
@@ -9,29 +10,28 @@
 << core.test
 
 describe("Text", () => <
-  it("trims both ends", () => expect("  padded  ".trim()).toBe("padded"))
-  it("finds a part", () => expect("haystack").toContain("stack"))
-  it("counts graphemes, not bytes", () => expect("héllo".length).toBe(5))
+  it("trims both ends", () => assertEq("  padded  ".trim(), "padded"))
+  it("finds a part", () => assert("haystack".contains("stack")))
+  it("counts graphemes, not bytes", () => assertEq("héllo".length, 5))
 
   ~ `describe` nests: the reporter indents by depth.
   describe("splitting", () => <
-    it("splits on a separator", () => expect("a,b,c".split(",").size).toBe(3))
+    it("splits on a separator", () => assertEq("a,b,c".split(",").size, 3))
     it("keeps the whole text when the separator is absent", () =>
-      expect("a,b,c".split(";").size).toBe(1))
+      assertEq("a,b,c".split(";").size, 1))
   >
   )
 >
 )
 
 describe("Num", () => <
-  it("adds", () => expect(2 + 2).toBe(4))
-  it("compares", () => expect(7).toBeGreaterThan(3))
-  it("compares the other way", () => expect(3).toBeLessThan(7))
+  it("adds", () => assertEq(2 + 2, 4))
+  it("compares", () => assert(7 > 3))
 >
 )
 
-describe("Bool", () => <
-  it("holds", () => expect(1 < 2).toBeTruthy())
-  it("does not hold", () => expect(2 < 1).toBeFalsy())
+describe("Result", () => <
+  it("is Ok in bounds", () => assertOk([10, 20].at(0)))
+  it("is NotOk out of bounds", () => assertNotOk([10, 20].at(9)))
 >
 )

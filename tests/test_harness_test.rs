@@ -1,10 +1,10 @@
-//! The in-language test framework: `quilon test`, and what a top-level `describe` block
-//! does to every OTHER command.
+//! The in-language test framework: `quilon test`, and what a top-level `describe` block does
+//! to every other command.
 //!
-//! Two halves, and both matter. A suite has to run — report each case, keep going past a
-//! failure, and exit non-zero when one failed. And a suite has to COST A RELEASE BUILD
-//! NOTHING: the blocks are not part of the compilation unit, so `build`/`compile`/`run`
-//! neither check them nor emit them, and a file that is only tests is not a program at all.
+//! Two halves, and both matter. A suite has to run — report each case, and exit non-zero
+//! when one failed. And a suite has to cost a release build nothing: the blocks are not part
+//! of the compilation unit, so `run`/`compile`/`build` neither check them nor emit them, and
+//! a file that is only tests is not a program at all.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,36 +13,36 @@ use quilon::ast::Item;
 use quilon::lexer::Lexer;
 use quilon::parser;
 
-/// A passing suite: two groups, one nested, and a matcher for each scalar type.
+/// A passing suite: two groups, one nested inside the other.
 const PASSING_SUITE: &str = r#"
 << core.test
 
 describe("numbers", () => <
-  it("adds", () => expect(1 + 1).toBe(2))
-  it("orders", () => expect(2).toBeGreaterThan(1))
+  it("adds", () => assertEq(1 + 1, 2))
+  it("orders", () => assert(2 > 1))
 
   describe("nested", () => <
-    it("still runs", () => expect(true).toBeTruthy())
+    it("still runs", () => assert(true))
   >
   )
 >
 )
 
 describe("text", () => <
-  it("contains", () => expect("haystack").toContain("stack"))
+  it("contains", () => assert("haystack".contains("stack")))
 >
 )
 "#;
 
-/// One failing case between two passing ones — the shape that proves a matcher renders and
-/// CONTINUES rather than exiting on the spot.
+/// A passing case, then a failing one, then another that would pass. The assertions are
+/// fail-fast, so the third never runs — which is what the report has to reflect.
 const FAILING_SUITE: &str = r#"
 << core.test
 
 describe("arithmetic", () => <
-  it("holds", () => expect(2 + 2).toBe(4))
-  it("does not hold", () => expect(2 + 2).toBe(5))
-  it("runs after the failure", () => expect("after").toBe("after"))
+  it("holds", () => assertEq(2 + 2, 4))
+  it("does not hold", () => assertEq(2 + 2, 5))
+  it("never reached", () => assertEq("after", "after"))
 >
 )
 "#;
@@ -119,7 +119,7 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
             "<< core.io\n",
             "double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
-            "  it(\"doubles\", () => expect(double(21)).toBe(42))\n",
+            "  it(\"doubles\", () => assertEq(double(21), 42))\n",
             ">\n",
             ")\n",
             "^ = () -> Num => double(0)\n"
@@ -130,13 +130,13 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
     let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
 
-    // The program's own function is emitted; the harness entry points are not — neither
-    // `describe` itself, nor an `expect` overload, nor the summary reporter.
+    // The program's own function is emitted; the harness is not — neither `describe`, nor
+    // `it`, nor the reporter it renders through.
     assert!(
         ir.contains("@double("),
         "the program's code must be emitted"
     );
-    for absent in ["@describe(", "@expect", "@reportSummary("] {
+    for absent in ["@describe(", "@it(", "@reportSuite(", "@reportSummary("] {
         assert!(
             !ir.contains(absent),
             "`{absent}` reached a release build:\n{ir}"
@@ -210,7 +210,7 @@ fn a_passing_suite_exits_zero_and_reports_every_case() {
         );
     }
     assert!(
-        out.stdout.contains("4 cases, 4 passed, 0 failed"),
+        out.stdout.contains("4 cases passed"),
         "unexpected summary:\n{}",
         out.stdout
     );
@@ -218,25 +218,26 @@ fn a_passing_suite_exits_zero_and_reports_every_case() {
 }
 
 #[test]
-fn a_failing_case_exits_non_zero_without_stopping_the_run() {
+fn a_failing_case_exits_non_zero_and_ends_the_run_where_it_failed() {
     let dir = work_dir("fail");
     let source = write(&dir, "suite.qn", FAILING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(out.code, 0, "a failing suite must exit non-zero");
+    // Cases before the failure are reported; the failing one and everything after it are
+    // not, the assertions being fail-fast. And no summary: the run never got there.
     assert!(
-        out.stdout.contains("3 cases, 2 passed, 1 failed"),
-        "unexpected summary:\n{}",
+        out.stdout.contains("holds"),
+        "the case before the failure should have been reported:\n{}",
         out.stdout
     );
-    // The case AFTER the failure ran, which is the render-and-continue contract.
     assert!(
-        out.stdout.contains("runs after the failure"),
-        "the run stopped at the first failure:\n{}",
+        !out.stdout.contains("never reached") && !out.stdout.contains("cases passed"),
+        "a fail-fast run must not report past the failure:\n{}",
         out.stdout
     );
     // The failure itself is reported in the compiler's own diagnostic format, on stderr,
-    // blaming the `expect(…)` that was written.
+    // blaming the assertion that was written.
     assert!(
         out.stderr.contains("suite.qn:6:"),
         "the failure must name file:line:column:\n{}",
@@ -276,11 +277,11 @@ fn a_directory_runs_every_suite_it_holds() {
         out.stdout
     );
 
-    // Each suite's totals are its own — the registry is per-thread, and a thread per file
-    // is what keeps them apart.
+    // The passing suite's total is its own: the registry is per-thread, and a thread per
+    // file is what keeps one suite's counts out of another's summary. The failing suite ran
+    // one case before it failed, and its count must not have landed here.
     assert!(
-        out.stdout.contains("4 cases, 4 passed, 0 failed")
-            && out.stdout.contains("3 cases, 2 passed, 1 failed"),
+        out.stdout.contains("4 cases passed"),
         "one suite's totals leaked into another's summary:\n{}",
         out.stdout
     );
@@ -307,25 +308,85 @@ fn a_suite_that_does_not_compile_fails_the_run() {
     let source = write(
         &dir,
         "suite.qn",
-        "<< core.test\ndescribe(\"g\", () => expect(1).toBe(\"one\"))\n",
+        "<< core.test\ndescribe(\"g\", () => assertEq(1, \"one\"))\n",
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0, "a suite that fails to type-check must fail");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A suite with no `<< core.test` has no `describe` to call, and says so where the call is
-/// — rather than blaming the entry point the compiler synthesized.
+/// A suite with no `<< core.test` has no reporter, and says so at its own `describe` —
+/// rather than blaming the entry point the compiler synthesized, which has no location.
 #[test]
-fn a_suite_without_the_import_is_reported_at_its_own_describe() {
+fn a_suite_without_a_reporter_is_reported_at_its_own_describe() {
     let dir = work_dir("noimport");
-    let source = write(&dir, "suite.qn", "describe(\"g\", () => 0)\n");
+    let source = write(&dir, "suite.qn", "\ndescribe(\"g\", () => 0)\n");
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0);
     assert!(
-        out.stderr.contains("suite.qn:1:"),
+        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test reporter"),
         "the diagnostic must point at the `describe` call:\n{}",
         out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The failure that would be silent: a suite whose SYNTAX is broken. It has no parseable
+/// `describe` to be recognized by, so passing over it would report success on a suite
+/// somebody had just broken.
+#[test]
+fn a_suite_that_does_not_parse_fails_the_run() {
+    let dir = work_dir("unparseable");
+    write(
+        &dir,
+        "suite.qn",
+        "<< core.test\ndescribe(\"g\", () => <<<\n",
+    );
+    let out = quilon(&["test", dir.to_str().unwrap()]);
+    assert_ne!(
+        out.code, 0,
+        "an unparseable suite must fail, not vanish:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A suite may carry its own fixtures — helper functions, record types — and is still not a
+/// program: stripping its blocks leaves nothing to run, so `build` passes over it.
+#[test]
+fn a_suite_with_its_own_helpers_is_still_not_a_program() {
+    let dir = work_dir("helpers");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.test\n",
+            "double = (n :: Num) -> Num => n * 2\n",
+            "describe(\"double\", () => <\n",
+            "  it(\"doubles\", () => assertEq(double(21), 42))\n",
+            ">\n",
+            ")\n"
+        ),
+    );
+
+    let build = quilon(&["build", source.to_str().unwrap()]);
+    assert_eq!(
+        build.code, 0,
+        "`quilon build` must pass over a suite with helpers:\n{}\n{}",
+        build.stdout, build.stderr
+    );
+    assert!(
+        build.stdout.is_empty() && build.stderr.is_empty(),
+        "the skip must be silent, said:\n{}\n{}",
+        build.stdout,
+        build.stderr
+    );
+
+    let test = quilon(&["test", source.to_str().unwrap()]);
+    assert_eq!(
+        test.code, 0,
+        "the same file must run as a suite:\n{}\n{}",
+        test.stdout, test.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -341,7 +402,7 @@ fn the_example_suite_passes() {
         out.stdout, out.stderr
     );
     assert!(
-        out.stdout.contains("0 failed"),
+        out.stdout.contains("cases passed"),
         "unexpected summary:\n{}",
         out.stdout
     );

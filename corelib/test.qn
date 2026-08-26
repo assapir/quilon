@@ -21,71 +21,52 @@
 ~
 ~ ── The harness ────────────────────────────────────────────────────────────────────
 ~ `quilon test` runs a file's top-level `describe` blocks; every other command compiles
-~ the file without them. A test file has no `^`.
+~ the file without them. A test file has no `^`. A case asserts with the assertions
+~ above, so the FIRST failure ends the run — see docs/corelib/test.md.
 ~
 ~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
-~   it(name, body)        one case. It FAILS when a matcher in `body` reports; unlike an
-~                         assertion, the run continues to the next case.
-~   expect(value)         a matcher over `value`, remembering the call's location:
-~                           Num    .toBe .toBeGreaterThan .toBeLessThan
-~                           Text   .toBe .toContain
-~                           Bool   .toBeTruthy .toBeFalsy
+~   it(name, body)        one case, reported once it has run.
 ~
 ~   describe("trimming", () => <
-~     it("drops both ends", () => expect("  x  ".trim()).toBe("x"))
+~     it("drops both ends", () => assertEq("  x  ".trim(), "x"))
 ~   >
 ~   )
 ~
 ~ ── Reporters ──────────────────────────────────────────────────────────────────────
 ~ What a run LOOKS like is decided here, not in the compiler: the harness records what
 ~ happened through the reporter-agnostic registry (`__test_*`) and renders through the
-~ `report*` functions below. A reporter of your own defines the same four and the entry
-~ `quilon test` synthesizes calls `reportSummary()` last, for the exit code.
+~ `report*` functions below. A reporter of your own defines the same three, and the
+~ entry `quilon test` synthesizes calls `reportSummary()` last, for the exit code.
 << core.io
 
 ~ Options record for `assert`; `message` is the text reported on failure.
 >> AssertOpts = { message :: Text }
 
-~ Render `message` in the compiler's own diagnostic frame, blaming `line`:`column` of
-~ `file` and underlining `width` characters of `excerpt`. The location arrives as separate
-~ values rather than as a `Site` so that a caller which STORED one (a matcher records where
-~ `expect` was written) can render from what it kept.
->> renderFrame = (
-  message :: Text,
-  file :: Text,
-  line :: Num,
-  column :: Num,
-  excerpt :: Text,
-  width :: Num
-) -> $ => <
+~ Report `message` at `site` — the location of the call that left the `site` argument off —
+~ in the compiler's diagnostic frame, then exit 101.
+>> failAt = (message :: Text, site :: Site) -> $ => <
   color = __color_enabled(stderr)
   position = color ? "\e[36m" : ""
   problem = color ? "\e[1;31m" : ""
   frame = color ? "\e[2m" : ""
   plain = color ? "\e[0m" : ""
 
-  number = "`line`"
+  number = "`site.line`"
   gutter = " ".repeat(number.length)
-  lead = " ".repeat(column - 1)
-  carets = "^".repeat(width)
+  lead = " ".repeat(site.column - 1)
+  carets = "^".repeat(site.width)
 
   ~ Keep in step with `shorten_path` in the runtime, which shortens a path the same way.
   room = 60
-  shown = file.length > room
-    ? "…" + file.slice(file.length - room + 1, file.length)
-    : file
+  file = site.file.length > room
+    ? "…" + site.file.slice(site.file.length - room + 1, site.file.length)
+    : site.file
 
-  eprint("`position``shown`:`line`:`column`:`plain`")
+  eprint("`position``file`:`site.line`:`site.column`:`plain`")
   eprint("`problem``message``plain`")
   eprint("`frame``gutter` |`plain`")
-  eprint("`frame``number` |`plain` `excerpt`")
+  eprint("`frame``number` |`plain` `site.excerpt`")
   eprint("`frame``gutter` |`plain` `lead``problem``carets``plain`")
->
-
-~ Report `message` at `site` — the location of the call that left the `site` argument off —
-~ then exit 101.
->> failAt = (message :: Text, site :: Site) -> $ => <
-  renderFrame(message, site.file, site.line, site.column, site.excerpt, site.width)
   __exit(101)
 >
 
@@ -137,48 +118,24 @@
 ~ Two spaces per level of `describe` nesting.
 >> indent = (depth :: Num) -> Text => "  ".repeat(depth)
 
-~ A failing matcher: render the frame, then mark the case in progress as failed. Rendering
-~ goes to stderr (where every other compiler diagnostic goes) and the case/group tree to
-~ stdout, so each stream reads on its own when they are captured separately.
->> reportFailure = (
-  message :: Text,
-  file :: Text,
-  line :: Num,
-  column :: Num,
-  excerpt :: Text,
-  width :: Num
-) -> $ => <
-  renderFrame(message, file, line, column, excerpt, width)
-  __test_note_fail()
-  $
->
+~ `text` in green — plain when stdout is not a terminal that wants color.
+>> green = (text :: Text) -> Text =>
+  __color_enabled(stdout) ? "\e[32m`text`\e[0m" : text
 
 ~ A `describe` group was entered, at `depth` (1 for an outermost group).
 >> reportSuite = (name :: Text, depth :: Num) -> $ => print("`indent(depth - 1)``name`")
 
-~ A case ended: `failed` is 1 when it failed and 0 when it passed.
->> reportCase = (name :: Text, depth :: Num, failed :: Num) -> $ => <
-  color = __color_enabled(stdout)
-  bad = color ? "\e[31m" : ""
-  good = color ? "\e[32m" : ""
-  plain = color ? "\e[0m" : ""
-  marker = failed == 0 ? "`good`✓`plain`" : "`bad`✗`plain`"
-  print("`indent(depth)``marker` `name`")
->
+~ A case ran to completion, at `depth`.
+>> reportCase = (name :: Text, depth :: Num) -> $ =>
+  print("`indent(depth)``green("✓")` `name`")
 
-~ The run's totals, and its exit code: 0 when every case passed, 1 when any failed. The
+~ The run's total, and its exit code. Only ever reached when every case passed: a failing
+~ assertion exits 101 from where it failed, so a run that gets here had no failures. The
 ~ synthesized entry point ends with this call, so what it returns IS the process status.
 >> reportSummary = () -> Num => <
-  passed = __test_passed()
-  failed = __test_failed()
-  color = __color_enabled(stdout)
-  bad = color ? "\e[1;31m" : ""
-  good = color ? "\e[1;32m" : ""
-  plain = color ? "\e[0m" : ""
-  tone = failed == 0 ? good : bad
   print("")
-  print("`tone``passed + failed` cases, `passed` passed, `failed` failed`plain`")
-  failed == 0 ? 0 : 1
+  print(green("`__test_passed()` cases passed"))
+  0
 >
 
 ~ ── describe / it ──────────────────────────────────────────────────────────────────
@@ -193,134 +150,9 @@
   $
 >
 
-~ One case. Every matcher failure inside `body` is reported and NOTED, and the case ends
-~ failed — the run carries on to the next one either way.
+~ One case, reported once `body` has run. A failing assertion inside `body` reports and
+~ exits before that, so a reported case is one that passed.
 >> it = (name :: Text, body :: () -> $) -> $ => <
-  depth = __test_case_enter()
   body()
-  failed = __test_case_leave()
-  reportCase(name, depth, failed)
+  reportCase(name, __test_case_passed())
 >
-
-~ ── Matchers ───────────────────────────────────────────────────────────────────────
-~ Each `expect` overload takes the call's `Site` and keeps its FIELDS, so a matcher can
-~ blame the `expect(…)` you wrote. (A method cannot take a `Site` of its own: only the
-~ last parameter of a top-level function is filled in.)
-
->> NumExpectation = {
-  actual :: Num,
-  file :: Text,
-  line :: Num,
-  column :: Num,
-  excerpt :: Text,
-  width :: Num,
-
-  toBe = (expected :: Num) -> $ =>
-    it.actual == expected
-      ? $
-      : reportFailure(
-          "expected `expected`, got `it.actual`",
-          it.file, it.line, it.column, it.excerpt, it.width
-        ),
-
-  toBeGreaterThan = (limit :: Num) -> $ =>
-    it.actual > limit
-      ? $
-      : reportFailure(
-          "expected a value greater than `limit`, got `it.actual`",
-          it.file, it.line, it.column, it.excerpt, it.width
-        ),
-
-  toBeLessThan = (limit :: Num) -> $ =>
-    it.actual < limit
-      ? $
-      : reportFailure(
-          "expected a value less than `limit`, got `it.actual`",
-          it.file, it.line, it.column, it.excerpt, it.width
-        )
-}
-
->> TextExpectation = {
-  actual :: Text,
-  file :: Text,
-  line :: Num,
-  column :: Num,
-  excerpt :: Text,
-  width :: Num,
-
-  toBe = (expected :: Text) -> $ =>
-    it.actual == expected
-      ? $
-      : reportFailure(
-          "expected \"`expected`\", got \"`it.actual`\"",
-          it.file, it.line, it.column, it.excerpt, it.width
-        ),
-
-  toContain = (part :: Text) -> $ =>
-    it.actual.contains(part)
-      ? $
-      : reportFailure(
-          "expected \"`it.actual`\" to contain \"`part`\"",
-          it.file, it.line, it.column, it.excerpt, it.width
-        )
-}
-
->> BoolExpectation = {
-  actual :: Bool,
-  file :: Text,
-  line :: Num,
-  column :: Num,
-  excerpt :: Text,
-  width :: Num,
-
-  toBe = (expected :: Bool) -> $ =>
-    it.actual == expected
-      ? $
-      : reportFailure(
-          "expected `expected`, got `it.actual`",
-          it.file, it.line, it.column, it.excerpt, it.width
-        ),
-
-  toBeTruthy = () -> $ =>
-    it.actual
-      ? $
-      : reportFailure(
-          "expected true, got false",
-          it.file, it.line, it.column, it.excerpt, it.width
-        ),
-
-  toBeFalsy = () -> $ =>
-    it.actual
-      ? reportFailure(
-          "expected false, got true",
-          it.file, it.line, it.column, it.excerpt, it.width
-        )
-      : $
-}
-
->> expect = (value :: Num, site :: Site) -> NumExpectation => NumExpectation {
-  actual = value,
-  file = site.file,
-  line = site.line,
-  column = site.column,
-  excerpt = site.excerpt,
-  width = site.width
-}
-
->> expect = (value :: Text, site :: Site) -> TextExpectation => TextExpectation {
-  actual = value,
-  file = site.file,
-  line = site.line,
-  column = site.column,
-  excerpt = site.excerpt,
-  width = site.width
-}
-
->> expect = (value :: Bool, site :: Site) -> BoolExpectation => BoolExpectation {
-  actual = value,
-  file = site.file,
-  line = site.line,
-  column = site.column,
-  excerpt = site.excerpt,
-  width = site.width
-}

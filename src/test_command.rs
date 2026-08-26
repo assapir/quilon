@@ -1,90 +1,86 @@
 //! `quilon test` — find a project's test suites and run them.
 //!
 //! A suite is a `.qn` file with top-level `describe(…)` blocks (see
-//! [`crate::ast::TEST_BLOCK_MARKER`]) and no `^` of its own. The front end synthesizes the
-//! entry point that runs those blocks in order and ends with the reporter's summary, whose
-//! result is the file's exit status; running is always through the in-process JIT, never a
-//! native build.
+//! [`crate::ast::TEST_BLOCK_MARKER`]) and no `^` of its own; the front end synthesizes the
+//! entry point that runs those blocks. Running is always through the in-process JIT, never
+//! a native build.
 //!
-//! Each file runs on its OWN thread. The registry the harness records into is per-thread
-//! (see `quilon_rt::test_registry`), so a thread per file is what keeps one suite's totals
-//! out of the next one's summary — with no state to reset between runs.
+//! ONE suite per process. A case asserts with `core.test`'s assertions, which are fail-fast:
+//! a failing one exits 101 there and then, so several suites in one process would end the
+//! whole run at the first failure. A run of many therefore spawns this same binary once per
+//! suite, stdio inherited so each report goes straight through.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::driver::{self, TestBlocks};
 use crate::jit;
+use crate::source_extension;
 
-/// Directory entries never searched for suites: version control and build output, plus
-/// anything hidden. Walking them is slow and finds nothing.
+/// Directory names never searched for suites: walking build output is slow and finds
+/// nothing. (Hidden entries are skipped separately, by their leading dot.)
 const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules"];
 
-/// What a run of one file, or of a whole tree, came to.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Outcome {
-    /// Suites that ran and reported every case passing.
-    pub passed: usize,
-    /// Suites that failed — a case reported, or the file did not compile.
-    pub failed: usize,
-}
-
-impl Outcome {
-    /// The process exit status: 0 only when nothing failed.
-    pub fn exit_code(&self) -> i32 {
-        match self.failed {
-            0 => 0,
-            _ => 1,
-        }
-    }
-}
-
-/// Run the suites at `root` — one file, or every suite under a directory. `arguments` is
-/// forwarded to each program as its `^` arguments would be, after the file's own path.
+/// Run the suites at `root` — one file, or every suite under a directory — and return how
+/// many FAILED. A suite fails when a case fails, or when the file does not compile.
 ///
-/// Prints each file's path before running it (the suite's own reporter prints the rest),
-/// and a closing line naming how many files failed when more than one ran.
-pub fn run(root: &Path, arguments: &[String]) -> Outcome {
+/// A single suite runs here, in this process, under its own path as a heading. Several run
+/// one process each (see the module docs), and a closing line tallies them.
+pub fn run(root: &Path) -> usize {
     let suites = discover(root);
-    if suites.is_empty() {
-        println!(
-            "no tests found in {} — a test file has top-level `{}` blocks",
-            root.display(),
-            crate::ast::TEST_BLOCK_MARKER
-        );
-        return Outcome::default();
-    }
-
-    let mut outcome = Outcome::default();
-    for suite in &suites {
-        println!("{}", suite.display());
-        match run_one(suite, arguments) {
-            true => outcome.passed += 1,
-            false => outcome.failed += 1,
+    match suites.as_slice() {
+        [] => {
+            println!(
+                "no tests found in {} — a test file has top-level `{}` blocks",
+                root.display(),
+                crate::ast::TEST_BLOCK_MARKER
+            );
+            0
+        }
+        [suite] => {
+            println!("{}", suite.display());
+            usize::from(!compile_and_run(suite))
+        }
+        many => {
+            let failed = many
+                .iter()
+                .filter(|suite| !run_in_its_own_process(suite))
+                .count();
+            println!(
+                "{} suites: {} passed, {failed} failed",
+                many.len(),
+                many.len() - failed
+            );
+            failed
         }
     }
-
-    if suites.len() > 1 {
-        println!(
-            "{} suites: {} passed, {} failed",
-            suites.len(),
-            outcome.passed,
-            outcome.failed
-        );
-    }
-    outcome
 }
 
-/// Run one suite on a thread of its own — which is what isolates its totals from the next
-/// suite's, the registry being per-thread. `true` when every case passed.
-fn run_one(suite: &Path, arguments: &[String]) -> bool {
-    // Everything the run needs is built INSIDE the thread: a checked program holds `Rc`s
-    // and so cannot cross a thread boundary, while `&Path`/`&[String]` can.
-    let outcome =
-        std::thread::scope(|scope| scope.spawn(|| compile_and_run(suite, arguments)).join());
-    match outcome {
-        Ok(passed) => passed,
-        Err(_) => {
-            eprintln!("❌ {} panicked while running", suite.display());
+/// Run one suite by re-invoking this binary on it, its output going straight to our own
+/// stdout/stderr. `true` when the child exited 0.
+///
+/// Handing the suite to a child is what keeps a fail-fast assertion — which calls `exit` —
+/// from ending the whole run at the first failing suite. Named with exactly one file, the
+/// child takes the single-suite path above and does not spawn again.
+fn run_in_its_own_process(suite: &Path) -> bool {
+    let quilon = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            // Without our own path there is no child to run in. Fall back to this process,
+            // where a failing case ends the run early — and say so rather than looking fine.
+            eprintln!(
+                "❌ cannot locate the quilon binary ({error}); running {} here, so a failing \
+                 case will end the run",
+                suite.display()
+            );
+            println!("{}", suite.display());
+            return compile_and_run(suite);
+        }
+    };
+    match Command::new(quilon).arg("test").arg(suite).status() {
+        Ok(status) => status.success(),
+        Err(error) => {
+            eprintln!("❌ could not run {}: {error}", suite.display());
             false
         }
     }
@@ -93,7 +89,7 @@ fn run_one(suite: &Path, arguments: &[String]) -> bool {
 /// Type-check `suite` with its test blocks compiled in, then JIT the synthesized entry
 /// point. `true` when the run exited 0. A front-end failure is reported like any other
 /// compile error and counts as a failure.
-fn compile_and_run(suite: &Path, arguments: &[String]) -> bool {
+fn compile_and_run(suite: &Path) -> bool {
     let checked = match driver::front_end_with(suite, TestBlocks::Run) {
         Ok(checked) => checked,
         Err(error) => {
@@ -102,11 +98,9 @@ fn compile_and_run(suite: &Path, arguments: &[String]) -> bool {
         }
     };
 
-    // The argument vector a native build would see: the program's own path, then the
-    // caller's arguments — the same shape `quilon run` builds.
-    let mut argv = Vec::with_capacity(arguments.len() + 1);
-    argv.push(suite.to_string_lossy().into_owned());
-    argv.extend(arguments.iter().cloned());
+    // A suite takes no arguments of its own — the entry point the front end synthesizes has
+    // no parameters — so `argv` is just the program's path, the way a native build sees it.
+    let argv = [suite.to_string_lossy().into_owned()];
 
     match jit::run_program(
         &checked.program,
@@ -123,39 +117,46 @@ fn compile_and_run(suite: &Path, arguments: &[String]) -> bool {
     }
 }
 
-/// Every suite at `root`, sorted so a run's order is the same everywhere: `root` itself
-/// when it is a suite file, or each suite found under it when it is a directory.
-///
-/// A file qualifies by having top-level test blocks, which takes a parse — so a `.qn` file
-/// that does not parse is passed over rather than reported here. `quilon check` is what
-/// reports on a file that cannot be read.
+/// Every suite at `root`, sorted so a run's order is the same everywhere: `root` itself when
+/// it is a suite file, or each suite found under it when it is a directory. See
+/// [`driver::is_test_suite`] for what qualifies.
 pub fn discover(root: &Path) -> Vec<PathBuf> {
     let mut suites = Vec::new();
-    collect(root, &mut suites);
+    match root.is_dir() {
+        true => collect(root, &mut suites),
+        false => consider(root, &mut suites),
+    }
     suites.sort();
     suites
 }
 
-fn collect(path: &Path, suites: &mut Vec<PathBuf>) {
-    if path.is_file() {
-        if driver::has_test_blocks(path).unwrap_or(false) {
-            suites.push(path.to_path_buf());
-        }
-        return;
+fn consider(file: &Path, suites: &mut Vec<PathBuf>) {
+    if driver::is_test_suite(file) {
+        suites.push(file.to_path_buf());
     }
-    let Ok(entries) = std::fs::read_dir(path) else {
+}
+
+/// Walk `directory`, collecting the suites in it and below. Symlinks are never followed —
+/// `file_type` reports the entry itself, not its target — so a link back up the tree cannot
+/// send this into unbounded recursion, and a linked directory's suites are not run twice.
+fn collect(directory: &Path, suites: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
     for entry in entries.flatten() {
-        let child = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_ref()) {
             continue;
         }
-        // Descend into a directory; consider a file only when it is a Quilon source.
-        if child.is_dir() || child.extension().is_some_and(|extension| extension == "qn") {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let child = entry.path();
+        if kind.is_dir() {
             collect(&child, suites);
+        } else if kind.is_file() && name.ends_with(source_extension::EXTENSION) {
+            consider(&child, suites);
         }
     }
 }

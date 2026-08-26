@@ -82,6 +82,11 @@ pub struct Checked {
     /// value, and whether any `@` primitive launch is reachable. Codegen reads it to emit
     /// the promise representation and forces; empty for pure programs.
     pub defer: crate::deferral::DeferInfo,
+    /// The file held nothing but test blocks and imports — no declarations of its own. It
+    /// is therefore not a compilation unit at all, which `run`/`compile`/`build` answer by
+    /// passing over it in silence. Recorded before the link, since `program.items` picks up
+    /// every imported module's exports.
+    pub tests_only: bool,
 }
 
 /// What the front end does with a file's top-level `describe` blocks (see
@@ -98,13 +103,8 @@ pub enum TestBlocks {
 }
 
 /// The reporter function the synthesized test entry point ends with: it renders the run's
-/// summary and yields the process exit code (0 when every case passed).
-///
-/// This is the reporter SEAM. `core.test`'s `describe`/`it`/matchers record what happened
-/// through the reporter-agnostic test registry (see [`ast::TEST_REGISTRY_INTRINSICS`]) and
-/// render through the `report*` functions beside this one; nothing about the harness is
-/// wired to a particular rendering. Selecting another reporter is a matter of pointing
-/// this name at another module's function.
+/// summary and yields the process exit code. Naming it here rather than inlining it is what
+/// makes the reporter selectable — see the seam in `docs/corelib/test.md`.
 pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
@@ -160,6 +160,8 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
         ));
     }
 
+    let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
+
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let (mut program, mut sources) =
         modules::link(program, base_dir).map_err(FrontEndError::plain)?;
@@ -167,7 +169,7 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
 
     if tests == TestBlocks::Run {
         synthesize_test_entry(&mut program)
-            .map_err(|(span, message)| FrontEndError::at(&path, &source, &span, &message))?;
+            .map_err(|(span, message)| FrontEndError::at_span(&sources, &span, &message))?;
     }
 
     let types = typechecker::TypeChecker::new()
@@ -185,6 +187,7 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
         types,
         sources: Rc::new(sources),
         defer,
+        tests_only,
     })
 }
 
@@ -215,11 +218,29 @@ fn entry_point(program: &ast::Program) -> Option<&ast::FunctionDeclaration> {
     })
 }
 
-/// A span for the `index`-th node the compiler builds itself. Spans key the type oracle,
-/// so each synthesized node needs its own — and none may collide with a node read from a
-/// real source, which is what [`SYNTHESIZED_FILE`] guarantees.
-fn synthesized_span(index: u32) -> Span {
-    Span::in_file(index, index, SYNTHESIZED_FILE)
+/// Whether `program` declares a top-level function called `name`.
+fn defines_function(program: &ast::Program, name: &str) -> bool {
+    program
+        .items
+        .iter()
+        .any(|item| matches!(item, ast::Item::FunctionDeclaration(func) if func.name == name))
+}
+
+/// The four nodes [`synthesize_test_entry`] builds, as the offsets that tell their spans
+/// apart. Spans key the type oracle, so each synthesized node needs its own — and none may
+/// collide with a node read from a real source, which is what [`SYNTHESIZED_FILE`]
+/// guarantees.
+#[derive(Clone, Copy)]
+enum Synthesized {
+    ReporterName,
+    ReporterCall,
+    EntryBody,
+    EntryDeclaration,
+}
+
+fn synthesized_span(node: Synthesized) -> Span {
+    let offset = node as u32;
+    Span::in_file(offset, offset, SYNTHESIZED_FILE)
 }
 
 /// Append the entry point that runs `program`'s test blocks: each `describe(…)` in source
@@ -228,9 +249,9 @@ fn synthesized_span(index: u32) -> Span {
 /// Fails (with the offending span and message) if the file also defines its own `^` — a
 /// test file has no entry point, because this is it.
 fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String)> {
-    if program.test_blocks.is_empty() {
+    let Some(first_block) = program.test_blocks.first() else {
         return Ok(());
-    }
+    };
     if let Some(existing) = entry_point(program) {
         return Err((
             existing.span.clone(),
@@ -241,14 +262,26 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
             ),
         ));
     }
+    // The reporter has to be in scope, since the entry ends by calling it. Said here, at the
+    // first test block, rather than by the type checker at the synthesized call — which has
+    // no source location to point a diagnostic at.
+    if !defines_function(program, REPORTER_SUMMARY_FUNCTION) {
+        return Err((
+            first_block.span().clone(),
+            format!(
+                "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
+                 Add `<< core.test`, or define a reporter of your own"
+            ),
+        ));
+    }
 
     let summary = ast::Expression::Call {
         function: Box::new(ast::Expression::Identifier {
             name: REPORTER_SUMMARY_FUNCTION.to_string(),
-            span: synthesized_span(0),
+            span: synthesized_span(Synthesized::ReporterName),
         }),
         arguments: Vec::new(),
-        span: synthesized_span(1),
+        span: synthesized_span(Synthesized::ReporterCall),
     };
     let statements = program
         .test_blocks
@@ -265,40 +298,34 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
             return_type: Some(ast::Type::Num),
             body: ast::Expression::Block {
                 statements,
-                span: synthesized_span(2),
+                span: synthesized_span(Synthesized::EntryBody),
             },
             exported: false,
             from_corelib: false,
-            span: synthesized_span(3),
+            span: synthesized_span(Synthesized::EntryDeclaration),
         }));
     Ok(())
 }
 
-/// Whether `file` holds nothing but tests: top-level `describe` blocks and imports, with
-/// no declarations of its own. Such a file is not a compilation unit at all — `build`,
-/// `compile`, and `run` skip it silently rather than reporting a missing `^`.
+/// Whether `file` is a suite `quilon test` should run: it has top-level test blocks — or it
+/// cannot be parsed at all, in which case running it is the only safe answer. Passing over a
+/// broken source in silence would let `quilon test` report success on a suite whose syntax
+/// someone had just broken; running it makes the front end say what is wrong.
 ///
-/// Answered from a parse alone (no import resolution, no type check), so it is cheap
-/// enough to ask of every `.qn` file when discovering a directory's tests. `None` when the
-/// file cannot be read or parsed, which leaves judging it to the ordinary front end.
-pub fn test_blocks_only(file: &Path) -> Option<bool> {
-    let program = parse_only(file)?;
-    Some(!program.test_blocks.is_empty() && program.items.is_empty())
-}
-
-/// Whether `file` has any top-level test block at all. `None` when it cannot be read or
-/// parsed.
-pub fn has_test_blocks(file: &Path) -> Option<bool> {
-    Some(!parse_only(file)?.test_blocks.is_empty())
-}
-
-/// Read and parse `file`, with no import resolution or type checking. `None` on any
-/// failure: the callers are asking a question about a file's SHAPE, and a file that cannot
-/// be parsed has no answer to give — the ordinary front end is what reports why.
-fn parse_only(file: &Path) -> Option<ast::Program> {
-    let source = std::fs::read_to_string(file).ok()?;
-    let tokens = lexer::Lexer::tokenize(&source).ok()?;
-    parser::parse(&tokens).ok()
+/// Answered from a parse alone — no import resolution, no type check — which is what makes it
+/// cheap enough to ask of every `.qn` file under a directory. A file that cannot even be READ
+/// is not a suite: there is nothing to run and nothing to report.
+pub fn is_test_suite(file: &Path) -> bool {
+    let Ok(source) = std::fs::read_to_string(file) else {
+        return false;
+    };
+    let Ok(tokens) = lexer::Lexer::tokenize(&source) else {
+        return true;
+    };
+    match parser::parse(&tokens) {
+        Ok(program) => !program.test_blocks.is_empty(),
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]

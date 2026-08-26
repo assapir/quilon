@@ -10,12 +10,11 @@ pub type FileId = u32;
 /// The source the compiler was invoked on, as opposed to an imported module.
 pub const ROOT_FILE: FileId = 0;
 
-/// The file id of a node the COMPILER built rather than read — today the entry point
-/// `quilon test` synthesizes around a file's test blocks. No source is ever registered
-/// under it, so a diagnostic on such a span falls back to naming the root file, and its
-/// offsets only have to be distinct from each other: spans key the type oracle, and
-/// giving synthesized nodes a file of their own is what keeps them from colliding with
-/// the real nodes of any module.
+/// The file id of a node the compiler built rather than read — today the entry point
+/// `quilon test` synthesizes around a file's test blocks. Spans key the type oracle, so
+/// giving synthesized nodes a file of their own is what keeps them from colliding with the
+/// real nodes of any module; their offsets then only have to be distinct from each other.
+/// No source is registered under it, so a diagnostic on such a span names the root file.
 pub const SYNTHESIZED_FILE: FileId = FileId::MAX;
 
 /// Source code position span: a byte range within ONE source file.

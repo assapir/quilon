@@ -57,9 +57,6 @@ enum Commands {
         /// File or directory to search for suites (defaults to the current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Arguments passed through to each suite, as `quilon run` passes them
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
     },
 }
 
@@ -76,14 +73,16 @@ fn checked(file: &Path) -> driver::Checked {
     }
 }
 
-/// Exit 0 without a word when `file` holds nothing but test blocks. Such a file is not a
-/// compilation unit: stripping its tests leaves nothing to compile, so `build`, `compile`,
-/// and `run` pass over it rather than reporting a missing `^` (`quilon test` is what runs
-/// it). Called before anything is printed, so skipping really is silent.
-fn skip_when_tests_only(file: &Path) {
-    if driver::test_blocks_only(file) == Some(true) {
+/// [`checked`], exiting 0 without a word when the file holds nothing but test blocks. Such
+/// a file is not a compilation unit — stripping its tests leaves nothing to compile — so
+/// `run`, `compile`, and `build` pass over it rather than reporting a missing `^`;
+/// `quilon test` is what runs it. Call it before printing anything, so the skip is silent.
+fn checked_program_to_emit(file: &Path) -> driver::Checked {
+    let checked = checked(file);
+    if checked.tests_only {
         std::process::exit(0);
     }
+    checked
 }
 
 /// Exit with the standard diagnostic unless `program` defines the `^` entry point
@@ -102,8 +101,7 @@ fn main() {
 
     match cli.command {
         Commands::Run { file, args } => {
-            skip_when_tests_only(&file);
-            let checked = checked(&file);
+            let checked = checked_program_to_emit(&file);
             require_entry_point(&checked.program);
 
             // Mirror the argv a native build receives: `argv[0]` is the program
@@ -133,10 +131,8 @@ fn main() {
             }
         }
         Commands::Compile { file, output } => {
-            skip_when_tests_only(&file);
+            let checked = checked_program_to_emit(&file);
             println!("🔨 Compiling: {}", file.display());
-
-            let checked = checked(&file);
             let program = checked.program;
             println!("✅ Type checking passed!");
             require_entry_point(&program);
@@ -185,12 +181,10 @@ fn main() {
             linker,
             debug,
         } => {
-            skip_when_tests_only(&file);
-            println!("🔨 Building: {}", file.display());
-
             // The source text and every file's path come from the source map the build already
             // carries; a `--debug` build additionally needs the root file's path (below).
-            let checked = checked(&file);
+            let checked = checked_program_to_emit(&file);
+            println!("🔨 Building: {}", file.display());
             let sources = checked.sources;
             let defer = checked.defer;
             let program = checked.program;
@@ -227,8 +221,9 @@ fn main() {
                 program.items.len()
             );
         }
-        Commands::Test { path, args } => {
-            std::process::exit(test_command::run(&path, &args).exit_code());
+        Commands::Test { path } => {
+            let failed = test_command::run(&path);
+            std::process::exit(i32::from(failed > 0));
         }
     }
 }

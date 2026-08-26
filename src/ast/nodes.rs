@@ -218,9 +218,10 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[Type::Num],
         ret: Type::Bool,
     },
-    // The test registry (see `TEST_REGISTRY_INTRINSICS`): the harness's event sink, which
-    // `core.test`'s `describe`/`it`/`expect` drive. Every member is `() -> Num`, so one
-    // lowering serves them all.
+    // The test registry (see `is_test_registry_intrinsic`): the harness's event sink, which
+    // `core.test`'s `describe` and `it` drive. Enter and leave a `describe` group, each
+    // yielding the resulting nesting depth; count a case that ran to completion, yielding
+    // the depth to indent it at; and read the total back for the summary.
     BuiltinOverload {
         name: "__test_suite_enter",
         parameters: &[],
@@ -232,17 +233,7 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         ret: Type::Num,
     },
     BuiltinOverload {
-        name: "__test_case_enter",
-        parameters: &[],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
-        name: "__test_case_leave",
-        parameters: &[],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
-        name: "__test_note_fail",
+        name: "__test_case_passed",
         parameters: &[],
         ret: Type::Num,
     },
@@ -251,38 +242,21 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Num,
     },
-    BuiltinOverload {
-        name: "__test_failed",
-        parameters: &[],
-        ret: Type::Num,
-    },
 ];
 
-/// The test registry's primitives — the event sink behind `core.test`'s `describe`, `it`,
-/// and the matchers. The registry counts and nests; it renders nothing, so a reporter is
-/// free to render however it likes (see `docs/corelib/test.md`).
+/// The prefix marking a test-registry primitive.
+const TEST_REGISTRY_PREFIX: &str = "__test_";
+
+/// Whether `name` is one of the test registry's primitives — the event sink behind
+/// `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above. The
+/// registry counts and nests; it renders nothing, so a reporter is free to render however it
+/// likes (see `docs/corelib/test.md`).
 ///
 /// Every one takes no arguments and yields a `Num`, which is what lets codegen lower the
-/// whole family through a single path. `__`-prefixed and exported by no module for the
+/// whole family through this one predicate. `__`-prefixed and exported by no module for the
 /// same reason as `__exit`: they are the harness's plumbing, not user-facing surface.
-pub const TEST_REGISTRY_INTRINSICS: &[&str] = &[
-    // Enter / leave a `describe` group; each yields the resulting nesting depth.
-    "__test_suite_enter",
-    "__test_suite_leave",
-    // Start a case, yielding the depth to indent it at; end one, yielding 1 when it
-    // failed and 0 when it passed (and folding it into the totals).
-    "__test_case_enter",
-    "__test_case_leave",
-    // Mark the case in progress as failed; yields how many failures it has noted.
-    "__test_note_fail",
-    // The run's totals, for the summary.
-    "__test_passed",
-    "__test_failed",
-];
-
-/// Whether `name` is one of the [`TEST_REGISTRY_INTRINSICS`].
 pub fn is_test_registry_intrinsic(name: &str) -> bool {
-    TEST_REGISTRY_INTRINSICS.contains(&name)
+    name.starts_with(TEST_REGISTRY_PREFIX)
 }
 
 /// Whether the compiler provides built-in members for `name`, so a single user definition
@@ -901,20 +875,20 @@ mod tests {
 
     #[test]
     fn every_test_registry_primitive_is_a_zero_argument_num_builtin() {
-        // The two tables are written out separately (a const table cannot iterate a const
-        // slice), so this is what keeps them from drifting: codegen lowers a name because
-        // `is_test_registry_intrinsic` says so, and the checker only knows the name at all
-        // because `BUILTIN_OVERLOADS` lists it.
-        for name in TEST_REGISTRY_INTRINSICS {
-            let member = BUILTIN_OVERLOADS
-                .iter()
-                .find(|member| member.name == *name)
-                .unwrap_or_else(|| panic!("`{name}` is missing from BUILTIN_OVERLOADS"));
+        // Codegen lowers the whole family through one path, which only works while they all
+        // share that signature.
+        let registry: Vec<&BuiltinOverload> = BUILTIN_OVERLOADS
+            .iter()
+            .filter(|member| is_test_registry_intrinsic(member.name))
+            .collect();
+        assert!(!registry.is_empty(), "the registry has no members at all");
+        for member in registry {
             assert!(
                 member.parameters.is_empty(),
-                "`{name}` must take no arguments"
+                "`{}` must take no arguments",
+                member.name
             );
-            assert_eq!(member.ret, Type::Num, "`{name}` must yield a Num");
+            assert_eq!(member.ret, Type::Num, "`{}` must yield a Num", member.name);
         }
     }
 }

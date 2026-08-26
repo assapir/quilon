@@ -3,10 +3,9 @@
 Import with `<< core.test`. See the [corelib index](../LANGUAGE.md#corelib),
 `examples/assert_demo.qn`, and `examples/test_suite.qn`.
 
-Two ways to check a program, for two purposes. **Assertions** (`assert`, `assertEq`, …) make
-a program verify itself as it runs, and exit `101` at the first failure — what every example
-in `examples/` uses. The **harness** (`describe`, `it`, `expect`) runs a suite of cases under
-`quilon test`, reporting all of them and exiting non-zero if any failed.
+**Assertions** (`assert`, `assertEq`, …) make a program verify itself as it runs, exiting
+`101` at the first failure — what every example in `examples/` uses. The **harness**
+(`describe`, `it`) groups those checks into named cases that `quilon test` runs and reports.
 
 ## Assertions
 
@@ -50,19 +49,19 @@ directly, and records, sum types, and arrays through their `` ` `` render operat
 
 ## The test harness
 
-A **suite** is a `.qn` file whose top level is `describe(…)` blocks and nothing else — no
-`^`. `quilon test` synthesizes the entry point that runs each block in order; every other
-command leaves the blocks out of the program.
+A **suite** is a `.qn` file whose top level is `describe(…)` blocks — no `^`. `quilon test`
+synthesizes the entry point that runs each block in order; every other command leaves the
+blocks out of the program. A case checks itself with the assertions above.
 
 ```quilon
 << core.test
 
 describe("Text", () => <
-  it("trims both ends", () => expect("  padded  ".trim()).toBe("padded"))
-  it("finds a part", () => expect("haystack").toContain("stack"))
+  it("trims both ends", () => assertEq("  padded  ".trim(), "padded"))
+  it("finds a part", () => assert("haystack".contains("stack")))
 
   describe("splitting", () => <
-    it("splits on a separator", () => expect("a,b,c".split(",").size).toBe(3))
+    it("splits on a separator", () => assertEq("a,b,c".split(",").size, 3))
   >
   )
 >
@@ -83,66 +82,55 @@ Text
   splitting
     ✓ splits on a separator
 
-3 cases, 3 passed, 0 failed
+3 cases passed
 ```
 
 | Function | Effect |
 |----------|--------|
 | `describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
-| `it(name :: Text, body :: () -> $) -> $` | One case. It fails if any matcher in `body` reports; the run continues to the next case either way. |
-| `expect(value) -> …Expectation` | A matcher over `value`, remembering where the `expect(…)` was written so a failure blames your call. An [overload set](../LANGUAGE.md#overloading) over `Num`/`Text`/`Bool`. |
-
-| Matcher | On | Holds when |
-|---------|----|------------|
-| `.toBe(expected)` | `Num`, `Text`, `Bool` | `actual == expected` |
-| `.toBeGreaterThan(limit)` / `.toBeLessThan(limit)` | `Num` | `actual > limit` / `actual < limit` |
-| `.toContain(part)` | `Text` | `actual` contains `part` |
-| `.toBeTruthy()` / `.toBeFalsy()` | `Bool` | `actual` is `true` / `false` |
+| `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run. |
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
-straight into CI. A suite that fails to compile counts as a failed suite.
+straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
 
-A failing matcher renders in the same [error frame](../LANGUAGE.md#error-messages) a compiler
-diagnostic uses, on **stderr**, while the case tree and the summary go to **stdout** — so
-each stream reads on its own when they are captured separately:
+The case tree and the summary go to **stdout**; a failing assertion's
+[error frame](../LANGUAGE.md#error-messages) goes to **stderr**, like every other compiler
+diagnostic, so each stream reads on its own when they are captured separately.
 
-```
-tests/text.qn:6:29:
-expected 5, got 4
-  |
-6 |   it("gets it wrong", () => expect(2 + 2).toBe(5))
-  |                             ^^^^^^^^^^^^^
-```
+Suites run one process each, so a failure in one does not stop the others.
 
-Unlike an assertion, a matcher does not exit: it **renders and continues**, which is what
-lets one run report every failing case.
+### A failing case ends its suite
+
+The assertions are fail-fast: the first failure reports and exits 101. Within a suite, that
+means the failing case and everything after it go unreported, and no summary is printed — the
+frame naming `file:line:column` is what identifies the failure. A suite therefore reports
+"all N passed" or stops where it broke; there is no "N passed, M failed" tally across cases
+yet. (A matcher API that reports every failing case is the next step here.)
 
 ### Blocks as arguments
 
-A `< >` block closes on a line-final `>`, so a lambda with a block body puts the call's
-closing `)` on the next line. Writing each `it` as a single expression keeps that to the
-`describe` alone.
+A `< >` block closes on a [line-final `>`](../LANGUAGE.md#expressions), so a lambda
+with a block body puts the call's closing `)` on the next line. Writing each `it` as a single
+expression keeps that to the `describe` alone.
 
 ### Suites cost a release build nothing
 
 `describe` is the marker — there is no `cfg` or attribute. A top-level `describe(…)` call is
-test code, so `check`, `compile`, `build`, and `run` never type-check or emit it, and a file
-that is *only* test blocks is not a compilation unit at all: those commands pass over it
-silently rather than reporting a missing `^`. Tests can therefore sit in the file they test.
+test code, so `run`, `compile`, and `build` never type-check or emit it, and a file that is
+*only* test blocks is not a compilation unit at all: those three pass over it in silence
+rather than reporting a missing `^`. Tests can therefore sit in the file they test.
 
 ### Reporters
 
-What a run looks like is decided in `.qn`, not in the compiler. `describe`/`it`/the matchers
-record what happened through a reporter-agnostic registry of `__test_*` primitives (counts
-and nesting depth — the compiler renders nothing), and all rendering lives in four functions
-`core.test` exports:
+What a run looks like is decided in `.qn`, not in the compiler. `describe` and `it` record
+what happened through a reporter-agnostic registry of `__test_*` primitives — nesting depth
+and a count, no rendering — and all rendering lives in three functions `core.test` exports:
 
 | Function | Called when |
 |----------|-------------|
 | `reportSuite(name :: Text, depth :: Num) -> $` | A `describe` group is entered. |
-| `reportCase(name :: Text, depth :: Num, failed :: Num) -> $` | A case ends; `failed` is 1 or 0. |
-| `reportFailure(message :: Text, file :: Text, line :: Num, column :: Num, excerpt :: Text, width :: Num) -> $` | A matcher fails. Draws the frame (via `renderFrame`, which `failAt` shares) and notes the failure. |
-| `reportSummary() -> Num` | Last, from the synthesized entry point. Prints the totals and returns the exit code. |
+| `reportCase(name :: Text, depth :: Num) -> $` | A case has run. |
+| `reportSummary() -> Num` | Last, from the synthesized entry point. Prints the total and returns the exit code. |
 
-A reporter of its own defines the same four; selecting it is a matter of pointing the
+A reporter of its own defines the same three; selecting it is a matter of pointing the
 synthesized entry at another module's `reportSummary`.
