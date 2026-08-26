@@ -18,7 +18,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         file_path: &std::path::Path,
         sources: &crate::source_map::SourceMap,
     ) {
-        self.debug = Some(DebugInfo::new(&self.module, self.context, file_path, sources));
+        self.debug = Some(DebugInfo::new(
+            &self.module,
+            self.context,
+            file_path,
+            sources,
+        ));
     }
 
     /// Point the builder's current debug location at `span` within the function currently

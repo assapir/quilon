@@ -149,6 +149,47 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The own attributes of every `DW_TAG_subprogram` in `dump`, as `(name, decl_file,
+/// artificial)`. A subprogram's own `DW_AT_name`/`DW_AT_decl_file`/`DW_AT_artificial` all
+/// precede its first child DIE, so reading each subprogram block only up to the next
+/// `DW_TAG_` line captures exactly the subprogram's own attributes (not a parameter's or a
+/// local's). Used to tell the user's `^` entry from the artificial `main`/thunk shims and to
+/// find a corelib function's subprogram by its source file.
+fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
+    let quoted = |line: &str, attr: &str| -> Option<String> {
+        let rest = line.split(attr).nth(1)?;
+        let open = rest.find('"')?;
+        let close = rest[open + 1..].find('"')?;
+        Some(rest[open + 1..open + 1 + close].to_string())
+    };
+    let lines: Vec<&str> = dump.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if !line.contains("DW_TAG_subprogram") {
+            continue;
+        }
+        let (mut name, mut file, mut artificial) = (None, None, false);
+        for body in lines.iter().skip(i + 1) {
+            if body.contains("DW_TAG_") {
+                break; // reached the first child DIE; the subprogram's own attributes are done
+            }
+            if name.is_none() && body.contains("DW_AT_name") {
+                name = quoted(body, "DW_AT_name");
+            }
+            if file.is_none() && body.contains("DW_AT_decl_file") {
+                file = quoted(body, "DW_AT_decl_file");
+            }
+            if body.contains("DW_AT_artificial") && body.contains("true") {
+                artificial = true;
+            }
+        }
+        if let Some(name) = name {
+            out.push((name, file.unwrap_or_default(), artificial));
+        }
+    }
+    out
+}
+
 /// The quoted DWARF type name `llvm-dwarfdump` prints on the `DW_AT_type` line of the
 /// variable/parameter named `var` (e.g. `Num`, `Text`, `[]Num`, `Point *`). `None` if the
 /// variable or its type is absent. Used to assert each Quilon type gets a DISTINCT entry.
@@ -445,6 +486,108 @@ fn non_debug_build_has_no_ql_debug_info() {
     assert!(
         !info_out.contains("plain.qn"),
         "a non-debug build must not carry `.qn` debug info, got:\n{info_out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The entry frame reads as `^`, a real corelib function is steppable, and an `@`-primitive
+/// wrapper is not. The program imports `core.cli` (whose `hasFlag` is a real `.qn` function)
+/// and `core.time` (whose `@sleep` is a leaf `@` primitive and `now` an inert built-in
+/// placeholder), so one build exercises all three:
+///
+/// - the user's `^` entry has a subprogram named `^` attributed to its own source, while the
+///   generated `main`/`__ql_entry` shims carry `^`-named `DW_AT_artificial` subprograms — so a
+///   backtrace shows `^` for the entry frame rather than the C shim's symbol;
+/// - `hasFlag` has a subprogram attributed to `corelib/cli.qn` (with parameters/locals on that
+///   file's lines), so a debugger steps INTO it;
+/// - nothing is attributed to `core.time`'s source: `@sleep`/`now` are lowered to intrinsics and
+///   never emitted, so a debugger steps OVER them with nothing to step into.
+#[test]
+fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping entry/corelib debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping entry/corelib debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+<< core.cli
+<< core.time
+
+^ = () -> Num => <
+  @sleep(0)
+  now()
+  hasFlag([\"-v\"], \"-v\") ? 1 : 0
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgentry_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("entry.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("entry");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(1), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+    let subs = subprograms(&out);
+
+    // The user's `^` entry: a subprogram named `^`, attributed to the user's own file, NOT
+    // artificial — this is the frame a backtrace should show as the entry point.
+    assert!(
+        subs.iter().any(|(name, file, artificial)| name == "^"
+            && file.ends_with("entry.qn")
+            && !artificial),
+        "expected a real `^` entry subprogram in entry.qn, got:\n{subs:#?}"
+    );
+    // The generated entry shim(s) (C `main`, and the `__ql_entry` thunk this deferral program
+    // uses) carry `^`-named artificial subprograms — the entry frame reads `^`, not `main`.
+    assert!(
+        subs.iter()
+            .any(|(name, _, artificial)| name == "^" && *artificial),
+        "expected an artificial `^` entry-shim subprogram, got:\n{subs:#?}"
+    );
+
+    // Step INTO corelib: `hasFlag` has its own subprogram, attributed to `corelib/cli.qn`.
+    assert!(
+        subs.iter()
+            .any(|(name, file, _)| name == "hasFlag" && file.ends_with("cli.qn")),
+        "expected a `hasFlag` subprogram attributed to corelib/cli.qn, got:\n{subs:#?}"
+    );
+
+    // Step OVER the primitives: `@sleep`/`now` are never emitted, so no subprogram — and their
+    // source file is referenced nowhere in the DWARF (no leaked, empty subprogram or file entry).
+    assert!(
+        !subs.iter().any(|(_, file, _)| file.ends_with("time.qn")),
+        "no subprogram should be attributed to core.time's source, got:\n{subs:#?}"
+    );
+    assert!(
+        !out.contains("time.qn"),
+        "core.time's `@`-primitive/inert exports must leak no `.qn` debug entry, got:\n{out}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
