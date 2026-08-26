@@ -60,12 +60,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_case_is_counted_where_it_sits() {
+    fn a_case_is_counted_and_reports_the_depth_it_sits_at() {
+        // Three cases across two nesting levels, so the count and the depth cannot be
+        // confused for each other.
         assert_eq!(__test_suite_enter(), 1.0);
-        assert_eq!(__test_case_passed(), 1.0);
+        assert_eq!(__test_case_passed(), 1.0, "outermost group: depth 1");
+        assert_eq!(
+            __test_case_passed(),
+            1.0,
+            "depth does not move between cases"
+        );
         assert_eq!(__test_suite_enter(), 2.0);
-        assert_eq!(__test_case_passed(), 2.0);
-        assert_eq!(__test_passed(), 2.0);
+        assert_eq!(__test_case_passed(), 2.0, "nested group: depth 2");
+        assert_eq!(__test_passed(), 3.0, "all three cases counted");
         assert_eq!(__test_suite_leave(), 1.0);
         assert_eq!(__test_suite_leave(), 0.0);
     }
