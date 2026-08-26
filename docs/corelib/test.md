@@ -120,7 +120,16 @@ expression keeps that to the `describe` alone.
 test code, so `run`, `compile`, and `build` never type-check or emit it — nothing of the
 harness reaches the binary. And a file with test blocks but no `^` is not a compilation unit
 at all: those three pass over it in silence rather than reporting a missing entry point.
-Tests can therefore sit in the file they test.
+Tests can therefore sit in the module they test — beside its `>>` exports, as in
+`examples/tests_alongside_code.qn`, which `examples/uses_tested_module.qn` imports. A file
+that defines `^` is a program rather than a suite, so `quilon test` refuses it: blocks written
+beside an `^` are stripped from the build and run nowhere.
+
+Never type-checking it cuts both ways: **a type error inside a `describe` block is invisible
+to `check`, `compile`, and `build`**, which strip the block before the checker sees it and
+report success. Only `quilon test` compiles the blocks — and there a suite that fails to
+compile counts as a failed suite. **Run `quilon test` in CI**, or broken test code passes
+unnoticed.
 
 ### Reporters
 
