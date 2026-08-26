@@ -282,7 +282,7 @@ A `Map` is a **built-in parametric collection** — like `[]T`, not a user-defin
 written with a **pipe fence** `[|K => V|]` (`=>` reads "maps to"). It is immutable, keyed by
 `Num`/`Text`/`Bool` or a **user type** that defines both a `%` hash hook and an `==` member,
 and read through `.get` (which returns a `Result` — there is no bracket indexing on a map).
-Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`, `examples/map_user_keys.qn`).
+Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
 
 ### Sets
 
@@ -673,9 +673,9 @@ member. Both are required together, and `%`/`==` must agree (equal values hash t
 This unary `%` is distinct from the binary `%` remainder operator (which takes one
 parameter), and has no call syntax of its own — the collections invoke it.
 
-(See `examples/overloading.qn`, `examples/sum_methods.qn`, `examples/map_user_keys.qn`, and
-`examples/overload_dispatch.qn` for dispatch on argument types out of an array element, a
-match, a call, or a lambda.)
+(See `examples/overloading.qn`, `examples/sum_methods.qn`, `examples/maps.qn`,
+`examples/sets.qn`, and `examples/overload_dispatch.qn` for dispatch on argument types out
+of an array element, a match, a call, or a lambda.)
 
 ---
 
