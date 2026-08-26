@@ -49,9 +49,10 @@ directly, and records, sum types, and arrays through their `` ` `` render operat
 
 ## The test harness
 
-A **suite** is a `.qn` file whose top level is `describe(…)` blocks — no `^`. `quilon test`
-synthesizes the entry point that runs each block in order; every other command leaves the
-blocks out of the program. A case checks itself with the assertions above.
+A **suite** is a `.qn` file with top-level `describe(…)` blocks and no `^` — it may declare
+whatever fixtures its cases need. `quilon test` synthesizes the entry point that runs each
+block in order; every other command leaves the blocks out of the program. A case checks
+itself with the assertions above.
 
 ```quilon
 << core.test
@@ -116,9 +117,10 @@ expression keeps that to the `describe` alone.
 ### Suites cost a release build nothing
 
 `describe` is the marker — there is no `cfg` or attribute. A top-level `describe(…)` call is
-test code, so `run`, `compile`, and `build` never type-check or emit it, and a file that is
-*only* test blocks is not a compilation unit at all: those three pass over it in silence
-rather than reporting a missing `^`. Tests can therefore sit in the file they test.
+test code, so `run`, `compile`, and `build` never type-check or emit it — nothing of the
+harness reaches the binary. And a file with test blocks but no `^` is not a compilation unit
+at all: those three pass over it in silence rather than reporting a missing entry point.
+Tests can therefore sit in the file they test.
 
 ### Reporters
 

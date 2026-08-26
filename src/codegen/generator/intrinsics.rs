@@ -141,9 +141,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // double __now() — read the monotonic clock, in seconds. Backs `core.time`'s
             // plain (non-`@`) `now()`; only differences between readings are meaningful.
             "__now" => f64t.fn_type(&[], false),
-            // double __test_*() — the test registry (see `TEST_REGISTRY_INTRINSICS`): the
-            // harness's event sink, which `core.test`'s `describe`/`it`/matchers drive.
-            // Every one takes no arguments and yields a count or a depth.
+            // double __test_*() — the test registry (see `is_test_registry_intrinsic`): the
+            // harness's event sink, which `core.test`'s `describe` and `it` drive. Every one
+            // takes no arguments and yields a count or a depth.
             name if crate::ast::is_test_registry_intrinsic(name) => f64t.fn_type(&[], false),
             // { ptr, i64 } __read_launch(Site* site) — the `@read` leaf IO primitive: launch
             // a background read of one line from stdin and return the DEFERRED Text
@@ -352,7 +352,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Lower one of the test registry's primitives (see
-    /// [`crate::ast::TEST_REGISTRY_INTRINSICS`]) to its runtime intrinsic. They take no
+    /// [`crate::ast::is_test_registry_intrinsic`]) to its runtime intrinsic. They take no
     /// arguments and yield a `Num` — a nesting depth or a count — so the whole family
     /// lowers through this one path.
     pub(super) fn generate_test_registry(
