@@ -50,6 +50,40 @@ fn available_linker() -> Option<&'static str> {
     ["clang", "gcc"].into_iter().find(|t| tool_available(t))
 }
 
+/// Run a command, tolerating a transient `ETXTBSY`.
+///
+/// Tests in one binary run as threads of a single process. When one test has just
+/// written an executable and a sibling test spawns a subprocess, the fork inherits
+/// the still-open writable descriptor, so executing that file fails with
+/// `ExecutableFileBusy` until the descriptor closes. Retry briefly instead of
+/// failing the run.
+fn run_allowing_busy_executable(cmd: &mut Command) -> std::io::Result<std::process::Output> {
+    for _ in 0..50 {
+        match cmd.output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
+    cmd.output()
+}
+
+/// Place `quilon` at `destination` for the distributed-binary simulation.
+///
+/// A hard link is preferred over a copy: it writes no new file, so it cannot leave a
+/// writable descriptor open for a forking sibling test to inherit. Unlike a symlink it
+/// is indistinguishable from a regular file, so `current_exe()` still reports the
+/// staged path — which is what the simulation depends on. Falls back to a copy when
+/// the link cannot be made (a different filesystem, for instance).
+fn stage_quilon_binary(destination: &Path) {
+    let source = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    if std::fs::hard_link(source, destination).is_ok() {
+        return;
+    }
+    std::fs::copy(source, destination).expect("stage quilon binary");
+}
+
 /// `quilon build examples/hello_world.qn -o out --linker <linker>` with
 /// `configure` applied to the command (env tweaks etc.), asserting the build
 /// succeeds; then run the produced binary and return its exit code
@@ -69,14 +103,14 @@ fn build_hello_and_run(
         .args(["--linker", linker])
         .args(["-o", out.to_str().unwrap()]);
     configure(&mut cmd);
-    let build = cmd.output().expect("run quilon build");
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
     assert!(
         build.status.success(),
         "`quilon build` failed ({context}): {}",
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(out).output().expect("run produced binary");
+    let run = run_allowing_busy_executable(&mut Command::new(out)).expect("run produced binary");
     run.status.code()
 }
 
@@ -159,7 +193,7 @@ fn distributed_binary_builds_via_embedded_runtime() {
     std::fs::create_dir_all(&bin_dir).expect("create staged bin dir");
 
     let quilon = bin_dir.join("quilon");
-    std::fs::copy(env!("CARGO_BIN_EXE_quilon"), &quilon).expect("copy quilon binary");
+    stage_quilon_binary(&quilon);
     let out = stage.join("hello");
 
     let staged_env = |cmd: &mut Command| {
