@@ -361,10 +361,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if !args.is_empty() {
-            return Err(format!(
-                "{name} expects no arguments, got {}",
-                args.len()
-            ));
+            return Err(format!("{name} expects no arguments, got {}", args.len()));
         }
         let f = self.get_intrinsic(name)?;
         let call = self

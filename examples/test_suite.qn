@@ -1,0 +1,37 @@
+~ A test suite: `describe` groups, `it` cases, and `expect` matchers from `core.test`.
+~
+~ Run: cargo run -- test examples/test_suite.qn    ~ exits 0 — every case passes
+~
+~ There is no `^` here. A top-level `describe(…)` is TEST code: `quilon test` synthesizes
+~ the entry point that runs each block in order, and `check`/`compile`/`build`/`run` leave
+~ the blocks out of the program entirely — so a suite alongside the code it tests costs a
+~ release build nothing.
+<< core.test
+
+describe("Text", () => <
+  it("trims both ends", () => expect("  padded  ".trim()).toBe("padded"))
+  it("finds a part", () => expect("haystack").toContain("stack"))
+  it("counts graphemes, not bytes", () => expect("héllo".length).toBe(5))
+
+  ~ `describe` nests: the reporter indents by depth.
+  describe("splitting", () => <
+    it("splits on a separator", () => expect("a,b,c".split(",").size).toBe(3))
+    it("keeps the whole text when the separator is absent", () =>
+      expect("a,b,c".split(";").size).toBe(1))
+  >
+  )
+>
+)
+
+describe("Num", () => <
+  it("adds", () => expect(2 + 2).toBe(4))
+  it("compares", () => expect(7).toBeGreaterThan(3))
+  it("compares the other way", () => expect(3).toBeLessThan(7))
+>
+)
+
+describe("Bool", () => <
+  it("holds", () => expect(1 < 2).toBeTruthy())
+  it("does not hold", () => expect(2 < 1).toBeFalsy())
+>
+)

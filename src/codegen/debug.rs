@@ -311,9 +311,12 @@ impl<'ctx> DebugInfo<'ctx> {
     }
 
     /// An opaque pointer (`i8*`), used for a type codegen can't model precisely (a bare
-    /// function value, or a recursive type broken to stop infinite metadata).
+    /// function value, or a recursive type broken to stop infinite metadata). The pointee
+    /// is NAMED, unlike the pointer: LLVM rejects a basic type with an empty name, so an
+    /// anonymous one turned every `-g` build of a program holding a function value into a
+    /// panic.
     pub fn opaque_pointer(&self) -> DIType<'ctx> {
-        let byte = self.basic_type("", 8, DW_ATE_SIGNED_CHAR);
+        let byte = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);
         self.pointer_to("", byte)
     }
 

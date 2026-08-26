@@ -1,4 +1,4 @@
-use quilon::{ast, build, codegen, driver, jit};
+use quilon::{ast, build, codegen, driver, jit, test_command};
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -52,6 +52,15 @@ enum Commands {
         /// Path to the .qn file
         file: PathBuf,
     },
+    /// Run a Quilon test suite: every top-level `describe` block in a file or directory
+    Test {
+        /// File or directory to search for suites (defaults to the current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Arguments passed through to each suite, as `quilon run` passes them
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Run the shared front-end (read → lex → parse → resolve imports → type-check),
@@ -64,6 +73,16 @@ fn checked(file: &Path) -> driver::Checked {
             eprintln!("{}", e);
             std::process::exit(1);
         }
+    }
+}
+
+/// Exit 0 without a word when `file` holds nothing but test blocks. Such a file is not a
+/// compilation unit: stripping its tests leaves nothing to compile, so `build`, `compile`,
+/// and `run` pass over it rather than reporting a missing `^` (`quilon test` is what runs
+/// it). Called before anything is printed, so skipping really is silent.
+fn skip_when_tests_only(file: &Path) {
+    if driver::test_blocks_only(file) == Some(true) {
+        std::process::exit(0);
     }
 }
 
@@ -83,6 +102,7 @@ fn main() {
 
     match cli.command {
         Commands::Run { file, args } => {
+            skip_when_tests_only(&file);
             let checked = checked(&file);
             require_entry_point(&checked.program);
 
@@ -113,6 +133,7 @@ fn main() {
             }
         }
         Commands::Compile { file, output } => {
+            skip_when_tests_only(&file);
             println!("🔨 Compiling: {}", file.display());
 
             let checked = checked(&file);
@@ -164,6 +185,7 @@ fn main() {
             linker,
             debug,
         } => {
+            skip_when_tests_only(&file);
             println!("🔨 Building: {}", file.display());
 
             // The source text and every file's path come from the source map the build already
@@ -204,6 +226,9 @@ fn main() {
                 "📋 Program contains {} top-level item(s)",
                 program.items.len()
             );
+        }
+        Commands::Test { path, args } => {
+            std::process::exit(test_command::run(&path, &args).exit_code());
         }
     }
 }
