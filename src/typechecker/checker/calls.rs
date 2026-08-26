@@ -34,6 +34,14 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // The provided assertions, which take a matcher rather than ordinary arguments —
+        // resolved here, ahead of every other dispatch, since they are the compiler's own.
+        if let Expression::Identifier { name, .. } = function
+            && crate::ast::is_assertion(name)
+        {
+            return self.check_assertion(name, arguments, span);
+        }
+
         // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.
         if let Expression::Identifier {
             name: constructor_name,

@@ -219,9 +219,10 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         ret: Type::Bool,
     },
     // The test registry (see `is_test_registry_intrinsic`): the harness's event sink, which
-    // `core.test`'s `describe` and `it` drive. Enter and leave a `describe` group, each
-    // yielding the resulting nesting depth; count a case that ran to completion, yielding
-    // the depth to indent it at; and read the total back for the summary.
+    // `core.test`'s `describe`/`it` and the provided `expect` drive. Enter and leave a
+    // `describe` group, each yielding the resulting nesting depth; ask whether the running
+    // case has already failed; close a case, yielding the depth to indent it at; and read
+    // the two totals back for the summary.
     BuiltinOverload {
         name: "__test_suite_enter",
         parameters: &[],
@@ -233,7 +234,12 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         ret: Type::Num,
     },
     BuiltinOverload {
-        name: "__test_case_passed",
+        name: "__test_case_failing",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_finish",
         parameters: &[],
         ret: Type::Num,
     },
@@ -242,7 +248,46 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Num,
     },
+    BuiltinOverload {
+        name: "__test_failed",
+        parameters: &[],
+        ret: Type::Num,
+    },
 ];
+
+/// The two assertion entry points the compiler provides. Both take the value under test and
+/// a matcher (see [`MATCHERS`]); they differ only in what a failure does — `assert` reports
+/// and exits, `expect` reports, marks the case failed, and lets the suite carry on.
+pub const ASSERT: &str = "assert";
+pub const EXPECT: &str = "expect";
+
+/// The matchers the compiler provides, in the only position they mean anything: the second
+/// argument of an [`ASSERT`]/[`EXPECT`] call. Elsewhere these are ordinary names, free for a
+/// program to use.
+///
+/// Compiler-provided rather than written in `.qn` because a matcher holds a value of the type
+/// under test, which without generics would need one matcher type per value type. `not` takes
+/// a matcher and negates it; the rest take the value they compare against, or nothing.
+pub const MATCHERS: &[&str] = &["equals", "contains", "not", "isOk", "isNotOk"];
+
+/// Whether `name` is `assert` or `expect` — a call the compiler lowers itself.
+pub fn is_assertion(name: &str) -> bool {
+    name == ASSERT || name == EXPECT
+}
+
+/// Whether `name` is one of the provided [`MATCHERS`].
+pub fn is_matcher(name: &str) -> bool {
+    MATCHERS.contains(&name)
+}
+
+/// The sum variant `isOk()` / `isNotOk()` asks about. Shared by the checker (which requires
+/// the value's type to carry that variant) and codegen (which compares against its tag).
+pub fn matcher_variant(matcher: &str) -> &'static str {
+    match matcher {
+        "isOk" => "Ok",
+        _ => "NotOk",
+    }
+}
 
 /// The prefix marking a test-registry primitive.
 const TEST_REGISTRY_PREFIX: &str = "__test_";

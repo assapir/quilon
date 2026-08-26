@@ -2,21 +2,23 @@
 
 //! Located fail-loud reports: the runtime half of the call-site machinery.
 //!
-//! A failing `core.test` assertion reports its call site as a framed diagnostic, composed
-//! in Quilon (`corelib/test.qn`'s `failAt`). The runtime's OWN fail-loud checks — an
-//! invalid `arr[i]`, a `Text.replace`/`repeat` contract violation — have no Quilon frame to
-//! compose from: they abort from inside an intrinsic. This module renders the same shape for
-//! them, from the [`QlSite`] the code generator hands in at each check.
+//! Everything that reports at a call site frames it here — a failing `assert`/`expect`, and
+//! the runtime's own fail-loud checks (an invalid `arr[i]`, a `Text.replace`/`repeat`
+//! contract violation), all from the [`QlSite`] the code generator hands in at the check.
 //!
-//! The two renderers are separate on purpose (the assertion one stays pure Quilon, which is
-//! what makes `core.test` hackable), so they are pinned to the same byte-level shape by
-//! `tests/fail_loud_location_test.rs`: an assertion failure and a bounds failure at the same
-//! call must frame identically.
+//! `core.test`'s `failAt` composes the same frame in Quilon, for an assertion helper of your
+//! own; `tests/fail_loud_location_test.rs` pins the two to the same byte-level shape, so a
+//! failure reported from either side reads identically.
 
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
+use crate::test_registry::mark_case_failed;
 use std::os::raw::c_int;
+
+/// The exit status a failing `assert` leaves — the Rust-panic convention, so a self-verifying
+/// program fails loudly in CI.
+pub const ASSERTION_EXIT_CODE: c_int = 101;
 
 /// A call site as the code generator materializes it — the runtime mirror of the built-in
 /// `Site` record (`file`, `line`, `column`, `excerpt`, `width`), in declaration order.
@@ -102,6 +104,16 @@ impl Style {
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
 pub(crate) fn fail_at(site: *const QlSite, message: &str, code: c_int) -> ! {
+    report_at(site, message);
+    __exit(code)
+}
+
+/// Report `message` at `site` on stderr and RETURN — the recorded half of the same frame
+/// [`fail_at`] ends the process with.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
+pub(crate) fn report_at(site: *const QlSite, message: &str) {
     let mut out = String::new();
     match unsafe { site.as_ref() } {
         Some(site) if !site.file.is_empty() && !site.excerpt.is_empty() => {
@@ -136,7 +148,38 @@ pub(crate) fn fail_at(site: *const QlSite, message: &str, code: c_int) -> ! {
         }
     }
     write_to_fd(2, out.as_bytes());
-    __exit(code)
+}
+
+/// A failing `assert(actual, matcher)`: report `message` at the assertion's own call site and
+/// terminate with [`ASSERTION_EXIT_CODE`]. Never returns.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
+#[unsafe(no_mangle)]
+pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, length: i64) -> ! {
+    fail_at(site, &message_text(message, length), ASSERTION_EXIT_CODE)
+}
+
+/// A failing `expect(actual, matcher)`: report `message` at the assertion's own call site,
+/// mark the running case failed, and RETURN. The case's remaining assertions see the mark and
+/// do nothing; the suite carries on with the next case.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
+#[unsafe(no_mangle)]
+pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, length: i64) {
+    report_at(site, &message_text(message, length));
+    mark_case_failed();
+}
+
+/// A `Text` argument's bytes as a `String`. Length is clamped at 0, and invalid UTF-8 is
+/// replaced rather than aborting: a diagnostic is the wrong place to fail.
+fn message_text(message: *const u8, length: i64) -> String {
+    if message.is_null() || length <= 0 {
+        return String::new();
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(message, length as usize) };
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[cfg(test)]

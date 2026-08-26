@@ -61,10 +61,13 @@ pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
-pub use report::{MAX_PATH_WIDTH, QlSite, shorten_path};
+pub use report::{
+    __assert_failed, __expect_failed, ASSERTION_EXIT_CODE, MAX_PATH_WIDTH, QlSite, shorten_path,
+};
 pub use scheduler::__run_fiber_main;
 pub use test_registry::{
-    __test_case_passed, __test_passed, __test_suite_enter, __test_suite_leave,
+    __test_case_failing, __test_case_finish, __test_failed, __test_passed, __test_suite_enter,
+    __test_suite_leave,
 };
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
@@ -219,8 +222,12 @@ intrinsic_registry! {
     __set_intersect: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __test_suite_enter: extern "C" fn() -> f64,
     __test_suite_leave: extern "C" fn() -> f64,
-    __test_case_passed: extern "C" fn() -> f64,
+    __test_case_failing: extern "C" fn() -> f64,
+    __test_case_finish: extern "C" fn() -> f64,
     __test_passed: extern "C" fn() -> f64,
+    __test_failed: extern "C" fn() -> f64,
+    __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
+    __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

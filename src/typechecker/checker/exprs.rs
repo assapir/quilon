@@ -76,7 +76,18 @@ impl TypeChecker {
                 function,
                 arguments,
                 span,
-            } => self.check_call(function, arguments, span),
+            } => {
+                // A `describe` block is where `expect` is legal, so the call's arguments —
+                // its cases, and everything they call inline — are checked one level deeper.
+                let opens_test_block = matches!(
+                    function.as_ref(),
+                    Expression::Identifier { name, .. } if name == crate::ast::TEST_BLOCK_MARKER
+                );
+                self.test_depth += usize::from(opens_test_block);
+                let checked = self.check_call(function, arguments, span);
+                self.test_depth -= usize::from(opens_test_block);
+                checked
+            }
 
             Expression::Lambda {
                 parameters,
