@@ -737,12 +737,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
         // can't tell them apart — dispatching on it would silently call a `Text` parameter
         // with the argv array). The supported signatures are `^()`,
-        // `^(args :: []Text)`, and `^(args :: []Text, env :: [][]Text)` (plus the legacy
-        // `^(argc :: Num, argv :: Num)`). We match on the EXACT element types — the
-        // runtime builds `Text`/`[]Text` elements, so a `[]Num` (or any other element)
-        // parameter must NOT reach the array arms, or it would receive mis-sized elements.
+        // `^(args :: []Text)`, and `^(args :: []Text, env :: [|Text => Text|])` (plus the
+        // legacy `^(argc :: Num, argv :: Num)`). We match on the EXACT element/key/value
+        // types — the runtime builds `Text` args and a `Text => Text` env Map, so a
+        // `[]Num` (or any other element) parameter must NOT reach the array arm.
         let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
-        let is_text_pairs = |t: &Type| matches!(t, Type::Array(e) if is_text_array(e.as_ref()));
+        let is_text_map =
+            |t: &Type| matches!(t, Type::Map(k, v) if **k == Type::Text && **v == Type::Text);
 
         // `argc` arrives as the C `int` (i32); widen it to the i64 the runtime expects.
         let argc_i64 = self
@@ -762,16 +763,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .into_struct_value()
                 .into())
         };
-        // Build the real `env :: [][]Text` from envp (used by the 2-arg modern form).
+        // Build the real `env :: [|Text => Text|]` Map from envp (used by the 2-arg modern
+        // form). A Map value is a single opaque pointer to its runtime representation.
         let build_env = |me: &Self| -> Result<BasicValueEnum<'ctx>, String> {
-            let f = me.get_intrinsic("__envp_to_pairs")?;
+            let f = me.get_intrinsic("__envp_to_map")?;
             use inkwell::values::AnyValue;
             Ok(me
                 .builder
-                .build_call(f, &[envp.into()], "env_pairs")
-                .map_err(ctx("Failed to build envp pairs"))?
+                .build_call(f, &[envp.into()], "env_map")
+                .map_err(ctx("Failed to build envp map"))?
                 .as_any_value_enum()
-                .into_struct_value()
+                .into_pointer_value()
                 .into())
         };
 
@@ -779,7 +781,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             format!(
                 "Entry point ^ has an unsupported signature ({}). \
                  Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
-                 '(args :: []Text, env :: [][]Text) -> Num' \
+                 '(args :: []Text, env :: [|Text => Text|]) -> Num' \
                  (or legacy '(argc :: Num, argv :: Num) -> Num').",
                 fmt_parameter_types(entry_parameters)
             )
@@ -798,8 +800,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_call(user_entry, &[args.into()], "entry_result")
                     .map_err(ctx("Failed to call entry point"))?
             }
-            // `^(args :: []Text, env :: [][]Text) -> Num`
-            [a, e] if is_text_array(a) && is_text_pairs(e) => {
+            // `^(args :: []Text, env :: [|Text => Text|]) -> Num`
+            [a, e] if is_text_array(a) && is_text_map(e) => {
                 let args = build_args(self)?;
                 let env = build_env(self)?;
                 self.builder
@@ -823,8 +825,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to call entry point"))?
             }
             // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
-            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [][]Text)` without
-            // args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
+            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [|Text => Text|])`
+            // without args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
             // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
         };

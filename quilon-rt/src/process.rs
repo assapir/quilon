@@ -2,8 +2,8 @@
 
 //! General process / runtime-lifecycle primitives: the process-exit primitive
 //! (`__exit`, and where the future `__panic` will go) and the entry-point
-//! startup conversions that turn the C `argv`/`envp` `main` receives into Quilon
-//! `[]Text` / `[][]Text` values.
+//! startup conversions that turn the C `argv`/`envp` `main` receives into a Quilon
+//! `[]Text` (args) and a `[|Text => Text|]` Map (env).
 
 use crate::mem::{__alloc, QlSlice, alloc_text};
 use std::ffi::CStr;
@@ -66,10 +66,11 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
     }
 }
 
-/// Build a Quilon `[][]Text` from the C `envp` the program's `main` received: one inner
-/// `[]Text` per environment entry, each an exactly-2-element `[key, value]` split on the
-/// FIRST `=`. An entry with no `=` becomes `[entry, ""]` (the whole string as the key,
-/// an empty value). Backs an `^` entry point that declares `env :: [][]Text`.
+/// Build a Quilon `[|Text => Text|]` Map from the C `envp` the program's `main` received:
+/// one entry per environment variable, its name and value split on the FIRST `=`. An entry
+/// with no `=` maps the whole string to `""` (empty value). Backs an `^` entry point that
+/// declares `env :: [|Text => Text|]`, in the same native Map representation `[|…|]`
+/// literals lower to (so `env.get("KEY")` works directly).
 ///
 /// `envp` is the conventional NULL-terminated array of `key=value` C strings.
 ///
@@ -80,47 +81,25 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
 // intentional (the contract is upheld by the compiler emitting the call).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __envp_to_pairs(envp: *const *const c_char) -> QlSlice {
-    if envp.is_null() {
-        return QlSlice::empty();
-    }
-    // First pass: count entries up to the NULL terminator.
-    let mut count = 0usize;
-    while !unsafe { *envp.add(count) }.is_null() {
-        count += 1;
-    }
-    if count == 0 {
-        return QlSlice::empty();
-    }
-    // Backing array of `count` inner `[]Text` structs (each itself a `QlSlice`).
-    let pairs = __alloc((count * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
-    for i in 0..count {
-        // SAFETY: i < count, and entries 0..count are non-null per the loop above.
-        let cstr = unsafe { *envp.add(i) };
-        let bytes = cstr_to_str_bytes(cstr);
-        // Split on the FIRST '='; an entry with no '=' is [entry, ""].
-        let (key, value): (&[u8], &[u8]) = match bytes.iter().position(|&b| b == b'=') {
-            Some(eq) => (&bytes[..eq], &bytes[eq + 1..]),
-            None => (&bytes[..], &[]),
-        };
-        // Inner 2-element `[]Text`: a backing array of exactly two Text structs.
-        let kv = __alloc((2 * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
-        unsafe {
-            std::ptr::write(kv, alloc_text(key));
-            std::ptr::write(kv.add(1), alloc_text(value));
-            std::ptr::write(
-                pairs.add(i),
-                QlSlice {
-                    data: kv as *const c_void,
-                    len: 2,
-                },
-            );
+pub extern "C" fn __envp_to_map(envp: *const *const c_char) -> *mut c_void {
+    // Decode every entry to owned bytes, split on the first '=', then hand the pairs to the
+    // Map builder (which copies each into GC memory). Collecting first keeps the borrow the
+    // builder's iterator needs alive.
+    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    if !envp.is_null() {
+        let mut i = 0usize;
+        while !unsafe { *envp.add(i) }.is_null() {
+            // SAFETY: entry `i` is non-null per the loop condition.
+            let bytes = cstr_to_str_bytes(unsafe { *envp.add(i) });
+            let (key, value) = match bytes.iter().position(|&b| b == b'=') {
+                Some(eq) => (bytes[..eq].to_vec(), bytes[eq + 1..].to_vec()),
+                None => (bytes, Vec::new()),
+            };
+            entries.push((key, value));
+            i += 1;
         }
     }
-    QlSlice {
-        data: pairs as *const c_void,
-        len: count as i64,
-    }
+    crate::collections::build_text_map(entries.iter().map(|(k, v)| (k.as_slice(), v.as_slice())))
 }
 
 /// The bytes of a NUL-terminated C string (empty for null). Used to copy `argv`/`envp`

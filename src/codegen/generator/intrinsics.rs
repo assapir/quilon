@@ -72,9 +72,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__argv_to_text_array" => self
                 .ptr_len_struct_type()
                 .fn_type(&[i64t.into(), ptr.into()], false),
-            // { ptr, i64 } __envp_to_pairs(i8** envp) — build a `[][]Text` (array of
-            // 2-element `[]Text` `[key, value]` pairs) from the C envp.
-            "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // ptr __envp_to_map(i8** envp) — build a `[|Text => Text|]` Map (an opaque
+            // native-map pointer, the same representation `[|…|]` literals lower to) from
+            // the C envp.
+            "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
             // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
             // { ptr, i64 } trimStart / trimEnd / toUpper / toLower (i8*, i64). `trim` is

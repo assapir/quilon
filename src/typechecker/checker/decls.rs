@@ -90,8 +90,8 @@ impl TypeChecker {
 
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`,
-    /// `(args :: []Text, env :: [][]Text)`, or the legacy `(argc :: Num, argv :: Num)`.
-    /// The runtime builds `Text`/`[]Text` elements for argv/env, so a differently-typed
+    /// `(args :: []Text, env :: [|Text => Text|])`, or the legacy `(argc :: Num, argv :: Num)`.
+    /// The runtime builds `Text` args and a `Text => Text` env Map, so a differently-typed
     /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
     /// elements. An unannotated parameter defaults to `Num` (matching codegen), so
     /// `^(x)` is the legacy shape only if it has exactly two such parameters.
@@ -104,12 +104,12 @@ impl TypeChecker {
             .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
             .collect();
         let text_array = Type::Array(Box::new(Type::Text));
-        let text_pairs = Type::Array(Box::new(text_array.clone()));
+        let text_map = Type::Map(Box::new(Type::Text), Box::new(Type::Text));
         let ok = match parameters.as_slice() {
             [] => true,
             [a] => *a == text_array,
             [a, b] => {
-                (*a == text_array && *b == text_pairs) || (*a == Type::Num && *b == Type::Num)
+                (*a == text_array && *b == text_map) || (*a == Type::Num && *b == Type::Num)
             }
             _ => false,
         };

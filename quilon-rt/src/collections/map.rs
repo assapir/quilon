@@ -5,7 +5,8 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, debug_check_user_key, gc_alloc};
+use super::common::{FixedState, QlKey, TAG_TEXT, debug_check_user_key, gc_alloc};
+use crate::mem::{QlSlice, alloc_text};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
@@ -52,6 +53,28 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_new() -> *mut c_void {
     unsafe { build_map(HashMap::with_hasher(FixedState)) as *mut c_void }
+}
+
+/// Build a `Text => Text` Map from `(key, value)` byte-slice pairs, in the exact native
+/// representation a `[|k => v|]` literal lowers to: each key a content-hashed `Text` key
+/// (`TAG_TEXT`), each value a GC-boxed `Text` the compiler loads back as a `Text` value.
+/// Backs the `^` entry point's `env :: [|Text => Text|]`.
+pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> *mut c_void {
+    let mut table = HashMap::with_hasher(FixedState);
+    for (key_bytes, value_bytes) in pairs {
+        let key_text = alloc_text(key_bytes);
+        let key = QlKey::new(
+            TAG_TEXT as i64,
+            key_text.data as i64,
+            key_text.len,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        let value_box = unsafe { gc_alloc::<QlSlice>(1) };
+        unsafe { std::ptr::write(value_box, alloc_text(value_bytes)) };
+        table.insert(key, value_box as *const c_void);
+    }
+    unsafe { build_map(table) as *mut c_void }
 }
 
 #[unsafe(no_mangle)]
