@@ -130,16 +130,21 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
     let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
 
-    // The program's own function is emitted; the harness is not — neither `describe`, nor
-    // `it`, nor the reporter it renders through.
+    // The program's own function is emitted, and NOTHING of the harness: the blocks were
+    // never checked or lowered, so nothing reaches `describe`, `it`, or the reporter, and
+    // reachability pruning drops all three.
+    let defined: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("define"))
+        .collect();
     assert!(
-        ir.contains("@double("),
-        "the program's code must be emitted"
+        defined.iter().any(|line| line.contains("@double(")),
+        "the program's code must be emitted:\n{defined:#?}"
     );
-    for absent in ["@describe(", "@it(", "@reportSuite(", "@reportSummary("] {
+    for absent in ["describe", "@it(", "report", "indent", "green"] {
         assert!(
-            !ir.contains(absent),
-            "`{absent}` reached a release build:\n{ir}"
+            !defined.iter().any(|line| line.contains(absent)),
+            "`{absent}` reached a release build:\n{defined:#?}"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);
