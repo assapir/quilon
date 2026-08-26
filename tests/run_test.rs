@@ -363,13 +363,13 @@ fn run_eprint_returns_unit_as_last_expression() {
 
 #[test]
 fn run_unannotated_print_wrapper_compiles_and_runs() {
-    // Regression: `log = m => print(m)` has no return annotation; its body is a
+    // Regression: `log = (m :: Num) => print(m)` has no return annotation; its body is a
     // `print` call, which returns `$` (Unit). Codegen must infer the `$` return
     // type (i8) rather than defaulting to Num (f64), or the generated function
     // would `ret i8` into an f64 signature and fail LLVM module verification.
     assert_exit_linked(
         "<< core.io
-log = m => print(m)
+log = (m :: Num) => print(m)
 ^ = () -> Num => <
   log(5)
   0

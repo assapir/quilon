@@ -116,7 +116,9 @@ impl std::fmt::Display for TypeError {
                 )
             }
             TypeError::UnannotatedParameter {
-                function, parameter, ..
+                function,
+                parameter,
+                ..
             } => {
                 write!(
                     f,

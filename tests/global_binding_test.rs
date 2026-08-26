@@ -16,7 +16,7 @@ fn a_literal_or_function_global_is_accepted() {
     assert_exit("limit = 10\n^ = () -> Num => limit", 10);
     assert_exit("on = true\n^ = () -> Num => on ? 3 : 4", 3);
     assert_exit("nothing = $\n^ = () -> Num => 7", 7);
-    assert_exit("scale = n => n * 3\n^ = () -> Num => scale(4)", 12);
+    assert_exit("scale = (n :: Num) => n * 3\n^ = () -> Num => scale(4)", 12);
     assert_exit("a = 2\nb = 3\n^ = () -> Num => a + b", 5);
 }
 

@@ -101,7 +101,7 @@ fn a_helper_called_only_from_a_global_function_value_survives() {
     assert_exit(
         concat!(
             "bump = (n :: Num) -> Num => n + 1\n",
-            "step = n => bump(n)\n",
+            "step = (n :: Num) => bump(n)\n",
             "^ = () -> Num => step(6)"
         ),
         7,
