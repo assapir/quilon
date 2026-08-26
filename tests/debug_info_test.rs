@@ -156,12 +156,6 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
 /// local's). Used to tell the user's `^` entry from the artificial `main`/thunk shims and to
 /// find a corelib function's subprogram by its source file.
 fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
-    let quoted = |line: &str, attr: &str| -> Option<String> {
-        let rest = line.split(attr).nth(1)?;
-        let open = rest.find('"')?;
-        let close = rest[open + 1..].find('"')?;
-        Some(rest[open + 1..open + 1 + close].to_string())
-    };
     let lines: Vec<&str> = dump.lines().collect();
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -174,10 +168,10 @@ fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
                 break; // reached the first child DIE; the subprogram's own attributes are done
             }
             if name.is_none() && body.contains("DW_AT_name") {
-                name = quoted(body, "DW_AT_name");
+                name = quoted_attr(body, "DW_AT_name");
             }
             if file.is_none() && body.contains("DW_AT_decl_file") {
-                file = quoted(body, "DW_AT_decl_file");
+                file = quoted_attr(body, "DW_AT_decl_file");
             }
             if body.contains("DW_AT_artificial") && body.contains("true") {
                 artificial = true;
@@ -188,6 +182,16 @@ fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
         }
     }
     out
+}
+
+/// The double-quoted value `llvm-dwarfdump` prints for attribute `attr` on `line`
+/// (e.g. `DW_AT_name\t("^")` yields `^`), or `None` if the attribute or its quoted value is
+/// absent. The one place the dump's `attr\t("value")` shape is parsed.
+fn quoted_attr(line: &str, attr: &str) -> Option<String> {
+    let rest = line.split(attr).nth(1)?;
+    let open = rest.find('"')?;
+    let close = rest[open + 1..].find('"')?;
+    Some(rest[open + 1..open + 1 + close].to_string())
 }
 
 /// The quoted DWARF type name `llvm-dwarfdump` prints on the `DW_AT_type` line of the
@@ -202,11 +206,8 @@ fn di_var_type(dump: &str, var: &str) -> Option<String> {
         if line.contains("DW_TAG_") {
             break; // ran into the next DIE without finding a type
         }
-        if let Some(rest) = line.split("DW_AT_type").nth(1)
-            && let Some(open) = rest.find('"')
-            && let Some(close) = rest[open + 1..].find('"')
-        {
-            return Some(rest[open + 1..open + 1 + close].to_string());
+        if let Some(ty) = quoted_attr(line, "DW_AT_type") {
+            return Some(ty);
         }
     }
     None
