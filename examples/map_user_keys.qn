@@ -1,0 +1,37 @@
+~ A user type becomes a Map/Set key by defining two members: a `%` hash hook (unary,
+~ `it` the value, returning a Num) and an `==` equality. The collections hash and compare
+~ keys through them; Num/Text/Bool keys keep working with no hooks.
+~ `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
+
+Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+
+^ = () -> $ => <
+  ~ A Map keyed by a user record type:
+  grid :: [|Point => Text|] = [|
+    Point { x = 0, y = 0 } => "origin",
+    Point { x = 1, y = 2 } => "here"
+  |]
+
+  assert(grid.has(Point { x = 0, y = 0 }))
+  assert(!grid.has(Point { x = 9, y = 9 }))
+  assertEq(grid.size, 2)
+
+  ~ `.get` looks up by value equality, returning a Result:
+  label :: Text = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
+  assertEq(label, "here")
+
+  ~ Mutators return a NEW collection (the receiver is immutable):
+  bigger :: [|Point => Text|] = grid.set(Point { x = 3, y = 4 }, "new")
+  assertEq(bigger.size, 3)
+  assertEq(grid.size, 2)
+
+  ~ A Set of the same key type deduplicates by `%`/`==`:
+  seen :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
+  assertEq(seen.size, 2)
+  assert(seen.has(Point { x = 2, y = 2 }))
+>
