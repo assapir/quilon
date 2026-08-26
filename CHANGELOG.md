@@ -6,6 +6,27 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **`quilon build` works on macOS, and CI covers macOS and Arch Linux
+  ([#49](https://github.com/assapir/quilon/issues/49)).** The AOT link line was GNU-ld
+  shaped and Apple's ld64 rejects it: `--whole-archive` is not a flag it knows, and there is
+  no `-ldl` to link against (libSystem provides `dlopen`). `src/build.rs` now picks the
+  right spelling per platform — `-Wl,-force_load,<archive>` on macOS, the
+  `--whole-archive`/`--no-whole-archive` bracket elsewhere — so forcing every runtime object
+  in stays deterministic on both.
+
+  Two new jobs build and test on every run, both non-blocking until they have proven
+  themselves stable: `macos-latest` (Homebrew `llvm@22`), and Arch Linux in an
+  `archlinux:latest` container — the distro whose lack of a static `libgc.a` is why the
+  collector is vendored at all, and the maintainer's own environment. `fmt`/`clippy` are
+  platform-independent and keep gating on Ubuntu only, as do the benchmarks so the series
+  compares like with like.
+
+  Windows remains unreachable, and the blocker is the runtime rather than the GC —
+  `quilon-rt` does not compile for `x86_64-pc-windows-msvc` (stdin readiness via
+  `mio::unix::SourceFd`, `fcntl`/`sysconf`, and the collector's pthread threading model).
+  Tracked with the full error list in
+  [#183](https://github.com/assapir/quilon/issues/183) rather than shipped as a red job.
+
 - **`quilon build` binaries are self-contained: the Boehm GC is linked statically
   ([#49](https://github.com/assapir/quilon/issues/49)).** A compiled Quilon program used to
   name `libgc.so` among its dynamic dependencies, so shipping it anywhere meant shipping —
