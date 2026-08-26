@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
-use common::ensure_runtime_lib;
+use common::{ensure_runtime_lib, position};
 
 const FAIL_CODE: i32 = 101;
 
@@ -31,19 +31,6 @@ fn tmp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("quilon_assert_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
-}
-
-/// The `file:line:column:` position line a report prints for `path` — with the path
-/// elided exactly as the report elides it.
-///
-/// A report shortens a path wider than `MAX_PATH_WIDTH` from its start, so an
-/// expectation built from the raw path only holds where the temp directory is short.
-/// Linux's `/tmp/...` always is; macOS's `/var/folders/<random>/T/...` never is, which
-/// is where an expectation spelled with `path.display()` fails while the compiler is
-/// behaving exactly as documented.
-fn position(path: &Path, line: u32, column: u32) -> String {
-    let shown = quilon::source_map::shorten_path(&path.display().to_string());
-    format!("{shown}:{line}:{column}:")
 }
 
 /// Write `src` to a uniquely-named `.qn` file under the per-process temp dir.
