@@ -954,20 +954,21 @@ Every executable defines `^` (main); the compiler generates a C-compatible `main
 ```quilon
 ^ = () -> Num => 42                              ~ no args/env
 ^ = (args :: []Text) -> Num => args.size         ~ command-line arguments
-^ = (args :: []Text, env :: [][]Text) -> Num => args.size   ~ args + environment
+^ = (args :: []Text, env :: [|Text => Text|]) -> Num => env.get("HOME")   ~ args + environment
 ```
 **Arguments & environment.** `^` may declare, in order, two typed parameters that the
 generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
 - `args :: []Text` — the command-line arguments (argv), **including** `argv[0]` (the
   program name), so `args.size` is always at least 1, and `args[i]` is the *i*-th
   argument as a `Text`.
-- `env :: [][]Text` — the environment, as an array of `[key, value]` pairs. Each inner
-  array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
-  (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
+- `env :: [|Text => Text|]` — the environment, as a Map from each variable's name to its
+  value. An entry `KEY=val` is split on its **first** `=` (so `KEY=a=b` maps `KEY` to
+  `a=b`); an entry with no `=` maps the whole string to `""`. Read a variable with
+  `env.get("HOME")` (or `<< core.cli`'s `getEnv`), both giving `Ok(value)`/`NotOk`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them — and
-an element bound out of one is a full `Text`: the whole `Text` API, and
-[overload](#overloading) dispatch by its concrete type.
+`args` is a real Quilon array (`.size`, `[index]`, the array methods) and `env` a real Map
+(`.get`/`.has`/`.keys`/`.size`); a value read out of either is a full `Text`: the whole
+`Text` API, and [overload](#overloading) dispatch by its concrete type.
 `quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
 program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
 the `.qn` path becomes `argv[0]`), so `quilon run f.qn a b c` gives the same `args.size`
@@ -1233,7 +1234,7 @@ pathological input.
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
-| `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
+| `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
 | Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |

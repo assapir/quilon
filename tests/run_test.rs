@@ -777,7 +777,7 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
     assert_type_error("^ = () -> Num => 1 + true");
 }
 
-// --- Entry-point `^` receiving `args :: []Text` and `env :: [][]Text`. ---
+// --- Entry-point `^` receiving `args :: []Text` and `env :: [|Text => Text|]`. ---
 // Under the JIT, `args` is the exact slice the caller hands `run_program` (here the
 // helpers pass a single-element argv, mirroring a native binary invoked with no extra
 // args); `env` still comes from this process's real environment, which is not
@@ -795,10 +795,10 @@ fn run_entry_with_args_parameter_typechecks_and_runs() {
 
 #[test]
 fn run_entry_with_args_and_env_parameters_runs() {
-    // `^(args :: []Text, env :: [][]Text)` — touches both arrays; the result depends
-    // only on invocation-independent facts (sizes), so it is deterministic.
+    // `^(args :: []Text, env :: [|Text => Text|])` — touches both the array and the Map;
+    // the result depends only on invocation-independent facts (sizes), so it is deterministic.
     assert_exit(
-        "^ = (args :: []Text, env :: [][]Text) -> Num => <\n  args.size >= 1 && env.size >= 0 ? 9 : 0\n>",
+        "^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <\n  args.size >= 1 && env.size >= 0 ? 9 : 0\n>",
         9,
     );
 }

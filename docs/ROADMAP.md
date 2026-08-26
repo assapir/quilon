@@ -65,7 +65,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 | Closures (`=` by value, `:=` by reference) | ✅ |
 | Guaranteed self-tail-call optimization | ✅ |
 | Array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) | ✅ |
-| `^` entry point receives `args: []Text`, `env: [][]Text` | ✅ |
+| `^` entry point receives `args: []Text`, `env: [\|Text => Text\|]` | ✅ |
 | Remove the `for` loop | ✅ |
 | Spread — prefix `<-` in literals | ✅ |
 | Text methods (`split`/`trim`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower`) | ✅ |

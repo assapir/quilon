@@ -108,9 +108,7 @@ impl TypeChecker {
         let ok = match parameters.as_slice() {
             [] => true,
             [a] => *a == text_array,
-            [a, b] => {
-                (*a == text_array && *b == text_map) || (*a == Type::Num && *b == Type::Num)
-            }
+            [a, b] => (*a == text_array && *b == text_map) || (*a == Type::Num && *b == Type::Num),
             _ => false,
         };
         if ok {
