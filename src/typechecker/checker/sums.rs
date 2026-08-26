@@ -213,6 +213,15 @@ impl TypeChecker {
                     ty.clone()
                 }
             }
+            // Recurse into the built-in composites so a nested named type in an annotation
+            // (`[]Point`, `[|Point => Num|]`, `[|Point|]`) carries its resolved fields and
+            // methods — otherwise a `Map(Point, …)` literal and its annotation disagree.
+            Type::Array(elem) => Type::Array(Box::new(self.resolve_type(elem))),
+            Type::Map(key, value) => Type::Map(
+                Box::new(self.resolve_type(key)),
+                Box::new(self.resolve_type(value)),
+            ),
+            Type::Set(elem) => Type::Set(Box::new(self.resolve_type(elem))),
             _ => ty.clone(),
         }
     }

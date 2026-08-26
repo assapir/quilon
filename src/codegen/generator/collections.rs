@@ -460,7 +460,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .builder
                     .build_ptr_to_int(boxed, i64t, "key_user_addr")
                     .map_err(ctx("Failed to ptrtoint user key"))?;
-                let (hash_fn, eq_fn) = self.user_key_trampolines(name)?;
+                let (hash_fn, eq_fn) = self.user_key_trampolines(name, key_ty)?;
                 Ok(KeyAbi {
                     tag: i64t.const_int(KEY_TAG_USER, false),
                     a: addr,
@@ -544,11 +544,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn user_key_trampolines(
         &mut self,
         type_name: &str,
+        key_ty: &Type,
     ) -> Result<(PointerValue<'ctx>, PointerValue<'ctx>), String> {
         let hash_name = format!("__keyhash_{type_name}");
         let eq_name = format!("__keyeq_{type_name}");
         if self.module.get_function(&hash_name).is_none() {
-            self.emit_key_trampolines(type_name, &hash_name, &eq_name)?;
+            self.emit_key_trampolines(key_ty, &hash_name, &eq_name)?;
         }
         let hash_fn = self
             .module
@@ -571,25 +572,26 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Both call the monomorphized operator members `#178` emits for `K`.
     fn emit_key_trampolines(
         &mut self,
-        type_name: &str,
+        key_ty: &Type,
         hash_name: &str,
         eq_name: &str,
     ) -> Result<(), String> {
         use inkwell::values::AnyValue;
 
-        let named = Type::named_ref(type_name);
-        let value_llvm = self.value_repr_type(&named)?;
+        // The value representation the box holds and the member expects `it` as: a record's
+        // by-pointer, a sum's by-value struct.
+        let value_llvm = self.value_repr_type(key_ty)?;
         let ptr = self.context.ptr_type(AddressSpace::default());
         let f64t = self.context.f64_type();
         let i64t = self.context.i64_type();
 
-        let hash_symbol = mangle_overload("%", &[named.clone()]);
+        let hash_symbol = mangle_overload("%", &[key_ty.clone()]);
         let hash_member = self.module.get_function(&hash_symbol).ok_or_else(|| {
-            format!("key type {type_name} has no `%` hash member ({hash_symbol}) emitted")
+            format!("key type has no `%` hash member ({hash_symbol}) emitted")
         })?;
-        let eq_symbol = mangle_overload("==", &[named.clone(), named.clone()]);
+        let eq_symbol = mangle_overload("==", &[key_ty.clone(), key_ty.clone()]);
         let eq_member = self.module.get_function(&eq_symbol).ok_or_else(|| {
-            format!("key type {type_name} has no `==` member ({eq_symbol}) emitted")
+            format!("key type has no `==` member ({eq_symbol}) emitted")
         })?;
 
         // Emitting fresh functions mid-stream: save and restore the enclosing builder
