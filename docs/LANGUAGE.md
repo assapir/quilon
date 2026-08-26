@@ -29,8 +29,8 @@ Quilon's identity, and the rules that guide its design:
 | `=` | Immutable binding | `x = 42` |
 | `:=` | Mutable bind / reassign / in-place field write | `counter := 0`, `obj.field := v` |
 | `::` | Type annotation | `x :: Num` |
-| `=>` | Function body / match arm | `f = x => x + 1` |
-| `->` | Return type | `f = x -> Num => x` |
+| `=>` | Function body / match arm | `f = (x :: Num) => x + 1` |
+| `->` | Return type; also a [function type](#function-types--higher-order-functions) | `f = (x :: Num) -> Num => x` · `(Num) -> Bool` |
 | `+` `-` `*` `/` `%` | [Arithmetic](#expressions) (`-x` negates) | `a + b` · `x % 2` |
 | `==` `!=` `<` `<=` `>` `>=` | [Comparison](#expressions) → `Bool` · `==`/`!=` over `Num`/`Text`/`Bool`, ordering over `Num`/`Text` | `a == b` · `x <= 3` |
 | `&&` `\|\|` `!` | Logical and / or / not (short-circuit) | `a && !b` |
@@ -38,7 +38,7 @@ Quilon's identity, and the rules that guide its design:
 | `^` | Entry point (main) | `^ = () -> Num => 0` |
 | `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
-| `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
+| `>>` | Export an item from a module | `>> add = (a :: Num, b :: Num) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
 | `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` · `Vec {<-p, x = 9}` |
@@ -378,7 +378,7 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
 Use it exactly like any other sum type:
 ```quilon
-classify = v => v ?
+classify = (v :: Result) => v ?
   | Ok(x)    => x * 2
   | NotOk(e) => 0
 ```
@@ -441,7 +441,7 @@ included, and a `:=` global is writable from inside a function like any other.
 ```quilon
 limit = 10              ~ fine
 enabled = true          ~ fine
-scale = n => n * 3      ~ fine — a function value
+scale = (n :: Num) => n * 3   ~ fine — a function value
 counter := 4            ~ fine — and writable from a function
 
 doubled = limit * 2     ~ error: has to be computed
@@ -498,22 +498,51 @@ Getter methods carry no `it.field := …`, so they are callable on `=` instances
 
 ```quilon
 greet  = => "Hello!"                       ~ no params
-double = x => x * 2                        ~ one param, no parens
-add    = (a, b) => a + b                   ~ multiple params
+double = (x :: Num) => x * 2               ~ one param
+add    = (a :: Num, b :: Num) => a + b     ~ multiple params
 typed  = (a :: Num, b :: Num) -> Num => a + b
 ```
+Every parameter must be annotated — there is no default type. A parameter whose type
+cannot be filled in from context (a lambda argument gets its parameter types from the
+call it is passed into) is a compile error that names the parameter.
 Multi-statement bodies use `< >` blocks (the last expression is the value):
 ```quilon
-compute = x => <
+compute = (x :: Num) => <
   doubled = x * 2
   doubled * doubled
 >
 ```
 Functions may recurse; a recursive function needs a `-> Type` annotation:
 ```quilon
-factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
+factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.qn`, `examples/fibonacci.qn`.)
+
+### Function types & higher-order functions
+
+A **function type** is written with the arrow, reusing `->`. The parameter types go in
+parentheses; `$` (Unit) names a function that returns nothing:
+
+```quilon
+() -> $              ~ takes nothing, returns unit
+(Num) -> Bool        ~ one parameter
+(Num, Text) -> Bool  ~ two parameters
+```
+
+A function type may be a **parameter type**, which is what makes a function *higher-order*
+— it takes another function as an argument and calls it:
+
+```quilon
+apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
+twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+
+^ = () -> Num => twice((n :: Num) => n * 2, 3)   ~ ((3*2)*2) = 12
+```
+
+The value passed in is a closure — a lambda literal (as above) or a named closure passed
+by its name. Function types may nest as parameter types (`((Num) -> Bool, Num) -> Bool`).
+A function-typed **return** (currying, `(A) -> (B) -> C`) is not supported yet. (See
+`examples/higher_order.qn`.)
 
 ### Names resolve top to bottom
 
@@ -568,7 +597,7 @@ bound it** — no capture list, no marker, mirroring the mutability rule for
 ```quilon
 ^ = () -> Num => <
   total := 0                 ~ `:=` -> captured BY REFERENCE
-  bump = n => <
+  bump = (n :: Num) => <
     total := total + n       ~ writes the SHARED cell; the effect persists across calls
     total
   >
@@ -576,19 +605,21 @@ bound it** — no capture list, no marker, mirroring the mutability rule for
   bump(20)                   ~ total -> 30  (same cell)
 
   base = 7                   ~ `=`  -> captured BY VALUE (a frozen copy)
-  addBase = x => x + base
+  addBase = (x :: Num) => x + base
 
   total + addBase(5)         ~ 30 + 12 = 42
 >
 ```
 
-A non-capturing nested function may **recurse** (`fact = n => … fact(n-1) …`); nested
-closures may capture from any enclosing frame (the shared `:=` cell is threaded through
-every level), and a closure value may itself be captured by another closure and called.
+A non-capturing nested function may **recurse** (`fact = (n :: Num) => … fact(n-1) …`);
+nested closures may capture from any enclosing frame (the shared `:=` cell is threaded
+through every level), and a closure value may itself be captured by another closure and
+called. A closure may also be **passed to a function** whose parameter has the matching
+[function type](#function-types--higher-order-functions) and called there.
 
 Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing a
-polymorphic value, generic closures, and passing or returning a closure across frames are
-deferred — see [Known limitations](#known-limitations). (See `examples/closures.qn`.)
+polymorphic value, generic closures, and **returning** a closure across frames are deferred
+— see [Known limitations](#known-limitations). (See `examples/closures.qn`.)
 
 ---
 
@@ -854,7 +885,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 << core.io                 ~ import the built-in IO module
 << "lib/math.qn"           ~ import a user module by path (/ or \)
 
->> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
+>> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
 - The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
@@ -1225,8 +1256,9 @@ pathological input.
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
 | `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
+| [Function types](#function-types--higher-order-functions) (`(Num) -> Bool`, `() -> $`) + higher-order functions: a function-typed parameter called inside, taking a closure by literal or by name | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
-| Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |
+| Overloaded or top-level function name passed as a value; a closure **returned** from a function | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
 | [Colorless implicit-futures concurrency](#concurrency--colorless-implicit-futures--in-progress) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, and the value-returning `@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |
@@ -1238,8 +1270,8 @@ pathological input.
 0.9 is a stable **core**, not the whole language. Notably:
 
 - **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
-- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, passing a closure **as a parameter**, and **returning one from a function**. An unsupported position is rejected at compile time (a called unannotated parameter reports `Not a function`), never miscompiled.
-- **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
+- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. A closure can also be passed to a [function-typed parameter](#function-types--higher-order-functions) and called there. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, and **returning** a closure from a function.
+- **Overloaded and top-level function names are not first-class values.** A closure is passed as a *lambda literal* or a *named closure binding*; passing a top-level function or an overloaded name as a value is not yet supported.
 - **Sum-type payloads mixing types across variants aren't unified yet.** Payload slots have a fixed representation sized to the widest variant. Distinct payload *types* per slot across variants (a position that is `Num` in one variant and `Text` in another) is deferred; the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.
 - **A named-composite sum payload must be a record, and a record field cannot yet be a named composite.** A variant may carry a named **record** (`Post(Body)`), but not another named **sum**; and a record field is still limited to built-in types and arrays (a `{ inner :: Inner }` field of a user type is a deferred follow-up).
 - **Concurrency is partly built.** The [model](#concurrency--colorless-implicit-futures--in-progress) is locked; the fiber scheduler, reactor, `@sleep`, and the deferred-value primitives (`@readStdin`, `@tcpRequest`) run. Remaining for 1.0: overlap as a showcase, deferred composites, further `@` primitives (file), and multicore M:N.

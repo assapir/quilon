@@ -14,7 +14,7 @@ Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^
 << core.io
 
 ~ functions are arrow bindings
-double = x => x * 2
+double = (x :: Num) => x * 2
 
 ~ Text is a built-in type: + concatenates, .length counts graphemes
 greet = name :: Text => "Hello, " + name
