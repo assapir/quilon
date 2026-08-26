@@ -485,6 +485,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .insert(parameter.name.clone(), fields.clone());
                 }
             }
+            // A function-typed parameter arrives as a `{ ptr fn, ptr env }` closure value
+            // (its alloca holds that struct). Record its signature so a call to it in the
+            // body dispatches through the same indirect closure-call path as a local
+            // closure binding — the env pointer is appended implicitly at the call site.
+            if let Type::Function {
+                parameters,
+                return_type,
+            } = &qty
+            {
+                let parameter_tys = parameters
+                    .iter()
+                    .map(|t| self.boundary_type(t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret_ty = self.boundary_type(return_type)?;
+                self.closure_sigs
+                    .insert(parameter.name.clone(), (parameter_tys, ret_ty));
+            }
             self.declare_variable(
                 &parameter.name,
                 alloca,

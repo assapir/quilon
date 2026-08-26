@@ -92,6 +92,14 @@ pub enum TypeError {
         parameter: String,
         span: Span,
     },
+    /// A function parameter whose type was neither annotated nor inferable from context.
+    /// A parameter type is no longer assumed to be `Num`: it must be written down (or, for
+    /// a lambda argument, follow from the position it is passed into).
+    UnannotatedParameter {
+        function: String,
+        parameter: String,
+        span: Span,
+    },
     /// A write to a field of a `Site`. The type is read-only as a whole: a location is a
     /// value, not a variable. It has to be — a compiler-filled call site is one shared
     /// read-only constant, and records alias, so a write through any binding of one would be

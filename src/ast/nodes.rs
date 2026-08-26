@@ -804,6 +804,13 @@ pub fn type_label(ty: &Type) -> String {
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
         Type::Set(elem) => format!("[|{}|]", type_label(elem)),
         Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
+        Type::Function {
+            parameters,
+            return_type,
+        } => {
+            let rendered: Vec<String> = parameters.iter().map(type_label).collect();
+            format!("({}) -> {}", rendered.join(", "), type_label(return_type))
+        }
         Type::Generic { .. } => "<unknown>".to_string(),
         other => format!("{:?}", other),
     }

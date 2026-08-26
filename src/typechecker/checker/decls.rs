@@ -645,17 +645,21 @@ impl TypeChecker {
             return Ok(());
         }
 
-        // Build function type from parameters and return type
+        // Build function type from parameters and return type. A parameter with no
+        // annotation is a compile-time error: a function's own parameter has no context to
+        // be inferred from, so its type must be written down (there is no `Num` default).
         let parameter_types: Vec<Type> = declaration
             .parameters
             .iter()
-            .map(|p| {
-                p.type_annotation
-                    .as_ref()
-                    .map(|t| self.resolve_type(t))
-                    .unwrap_or(Type::Num)
+            .map(|p| match &p.type_annotation {
+                Some(t) => Ok(self.resolve_type(t)),
+                None => Err(TypeError::UnannotatedParameter {
+                    function: declaration.name.clone(),
+                    parameter: p.name.clone(),
+                    span: p.span.clone(),
+                }),
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         // Only a top-level function's LAST parameter can receive a call site.
         self.reject_unfillable_site_parameters(

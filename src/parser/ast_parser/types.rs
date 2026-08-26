@@ -30,6 +30,14 @@ impl<'a> Parser<'a> {
             return self.parse_fenced_type();
         }
 
+        // `( … ) ->` — a function type: `() -> $`, `(Num) -> Bool`, `(Num, Text) -> Bool`.
+        // Parentheses appear in type position only here (the language has no grouped or
+        // tuple types), so an opening paren always begins a function type. A function type
+        // may itself be a parameter type (`((Num) -> Bool, Num) -> Bool`).
+        if token.kind == TokenKind::ParenOpen {
+            return self.parse_function_type();
+        }
+
         // `[]T` — an array type (e.g. `[]Text`, and nested `[][]Text`). The `[]` prefix
         // wraps the element type that follows, so `[][]Text` parses as
         // `Array(Array(Text))` via the recursive `parse_type` call.
@@ -113,6 +121,40 @@ impl<'a> Parser<'a> {
                 span: token.span.clone(),
             }),
         }
+    }
+
+    /// Parse a function type, with the cursor at the opening `(`:
+    /// `(P1, P2, …) -> R`. The parameter list may be empty (`() -> $`) and each parameter
+    /// type is itself a full type (so a parameter may be a function type). The return
+    /// position must be a NON-function type for now — a curried `(A) -> (B) -> C` is not
+    /// supported yet and is rejected with a clear message rather than silently accepted.
+    fn parse_function_type(&mut self) -> Result<crate::ast::Type, ParseError> {
+        self.expect(&TokenKind::ParenOpen)?;
+        let mut parameters = Vec::new();
+        if !self.check(&TokenKind::ParenClose) {
+            loop {
+                parameters.push(self.parse_type()?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        self.expect(&TokenKind::ParenClose)?;
+        self.expect(&TokenKind::ReturnArrow)?;
+        let return_arrow = self.previous_span();
+        let return_type = self.parse_type()?;
+        if matches!(return_type, crate::ast::Type::Function { .. }) {
+            return Err(ParseError {
+                message: "a curried function type (a function-typed return) is not supported yet"
+                    .to_string(),
+                span: return_arrow,
+            });
+        }
+        Ok(crate::ast::Type::Function {
+            parameters,
+            return_type: Box::new(return_type),
+        })
     }
 
     /// Parse a pipe-fenced collection type, with the cursor at the opening `[` of a `[|`.

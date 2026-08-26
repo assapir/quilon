@@ -213,6 +213,16 @@ impl TypeChecker {
                     ty.clone()
                 }
             }
+            // A function type carries its parameter and return types unresolved from the
+            // parser, so a named type nested inside one (`(Color) -> Bool`) must resolve
+            // too — otherwise it would never line up with a concrete inferred type.
+            Type::Function {
+                parameters,
+                return_type,
+            } => Type::Function {
+                parameters: parameters.iter().map(|p| self.resolve_type(p)).collect(),
+                return_type: Box::new(self.resolve_type(return_type)),
+            },
             _ => ty.clone(),
         }
     }

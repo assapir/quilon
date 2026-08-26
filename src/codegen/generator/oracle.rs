@@ -335,6 +335,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             // user operator overload) is passed by pointer — record instances are
             // represented as a pointer to their struct alloca (see `generate_record`).
             Type::Named { .. } => Ok(self.context.ptr_type(AddressSpace::default()).into()),
+            // A function-typed value (a closure passed as an argument, or a function-typed
+            // parameter) is the `{ ptr fn, ptr env }` closure pair. Validate the parameter
+            // and return types, then lower to that shared struct.
+            Type::Function {
+                parameters,
+                return_type,
+            } => {
+                for parameter in parameters {
+                    let _ = self.type_to_llvm(parameter)?;
+                }
+                let _ = self.type_to_llvm(return_type)?;
+                Ok(self.closure_struct_type().into())
+            }
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }
     }
