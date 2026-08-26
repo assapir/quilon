@@ -197,8 +197,8 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets --verbose
 
-      # Covers the macOS-specific link path in `quilon build`: ld64 takes
-      # `-force_load` where GNU ld takes `--whole-archive`, and has no `-ldl`.
+      # Covers the macOS-specific link path in `quilon build`: ld64 force-loads the runtime
+      # archive where GNU ld takes a per-intrinsic `-u`, and has no `-ldl`.
       - name: Test
         run: cargo test --workspace --verbose
 

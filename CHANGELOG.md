@@ -50,6 +50,13 @@ All notable changes to Quilon are documented here.
   by two rules that disagreed, either of which could size a slot below the payload stored in
   it. Both now follow one rule, keyed on the type checker's own answer.
 
+- **`quilon build` on macOS: a comma in the runtime archive's path no longer mangles the
+  link.** The flag that force-loads `libquilon_rt.a` was passed as `-Wl,-force_load,<path>`,
+  which the compiler driver splits on commas — so a cache path containing one (it follows
+  `XDG_CACHE_HOME`/`HOME`, and a home directory may have a comma in it) reached ld64 as two
+  broken flags. The flag and the path are now separate `-Xlinker` arguments, which nothing
+  comma-parses.
+
 - **Method checking: an immutability bypass and an unchecked call site.** Two soundness
   holes in how methods were checked, both of which let a broken program past the checker.
 

@@ -201,9 +201,9 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
 /// with no libgc installed. Apple's libSystem provides `dlopen` and friends, so
 /// there is no `-ldl` to ask for there (and asking is a hard error).
 #[cfg(target_os = "macos")]
-const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
+pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
 #[cfg(not(target_os = "macos"))]
-const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
+pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 
 /// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
 /// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
@@ -213,10 +213,9 @@ const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 ///
 /// On GNU ld the retention is narrow: one `-u <symbol>` per intrinsic seeds an undefined
 /// reference the archive scan resolves, pinning exactly those members and pulling the rest in on
-/// demand. This replaces a former blanket `--whole-archive` — which force-included every object,
-/// unreferenced compiler-support and std objects among them — and drops roughly a tenth of a
-/// hello-world's size. The set is driven from `quilon_rt::INTRINSICS`, the one registry of
-/// intrinsic names, so it cannot drift from what the code generator emits.
+/// demand — leaving out the unreferenced compiler-support and std objects that force-including
+/// the whole archive drags along, roughly a tenth of a hello-world's size. Driven from
+/// `quilon_rt::INTRINSICS`, so a new intrinsic needs no change here.
 ///
 /// It does NOT drop the concurrency runtime (scheduler, `mio` reactor, `corosensei` stacks) from
 /// a program that never blocks, and cannot: rustc partitions the staticlib into codegen-unit
@@ -227,18 +226,17 @@ const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 /// the concurrency runtime into its own crate; both carry conservative-GC and retained-symbol
 /// correctness questions and are left as follow-up.
 ///
-/// ld64 (macOS) keeps the whole-archive form: a per-intrinsic `-u` would need each name spelled
-/// with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a hard link error, so
-/// `-force_load` on the archive path is both correct and unconditionally safe there.
+/// ld64 (macOS) force-loads the whole archive instead (`force_load`): a per-intrinsic `-u` would
+/// need each name spelled with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a
+/// hard link error, so force-loading is both correct and unconditionally safe there.
 ///
 /// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted copy carries a
-/// content-hash suffix in its filename, which `-l` name lookup could not address. On the ld64 path
-/// the path goes through `-Xlinker`, one argument each, rather than a `-Wl,` list: the driver
-/// splits a `-Wl,` argument on commas, so a comma anywhere in the archive path — the cache location
-/// follows `XDG_CACHE_HOME`/`HOME`, and a home directory may contain one — would arrive at the
-/// linker as two mangled flags.
-fn append_runtime_link_args(command: &mut Command, rt_lib: &Path) {
-    if cfg!(target_os = "macos") {
+/// content-hash suffix in its filename, which `-l` name lookup could not address. The force-load
+/// flag and that path are separate `-Xlinker` arguments rather than one `-Wl,` list, because the
+/// driver splits a `-Wl,` argument on commas and the archive path is user-controlled — a comma in
+/// it would arrive at the linker as two mangled flags.
+fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bool) {
+    if force_load {
         command.arg("-Xlinker").arg("-force_load");
         command.arg("-Xlinker").arg(rt_lib);
     } else {
@@ -266,7 +264,7 @@ pub fn build_native(
 
     let mut command = Command::new(linker);
     command.arg(&obj);
-    append_runtime_link_args(&mut command, &rt_lib);
+    append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
     command.args(SYSTEM_LIBS);
     command.arg("-o").arg(out);
 
@@ -286,5 +284,76 @@ pub fn build_native(
     match status? {
         s if s.success() => Ok(()),
         s => Err(format!("linker `{linker}` failed with {s}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A comma in the archive path is enough to mangle a `-Wl,` flag, and the path comes from
+    /// the user's cache location, so neither retention shape may build one. Both are checked
+    /// from any host: the ld64 form is unreachable on Linux, where it would otherwise go
+    /// untested until someone with a comma in `$HOME` ran `quilon build` on a Mac.
+    #[test]
+    fn neither_retention_shape_passes_a_comma_bearing_path_through_wl() {
+        let archive = Path::new("/home/a,b/.cache/quilon/libquilon_rt.a");
+        for force_load in [true, false] {
+            let mut command = Command::new("cc");
+            append_runtime_link_args(&mut command, archive, force_load);
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+
+            assert!(
+                !args.iter().any(|arg| arg.starts_with("-Wl,")),
+                "a `-Wl,` argument is comma-split by the driver: {args:?}"
+            );
+            assert!(
+                args.iter().any(|arg| arg == archive.to_str().unwrap()),
+                "the archive path must reach the linker whole: {args:?}"
+            );
+        }
+    }
+
+    /// ld64 wants `-force_load <archive>` as two arguments, and `-Xlinker` is what keeps them
+    /// adjacent and unparsed.
+    #[test]
+    fn the_force_load_shape_is_two_xlinker_pairs() {
+        let archive = Path::new("/tmp/libquilon_rt.a");
+        let mut command = Command::new("cc");
+        append_runtime_link_args(&mut command, archive, true);
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            ["-Xlinker", "-force_load", "-Xlinker", "/tmp/libquilon_rt.a"]
+        );
+    }
+
+    /// The GNU-ld shape: one `-u` per intrinsic, all of them before the archive, since a
+    /// member is only pulled in for a reference the scan has already seen.
+    #[test]
+    fn the_undefined_symbol_shape_names_every_intrinsic_before_the_archive() {
+        let archive = Path::new("/tmp/libquilon_rt.a");
+        let mut command = Command::new("cc");
+        append_runtime_link_args(&mut command, archive, false);
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(args.len(), quilon_rt::INTRINSICS.len() * 2 + 1);
+        assert_eq!(args.last().unwrap(), "/tmp/libquilon_rt.a");
+        for (name, _) in quilon_rt::INTRINSICS {
+            let at = args
+                .iter()
+                .position(|arg| arg == name)
+                .unwrap_or_else(|| panic!("{name} is not forced onto the link"));
+            assert_eq!(args[at - 1], "-u");
+        }
     }
 }
