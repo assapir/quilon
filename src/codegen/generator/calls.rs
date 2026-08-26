@@ -14,6 +14,8 @@ pub(super) enum IntrinsicLowering {
     Now,
     ColorEnabled,
     Exit,
+    /// One of the test registry's primitives, lowered by name (they share a signature).
+    TestRegistry,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -51,6 +53,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             "now" => IntrinsicLowering::Now,
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
+            name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
             _ => return None,
         };
         if arguments.len() != crate::ast::builtin_overload_arity(name)? {
@@ -105,6 +108,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // `__exit(code)` — the single native primitive `core.test` builds on
                 // (terminates the process).
                 IntrinsicLowering::Exit => self.generate_exit(arguments),
+                IntrinsicLowering::TestRegistry => {
+                    self.generate_test_registry(function_name, arguments)
+                }
             };
         }
 

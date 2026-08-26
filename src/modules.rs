@@ -198,6 +198,9 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), S
         Program {
             imports: Vec::new(),
             items,
+            // An imported module's own test blocks are that module's to run, so only the
+            // root program's survive the link.
+            test_blocks: program.test_blocks,
         },
         sources,
     ))

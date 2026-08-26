@@ -7,7 +7,17 @@ use std::rc::Rc;
 pub struct Program {
     pub imports: Vec<Import>,
     pub items: Vec<Item>,
+    /// Top-level [`TEST_BLOCK_MARKER`] calls — `describe("…", () => < … >)` — kept apart
+    /// from `items` because they are TEST code: `quilon test` synthesizes an entry point
+    /// that runs them in order, and every other command ignores this field, which is what
+    /// keeps a test suite out of a release build.
+    pub test_blocks: Vec<Expression>,
 }
+
+/// The name whose top-level call marks test code: `describe`. There is no attribute or
+/// `cfg` syntax — the symbol IS the marker, so a file's tests are recognizable by the
+/// parser (see `Parser::parse_program`) with no annotation to keep in sync.
+pub const TEST_BLOCK_MARKER: &str = "describe";
 
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 /// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
@@ -208,7 +218,72 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[Type::Num],
         ret: Type::Bool,
     },
+    // The test registry (see `TEST_REGISTRY_INTRINSICS`): the harness's event sink, which
+    // `core.test`'s `describe`/`it`/`expect` drive. Every member is `() -> Num`, so one
+    // lowering serves them all.
+    BuiltinOverload {
+        name: "__test_suite_enter",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_suite_leave",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_enter",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_leave",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_note_fail",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_passed",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_failed",
+        parameters: &[],
+        ret: Type::Num,
+    },
 ];
+
+/// The test registry's primitives — the event sink behind `core.test`'s `describe`, `it`,
+/// and the matchers. The registry counts and nests; it renders nothing, so a reporter is
+/// free to render however it likes (see `docs/corelib/test.md`).
+///
+/// Every one takes no arguments and yields a `Num`, which is what lets codegen lower the
+/// whole family through a single path. `__`-prefixed and exported by no module for the
+/// same reason as `__exit`: they are the harness's plumbing, not user-facing surface.
+pub const TEST_REGISTRY_INTRINSICS: &[&str] = &[
+    // Enter / leave a `describe` group; each yields the resulting nesting depth.
+    "__test_suite_enter",
+    "__test_suite_leave",
+    // Start a case, yielding the depth to indent it at; end one, yielding 1 when it
+    // failed and 0 when it passed (and folding it into the totals).
+    "__test_case_enter",
+    "__test_case_leave",
+    // Mark the case in progress as failed; yields how many failures it has noted.
+    "__test_note_fail",
+    // The run's totals, for the summary.
+    "__test_passed",
+    "__test_failed",
+];
+
+/// Whether `name` is one of the [`TEST_REGISTRY_INTRINSICS`].
+pub fn is_test_registry_intrinsic(name: &str) -> bool {
+    TEST_REGISTRY_INTRINSICS.contains(&name)
+}
 
 /// Whether the compiler provides built-in members for `name`, so a single user definition
 /// of it already forms an overload set (rather than being an ordinary function).
@@ -817,5 +892,29 @@ pub fn type_label(ty: &Type) -> String {
         }
         Type::Generic { .. } => "<unknown>".to_string(),
         other => format!("{:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_test_registry_primitive_is_a_zero_argument_num_builtin() {
+        // The two tables are written out separately (a const table cannot iterate a const
+        // slice), so this is what keeps them from drifting: codegen lowers a name because
+        // `is_test_registry_intrinsic` says so, and the checker only knows the name at all
+        // because `BUILTIN_OVERLOADS` lists it.
+        for name in TEST_REGISTRY_INTRINSICS {
+            let member = BUILTIN_OVERLOADS
+                .iter()
+                .find(|member| member.name == *name)
+                .unwrap_or_else(|| panic!("`{name}` is missing from BUILTIN_OVERLOADS"));
+            assert!(
+                member.parameters.is_empty(),
+                "`{name}` must take no arguments"
+            );
+            assert_eq!(member.ret, Type::Num, "`{name}` must yield a Num");
+        }
     }
 }

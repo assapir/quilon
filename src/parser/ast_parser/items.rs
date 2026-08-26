@@ -19,16 +19,36 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut imports = Vec::new();
         let mut items = Vec::new();
+        let mut test_blocks = Vec::new();
 
         while !self.is_at_end() {
             if self.check(&TokenKind::Import) {
                 imports.push(self.parse_import()?);
+            } else if self.at_test_block() {
+                test_blocks.push(self.parse_expression()?);
             } else {
                 items.push(self.parse_item()?);
             }
         }
 
-        Ok(Program { imports, items })
+        Ok(Program {
+            imports,
+            items,
+            test_blocks,
+        })
+    }
+
+    /// Whether the cursor is on a top-level test block: a CALL to
+    /// [`crate::ast::TEST_BLOCK_MARKER`] (`describe("…", () => < … >)`). A `describe`
+    /// followed by anything but an argument list — `describe = …`, which is how
+    /// `core.test` DEFINES it — is an ordinary item.
+    fn at_test_block(&self) -> bool {
+        self.check(&TokenKind::Ident)
+            && self.peek().text == crate::ast::TEST_BLOCK_MARKER
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|next| next.kind == TokenKind::ParenOpen && !next.first_on_line)
     }
 
     /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).

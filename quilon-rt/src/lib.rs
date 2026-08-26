@@ -24,7 +24,8 @@
 //! The intrinsics are grouped by the surface they back: [`io`] (core.io — the one
 //! genuinely lib-aligned module), [`text`] (the built-in `Text` type), [`process`]
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
-//! `argv`/`envp` conversions), and [`mem`] (general memory primitives: allocation,
+//! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`), and
+//! [`mem`] (general memory primitives: allocation,
 //! GC, the shared `QlSlice` ABI type, bounds-check failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
@@ -46,6 +47,7 @@ pub mod reactor;
 // Only the `QlSite` type is public (re-exported below); the formatter is the runtime's own.
 mod report;
 pub mod scheduler;
+pub mod test_registry;
 pub mod text;
 pub mod time;
 
@@ -61,6 +63,10 @@ pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{MAX_PATH_WIDTH, QlSite, shorten_path};
 pub use scheduler::__run_fiber_main;
+pub use test_registry::{
+    __test_case_enter, __test_case_leave, __test_failed, __test_note_fail, __test_passed,
+    __test_suite_enter, __test_suite_leave,
+};
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
     __text_repeat, __text_replace_all, __text_replace_n, __text_slice, __text_split,
@@ -212,6 +218,13 @@ intrinsic_registry! {
     __set_union: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_diff: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_intersect: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
+    __test_suite_enter: extern "C" fn() -> f64,
+    __test_suite_leave: extern "C" fn() -> f64,
+    __test_case_enter: extern "C" fn() -> f64,
+    __test_case_leave: extern "C" fn() -> f64,
+    __test_note_fail: extern "C" fn() -> f64,
+    __test_passed: extern "C" fn() -> f64,
+    __test_failed: extern "C" fn() -> f64,
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

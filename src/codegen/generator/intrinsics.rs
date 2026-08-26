@@ -141,6 +141,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // double __now() — read the monotonic clock, in seconds. Backs `core.time`'s
             // plain (non-`@`) `now()`; only differences between readings are meaningful.
             "__now" => f64t.fn_type(&[], false),
+            // double __test_*() — the test registry (see `TEST_REGISTRY_INTRINSICS`): the
+            // harness's event sink, which `core.test`'s `describe`/`it`/matchers drive.
+            // Every one takes no arguments and yields a count or a depth.
+            name if crate::ast::is_test_registry_intrinsic(name) => f64t.fn_type(&[], false),
             // { ptr, i64 } __read_launch(Site* site) — the `@read` leaf IO primitive: launch
             // a background read of one line from stdin and return the DEFERRED Text
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
@@ -345,6 +349,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             .as_any_value_enum()
             .into_int_value();
         self.int_to_bool(enabled, "color_bool")
+    }
+
+    /// Lower one of the test registry's primitives (see
+    /// [`crate::ast::TEST_REGISTRY_INTRINSICS`]) to its runtime intrinsic. They take no
+    /// arguments and yield a `Num` — a nesting depth or a count — so the whole family
+    /// lowers through this one path.
+    pub(super) fn generate_test_registry(
+        &mut self,
+        name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err(format!(
+                "{name} expects no arguments, got {}",
+                args.len()
+            ));
+        }
+        let f = self.get_intrinsic(name)?;
+        let call = self
+            .builder
+            .build_call(f, &[], name)
+            .map_err(ctx("Failed to call a test registry primitive"))?;
+        Self::call_result_to_basic(call)
     }
 
     /// Lower the `now()` builtin: seconds on a monotonic clock, read through the `__now`
