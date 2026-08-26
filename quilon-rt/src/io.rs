@@ -3,8 +3,7 @@
 //! Byte-writing intrinsics backing `write`/`print`/`eprint`, plus the shared
 //! `write_to_fd` raw-syscall helper the fail-loud paths in `core`/`text` reuse.
 
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_int, c_void};
 
 /// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
 /// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin.
@@ -22,17 +21,23 @@ pub extern "C" fn __write_bytes(fd: i64, ptr: *const u8, len: i64) -> i64 {
     write_to_fd(fd, bytes)
 }
 
-/// Write a NUL-terminated C string to `fd` followed by a newline (backs
-/// `print`/`eprint` of a `Text`).
+/// Write `len` bytes from `ptr` to `fd` as human-readable text followed by a newline
+/// (backs `print`/`eprint` of a `Text`). The bytes are decoded as UTF-8 with each invalid
+/// byte replaced by U+FFFD — `print` renders for a reader, where `__write_bytes` (backing
+/// `write`) passes bytes through verbatim.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to a NUL-terminated byte string.
+/// `ptr` is null or points to at least `len` readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_text_fd(fd: i64, ptr: *const c_char) {
-    let mut s = cstr_to_str(ptr).unwrap_or_default().into_owned();
-    s.push('\n');
-    write_to_fd(fd, s.as_bytes());
+pub extern "C" fn __print_text_fd(fd: i64, ptr: *const u8, len: i64) {
+    let rendered = crate::text::text_str(ptr, len);
+    // Text and newline in one buffer, so one `print` is one write: on a pipe that keeps a
+    // line whole against a concurrent writer, and it costs one allocation either way.
+    let mut line = Vec::with_capacity(rendered.len() + 1);
+    line.extend_from_slice(rendered.as_bytes());
+    line.push(b'\n');
+    write_to_fd(fd, &line);
 }
 
 /// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
@@ -67,13 +72,6 @@ pub(crate) fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
     total as i64
 }
 
-fn cstr_to_str<'a>(ptr: *const c_char) -> Option<std::borrow::Cow<'a, str>> {
-    if ptr.is_null() {
-        return None;
-    }
-    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy())
-}
-
 /// Whether colored output is appropriate on file descriptor `fd`: 1 when it is a terminal
 /// and the environment has not opted out, 0 otherwise. Backs the internal
 /// `__color_enabled(fd)` primitive, which `core.test` uses to decide whether a failed
@@ -95,5 +93,73 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
     match unsafe { libc::isatty(fd as c_int) } {
         1 => 1,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run `emit` with a fresh pipe as its target descriptor and return the bytes it wrote.
+    /// The payloads here are far below a pipe's buffer, so the write never blocks.
+    fn captured(emit: impl FnOnce(i64)) -> Vec<u8> {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+
+        let (mut reader, writer) = std::io::pipe().expect("pipe");
+        emit(writer.as_raw_fd() as i64);
+        drop(writer);
+
+        let mut out = Vec::new();
+        reader
+            .read_to_end(&mut out)
+            .expect("read the captured bytes");
+        out
+    }
+
+    fn printed(bytes: &[u8]) -> Vec<u8> {
+        captured(|fd| __print_text_fd(fd, bytes.as_ptr(), bytes.len() as i64))
+    }
+
+    fn written(bytes: &[u8]) -> Vec<u8> {
+        captured(|fd| {
+            assert_eq!(
+                __write_bytes(fd, bytes.as_ptr(), bytes.len() as i64),
+                bytes.len() as i64
+            );
+        })
+    }
+
+    #[test]
+    fn print_renders_invalid_utf8_as_replacement_while_write_passes_it_through() {
+        let bytes = b"a\xffb";
+        assert_eq!(written(bytes), bytes);
+        assert_eq!(printed(bytes), "a\u{fffd}b\n".as_bytes());
+    }
+
+    #[test]
+    fn an_interior_nul_survives_both_paths_in_full() {
+        let bytes = b"a\0b";
+        assert_eq!(written(bytes), bytes);
+        assert_eq!(printed(bytes), b"a\0b\n");
+    }
+
+    #[test]
+    fn print_reads_exactly_len_bytes_of_a_longer_buffer() {
+        // The `{ptr,len}` pair is the whole contract: bytes past `len` are not this Text's.
+        let buffer = b"visible/hidden";
+        assert_eq!(
+            captured(|fd| __print_text_fd(fd, buffer.as_ptr(), 7)),
+            b"visible\n"
+        );
+    }
+
+    #[test]
+    fn a_null_or_empty_text_prints_just_the_newline() {
+        assert_eq!(
+            captured(|fd| __print_text_fd(fd, std::ptr::null(), 0)),
+            b"\n"
+        );
+        assert_eq!(printed(b""), b"\n");
     }
 }

@@ -58,8 +58,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
             "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
-            // void __print_text_fd(i64 fd, i8*) — C string + newline to fd.
-            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into()], false),
+            // void __print_text_fd(i64 fd, i8* ptr, i64 len) — text + newline to fd.
+            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
             // { ptr, i64 } __num_to_text(double) — render a Num (integer-valued without
             // decimals, else shortest round-trip). Backs the built-in `` ` `` for Num.
             "__num_to_text" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
@@ -273,14 +273,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let fd = if name == "eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
         let text = self.render_expression(&args[0])?;
-        let data = self
-            .builder
-            .build_extract_value(text.into_struct_value(), 0, "print_data")
-            .map_err(ctx("Failed to extract render data"))?
-            .into_pointer_value();
+        let (data, len) = self.split_text(text.into_struct_value(), "print")?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;
         self.builder
-            .build_call(print_fn, &[fd_val.into(), data.into()], "")
+            .build_call(print_fn, &[fd_val.into(), data.into(), len.into()], "")
             .map_err(ctx("Failed to build print call"))?;
         // `print`/`eprint` yield Unit (`$`); their result is meaningless.
         Ok(self.unit_value().into())
@@ -383,16 +379,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ));
             }
         };
-        let data = self
-            .builder
-            .build_extract_value(s, 0, "write_data")
-            .map_err(ctx("Failed to extract text data"))?
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(s, 1, "write_len")
-            .map_err(ctx("Failed to extract text len"))?
-            .into_int_value();
+        let (data, len) = self.split_text(s, "write")?;
         let fd_float = match fd_num {
             BasicValueEnum::FloatValue(f) => f,
             other => {

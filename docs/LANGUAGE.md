@@ -180,6 +180,11 @@ back to the default rather than recursing forever.)
 
 There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.qn`.)
 
+**On output, `print` renders and `write` does not.** `print`/`eprint` write text for a
+reader: a `Text` whose bytes are not valid UTF-8 arrives with each invalid byte shown as the
+replacement character `�`. [`write`](corelib/io.md) is the byte-exact form — a `Text`'s bytes
+as they are. Both write the whole `Text`: a NUL byte is content, never a terminator.
+
 ### `Bool`
 `true` / `false` (the literals are lowercase; note that a `Bool` *renders* as capitalized
 `True`/`False` — see [interpolation](#string-interpolation-and-the-render-operator)).

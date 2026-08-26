@@ -171,7 +171,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` (mirrors
-    /// `Expression::String` lowering): a global NUL-terminated byte constant plus its byte length.
+    /// `Expression::String` lowering): a global byte constant plus its byte length.
     pub(super) fn text_literal(&mut self, s: &str) -> Result<BasicValueEnum<'ctx>, String> {
         let global = self
             .builder

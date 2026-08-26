@@ -165,7 +165,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Evaluate a `Text` expression and split it into its `(data_ptr, byte_len)` fields —
     /// the shared primitive for lowering Text-method calls, whose intrinsics take a `Text`
-    /// as its two fields (mirrors the extraction in `generate_text_compare`).
+    /// as its two fields.
     pub(super) fn extract_text(
         &mut self,
         expression: &Expression,
@@ -174,14 +174,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         let BasicValueEnum::StructValue(s) = val else {
             return Err("Text method receiver/argument must be a Text value".to_string());
         };
+        self.split_text(s, "txt")
+    }
+
+    /// Split an already-evaluated `Text` value into its `(data_ptr, byte_len)` fields, named
+    /// after `label`. Every intrinsic that takes a `Text` takes it as this pair — the length
+    /// is what bounds the bytes, so no caller has to look for a terminator.
+    pub(super) fn split_text(
+        &self,
+        text: inkwell::values::StructValue<'ctx>,
+        label: &str,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
         let ptr = self
             .builder
-            .build_extract_value(s, 0, "txt_ptr")
+            .build_extract_value(text, 0, &format!("{label}_ptr"))
             .map_err(ctx("Failed to extract text ptr"))?
             .into_pointer_value();
         let len = self
             .builder
-            .build_extract_value(s, 1, "txt_len")
+            .build_extract_value(text, 1, &format!("{label}_len"))
             .map_err(ctx("Failed to extract text len"))?
             .into_int_value();
         Ok((ptr, len))
@@ -267,44 +278,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to select indexOf result"))
     }
 
-    /// Concatenate two `Text` values into a fresh, GC-allocated, NUL-terminated
-    /// buffer and return a new `{ ptr, byte_len }` struct.
+    /// Concatenate two `Text` values into a fresh, GC-allocated buffer and return a new
+    /// `{ ptr, byte_len }` struct. The buffer holds exactly the concatenated bytes — a
+    /// `Text` carries its own length, so nothing reads past it.
     pub(super) fn generate_text_concat(
         &mut self,
         left: inkwell::values::StructValue<'ctx>,
         right: inkwell::values::StructValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i8t = self.context.i8_type();
-        let i64t = self.context.i64_type();
 
-        let field = |s: inkwell::values::StructValue<'ctx>,
-                     idx: u32,
-                     name: &str|
-         -> Result<BasicValueEnum<'ctx>, String> {
-            self.builder
-                .build_extract_value(s, idx, name)
-                .map_err(ctx("Failed to extract text field"))
-        };
-        let l_ptr = field(left, 0, "l_ptr")?.into_pointer_value();
-        let l_len = field(left, 1, "l_len")?.into_int_value();
-        let r_ptr = field(right, 0, "r_ptr")?.into_pointer_value();
-        let r_len = field(right, 1, "r_len")?.into_int_value();
+        let (l_ptr, l_len) = self.split_text(left, "l")?;
+        let (r_ptr, r_len) = self.split_text(right, "r")?;
 
         let total = self
             .builder
             .build_int_add(l_len, r_len, "concat_len")
             .map_err(ctx("Failed to add lengths"))?;
-        // +1 byte for the NUL terminator so the result is also a valid C string.
-        let alloc_size = self
-            .builder
-            .build_int_add(total, i64t.const_int(1, false), "concat_alloc")
-            .map_err(ctx("Failed to size alloc"))?;
 
         use inkwell::values::AnyValue;
         let alloc_fn = self.get_intrinsic("__alloc")?;
         let dest = self
             .builder
-            .build_call(alloc_fn, &[alloc_size.into()], "concat_buf")
+            .build_call(alloc_fn, &[total.into()], "concat_buf")
             .map_err(ctx("Failed to call __alloc"))?
             .as_any_value_enum()
             .into_pointer_value();
@@ -321,14 +317,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_call(memcpy_fn, &[tail.into(), r_ptr.into(), r_len.into()], "")
             .map_err(ctx("Failed to copy right text"))?;
-        let nul = unsafe {
-            self.builder
-                .build_gep(i8t, dest, &[total], "concat_nul")
-                .map_err(ctx("Failed to offset NUL"))?
-        };
-        self.builder
-            .build_store(nul, i8t.const_zero())
-            .map_err(ctx("Failed to write NUL"))?;
 
         let text_ty = self.ptr_len_struct_type();
         let with_ptr = self
@@ -357,18 +345,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) else {
             return Err("Text comparison requires two Text values".to_string());
         };
-        let extract = |s: inkwell::values::StructValue<'ctx>,
-                       idx: u32,
-                       name: &str|
-         -> Result<BasicValueEnum<'ctx>, String> {
-            self.builder
-                .build_extract_value(s, idx, name)
-                .map_err(ctx("Failed to extract text field"))
-        };
-        let l_ptr = extract(l, 0, "lcmp_ptr")?.into_pointer_value();
-        let l_len = extract(l, 1, "lcmp_len")?.into_int_value();
-        let r_ptr = extract(r, 0, "rcmp_ptr")?.into_pointer_value();
-        let r_len = extract(r, 1, "rcmp_len")?.into_int_value();
+        let (l_ptr, l_len) = self.split_text(l, "lcmp")?;
+        let (r_ptr, r_len) = self.split_text(r, "rcmp")?;
 
         let cmp_fn = self.get_intrinsic("__text_cmp")?;
         use inkwell::values::AnyValue;

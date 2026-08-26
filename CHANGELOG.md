@@ -32,6 +32,24 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **`print` writes the whole `Text`, and renders it deliberately
+  ([#220](https://github.com/assapir/quilon/issues/220)).** `print`/`eprint` took only a
+  pointer, so output stopped at the first NUL byte: a `Text` read from stdin as
+  `a<NUL>b` printed just `a`, while `write` of the same value emitted all three bytes.
+  Output now takes the `Text`'s length like `write` does, so the value reaches the
+  descriptor whole, and the difference between the two is deliberate rather than accidental:
+  `print` renders for a reader (an invalid UTF-8 byte shows as `�`), `write` is byte-exact —
+  the rule `docs/LANGUAGE.md` now carries. With length carried through, a `Text` is exactly
+  its bytes: nothing appends a terminator past them, so no future producer of one can
+  forget to.
+
+- **Type confusions in codegen, reachable if the checker ever loosened
+  ([#220](https://github.com/assapir/quilon/issues/220)).** Comparing two composite values
+  chose `Text` comparison from their LLVM *shape*, so an array (or closure, or sum) would
+  have been read as a `Text`'s pointer and length; and a sum's payload slots were laid out
+  by two rules that disagreed, either of which could size a slot below the payload stored in
+  it. Both now follow one rule, keyed on the type checker's own answer.
+
 - **Method checking: an immutability bypass and an unchecked call site.** Two soundness
   holes in how methods were checked, both of which let a broken program past the checker.
 

@@ -861,13 +861,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Register a sum type: map each variant to `(tag, type_name)` (tag = declaration
-    /// index) and compute the type's canonical payload layout — one LLVM slot per
-    /// payload position, sized to the widest variant. Per position, the slot type is the
-    /// first NON-Unit field at that position (the type checker has validated that all
-    /// concrete fields at a position agree). `$` (Unit) payload fields are zero-sized and
-    /// contribute no slot, so a position that is `$` in every variant is dropped; a
-    /// position mixing `$` with a concrete type uses the concrete type.
+    /// Register a sum type: map each variant to `(tag, type_name)` (tag = declaration index)
+    /// and record the type's canonical payload layout from [`payload_slot_types`].
     fn register_sum_variants(
         &mut self,
         type_name: &str,
@@ -888,27 +883,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .insert(variant.name.clone(), variant.fields.clone());
         }
 
-        let max_arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
-        let mut layout: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(max_arity);
-        for pos in 0..max_arity {
-            // Slot type = the first NON-Unit field at this position (all concrete fields
-            // here agree, per the checker). If every variant has `$` (or nothing) here,
-            // the slot is a zero `i8` Unit placeholder — keeps the struct shape uniform
-            // (one field per position) while storing nothing meaningful.
-            let concrete = variants
-                .iter()
-                .find_map(|v| v.fields.get(pos).filter(|f| **f != Type::Unit));
-            let slot = match concrete {
-                Some(ty) => self.type_to_llvm(ty)?,
-                None => self.context.i8_type().into(),
-            };
-            layout.push(slot);
-        }
-        // A purely nullary enum still needs a payload slot so its `{ i8, .. }` value has
-        // a uniform shape; use a single `double` placeholder (matches constructor codegen).
-        if layout.is_empty() {
-            layout.push(self.context.f64_type().into());
-        }
+        let layout = self.payload_slot_types(variants)?;
         self.sum_layouts.insert(type_name.to_string(), layout);
         Ok(())
     }

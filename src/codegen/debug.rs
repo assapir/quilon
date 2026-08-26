@@ -324,7 +324,7 @@ impl<'ctx> DebugInfo<'ctx> {
             .as_type()
     }
 
-    /// `Text` — a `{ ptr data, i64 byte_len }` struct over a NUL-terminated UTF-8 buffer.
+    /// `Text` — a `{ ptr data, i64 byte_len }` struct over a UTF-8 byte buffer.
     /// Distinct from an array by name (`Text`) and by its `data` pointee (`char`, not `T`).
     pub fn text_type(&self) -> DIType<'ctx> {
         let char_ty = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);

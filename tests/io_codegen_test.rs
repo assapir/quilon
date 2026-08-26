@@ -44,6 +44,9 @@ fn print_number_renders_via_num_to_text() {
 
 #[test]
 fn print_text_lowers_to_print_text_fd_intrinsic() {
+    // A `Text` is its `{ ptr, len }` pair, and the output path takes BOTH: the length is
+    // what bounds the write, so no producer has to append anything past the bytes for
+    // `print` to find the end.
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
@@ -53,8 +56,16 @@ fn print_text_lowers_to_print_text_fd_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("@__print_text_fd"),
-        "expected __print_text_fd in:\n{ir}"
+        ir.contains("declare void @__print_text_fd(i64, ptr, i64)"),
+        "expected a (fd, ptr, len) print signature in:\n{ir}"
+    );
+    let call = ir
+        .lines()
+        .find(|line| line.contains("call void @__print_text_fd"))
+        .unwrap_or_else(|| panic!("expected a print call in:\n{ir}"));
+    assert!(
+        call.contains("(i64 1, ptr") && call.trim_end().ends_with(", i64 5)"),
+        "expected stdout and the literal's 5-byte length: {call}"
     );
 }
 

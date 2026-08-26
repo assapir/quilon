@@ -158,13 +158,12 @@ impl QlSlice {
     }
 }
 
-/// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC
-/// (so it outlives the C `argv`/`envp` buffers, which the program may not keep), and is
-/// NUL-terminated past `len` so `print`/`eprint` (which expect a C string) work too.
+/// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC, so
+/// it outlives the C `argv`/`envp` buffers, which the program may not keep. A `Text` is
+/// exactly its `{ ptr, len }` bytes — nothing reads past `len`.
 pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     let len = bytes.len();
-    // +1 for a trailing NUL so the buffer doubles as a C string for `print`.
-    let buf = __alloc(len as i64 + 1) as *mut u8;
+    let buf = __alloc(len as i64) as *mut u8;
     if !buf.is_null() && len > 0 {
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len) };
     }
