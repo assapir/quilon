@@ -6,6 +6,42 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **The release publishes a binary per platform, under a new name each
+  ([#49](https://github.com/assapir/quilon/issues/49)).** A release used to carry one asset,
+  named `quilon`, built on Ubuntu. It now carries three, and every one of them is named for
+  what it runs on — which **breaks any script or link that fetched the old bare `quilon`
+  asset**:
+
+  | Platform | Asset | Needs installed |
+  | --- | --- | --- |
+  | Linux, x86_64, glibc 2.39+ | `quilon-x86_64-unknown-linux-gnu` | nothing |
+  | macOS, Apple silicon | `quilon-aarch64-apple-darwin` | nothing |
+  | Arch Linux, x86_64 | `quilon-x86_64-unknown-linux-gnu-arch` | `pacman -S llvm` |
+
+  Intel Macs are not covered: `macos-latest` is Apple silicon, and the asset is arm64 only.
+
+  The first two are self-contained — LLVM is linked into them, as the collector already was.
+  That took work on macOS, where Homebrew's `llvm@22` ships no static LLVM at all (it is
+  built `LLVM_LINK_LLVM_DYLIB=ON`, and a binary linked against it starts only where that
+  formula is installed): the job links the static archives from the upstream LLVM release
+  package instead.
+
+  **The Arch asset is not self-contained**, and Arch leaves no way to make it so: its `llvm`
+  package also ships only a shared `libLLVM.so`, and the upstream static package cannot be
+  linked there either — it names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a
+  Debian layout, and Arch ships no static `zstd` (the same gap that made the collector a
+  vendored submodule). So it links `libLLVM.so.22.1` and needs Arch's `llvm` (LLVM 22)
+  installed, which also means it stops working when Arch moves to LLVM 23. The portable
+  Linux asset needs nothing and runs on Arch too.
+
+  Each job proves its result rather than asserting it: it runs `ldd`/`otool -L` on the
+  binary it built and type-checks a program with it, publishes that output to the job
+  summary, and — for the two that promise self-containment — fails the release if an LLVM,
+  or on macOS anything outside the system libraries, is named there.
+
+  A manual run of the workflow builds all three and stops before publishing, so the matrix
+  can be exercised without spending a version number.
+
 - **`quilon build` works on macOS, and CI covers macOS and Arch Linux
   ([#49](https://github.com/assapir/quilon/issues/49)).** The AOT link line was GNU-ld
   shaped and Apple's ld64 rejects it: `--whole-archive` is not a flag it knows, and there is
