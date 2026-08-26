@@ -342,8 +342,20 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let field_type = self.parse_type()?;
                 fields.push((member_name, field_type));
-            } else if self.check(&TokenKind::Assign) {
-                // This is a method: name = parameters => body
+            } else if self.check(&TokenKind::Assign) || self.check(&TokenKind::MutAssign) {
+                // A method: `name = params => body`, or `name := params => body` for one
+                // that may mutate `it`.
+                let mutating = self.check(&TokenKind::MutAssign);
+                // An operator member yields a value; there is no receiver-mutability check
+                // at an operator's use site, so declaring one mutating would be a promise
+                // nothing enforces. (`operator_def_name` already refuses `+ := …` for the
+                // symbol operators; the render member reaches here by its own branch.)
+                if mutating && member_name == "`" {
+                    return Err(ParseError {
+                        message: "The render member ` cannot be declared with ':=' — it renders a value rather than mutating `it`".to_string(),
+                        span: self.peek().span.clone(),
+                    });
+                }
                 self.advance();
 
                 let method_start = self.current_span();
@@ -376,11 +388,12 @@ impl<'a> Parser<'a> {
                     parameters,
                     return_type,
                     body,
+                    mutating,
                     span: self.span(method_start.start, method_end.end),
                 });
             } else {
                 return Err(ParseError {
-                    message: "Expected :: or = after field/method name".to_string(),
+                    message: "Expected ::, = or := after field/method name".to_string(),
                     span: self.peek().span.clone(),
                 });
             }

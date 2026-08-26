@@ -173,6 +173,14 @@ impl TypeChecker {
         use crate::ast::{SumVariant, Type, TypeDefinition};
 
         // Build the type from the definition
+        // A setter is DECLARED, with `:=` — the binding operator means here what it means
+        // everywhere else. Records and sums take the same contract, so this runs once for
+        // both kinds.
+        self.check_method_mutation_contracts(
+            &declaration.name,
+            declaration.type_definition.methods(),
+        )?;
+
         let type_value = match &declaration.type_definition {
             TypeDefinition::Sum { variants, .. } => {
                 // Resolve and validate each variant's payload types. A payload is either a
@@ -284,15 +292,10 @@ impl TypeChecker {
                         )?;
                     }
                 }
+
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
-                // Infer which methods mutate the receiver in place ("setters"), so
-                // a later call-site can require a `:=` receiver. A method is a setter
-                // iff its body writes `it.field := …` or calls a sibling setter on
-                // `it`. The latter is resolved to a fixpoint (setters calling setters).
-                self.infer_setter_methods(&declaration.name, methods);
-
                 // The declaration itself, built once: every method's `it` binding and the
                 // registered type are the same record, so they share one copy of it.
                 let record_fields = Rc::new(fields.clone());
@@ -434,49 +437,58 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Populate `self.setter_methods` for `type_name`'s methods. A method is a
-    /// setter iff its body mutates the receiver: a direct `it.field := …`, or a
-    /// call to a sibling method on `it` that is itself a setter. Because setters
-    /// can call setters, this is iterated to a fixpoint over the method set.
-    pub(super) fn infer_setter_methods(
+    /// Apply the declared mutation contract to `type_name`'s methods: register the
+    /// `:=`-declared ones as setters, then hold each `=`-declared one to its promise.
+    ///
+    /// Registration comes first so the verifier sees every sibling, which is what lets the
+    /// transitive rule be a lookup: a method calling a `:=` sibling on `it` mutates by
+    /// proxy, and every sibling's contract is known from its declaration.
+    fn check_method_mutation_contracts(
         &mut self,
         type_name: &str,
         methods: &[crate::ast::MethodDeclaration],
-    ) {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for method in methods {
-                let key = (type_name.to_string(), method.name.clone());
-                if self.setter_methods.contains(&key) {
-                    continue;
-                }
-                if self.body_mutates_receiver(type_name, &method.body) {
-                    self.setter_methods.insert(key);
-                    changed = true;
-                }
+    ) -> Result<(), TypeError> {
+        for method in methods.iter().filter(|m| m.mutating) {
+            self.setter_methods
+                .insert((type_name.to_string(), method.name.clone()));
+        }
+        for method in methods.iter().filter(|m| !m.mutating) {
+            // Point at the write itself: that is what broke the promise, and the method's
+            // own span starts after the `=` the message tells the author to change.
+            if let Some(span) = self.body_mutates_receiver(type_name, &method.body) {
+                return Err(TypeError::MutatingMethodDeclaredImmutable {
+                    type_name: type_name.to_string(),
+                    method: method.name.clone(),
+                    span,
+                });
             }
         }
+        Ok(())
     }
 
-    /// Does `expression` (a method body) mutate the receiver `it`? True if any
-    /// sub-expression is a field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a
-    /// call to a sibling method already known to be a setter, applied to `it`.
+    /// Where does `expression` (a method body) mutate the receiver `it`, if anywhere?
+    /// Yields the span of the first such sub-expression: a field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a
+    /// call to a `:=`-declared sibling applied to `it`.
     ///
-    /// A write anywhere in the body makes the method a setter — nested in a lambda, an
-    /// array or record literal, a match arm, an argument list, or a locally declared
-    /// function's body. Missing one is not cosmetic: an unclassified setter stays callable
-    /// on an `=`-bound receiver and mutates it. Both signals are node-local, so this is a
-    /// flat predicate over the shared structural walk, which is the one place that has to
-    /// know every expression form.
-    pub(super) fn body_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
-        try_for_each_subexpression(expression, &mut |e| match self
+    /// A write anywhere in the body counts — nested in a lambda, an array or record
+    /// literal, a match arm, an argument list, or a locally declared function's body.
+    /// Missing one would let an `=`-declared method mutate its receiver in silence. Both
+    /// signals are node-local, so this is a flat predicate over the shared structural
+    /// walk, the one place that has to know every expression form.
+    pub(super) fn body_mutates_receiver(
+        &self,
+        type_name: &str,
+        expression: &Expression,
+    ) -> Option<Span> {
+        match try_for_each_subexpression(expression, &mut |e| match self
             .node_mutates_receiver(type_name, e)
         {
-            true => ControlFlow::Break(()),
+            true => ControlFlow::Break(e.span().clone()),
             false => ControlFlow::Continue(()),
-        })
-        .is_break()
+        }) {
+            ControlFlow::Break(span) => Some(span),
+            ControlFlow::Continue(()) => None,
+        }
     }
 
     /// Is THIS expression itself a mutation of `it` — ignoring its sub-expressions, which

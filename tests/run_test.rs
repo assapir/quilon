@@ -247,27 +247,27 @@ fn run_mutable_record_field_write_mutates_in_place() {
     // A `:=`-bound record allows a direct in-place field write `c.value := …`.
     // The mutation is observable on the same binding afterwards.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
         42,
     );
 }
 
 #[test]
 fn run_setter_method_mutates_mutable_instance() {
-    // A setter method (its body writes `it.field := …`) mutates a `:=` instance
-    // in place; the change is visible through the same binding after the call.
+    // A setter method (declared `:=`) mutates a `:=` instance in place; the change is
+    // visible through the same binding after the call.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
         42,
     );
 }
 
 #[test]
 fn run_setter_with_block_body_writes_multiple_fields() {
-    // A setter whose body is a `< >` block performing several `it.f := …` writes
+    // A `:=` method whose body is a `< >` block performing several `it.f := …` writes
     // mutates every field in place.
     assert_exit(
-        "Point = {\n  x :: Num,\n  y :: Num,\n  shift = (d :: Num) => <\n    it.x := it.x + d\n    it.y := it.y + d\n  >\n}\n^ = () -> Num => <\n  p := Point { x = 1, y = 2 }\n  p.shift(10)\n  p.x + p.y\n>",
+        "Point = {\n  x :: Num,\n  y :: Num,\n  shift := (d :: Num) => <\n    it.x := it.x + d\n    it.y := it.y + d\n  >\n}\n^ = () -> Num => <\n  p := Point { x = 1, y = 2 }\n  p.shift(10)\n  p.x + p.y\n>",
         23,
     );
 }
@@ -290,51 +290,73 @@ fn field_write_on_immutable_instance_is_a_type_error() {
 fn setter_call_on_immutable_instance_is_a_type_error() {
     // Calling a mutating (setter) method on an `=`-bound instance must fail type
     // checking; only a `:=` receiver may be mutated.
-    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_writing_through_a_lambda_is_rejected() {
+    // The contract is the DECLARATION: `=` promises the method does not mutate `it`.
+    // A write from inside a lambda breaks that promise as surely as a direct one — the
+    // write lands on the same receiver — so the verifier must see through the lambda.
+    //
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_writing_through_a_declared_function_is_rejected() {
+    // The write can also sit in a function DECLARED inside the body. That body is still
+    // code the method runs against the same receiver, so it breaks the same promise —
+    // the traversal must descend into a block's item declarations, not just its
+    // expression statements.
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    helper = () -> $ => it.v := 99\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_calling_a_mutating_sibling_is_rejected() {
+    // The transitive half: `viaBump` writes nothing itself, but calls a `:=` sibling on
+    // `it`, so it mutates by proxy and cannot be declared `=`. Every sibling's contract is known from its
+    // declaration, so this is a lookup rather than an inference.
+    let src = "T = {\n  v :: Num,\n  bump := () -> $ => it.v := 99,\n  viaBump = () -> Num => it.bump()\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.viaBump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn a_mutating_method_writing_through_a_lambda_runs_on_a_mutable_receiver() {
+    // The other half of the rule: declaring it `:=` must actually let it work. On a
+    // `:=` receiver it runs and mutates, leaving v = 2 — so the verifier rejects the
+    // undeclared case without making the declared one uncallable.
+    let src = "T = {\n  v :: Num,\n  bump := () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_exit(src, 2);
+}
+
+#[test]
+fn a_method_is_a_setter_because_it_is_declared_one_not_because_it_writes() {
+    // The contract is the declaration, not the body: `bump` writes nothing at all, yet
+    // being declared `:=` still makes it require a `:=` receiver. Nothing else in the
+    // suite would fail if registration quietly went back to inspecting bodies.
+    let src = "T = {\n  v :: Num,\n  bump := () -> Num => it.v\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
+    // The message is the whole remedy — it has to say which method and what to do — and
+    // `docs/LANGUAGE.md` quotes it, so pin the wording rather than merely "some error".
+    let src = "T = {\n  v :: Num,\n  bump = () -> $ => it.v := 99\n}\n^ = () -> Num => 0";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
+    let err = checker
+        .check_program(&program)
+        .expect_err("an `=` method that mutates `it` must be rejected");
+    let message = err.to_string();
     assert!(
-        checker.check_program(&program).is_err(),
-        "expected a setter call on an `=`-bound instance to be a type error"
+        message.contains("'T.bump'") && message.contains("declare it with ':='"),
+        "the diagnostic must name the method and the fix, got: {message}"
     );
-}
-
-#[test]
-fn setter_writing_through_a_lambda_is_still_a_setter() {
-    // A method that writes `it.field := …` from INSIDE a lambda is a setter just as
-    // surely as one that writes it directly — the write happens on the same receiver.
-    // Missing this made the method read as a getter, which left it callable on an
-    // `=`-bound instance that it then mutated: an immutability bypass, not a cosmetic
-    // misclassification.
-    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
-    assert_type_error(src);
-}
-
-#[test]
-fn setter_writing_through_a_locally_declared_function_is_still_a_setter() {
-    // The write can also sit in a function DECLARED inside the body. That body is still
-    // code the method runs on the same receiver, so it makes the method a setter too —
-    // the traversal must descend into a block's item declarations, not just its
-    // expression statements.
-    let src = "T = {\n  v :: Num\n  bump = () -> Num => <\n    helper = () -> $ => it.v := 99\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
-    assert_type_error(src);
-}
-
-#[test]
-fn setter_writing_through_a_lambda_still_composes_transitively() {
-    // The calls-another-setter rule must keep composing once the lambda write is seen:
-    // `viaBump` only calls `bump`, so it is a setter because `bump` is one.
-    let src = "T = {\n  v :: Num\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n  viaBump = () -> Num => it.bump()\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.viaBump()\n>";
-    assert_type_error(src);
-}
-
-#[test]
-fn a_lambda_writing_setter_runs_on_a_mutable_receiver() {
-    // The other half of the rule: classifying it as a setter must not make it
-    // uncallable. On a `:=` receiver it runs and mutates, leaving v = 2.
-    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
-    assert_exit(src, 2);
 }
 
 #[test]
@@ -362,7 +384,7 @@ fn setter_call_result_is_unit_not_num() {
     // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
     // fail type checking, keeping the checker in agreement with codegen (a setter
     // call emits an i8/Unit, not an f64). Regression for a check/compile divergence.
-    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -374,8 +396,8 @@ fn setter_call_result_is_unit_not_num() {
 
 #[test]
 fn run_non_setter_method_on_immutable_instance_is_allowed() {
-    // A non-mutating (getter) method has no `it.field := …` in its body, so it may
-    // be called on an `=`-bound (frozen) instance — only setters need `:=`.
+    // An `=`-declared method may be called on an `=`-bound (frozen) instance — only
+    // `:=` methods need a `:=` receiver.
     assert_exit(
         "Counter = {\n  value :: Num,\n  peek = => it.value\n}\n^ = () -> Num => <\n  c = Counter { value = 42 }\n  c.peek()\n>",
         42,

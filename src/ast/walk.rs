@@ -16,10 +16,10 @@ use std::ops::ControlFlow;
 ///
 /// Use [`for_each_subexpression`] when the walk always visits everything; a search wants
 /// this form, so it does not keep traversing after it has its answer.
-pub fn try_for_each_subexpression(
+pub fn try_for_each_subexpression<B>(
     expression: &Expression,
-    f: &mut impl FnMut(&Expression) -> ControlFlow<()>,
-) -> ControlFlow<()> {
+    f: &mut impl FnMut(&Expression) -> ControlFlow<B>,
+) -> ControlFlow<B> {
     f(expression)?;
     match expression {
         Expression::Number { .. }
@@ -124,7 +124,7 @@ pub fn try_for_each_subexpression(
 /// Apply `f` to `expression` and every sub-expression (pre-order), visiting all of them.
 /// The always-visit form of [`try_for_each_subexpression`].
 pub fn for_each_subexpression(expression: &Expression, f: &mut impl FnMut(&Expression)) {
-    let _ = try_for_each_subexpression(expression, &mut |e| {
+    let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
         f(e);
         ControlFlow::Continue(())
     });

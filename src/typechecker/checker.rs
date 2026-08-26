@@ -63,6 +63,13 @@ pub enum TypeError {
         receiver: String,
         span: Span,
     },
+    /// An `=`-declared method whose body mutates `it`, breaking the promise its binding
+    /// operator makes.
+    MutatingMethodDeclaredImmutable {
+        type_name: String,
+        method: String,
+        span: Span,
+    },
     DuplicateDefinition {
         name: String,
         span: Span,
@@ -281,9 +288,8 @@ pub struct TypeChecker {
     methods: std::collections::HashMap<(String, String), MethodDef>,
     // Registry of sum types: TypeName -> Type::Sum
     sum_types: std::collections::HashMap<String, Type>,
-    // Methods that mutate their receiver in place ("setters"), inferred from the
-    // body containing `it.field := …` (or a call to another setter on `it`).
-    // Calling such a method requires a `:=`-bound (mutable) receiver.
+    // Methods declared with `:=` ("setters"): they may mutate their receiver in place,
+    // so calling one requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expression` and returned by `check_program`.

@@ -75,6 +75,10 @@ pub struct MethodDeclaration {
     pub parameters: Vec<Parameter>, // Does not include implicit "it" parameter
     pub return_type: Option<Type>,
     pub body: Expression,
+    /// Declared with `:=` rather than `=`: this method may mutate its receiver, and
+    /// calling it requires a `:=` receiver. An `=` method is checked to make sure it
+    /// does not mutate.
+    pub mutating: bool,
     pub span: Span,
 }
 

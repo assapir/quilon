@@ -15,6 +15,7 @@ impl TypeError {
             | TypeError::ImmutableAssignment { span, .. }
             | TypeError::ImmutableFieldWrite { span, .. }
             | TypeError::MutatingMethodOnImmutable { span, .. }
+            | TypeError::MutatingMethodDeclaredImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
@@ -63,6 +64,15 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Cannot write to a field of immutable '{}'; bind it with ':=' to allow in-place mutation",
                     name
+                )
+            }
+            TypeError::MutatingMethodDeclaredImmutable {
+                type_name, method, ..
+            } => {
+                write!(
+                    f,
+                    "Method '{}.{}' mutates 'it' but is declared with '='; declare it with ':=' to allow in-place mutation",
+                    type_name, method
                 )
             }
             TypeError::MutatingMethodOnImmutable {
