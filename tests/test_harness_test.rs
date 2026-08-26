@@ -282,9 +282,9 @@ fn a_directory_runs_every_suite_it_holds() {
         out.stdout
     );
 
-    // The passing suite's total is its own: the registry is per-thread, and a thread per
-    // file is what keeps one suite's counts out of another's summary. The failing suite ran
-    // one case before it failed, and its count must not have landed here.
+    // The passing suite's total is its own — a process per suite is what keeps one suite's
+    // counts out of another's summary. The failing suite ran one case before it failed, and
+    // that count must not have landed here.
     assert!(
         out.stdout.contains("4 cases passed"),
         "one suite's totals leaked into another's summary:\n{}",
