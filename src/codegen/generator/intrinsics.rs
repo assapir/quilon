@@ -141,6 +141,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             // double __now() — read the monotonic clock, in seconds. Backs `core.time`'s
             // plain (non-`@`) `now()`; only differences between readings are meaningful.
             "__now" => f64t.fn_type(&[], false),
+            // void __assert_failed(Site* site, i8* message, i64 length) — report a failing
+            // `assert` at `site` and terminate with 101. Never returns; the call is left as
+            // ordinary flow so an assertion composes in expression position.
+            // void __expect_failed(Site*, i8*, i64) — the same report, but it marks the
+            // running test case failed and RETURNS, so the suite carries on.
+            "__assert_failed" | "__expect_failed" => {
+                void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
+            }
             // double __test_*() — the test registry (see `is_test_registry_intrinsic`): the
             // harness's event sink, which `core.test`'s `describe` and `it` drive. Every one
             // takes no arguments and yields a count or a depth.

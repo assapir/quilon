@@ -85,6 +85,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Only direct function calls supported".to_string());
         };
 
+        // The provided assertions, whose second argument is a matcher rather than a value —
+        // lowered here, ahead of every other dispatch, since the compiler provides the form.
+        if crate::ast::is_assertion(function_name) {
+            return self.generate_assertion(function_name, arguments, span);
+        }
+
         // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
         // into the name. Handled before every other dispatch — the name is not an
         // overload/method/constructor. The `@`-identifier span carries the call's launch site.
