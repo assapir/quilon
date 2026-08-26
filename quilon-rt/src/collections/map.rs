@@ -122,7 +122,11 @@ pub extern "C" fn __map_has(
     eq_fn: *const c_void,
 ) -> i64 {
     let map = map as *const QlMap;
-    unsafe { (*map).table.contains_key(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64 }
+    unsafe {
+        (*map)
+            .table
+            .contains_key(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -585,14 +585,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         let f64t = self.context.f64_type();
         let i64t = self.context.i64_type();
 
-        let hash_symbol = mangle_overload("%", &[key_ty.clone()]);
-        let hash_member = self.module.get_function(&hash_symbol).ok_or_else(|| {
-            format!("key type has no `%` hash member ({hash_symbol}) emitted")
-        })?;
+        let hash_symbol = mangle_overload("%", std::slice::from_ref(key_ty));
+        let hash_member = self
+            .module
+            .get_function(&hash_symbol)
+            .ok_or_else(|| format!("key type has no `%` hash member ({hash_symbol}) emitted"))?;
         let eq_symbol = mangle_overload("==", &[key_ty.clone(), key_ty.clone()]);
-        let eq_member = self.module.get_function(&eq_symbol).ok_or_else(|| {
-            format!("key type has no `==` member ({eq_symbol}) emitted")
-        })?;
+        let eq_member = self
+            .module
+            .get_function(&eq_symbol)
+            .ok_or_else(|| format!("key type has no `==` member ({eq_symbol}) emitted"))?;
 
         // Emitting fresh functions mid-stream: save and restore the enclosing builder
         // position and debug location so the surrounding function body resumes intact.

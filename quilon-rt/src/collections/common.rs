@@ -145,10 +145,7 @@ impl Hash for QlKey {
 /// keys hashing apart would silently split into duplicate logical entries), so fail loud.
 /// The O(n) scan is compiled OUT of release builds.
 #[cfg(debug_assertions)]
-pub(crate) fn debug_check_user_key<'a>(
-    existing: impl Iterator<Item = &'a QlKey>,
-    new_key: &QlKey,
-) {
+pub(crate) fn debug_check_user_key<'a>(existing: impl Iterator<Item = &'a QlKey>, new_key: &QlKey) {
     if new_key.tag != TAG_USER {
         return;
     }

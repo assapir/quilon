@@ -91,7 +91,11 @@ pub extern "C" fn __set_has(
     eq_fn: *const c_void,
 ) -> i64 {
     let set = set as *const QlSet;
-    unsafe { (*set).table.contains(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64 }
+    unsafe {
+        (*set)
+            .table
+            .contains(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64
+    }
 }
 
 #[unsafe(no_mangle)]
