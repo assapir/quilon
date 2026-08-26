@@ -70,9 +70,9 @@ version 2 — the copyleft is intact.
 Compiled Quilon programs also carry the Boehm-Demers-Weiser conservative garbage
 collector (libgc), which is a separate third-party work distributed under its
 own permissive, MIT-style license. Its sources come from the
-`quilon-rt/vendor/bdwgc` submodule (upstream terms in that repository's
-`README.md`, under "Copyright & Warranty"); its compiled object is linked
-statically into `libquilon_rt.a`, into the `quilon` binary, and into every
-executable `quilon build` produces, so those artifacts distribute libgc in
-binary form. libgc is not covered by, and does not
-need, this exception; its own license applies to it.
+`quilon-rt/vendor/bdwgc` submodule, and its compiled object is linked statically
+into `libquilon_rt.a`, into the `quilon` binary, and into every executable
+`quilon build` produces, so those artifacts distribute libgc in binary form. Its
+copyright and permission notice is reproduced verbatim in
+THIRD-PARTY-NOTICES.md. libgc is not covered by, and does not need, this
+exception; its own license applies to it.

@@ -83,4 +83,4 @@ Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking c
 
 **Programs you compile are yours to license however you want.** The runtime (`quilon-rt`) is statically linked into every binary `quilon build` produces, but it ships **GPLv2 _with_ a Classpath-style runtime-library exception** ([LICENSE-EXCEPTION.md](./LICENSE-EXCEPTION.md) — the model GCC and OpenJDK use), which also covers the runtime boilerplate the compiler emits (such as the generated C-compatible `main()`). So your output may be any license, including proprietary. The exception frees only the combined output; forking `quilon-rt` itself stays GPLv2.
 
-Compiled binaries also carry **libgc (the Boehm GC)**, statically linked from the `quilon-rt/vendor/bdwgc` submodule — a separate third-party work under its own permissive, MIT-style license.
+Compiled binaries also carry **libgc (the Boehm GC)**, statically linked from the `quilon-rt/vendor/bdwgc` submodule — a separate third-party work under its own permissive, MIT-style license, reproduced in [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).
