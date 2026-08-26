@@ -366,7 +366,8 @@ A sum type may carry a trailing `{ }` block of **methods** (the block is optiona
 with no methods is written exactly as above). `it` is the whole sum value, so a method
 typically matches on it. A member is a named method, an
 [operator](#operator-overloading), or the render `` ` ``. The block holds **methods only**
-— a sum has no fields, so a field-like entry there is a compile error.
+— a sum has no fields, so a field-like entry there is a compile error, and its methods are
+always `=` (see [Mutation](#mutation-in-place-field-writes--setters)).
 ```quilon
 Shape = Circle(Num) / Rect(Num, Num) {
   area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
@@ -508,6 +509,23 @@ A setter call requires a `:=` receiver:
 c = Counter { value = 30 }   ~ `=` -> immutable
 c.value := 99                 ~ error: cannot write a field of immutable `c`
 c.bump(5)                     ~ error: cannot call mutating method `bump` on immutable `c`
+```
+
+**Setters live on records.** Only a record's named methods may be declared `:=`. A sum's
+methods, and operator members on either kind (`` ` ``, `==`, `+`, …), are always `=` and
+non-mutating; `:=` on one is a compile error. Nothing they can do mutates the receiver
+anyway: a sum keeps its data in variant payloads, whose match bindings are immutable, and
+an operator or render member yields a value.
+
+```quilon
+Shape = Circle(Num) / Rect(Num, Num) {
+  area := () -> Num => 0      ~ error: a sum cannot have a mutating method
+}
+
+Counter = {
+  value :: Num,
+  + := (other :: Counter) -> Num => it.value   ~ error: an operator member is never `:=`
+}
 ```
 
 (See `examples/mutation.qn`.)
@@ -662,7 +680,9 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
 An operator is user-overloadable — `+ - * / %`, `== != < <= > >=` — as a **member of the
 type it operates on** (a [record](#named-record-types-with-methods) or a
 [sum](#sum-types--)). `it` is the **left** operand; a **binary** operator member takes one
-explicit parameter (the **right** operand), a unary one (the render `` ` ``) takes none:
+explicit parameter (the **right** operand), a unary one (the render `` ` ``) takes none.
+An operator member is always `=`-declared and yields a value; it never mutates `it`
+(see [Mutation](#mutation-in-place-field-writes--setters)):
 
 ```quilon
 Vec = {
@@ -1237,7 +1257,7 @@ pathological input.
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
-| Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields | ✅ |
+| Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields, no `:=` methods | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |

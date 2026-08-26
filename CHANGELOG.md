@@ -20,6 +20,11 @@ All notable changes to Quilon are documented here.
   method's shape. Migration is mechanical: re-declare each mutating method with `:=`. Only
   `examples/mutation.qn` needed it in this repository; corelib had none.
 
+  `:=` is confined to where it is enforced. The receiver-mutability gate lives in the
+  method-call path, which operator, render and hash members never reach, and a sum has no
+  field to write, so `+ := …`, `` ` := … `` and a `:=` sum method are rejected rather than
+  accepted as promises nothing checks.
+
   Calling a setter still requires a `:=` receiver — unchanged, and that rule is what the
   contract exists to serve. What is gone is the inference that decided which methods were
   setters, along with the fixpoint it needed: every sibling's contract is now known from

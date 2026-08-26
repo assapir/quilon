@@ -162,6 +162,23 @@ impl<'a> Parser<'a> {
     /// Requiring the following `=` keeps a stray leading operator from being mistaken
     /// for a definition. `<`/`>` (block delimiters) are intentionally excluded here —
     /// a top-level `< ... >` would be a block, never an operator name.
+    /// The operator symbol at the cursor, if it is one — without asking what follows.
+    pub(super) fn operator_symbol_name(&self) -> Option<String> {
+        let sym = match self.peek().kind {
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            TokenKind::Star => "*",
+            TokenKind::Slash => "/",
+            TokenKind::Percent => "%",
+            TokenKind::Eq => "==",
+            TokenKind::Ne => "!=",
+            TokenKind::Le => "<=",
+            TokenKind::Ge => ">=",
+            _ => return None,
+        };
+        Some(sym.to_string())
+    }
+
     pub(super) fn operator_def_name(&self) -> Option<String> {
         let sym = match self.peek().kind {
             TokenKind::Plus => "+",

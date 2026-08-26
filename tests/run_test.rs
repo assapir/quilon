@@ -342,6 +342,74 @@ fn a_method_is_a_setter_because_it_is_declared_one_not_because_it_writes() {
 }
 
 #[test]
+fn an_operator_member_cannot_be_declared_mutating() {
+    // An operator yields a value, and its dispatch never consults the setter set, so a
+    // `:=` operator would promise a mutation no call site checks. Rejected at parse time,
+    // with the rule rather than a stray-symbol complaint.
+    let src = "Counter = {\n  value :: Num,\n  + := (other :: Counter) -> Num => it.value\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on an operator member must be rejected");
+    assert!(
+        err.message.contains("cannot be declared with `:=`"),
+        "expected the operator-member rule, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn the_render_member_cannot_be_declared_mutating() {
+    // Same rule for the render member: it renders a value, and `print`/interpolation
+    // never reach the receiver-mutability gate.
+    let src = "Counter = {\n  value :: Num,\n  ` := () -> Text => \"c\"\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on the render member must be rejected");
+    assert!(
+        err.message.contains("cannot be declared with ':='"),
+        "expected the render-member rule, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn a_sum_method_cannot_be_declared_mutating() {
+    // A sum's data lives in variant payloads, reached by matching, and a match binding is
+    // immutable — so there is no field to write and `:=` would declare a mutation nothing
+    // can perform. Rejected at parse time, like an operator member.
+    let src = "S = A(Num) / B {\n  poke := () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on a sum method must be rejected");
+    assert!(
+        err.message.contains("cannot have a mutating method"),
+        "expected a mutating-sum-method diagnostic, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
+    // Diagnostic ORDER, not just presence. The mutation verifier must not run for sums:
+    // if it did, `it.x := 99` on a sum would be answered with "declare it with ':='",
+    // advice that leads nowhere — following it hits the type error below anyway. The
+    // truthful complaint is that a sum has no such field.
+    let src = "S = A(Num) / B {\n  poke = () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let message = checker
+        .check_program(&program)
+        .expect_err("a field write on a sum must be rejected")
+        .to_string();
+    assert!(
+        !message.contains("declare it with ':='"),
+        "a sum field write must not be answered with setter advice, got: {message}"
+    );
+    assert!(
+        message.contains("Type mismatch"),
+        "expected the field/type complaint, got: {message}"
+    );
+}
+
+#[test]
 fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
     // The message is the whole remedy — it has to say which method and what to do — and
     // `docs/LANGUAGE.md` quotes it, so pin the wording rather than merely "some error".

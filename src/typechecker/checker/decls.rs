@@ -174,12 +174,13 @@ impl TypeChecker {
 
         // Build the type from the definition
         // A setter is DECLARED, with `:=` — the binding operator means here what it means
-        // everywhere else. Records and sums take the same contract, so this runs once for
-        // both kinds.
-        self.check_method_mutation_contracts(
-            &declaration.name,
-            declaration.type_definition.methods(),
-        )?;
+        // everywhere else. Records only: a sum's methods cannot mutate `it` (no fields to
+        // write), the parser rejects `:=` on them, and running the verifier over one would
+        // answer a field write with setter advice instead of the truth, which is that a
+        // sum has no such field.
+        if let TypeDefinition::Record { methods, .. } = &declaration.type_definition {
+            self.check_method_mutation_contracts(&declaration.name, methods)?;
+        }
 
         let type_value = match &declaration.type_definition {
             TypeDefinition::Sum { variants, .. } => {

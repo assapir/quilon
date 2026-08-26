@@ -333,6 +333,19 @@ impl<'a> Parser<'a> {
                 // requires the following `=`, so this never swallows a stray operator.
                 self.advance();
                 operator
+            } else if let Some(operator) = self.operator_symbol_name()
+                && self.peek_ahead(1).kind == TokenKind::MutAssign
+            {
+                // Caught here so the author gets the rule rather than "expected identifier":
+                // `operator_def_name` only recognizes `op = …`, so `op := …` would otherwise
+                // fall through to the name parser and fail as a stray symbol.
+                return Err(ParseError {
+                    message: format!(
+                        "operator member `{}` cannot be declared with `:=` — an operator yields a value and never mutates `it`",
+                        operator
+                    ),
+                    span: self.peek().span.clone(),
+                });
             } else {
                 self.expect_ident()?
             };
@@ -473,6 +486,20 @@ impl<'a> Parser<'a> {
                         name
                     ),
                     span: self.previous_span(),
+                });
+            }
+            // A sum's receiver has no writable field — its data lives in variant payloads,
+            // reached by matching, and a match binding is immutable. So `:=` here would
+            // declare a mutation nothing can perform and nothing checks; the same reason
+            // operator members refuse it. If payload mutation ever lands, allowing `:=`
+            // then only widens what is accepted.
+            if let Some(mutating) = methods.iter().find(|m| m.mutating) {
+                return Err(ParseError {
+                    message: format!(
+                        "sum type `{}` cannot have a mutating method — `{}` is declared with `:=`, but a sum has no fields to write (its data lives in variant payloads)",
+                        name, mutating.name
+                    ),
+                    span: mutating.span.clone(),
                 });
             }
             methods
