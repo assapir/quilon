@@ -54,7 +54,7 @@ a corpus when a change has a cost profile the existing ones don't cover.
 
 ## Compiling & running `.qn` programs
 
-All four subcommands share one front-end (`src/driver.rs`): read → lex → parse → resolve `<<` imports → typecheck.
+Every subcommand shares one front-end (`src/driver.rs`): read → lex → parse → resolve `<<` imports → typecheck.
 
 ```bash
 cargo run -- check   examples/hello_world.qn   # front-end only
