@@ -25,9 +25,8 @@
 //!     scanned once, by the automatic scan.
 //!
 //! Any pre-existing `GC_push_other_roots` callback is chained, not clobbered. The
-//! `#[no_mangle]` GC intrinsics (`__gc_init`, the `#[link(name = "gc")]` allocation
-//! binding) live in [`crate::mem`]; this module holds only the scheduler-side
-//! scanning integration.
+//! `#[no_mangle]` GC intrinsics (`__gc_init`, the allocation binding) live in
+//! [`crate::mem`]; this module holds only the scheduler-side scanning integration.
 
 use crate::mem::__gc_init;
 use std::os::raw::{c_int, c_void};
@@ -41,7 +40,7 @@ struct GcStackBase {
 
 type GcPushOtherRootsProc = unsafe extern "C" fn();
 
-#[link(name = "gc")]
+#[link(name = "gc", kind = "static")]
 unsafe extern "C" {
     fn GC_set_push_other_roots(f: GcPushOtherRootsProc);
     fn GC_get_push_other_roots() -> Option<GcPushOtherRootsProc>;

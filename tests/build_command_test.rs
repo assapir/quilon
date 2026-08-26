@@ -222,3 +222,58 @@ fn distributed_binary_builds_via_embedded_runtime() {
 
     let _ = std::fs::remove_dir_all(&stage);
 }
+
+/// Self-contained output: a binary `quilon build` produces must NOT name a shared
+/// `libgc` among its dynamic dependencies. The collector is built from the bundled
+/// bdwgc sources and linked statically (inside `libquilon_rt.a`), so a produced
+/// executable carries its own GC and runs on a machine where libgc was never
+/// installed — which is the whole point, and is invisible to every other test here
+/// because the machine that builds also happens to have libgc.
+///
+/// Checked with the platform's dynamic-dependency lister; skipped when there is
+/// none, rather than passing vacuously.
+#[test]
+fn produced_binary_does_not_depend_on_a_shared_libgc() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping self-contained-GC gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+    let macos = cfg!(target_os = "macos");
+    let lister = if macos { "otool" } else { "ldd" };
+    if !tool_available(lister) {
+        eprintln!("skipping self-contained-GC gate: `{lister}` is not on PATH");
+        return;
+    }
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let out: PathBuf = std::env::temp_dir().join(format!("quilon_nogc_{}", std::process::id()));
+    let code = build_hello_and_run(quilon, linker, &out, "self-contained GC", |_| {});
+
+    let mut cmd = Command::new(lister);
+    if macos {
+        cmd.arg("-L");
+    }
+    let deps = cmd.arg(&out).output().expect("list dynamic dependencies");
+    let _ = std::fs::remove_file(&out);
+
+    assert_eq!(code, Some(0), "hello_world native binary did not run");
+    assert!(
+        deps.status.success(),
+        "`{lister}` failed: {}",
+        String::from_utf8_lossy(&deps.stderr)
+    );
+    // Match the library NAME, not the substring: every binary here links
+    // `libgcc_s.so.1`, which contains "libgc". A real hit is `libgc.` — `libgc.so.1`
+    // on Linux, `libgc.1.dylib` on macOS.
+    let listed = String::from_utf8_lossy(&deps.stdout);
+    let shared_gc = listed.split(|c: char| c.is_whitespace()).any(|token| {
+        token
+            .rsplit('/')
+            .next()
+            .is_some_and(|n| n.starts_with("libgc."))
+    });
+    assert!(
+        !shared_gc,
+        "produced binary still depends on a shared libgc (linker={linker}):\n{listed}"
+    );
+}

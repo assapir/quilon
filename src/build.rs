@@ -2,9 +2,9 @@
 //!
 //! Emits an object file directly from the in-process LLVM module via inkwell's
 //! `TargetMachine` (so no external `llc` is needed), then links it against the
-//! `libquilon_rt` static library + Boehm GC using the system C toolchain
-//! (`clang` by default, or `gcc`). Backs the `quilon build` subcommand and
-//! supersedes the old `scripts/aot.sh`.
+//! `libquilon_rt` static library — which carries the Boehm GC — using the system C
+//! toolchain (`clang` by default, or `gcc`). Backs the `quilon build` subcommand
+//! and supersedes the old `scripts/aot.sh`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -90,8 +90,9 @@ fn emit_object(
 /// the `quilon-rt` staticlib and bakes the compressed copy's path into
 /// `QUILON_RT_GZ`; embedding the archive makes a *distributed* `quilon` binary
 /// self-contained — `quilon build` works from a bare binary download, with no
-/// archive shipped alongside it (system libgc is still required, as documented
-/// in the README). Decompressed at most once per compiler version per machine:
+/// archive shipped alongside it, and since the archive carries the statically
+/// built Boehm GC, so is every binary it produces. Decompressed at most once per
+/// compiler version per machine:
 /// only when no system-provided archive exists and the cache misses.
 const QUILON_RT_ARCHIVE_GZ: &[u8] = include_bytes!(env!("QUILON_RT_GZ"));
 
@@ -198,7 +199,7 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
 }
 
 /// Build `program` into a native executable at `out`, linking with `linker`
-/// (`clang` or `gcc`) against `libquilon_rt` + Boehm GC.
+/// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC.
 pub fn build_native(
     program: &Program,
     types: TypeTable,
@@ -228,8 +229,11 @@ pub fn build_native(
         .arg("-Wl,--whole-archive")
         .arg(&rt_lib)
         .arg("-Wl,--no-whole-archive")
-        // System libs the Rust staticlib needs, alongside Boehm GC.
-        .args(["-lgc", "-lpthread", "-ldl", "-lm"])
+        // System libs the Rust staticlib needs. The Boehm GC is not among them:
+        // `quilon-rt`'s build script compiles it statically, so it is already
+        // inside the archive above — which is what makes a produced binary
+        // runnable on a machine with no libgc installed.
+        .args(["-lpthread", "-ldl", "-lm"])
         .arg("-o")
         .arg(out)
         .status()

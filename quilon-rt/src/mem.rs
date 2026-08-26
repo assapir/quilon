@@ -10,10 +10,10 @@
 use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 
-// Link the Boehm GC and tie it to these symbol references so the linker keeps
-// libgc for every target (binary, tests, JIT harness) regardless of `--as-needed`
-// ordering. libgc must be installed (`libgc-dev` / `gc`); CI installs it.
-#[link(name = "gc")]
+// The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
+// script and linked statically, so a compiled Quilon program carries its own
+// collector and needs no `libgc` installed where it runs.
+#[link(name = "gc", kind = "static")]
 unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut c_void;
     fn GC_init();

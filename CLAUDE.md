@@ -21,7 +21,7 @@ cargo bench              # both benchmark families (compile speed, and generated
 cargo test --test run_test   # one test file (e.g. the JIT exit-code tests)
 ```
 
-Requires **LLVM 22** (for `inkwell`) and the system's **dynamic `libgc`** (Boehm GC) installed; CI installs `llvm-22-dev libpolly-22-dev libgc-dev`. (A static/vendored GC is a post-0.9 goal.)
+Requires **LLVM 22** (for `inkwell`) and a C compiler; CI installs `llvm-22-dev libpolly-22-dev`. The Boehm GC is a **git submodule** (`quilon-rt/vendor/bdwgc`, pinned to a release tag) that `quilon-rt/build.rs` compiles via the `cc` crate and links statically, so there is no libgc to install and a binary `quilon build` produces runs on a machine that has none. Clone with `--recurse-submodules`, or run `git submodule update --init` — without it the build stops with that instruction.
 
 Two families, both reading **committed** corpora so every run measures the same programs,
 both printing tables and asserting nothing; CI publishes them to the job summary, where a
@@ -65,7 +65,7 @@ cargo run -- compile examples/hello_world.qn   # emit LLVM IR -> .ll (for inspec
 
 `quilon run` is implemented (in-process JIT). A program's `^` entry point return value is its exit code (e.g. `factorial(5)` → 120) — this is how most run tests verify behavior. (The exit code is the `^` body's `Num` value, or 0 if the body isn't a `Num`.)
 
-`quilon build` is a first-class Rust command (`src/build.rs`): it emits an object file in-process and links it with `libquilon_rt` (the runtime) and `libgc` into a native executable. `clang` is installed and is the **default** linker; `gcc` is also supported (CI checks both). There is no `scripts/aot.sh` and no manual `llc`/link step.
+`quilon build` is a first-class Rust command (`src/build.rs`): it emits an object file in-process and links it with `libquilon_rt` (the runtime, which carries the statically built GC) into a native executable. `clang` is installed and is the **default** linker; `gcc` is also supported (CI checks both). There is no `scripts/aot.sh` and no manual `llc`/link step.
 
 ```bash
 cargo run -- build examples/hello_world.qn -o hello       # default linker: clang
@@ -84,8 +84,8 @@ Classic multi-pass pipeline; `src/driver.rs::front_end` wires the passes for the
 3. **AST** — `src/ast/nodes.rs` — `Program { imports, items }`.
 4. **Type checker** — `src/typechecker/checker.rs` plus its per-area child modules (errors, env, overloads, sums, decls, exprs, calls, patterns). Inference, exhaustiveness, arity.
 5. **Code generator** — `src/codegen/generator.rs` plus its per-area child modules (arrays, calls, closures, decls, di, exprs, interpolation, intrinsics, mangle, matching, oracle, records, sums, tco, text) (`inkwell`, **LLVM 22**) → LLVM IR.
-6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting via `unicode-segmentation`, Boehm GC glue), packaged as `libquilon_rt`. Not stubs.
-7. **Native / JIT** — `quilon build` (`src/build.rs`) emits an object in-process and links `libquilon_rt` + `libgc`; `quilon run` uses an in-process JIT (`src/jit.rs`).
+6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting via `unicode-segmentation`, Boehm GC glue), packaged as `libquilon_rt` — which bundles the collector's object too, so the archive alone is a complete runtime. Not stubs.
+7. **Native / JIT** — `quilon build` (`src/build.rs`) emits an object in-process and links `libquilon_rt`; `quilon run` uses an in-process JIT (`src/jit.rs`).
 
 ## Things to know when changing the language
 

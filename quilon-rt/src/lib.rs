@@ -29,10 +29,11 @@
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
 //!
-//! Memory is managed by the Boehm conservative GC (libgc); the `#[link(name = "gc")]`
-//! binding lives in [`mem`]. libgc must be installed (`libgc-dev` / `gc`). When
-//! linking an AOT binary with gcc, pass `-lgc` explicitly (the `#[link]` directive
-//! only drives rustc's own links, not a downstream gcc invocation).
+//! Memory is managed by the Boehm conservative GC, compiled from the
+//! `vendor/bdwgc` submodule by this crate's build script and linked statically;
+//! the binding lives in [`mem`]. Because rustc bundles a static native library
+//! into a staticlib, the collector travels inside `libquilon_rt.a` — an AOT-linked
+//! Quilon binary needs no `libgc` on the machine that runs it.
 
 pub mod collections;
 pub mod deferred;

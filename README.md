@@ -42,17 +42,25 @@ The full list lives in **[LANGUAGE.md](./docs/LANGUAGE.md#design-principles)**.
 Install these **before** building or running Quilon:
 
 - **LLVM 22** — the compiler backend (via inkwell). Debian/Ubuntu: [apt.llvm.org](https://apt.llvm.org); Arch: `llvm`; macOS: `brew install llvm@22`.
-- **libgc (Boehm GC)** — the runtime GC. Needed to build the compiler, to `quilon run`, and at run time by `quilon build` binaries (dynamically linked), so it must be present wherever they run. Packages: `libgc-dev` (Debian/Ubuntu), `gc` (Arch), `bdw-gc` (Homebrew).
-- **A C toolchain** — `clang` (default) or `gcc`, used by `quilon build` to link the executable. Not needed for `quilon run`.
+- **A C toolchain** — `clang` (default) or `gcc`. Compiles the bundled Boehm GC when you build the compiler, and links the executable for `quilon build`.
 
-The `quilon` binary is otherwise **self-contained**: `libquilon_rt.a` is embedded in it (gzip-compressed, unpacked to `~/.cache/quilon` on first build), so `quilon build` works from a bare download.
+There is no libgc to install: the Boehm collector comes in as a git submodule (`quilon-rt/vendor/bdwgc`) and is linked statically. Clone with it, or fetch it after the fact:
+
+```bash
+git clone --recurse-submodules https://github.com/assapir/quilon.git
+git submodule update --init          # in a clone that already exists
+```
+
+A downloaded source tarball has no submodules — clone the repository instead.
+
+The `quilon` binary is **self-contained**: `libquilon_rt.a`, collector included, is embedded in it (gzip-compressed, unpacked to `~/.cache/quilon` on first build), so `quilon build` works from a bare download — and so is every binary it produces, which runs anywhere without installing anything.
 
 ## Build & run
 
 ```bash
 cargo build --release                        # binary at target/release/quilon
 ./target/release/quilon run   program.qn [args...]   # JIT-compile & execute (args pass through to the program, mirroring ./program args...)
-./target/release/quilon build program.qn     # build a native executable (links libquilon_rt + libgc)
+./target/release/quilon build program.qn     # build a native executable (links libquilon_rt, GC included)
 ./target/release/quilon build program.qn --debug   # + DWARF line info, local variables & types for gdb/lldb source-level debugging (alias -g)
 ./target/release/quilon check program.qn     # typecheck only
 ```
@@ -73,4 +81,4 @@ Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking c
 
 **Programs you compile are yours to license however you want.** The runtime (`quilon-rt`) is statically linked into every binary `quilon build` produces, but it ships **GPLv2 _with_ a Classpath-style runtime-library exception** ([LICENSE-EXCEPTION.md](./LICENSE-EXCEPTION.md) — the model GCC and OpenJDK use), which also covers the runtime boilerplate the compiler emits (such as the generated C-compatible `main()`). So your output may be any license, including proprietary. The exception frees only the combined output; forking `quilon-rt` itself stays GPLv2.
 
-Compiled binaries also link **libgc (the Boehm GC)**, a separate third-party dependency under its own permissive, MIT-style license.
+Compiled binaries also carry **libgc (the Boehm GC)**, statically linked from the `quilon-rt/vendor/bdwgc` submodule — a separate third-party work under its own permissive, MIT-style license.

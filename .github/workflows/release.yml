@@ -19,6 +19,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
+          # crate's build script compiles it from source.
+          submodules: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -26,9 +30,10 @@ jobs:
       - name: Install LLVM 22 and system dependencies
         run: |
           set -euxo pipefail
-          # Same toolchain as CI: Boehm GC + both C linkers, LLVM 22 dev libs.
+          # Same toolchain as CI: both C linkers and the LLVM 22 dev libs. The GC is
+          # vendored, so there is no libgc package to install.
           sudo apt-get update
-          sudo apt-get install -y libgc-dev gcc clang
+          sudo apt-get install -y gcc clang
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22

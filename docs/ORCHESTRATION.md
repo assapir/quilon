@@ -115,7 +115,8 @@ and **merge one at a time**, rebasing each subsequent PR onto the growing `main`
 
 Classic pipeline: **lexer** (`logos`) → hand-written recursive-descent **parser** → **AST** →
 **type checker** → **codegen** (`inkwell`/LLVM) → native (`llc`/linker) or in-process **JIT**.
-Whole-program compilation (modules merged into one program). Conservative Boehm GC (`-lgc`). A new
+Whole-program compilation (modules merged into one program). Conservative Boehm GC, built from the
+`quilon-rt/vendor/bdwgc` submodule and statically linked. A new
 language feature typically touches lexer → parser → AST → checker → codegen, in that order, with
 tests following `tokenize → parse → check → generate → run`. The checker records each expression's
 type into a side-table (the **type-oracle**) that codegen consumes — prefer extending that over

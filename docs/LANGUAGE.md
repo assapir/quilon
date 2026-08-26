@@ -935,7 +935,7 @@ compile-time error, reported by `check` as well as `run`/`build`.
 
 ## Memory
 
-Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, etc.) are GC-managed — there is no manual free. In 0.9 this is the system's **dynamic `libgc`** (a documented build- and run-time dependency); a statically-linked / vendored GC is a post-0.9 goal.
+Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, etc.) are GC-managed — there is no manual free. The collector is **linked statically** into every binary, so a compiled program carries its own GC and needs nothing installed to run.
 
 ---
 
@@ -1062,7 +1062,7 @@ quilon build   program.qn   # produce a native executable
 quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 ```
 
-`quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt` and the GC `libgc`) into a native executable:
+`quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt`, which carries the GC) into a native executable:
 ```bash
 quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
@@ -1212,6 +1212,6 @@ A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs
 4. **Type checker** — `src/typechecker/checker.rs` plus its per-area child modules.
 5. **Code generator** — `src/codegen/generator.rs` plus its per-area child modules (`inkwell`, LLVM 22) → LLVM IR.
 6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting, GC glue), packaged as `libquilon_rt`.
-7. **LLVM** — `quilon build` emits an object in-process and links `libquilon_rt` + `libgc` into a native binary; `quilon run` uses an in-process JIT.
+7. **LLVM** — `quilon build` emits an object in-process and links `libquilon_rt` into a native binary; `quilon run` uses an in-process JIT.
 
 See `CLAUDE.md` for contributor guidance.

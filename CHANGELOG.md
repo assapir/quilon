@@ -2,6 +2,34 @@
 
 All notable changes to Quilon are documented here.
 
+## Unreleased
+
+### Changed
+
+- **`quilon build` binaries are self-contained: the Boehm GC is linked statically
+  ([#49](https://github.com/assapir/quilon/issues/49)).** A compiled Quilon program used to
+  name `libgc.so` among its dynamic dependencies, so shipping it anywhere meant shipping —
+  or installing — libgc too. The collector now comes from a pinned `quilon-rt/vendor/bdwgc`
+  submodule (bdwgc 8.2.12), compiled by `quilon-rt`'s build script into a single object and
+  linked statically. Because rustc bundles a static native library into a staticlib, it
+  travels inside `libquilon_rt.a` — the archive the compiler already embeds and
+  cache-extracts — so the AOT link needed nothing new beyond dropping `-lgc`. A produced
+  binary now runs on a machine with no libgc installed, gated by
+  `tests/build_command_test.rs`, which asserts the product names no shared `libgc`.
+
+  libgc stops being a dependency anywhere: the `quilon` binary and `quilon run`'s in-process
+  JIT carry the same statically linked collector, so `libgc-dev` is gone from both workflows
+  and CI's green run is itself the proof that nothing needs installing. Clone with
+  `--recurse-submodules` (or `git submodule update --init`) — the build stops with exactly
+  that instruction when the submodule is absent, rather than a wall of compiler errors.
+
+  The collector is built with upstream's configure defaults for a threaded POSIX build, so
+  its behaviour is unchanged; `ALL_INTERIOR_POINTERS` is load bearing, since Quilon's
+  `Text`/array values are `{ ptr, len }` pairs whose pointer may be interior. Costs, measured
+  on x86_64: a compiled `hello_world` grows 202 KB (+3.1%) and the `quilon` binary 245 KB
+  (+2.8%). Runtime is flat to faster — `gc_churn` -6.0%, `text_loop` -7.1% — with peak RSS
+  unchanged.
+
 ## 0.9.2 "Hegemon" — 2026-08-24
 
 ### Added
