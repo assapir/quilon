@@ -268,6 +268,29 @@ impl TypeChecker {
         self_type: &Type,
         method: &crate::ast::MethodDeclaration,
     ) -> Result<(), TypeError> {
+        // The `%` hash hook is a UNARY member — `it` only, no right operand — that turns a
+        // value into a `Num` hash so its type can be a Map/Set key. It has no `.qn` call
+        // syntax; the collections invoke it directly. Its overload is `(Self) -> Num`.
+        if method.name == "%" && method.parameters.is_empty() {
+            let ret = method.return_type.as_ref().map(|t| self.resolve_type(t));
+            if ret != Some(Type::Num) {
+                let got = match &ret {
+                    Some(t) => crate::ast::type_label(t),
+                    None => "an unannotated return".to_string(),
+                };
+                return Err(TypeError::InvalidBuiltinArgument {
+                    message: format!("the `%` hash hook must return Num, but returns {got}"),
+                    span: method.span.clone(),
+                });
+            }
+            return self.finish_overload_registration(
+                &method.name,
+                &method.span,
+                vec![self_type.clone()],
+                ret,
+            );
+        }
+
         // A binary operator member takes exactly one explicit parameter (the right operand).
         if method.parameters.len() != 1 {
             return Err(TypeError::OperatorMemberArity {

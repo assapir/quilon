@@ -17,11 +17,36 @@
 use super::*;
 use inkwell::values::{BasicMetadataValueEnum, IntValue};
 
-/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `TAG_NUM`/`TAG_TEXT`
+/// The key-kind tags shared with the runtime ABI (`quilon-rt`'s `TAG_*`
 /// in `collections/common.rs`).
 const KEY_TAG_NUM: u64 = 0;
 const KEY_TAG_TEXT: u64 = 1;
 const KEY_TAG_BOOL: u64 = 2;
+const KEY_TAG_USER: u64 = 3;
+
+/// A key/element lowered to the runtime ABI: the triple `(tag, a, b)` of `i64`s plus the
+/// `%` hash and `==` function pointers a `TAG_USER` key hashes/compares through (both null
+/// for a built-in Num/Text/Bool key).
+struct KeyAbi<'ctx> {
+    tag: IntValue<'ctx>,
+    a: IntValue<'ctx>,
+    b: IntValue<'ctx>,
+    hash_fn: PointerValue<'ctx>,
+    eq_fn: PointerValue<'ctx>,
+}
+
+impl<'ctx> KeyAbi<'ctx> {
+    /// The five ABI words in order, for splicing into a runtime call's argument list.
+    fn arguments(&self) -> [BasicMetadataValueEnum<'ctx>; 5] {
+        [
+            self.tag.into(),
+            self.a.into(),
+            self.b.into(),
+            self.hash_fn.into(),
+            self.eq_fn.into(),
+        ]
+    }
+}
 
 impl<'ctx> CodeGenerator<'ctx> {
     /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then a persistent
@@ -39,13 +64,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let mut map = self.call_rt_ptr("__map_new", &[])?;
         for (key_expression, value_expression) in entries {
-            let (tag, ka, kb) = self.key_words(key_expression, &key_ty)?;
+            let key = self.key_abi(key_expression, &key_ty)?;
             let value = self.generate_expression(value_expression)?;
             let boxed = self.box_value(value, value_llvm)?;
-            map = self.call_rt_ptr(
-                "__map_set",
-                &[map.into(), tag.into(), ka.into(), kb.into(), boxed.into()],
-            )?;
+            let mut arguments = vec![map.into()];
+            arguments.extend(key.arguments());
+            arguments.push(boxed.into());
+            map = self.call_rt_ptr("__map_set", &arguments)?;
         }
         Ok(map.into())
     }
@@ -62,8 +87,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let mut set = self.call_rt_ptr("__set_new", &[])?;
         for elem in elements {
-            let (tag, a, b) = self.key_words(elem, &elem_ty)?;
-            set = self.call_rt_ptr("__set_add", &[set.into(), tag.into(), a.into(), b.into()])?;
+            let key = self.key_abi(elem, &elem_ty)?;
+            let mut arguments = vec![set.into()];
+            arguments.extend(key.arguments());
+            set = self.call_rt_ptr("__set_add", &arguments)?;
         }
         Ok(set.into())
     }
@@ -84,27 +111,27 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match method {
             "has" => {
-                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
-                let found =
-                    self.call_rt_int("__map_has", &[map.into(), tag.into(), ka.into(), kb.into()])?;
+                let key = self.key_abi(&arguments[1], &key_ty)?;
+                let mut call_arguments = vec![map.into()];
+                call_arguments.extend(key.arguments());
+                let found = self.call_rt_int("__map_has", &call_arguments)?;
                 self.int_to_bool(found, "rt_bool")
             }
             "set" => {
-                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
+                let key = self.key_abi(&arguments[1], &key_ty)?;
                 let value = self.generate_expression(&arguments[2])?;
                 let boxed = self.box_value(value, value_llvm)?;
-                let out = self.call_rt_ptr(
-                    "__map_set",
-                    &[map.into(), tag.into(), ka.into(), kb.into(), boxed.into()],
-                )?;
+                let mut call_arguments = vec![map.into()];
+                call_arguments.extend(key.arguments());
+                call_arguments.push(boxed.into());
+                let out = self.call_rt_ptr("__map_set", &call_arguments)?;
                 Ok(out.into())
             }
             "remove" => {
-                let (tag, ka, kb) = self.key_words(&arguments[1], &key_ty)?;
-                let out = self.call_rt_ptr(
-                    "__map_remove",
-                    &[map.into(), tag.into(), ka.into(), kb.into()],
-                )?;
+                let key = self.key_abi(&arguments[1], &key_ty)?;
+                let mut call_arguments = vec![map.into()];
+                call_arguments.extend(key.arguments());
+                let out = self.call_rt_ptr("__map_remove", &call_arguments)?;
                 Ok(out.into())
             }
             "get" => self.generate_map_get(map, &arguments[1], &key_ty, value_llvm),
@@ -127,19 +154,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         key_ty: &Type,
         value_llvm: BasicTypeEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (tag, ka, kb) = self.key_words(key_expression, key_ty)?;
+        let key = self.key_abi(key_expression, key_ty)?;
         let i64t = self.context.i64_type();
         let found_slot = self.create_entry_block_alloca("mget_found", i64t.into())?;
-        let boxed = self.call_rt_ptr(
-            "__map_get",
-            &[
-                map.into(),
-                tag.into(),
-                ka.into(),
-                kb.into(),
-                found_slot.into(),
-            ],
-        )?;
+        let mut call_arguments = vec![map.into()];
+        call_arguments.extend(key.arguments());
+        call_arguments.push(found_slot.into());
+        let boxed = self.call_rt_ptr("__map_get", &call_arguments)?;
         let found = self
             .builder
             .build_load(i64t, found_slot, "mget_found_v")
@@ -259,23 +280,24 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match method {
             "has" => {
-                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
-                let found =
-                    self.call_rt_int("__set_has", &[set.into(), tag.into(), a.into(), b.into()])?;
+                let key = self.key_abi(&arguments[1], &elem_ty)?;
+                let mut call_arguments = vec![set.into()];
+                call_arguments.extend(key.arguments());
+                let found = self.call_rt_int("__set_has", &call_arguments)?;
                 self.int_to_bool(found, "rt_bool")
             }
             "add" => {
-                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
-                let out =
-                    self.call_rt_ptr("__set_add", &[set.into(), tag.into(), a.into(), b.into()])?;
+                let key = self.key_abi(&arguments[1], &elem_ty)?;
+                let mut call_arguments = vec![set.into()];
+                call_arguments.extend(key.arguments());
+                let out = self.call_rt_ptr("__set_add", &call_arguments)?;
                 Ok(out.into())
             }
             "remove" => {
-                let (tag, a, b) = self.key_words(&arguments[1], &elem_ty)?;
-                let out = self.call_rt_ptr(
-                    "__set_remove",
-                    &[set.into(), tag.into(), a.into(), b.into()],
-                )?;
+                let key = self.key_abi(&arguments[1], &elem_ty)?;
+                let mut call_arguments = vec![set.into()];
+                call_arguments.extend(key.arguments());
+                let out = self.call_rt_ptr("__set_remove", &call_arguments)?;
                 Ok(out.into())
             }
             "items" => self.build_items_array(set, &elem_ty),
@@ -367,13 +389,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(out.into())
     }
 
-    /// Lower a key/element expression to the runtime ABI triple `(tag, a, b)` of `i64`s.
-    fn key_words(
+    /// Lower a key/element expression to the runtime ABI: the triple `(tag, a, b)` plus the
+    /// `%`/`==` function pointers (null for a built-in key). A user key type boxes its value
+    /// on the GC heap and passes the box pointer as `a`, so the runtime hashes/compares it
+    /// through the type's monomorphized `%`/`==` via those pointers.
+    fn key_abi(
         &mut self,
         key_expression: &Expression,
         key_ty: &Type,
-    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>), String> {
+    ) -> Result<KeyAbi<'ctx>, String> {
         let i64t = self.context.i64_type();
+        let null = self.context.ptr_type(AddressSpace::default()).const_null();
         let value = self.generate_expression(key_expression)?;
         match key_ty {
             Type::Num => {
@@ -382,14 +408,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_bit_cast(value.into_float_value(), i64t, "key_num_bits")
                     .map_err(ctx("Failed to bitcast Num key"))?
                     .into_int_value();
-                Ok((i64t.const_int(KEY_TAG_NUM, false), bits, i64t.const_zero()))
+                Ok(KeyAbi {
+                    tag: i64t.const_int(KEY_TAG_NUM, false),
+                    a: bits,
+                    b: i64t.const_zero(),
+                    hash_fn: null,
+                    eq_fn: null,
+                })
             }
             Type::Bool => {
                 let ext = self
                     .builder
                     .build_int_z_extend(value.into_int_value(), i64t, "key_bool")
                     .map_err(ctx("Failed to extend Bool key"))?;
-                Ok((i64t.const_int(KEY_TAG_BOOL, false), ext, i64t.const_zero()))
+                Ok(KeyAbi {
+                    tag: i64t.const_int(KEY_TAG_BOOL, false),
+                    a: ext,
+                    b: i64t.const_zero(),
+                    hash_fn: null,
+                    eq_fn: null,
+                })
             }
             Type::Text => {
                 let s = value.into_struct_value();
@@ -407,7 +445,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .builder
                     .build_ptr_to_int(data, i64t, "key_text_addr")
                     .map_err(ctx("Failed to ptrtoint Text key"))?;
-                Ok((i64t.const_int(KEY_TAG_TEXT, false), data_int, len))
+                Ok(KeyAbi {
+                    tag: i64t.const_int(KEY_TAG_TEXT, false),
+                    a: data_int,
+                    b: len,
+                    hash_fn: null,
+                    eq_fn: null,
+                })
+            }
+            Type::Named { name, .. } | Type::Sum { name, .. } => {
+                let value_llvm = self.value_repr_type(key_ty)?;
+                let boxed = self.box_value(value, value_llvm)?;
+                let addr = self
+                    .builder
+                    .build_ptr_to_int(boxed, i64t, "key_user_addr")
+                    .map_err(ctx("Failed to ptrtoint user key"))?;
+                let (hash_fn, eq_fn) = self.user_key_trampolines(name)?;
+                Ok(KeyAbi {
+                    tag: i64t.const_int(KEY_TAG_USER, false),
+                    a: addr,
+                    b: i64t.const_zero(),
+                    hash_fn,
+                    eq_fn,
+                })
             }
             other => Err(format!(
                 "unsupported map/set key type: {}",
@@ -417,7 +477,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Reconstruct a key/element value (in its value representation) from the runtime ABI
-    /// words `a`/`b` produced by `key_words`.
+    /// words `a`/`b` produced by `key_abi`.
     fn key_from_words(
         &mut self,
         a: IntValue<'ctx>,
@@ -434,6 +494,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_int_truncate(a, self.context.bool_type(), "key_bool")
                 .map_err(ctx("Failed to truncate Bool key"))?
                 .into()),
+            Type::Named { .. } | Type::Sum { .. } => {
+                // `a` is the boxed-key pointer; load the value at its representation (a
+                // record's by-pointer, a sum's by-value struct).
+                let value_llvm = self.value_repr_type(key_ty)?;
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(
+                        a,
+                        self.context.ptr_type(AddressSpace::default()),
+                        "key_user_box",
+                    )
+                    .map_err(ctx("Failed to inttoptr user key"))?;
+                self.builder
+                    .build_load(value_llvm, box_ptr, "key_user")
+                    .map_err(ctx("Failed to load user key"))
+            }
             Type::Text => {
                 let ptr = self
                     .builder
@@ -461,6 +537,131 @@ impl<'ctx> CodeGenerator<'ctx> {
                 crate::ast::type_label(other)
             )),
         }
+    }
+
+    /// The `%` hash and `==` function pointers a user key type crosses the runtime ABI
+    /// with, emitting the per-type trampolines once and reusing them thereafter.
+    fn user_key_trampolines(
+        &mut self,
+        type_name: &str,
+    ) -> Result<(PointerValue<'ctx>, PointerValue<'ctx>), String> {
+        let hash_name = format!("__keyhash_{type_name}");
+        let eq_name = format!("__keyeq_{type_name}");
+        if self.module.get_function(&hash_name).is_none() {
+            self.emit_key_trampolines(type_name, &hash_name, &eq_name)?;
+        }
+        let hash_fn = self
+            .module
+            .get_function(&hash_name)
+            .unwrap()
+            .as_global_value()
+            .as_pointer_value();
+        let eq_fn = self
+            .module
+            .get_function(&eq_name)
+            .unwrap()
+            .as_global_value()
+            .as_pointer_value();
+        Ok((hash_fn, eq_fn))
+    }
+
+    /// Emit the two trampolines a user key type `K` is hashed/compared through: `keyhash`
+    /// loads the boxed key and returns its `%` `Num` hash; `keyeq` loads two boxed keys and
+    /// returns `K`'s `==` as an `i64` (normalizing the member's `Bool`/`i1` across the C ABI).
+    /// Both call the monomorphized operator members `#178` emits for `K`.
+    fn emit_key_trampolines(
+        &mut self,
+        type_name: &str,
+        hash_name: &str,
+        eq_name: &str,
+    ) -> Result<(), String> {
+        use inkwell::values::AnyValue;
+
+        let named = Type::named_ref(type_name);
+        let value_llvm = self.value_repr_type(&named)?;
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        let f64t = self.context.f64_type();
+        let i64t = self.context.i64_type();
+
+        let hash_symbol = mangle_overload("%", &[named.clone()]);
+        let hash_member = self.module.get_function(&hash_symbol).ok_or_else(|| {
+            format!("key type {type_name} has no `%` hash member ({hash_symbol}) emitted")
+        })?;
+        let eq_symbol = mangle_overload("==", &[named.clone(), named.clone()]);
+        let eq_member = self.module.get_function(&eq_symbol).ok_or_else(|| {
+            format!("key type {type_name} has no `==` member ({eq_symbol}) emitted")
+        })?;
+
+        // Emitting fresh functions mid-stream: save and restore the enclosing builder
+        // position and debug location so the surrounding function body resumes intact.
+        let saved_block = self.builder.get_insert_block();
+        let saved_function = self.current_function;
+        let saved_loc = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+
+        let hash_fn = self
+            .module
+            .add_function(hash_name, f64t.fn_type(&[ptr.into()], false), None);
+        hash_fn.set_linkage(inkwell::module::Linkage::Internal);
+        self.current_function = Some(hash_fn);
+        let entry = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry);
+        let box_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let it = self
+            .builder
+            .build_load(value_llvm, box_ptr, "it")
+            .map_err(ctx("Failed to load boxed key"))?;
+        let hashed = self
+            .builder
+            .build_call(hash_member, &[it.into()], "keyhash")
+            .map_err(ctx("Failed to call `%` member"))?
+            .as_any_value_enum()
+            .into_float_value();
+        self.builder
+            .build_return(Some(&hashed))
+            .map_err(ctx("Failed to return key hash"))?;
+
+        let eq_fn = self.module.add_function(
+            eq_name,
+            i64t.fn_type(&[ptr.into(), ptr.into()], false),
+            None,
+        );
+        eq_fn.set_linkage(inkwell::module::Linkage::Internal);
+        self.current_function = Some(eq_fn);
+        let entry = self.context.append_basic_block(eq_fn, "entry");
+        self.builder.position_at_end(entry);
+        let left_box = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let right_box = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let left = self
+            .builder
+            .build_load(value_llvm, left_box, "left")
+            .map_err(ctx("Failed to load left key"))?;
+        let right = self
+            .builder
+            .build_load(value_llvm, right_box, "right")
+            .map_err(ctx("Failed to load right key"))?;
+        let equal = self
+            .builder
+            .build_call(eq_member, &[left.into(), right.into()], "keyeq")
+            .map_err(ctx("Failed to call `==` member"))?
+            .as_any_value_enum()
+            .into_int_value();
+        let widened = self
+            .builder
+            .build_int_z_extend(equal, i64t, "keyeq64")
+            .map_err(ctx("Failed to widen key equality"))?;
+        self.builder
+            .build_return(Some(&widened))
+            .map_err(ctx("Failed to return key equality"))?;
+
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Ok(())
     }
 
     /// GC-allocate a box holding one value and store `value` into it; returns the box

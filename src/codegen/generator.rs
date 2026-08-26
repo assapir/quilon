@@ -522,20 +522,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             if let Item::TypeDeclaration(declaration) = item {
                 let self_type = Type::named_ref(&declaration.name);
                 for method in declaration.type_definition.methods() {
-                    if is_operator_symbol(&method.name) && method.parameters.len() == 1 {
-                        let parameters = vec![
+                    if !is_operator_symbol(&method.name) {
+                        continue;
+                    }
+                    // The `%` hash hook is a UNARY member (`it` only) whose overload takes
+                    // just the receiver; every other operator member is binary (`it` + one
+                    // explicit right operand).
+                    let parameters = if method.name == "%" && method.parameters.is_empty() {
+                        vec![self_type.clone()]
+                    } else if method.parameters.len() == 1 {
+                        vec![
                             self_type.clone(),
                             method.parameters[0]
                                 .type_annotation
                                 .clone()
                                 .unwrap_or(Type::Num),
-                        ];
-                        let ret = method.return_type.clone().unwrap_or(Type::Num);
-                        self.overloads
-                            .entry(method.name.clone())
-                            .or_default()
-                            .push((parameters, ret));
-                    }
+                        ]
+                    } else {
+                        continue;
+                    };
+                    let ret = method.return_type.clone().unwrap_or(Type::Num);
+                    self.overloads
+                        .entry(method.name.clone())
+                        .or_default()
+                        .push((parameters, ret));
                 }
             }
         }

@@ -547,11 +547,65 @@ impl TypeChecker {
         Ok(Type::Record(merged))
     }
 
-    /// Whether `ty` may be used as a Map/Set key. In this release the built-in hashable
-    /// types are `Num`, `Text` (hashed by content), and `Bool`. User-defined key types
-    /// (via a `%` hash hook) are not yet supported.
-    pub(super) fn is_hashable_key(ty: &Type) -> bool {
-        matches!(ty, Type::Num | Type::Text | Type::Bool)
+    /// Verify `ty` may be used as a Map/Set key. The built-in hashable types are `Num`,
+    /// `Text` (hashed by content), and `Bool`. A user type qualifies when it defines BOTH a
+    /// `%` hash hook and an `==` member — defining only one is a compile error (equal keys
+    /// that hash apart, or distinct keys forced equal, would corrupt the table).
+    pub(super) fn check_key_type(&self, ty: &Type, span: &Span) -> Result<(), TypeError> {
+        if matches!(ty, Type::Num | Type::Text | Type::Bool) {
+            return Ok(());
+        }
+        if let Some((name, has_hash, has_equality)) = self.key_type_operators(ty) {
+            match (has_hash, has_equality) {
+                (true, true) => return Ok(()),
+                (true, false) => {
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: format!(
+                            "type {name} is used as a Map/Set key and defines a `%` hash hook \
+                             but no `==` member; a key type needs both",
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                (false, true) => {
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: format!(
+                            "type {name} is used as a Map/Set key and defines an `==` member \
+                             but no `%` hash hook; a key type needs both",
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                (false, false) => {}
+            }
+        }
+        Err(TypeError::InvalidBuiltinArgument {
+            message: format!(
+                "a Map/Set key must be Num, Text, Bool, or a type defining both a `%` hash \
+                 hook and an `==` member, got {}",
+                crate::ast::type_label(ty)
+            ),
+            span: span.clone(),
+        })
+    }
+
+    /// For a user type, its name and whether it defines a `%` hash hook and an `==` member.
+    /// A record carries its member names inline; a sum's are looked up in the method registry
+    /// (both are populated by the time a later key site is checked — names resolve top down).
+    fn key_type_operators(&self, ty: &Type) -> Option<(String, bool, bool)> {
+        let has = |name: &str, member: &str| {
+            self.methods
+                .contains_key(&(name.to_string(), member.to_string()))
+        };
+        match ty {
+            Type::Named { name, methods, .. } => Some((
+                name.clone(),
+                methods.iter().any(|m| m == "%") || has(name, "%"),
+                methods.iter().any(|m| m == "==") || has(name, "=="),
+            )),
+            Type::Sum { name, .. } => Some((name.clone(), has(name, "%"), has(name, "=="))),
+            _ => None,
+        }
     }
 
     /// Infer a map literal `[|k1 => v1, ...|]` as `Map(K, V)`. Every key must share one
@@ -566,15 +620,7 @@ impl TypeChecker {
         let mut value_type: Option<Type> = None;
         for (key, value) in entries {
             let k = self.infer_expression(key)?;
-            if !Self::is_hashable_key(&k) {
-                return Err(TypeError::InvalidBuiltinArgument {
-                    message: format!(
-                        "map key must be a hashable type (Num, Text, or Bool), got {}",
-                        crate::ast::type_label(&k)
-                    ),
-                    span: key.span().clone(),
-                });
-            }
+            self.check_key_type(&k, key.span())?;
             let v = self.infer_expression(value)?;
             match &key_type {
                 None => key_type = Some(k),
@@ -601,15 +647,7 @@ impl TypeChecker {
         let mut elem_type: Option<Type> = None;
         for elem in elements {
             let t = self.infer_expression(elem)?;
-            if !Self::is_hashable_key(&t) {
-                return Err(TypeError::InvalidBuiltinArgument {
-                    message: format!(
-                        "set element must be a hashable type (Num, Text, or Bool), got {}",
-                        crate::ast::type_label(&t)
-                    ),
-                    span: elem.span().clone(),
-                });
-            }
+            self.check_key_type(&t, elem.span())?;
             match &elem_type {
                 None => elem_type = Some(t),
                 Some(first) => self.check_type_compatibility(first, &t, span)?,
