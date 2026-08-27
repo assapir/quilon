@@ -26,19 +26,6 @@ All notable changes to Quilon are documented here.
   are read leniently (HTTP/1.0 or 1.1, CRLF or bare LF) and the close, not `Content-Length`,
   delimits the body. See `docs/corelib/http.md`.
 
-- **An import the erased `describe` blocks were the only user of reaches no build.** A
-  file's test blocks are compiled by `quilon test` alone; `check`, `compile`, `build` and
-  `run` erase them, and with them every reference the harness had. An item nothing in the
-  compilation unit reaches is not emitted, so `<< core.test` beside a program's own code
-  costs that program's build nothing and needs no marker of its own:
-
-  ```quilon ignore
-  << core.io      ~ the program uses this
-  << core.test    ~ only the blocks use this
-  ```
-
-  See `docs/corelib/test/README.md`.
-
 ### Changed
 
 - **`>` closes a block by default; it is greater-than only when an operand follows it.**
@@ -149,6 +136,11 @@ All notable changes to Quilon are documented here.
   program that declared a type with a method. A bare `it` is no longer
   a mention; an `it` in callee position — the callee of a call, or the right side of a `|>`,
   which desugars to one — still is, since that is where it can name a top-level function.
+
+  With that, an import the erased `describe` blocks were the only user of reaches no build
+  on its own: `check`, `compile`, `build` and `run` erase the blocks and with them every
+  reference the harness had, and a function nothing reaches is not emitted. So `<< core.test`
+  beside a program's own code costs that program's build nothing, and needs no marker.
 
 - **`print` writes the whole `Text`, and renders it deliberately
   ([#220](https://github.com/assapir/quilon/issues/220)).** `print`/`eprint` took only a

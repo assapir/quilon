@@ -7,7 +7,7 @@
 //! The report names the failing call's own `file:line:column` and underlines it, wherever the
 //! call sits — inside a helper, or inside an imported module. Those are the cases under
 //! "Call-site reporting" below. `expect`, the recorded half of the same vocabulary, is
-//! covered by `tests/test_harness_test.rs`, where there is a reporter to record into.
+//! covered by `tests/test_harness_test.rs`, where there is a run to record into.
 //!
 //! Every case is driven as a SUBPROCESS — `quilon run <file>` (in-process JIT) and, where a
 //! linker is present, `quilon build` + execute (native AOT). It must never be the in-process

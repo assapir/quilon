@@ -183,7 +183,7 @@ pub struct BuiltinOverload {
 /// these names ADDS a member to its set rather than shadowing the built-in, and dispatch
 /// picks by exact argument types like any other set.
 ///
-/// The `__`-prefixed entries are internal primitives (`core.test`'s harness and reporter
+/// The `__`-prefixed entries are internal primitives (`core.test`'s harness and report
 /// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
 /// all the same, so the one rule covers them too.
 ///
@@ -253,7 +253,7 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     // `describe` group, each yielding the resulting nesting depth; read that depth without
     // moving it; ask whether the running case has already failed; close a case, yielding the
     // depth to indent it at; and read the two totals back for the summary. `core.test` wraps
-    // the three read-only ones as named `.qn` functions, which is the reporter's API.
+    // the three read-only ones as named `.qn` functions, which is what a case reads.
     BuiltinOverload {
         name: "__test_suite_enter",
         parameters: &[],
@@ -334,8 +334,8 @@ const TEST_REGISTRY_PREFIX: &str = "__test_";
 
 /// Whether `name` is one of the test registry's primitives — the event sink behind
 /// `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above. The
-/// registry counts and nests; it renders nothing, so a reporter is free to render however it
-/// likes (see `docs/corelib/test.md`).
+/// registry counts and nests; it renders nothing, so the rendering is `core.test`'s to do
+/// (see `docs/corelib/test/README.md`).
 ///
 /// Every one takes no arguments and yields a `Num`, which is what lets codegen lower the
 /// whole family through this one predicate. `__`-prefixed and exported by no module for the

@@ -3,8 +3,7 @@
 ~ blocks — every other command erases them, so the line one case prints below reaches no
 ~ build, and `quilon test` in turn ignores the `^` and runs the blocks instead.
 ~
-~ `core.test` needs no marker of its own: with the blocks gone nothing names `describe` or
-~ `it` any more, so the harness is shaken out of the build along with them.
+~ The harness needs no marker of its own: it follows the blocks that name it.
 ~
 ~ Run: cargo run -- run  examples/tests_alongside_code.qn    ~ prints the program's line only
 ~ Run: cargo run -- test examples/tests_alongside_code.qn    ~ runs the cases instead

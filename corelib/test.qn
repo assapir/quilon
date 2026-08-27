@@ -6,10 +6,6 @@
 ~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
 ~   it(name, body)        one case, reported once it has run.
 ~
-~   describe("trimming", () => <
-~     it("drops both ends", () => expect("  x  ".trim(), equals("x")))
-~   >)
-~
 ~ ── Assertions ─────────────────────────────────────────────────────────────────────
 ~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
 ~ defined here. Both take the value under test and a matcher:
@@ -99,9 +95,9 @@
 >> finishCase = () -> Num => __test_case_finish()
 
 ~ ── The harness ────────────────────────────────────────────────────────────────────
-~ The output is fixed. Its two ANSI wraps and its two-space indent are written out at each
-~ site below rather than shared through helpers, because a name a program never calls has
-~ no business in the scope `<< core.test` merges.
+~ The output is fixed, and written out at each site below rather than shared through
+~ helpers: `<< core.test` merges every exported name into the importer's scope, and one no
+~ program calls is a word taken for nothing.
 
 ~ A group of cases, nestable. `body` runs immediately; the group is only there to name and
 ~ indent what it contains.
@@ -122,9 +118,9 @@
   failed = caseFailing()
   depth = finishCase()
   lead = "  ".repeat(depth)
-  mark = failed
-    ? (__color_enabled(stdout) ? "\e[31m✗\e[0m" : "✗")
-    : (__color_enabled(stdout) ? "\e[32m✓\e[0m" : "✓")
+  glyph = failed ? "✗" : "✓"
+  color = failed ? "31" : "32"
+  mark = __color_enabled(stdout) ? "\e[`color`m`glyph`\e[0m" : glyph
   print("`lead``mark` `name`")
 >
 
@@ -134,9 +130,8 @@
 >> reportSummary = () -> Num => <
   failed = casesFailed()
   tally = "`casesPassed()` passed, `failed` failed"
+  color = failed == 0 ? "32" : "31"
   print("")
-  print(failed == 0
-    ? (__color_enabled(stdout) ? "\e[32m`tally`\e[0m" : tally)
-    : (__color_enabled(stdout) ? "\e[31m`tally`\e[0m" : tally))
+  print(__color_enabled(stdout) ? "\e[`color`m`tally`\e[0m" : tally)
   failed == 0 ? 0 : 1
 >

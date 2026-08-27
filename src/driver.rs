@@ -91,10 +91,6 @@ pub struct Checked {
 
 /// What the front end does with a file's top-level `describe` blocks (see
 /// [`ast::TEST_BLOCK_MARKER`]).
-///
-/// An import that exists only to serve those blocks needs no marker of its own: erasing the
-/// blocks leaves nothing referencing what it brought in, and the reachability pass then keeps
-/// none of it out of the emitted program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestBlocks {
     /// Leave them out of the compilation unit. `check`, `compile`, `build`, and `run` all
@@ -107,13 +103,13 @@ pub enum TestBlocks {
 }
 
 /// The function the synthesized test entry point ends with: it renders the run's summary and
-/// yields the run's status. Bound by NAME, in the linked program's scope, which is
-/// `core.test`'s definition.
-pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
+/// yields the run's status. Bound by NAME in the linked program's scope, where `core.test`'s
+/// definition answers.
+const SUMMARY_FUNCTION: &str = "reportSummary";
 
-/// The module carrying the harness, named in the diagnostic a suite gets when its summary
+/// The module carrying the harness, named in the diagnostic a suite gets when the summary
 /// function is not in scope at all.
-pub const DEFAULT_REPORTER_MODULE: &str = "core.test";
+const HARNESS_MODULE: &str = "core.test";
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, leaving its test blocks out (see [`TestBlocks`]).
@@ -242,8 +238,8 @@ fn names_entry_point(item: &ast::Item) -> bool {
 /// guarantees.
 #[derive(Clone, Copy)]
 enum Synthesized {
-    ReporterName,
-    ReporterCall,
+    SummaryName,
+    SummaryCall,
     EntryBody,
     EntryDeclaration,
 }
@@ -268,23 +264,23 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
     // The summary function has to be in scope, since the entry ends by calling it. Said here,
     // at the first test block, rather than by the type checker at the synthesized call — which
     // has no source location to point a diagnostic at.
-    if !defines_function(program, REPORTER_SUMMARY_FUNCTION) {
+    if !defines_function(program, SUMMARY_FUNCTION) {
         return Err((
             first_block.span().clone(),
             format!(
-                "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
-                 Add `<< {DEFAULT_REPORTER_MODULE}`"
+                "no test harness in scope: `{SUMMARY_FUNCTION}` is undefined. \
+                 Add `<< {HARNESS_MODULE}`"
             ),
         ));
     }
 
     let summary = ast::Expression::Call {
         function: Box::new(ast::Expression::Identifier {
-            name: REPORTER_SUMMARY_FUNCTION.to_string(),
-            span: synthesized_span(Synthesized::ReporterName),
+            name: SUMMARY_FUNCTION.to_string(),
+            span: synthesized_span(Synthesized::SummaryName),
         }),
         arguments: Vec::new(),
-        span: synthesized_span(Synthesized::ReporterCall),
+        span: synthesized_span(Synthesized::SummaryCall),
     };
     let statements = program
         .test_blocks

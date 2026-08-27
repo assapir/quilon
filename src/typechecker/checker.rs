@@ -69,7 +69,7 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
-    /// `expect` outside a `describe` block, where there is no reporter to record into.
+    /// `expect` outside a `describe` block, where there is no run to record into.
     ExpectOutsideTest {
         span: Span,
     },

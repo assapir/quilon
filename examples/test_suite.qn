@@ -14,7 +14,7 @@ describe("Text", () => <
   it("finds a part", () => expect("haystack", contains("stack")))
   it("counts graphemes, not bytes", () => expect("héllo".length, equals(5)))
 
-  ~ `describe` nests: the reporter indents by depth.
+  ~ `describe` nests: the report indents by depth.
   describe("splitting", () => <
     it("splits on a separator", () => expect("a,b,c".split(","), contains("b")))
     it("keeps the whole text when the separator is absent", () =>
@@ -33,7 +33,7 @@ describe("Result", () => <
   it("is NotOk out of bounds", () => expect([10, 20].at(9), isNotOk()))
 >)
 
-~ The run's own state, as the reporter reads it — see docs/corelib/test.md.
+~ The run's own state, as the harness reads it — see docs/corelib/test/README.md.
 describe("the run", () => <
   it("knows the group it is in", () => expect(nestingDepth(), equals(1)))
   it("has counted every case that closed", () => expect(casesFailed(), equals(0)))

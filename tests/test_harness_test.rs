@@ -169,23 +169,30 @@ fn a_describe_definition_is_still_an_ordinary_item() {
 
 /// What `core.test` defines, none of which may reach a build: the harness, the summary it
 /// ends with, and the state and lifecycle behind them.
-const HARNESS_SYMBOLS: [&str; 8] = [
+const HARNESS_SYMBOLS: [&str; 11] = [
     "describe",
     "@it(",
     "report",
+    "failAt",
     "enterSuite",
     "leaveSuite",
     "casesPassed",
+    "casesFailed",
+    "nestingDepth",
     "caseFailing",
     "finishCase",
 ];
 
+/// The `define` lines of an emitted `.ll` — what a build kept, by name and by count.
+fn defined_functions(ir: &str) -> Vec<&str> {
+    ir.lines()
+        .filter(|line| line.starts_with("define"))
+        .collect()
+}
+
 /// Assert that `ir` defines none of [`HARNESS_SYMBOLS`]; `what` names the build for the report.
 fn assert_no_harness_emitted(ir: &str, what: &str) {
-    let defined: Vec<&str> = ir
-        .lines()
-        .filter(|line| line.starts_with("define"))
-        .collect();
+    let defined = defined_functions(ir);
     for absent in HARNESS_SYMBOLS {
         assert!(
             !defined.iter().any(|line| line.contains(absent)),
@@ -331,10 +338,9 @@ fn an_import_only_the_blocks_used_reaches_no_build() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The same file, counted rather than named: with the blocks erased the emitted functions are
-/// the program's own and the C `main` wrapper, and nothing else. Naming the harness from
-/// ORDINARY code is the control — every item it contributes is emitted then, which is what
-/// makes the erased count a measurement and not an accident of the module being small.
+/// The same file, counted rather than named. Naming the harness from ORDINARY code is the
+/// control: every item it contributes is emitted then, which is what makes the erased build's
+/// smaller count a measurement rather than an accident of the module being small.
 #[test]
 fn the_shaken_build_emits_only_the_programs_own_functions() {
     let dir = work_dir("shaken_count");
@@ -342,7 +348,8 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
     let erased = write(&dir, "erased.qn", TESTS_BESIDE_CODE_SUITE);
     let compile = quilon(&["compile", erased.to_str().unwrap()]);
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
-    let shaken = defined_functions(&erased.with_extension("ll"));
+    let erased_ir = std::fs::read_to_string(erased.with_extension("ll")).expect("the erased IR");
+    let shaken = defined_functions(&erased_ir);
 
     let referenced = write(
         &dir,
@@ -361,12 +368,29 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
     );
     let compile = quilon(&["compile", referenced.to_str().unwrap()]);
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
-    let kept = defined_functions(&referenced.with_extension("ll"));
+    let control_ir =
+        std::fs::read_to_string(referenced.with_extension("ll")).expect("the control IR");
+    let kept = defined_functions(&control_ir);
 
+    // The control names the harness from ordinary code, so the three it calls are emitted
+    // along with the lifecycle behind them: the same source with those calls inside `describe`
+    // blocks emits none of it. (`failAt` and `nestingDepth` are in [`HARNESS_SYMBOLS`] because
+    // no build may leak them, but nothing in the harness itself reaches them.)
+    for present in [
+        "describe",
+        "@it(",
+        "reportSummary",
+        "enterSuite",
+        "finishCase",
+    ] {
+        assert!(
+            kept.iter().any(|line| line.contains(present)),
+            "the control must emit `{present}`, or it measures nothing:\n{kept:#?}"
+        );
+    }
     assert!(
-        kept.len() > shaken.len() + 5,
-        "the control must emit the harness it names, so the two counts differ:\n\
-         erased: {shaken:#?}\nreferenced: {kept:#?}"
+        shaken.len() < kept.len(),
+        "erasing the blocks must shrink the build:\n         erased: {shaken:#?}\ncontrol: {kept:#?}"
     );
     for own in ["@double(", "@\"^\"(", "@main("] {
         assert!(
@@ -375,16 +399,6 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
         );
     }
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The `define` lines of an emitted `.ll`, for counting what a build kept.
-fn defined_functions(ir: &Path) -> Vec<String> {
-    std::fs::read_to_string(ir)
-        .expect("read the emitted IR")
-        .lines()
-        .filter(|line| line.starts_with("define"))
-        .map(str::to_string)
-        .collect()
 }
 
 /// The names `core.test` no longer exports, asserted where a user meets them: a program that
@@ -432,24 +446,58 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The same rule at the module layer: `<< core.http` contributes none of the names the
-/// harness stopped exporting, so nothing can collide with a program's own.
+/// The names `<< core.http` puts in a program's scope, pinned EXACTLY rather than as a list of
+/// absences — the five the harness stopped exporting no longer exist anywhere, so asserting
+/// they are absent could never fail.
+///
+/// `corelib/http.qn` needs the harness for its own cases and imports it with a plain `<<`, so
+/// the resolver walks into `core.test` (and `core.io` behind it) and merges what they export.
+/// That is the accepted cost of dropping the test-only marker: a program importing the client
+/// cannot also define a `describe` or a `failAt` of its own. What it CAN define is everything
+/// the report was inlined out of, which is the shrink this asserts the other half of.
 #[test]
-fn importing_core_http_contributes_no_report_internals() {
+fn importing_core_http_contributes_exactly_this_surface() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     let (items, _sources) =
         quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
-    let contributed: Vec<&str> = items.iter().map(Item::name).collect();
-    for absent in ["green", "red", "indent", "reportSuite", "reportCase"] {
-        assert!(
-            !contributed.contains(&absent),
-            "`<< core.http` must not contribute `{absent}`: {contributed:?}"
-        );
-    }
-    assert!(
-        contributed.contains(&"Request"),
-        "the client itself must still arrive: {contributed:?}"
+    let mut contributed: Vec<&str> = items.iter().map(Item::name).collect();
+    contributed.sort_unstable();
+
+    let mut expected = vec![
+        // core.io, behind the harness.
+        "stdout",
+        "stderr",
+        "print",
+        "eprint",
+        "write",
+        "@readStdin",
+        // core.test: the harness, the summary, the state and the lifecycle. NOT `indent`,
+        // `green`, `red`, `reportSuite` or `reportCase` — those are inlined into the three
+        // functions above them and export no name.
+        "failAt",
+        "casesPassed",
+        "casesFailed",
+        "nestingDepth",
+        "enterSuite",
+        "leaveSuite",
+        "caseFailing",
+        "finishCase",
+        "describe",
+        "it",
+        "reportSummary",
+        // core.net, and the client itself.
+        "@tcpRequest",
+        "Body",
+        "Method",
+        "Response",
+        "Request",
+    ];
+    expected.sort_unstable();
+
+    assert_eq!(
+        contributed, expected,
+        "`<< core.http` merges a different set of names than this pins"
     );
 }
 
@@ -866,7 +914,7 @@ fn a_suite_without_a_harness_is_reported_at_its_own_describe() {
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0);
     assert!(
-        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test reporter"),
+        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test harness"),
         "the diagnostic must point at the `describe` call:\n{}",
         out.stderr
     );

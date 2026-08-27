@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! The test harness's event sink, driven by `core.test`'s `describe` and `it` and by the
-//! compiler-provided `expect`. It counts and nests, and renders nothing — see the reporter
-//! seam in `docs/corelib/test.md`.
+//! compiler-provided `expect`. It counts and nests, and renders nothing — the rendering is
+//! `core.test`'s, in `docs/corelib/test/README.md`.
 //!
 //! The counters live here because a test run needs state that outlives the call recording
 //! it, and Quilon has none to offer: a top-level `:=` binding does not persist across
@@ -18,7 +18,7 @@
 use std::cell::Cell;
 
 thread_local! {
-    /// How many `describe` groups are open, for a reporter to indent by.
+    /// How many `describe` groups are open, for the report to indent by.
     static DEPTH: Cell<i64> = const { Cell::new(0) };
     /// Cases that ran with no failing `expect`.
     static PASSED: Cell<i64> = const { Cell::new(0) };
@@ -38,7 +38,7 @@ pub extern "C" fn __test_suite_enter() -> f64 {
 }
 
 /// How many `describe` groups are open right now — 0 outside any group, 1 inside an
-/// outermost one. Reads the depth without moving it, which is what a reporter asked for the
+/// outermost one. Reads the depth without moving it, which is what a case asking for the
 /// run's state needs (`enter`/`leave` are the harness's, and they move it).
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_depth() -> f64 {
@@ -46,7 +46,7 @@ pub extern "C" fn __test_depth() -> f64 {
 }
 
 /// Close a `describe` group; yields the remaining nesting depth. Clamped at 0, so an
-/// unbalanced close cannot drive a reporter's indentation negative.
+/// unbalanced close cannot drive the report's indentation negative.
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_suite_leave() -> f64 {
     DEPTH.with(|depth| {
@@ -69,7 +69,7 @@ pub extern "C" fn __test_case_failing() -> f64 {
 }
 
 /// Close the case that just ran: tally it as passed or failed, clear the flag for the next
-/// one, and yield the depth it sits at — which is what a reporter indents the case by.
+/// one, and yield the depth it sits at — which is what the report indents the case by.
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_case_finish() -> f64 {
     let failed = CASE_FAILED.with(|flag| flag.replace(false));

@@ -91,9 +91,11 @@ GET.
 
 The parser's and serialiser's edge cases are covered by the suite that lives in
 `corelib/http.qn` itself, beside the code it tests: the public surface first, the internals it
-rests on second. Only the root program's `describe` blocks survive the import resolver, so
-`<< core.http` brings you the client and nothing of its tests. The suite runs when the module is
-the file being tested:
+rests on second. Only the root program's `describe` blocks survive the import resolver, and the
+fixtures under them carry no `>>`, so `<< core.http` brings you the client and none of its test
+code. The harness it runs under is a plain `<< core.test`, which an importer does resolve — so
+`describe`, `it` and the rest of that module's exports are in scope too. The suite runs when
+the module is the file being tested:
 
 ```bash
 quilon test corelib/http.qn

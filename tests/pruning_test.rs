@@ -141,7 +141,7 @@ fn an_overload_member_reached_only_by_dispatch_survives() {
 #[test]
 fn a_methods_receiver_is_not_a_mention_of_a_top_level_name() {
     // Reading the receiver as a top-level mention keeps the harness's `it` function, and the
-    // reporter's whole chain behind it, in any program that declares a type with a method.
+    // harness's whole chain behind it, in any program that declares a type with a method.
     let ir = emit(concat!(
         "it = (name :: Text) -> Num => name.size\n",
         "Box = { size :: Num, doubled = => it.size * 2 }\n",

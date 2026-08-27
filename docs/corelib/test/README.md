@@ -2,6 +2,7 @@
 title: "core.test — the test harness, assertions and checks"
 sidebar:
   label: "core.test"
+  order: 2
 ---
 
 # `core.test` — the test harness, assertions and checks
@@ -128,9 +129,8 @@ Text
 | `describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
 | `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
 
-The compiler recognizes a top-level `describe(…)` call **by name**, so a `describe` you
-define yourself marks test blocks exactly as the module's does. What the report looks like is
-currently fixed, and not replaceable.
+The compiler recognizes a top-level `describe(…)` call **by name** — there is no attribute
+or `cfg`. What the report looks like is currently fixed.
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
 straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
@@ -139,7 +139,9 @@ The case tree and the summary go to **stdout**; a failing assertion's
 [error frame](../../tooling/errors.md) goes to **stderr**, like every other compiler
 diagnostic, so each stream reads on its own when they are captured separately.
 
-Suites run one process each, so a failure in one does not stop the others.
+Suites run one process each, so a failure in one does not stop the others. A suite that
+imports no harness at all is a compile error at its first `describe`, naming the import that
+fixes it — never a silent run with no output.
 
 ## A failing case does not stop the run
 
@@ -179,16 +181,18 @@ or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker; the
 or attribute:
 
 - `check`, `compile`, `build`, `run`: every top-level `describe(…)` is **erased** before the
-  checker sees it, so nothing of the harness is type-checked or emitted. The file's own `^` is
-  its entry point and behaves exactly as it would without the blocks. A file whose blocks are
-  all it has is no program at all — `compile`, `build`, and `run` pass over it in silence
-  rather than reporting a missing entry point.
+  checker sees it, so no test code of yours is checked or emitted. A file whose blocks are all
+  it has is no program at all — `compile`, `build`, and `run` pass over it in silence rather
+  than reporting a missing entry point.
 - `quilon test`: the blocks are **compiled and run**, under the entry point it synthesizes. A
   file's own `^` is not the test run's, so it is ignored rather than called.
 
-The `<< core.test` the blocks need takes no marker of its own. Erasing the blocks leaves
-nothing in the file naming `describe` or `it`, and an item nothing reaches is not emitted, so
-the harness is shaken out of the build along with the blocks it served.
+The `<< core.test` the blocks need takes no marker of its own. Erasing them leaves nothing in
+the file naming `describe` or `it`, and a function nothing reaches is not emitted, so the
+harness is shaken out of the build along with the blocks it served. The shaking is over
+EMISSION, not scope: an imported module is still resolved and type-checked, and the names it
+exports still occupy the importer's scope, so a program cannot define a `describe` of its own
+beside `<< core.test`.
 
 Never type-checking them cuts both ways: **a type error inside a `describe` block is invisible
 to `check`, `compile`, `build`, and `run`** — they erase the block before the checker sees it

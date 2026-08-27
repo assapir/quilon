@@ -191,7 +191,7 @@
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
 ~ other command erases them, and the fixtures below carry no `>>`, so a program importing
 ~ `core.http` never sees them. The harness follows the blocks: nothing outside one names it,
-~ so no build it does not belong in keeps it.
+~ so no build it does not belong in emits it.
 << core.test
 
 ~ A well-formed CRLF reply with two headers and a five-character body.
