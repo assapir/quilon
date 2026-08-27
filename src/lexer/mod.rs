@@ -6,4 +6,6 @@ pub mod lexer;
 pub mod token;
 
 pub use lexer::Lexer;
-pub use token::{FileId, ROOT_FILE, SYNTHESIZED_FILE, Span, StrChunk, Token, TokenKind};
+pub use token::{
+    FileId, ROOT_FILE, SYNTHESIZED_FILE, Span, StrChunk, Token, TokenKind, TokenLexError,
+};

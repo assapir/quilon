@@ -1,3 +1,7 @@
+---
+title: "Quilon Language Reference"
+---
+
 # Quilon Language Reference
 
 **Version:** 0.9.2 — "Hegemon" (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](status/limitations.md)).

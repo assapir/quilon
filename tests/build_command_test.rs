@@ -107,10 +107,23 @@ fn build_hello_and_run(
         .args(["-o", out.to_str().unwrap()]);
     configure(&mut cmd);
     let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+    let stdout = String::from_utf8_lossy(&build.stdout);
+    let stderr = String::from_utf8_lossy(&build.stderr);
     assert!(
         build.status.success(),
-        "`quilon build` failed ({context}): {}",
-        String::from_utf8_lossy(&build.stderr)
+        "`quilon build` failed ({context}): {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "`quilon build` wrote status to stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("🔨 Building:"),
+        "missing build status from stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("✅ Built native executable:"),
+        "missing build success status from stderr: {stderr}"
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(out)).expect("run produced binary");

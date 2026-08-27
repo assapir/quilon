@@ -1,0 +1,21 @@
+{
+  "name": "quilon-docs",
+  "private": true,
+  "version": "0.0.1",
+  "description": "The documentation site for the Quilon programming language — docs.quilon.run",
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.9",
+    "astro": "^7.2.8"
+  },
+  "devDependencies": {
+    "wrangler": "^4.127.0"
+  }
+}

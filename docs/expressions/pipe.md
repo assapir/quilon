@@ -1,3 +1,10 @@
+---
+title: "Pipe — |>"
+sidebar:
+  label: "Pipe"
+  order: 1
+---
+
 # Pipe — `|>`
 `|>` feeds its left operand in as the **first argument** of the right-hand call:
 ```quilon ignore

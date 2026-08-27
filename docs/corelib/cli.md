@@ -1,3 +1,10 @@
+---
+title: "core.cli — CLI helpers"
+sidebar:
+  label: "core.cli"
+  order: 3
+---
+
 # `core.cli` — CLI helpers
 
 Import with `<< core.cli`. See the [corelib index](README.md) and `examples/cli.qn`.

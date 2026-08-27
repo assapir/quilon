@@ -1,6 +1,6 @@
 // Lexer implementation for Quilon
 
-use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind};
+use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind, TokenLexError};
 use logos::Logos;
 
 /// Namespace for the lexer's entry point. Tokenizing is a single batch call
@@ -45,11 +45,15 @@ impl Lexer {
                         first_on_line: is_first_on_line(source, span.start),
                     });
                 }
-                Some(Err(_)) => {
+                Some(Err(error)) => {
                     let span = lexer.span();
                     let text = source[span.clone()].to_string();
                     return Err(LexerError {
-                        message: format!("Invalid token: '{}'", text),
+                        message: if error == TokenLexError::UnterminatedString {
+                            "unterminated string literal".to_string()
+                        } else {
+                            format!("Invalid token: '{}'", text)
+                        },
                         span: Span::in_file(span.start as u32, span.end as u32, file),
                     });
                 }

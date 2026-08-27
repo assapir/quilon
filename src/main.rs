@@ -133,9 +133,9 @@ fn main() {
         }
         Commands::Compile { file, output } => {
             let checked = checked_program_to_emit(&file);
-            println!("🔨 Compiling: {}", file.display());
+            eprintln!("🔨 Compiling: {}", file.display());
             let program = checked.program;
-            println!("✅ Type checking passed!");
+            eprintln!("✅ Type checking passed!");
             require_entry_point(&program);
 
             // Generate LLVM IR
@@ -164,8 +164,8 @@ fn main() {
             // Write IR to file
             match std::fs::write(&output_path, ir) {
                 Ok(()) => {
-                    println!("✅ LLVM IR written to: {}", output_path.display());
-                    println!(
+                    eprintln!("✅ LLVM IR written to: {}", output_path.display());
+                    eprintln!(
                         "💡 To build a native executable directly, run: quilon build {}",
                         file.display()
                     );
@@ -185,7 +185,7 @@ fn main() {
             // The source text and every file's path come from the source map the build already
             // carries; a `--debug` build additionally needs the root file's path (below).
             let checked = checked_program_to_emit(&file);
-            println!("🔨 Building: {}", file.display());
+            eprintln!("🔨 Building: {}", file.display());
             let sources = checked.sources;
             let defer = checked.defer;
             let program = checked.program;
@@ -205,7 +205,7 @@ fn main() {
                 &linker,
                 debug_source.as_ref(),
             ) {
-                Ok(()) => println!("✅ Built native executable: {}", out.display()),
+                Ok(()) => eprintln!("✅ Built native executable: {}", out.display()),
                 Err(e) => {
                     eprintln!("❌ Build error: {}", e);
                     std::process::exit(1);
@@ -213,11 +213,11 @@ fn main() {
             }
         }
         Commands::Check { file } => {
-            println!("🔍 Checking: {}", file.display());
+            eprintln!("🔍 Checking: {}", file.display());
 
             let program = checked(&file).program;
-            println!("✅ Type checking passed!");
-            println!(
+            eprintln!("✅ Type checking passed!");
+            eprintln!(
                 "📋 Program contains {} top-level item(s)",
                 program.items.len()
             );

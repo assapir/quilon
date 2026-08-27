@@ -1,3 +1,7 @@
+---
+title: "Functions"
+---
+
 # Functions
 
 ```quilon

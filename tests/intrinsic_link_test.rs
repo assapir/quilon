@@ -263,10 +263,27 @@ fn the_smoke_program_reaches_every_intrinsic() {
         .arg(&source)
         .output()
         .expect("running quilon compile");
+    let stdout = String::from_utf8_lossy(&compile.stdout);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(
         compile.status.success(),
-        "compiling the every-intrinsic program failed:\n{}",
-        String::from_utf8_lossy(&compile.stderr)
+        "compiling the every-intrinsic program failed:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "`quilon compile` wrote status to stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("🔨 Compiling:"),
+        "missing compile status from stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("✅ Type checking passed!"),
+        "missing type-check status from stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("✅ LLVM IR written to:"),
+        "missing compile success status from stderr: {stderr}"
     );
 
     let ir = std::fs::read_to_string(source.with_extension("ll")).expect("reading the emitted IR");

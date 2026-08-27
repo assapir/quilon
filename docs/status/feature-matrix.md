@@ -1,3 +1,9 @@
+---
+title: "Feature matrix"
+sidebar:
+  order: 1
+---
+
 # Feature matrix
 
 ✅ = works end-to-end with a passing run test · 🚧 = partial · ❌ = not yet
