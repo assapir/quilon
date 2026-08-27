@@ -1,3 +1,7 @@
+---
+title: "Concurrency runtime: deferred socket I/O"
+---
+
 # Concurrency runtime: deferred socket I/O
 
 How one non-blocking socket op suspends and resumes on the single-threaded fiber

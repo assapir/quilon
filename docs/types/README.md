@@ -1,3 +1,9 @@
+---
+title: "Types"
+sidebar:
+  order: 0
+---
+
 # Types
 
 ## `Num`

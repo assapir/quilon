@@ -1,3 +1,9 @@
+---
+title: "Compiler architecture"
+sidebar:
+  order: 3
+---
+
 # Compiler architecture
 
 A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs` runs the shared front-end (read → lex → parse → resolve imports → typecheck) for all CLI commands and renders any failure through `src/diagnostic.rs` (the rustc-style `path:line:col` reporter described under [Error messages](../tooling/errors.md)).

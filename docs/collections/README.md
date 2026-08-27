@@ -1,3 +1,7 @@
+---
+title: "Collections"
+---
+
 # Collections
 
 Quilon has three built-in parametric collections: arrays, maps, and sets.

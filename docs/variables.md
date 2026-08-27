@@ -1,3 +1,7 @@
+---
+title: "Variables"
+---
+
 # Variables
 
 Bindings are immutable by default (`=`). Use `:=` to declare a mutable binding **and** to reassign it.

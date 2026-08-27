@@ -1,3 +1,9 @@
+---
+title: "Text"
+sidebar:
+  order: 1
+---
+
 # `Text`
 UTF-8 text. A **built-in** type (like `Num`/`Bool`/arrays) — **no import needed**.
 ```quilon

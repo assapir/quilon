@@ -1,3 +1,7 @@
+---
+title: "Map — keyed collection"
+---
+
 # `Map` — keyed collection
 
 A built-in, no-import type. See the [Language reference](README.md#maps) and `examples/maps.qn`.

@@ -1,3 +1,9 @@
+---
+title: "Sum types — /"
+sidebar:
+  order: 3
+---
+
 # Sum types — `/`
 A sum type (tagged union / enum) is a set of named **variants**, declared with `/`
 as the separator. Variants may be **nullary** or carry a payload:

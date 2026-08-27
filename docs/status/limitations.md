@@ -1,3 +1,9 @@
+---
+title: "Known limitations"
+sidebar:
+  order: 2
+---
+
 # Known limitations
 
 0.9 is a stable **core**, not the whole language. Notably:

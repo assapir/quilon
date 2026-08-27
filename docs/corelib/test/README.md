@@ -1,3 +1,7 @@
+---
+title: "core.test — assertions and checks"
+---
+
 # `core.test` — assertions and checks
 
 **Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every

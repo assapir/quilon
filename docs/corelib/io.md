@@ -1,3 +1,9 @@
+---
+title: "core.io — I/O"
+sidebar:
+  order: 1
+---
+
 # `core.io` — I/O
 
 Import with `<< core.io`. See the [corelib index](README.md) and `examples/io.qn`.

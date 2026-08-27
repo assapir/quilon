@@ -1,3 +1,9 @@
+---
+title: "Ranges and spread"
+sidebar:
+  order: 3
+---
+
 # Ranges and spread
 
 ## Ranges — infix `lo <- hi`

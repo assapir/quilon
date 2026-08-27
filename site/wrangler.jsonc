@@ -1,0 +1,17 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "quilon-docs",
+	"compatibility_date": "2026-08-27",
+	"assets": {
+		"directory": "./dist"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"routes": [
+		{
+			"pattern": "docs.quilon.run",
+			"custom_domain": true
+		}
+	]
+}

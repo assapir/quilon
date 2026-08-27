@@ -1,3 +1,7 @@
+---
+title: "Compiling & running"
+---
+
 # Compiling & running
 
 Source files are **`.qn`**, and the compiler rejects a source named anything else. (Quilon

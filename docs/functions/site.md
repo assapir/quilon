@@ -1,3 +1,7 @@
+---
+title: "Call-site locations — Site"
+---
+
 # Call-site locations — `Site`
 
 A function whose **last** parameter is a `Site` receives the location of the call — and a

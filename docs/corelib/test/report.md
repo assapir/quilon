@@ -1,3 +1,7 @@
+---
+title: "core.test.report — the test harness"
+---
+
 # `core.test.report` — the test harness
 
 The **harness** (`describe`, `it`) groups checks into named cases that `quilon test` runs

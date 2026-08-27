@@ -1,3 +1,7 @@
+---
+title: "Arrays — []T"
+---
+
 # Arrays — `[]T`
 ```quilon
 nums  = [1, 2, 3, 4, 5]

@@ -1,3 +1,9 @@
+---
+title: "Iteration — array methods + recursion"
+sidebar:
+  order: 2
+---
+
 # Iteration — array methods + recursion
 Quilon has **no `for`/`while` loop**. A collection is iterated with the built-in
 [array methods](../collections/arrays.md#array-methods): `.each` runs a body for its side effects (the direct

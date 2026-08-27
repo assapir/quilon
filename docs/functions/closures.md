@@ -1,3 +1,7 @@
+---
+title: "Closures and tail recursion"
+---
+
 # Closures and tail recursion
 
 ## Tail self-recursion runs in constant stack (guaranteed)

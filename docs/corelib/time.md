@@ -1,3 +1,9 @@
+---
+title: "core.time — Time"
+sidebar:
+  order: 4
+---
+
 # `core.time` — Time
 
 Import with `<< core.time`. See the [corelib index](README.md) and `examples/sleep.qn`.

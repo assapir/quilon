@@ -1,3 +1,7 @@
+---
+title: "Memory"
+---
+
 # Memory
 
 Memory is **garbage-collected**: heap values (`Text`, arrays, records) are freed

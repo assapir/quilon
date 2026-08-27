@@ -1,3 +1,7 @@
+---
+title: "Set — unordered unique collection"
+---
+
 # `Set` — unordered unique collection
 
 A built-in, no-import type. See the [Language reference](README.md#sets) and `examples/sets.qn`.
