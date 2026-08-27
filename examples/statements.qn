@@ -1,6 +1,7 @@
 ~ Statement boundaries. Quilon has no statement separator; the grammar is
 ~ newline-insensitive except for two line-aware rules:
-~   1. a line-final `>` closes a block;
+~   1. a `>` closes a block unless a same-line operand follows it, which makes it
+~      greater-than instead;
 ~   2. a `(`, `[`, or `{` that is the FIRST token on its line never continues
 ~      the previous expression — it begins a NEW statement.
 ~ So call arguments, index brackets, and constructor braces must open on the
@@ -20,8 +21,7 @@ Point = { x :: Num, y :: Num }
   sum := 0
   [3, 4].each(x => <
     sum := sum + x
-  >
-  )
+  >)
   assertEq(a.size, 2)
   assertEq(sum, 7)
 
@@ -54,4 +54,23 @@ Point = { x :: Num, y :: Num }
   assertEq(c, 20)
   assertEq(d, 12)
   assertEq(g.x + g.y, 3)
+
+  ~ A `>` closes its block whenever no operand can follow — before a `)`, a `]`,
+  ~ a `,`, a comment, or the end of the line — so a block-bodied lambda needs no
+  ~ dangling closer, even all on one line.
+  assertEq([1, 2, 3].map(x => < x * 2 >).reduce(0, (acc, x) => acc + x), 12)
+  totals = [10, 20].map(x => <
+    x + 1
+  >)   ~ the closer sits right before the `)`
+  assertEq(totals[0], 11)
+
+  ~ With an operand after it, the same `>` is greater-than — including as a
+  ~ block's last expression, and over Text.
+  bigger = (left :: Num) -> Bool => <
+    right = 2
+    left > right
+  >
+  assert(bigger(3))
+  assert("b" > "a")
+  assertEq([3, 1, 4].filter(x => x > 2).size, 2)
 >

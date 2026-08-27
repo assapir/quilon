@@ -60,8 +60,7 @@ Point = {
   sum := 0
   ages.each((name, age) => <
     sum := sum + age
-  >
-  )
+  >)
   assertEq(sum, 122)
 
   ~ A Map keyed by a user record type hashes and compares keys through `%`/`==`.

@@ -49,8 +49,7 @@ Point = {
   count := 0
   primes.each(p => <
     count := count + 1
-  >
-  )
+  >)
   assertEq(count, 4)
 
   ~ A Set of a user record type deduplicates by `%`/`==`.
