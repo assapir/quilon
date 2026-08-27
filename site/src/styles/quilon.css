@@ -1,0 +1,47 @@
+/* docs.quilon.run wears quilon.run's clothes: the claret accent, the warm
+ * near-white ground, and its font stacks, mapped onto Starlight's own theme
+ * tokens. The dark theme is derived from the same ramp (quilon.run itself is
+ * light-only), with every colour re-checked for contrast on the dark ground. */
+
+:root {
+  --sl-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --sl-font-mono:
+    'Fira Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Quilon is made of => -> |> :: := <= — the ligatures are the point. */
+code {
+  font-variant-ligatures: contextual common-ligatures;
+}
+
+/* Dark: the claret ramp lifted onto a warm near-black ground. */
+:root {
+  --sl-color-accent-low: #46182b;
+  --sl-color-accent: #a2194f;
+  --sl-color-accent-high: #e8a3c0;
+  --sl-color-white: #eee9e5;
+  --sl-color-gray-1: #ddd6d2;
+  --sl-color-gray-2: #b8b0ac;
+  --sl-color-gray-3: #a89fa4;
+  --sl-color-gray-4: #5c545e;
+  --sl-color-gray-5: #453e47;
+  --sl-color-gray-6: #241d22;
+  --sl-color-black: #1a151a;
+}
+
+/* Light: quilon.run's palette, verbatim. */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f3dbe6;
+  --sl-color-accent: #a2194f;
+  --sl-color-accent-high: #6e1230;
+  --sl-color-white: #1a1a1c;
+  --sl-color-gray-1: #26262a;
+  --sl-color-gray-2: #3c3c41;
+  --sl-color-gray-3: #6b6b70;
+  --sl-color-gray-4: #8a8a8f;
+  --sl-color-gray-5: #b9b5b0;
+  --sl-color-gray-6: #e4e1dc;
+  --sl-color-gray-7: #f4f2ef;
+  --sl-color-black: #fbfaf8;
+}

@@ -3,11 +3,14 @@ import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { stripLeadingH1 } from './src/remark-strip-leading-h1.mjs';
+import { quilonDark, quilonLight } from './src/themes/quilon-code.mjs';
 
 // The one Quilon grammar: the VS Code extension's TextMate file, read in place
 // so the editor and the site can never drift apart. It rides in Astro's own
-// shikiConfig, which Expressive Code picks up and which survives the content
-// pipeline's process boundary (an ec.config.mjs does not).
+// shikiConfig, which Expressive Code picks up. Keep code-rendering config in
+// THIS file: the content layer caches rendered pages and only re-renders when
+// astro.config.mjs changes, so config living elsewhere (an ec.config.mjs) can
+// appear to silently no-op until the .astro cache is cleared.
 const quilonGrammar = {
   ...JSON.parse(
     readFileSync(new URL('../editors/vscode/syntaxes/quilon.tmLanguage.json', import.meta.url), 'utf8')
@@ -32,6 +35,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Quilon',
+      favicon: '/favicon.png',
+      customCss: ['./src/styles/quilon.css'],
+      expressiveCode: {
+        themes: [quilonDark, quilonLight],
+      },
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/assapir/quilon' }],
       editLink: { baseUrl: 'https://github.com/assapir/quilon/edit/main/docs/' },
       sidebar: [
