@@ -1,6 +1,7 @@
 ---
 title: "core.time — Time"
 sidebar:
+  label: "core.time"
   order: 4
 ---
 

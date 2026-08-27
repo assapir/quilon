@@ -1,5 +1,7 @@
 ---
 title: "Arrays — []T"
+sidebar:
+  label: "Arrays"
 ---
 
 # Arrays — `[]T`

@@ -1,5 +1,7 @@
 ---
 title: "Map — keyed collection"
+sidebar:
+  label: "Map"
 ---
 
 # `Map` — keyed collection

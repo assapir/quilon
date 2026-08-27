@@ -1,5 +1,7 @@
 ---
 title: "Concurrency runtime: deferred socket I/O"
+sidebar:
+  label: "Runtime"
 ---
 
 # Concurrency runtime: deferred socket I/O

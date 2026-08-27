@@ -1,5 +1,7 @@
 ---
 title: "Set — unordered unique collection"
+sidebar:
+  label: "Set"
 ---
 
 # `Set` — unordered unique collection

@@ -1,6 +1,7 @@
 ---
 title: "Pipe — |>"
 sidebar:
+  label: "Pipe"
   order: 1
 ---
 

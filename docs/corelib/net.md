@@ -1,6 +1,7 @@
 ---
 title: "core.net — Networking"
 sidebar:
+  label: "core.net"
   order: 5
 ---
 

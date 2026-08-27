@@ -1,5 +1,7 @@
 ---
 title: "core.test.report — the test harness"
+sidebar:
+  label: "core.test.report"
 ---
 
 # `core.test.report` — the test harness

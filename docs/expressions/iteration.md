@@ -1,6 +1,7 @@
 ---
 title: "Iteration — array methods + recursion"
 sidebar:
+  label: "Iteration"
   order: 2
 ---
 

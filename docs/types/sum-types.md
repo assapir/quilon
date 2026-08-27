@@ -1,6 +1,7 @@
 ---
 title: "Sum types — /"
 sidebar:
+  label: "Sum types"
   order: 3
 ---
 

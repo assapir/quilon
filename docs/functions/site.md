@@ -1,5 +1,7 @@
 ---
 title: "Call-site locations — Site"
+sidebar:
+  label: "Call-site locations"
 ---
 
 # Call-site locations — `Site`

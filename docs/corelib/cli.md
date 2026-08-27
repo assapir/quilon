@@ -1,6 +1,7 @@
 ---
 title: "core.cli — CLI helpers"
 sidebar:
+  label: "core.cli"
   order: 3
 ---
 

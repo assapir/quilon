@@ -1,6 +1,7 @@
 ---
 title: "core.io — I/O"
 sidebar:
+  label: "core.io"
   order: 1
 ---
 
