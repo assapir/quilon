@@ -17,10 +17,10 @@
   sum :: Num = nums
     .map(n => n * 2)                    ~ [2, 4, 6, 8, 10]
     .reduce(0, (acc, n) => acc + n)     ~ 30
-  assertEq(sum, 30)
+  assert(sum, equals(30))
 
   ~ A range `lo <- hi` is just a `[]Num`, so it iterates the same way.
   digits :: []Num = 1 <- 4
   digits.each(n => print(n))            ~ prints 1, 2, 3, 4
-  assertEq(digits.size, 4)
+  assert(digits.size, equals(4))
 >

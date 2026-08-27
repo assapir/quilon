@@ -7,7 +7,22 @@ use std::rc::Rc;
 pub struct Program {
     pub imports: Vec<Import>,
     pub items: Vec<Item>,
+    /// Top-level [`TEST_BLOCK_MARKER`] calls — `describe("…", () => < … >)` — kept apart
+    /// from `items` because they are TEST code: `quilon test` synthesizes an entry point
+    /// that runs them in order, and every other command ignores this field, which is what
+    /// keeps a test suite out of a release build.
+    pub test_blocks: Vec<Expression>,
 }
+
+/// The name whose top-level call marks test code: `describe`. There is no attribute or
+/// `cfg` syntax — the symbol IS the marker, so a file's tests are recognizable by the
+/// parser (see `Parser::parse_program`) with no annotation to keep in sync.
+pub const TEST_BLOCK_MARKER: &str = "describe";
+
+/// The name of a test CASE, written `it("…", () => …)`. A recorded assertion belongs
+/// inside one: `it` is what closes a case and tallies it, so an `expect` anywhere else in
+/// a suite would set a failure mark nothing ever reports.
+pub const TEST_CASE_MARKER: &str = "it";
 
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 /// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
@@ -143,8 +158,8 @@ pub struct BuiltinOverload {
 /// these names ADDS a member to its set rather than shadowing the built-in, and dispatch
 /// picks by exact argument types like any other set.
 ///
-/// The `__`-prefixed entries are internal primitives (`core.test` builds its `assert` on
-/// them) that no module exports and no `.qn` declares. They are members on the same terms
+/// The `__`-prefixed entries are internal primitives (`core.test`'s harness and reporter
+/// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
 /// all the same, so the one rule covers them too.
 ///
 /// This is the single table the type checker registers from, codegen mangles and dispatches
@@ -208,7 +223,101 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[Type::Num],
         ret: Type::Bool,
     },
+    // The test registry (see `is_test_registry_intrinsic`): the harness's event sink, which
+    // `core.test`'s `describe`/`it` and the provided `expect` drive. Enter and leave a
+    // `describe` group, each yielding the resulting nesting depth; read that depth without
+    // moving it; ask whether the running case has already failed; close a case, yielding the
+    // depth to indent it at; and read the two totals back for the summary. `core.test` wraps
+    // the three read-only ones as named `.qn` functions, which is the reporter's API.
+    BuiltinOverload {
+        name: "__test_suite_enter",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_suite_leave",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_depth",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_failing",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_finish",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_passed",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_failed",
+        parameters: &[],
+        ret: Type::Num,
+    },
 ];
+
+/// The two assertion entry points the compiler provides. Both take the value under test and
+/// a matcher (see [`MATCHERS`]); they differ only in what a failure does — `assert` reports
+/// and exits, `expect` reports, marks the case failed, and lets the suite carry on.
+pub const ASSERT: &str = "assert";
+pub const EXPECT: &str = "expect";
+
+/// The matchers the compiler provides, in the only position they mean anything: the second
+/// argument of an [`ASSERT`]/[`EXPECT`] call. Elsewhere these are ordinary names, free for a
+/// program to use.
+///
+/// Compiler-provided rather than written in `.qn` because a matcher holds a value of the type
+/// under test, which without generics would need one matcher type per value type. `not` takes
+/// a matcher and negates it; the rest take the value they compare against, or nothing.
+pub const MATCHERS: &[&str] = &["equals", "contains", "not", "isOk", "isNotOk"];
+
+/// Whether `name` is `assert` or `expect` — a call the compiler lowers itself.
+pub fn is_assertion(name: &str) -> bool {
+    name == ASSERT || name == EXPECT
+}
+
+/// Whether `name` is one of the provided [`MATCHERS`].
+pub fn is_matcher(name: &str) -> bool {
+    MATCHERS.contains(&name)
+}
+
+/// The sum variant `isOk()` / `isNotOk()` asks about, or `None` for a matcher that reads no
+/// variant. Shared by the checker (which requires the value's type to carry that variant) and
+/// codegen (which compares against its tag), so the two can never disagree — and named
+/// exhaustively, so a matcher added later has to say what it reads rather than inheriting
+/// `NotOk`.
+pub fn matcher_variant(matcher: &str) -> Option<&'static str> {
+    match matcher {
+        "isOk" => Some("Ok"),
+        "isNotOk" => Some("NotOk"),
+        _ => None,
+    }
+}
+
+/// The prefix marking a test-registry primitive.
+const TEST_REGISTRY_PREFIX: &str = "__test_";
+
+/// Whether `name` is one of the test registry's primitives — the event sink behind
+/// `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above. The
+/// registry counts and nests; it renders nothing, so a reporter is free to render however it
+/// likes (see `docs/corelib/test.md`).
+///
+/// Every one takes no arguments and yields a `Num`, which is what lets codegen lower the
+/// whole family through this one predicate. `__`-prefixed and exported by no module for the
+/// same reason as `__exit`: they are the harness's plumbing, not user-facing surface.
+pub fn is_test_registry_intrinsic(name: &str) -> bool {
+    name.starts_with(TEST_REGISTRY_PREFIX)
+}
 
 /// Whether the compiler provides built-in members for `name`, so a single user definition
 /// of it already forms an overload set (rather than being an ordinary function).
@@ -306,7 +415,7 @@ pub fn site_type() -> Type {
 /// receive its CALLER's location. A trailing `Site` parameter left off at a call site is
 /// filled in by the compiler with that call's `file:line:column`; passing one explicitly
 /// forwards the caller's own site instead, which is how a location propagates through a
-/// chain of wrappers (`assertEq` -> `assert`).
+/// chain of wrappers (a check of your own forwarding its `site` to `failAt`).
 pub fn is_site_type(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, .. } if name == SITE_TYPE_NAME)
 }
@@ -817,5 +926,29 @@ pub fn type_label(ty: &Type) -> String {
         }
         Type::Generic { .. } => "<unknown>".to_string(),
         other => format!("{:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_test_registry_primitive_is_a_zero_argument_num_builtin() {
+        // Codegen lowers the whole family through one path, which only works while they all
+        // share that signature.
+        let registry: Vec<&BuiltinOverload> = BUILTIN_OVERLOADS
+            .iter()
+            .filter(|member| is_test_registry_intrinsic(member.name))
+            .collect();
+        assert!(!registry.is_empty(), "the registry has no members at all");
+        for member in registry {
+            assert!(
+                member.parameters.is_empty(),
+                "`{}` must take no arguments",
+                member.name
+            );
+            assert_eq!(member.ret, Type::Num, "`{}` must yield a Num", member.name);
+        }
     }
 }

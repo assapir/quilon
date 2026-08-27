@@ -12,6 +12,7 @@ use crate::lexer::Span;
 // `impl TypeChecker` blocks. Children of this file rather than siblings under
 // `typechecker`, so the state declared below stays private to the checker: a child can
 // reach its ancestor's private items, a sibling could not.
+mod assertions;
 mod calls;
 mod decls;
 mod env;
@@ -61,6 +62,29 @@ pub enum TypeError {
     MutatingMethodOnImmutable {
         method: String,
         receiver: String,
+        span: Span,
+    },
+    /// `assert`/`expect` called with anything but a value and one of the provided matchers.
+    AssertionNeedsMatcher {
+        name: String,
+        span: Span,
+    },
+    /// `expect` outside a `describe` block, where there is no reporter to record into.
+    ExpectOutsideTest {
+        span: Span,
+    },
+    /// A matcher given the wrong number of arguments.
+    MatcherArity {
+        matcher: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+    /// A matcher applied to a type it cannot inspect — no `==` member to compare with, or
+    /// not the shape the matcher reads.
+    MatcherTypeUnsupported {
+        matcher: String,
+        ty: Box<Type>,
         span: Span,
     },
     /// An `=`-declared method whose body mutates `it`, breaking the promise its binding
@@ -324,6 +348,11 @@ pub struct TypeChecker {
     // the call; this is what lets an uncalled one still be reported, at its definition.
     // Only the first is kept — one report per run is what the checker gives anyway.
     unannotated_overload_member: Option<(String, Vec<Type>, Span)>,
+    // How many `describe` blocks, and how many `it` cases, enclose what is being checked.
+    // `expect` marks the running CASE failed and the case's close is what tallies that, so it
+    // is only legal inside an `it` — which in turn is only compiled inside a `describe`.
+    test_depth: usize,
+    case_depth: usize,
 }
 
 impl Default for TypeChecker {
@@ -343,6 +372,8 @@ impl TypeChecker {
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
+            test_depth: 0,
+            case_depth: 0,
         };
 
         // Add built-in sum types to the environment

@@ -10,5 +10,5 @@ Counter = {
 
 ^ = () -> $ => <
   c :: Counter = Counter { value = 30 }
-  assertEq(c.bump(5), 35)   ~ it.value + 5
+  assert(c.bump(5), equals(35))   ~ it.value + 5
 >

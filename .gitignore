@@ -17,3 +17,4 @@ examples/math
 examples/factorial
 examples/option
 examples/pattern_wildcard
+.buildtmp/

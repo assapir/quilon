@@ -1,26 +1,37 @@
-~ core.test — assertions for self-verifying programs. Import with `<< core.test`.
-~ Reference: docs/corelib/test.md.
+~ core.test — what a test harness and its reporter are built from. Import with
+~ `<< core.test`. For the harness and output Quilon ships, import `<< core.test.report`
+~ instead. Reference: docs/corelib/test.md.
 ~
-~ A failing assertion reports at YOUR call site, then exits 101.
+~ ── Assertions ─────────────────────────────────────────────────────────────────────
+~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
+~ defined here. Both take the value under test and a matcher:
 ~
-~   assert(cond)          on a false `cond`, report a default message and exit 101;
-~                         on true, do nothing. Returns `$` (Unit).
-~   assert(cond, opts)    same, but report `opts.message`.
-~   AssertOpts            options record for `assert`: { message :: Text }. Records are
-~                         nominal — construct by name: `AssertOpts { message = "…" }`.
-~   assertEq(a, b)        assert `a == b` (over Num / Text / Bool); reports both values.
-~   assertNotEq(a, b)     assert `a != b`; reports the (equal) value.
-~   assertOk(r)           assert a Result is `Ok`.
-~   assertNotOk(r)        assert a Result is `NotOk`.
-~   failAt(message)       fail outright at the CALLER's location — what the assertions
-~                         above are built from. An assertion of your own reports ITS
-~                         caller by taking a trailing `site :: Site` and forwarding it:
+~   assert(2 + 2, equals(4))    report at YOUR call site and exit 101 on failure
+~   expect(2 + 2, equals(4))    report, mark the case failed, and carry on (tests only)
+~
+~ The matchers are `equals`, `contains`, `not`, `isOk`, `isNotOk` — see
+~ docs/corelib/test.md.
+~
+~   failAt(message)       fail outright at the CALLER's location, the way `assert` does —
+~                         what a check of your own is built from. Take a trailing
+~                         `site :: Site` and forward it to report ITS caller:
 ~                           assertEven = (n :: Num, site :: Site) -> $ =>
 ~                             n % 2 == 0 ? $ : failAt("`n` is odd", site)
+~
+~ ── The run's state, and the case lifecycle ────────────────────────────────────────
+~ `quilon test` runs a file's top-level `describe` blocks and ends by calling
+~ `reportSummary()`, whose result is the run's status — 0 passes the suite, anything else
+~ fails it. Neither `describe`,
+~ `it`, nor any `report*` function lives here: they are what `core.test.report` builds
+~ out of the functions below, and what a harness of your own defines instead.
+~
+~ Everything the run records is reachable through these — a reporter never names a
+~ registry primitive:
+~
+~   casesPassed()  casesFailed()  nestingDepth()      what the run has recorded
+~   enterSuite()   leaveSuite()                       open and close a group
+~   caseFailing()  finishCase()                       ask about, then close, a case
 << core.io
-
-~ Options record for `assert`; `message` is the text reported on failure.
->> AssertOpts = { message :: Text }
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
 ~ in the compiler's diagnostic frame, then exit 101.
@@ -50,45 +61,34 @@
   __exit(101)
 >
 
-~ The primitive: on a false `cond`, report `opts.message` at the caller's location.
->> assert = (cond :: Bool, opts :: AssertOpts, site :: Site) -> $ =>
-  cond ? $ : failAt(opts.message, site)
+~ ── The run's state ────────────────────────────────────────────────────────────────
 
-~ `assert(cond)` is `assert` with the default message.
->> assert = (cond :: Bool, site :: Site) -> $ => cond ? $ : failAt("assertion failed", site)
+~ How many cases have run with no failing `expect`.
+>> casesPassed = () -> Num => __test_passed()
 
-~ Assert `actual == expected`, reporting both values on failure. One member per scalar
-~ type (`==` is defined over Num / Text / Bool); Text values are quoted, so a trailing
-~ space or an empty string is visible in the report.
->> assertEq = (actual :: Num, expected :: Num, site :: Site) -> $ =>
-  actual == expected
-    ? $
-    : failAt("assertion failed: expected `expected`, got `actual`", site)
+~ How many cases have run with at least one failing `expect`. Non-zero is what makes a
+~ run exit non-zero.
+>> casesFailed = () -> Num => __test_failed()
 
->> assertEq = (actual :: Text, expected :: Text, site :: Site) -> $ =>
-  actual == expected
-    ? $
-    : failAt("assertion failed: expected \"`expected`\", got \"`actual`\"", site)
+~ How many `describe` groups are open: 0 outside any group, 1 inside an outermost one.
+>> nestingDepth = () -> Num => __test_depth()
 
->> assertEq = (actual :: Bool, expected :: Bool, site :: Site) -> $ =>
-  actual == expected
-    ? $
-    : failAt("assertion failed: expected `expected`, got `actual`", site)
+~ ── The case lifecycle ─────────────────────────────────────────────────────────────
+~ What a `describe` and an `it` of your own call, in this order:
+~   enterSuite() … the group's body … leaveSuite()
+~   the case's body … caseFailing() … finishCase()
 
-~ Assert `a != b`, reporting the (equal) value on failure.
->> assertNotEq = (a :: Num, b :: Num, site :: Site) -> $ =>
-  a != b ? $ : failAt("assertion failed: expected a different value, got `a`", site)
+~ Open a group; yields the depth it sits at (1 for an outermost group), which is what a
+~ reporter indents by.
+>> enterSuite = () -> Num => __test_suite_enter()
 
->> assertNotEq = (a :: Text, b :: Text, site :: Site) -> $ =>
-  a != b ? $ : failAt("assertion failed: expected a different value, got \"`a`\"", site)
+~ Close the group just entered; yields the depth that remains.
+>> leaveSuite = () -> Num => __test_suite_leave()
 
->> assertNotEq = (a :: Bool, b :: Bool, site :: Site) -> $ =>
-  a != b ? $ : failAt("assertion failed: expected a different value, got `a`", site)
+~ Whether the case now running has already failed an `expect`. Ask BEFORE closing it —
+~ closing clears the mark for the next case.
+>> caseFailing = () -> Bool => __test_case_failing() == 1
 
-~ Assert a Result is `Ok`; fail on `NotOk`.
->> assertOk = (r :: Result, site :: Site) -> $ =>
-  r ? | Ok(_) => $ | NotOk(_) => failAt("assertion failed: expected Ok, got NotOk", site)
-
-~ Assert a Result is `NotOk`; fail on `Ok`.
->> assertNotOk = (r :: Result, site :: Site) -> $ =>
-  r ? | Ok(_) => failAt("assertion failed: expected NotOk, got Ok", site) | NotOk(_) => $
+~ Close the case that just ran, tallying it as passed or failed; yields the depth to
+~ report it at.
+>> finishCase = () -> Num => __test_case_finish()

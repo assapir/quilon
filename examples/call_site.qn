@@ -2,7 +2,7 @@
 ~
 ~ A function whose LAST parameter is a `Site` receives the location of the call that left
 ~ that argument off. Forwarding a received `site` on reports the ORIGINAL caller rather
-~ than the hop, which is how `core.test`'s assertions blame your `assertEq` call.
+~ than the hop, which is how a `Site`-taking check of your own blames ITS caller.
 ~
 ~ Run: cargo run -- run examples/call_site.qn    ~ exits 0 — it checks itself
 << core.test
@@ -34,18 +34,18 @@ assertEven = (n :: Num, site :: Site) -> $ =>
   first = callerLine()
   second = callerLine()
   wrapped = throughAWrapper()
-  assertEq(second - first, 1)
-  assertEq(wrapped - second, 1)
+  assert(second - first, equals(1))
+  assert(wrapped - second, equals(1))
 
   ~ Every call reports its OWN column, so of two on one line the left one starts earlier.
-  assert(callerColumn() < callerColumn())
+  assert(callerColumn() < callerColumn(), equals(true))
 
   ~ The width is the call's own text — the same length as that text written as a literal.
-  assertEq(callerWidth(), "callerWidth()".length)
+  assert(callerWidth(), equals("callerWidth()".length))
 
   ~ The file is this example, and the source line is the one the call is written on.
-  assert(callerFile().contains("call_site.qn"))
-  assert(callerSource().contains("callerSource()"))
+  assert(callerFile(), contains("call_site.qn"))
+  assert(callerSource(), contains("callerSource()"))
 
   ~ A custom assertion holds without a peep, and would report right here if it failed.
   assertEven(4)

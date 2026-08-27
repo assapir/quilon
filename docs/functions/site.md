@@ -49,5 +49,5 @@ above takes no arguments at the call site.
 Filling one in **costs nothing at run time**: the location is known at compile time, so the
 call allocates nothing. `quilon run` and a native build report identically. Assert as often
 as you like, in the hottest loop you have. (A site does cost a little binary size.)
-[`core.test`'s assertions](../corelib/test.md) are built on this; nothing
+[`failAt`](../corelib/test.md#building-a-check-of-your-own) is built on this; nothing
 about it is specific to them. See `examples/call_site.qn`.

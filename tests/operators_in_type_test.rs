@@ -55,7 +55,7 @@ fn record_render_member_is_used_by_interpolation_and_print() {
     assert_exit_linked(
         "<< core.test\n\
          Color = { r :: Num, g :: Num, ` = () -> Text => \"Color(`it.r`, `it.g`)\" }\n\
-         ^ = () -> $ => assertEq(\"`Color { r = 1, g = 2 }`\", \"Color(1, 2)\")",
+         ^ = () -> $ => assert(\"`Color { r = 1, g = 2 }`\", equals(\"Color(1, 2)\"))",
         0,
     );
 }
@@ -95,8 +95,8 @@ fn sum_render_member_is_used_by_interpolation() {
            ` = () -> Text => it ? | Circle(r) => \"Circle(`r`)\" | Rect(w, h) => \"Rect(`w`x`h`)\"\n\
          }\n\
          ^ = () -> $ => <\n\
-           assertEq(\"`Rect(6, 7)`\", \"Rect(6x7)\")\n\
-           assertEq(\"`Circle(4)`\", \"Circle(4)\")\n\
+           assert(\"`Rect(6, 7)`\", equals(\"Rect(6x7)\"))\n\
+           assert(\"`Circle(4)`\", equals(\"Circle(4)\"))\n\
          >",
         0,
     );
@@ -112,8 +112,8 @@ fn sum_render_member_rendering_it_wholesale_falls_back_to_the_variant_name() {
            ` = () -> Text => \"Shape: `it`\"\n\
          }\n\
          ^ = () -> $ => <\n\
-           assertEq(\"`Circle(4)`\", \"Shape: Circle\")\n\
-           assertEq(\"`Rect(6, 7)`\", \"Shape: Rect\")\n\
+           assert(\"`Circle(4)`\", equals(\"Shape: Circle\"))\n\
+           assert(\"`Rect(6, 7)`\", equals(\"Shape: Rect\"))\n\
          >",
         0,
     );

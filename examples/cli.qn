@@ -12,56 +12,56 @@
   ~ getEnv: look a variable up in the env Map; Ok(value) when set, NotOk otherwise.
   env = [|"HOME" => "/home/quilon", "PATH" => "/usr/bin", "EMPTY" => ""|]
   home :: Text = getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
-  assertEq(home, "/home/quilon")
+  assert(home, equals("/home/quilon"))
   empty :: Text = getEnv(env, "EMPTY") ? | Ok(v) => v | NotOk(_) => "?"
-  assertEq(empty, "")
-  ~ assertOk / assertNotOk take a Result of ANY payload — here getEnv's `Ok(Text)` — through
+  assert(empty, equals(""))
+  ~ isOk() / isNotOk() read a Result of ANY payload — here getEnv's `Ok(Text)` — through
   ~ their generic `(r :: Result)` parameter, so no match -> Bool bridge is needed.
-  assertOk(getEnv(env, "PATH"))
-  assertNotOk(getEnv(env, "MISSING"))
+  assert(getEnv(env, "PATH"), isOk())
+  assert(getEnv(env, "MISSING"), isNotOk())
 
   ~ hasFlag: true when the bare flag appears; the name works with or without `--`.
   args :: []Text = ["prog", "--out", "a.txt", "--out=b.txt", "-v", "--verbose", "--empty="]
-  assert(hasFlag(args, "verbose"))          ~ matches "--verbose" without the dashes
-  assert(hasFlag(args, "--verbose"))        ~ matches "--verbose" with the dashes
-  assert(hasFlag(args, "-v"))               ~ single-dash flag matched literally
-  assert(!hasFlag(args, "missing"))         ~ absent
-  assert(!hasFlag(args, "v"))               ~ "v" is not "-v" (double-dash form only)
+  assert(hasFlag(args, "verbose"), equals(true))          ~ matches "--verbose" without the dashes
+  assert(hasFlag(args, "--verbose"), equals(true))        ~ matches "--verbose" with the dashes
+  assert(hasFlag(args, "-v"), equals(true))               ~ single-dash flag matched literally
+  assert(!hasFlag(args, "missing"), equals(true))         ~ absent
+  assert(!hasFlag(args, "v"), equals(true))               ~ "v" is not "-v" (double-dash form only)
 
   ~ getOpt: collect an option's values; both `--name value` and `--name=value`.
   none :: []Text = args.filter(x => false)  ~ an empty []Text for the NotOk fallback
   outVals :: []Text = getOpt(args, "out") ? | Ok(vs) => vs | NotOk(_) => none
-  assertEq(outVals.size, 2)                 ~ "a.txt" (space form) then "b.txt" (= form)
-  assertEq(outVals[0], "a.txt")
-  assertEq(outVals[1], "b.txt")
+  assert(outVals.size, equals(2))                 ~ "a.txt" (space form) then "b.txt" (= form)
+  assert(outVals[0], equals("a.txt"))
+  assert(outVals[1], equals("b.txt"))
   ~ The name works with or without `--`.
   dashedVals :: []Text = getOpt(args, "--out") ? | Ok(vs) => vs | NotOk(_) => none
-  assertEq(dashedVals.size, 2)
+  assert(dashedVals.size, equals(2))
   ~ `--empty=` yields a single empty value.
   emptyVals :: []Text = getOpt(args, "empty") ? | Ok(vs) => vs | NotOk(_) => none
-  assertEq(emptyVals.size, 1)
-  assertEq(emptyVals[0], "")
+  assert(emptyVals.size, equals(1))
+  assert(emptyVals[0], equals(""))
   ~ An absent option is NotOk, carrying the requested name.
   missName :: Text = getOpt(args, "nope") ? | Ok(_) => "?" | NotOk(n) => n
-  assertEq(missName, "nope")
-  ~ assertNotOk on getOpt's `Ok([]Text)` / `NotOk(Text)` — a composite-payload Result
+  assert(missName, equals("nope"))
+  ~ isNotOk() on getOpt's `Ok([]Text)` / `NotOk(Text)` — a composite-payload Result
   ~ flowing straight through the generic assertion.
-  assertNotOk(getOpt(args, "nope"))
+  assert(getOpt(args, "nope"), isNotOk())
 
   ~ argv[0] is skipped: the leading "--out" and its value are ignored, so only "real"
   ~ (the option after argv[0]) is collected.
   skipArgs :: []Text = ["--out", "fromArgv0", "--out", "real"]
   skipVals :: []Text = getOpt(skipArgs, "out") ? | Ok(vs) => vs | NotOk(_) => none
-  assertEq(skipVals.size, 1)
-  assertEq(skipVals[0], "real")
+  assert(skipVals.size, equals(1))
+  assert(skipVals[0], equals("real"))
 
   ~ A trailing option with no following value collects nothing, so it is NotOk(name).
   trailArgs :: []Text = ["prog", "--out"]
-  assertNotOk(getOpt(trailArgs, "out"))
-  ~ An Ok result of the same generic call passes assertOk just as directly.
-  assertOk(getOpt(args, "out"))
+  assert(getOpt(trailArgs, "out"), isNotOk())
+  ~ An Ok result of the same generic call passes isOk() just as directly.
+  assert(getOpt(args, "out"), isOk())
   ~ The `--name=` form always supplies a value (the empty string), so it stays Ok([""]).
   eqEmpty :: []Text = getOpt(["prog", "--tag="], "tag") ? | Ok(vs) => vs | NotOk(_) => none
-  assertEq(eqEmpty.size, 1)
-  assertEq(eqEmpty[0], "")
+  assert(eqEmpty.size, equals(1))
+  assert(eqEmpty[0], equals(""))
 >

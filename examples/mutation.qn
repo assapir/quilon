@@ -21,9 +21,9 @@ Counter = {
 ^ = () -> $ => <
   c := Counter { value = 30 }   ~ `:=` -> mutable instance
   c.bump(5)                      ~ setter mutates: value = 35
-  assertEq(c.peek(), 35)
+  assert(c.peek(), equals(35))
   c.value := c.value + 7         ~ direct field write: value = 42
-  assertEq(c.peek(), 42)
+  assert(c.peek(), equals(42))
   c.bumpEach([1, 2, 3])          ~ setter writing from inside a lambda: value = 48
-  assertEq(c.peek(), 48)
+  assert(c.peek(), equals(48))
 >

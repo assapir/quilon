@@ -88,6 +88,13 @@ jobs:
       - name: Test
         run: cargo test --workspace --verbose
 
+      # The `.qn` suites. Only `quilon test` compiles a `describe` block, so a type error
+      # inside one passes every other gate; the Rust tests name today's suites one by one,
+      # while this covers any suite added to `examples/` without one. Exits non-zero if a
+      # case fails or a suite does not compile.
+      - name: Quilon test suites
+        run: ./target/debug/quilon test examples
+
       # The previous run-on-main's numbers, so each table can carry a delta column. Keyed
       # per commit and restored by prefix: a fresh key every run (caches are immutable once
       # written), and `restore-keys` finds the most recent one. A miss — first run, an
@@ -202,6 +209,9 @@ jobs:
       - name: Test
         run: cargo test --workspace --verbose
 
+      - name: Quilon test suites
+        run: ./target/debug/quilon test examples
+
   # Arch Linux, in a container on the Ubuntu runner. Arch is the maintainer's own
   # environment, and the one that forced the vendored collector: its `gc` package
   # ships only `libgc.so*`, with no static `libgc.a` to link. Covering it here keeps
@@ -248,3 +258,6 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --verbose
+
+      - name: Quilon test suites
+        run: ./target/debug/quilon test examples

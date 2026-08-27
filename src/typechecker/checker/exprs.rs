@@ -76,7 +76,23 @@ impl TypeChecker {
                 function,
                 arguments,
                 span,
-            } => self.check_call(function, arguments, span),
+            } => {
+                // An `it` case inside a `describe` block is where `expect` is legal, so both
+                // markers' arguments — the cases, and everything they call inline — are
+                // checked one level deeper.
+                let marker = match function.as_ref() {
+                    Expression::Identifier { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                let opens_block = marker == Some(crate::ast::TEST_BLOCK_MARKER);
+                let opens_case = marker == Some(crate::ast::TEST_CASE_MARKER);
+                self.test_depth += usize::from(opens_block);
+                self.case_depth += usize::from(opens_case);
+                let checked = self.check_call(function, arguments, span);
+                self.test_depth -= usize::from(opens_block);
+                self.case_depth -= usize::from(opens_case);
+                checked
+            }
 
             Expression::Lambda {
                 parameters,

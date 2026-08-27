@@ -19,41 +19,41 @@ Point = {
 
   ~ Duplicates collapse; membership and size are built in.
   dups :: [|Num|] = [|1, 1, 2, 2, 3|]
-  assertEq(dups.size, 3)
-  assert(primes.has(7))
-  assert(!primes.has(4))
+  assert(dups.size, equals(3))
+  assert(primes.has(7), equals(true))
+  assert(!primes.has(4), equals(true))
 
   ~ add is persistent, like map.set.
   more :: [|Num|] = primes.add(11)
-  assertEq(primes.size, 4)
-  assertEq(more.size, 5)
+  assert(primes.size, equals(4))
+  assert(more.size, equals(5))
 
   ~ remove is persistent, like add: a NEW set without the element.
   fewer :: [|Num|] = primes.remove(2)
-  assertEq(primes.size, 4)
-  assertEq(fewer.size, 3)
-  assert(!fewer.has(2))
+  assert(primes.size, equals(4))
+  assert(fewer.size, equals(3))
+  assert(!fewer.has(2), equals(true))
   ~ removing an absent element is a no-op (still a fresh, equal-size set).
-  assertEq(primes.remove(42).size, 4)
+  assert(primes.remove(42).size, equals(4))
 
   ~ items is a plain array of the elements.
-  assertEq(primes.items().size, 4)
+  assert(primes.items().size, equals(4))
 
   ~ Set algebra: `+` union, `-` difference, `+-`/`-+` (symmetric) intersection.
-  assertEq((primes + evens).size, 7)   ~ {2,3,5,7,4,6,8}
-  assertEq((primes - evens).size, 3)   ~ {3,5,7}
-  assertEq((primes +- evens).size, 1)  ~ {2}
-  assertEq((primes -+ evens).size, 1)  ~ same operator, other spelling
+  assert((primes + evens).size, equals(7))   ~ {2,3,5,7,4,6,8}
+  assert((primes - evens).size, equals(3))   ~ {3,5,7}
+  assert((primes +- evens).size, equals(1))  ~ {2}
+  assert((primes -+ evens).size, equals(1))  ~ same operator, other spelling
 
   ~ each over a set, chaining on the returned receiver.
   count := 0
   primes.each(p => <
     count := count + 1
   >)
-  assertEq(count, 4)
+  assert(count, equals(4))
 
   ~ A Set of a user record type deduplicates by `%`/`==`.
   seen :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
-  assertEq(seen.size, 2)
-  assert(seen.has(Point { x = 2, y = 2 }))
+  assert(seen.size, equals(2))
+  assert(seen.has(Point { x = 2, y = 2 }), equals(true))
 >

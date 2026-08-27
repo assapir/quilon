@@ -31,8 +31,8 @@ sumOnes = (n :: Num, acc :: Num) -> Num => <
 ^ = () -> $ => <
   p = makePair()
   z = clobber(77)          ~ overwrite the dead frame with 77s
-  assertEq(p.xs[0], 10)    ~ escaped literal is intact, not 77
-  assertEq(p.xs.size, 3)
+  assert(p.xs[0], equals(10))    ~ escaped literal is intact, not 77
+  assert(p.xs.size, equals(3))
 
-  assertEq(sumOnes(1000000, 0), 1000000)   ~ constant-stack tail loop, no overflow
+  assert(sumOnes(1000000, 0), equals(1000000))   ~ constant-stack tail loop, no overflow
 >

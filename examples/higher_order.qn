@@ -20,12 +20,12 @@ run = (action :: () -> $) -> $ => <
 >
 
 ^ = () -> $ => <
-  assertEq(apply(10, (n :: Num) => n + 1), 11)
-  assertEq(10 |> apply((n :: Num) => n + 1), 11)
-  assertEq(twice((n :: Num) => n * 3, 2), 18)
+  assert(apply(10, (n :: Num) => n + 1), equals(11))
+  assert(10 |> apply((n :: Num) => n + 1), equals(11))
+  assert(twice((n :: Num) => n * 3, 2), equals(18))
 
-  assertEq(keepIf((n :: Num) => n > 5, 9), 9)
-  assertEq(keepIf((n :: Num) => n > 5, 3), 0)
+  assert(keepIf((n :: Num) => n > 5, 9), equals(9))
+  assert(keepIf((n :: Num) => n > 5, 3), equals(0))
 
   ~ A named closure captures `total` by reference, so its writes escape and accumulate
   ~ across the two calls `run` makes. Passing it by name hands `run` the closure value.
@@ -35,5 +35,5 @@ run = (action :: () -> $) -> $ => <
     $
   >
   run(tick)
-  assertEq(total, 10)
+  assert(total, equals(10))
 >

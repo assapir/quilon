@@ -71,8 +71,8 @@ shape — carries **both** arms' payloads. (See `examples/result.qn` and
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
-`(r :: Result)` parameter or return. This is what lets `assertOk` / `assertNotOk`
-([`core.test`](../corelib/test.md)) accept a `Result` of any shape, including the
+`(r :: Result)` parameter or return. This is what lets the `isOk()` / `isNotOk()`
+[matchers](../corelib/test.md#the-matchers) read a `Result` of any shape, including the
 composite-payload results of `getEnv` / `getOpt` (see `examples/cli.qn`). Extracting a
 payload still needs its concrete type in scope at the match site (there are no generics),
 but *matching by variant* (`Ok` vs `NotOk`) works on any `Result` anywhere.

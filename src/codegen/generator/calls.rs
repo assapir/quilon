@@ -14,6 +14,8 @@ pub(super) enum IntrinsicLowering {
     Now,
     ColorEnabled,
     Exit,
+    /// One of the test registry's primitives, lowered by name (they share a signature).
+    TestRegistry,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -51,6 +53,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             "now" => IntrinsicLowering::Now,
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
+            name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
             _ => return None,
         };
         if arguments.len() != crate::ast::builtin_overload_arity(name)? {
@@ -82,6 +85,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("Only direct function calls supported".to_string());
         };
 
+        // The provided assertions, whose second argument is a matcher rather than a value —
+        // lowered here, ahead of every other dispatch, since the compiler provides the form.
+        if crate::ast::is_assertion(function_name) {
+            return self.generate_assertion(function_name, arguments, span);
+        }
+
         // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
         // into the name. Handled before every other dispatch — the name is not an
         // overload/method/constructor. The `@`-identifier span carries the call's launch site.
@@ -105,6 +114,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // `__exit(code)` — the single native primitive `core.test` builds on
                 // (terminates the process).
                 IntrinsicLowering::Exit => self.generate_exit(arguments),
+                IntrinsicLowering::TestRegistry => {
+                    self.generate_test_registry(function_name, arguments)
+                }
             };
         }
 
@@ -219,8 +231,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Fill in the caller's location when the callee's last parameter is a `Site` the
-        // call left off. A call that passes one explicitly (`assertEq`'s body forwarding its
-        // own `site` to `assert`) matches the full parameter list and so fills in nothing —
+        // call left off. A call that passes one explicitly (a check of your own forwarding
+        // its own `site` to `failAt`) matches the full parameter list and so fills in nothing —
         // which is what propagates the USER's call site through a chain of wrappers instead
         // of reporting the innermost hop.
         if fills_call_site {

@@ -6,7 +6,7 @@
 
 >> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.test.report`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 

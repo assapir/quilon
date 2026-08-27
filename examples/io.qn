@@ -16,12 +16,12 @@ write = (content :: Text) -> Num => write(content, stdout)
 ^ = () -> $ => <
   print("hello")            ~ stdout: hello\n
   written :: Num = "raw" |> write(stdout)   ~ stdout: raw   (no newline)
-  assertEq(written, 3)      ~ "raw" is 3 bytes
-  assertEq(write("!"), 1)   ~ the one-argument member, picked by its type
+  assert(written, equals(3))      ~ "raw" is 3 bytes
+  assert(write("!"), equals(1))   ~ the one-argument member, picked by its type
 
   ~ What reaches the descriptor is bytes, not characters: "héllo" is five characters and
   ~ six bytes, and `print` writes the same six plus a newline.
-  assertEq(write("héllo"), 6)
+  assert(write("héllo"), equals(6))
   print("héllo")            ~ stdout: héllo\n
 
   eprint("done")            ~ stderr: done\n

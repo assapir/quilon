@@ -12,10 +12,9 @@ use std::os::raw::{c_char, c_int, c_void};
 /// Terminate the running program with exit status `code`.
 ///
 /// Quilon cannot yet exit/abort mid-program in-language, so the exit primitive lives
-/// here as a generic `__exit(code)`. It backs both `core.test` assertion failures
-/// (which call `__exit(101)` — the Rust-panic convention, deliberately distinct from
-/// the small result codes examples use as their normal exit status) and the runtime's
-/// own fail-loud paths. Codegen lowers a `__exit(n)` call to a call of this symbol;
+/// here as a generic `__exit(code)`. It backs both a failing assertion (exit 101 — the
+/// Rust-panic convention, deliberately distinct from the small result codes examples
+/// use as their normal exit status) and the runtime's own fail-loud paths. Codegen lowers a `__exit(n)` call to a call of this symbol;
 /// see `CodeGenerator::generate_exit`.
 ///
 /// Never returns. Uses libc `exit(3)` directly rather than `std::process::exit` for

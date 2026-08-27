@@ -27,6 +27,70 @@ All notable changes to Quilon are documented here.
   right operand must share its line. And two adjacent closers now need a space (`> >`),
   because `>>` is the export marker — a diagnostic names that fix.
 
+- **BREAKING: assertions take a matcher, and the old forms are gone.** An assertion is now
+  the value under test first and a matcher second, with two entry points over one
+  vocabulary:
+
+  ```quilon
+  assert(2 + 2, equals(4))              ~ fatal: report at the call site and exit 101
+  expect(body, contains("HTTP/1.1"))    ~ recorded: mark the case failed, carry on
+  expect(status, not(equals(500)))
+  expect(response, isOk())
+  ```
+
+  `assert(cond)`, `assert(cond, opts)`, `AssertOpts`, `assertEq`, `assertNotEq`, `assertOk`
+  and `assertNotOk` are **removed**. Migration is mechanical: `assertEq(a, b)` becomes
+  `assert(a, equals(b))`, `assertNotEq(a, b)` becomes `assert(a, not(equals(b)))`,
+  `assertOk(r)` becomes `assert(r, isOk())`, and `assert(a == b)` becomes
+  `assert(a, equals(b))`. A custom failure message has no replacement — the matcher's own
+  report names what was expected and what was found.
+
+  The matchers are `equals`, `contains`, `not`, `isOk` and `isNotOk`. `equals` compares
+  through the `==` member and renders through `` ` ``, so a user record or sum works exactly
+  as far as its own members do; `contains` reads a `Text` or an array; `not` wraps any
+  matcher. A matcher applied to a type it cannot read is a compile error naming the missing
+  member. Comparisons (`greaterThan`, …) come later.
+
+  `assert` and the matchers are **compiler-provided**, like `print` — no `<< core.test`, and
+  a program reaches them with no import. That is what lets one matcher name work over every
+  type while the language has no generics: a matcher holds a value of the type under test,
+  which otherwise needs a matcher type per type. `core.test` keeps `failAt`, for building a
+  check of your own.
+
+- **A test run reports every case, and tallies them.** `expect` records its failure instead
+  of ending the process: the first failing `expect` in a case skips what is left of that case
+  — the assertions after it never run, so their subjects are never evaluated — and the suite
+  carries on with the next case. A run therefore prints `N passed, M failed`, marks each case
+  `✓` or `✗`, and exits non-zero when any case failed.
+
+  `expect` outside an `it` case is a compile error pointing at `assert`: outside a `describe`
+  block there is no reporter at all (the blocks are stripped from `run`/`compile`/`build`),
+  and inside one but outside a case there is nothing to mark, so the failure would print and
+  never be counted. `assert` inside a case stays fatal, for a precondition the case
+  cannot continue past. `reportCase` gained a `failed :: Bool` parameter, so a reporter of
+  your own says which way each case went.
+
+- **BREAKING: a test suite imports `core.test.report`, and its output is replaceable.** The
+  harness and the report Quilon ships move to a module of their own — `describe`, `it`,
+  `reportSuite`, `reportCase`, `reportSummary` — and a suite gets them with
+  `<< core.test.report`. Migration is one line per suite: `<< core.test` becomes
+  `<< core.test.report`. (A file that imported `core.test` only for `assert` needs no change;
+  assertions are compiler-provided.)
+
+  What `core.test` keeps is what those five are built from, none of it privileged: `failAt`,
+  the run's recorded state (`casesPassed`, `casesFailed`, `nestingDepth`), and the case
+  lifecycle (`enterSuite`, `leaveSuite`, `caseFailing`, `finishCase`). So a suite that imports
+  `core.test` alone and defines the five names itself gets its own report, in ordinary `.qn`
+  and without naming a runtime primitive — `examples/custom_test_reporter.qn` is a working TAP
+  reporter in 30 lines. This is what the split is for: those names had to leave `core.test` to
+  be definable at all, since imports are transitive and a second definition collides.
+
+  `quilon test` binds `reportSummary` by name in the linked program, so whichever definition
+  is in scope ends the run and decides whether it passed; a top-level `describe(…)` is
+  recognized by name too, so a `describe` of your own marks test blocks identically. A suite
+  with no reporter in scope is a compile error at its first `describe`, naming the import that
+  fixes it.
+
 - **BREAKING: a setter is now declared with `:=`, and `=` methods are verified
   non-mutating ([#198](https://github.com/assapir/quilon/issues/198)).** A method that
   mutates its receiver is written `name := (…) => …`; one written `name = (…) => …`

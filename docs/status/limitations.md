@@ -2,7 +2,7 @@
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
+- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables — which is why the [matchers](../corelib/test.md#the-matchers) are compiler-provided rather than written in `.qn`. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](../functions/closures.md#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. A closure can also be passed to a [function-typed parameter](../functions/README.md#function-types--higher-order-functions) and called there. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, and **returning** a closure from a function.
 - **Overloaded and top-level function names are not first-class values.** A closure is passed as a *lambda literal* or a *named closure binding*; passing a top-level function or an overloaded name as a value is not yet supported.
 - **Sum-type payloads mixing types across variants aren't unified yet.** Distinct payload *types* per slot across variants (a position that is `Num` in one variant and `Text` in another) is deferred; the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.

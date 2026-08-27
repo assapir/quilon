@@ -8,7 +8,7 @@ g = (n :: Num) -> Num => n + 1
 ^ = () -> Num => <
   nested = g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(1))))))))))))))))))))))))))))))))))))))))
   piped  = 1 |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g |> g 
-  assertEq(nested, 41)
-  assertEq(piped, 41)
+  assert(nested, equals(41))
+  assert(piped, equals(41))
   0
 >

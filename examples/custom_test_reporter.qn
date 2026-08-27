@@ -1,0 +1,61 @@
+~ A suite that brings its own reporter. `<< core.test` carries what a harness is built from
+~ — the run's recorded state and the case lifecycle — and no `describe`, `it` or `report*`,
+~ so those names are this file's to define. Importing `<< core.test.report` instead would
+~ get the output Quilon ships; nothing here is privileged over that module.
+~
+~ The output is one line per case in TAP order, no indentation and no color, and a final
+~ count. `quilon test` binds `reportSummary` by name, so this one ends the run and its
+~ result is the run's status: 0 passes the suite, anything else fails it.
+~
+~ Run: cargo run -- test examples/custom_test_reporter.qn    ~ exits 0 — every case passes
+<< core.io
+<< core.test
+
+~ ── The reporter ───────────────────────────────────────────────────────────────────
+
+~ A group was entered. This reporter names groups inline rather than as headings, so
+~ entering one prints nothing.
+reportSuite = (name :: Text, depth :: Num) -> $ => $
+
+~ One case, numbered in the order it closed.
+reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ =>
+  print("`failed ? "not ok" : "ok"` `casesPassed() + casesFailed()` - `name`")
+
+~ Last, from the entry point `quilon test` synthesizes. What it returns is the run's status.
+reportSummary = () -> Num => <
+  print("1..`casesPassed() + casesFailed()`")
+  casesFailed() == 0 ? 0 : 1
+>
+
+~ ── The harness ────────────────────────────────────────────────────────────────────
+~ `describe` and `it` are recognized by name, so a definition of one's own drives the same
+~ machinery: `enterSuite`/`leaveSuite` bracket a group, and `caseFailing`/`finishCase`
+~ close a case — asked in that order, because closing clears the failure mark.
+
+describe = (name :: Text, body :: () -> $) -> $ => <
+  reportSuite(name, enterSuite())
+  body()
+  leaveSuite()
+  $
+>
+
+it = (name :: Text, body :: () -> $) -> $ => <
+  body()
+  failed = caseFailing()
+  reportCase(name, finishCase(), failed)
+>
+
+~ ── The suite ──────────────────────────────────────────────────────────────────────
+
+describe("Text", () => <
+  it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
+  it("finds a part", () => expect("haystack", contains("stack")))
+
+  describe("nesting still tracks depth", () => <
+    it("sits one level in", () => expect(nestingDepth(), equals(2)))
+  >)
+>)
+
+describe("Num", () => <
+  it("adds", () => expect(2 + 2, equals(4)))
+>)

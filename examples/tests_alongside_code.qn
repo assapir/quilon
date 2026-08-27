@@ -1,0 +1,36 @@
+~ Tests beside the code they test: the `>>` exports, the `^` that uses them, and the
+~ `describe` blocks checking them all share one file. Only `quilon test` compiles those
+~ blocks — every other command erases them, so the line one case prints below reaches no
+~ build, and `quilon test` in turn ignores the `^` and runs the blocks instead.
+~
+~ Run: cargo run -- run  examples/tests_alongside_code.qn    ~ prints the program's line only
+~ Run: cargo run -- test examples/tests_alongside_code.qn    ~ runs the cases instead
+<< core.io
+<< core.test.report
+
+>> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
+
+>> wordCount = (line :: Text) -> Num => line.trim().split(" ").size
+
+describe("slugify", () => <
+  it("lowercases and hyphenates", () =>
+    expect(slugify("  Hello World  "), equals("hello-world")))
+  it("leaves one lowercase word alone", () => expect(slugify("quilon"), equals("quilon")))
+>)
+
+describe("wordCount", () => <
+  it("counts the words of a line", () => expect(wordCount(" one two three "), equals(3)))
+>)
+
+describe("the erased block", () => <
+  it("runs under quilon test and nowhere else", () => <
+    print("ERASED-TEST-BLOCK-RAN")
+    expect(slugify("Both Halves"), equals("both-halves"))
+  >)
+>)
+
+^ = () -> $ => <
+  print("PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS")
+  assert(slugify("  Hello World  "), equals("hello-world"))
+  assert(wordCount("one two three"), equals(3))
+>

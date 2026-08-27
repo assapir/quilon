@@ -23,6 +23,7 @@ use std::rc::Rc;
 // under `codegen`, so the state declared below stays private to the generator: a child
 // can reach its ancestor's private items, a sibling could not.
 mod arrays;
+mod assertions;
 mod calls;
 mod closures;
 mod collections;

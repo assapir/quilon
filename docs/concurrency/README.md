@@ -69,17 +69,16 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
 
 ```quilon
 << core.io
-<< core.test
 
 ^ = () -> Num => <
-  line = @readStdin()     ~ launches the read; returns a deferred Text (no wait here)
-  assertEq(line, "")      ~ the comparison FORCES it; "" at end-of-input (no piped input)
+  line = @readStdin()          ~ launches the read; returns a deferred Text (no wait here)
+  assert(line, equals(""))     ~ the comparison FORCES it; "" at end-of-input (no piped input)
   0
 >
 ~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.qn
 ```
 
-Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
+Binding `line` does not wait; the force is the `==` behind `equals`. Because
 `print`/`eprint` force and write eagerly, per-fiber output stays in program order.
 
 `core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Result`** is a one-shot

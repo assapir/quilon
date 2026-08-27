@@ -30,8 +30,8 @@ status = (n :: Num) -> Num => check(n) ?
   | NotOk(c) => c
 
 ^ = () -> $ => <
-  assertEq(area(Rect(6, 7)), 42)   ~ 6 * 7
-  assertEq(rank(Green), 1)
-  assertEq(status(50), 0)          ~ 50 <= 100 -> Ok($) -> 0
-  assertEq(status(200), 200)       ~ 200 > 100 -> NotOk(200) -> 200
+  assert(area(Rect(6, 7)), equals(42))   ~ 6 * 7
+  assert(rank(Green), equals(1))
+  assert(status(50), equals(0))          ~ 50 <= 100 -> Ok($) -> 0
+  assert(status(200), equals(200))       ~ 200 > 100 -> NotOk(200) -> 200
 >
