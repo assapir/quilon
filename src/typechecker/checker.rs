@@ -232,6 +232,16 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
+    /// `recv.name(...)` where `name` is not a member of the receiver's type. A member call
+    /// resolves against that type alone, so a function of the same name is never a fallback
+    /// — it would otherwise hijack the call. `in_scope` says whether such a function is
+    /// there to point the reader at.
+    UnknownMember {
+        type_name: String,
+        member: String,
+        in_scope: bool,
+        span: Span,
+    },
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars

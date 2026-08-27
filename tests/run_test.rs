@@ -472,6 +472,132 @@ fn run_non_setter_method_on_immutable_instance_is_allowed() {
     );
 }
 
+// --- Member calls resolve against the receiver's type, never the top-level namespace. ---
+
+#[test]
+fn run_method_wins_over_a_top_level_function_of_the_same_name() {
+    // `c.bump(3)` asks `Counter` for `bump` and gets the method (5 + 3 = 8). The
+    // top-level `bump` shares only the name; letting it claim the call passed the
+    // receiver to a function that never expected it.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
+        8,
+    );
+}
+
+#[test]
+fn run_method_wins_over_a_same_named_overload_set() {
+    // Same rule against an overload SET: two top-level `scale` members, neither of
+    // which may answer `v.scale(3)` — `Vec`'s own method does (7 * 3 = 21).
+    assert_exit(
+        "Vec = {\n  x :: Num,\n  scale = (k :: Num) -> Num => it.x * k\n}\nscale = (n :: Num) -> Num => 0\nscale = (t :: Text) -> Num => 0\n^ = () -> Num => <\n  v :: Vec = Vec { x = 7 }\n  v.scale(3)\n>",
+        21,
+    );
+}
+
+#[test]
+fn run_a_function_calling_a_same_named_method_is_not_a_self_call() {
+    // Inside `bump`, the tail `c.bump(3)` is `Counter`'s method, not recursion — the
+    // tail-call analysis must resolve the callee the same way call lowering does or it
+    // rewrites the call into this function's own loop back-edge. 5 + 3 = 8.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(n)\n>\n^ = () -> Num => bump(3)",
+        8,
+    );
+}
+
+#[test]
+fn a_member_call_never_falls_back_to_a_top_level_function() {
+    // `Counter` declares no `bump`, so `c.bump(3)` is an error naming the type and the
+    // member — never the top-level `bump`, which is a different function.
+    let message = common::type_error_message(
+        "Counter = {\n  value :: Num\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
+    );
+    assert!(
+        message.contains("'Counter' has no member 'bump'"),
+        "the diagnostic must name the receiver's type and the member, got: {message}"
+    );
+}
+
+#[test]
+fn a_member_call_on_a_built_in_type_never_reaches_a_top_level_function() {
+    // The rule is the receiver's TYPE, not just records: `Num` has no `double`, so the
+    // top-level one does not answer `(5).double()`.
+    let message = common::type_error_message(
+        "double = (x :: Num) -> Num => x * 2\n^ = () -> Num => (5).double()",
+    );
+    assert!(
+        message.contains("'Num' has no member 'double'"),
+        "the diagnostic must name the receiver's type and the member, got: {message}"
+    );
+}
+
+#[test]
+fn a_free_call_still_reaches_a_top_level_function_over_a_same_named_method() {
+    // Only the `recv.name(...)` form is receiver-scoped. `bump(3)` names the top-level
+    // function, and the pipe is that same free call (3 * 100 + 3 * 100 = 600).
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + (3 |> bump())",
+        600,
+    );
+}
+
+#[test]
+fn the_free_form_of_a_method_call_still_reaches_the_method() {
+    // What the `.` form adds is refusing the top-level fallback, not receiver dispatch
+    // itself: `bump(c, 3)` and `c |> bump(3)` are the same call and both reach `Counter`'s
+    // method over the top-level `bump` (8 + 8 = 16).
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3) + (c |> bump(3))\n>",
+        16,
+    );
+}
+
+#[test]
+fn a_name_rebound_in_an_inner_scope_is_not_still_the_outer_record() {
+    // The receiver's type comes from the checker, which knows which binding a name refers
+    // to. Reading it off a flat per-function map instead let the lambda's own `x` still
+    // count as the `Foo` bound outside, sending `twice(x)` to `Foo`'s method. 10 + 7 = 17.
+    assert_exit(
+        "Foo = {\n  v :: Num,\n  twice = (n :: Num) -> Num => 999\n}\ntwice = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  x :: Foo = Foo { v = 7 }\n  doubled = [5].map(x => twice(x))\n  doubled[0] + x.v\n>",
+        17,
+    );
+}
+
+#[test]
+fn a_top_level_function_named_like_a_mangled_method_is_not_that_method() {
+    // Method dispatch asks what the type declares, not whether a symbol of the mangled
+    // shape exists — otherwise a top-level `Counter_bump` answers `bump(c, 3)`. 5 + 3 = 8.
+    assert_exit(
+        "Counter = {\n  value :: Num\n}\nCounter_bump = (c :: Counter, n :: Num) -> Num => 900 + n\nbump = (c :: Counter, n :: Num) -> Num => c.value + n\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+        8,
+    );
+}
+
+#[test]
+fn a_method_may_be_named_like_a_compiler_provided_form() {
+    // `assert` and the sum constructors are top-level names, so a member call reaches
+    // neither: `c.assert(3)` is `Counter`'s own method. 5 + 3 = 8.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  assert = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.assert(3)\n>",
+        8,
+    );
+}
+
+#[test]
+fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
+    // A method calling a sibling declared below it (there is no hoisting inside a type)
+    // gets the plain error — pointing at a top-level function that does not exist would
+    // be advice that fails too.
+    let message = common::type_error_message(
+        "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => n <= 0 ? it.value : it.down(n - 1)\n}\n^ = () -> Num => 0",
+    );
+    assert!(
+        message.contains("'Counter' has no member 'down'") && !message.contains("call it as"),
+        "expected the bare diagnostic with no call-it-as advice, got: {message}"
+    );
+}
+
 // --- Unit type (`$`): the type and its sole value share the symbol `$`. ---
 
 #[test]

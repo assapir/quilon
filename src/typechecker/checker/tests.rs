@@ -387,42 +387,36 @@ test = => <
 #[test]
 fn test_method_call_with_args() {
     // Test method calls with additional arguments
-    let tokens = Lexer::tokenize(
-        "add = (self :: Num, x :: Num) => self + x
+    check_ok(
+        "Counter = {
+  value :: Num,
+  add = (x :: Num) -> Num => it.value + x
+}
 test = => <
-  result = (5).add(10)
-  result
+  c = Counter { value = 5 }
+  c.add(10)
 >",
     )
     .unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    let result = checker.check_program(&program);
-    if let Err(e) = result.as_ref() {
-        eprintln!("Type error: {:?}", e);
-    }
-    assert!(result.is_ok());
 }
 
 #[test]
-fn test_method_vs_function_call() {
-    // Both method and function call syntax should work
-    let tokens = Lexer::tokenize(
-        "double = (x :: Num) => x * 2
-test = => <
-  a = (5).double()     ~ Method syntax
-  b = double(5)         ~ Function syntax
-  a + b
->",
+fn test_method_syntax_never_reaches_a_top_level_function() {
+    // A top-level function is not a member of any type: `(5).double()` has no `double`
+    // to resolve on `Num`, and the diagnostic names the type and the member.
+    let err = check_ok(
+        "double = (x :: Num) -> Num => x * 2
+^ = () -> Num => (5).double()",
     )
-    .unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    let result = checker.check_program(&program);
-    if let Err(e) = result.as_ref() {
-        eprintln!("Type error: {:?}", e);
-    }
-    assert!(result.is_ok());
+    .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            TypeError::UnknownMember { type_name, member, .. }
+                if type_name == "Num" && member == "double"
+        ),
+        "expected UnknownMember for Num.double, got {err:?}"
+    );
 }
 
 #[test]

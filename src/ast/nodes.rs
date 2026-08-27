@@ -567,10 +567,14 @@ pub enum Expression {
         span: Span,
     },
 
-    // Function call
+    // Function call. `member_call` marks the `recv.name(args)` form, which the parser
+    // desugars to `name(recv, args)` with `recv` as the first argument. That form resolves
+    // against the RECEIVER's type alone — a built-in method of `recv`'s type, or a method
+    // the record/sum declares — never against the top-level namespace.
     Call {
         function: Box<Expression>,
         arguments: Vec<Expression>,
+        member_call: bool,
         span: Span,
     },
 
@@ -744,6 +748,10 @@ impl Expression {
         Expression::Call {
             function: Box::new(function),
             arguments,
+            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: a name that the
+            // receiver's type can claim but that also falls back to the top-level
+            // namespace, unlike the `x.f(a)` form.
+            member_call: false,
             span: span.clone(),
         }
     }

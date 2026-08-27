@@ -28,15 +28,21 @@ impl TypeChecker {
         }
     }
 
+    /// Type-check a call. `member_call` marks the `recv.name(args)` form (see
+    /// [`Expression::Call`]): its name resolves against the receiver's type alone, so
+    /// every namespace-level dispatch below is skipped for one and an unresolved name is
+    /// [`TypeError::UnknownMember`] rather than a fall-through to a top-level function.
     pub(super) fn check_call(
         &mut self,
         function: &Expression,
         arguments: &[Expression],
+        member_call: bool,
         span: &Span,
     ) -> Result<Type, TypeError> {
         // The provided assertions, which take a matcher rather than ordinary arguments —
         // resolved here, ahead of every other dispatch, since they are the compiler's own.
         if let Expression::Identifier { name, .. } = function
+            && !member_call
             && crate::ast::is_assertion(name)
         {
             return self.check_assertion(name, arguments, span);
@@ -47,6 +53,7 @@ impl TypeChecker {
             name: constructor_name,
             ..
         } = function
+            && !member_call
             && let Some(sum_type) =
                 self.check_constructor_call(constructor_name, arguments, span)?
         {
@@ -121,14 +128,15 @@ impl TypeChecker {
                 name: type_name, ..
             } = first_arg_type
             {
-                // Look up method in the type's method list
-                if let Some(method_sig) = self
+                // Look up method in the type's method list. Only the signature is taken —
+                // cloning the whole entry would deep-copy the method's body at every call.
+                if let Some((method_parameters, method_return_type)) = self
                     .methods
                     .get(&(type_name.clone(), name.clone()))
-                    .cloned()
+                    .map(|(parameters, return_type, _body)| {
+                        (parameters.clone(), return_type.clone())
+                    })
                 {
-                    let (method_parameters, method_return_type, _body) = method_sig;
-
                     // A mutating (setter) method requires a mutable (`:=`) receiver.
                     // The receiver is arguments[0]; `it` (a method calling a sibling
                     // setter on its own receiver) is allowed — its mutability is
@@ -177,6 +185,29 @@ impl TypeChecker {
                     return Ok(method_return_type.unwrap_or(Type::Num));
                 }
             }
+        }
+
+        // Everything below resolves the name in the TOP-LEVEL namespace, which a member
+        // call never reaches: `recv.name(...)` asks the receiver's type for `name`, and a
+        // top-level function that happens to share the name is unrelated to it. Without
+        // this cut-off such a function would silently take over the call.
+        // A member call ALWAYS stops here — never conditionally, or a shape that slipped
+        // past the destructure would fall through and be hijacked after all. The parser
+        // builds one only as `name(recv, …)`, so both halves always bind.
+        if member_call {
+            let (Expression::Identifier { name, .. }, Some(receiver_type)) = (function, &first_ty)
+            else {
+                return Err(TypeError::NotAFunction {
+                    got: self.infer_expression(function)?,
+                    span: span.clone(),
+                });
+            };
+            return Err(TypeError::UnknownMember {
+                type_name: crate::ast::type_label(receiver_type),
+                member: name.clone(),
+                in_scope: self.env.lookup(name).is_some() || self.overloads.contains_key(name),
+                span: span.clone(),
+            });
         }
 
         // `print`/`eprint` render ANY value through its `` ` `` operator, so a single
