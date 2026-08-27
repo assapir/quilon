@@ -12,6 +12,8 @@ quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
 ```
 
+`quilon --version` (or `-V`) prints the compiler version.
+
 `quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
 any case failed. It runs a file's top-level `describe` blocks, which every other command
 erases — so tests may sit in the file they test, its `^` included, and still cost a release
