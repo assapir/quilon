@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(name = "quilon")]
 #[command(about = "Quilon - A fast, statically-typed web programming language", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -224,6 +225,28 @@ fn main() {
         Commands::Test { path } => {
             let failed = test_command::run(&path);
             std::process::exit(i32::from(failed > 0));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::{CommandFactory, error::ErrorKind};
+
+    #[test]
+    fn version_flags_print_the_package_version() {
+        for flag in ["--version", "-V"] {
+            let error = Cli::command()
+                .try_get_matches_from(["quilon", flag])
+                .expect_err("the version flags should exit before requiring a subcommand");
+
+            assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+            assert_eq!(error.exit_code(), 0);
+            assert_eq!(
+                error.to_string(),
+                format!("quilon {}\n", env!("CARGO_PKG_VERSION"))
+            );
         }
     }
 }
