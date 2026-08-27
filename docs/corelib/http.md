@@ -1,3 +1,9 @@
+---
+title: "core.http — HTTP client"
+sidebar:
+  label: "core.http"
+  order: 6
+---
 # `core.http` — HTTP client
 
 Import with `<< core.http`. See the [corelib index](README.md).
