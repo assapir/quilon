@@ -4,7 +4,8 @@
 //! Two halves, and both matter. A suite has to run — report each case, and exit non-zero
 //! when one failed. And a suite has to cost a release build nothing: the blocks are not part
 //! of the compilation unit, so `run`/`compile`/`build` neither check them nor emit them, and
-//! a file that is only tests is not a program at all.
+//! a file that is only tests is not a program at all. Both halves apply to ONE file: tests
+//! may sit beside the code they test, `^` included, which is where the two meet.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
