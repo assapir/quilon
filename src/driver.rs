@@ -295,6 +295,7 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
             name: "^".to_string(),
             parameters: Vec::new(),
             return_type: Some(ast::Type::Num),
+            binding_type: None,
             body: ast::Expression::Block {
                 statements,
                 span: synthesized_span(Synthesized::EntryBody),

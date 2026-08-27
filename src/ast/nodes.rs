@@ -144,6 +144,13 @@ pub struct FunctionDeclaration {
     pub name: String,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
+    /// The `::` annotation written on the binding itself. A FUNCTION type there states the
+    /// whole signature — `f :: (Num) -> Num = (n) => n + 1` — so its parameter types fill in
+    /// the parameters the definition leaves unannotated and its return type is the
+    /// function's; any other type states the return type alone (`f :: Num = (x :: Num) => x`).
+    /// Read it through [`Self::parameter_type`] and [`Self::declared_return_type`] rather
+    /// than directly: the two ways of writing a signature must never be read apart.
+    pub binding_type: Option<Type>,
     pub body: Expression,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
@@ -167,6 +174,43 @@ impl FunctionDeclaration {
     /// Shared by the type checker and codegen so the two never disagree on what to skip.
     pub fn is_inert_corelib_placeholder(&self) -> bool {
         self.from_corelib && is_builtin_overload_name(&self.name)
+    }
+
+    /// The parameter slots of a function type on the binding (`f :: (Num) -> Num = …`),
+    /// when it has as many as the definition has parameters. A mismatched arity answers
+    /// `None`: the type checker reports that against the annotation itself, and nothing
+    /// else should quietly index the wrong slot.
+    pub fn declared_parameters(&self) -> Option<&[Type]> {
+        match &self.binding_type {
+            Some(Type::Function { parameters, .. })
+                if parameters.len() == self.parameters.len() =>
+            {
+                Some(parameters)
+            }
+            _ => None,
+        }
+    }
+
+    /// The declared type of parameter `index`: its own annotation, else the matching slot
+    /// of a function type on the binding.
+    pub fn parameter_type(&self, index: usize) -> Option<&Type> {
+        self.parameters[index]
+            .type_annotation
+            .as_ref()
+            .or_else(|| self.declared_parameters().map(|slots| &slots[index]))
+    }
+
+    /// The declared return type: the `-> Type` annotation, else what the binding's `::`
+    /// annotation says the result is — the return slot of a function type, or the whole
+    /// annotation when it names anything else.
+    pub fn declared_return_type(&self) -> Option<&Type> {
+        if let Some(annotation) = &self.return_type {
+            return Some(annotation);
+        }
+        match &self.binding_type {
+            Some(Type::Function { return_type, .. }) => Some(return_type),
+            other => other.as_ref(),
+        }
     }
 }
 
@@ -474,14 +518,14 @@ pub fn visible_parameters(parameters: &[Type]) -> &[Type] {
     }
 }
 
-/// Whether a callee with `parameters` accepts a call passing `args` argument types: either an
+/// Whether a callee with `parameters` accepts a call passing `args` arguments: either an
 /// exact match, or one argument short of a trailing `Site` the compiler fills in. `matches`
-/// compares one parameter against one argument (the checker and codegen each pass their
-/// own comparison — resolved types vs. mangling tags).
-pub fn parameters_accept(
+/// compares one parameter against one argument, so an argument is whatever the caller knows
+/// about it — a resolved type, a mangling tag, or a type not settled yet.
+pub fn parameters_accept<A>(
     parameters: &[Type],
-    args: &[Type],
-    matches: impl Fn(&Type, &Type) -> bool,
+    args: &[A],
+    matches: impl Fn(&Type, &A) -> bool,
 ) -> bool {
     if parameters.len() != args.len() && !fills_call_site(parameters, args.len()) {
         return false;

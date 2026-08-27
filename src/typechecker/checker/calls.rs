@@ -28,6 +28,30 @@ impl TypeChecker {
         }
     }
 
+    /// Infer an argument's type, handing a lambda argument the type its position states.
+    /// This is **contextual typing**: `apply(10, (n) => n + 1)` types `n` from `apply`'s
+    /// own `(Num) -> Num` parameter, so a higher-order call states the parameter types
+    /// once — at the definition that receives them. Anything but a lambda is inferred on
+    /// its own, `target` unused.
+    pub(super) fn infer_argument(
+        &mut self,
+        argument: &Expression,
+        target: LambdaTarget<'_>,
+    ) -> Result<Type, TypeError> {
+        let Expression::Lambda {
+            parameters,
+            return_type,
+            body,
+            span,
+        } = argument
+        else {
+            return self.infer_expression(argument);
+        };
+        let ty = self.check_lambda_against(parameters, return_type.as_ref(), body, target)?;
+        self.type_table.insert(span.clone(), ty.clone());
+        Ok(ty)
+    }
+
     pub(super) fn check_call(
         &mut self,
         function: &Expression,
@@ -59,12 +83,17 @@ impl TypeChecker {
         // each place made every nesting level infer its subtree twice — 2^depth work,
         // which visibly hung the checker on ~25-deep call chains (and `|>` pipelines,
         // which desugar to exactly that shape).
-        let first_ty =
-            if let (Expression::Identifier { .. }, false) = (function, arguments.is_empty()) {
-                Some(self.infer_expression(&arguments[0])?)
-            } else {
-                None
-            };
+        // A LAMBDA first argument is left out: its type may depend on the signature this
+        // call resolves to, which is only known further down. It is no loss — a lambda is
+        // never a receiver, so none of the probes below can want it.
+        let first_ty = match (function, arguments.first()) {
+            (Expression::Identifier { .. }, Some(first))
+                if !matches!(first, Expression::Lambda { .. }) =>
+            {
+                Some(self.infer_expression(first)?)
+            }
+            _ => None,
+        };
 
         // Built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) take
         // precedence over any user overload of the same name: when the receiver
@@ -168,8 +197,9 @@ impl TypeChecker {
                     // resolving it only moves the failure from the checker into codegen, which
                     // has no field types for a method parameter.
                     for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
-                        let arg_type = self.infer_expression(arg)?;
                         let parameter_type = parameter.type_annotation.clone().unwrap_or(Type::Num);
+                        let arg_type =
+                            self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
                         self.check_type_compatibility(&parameter_type, &arg_type, span)?;
                     }
 
@@ -207,14 +237,7 @@ impl TypeChecker {
         if let Expression::Identifier { name, .. } = function
             && self.overloads.contains_key(name)
         {
-            let mut arg_types = Vec::with_capacity(arguments.len());
-            for (i, arg) in arguments.iter().enumerate() {
-                arg_types.push(match (i, &first_ty) {
-                    (0, Some(ty)) => ty.clone(),
-                    _ => self.infer_expression(arg)?,
-                });
-            }
-            return self.resolve_overload(name, &arg_types, span);
+            return self.check_overloaded_call(name, arguments, first_ty.as_ref(), span);
         }
 
         // Fall back to regular function call
@@ -238,13 +261,15 @@ impl TypeChecker {
                     });
                 }
 
-                // Type the arguments once, then check against the resolved signature.
+                // Type the arguments once, then check against the resolved signature. The
+                // signature is known here, so a lambda argument takes its parameter types
+                // from the matching parameter rather than having to repeat them.
                 for (i, (parameter_type, arg)) in
                     parameters.iter().zip(arguments.iter()).enumerate()
                 {
                     let arg_type = match (i, &first_ty) {
                         (0, Some(ty)) => ty.clone(),
-                        _ => self.infer_expression(arg)?,
+                        _ => self.infer_argument(arg, LambdaTarget::Declared(parameter_type))?,
                     };
                     self.check_type_compatibility(parameter_type, &arg_type, span)?;
                 }
@@ -609,6 +634,7 @@ impl TypeChecker {
                 span: span.clone(),
             });
         }
+        self.record_parameter_types(parameters, parameter_types);
         self.env.push_scope();
         for (parameter, ty) in parameters.iter().zip(parameter_types) {
             if let Some(ann) = &parameter.type_annotation {

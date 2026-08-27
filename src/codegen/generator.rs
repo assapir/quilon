@@ -491,14 +491,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     || is_builtin_overload_name(&declaration.name))
                 && declaration.name != "^"
             {
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 // The return type drives argument-type inference for a value bound to
                 // an overloaded call/operator (e.g. a user `+` returning a record).
-                let ret = declaration.return_type.clone().unwrap_or(Type::Num);
+                let ret = declaration
+                    .declared_return_type()
+                    .cloned()
+                    .unwrap_or(Type::Num);
                 self.overloads
                     .entry(declaration.name.clone())
                     .or_default()
@@ -525,10 +524,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else if method.parameters.len() == 1 {
                         vec![
                             self_type.clone(),
-                            method.parameters[0]
-                                .type_annotation
-                                .clone()
-                                .unwrap_or(Type::Num),
+                            self.parameter_type(&method.parameters[0]),
                         ]
                     } else {
                         continue;
@@ -550,15 +546,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = &declaration.return_type {
+                if let Some(ret) = declaration.declared_return_type() {
                     self.fn_return_types
                         .insert(declaration.name.clone(), ret.clone());
                 }
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
                         .insert(declaration.name.clone(), parameters.len());
@@ -598,13 +590,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => Some(
-                        declaration
-                            .parameters
-                            .iter()
-                            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                            .collect(),
-                    ),
+                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
+                        Some(self.parameter_types(&declaration.parameters))
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();

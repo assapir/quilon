@@ -57,6 +57,7 @@ sidebar:
 | `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | [Function types](../functions/README.md#function-types--higher-order-functions) (`(Num) -> Bool`, `() -> $`) + higher-order functions: a function-typed parameter called inside, taking a closure by literal or by name | ✅ |
+| [Contextual lambda typing](../functions/README.md#a-lambda-takes-its-parameter-types-from-the-target): a lambda takes its parameter types from the signature that receives it — a function-typed parameter (a user function's, a method's, or the member an overload set narrows to) or a binding that declares its function type | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
 | Overloaded or top-level function name passed as a value; a closure **returned** from a function | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |

@@ -650,6 +650,81 @@ impl TypeChecker {
         }
     }
 
+    /// Record each parameter's resolved type in the type oracle, keyed by the parameter's
+    /// own span. A parameter that took its type from context has nothing written in the
+    /// AST for codegen to read, so this side-table is where codegen recovers it — the same
+    /// route it already takes for every inferred expression type.
+    pub(super) fn record_parameter_types(&mut self, parameters: &[Parameter], types: &[Type]) {
+        for (parameter, ty) in parameters.iter().zip(types) {
+            self.type_table.insert(parameter.span.clone(), ty.clone());
+        }
+    }
+
+    /// Resolve a definition's parameter types and record them in the oracle. A written
+    /// annotation wins; a parameter without one takes the matching slot of `declared` — the
+    /// function type the position or the binding states — and an annotation that disagrees
+    /// with its slot is reported at that parameter. With no annotation and no slot there is
+    /// nothing to infer from, and `missing` names the error for the kind of definition this
+    /// is. Shared by every parameter list whose types can come from context.
+    fn resolve_parameter_types(
+        &mut self,
+        parameters: &[Parameter],
+        declared: Option<&[Type]>,
+        missing: impl Fn(&Parameter) -> TypeError,
+    ) -> Result<Vec<Type>, TypeError> {
+        let types: Vec<Type> = parameters
+            .iter()
+            .enumerate()
+            .map(|(i, p)| match (&p.type_annotation, declared) {
+                (Some(annotation), slots) => {
+                    let annotated = self.resolve_type(annotation);
+                    if let Some(slots) = slots {
+                        self.check_type_compatibility(
+                            &self.resolve_type(&slots[i]),
+                            &annotated,
+                            &p.span,
+                        )?;
+                    }
+                    Ok(annotated)
+                }
+                (None, Some(slots)) => Ok(self.resolve_type(&slots[i])),
+                (None, None) => Err(missing(p)),
+            })
+            .collect::<Result<_, _>>()?;
+        self.record_parameter_types(parameters, &types);
+        Ok(types)
+    }
+
+    /// A function type on the binding has to describe the definition it sits on, or it is
+    /// a lie about the function: it must have a slot per parameter, and — where a `->` is
+    /// written beside it — the two must agree on the return type. (A parameter annotated
+    /// against its slot is caught per parameter, in `resolve_parameter_types`.)
+    fn check_binding_signature(&self, declaration: &FunctionDeclaration) -> Result<(), TypeError> {
+        let Some(Type::Function {
+            parameters,
+            return_type,
+        }) = &declaration.binding_type
+        else {
+            return Ok(());
+        };
+        if parameters.len() != declaration.parameters.len() {
+            return Err(TypeError::SignatureArity {
+                subject: format!("'{}'", declaration.name),
+                expected: parameters.len(),
+                got: declaration.parameters.len(),
+                span: declaration.span.clone(),
+            });
+        }
+        match &declaration.return_type {
+            Some(arrow) => self.check_type_compatibility(
+                &self.resolve_type(return_type),
+                &self.resolve_type(arrow),
+                &declaration.span,
+            ),
+            None => Ok(()),
+        }
+    }
+
     pub(super) fn check_function_declaration(
         &mut self,
         declaration: &FunctionDeclaration,
@@ -661,21 +736,22 @@ impl TypeChecker {
             return Ok(());
         }
 
-        // Build function type from parameters and return type. A parameter with no
-        // annotation is a compile-time error: a function's own parameter has no context to
-        // be inferred from, so its type must be written down (there is no `Num` default).
-        let parameter_types: Vec<Type> = declaration
-            .parameters
-            .iter()
-            .map(|p| match &p.type_annotation {
-                Some(t) => Ok(self.resolve_type(t)),
-                None => Err(TypeError::UnannotatedParameter {
-                    function: declaration.name.clone(),
-                    parameter: p.name.clone(),
-                    span: p.span.clone(),
-                }),
-            })
-            .collect::<Result<_, _>>()?;
+        self.check_binding_signature(declaration)?;
+
+        // Build function type from parameters and return type. A parameter takes its
+        // written annotation, else the matching slot of a function type declared on the
+        // binding itself. With neither it is a compile-time error: there is no `Num`
+        // default, and nothing else here to infer from.
+        let name = declaration.name.clone();
+        let parameter_types = self.resolve_parameter_types(
+            &declaration.parameters,
+            declaration.declared_parameters(),
+            |p| TypeError::UnannotatedParameter {
+                function: name.clone(),
+                parameter: p.name.clone(),
+                span: p.span.clone(),
+            },
+        )?;
 
         // Only a top-level function's LAST parameter can receive a call site.
         self.reject_unfillable_site_parameters(
@@ -685,14 +761,14 @@ impl TypeChecker {
             nesting == Nesting::TopLevel,
         )?;
 
+        let annotated_return = declaration
+            .declared_return_type()
+            .map(|t| self.resolve_type(t));
+
         // For recursion support, we need to add the function to the environment
         // BEFORE checking its body. We'll use the annotated return type if available,
         // or default to Num (which we'll verify later)
-        let preliminary_return_type = declaration
-            .return_type
-            .as_ref()
-            .map(|t| self.resolve_type(t))
-            .unwrap_or(Type::Num);
+        let preliminary_return_type = annotated_return.clone().unwrap_or(Type::Num);
 
         // An overloaded member (operator-named, or one of 2+ same-named defs) is NOT
         // a single `env` binding — its signature already lives in the overload set
@@ -737,10 +813,7 @@ impl TypeChecker {
         // parameter, but handing one back across the call boundary is not supported yet.
         // Checked on both the annotation and the inferred body so neither slips through.
         let returns_function = matches!(body_type, Type::Function { .. })
-            || declaration
-                .return_type
-                .as_ref()
-                .is_some_and(|t| matches!(self.resolve_type(t), Type::Function { .. }));
+            || matches!(annotated_return, Some(Type::Function { .. }));
         if returns_function {
             return Err(TypeError::UnsupportedFunctionReturn {
                 function: declaration.name.clone(),
@@ -749,8 +822,7 @@ impl TypeChecker {
         }
 
         // Verify the return type matches if annotated
-        if let Some(ref annotated_type) = declaration.return_type {
-            let annotated_type = self.resolve_type(annotated_type);
+        if let Some(annotated_type) = annotated_return {
             self.check_type_compatibility(&annotated_type, &body_type, &declaration.span)?;
             // A GENERIC return annotation — in practice only `-> Result`, whose
             // `Ok(T)`/`NotOk(E)` payload slots are type variables the language cannot
@@ -797,25 +869,58 @@ impl TypeChecker {
     /// decided downstream (codegen) from each captured name's binding operator; the
     /// checker only needs the outer binding to be visible and concrete.
     ///
-    /// Closures are MONOMORPHIC in M3: parameters are concrete-typed (annotated, else the
-    /// `Num` default, matching top-level functions) and captured values are concrete. The
-    /// language has no type variables, so there is nothing polymorphic to capture; generic
-    /// closures + defunctionalization are deferred to M4.
+    /// Closures are MONOMORPHIC: parameters are concrete-typed and captured values are
+    /// concrete. The language has no type variables, so there is nothing polymorphic to
+    /// capture; generic closures + defunctionalization are deferred.
+    ///
+    /// Checked with no target type — the caller of this one has no signature to offer. A
+    /// lambda in a position that DOES state one goes through
+    /// [`Self::check_lambda_against`] instead.
     pub(super) fn check_lambda(
         &mut self,
         parameters: &[Parameter],
         return_type: Option<&Type>,
         body: &Expression,
     ) -> Result<Type, TypeError> {
-        let parameter_types: Vec<Type> = parameters
-            .iter()
-            .map(|p| {
-                p.type_annotation
-                    .as_ref()
-                    .map(|t| self.resolve_type(t))
-                    .unwrap_or(Type::Num)
-            })
-            .collect();
+        self.check_lambda_against(parameters, return_type, body, LambdaTarget::None)
+    }
+
+    /// Type-check a lambda against the type its position states — **contextual typing**.
+    /// Where that is a function type of the same arity, each parameter the lambda leaves
+    /// unannotated takes its type from the matching slot, so a higher-order call states the
+    /// parameter types once, at the receiving definition. A written annotation always wins.
+    ///
+    /// Where the position states no usable type, an unannotated parameter is an error
+    /// naming it — there is no silent `Num` — and the [`LambdaTarget`] is what the message
+    /// says was missing.
+    pub(super) fn check_lambda_against(
+        &mut self,
+        parameters: &[Parameter],
+        return_type: Option<&Type>,
+        body: &Expression,
+        target: LambdaTarget<'_>,
+    ) -> Result<Type, TypeError> {
+        // Only a function type can type these parameters, and only slot for slot: a
+        // different arity is a mismatch with the stated type, not a missing annotation.
+        let slots = match target.stated() {
+            Some(Type::Function {
+                parameters: slots, ..
+            }) if slots.len() == parameters.len() => Some(slots.as_slice()),
+            Some(Type::Function {
+                parameters: slots, ..
+            }) => {
+                return Err(TypeError::SignatureArity {
+                    subject: "this lambda".to_string(),
+                    expected: slots.len(),
+                    got: parameters.len(),
+                    span: body.span().clone(),
+                });
+            }
+            _ => None,
+        };
+
+        let parameter_types =
+            self.resolve_parameter_types(parameters, slots, |p| target.uninferable(p))?;
 
         // A lambda is a function VALUE, called through its binding rather than by name, so
         // no parameter of it — last included — can receive a call site.

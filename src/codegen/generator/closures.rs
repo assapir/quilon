@@ -17,14 +17,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<(), String> {
         let sig = self.closure_signature(
             &declaration.parameters,
-            declaration.return_type.as_ref(),
+            declaration.declared_return_type(),
             &declaration.body,
         )?;
         self.closure_sigs.insert(declaration.name.clone(), sig);
 
         let closure = self.generate_lambda(
             &declaration.parameters,
-            declaration.return_type.as_ref(),
+            declaration.declared_return_type(),
             &declaration.body,
         )?;
         let slot = self.create_entry_block_alloca(&declaration.name, closure.get_type())?;
@@ -414,7 +414,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<ClosureSig<'ctx>, String> {
         let parameter_types: Vec<BasicTypeEnum> = parameters
             .iter()
-            .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
+            .map(|p| self.boundary_type(&self.parameter_type(p)))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.default_return_type(return_type, body);
         Ok((parameter_types, self.boundary_type(&ret)?))
@@ -594,7 +594,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(alloca, llvm_parameter)
                 .map_err(ctx("Failed to store parameter"))?;
             self.variables.insert(parameter.name.clone(), (alloca, pty));
-            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
+            let qty = self.parameter_type(parameter);
             self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
