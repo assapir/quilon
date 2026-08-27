@@ -98,7 +98,7 @@ Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking c
 
 Thanks to everyone who has contributed to Quilon. This table updates itself.
 
-<!-- readme: contributors,assapir/- -start -->
+<!-- readme: contributors -start -->
 <table>
 	<tbody>
 		<tr>
@@ -112,7 +112,7 @@ Thanks to everyone who has contributed to Quilon. This table updates itself.
 		</tr>
 	<tbody>
 </table>
-<!-- readme: contributors,assapir/- -end -->
+<!-- readme: contributors -end -->
 
 ## Licensing
 
