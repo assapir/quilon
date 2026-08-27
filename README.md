@@ -94,6 +94,13 @@ Run `./scripts/release.sh` from a clean `main`: it checks the `Cargo.toml`/`quil
 
 Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language. The runtime is single-threaded today; the parallel machinery is direction, not delivery.
 
+## Contributors
+
+Thanks to everyone who has contributed to Quilon. This table updates itself.
+
+<!-- readme: contributors -start -->
+<!-- readme: contributors -end -->
+
 ## Licensing
 
 **The Quilon compiler is free software under the GNU GPL v2** ([LICENSE.md](./LICENSE.md)) — forks and runtime modifications stay GPLv2.
