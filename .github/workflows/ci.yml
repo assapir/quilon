@@ -92,8 +92,14 @@ jobs:
       # inside one passes every other gate; the Rust tests name today's suites one by one,
       # while this covers any suite added to `examples/` without one. Exits non-zero if a
       # case fails or a suite does not compile.
+      #
+      # `corelib` as well as `examples`: a corelib module's tests sit beside the code they
+      # test, and the import resolver drops an imported module's blocks — so `corelib/http.qn`
+      # is only ever run by naming it, or the directory holding it, here.
       - name: Quilon test suites
-        run: ./target/debug/quilon test examples
+        run: |
+          ./target/debug/quilon test examples
+          ./target/debug/quilon test corelib
 
       # The previous run-on-main's numbers, so each table can carry a delta column. Keyed
       # per commit and restored by prefix: a fresh key every run (caches are immutable once
@@ -210,7 +216,9 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Quilon test suites
-        run: ./target/debug/quilon test examples
+        run: |
+          ./target/debug/quilon test examples
+          ./target/debug/quilon test corelib
 
   # Arch Linux, in a container on the Ubuntu runner. Arch is the maintainer's own
   # environment, and the one that forced the vendored collector: its `gc` package
@@ -260,4 +268,6 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Quilon test suites
-        run: ./target/debug/quilon test examples
+        run: |
+          ./target/debug/quilon test examples
+          ./target/debug/quilon test corelib

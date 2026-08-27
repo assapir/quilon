@@ -870,6 +870,44 @@ fn the_example_suite_passes() {
     );
 }
 
+/// A corelib module's own suite sits beside the code it tests, and the import resolver drops an
+/// imported module's blocks — so `corelib/http.qn` runs only when it is the file named. Gated
+/// here as well as in CI: the blocks are compiled by nothing else, so a type error in one is
+/// invisible to every other command.
+#[test]
+fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("corelib")
+        .join("http.qn");
+    let out = quilon(&["test", module.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "corelib/http.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    for group in [
+        "the status line",
+        "headers",
+        "the body",
+        "line endings",
+        "the Method sum",
+        "reading a URL apart",
+        "serialising a request",
+        "a round trip",
+    ] {
+        assert!(
+            out.stdout.contains(group),
+            "the `{group}` group is missing from the report:\n{}",
+            out.stdout
+        );
+    }
+    assert!(
+        out.stdout.contains("71 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+}
+
 // ── The shipped example: tests beside the code, and what each command does with them ─────
 
 /// The shipped demonstration, built and run: `examples/tests_alongside_code.qn` holds its `>>`

@@ -84,6 +84,13 @@ Known gaps: an IPv6 literal host (`http://[::1]/p`) is read as already carrying 
 default `:80` is not appended; and a scheme-less URL whose query itself contains `://` is cut at
 that inner occurrence.
 
-See `examples/http_parse.qn` for serialising and parsing offline, `examples/http_get.qn` for a
-live GET, and `examples/http_test.qn` for the parser's and serialiser's edge cases — run that
-one with `quilon test examples/http_test.qn`.
+See `examples/http_parse.qn` for serialising and parsing offline, and `examples/http_get.qn` for
+a live GET.
+
+The parser's and serialiser's edge cases are covered by the suite that lives in
+`corelib/http.qn` itself, beside the code it tests. Only the root program's `describe` blocks
+survive the import resolver, so the suite runs when the module is the file being tested:
+
+```bash
+quilon test corelib/http.qn
+```
