@@ -1115,6 +1115,25 @@ fn unterminated_block_with_only_a_comparison_gt_is_an_error() {
 }
 
 #[test]
+fn two_adjacent_closers_name_the_missing_space() {
+    // `>>` is the export marker by maximal munch, so two closers need a space between
+    // them. The diagnostic must say so rather than fail on a phantom export.
+    let src = "^ = () -> Num => <\n  f = () => < 1 >>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`>>` as two closers must be rejected");
+    assert!(
+        err.message.contains("separate them with a space"),
+        "expected the adjacent-closer hint, got: {}",
+        err.message
+    );
+
+    // With the space, the same program parses.
+    let spaced = "^ = () -> Num => <\n  f = () => < 1 > >";
+    let tokens = Lexer::tokenize(spaced).expect("lexing failed");
+    assert!(parser::parse(&tokens).is_ok(), "`> >` must parse");
+}
+
+#[test]
 fn modulo_works_end_to_end() {
     // `%` was once documented and type-checked but had NO codegen arm — it passed
     // `check` and died at run/build with an internal error. It lowers to the f64

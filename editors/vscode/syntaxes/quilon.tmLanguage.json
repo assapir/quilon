@@ -163,7 +163,7 @@
         },
         {
           "name": "punctuation.definition.block.end.quilon",
-          "match": ">(?![ \\t]*[A-Za-z0-9\"$@(\\[{!-])"
+          "match": ">(?![ \\t]*(?:[A-Za-z0-9_\"$@(\\[{]|-(?![>+])|!(?!=)))"
         },
         {
           "name": "keyword.operator.comparison.quilon",

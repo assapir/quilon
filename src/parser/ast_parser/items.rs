@@ -534,6 +534,18 @@ impl<'a> Parser<'a> {
         let mut statements = Vec::new();
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
+            // Two block closers written with no space between them (`… >>`) are one
+            // `Export` token by maximal munch, and an export is never a statement, so say
+            // what the fix is instead of failing further along on a phantom marker.
+            if self.check(&TokenKind::Export) {
+                return Err(ParseError {
+                    message: "`>>` here is the export marker, not two block closers — \
+                              separate them with a space (`> >`)"
+                        .to_string(),
+                    span: self.current_span(),
+                });
+            }
+
             // Try to parse as item first (for nested declarations / reassignments).
             // `name = …` is an immutable binding; `name := …` is a mutable bind/reassign;
             // `name :: Type = …` is an annotated binding. `::` at statement start is

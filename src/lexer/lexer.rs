@@ -75,10 +75,13 @@ impl Lexer {
 /// the rest as the block close [`TokenKind::BlockClose`] — the rule stated on those two
 /// token kinds.
 ///
-/// The two readings never both apply to one `>`: a block is not an operand of anything, so
-/// a block close can never be followed by the start of an operand, and a comparison always
-/// is. Deciding therefore takes exactly one token of lookahead, and no `>`'s reading
-/// depends on another's.
+/// One token of lookahead settles it because a block is not an operand of anything: within
+/// a statement, a block close is never followed by the start of an operand, while a
+/// comparison's `>` always is. The successor must also be on the same line — otherwise the
+/// identifier opening the next statement would read as a comparison's right operand. What
+/// stays unexpressible (as under any one-token rule) is a block close and a following
+/// statement sharing a line: `< f = () => < 1 > y = 2 >` reads that `>` as a comparison.
+/// No `>`'s reading depends on another's, so one flat pass suffices.
 fn reclassify_gt(tokens: &mut [Token]) {
     let mut rest = tokens;
     while let [token, tail @ ..] = rest {

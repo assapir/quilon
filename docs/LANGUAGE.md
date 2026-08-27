@@ -765,7 +765,7 @@ of an array element, a match, a call, or a lambda.)
 > **closes a block by default**; it is **greater-than only when an operand follows it on
 > the same line** — an identifier, a literal, `(`, `[`, `{`, or a prefix `-`/`!`. So `a > b`,
 > `f(x > y)`, `a > -b` and `"b" > "a"` are comparisons, while a `>` before a `)`, `]`, `}`,
-> `,`, `.`, a `~` comment, or the end of the line closes its block — which is what lets a
+> `,`, a `~` comment, or the end of the line closes its block — which is what lets a
 > block-bodied lambda sit inside a call on one line:
 > ```quilon
 > xs.each(x => <
@@ -806,12 +806,14 @@ of an array element, a match, a call, or a lambda.)
 > ```
 > (See `examples/statements.qn`.)
 - **Ternary:** `cond ? then : else`.
-- **Blocks:** `< stmt… last >` are expressions that evaluate to their last expression — usable anywhere a value is, not just as a function body:
+- **Blocks:** `< stmt… last >` evaluate to their last expression. A block goes in **body**
+  position — a function's, a lambda's, or a method's — not in operand position, so a block
+  is never the left or right side of an operator:
 ```quilon
-result = <
+total = () -> Num => <
   x = 10
   y = 20
-  x + y          ~ result is 30
+  x + y          ~ total() is 30
 >
 ```
 

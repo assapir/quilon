@@ -600,11 +600,13 @@ impl<'a> Parser<'a> {
             _ => {
                 // The lexer's `>` rule reads a `>` as greater-than exactly when an
                 // operand follows, so `TokenKind::starts_operand` must accept nothing
-                // this function rejects — a divergence would silently turn a comparison
-                // into a block close.
+                // the operand grammar rejects — a divergence would silently turn a
+                // comparison into a block close. The prefix operators are exempt here:
+                // `parse_unary` consumes them before this function is ever reached.
                 debug_assert!(
-                    !token.kind.starts_operand(),
-                    "starts_operand accepts {:?}, which parse_primary rejects",
+                    !token.kind.starts_operand()
+                        || matches!(token.kind, TokenKind::Minus | TokenKind::Not),
+                    "starts_operand accepts {:?}, which the operand grammar rejects",
                     token.kind
                 );
                 Err(ParseError {
