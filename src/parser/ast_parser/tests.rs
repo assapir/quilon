@@ -130,7 +130,7 @@ fn test_parse_comparison() {
 
 #[test]
 fn test_parse_bare_less_and_greater_than() {
-    // `<` after a complete operand is `Lt`; a non-line-final `>` is `Gt`.
+    // `<` after a complete operand is `Lt`; a `>` with an operand after it is `Gt`.
     let lt = parse(&Lexer::tokenize("flag = a < b").unwrap()).unwrap();
     if let Item::VariableDeclaration(d) = &lt.items[0] {
         assert!(matches!(

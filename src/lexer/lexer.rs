@@ -66,66 +66,38 @@ impl Lexer {
             }
         }
 
-        classify_block_closes(&mut tokens);
+        reclassify_gt(&mut tokens);
         Ok(tokens)
     }
 }
 
-/// Decide, for every `>` in the stream, whether it closes a `< … >` block or is the
-/// greater-than operator.
+/// Turn each `>` that is really the greater-than operator into [`TokenKind::Gt`], leaving
+/// the rest as the block close [`TokenKind::BlockClose`] — the rule stated on those two
+/// token kinds.
 ///
-/// `>` **closes a block by default**; it is the operator only where a comparison can
-/// actually be written — that is, only when the very next token is on the **same line**
-/// and can **begin an operand** (see [`starts_operand`]). Everything else — a `)`, `]`,
-/// `}`, `,`, `.`, another `>`, a trailing `~` comment, the end of the line, the end of the
-/// file — closes. So a block-bodied lambda closes cleanly inside a call argument list,
-/// `f(() => < … >)`, while `a > b`, `f(x > y)`, `a > -b` and `"b" > "a"` all stay
-/// comparisons.
-///
-/// One following token is enough to decide, and the decision never depends on another
-/// `>`'s outcome, so this is a single flat pass rather than anything nested.
-fn classify_block_closes(tokens: &mut [Token]) {
-    for index in 0..tokens.len() {
-        if tokens[index].kind != TokenKind::BlockClose {
-            continue;
+/// The two readings never both apply to one `>`: a block is not an operand of anything, so
+/// a block close can never be followed by the start of an operand, and a comparison always
+/// is. Deciding therefore takes exactly one token of lookahead, and no `>`'s reading
+/// depends on another's.
+fn reclassify_gt(tokens: &mut [Token]) {
+    let mut rest = tokens;
+    while let [token, tail @ ..] = rest {
+        if token.kind == TokenKind::BlockClose
+            && tail
+                .first()
+                .is_some_and(|next| !next.first_on_line && next.kind.starts_operand())
+        {
+            token.kind = TokenKind::Gt;
         }
-        let compares = tokens
-            .get(index + 1)
-            .is_some_and(|next| !next.first_on_line && starts_operand(&next.kind));
-        if compares {
-            tokens[index].kind = TokenKind::Gt;
-        }
+        rest = tail;
     }
-}
-
-/// Whether `kind` can be the first token of an operand — the mirror of the parser's
-/// `parse_unary`/`parse_primary` entry set, which is what makes a preceding `>` a
-/// comparison. Note `<` is absent: a block is not an operand (in operand position a `<`
-/// is the less-than operator), so `>` before a `<` closes.
-fn starts_operand(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Number(_)
-            | TokenKind::String(_)
-            | TokenKind::True
-            | TokenKind::False
-            | TokenKind::Unit
-            | TokenKind::At
-            | TokenKind::Ident
-            | TokenKind::ParenOpen
-            | TokenKind::BracketOpen
-            | TokenKind::BraceOpen
-            | TokenKind::Minus
-            | TokenKind::Not
-    )
 }
 
 /// Whether the position `at` in `source` is at the start of its line: only horizontal
 /// whitespace (spaces/tabs) between it and the preceding newline or start of file. Exact
 /// for token starts: everything the lexer skips is whitespace or a `~` comment, and a
 /// comment always runs to end of line, so nothing but spaces/tabs can sit between a
-/// line's newline and its first token — which is also why a `>` trailed by a comment
-/// reads as a block close, its next token opening the following line.
+/// line's newline and its first token.
 /// Feeds `Token::first_on_line` (see `Parser::check_same_line` for the grammar rule).
 fn is_first_on_line(source: &str, at: usize) -> bool {
     for b in source.as_bytes()[..at].iter().rev() {
@@ -157,6 +129,16 @@ impl std::error::Error for LexerError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kinds of every non-EOF token of `source`, for the `>` classification tests.
+    fn kinds(source: &str) -> Vec<TokenKind> {
+        Lexer::tokenize(source)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.kind)
+            .filter(|k| *k != TokenKind::Eof)
+            .collect()
+    }
 
     #[test]
     #[allow(clippy::approx_constant)] // 3.14 is a generic decimal test value, not PI
@@ -267,16 +249,6 @@ mod tests {
         assert_eq!(two[1].kind, TokenKind::BlockOpen);
     }
 
-    /// The kinds of every non-EOF token of `source`, for the `>` classification tests.
-    fn kinds(source: &str) -> Vec<TokenKind> {
-        Lexer::tokenize(source)
-            .unwrap()
-            .into_iter()
-            .map(|t| t.kind)
-            .filter(|k| *k != TokenKind::Eof)
-            .collect()
-    }
-
     #[test]
     fn test_delimiters() {
         // `>` here is followed by `{`, which starts an operand, so it is greater-than.
@@ -291,51 +263,32 @@ mod tests {
 
     #[test]
     fn test_block_close_is_the_default() {
-        // `>` at the end of a line closes a block.
-        let nl = kinds("<\n  x\n>");
-        assert_eq!(nl[0], TokenKind::BlockOpen);
-        assert_eq!(nl[2], TokenKind::BlockClose);
-        assert!(!nl.contains(&TokenKind::Gt));
-
-        // A `>` at end of file (no trailing newline) still closes the block.
-        assert_eq!(kinds("< x >")[2], TokenKind::BlockClose);
-
-        // Nothing that can start an operand follows: every one of these closes.
+        // Nothing that can start an operand follows the `>`, so every one of these
+        // closes its block and produces no comparison.
         for source in [
-            "f(() => <x>)",
-            "[() => <x>]",
-            "{ f = () => <x> }",
-            "f(() => <x>, 1)",
-            "<x> ~ trailing comment\ny",
-            "<x>.size",
-            "<x> <= y",
+            "<\n  x\n>",                             // end of line
+            "< x >",                                 // end of file, no newline
+            "f(() => <x>)",                          // before `)`
+            "[() => <x>]",                           // before `]`
+            "{ f = () => <x> }",                     // before `}`
+            "f(() => <x>, 1)",                       // before `,`
+            "<x> ~ trailing comment\ny",             // before a comment
+            "<x>.size",                              // before `.`
+            "<x> <= y",                              // before `<=`
+            "<x> ? 1 : 2",                           // before `?`
+            "<x> | y",                               // before `|`
+            "<x> _",                                 // before `_`
+            "describe(\"math\", () => < f(1, 1) >)", // one-line lambda argument
+            "f(g(() => <x>))",                       // nested closers `>))`
         ] {
-            let kinds = kinds(source);
+            let got = kinds(source);
             assert!(
-                kinds.contains(&TokenKind::BlockClose) && !kinds.contains(&TokenKind::Gt),
+                got.contains(&TokenKind::BlockClose) && !got.contains(&TokenKind::Gt),
                 "`{source}` must close its block"
             );
         }
 
-        // Nested closers: `>))` is three closes, and adjacent block closes separated by a
-        // space are two `BlockClose` (adjacent `>>` would be the export token).
-        assert_eq!(
-            kinds("f(g(() => <x>))"),
-            vec![
-                TokenKind::Ident,
-                TokenKind::ParenOpen,
-                TokenKind::Ident,
-                TokenKind::ParenOpen,
-                TokenKind::ParenOpen,
-                TokenKind::ParenClose,
-                TokenKind::Arrow,
-                TokenKind::BlockOpen,
-                TokenKind::Ident,
-                TokenKind::BlockClose,
-                TokenKind::ParenClose,
-                TokenKind::ParenClose,
-            ]
-        );
+        // Two adjacent closers, which need the space: `>>` is the export marker.
         assert_eq!(
             kinds("< < x > >"),
             vec![
@@ -346,17 +299,12 @@ mod tests {
                 TokenKind::BlockClose,
             ]
         );
-
-        // A block-bodied lambda as a call argument, all on one line.
-        let one_line = kinds("describe(\"math\", () => < assertEq(1, 1) >)");
-        assert_eq!(one_line[7], TokenKind::BlockOpen);
-        assert_eq!(one_line[14], TokenKind::BlockClose);
-        assert!(!one_line.contains(&TokenKind::Gt));
     }
 
     #[test]
     fn test_greater_than_when_an_operand_follows() {
-        // Every operand-starting token after `>` keeps it a comparison.
+        // Every operand-starting token after `>` keeps it a comparison, and none of these
+        // produces a block close.
         for source in [
             "a > b",
             "a > 1",
@@ -374,30 +322,36 @@ mod tests {
             "f(x > y)",
             "[x > y, z]",
             "(a > b) == true",
-            "a > b > c",
+            // A continuation line may lead with the operator.
+            "a\n> b",
         ] {
+            let got = kinds(source);
             assert!(
-                kinds(source).contains(&TokenKind::Gt),
+                got.contains(&TokenKind::Gt) && !got.contains(&TokenKind::BlockClose),
                 "`{source}` must keep `>` as the comparison operator"
             );
         }
 
-        // A comparison inside a block, and one as the block's last expression: only the
-        // block's own `>` closes.
-        let inner = kinds("<\n  a > b\n  c > d\n>");
+        // Chained comparisons: both `>` are operators.
         assert_eq!(
-            inner.iter().filter(|k| **k == TokenKind::Gt).count(),
-            2,
-            "both comparisons stay comparisons"
-        );
-        assert_eq!(
-            inner.iter().filter(|k| **k == TokenKind::BlockClose).count(),
-            1
+            kinds("a > b > c")
+                .iter()
+                .filter(|k| **k == TokenKind::Gt)
+                .count(),
+            2
         );
 
-        // A continuation line may lead with the operator: `>` opening line 2 with an
-        // operand after it is still a comparison.
-        assert_eq!(kinds("a\n> b")[1], TokenKind::Gt);
+        // Comparisons inside a block, one of them its last expression: only the block's
+        // own `>` closes.
+        let inner = kinds("<\n  a > b\n  c > d\n>");
+        assert_eq!(inner.iter().filter(|k| **k == TokenKind::Gt).count(), 2);
+        assert_eq!(
+            inner
+                .iter()
+                .filter(|k| **k == TokenKind::BlockClose)
+                .count(),
+            1
+        );
     }
 
     #[test]

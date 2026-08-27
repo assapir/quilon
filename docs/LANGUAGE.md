@@ -761,14 +761,23 @@ of an array element, a match, a call, or a lambda.)
 - **Logical:** `&& || !` (short-circuit).
 
 > **`<` and `>` vs. `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
-> after a complete operand is always less-than (a block can't start mid-expression). A
-> `>` is the **block close** only when it is the **last token on its line** (followed by
-> only spaces/tabs then a newline or end-of-file); any other `>`, like `a > b`, is
-> greater-than. So: don't end a line with a comparison `>`. `<=`/`>=`/`>>` are distinct
-> tokens and unaffected.
+> after a complete operand is always less-than (a block can't start mid-expression). A `>`
+> **closes a block by default**; it is **greater-than only when an operand follows it on
+> the same line** — an identifier, a literal, `(`, `[`, `{`, or a prefix `-`/`!`. So `a > b`,
+> `f(x > y)`, `a > -b` and `"b" > "a"` are comparisons, while a `>` before a `)`, `]`, `}`,
+> `,`, `.`, a `~` comment, or the end of the line closes its block — which is what lets a
+> block-bodied lambda sit inside a call on one line:
+> ```quilon
+> xs.each(x => <
+>   total := total + x
+> >)
+> ```
+> Two rules follow: don't end a line with a comparison `>` (the right operand must be on
+> that line), and separate two adjacent closers with a space — `> >`, since `>>` is the
+> export marker. `<=`/`>=`/`>>` are distinct tokens and unaffected.
 
 > **Statement boundaries — line-first `(` / `[` / `{`.** Quilon has no statement separator,
-> and the grammar is newline-insensitive but for two rules: the line-final `>` above, and
+> and the grammar is newline-insensitive but for two rules: the `>` rule above, and
 > this one — a `(`, `[`, or `{` that is the **first token on its line** begins a new
 > statement rather than continuing the previous expression as a call, index, or constructor.
 > Those must open on the **same line** as the expression they apply to, though once opened
@@ -826,7 +835,9 @@ non-associative (`1 <- 2 <- 3` is a parse error).
 | more priority | `.field` · `.method(…)` · `f(…)` · `xs[i]` |
 
 So `2 + 3 |> double` is `double(5)`, `1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is
-`(1 < 2) == true`. Parenthesize anything else.
+`(1 < 2) == true`. Parenthesize anything else. `>` appears in the table in its operator
+reading; whether a given `>` gets that reading at all is settled first, in the lexer — see
+the [`>` rule](#expressions).
 
 ### Pipe — `|>`
 `|>` feeds its left operand in as the **first argument** of the right-hand call:

@@ -6,6 +6,23 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **`>` closes a block by default; it is greater-than only when an operand follows it.**
+  A block-bodied lambda now fits inside a call on one line:
+
+  ```quilon
+  xs.each(x => <
+    total := total + x
+  >)
+  ```
+
+  Previously `>` closed a block only as the last token on its line, so the closer above
+  had to dangle on a line of its own with the `)` beneath it. A `>` is now the operator
+  only where a comparison can be written — when the next token is on the same line and can
+  begin an operand (identifier, literal, `(`, `[`, `{`, prefix `-`/`!`) — and closes before
+  a `)`, `]`, `}`, `,`, `.`, a `~` comment, or the end of the line. `a > b`, `f(x > y)`,
+  `a > -b` and `"b" > "a"` are unaffected, as are `>=` and the `>>` export marker; two
+  adjacent closers need a space (`> >`), since `>>` is that marker.
+
 - **BREAKING: a setter is now declared with `:=`, and `=` methods are verified
   non-mutating ([#198](https://github.com/assapir/quilon/issues/198)).** A method that
   mutates its receiver is written `name := (…) => …`; one written `name = (…) => …`

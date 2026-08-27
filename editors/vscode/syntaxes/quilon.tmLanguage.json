@@ -157,13 +157,13 @@
           "match": "[+\\-*/%]"
         },
         {
-          "comment": "Block delimiters, scoped so the opening `<` and closing `>` of a `< … >` block share the `punctuation.definition.block` family and a theme colors them the same — not as an error/operator. The closing `>` half mirrors the compiler exactly: a `>` is the block close only when it is the last token on its line (`>` then only spaces/tabs to end-of-line), which is `Lexer::is_line_final` (see docs/LANGUAGE.md). The opening `<` half is a highlighting heuristic — the compiler always lexes `<` as block-open and recovers less-than in the parser, which a stateless grammar can't do; so we approximate block-open as a line-final `<`, which is how a canonical multi-line block opens. A mid-line `<`/`>` (e.g. `a > b`, or an inline `< x >`'s `<`) fails the `(?=[ \\t]*$)` lookahead and falls through to the comparison rule below. These are listed BEFORE `[<>]` so a line-final delimiter wins. `<=`/`>=`/`<-`/`->`/`<<`/`>>` are unaffected — their second character is not whitespace (so this lookahead never fires), and those multi-char rules match earlier anyway. Fully correct block `< >` vs comparison `<`/`>` coloring is impossible in a context-free TextMate grammar and is deferred to semantic tokens / an LSP; this line-final heuristic is the safe best-effort.",
+          "comment": "Block delimiters, scoped so the opening `<` and closing `>` of a `< … >` block share the `punctuation.definition.block` family and a theme colors them the same — not as an error/operator. The closing `>` half follows the compiler's rule (see docs/LANGUAGE.md): a `>` closes a block unless an operand follows it on the same line, so the negative lookahead lists the characters an operand can start with. The opening `<` half is a highlighting heuristic — the compiler always lexes `<` as block-open and recovers less-than in the parser, which a stateless grammar can't do; so we approximate block-open as a line-final `<`, which is how a canonical multi-line block opens. These are listed BEFORE `[<>]` so a delimiter wins. `<=`/`>=`/`<-`/`->`/`<<`/`>>` are unaffected — those multi-char rules match earlier. Fully correct block `< >` vs comparison `<`/`>` coloring is impossible in a context-free TextMate grammar and is deferred to semantic tokens / an LSP; these lookaheads are the safe best-effort.",
           "name": "punctuation.definition.block.begin.quilon",
           "match": "<(?=[ \\t]*$)"
         },
         {
           "name": "punctuation.definition.block.end.quilon",
-          "match": ">(?=[ \\t]*$)"
+          "match": ">(?![ \\t]*[A-Za-z0-9\"$@(\\[{!-])"
         },
         {
           "name": "keyword.operator.comparison.quilon",

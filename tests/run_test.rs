@@ -185,10 +185,10 @@ fn run_each_executes() {
 
 #[test]
 fn run_each_with_block_body() {
-    // The `.each` lambda body may be a `< ... >` block. The block-closing `>`
-    // must be the last token on its line, so the call's `)` goes on the next line.
+    // The `.each` lambda body may be a `< ... >` block, closing right before the
+    // call's `)`.
     assert_exit(
-        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  xs.each(val => <\n    x = val + 1\n    x\n  >\n  )\n  0\n>",
+        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  xs.each(val => <\n    x = val + 1\n    x\n  >)\n  0\n>",
         0,
     );
 }
@@ -1054,7 +1054,7 @@ fn entry_with_non_text_array_param_is_rejected() {
     );
 }
 
-// --- The `>` lexing rule: line-final `>` closes a block; otherwise it is `Gt`. ---
+// --- The `>` lexing rule: `>` closes a block unless a same-line operand follows. ---
 
 #[test]
 fn run_bare_greater_than_works_on_one_line() {
@@ -1063,8 +1063,8 @@ fn run_bare_greater_than_works_on_one_line() {
 }
 
 #[test]
-fn run_greater_than_inside_block_closing_line_final() {
-    // A `>` comparison used inside a `< >` block whose closing `>` is line-final.
+fn run_greater_than_inside_a_block() {
+    // A `>` comparison used inside a `< >` block, whose own `>` still closes.
     assert_exit(
         "^ = () -> Num => <\n  ok = 10 > 2 ? 1 : 0\n  ok == 1 ? 42 : 0\n>",
         42,
@@ -1072,21 +1072,40 @@ fn run_greater_than_inside_block_closing_line_final() {
 }
 
 #[test]
-fn dangling_comparison_at_line_end_is_an_error() {
-    // A `>` placed as the LAST token on its line is lexed as block-close, so using it
-    // as a comparison there must fail to parse (never silently miscompile).
-    let src = "^ = () -> Num => <\n  x = 5\n  x >\n  3\n>";
-    let tokens = Lexer::tokenize(src).expect("lexing failed");
-    assert!(
-        parser::parse(&tokens).is_err(),
-        "a line-final `>` used as comparison must be a parse error"
+fn run_block_bodied_lambda_as_a_call_argument_on_one_line() {
+    // The closer sits directly before the call's `)`, where no operand can follow.
+    assert_exit(
+        "^ = () -> Num => <\n  total := 0\n  [1, 2, 3].each(x => < total := total + x >)\n  total * 7\n>",
+        42,
     );
 }
 
 #[test]
-fn unterminated_block_with_only_midline_gt_is_an_error() {
-    // A block whose `>` is mid-line (a `Gt`) never gets its line-final closing `>`,
-    // so the block is unterminated -> a clear parse error (unexpected EOF).
+fn run_greater_than_survives_next_to_a_closer() {
+    // A `>` comparison as a call's last argument: the comparison keeps its operand,
+    // and the `)` right after it is not mistaken for a block close.
+    assert_exit(
+        "^ = () -> Num => <\n  big = [3, 1, 4].filter(x => x > 2)\n  big.size * 21\n>",
+        42,
+    );
+}
+
+#[test]
+fn dangling_comparison_at_line_end_is_an_error() {
+    // A `>` with nothing after it on its line is a block close, so using it as a
+    // comparison there must fail to parse (never silently miscompile).
+    let src = "^ = () -> Num => <\n  x = 5\n  x >\n  3\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    assert!(
+        parser::parse(&tokens).is_err(),
+        "a `>` at the end of its line used as comparison must be a parse error"
+    );
+}
+
+#[test]
+fn unterminated_block_with_only_a_comparison_gt_is_an_error() {
+    // The `>` here has an operand after it, so it is `Gt` and the block never closes
+    // -> a clear parse error (unexpected EOF), not a silent miscompile.
     let src = "^ = () -> Num => < x > 5";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     assert!(

@@ -375,8 +375,8 @@ impl<'a> Parser<'a> {
                 Some(BinaryOperator::Lt)
             }
             // The lexer already distinguished a greater-than `>` (token `Gt`) from a
-            // block-closing `>` (token `BlockClose`, only when line-final), so a `Gt`
-            // here is unambiguously the operator.
+            // block-closing `>` (token `BlockClose`), so a `Gt` here is unambiguously
+            // the operator.
             TokenKind::Gt => {
                 self.advance();
                 Some(BinaryOperator::Gt)
@@ -597,10 +597,21 @@ impl<'a> Parser<'a> {
             }
             TokenKind::BracketOpen => self.parse_array(),
             TokenKind::BraceOpen => self.parse_record(),
-            _ => Err(ParseError {
-                message: format!("Unexpected token: {:?}", token.kind),
-                span: token.span.clone(),
-            }),
+            _ => {
+                // The lexer's `>` rule reads a `>` as greater-than exactly when an
+                // operand follows, so `TokenKind::starts_operand` must accept nothing
+                // this function rejects — a divergence would silently turn a comparison
+                // into a block close.
+                debug_assert!(
+                    !token.kind.starts_operand(),
+                    "starts_operand accepts {:?}, which parse_primary rejects",
+                    token.kind
+                );
+                Err(ParseError {
+                    message: format!("Unexpected token: {:?}", token.kind),
+                    span: token.span.clone(),
+                })
+            }
         }
     }
 
