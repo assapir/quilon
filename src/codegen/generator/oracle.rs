@@ -131,7 +131,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Prefer the type checker's authoritative type for this exact node (the oracle) —
         // the same source codegen's read sites use. It knows shapes the structural fallback
         // below can't (an `arr[i]` element, a `.split(…)`/`.replace(…)` result, a field
-        // read), so an overloaded call taking one of those (e.g. `assertEq(parts[0], …)`)
+        // read), so an overloaded call taking one of those (e.g. `render(parts[0])`)
         // mangles to the right member. Falls back to structural inference only when the
         // oracle has no entry — the IR-only codegen tests that skip the type-check pass.
         if let Some(ty) = self.oracle.expression_type(expression) {

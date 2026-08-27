@@ -348,9 +348,11 @@ pub struct TypeChecker {
     // the call; this is what lets an uncalled one still be reported, at its definition.
     // Only the first is kept — one report per run is what the checker gives anyway.
     unannotated_overload_member: Option<(String, Vec<Type>, Span)>,
-    // How many `describe` blocks enclose what is being checked. `expect` records into the
-    // test reporter, so it is only legal where there is one — inside a `describe`.
+    // How many `describe` blocks, and how many `it` cases, enclose what is being checked.
+    // `expect` marks the running CASE failed and the case's close is what tallies that, so it
+    // is only legal inside an `it` — which in turn is only compiled inside a `describe`.
     test_depth: usize,
+    case_depth: usize,
 }
 
 impl Default for TypeChecker {
@@ -371,6 +373,7 @@ impl TypeChecker {
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
             test_depth: 0,
+            case_depth: 0,
         };
 
         // Add built-in sum types to the environment

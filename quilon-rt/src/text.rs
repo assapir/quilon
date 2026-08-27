@@ -88,11 +88,12 @@ pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str
 
 /// Abort on an invalid `replace`/`replaceAll`/`repeat` request (empty `from`, non-positive
 /// `count`, or a `count` exceeding the occurrences present): report `msg` at `site` — the
-/// framed diagnostic an assertion failure also produces — and exit 101. Never returns. The
+/// framed diagnostic an assertion failure also produces — and exit with the same status.
+/// Never returns. The
 /// detection lives in the runtime (not codegen) because the `count > occurrences` case needs
 /// the occurrence count.
 fn text_misuse(site: *const QlSite, msg: &str) -> ! {
-    fail_at(site, msg, 101)
+    fail_at(site, msg, crate::ASSERTION_EXIT_CODE)
 }
 
 /// Repeat the text `count` times, back to back. Backs `Text.repeat(count)`; `count` 0

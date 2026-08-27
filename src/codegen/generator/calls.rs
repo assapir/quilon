@@ -231,8 +231,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Fill in the caller's location when the callee's last parameter is a `Site` the
-        // call left off. A call that passes one explicitly (`assertEq`'s body forwarding its
-        // own `site` to `assert`) matches the full parameter list and so fills in nothing —
+        // call left off. A call that passes one explicitly (a check of your own forwarding
+        // its own `site` to `failAt`) matches the full parameter list and so fills in nothing —
         // which is what propagates the USER's call site through a chain of wrappers instead
         // of reporting the innermost hop.
         if fills_call_site {

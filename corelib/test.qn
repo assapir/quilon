@@ -69,11 +69,12 @@
 ~ Two spaces per level of `describe` nesting.
 >> indent = (depth :: Num) -> Text => "  ".repeat(depth)
 
-~ `text` in green — plain when stdout is not a terminal that wants color.
+~ The two colors the report uses, each plain when stdout is not a terminal that wants
+~ color. Not folded into one `paint(code, text)` helper: a module's non-exported names are
+~ not linked into a program, and the shared body is not worth a third exported name.
 >> green = (text :: Text) -> Text =>
   __color_enabled(stdout) ? "\e[32m`text`\e[0m" : text
 
-~ `text` in red, on the same terms as `green`.
 >> red = (text :: Text) -> Text =>
   __color_enabled(stdout) ? "\e[31m`text`\e[0m" : text
 

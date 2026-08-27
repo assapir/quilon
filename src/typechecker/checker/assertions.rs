@@ -11,16 +11,17 @@ use super::*;
 impl TypeChecker {
     /// Check `assert(actual, matcher)` / `expect(actual, matcher)`, yielding `$`.
     ///
-    /// `expect` is rejected outside a `describe` block: it records into the test reporter,
-    /// and `describe` blocks are left out of everything but `quilon test`, so an `expect` in
-    /// ordinary code would have nothing to record into.
+    /// `expect` is rejected outside an `it` case in a `describe` block: it marks the running
+    /// case failed, and the case's close is what tallies that. Outside a case nothing would
+    /// report the failure, and outside a `describe` there is no reporter at all — the blocks
+    /// are left out of everything but `quilon test`.
     pub(super) fn check_assertion(
         &mut self,
         name: &str,
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        if name == crate::ast::EXPECT && self.test_depth == 0 {
+        if name == crate::ast::EXPECT && (self.test_depth == 0 || self.case_depth == 0) {
             return Err(TypeError::ExpectOutsideTest { span: span.clone() });
         }
         let [actual, matcher] = arguments else {
@@ -80,15 +81,20 @@ impl TypeChecker {
             "equals" => {
                 let expected_type = self.infer_expression(&arguments[0])?;
                 self.check_type_compatibility(actual_type, &expected_type, span)?;
+                self.require_one_representation(actual_type, &expected_type, span)?;
                 self.require_equality(name, actual_type, span)
             }
             // A `Text` part of a `Text`, or one element of an array.
             "contains" => {
                 let part_type = self.infer_expression(&arguments[0])?;
                 match actual_type {
-                    Type::Text => self.check_type_compatibility(&Type::Text, &part_type, span),
+                    Type::Text => {
+                        self.check_type_compatibility(&Type::Text, &part_type, span)?;
+                        self.require_one_representation(&Type::Text, &part_type, span)
+                    }
                     Type::Array(element) => {
                         self.check_type_compatibility(element, &part_type, span)?;
+                        self.require_one_representation(element, &part_type, span)?;
                         self.require_equality(name, element, span)
                     }
                     other => Err(TypeError::MatcherTypeUnsupported {
@@ -99,21 +105,52 @@ impl TypeChecker {
                 }
             }
             "not" => self.check_matcher(assertion, actual_type, &arguments[0]),
-            // A `Result` (or any sum carrying the variant being asked about).
-            matcher_name => match actual_type {
-                Type::Sum { variants, .. }
-                    if variants.iter().any(|variant| {
-                        variant.name == crate::ast::matcher_variant(matcher_name)
-                    }) =>
-                {
-                    Ok(())
+            // A `Result` — or any sum carrying the variant being asked about.
+            matcher_name => {
+                let asked_about = crate::ast::matcher_variant(matcher_name).ok_or_else(|| {
+                    TypeError::AssertionNeedsMatcher {
+                        name: assertion.to_string(),
+                        span: span.clone(),
+                    }
+                })?;
+                match actual_type {
+                    Type::Sum { variants, .. }
+                        if variants.iter().any(|variant| variant.name == asked_about) =>
+                    {
+                        Ok(())
+                    }
+                    other => Err(TypeError::MatcherTypeUnsupported {
+                        matcher: name.clone(),
+                        ty: Box::new(other.clone()),
+                        span: span.clone(),
+                    }),
                 }
-                other => Err(TypeError::MatcherTypeUnsupported {
-                    matcher: name.clone(),
-                    ty: Box::new(other.clone()),
-                    span: span.clone(),
-                }),
-            },
+            }
+        }
+    }
+
+    /// The two sides of a comparison must share one runtime REPRESENTATION. A `Generic` — a
+    /// sum payload whose type is not yet concrete — is represented as a `Num`, while
+    /// `types_compatible` treats it as a wildcard that pairs with anything; without this,
+    /// `equals("x")` on a generic payload would type-check and then hand codegen an `f64` and
+    /// a `Text` to compare.
+    fn require_one_representation(
+        &self,
+        actual: &Type,
+        expected: &Type,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let mismatched = |one: &Type, other: &Type| {
+            matches!(one, Type::Generic { .. })
+                && !matches!(other, Type::Generic { .. } | Type::Num)
+        };
+        match mismatched(actual, expected) || mismatched(expected, actual) {
+            true => Err(TypeError::TypeMismatch {
+                expected: Box::new(actual.clone()),
+                got: Box::new(expected.clone()),
+                span: span.clone(),
+            }),
+            false => Ok(()),
         }
     }
 

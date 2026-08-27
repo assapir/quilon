@@ -22,7 +22,7 @@ Two entry points, one vocabulary. They differ only in what a FAILURE does:
 | Function | On failure |
 |----------|-----------|
 | `assert(actual, matcher) -> $` | Report at the call site and **exit 101** (the Rust-panic convention). For examples and ordinary code. |
-| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test code only — see [`expect` is for tests](#expect-is-for-tests). |
+| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
 
 A holding assertion does nothing. A failure reports in the standard
 [error frame](../LANGUAGE.md#error-messages) at **your** call site — the line the assertion
@@ -148,13 +148,18 @@ arithmetic
 `assert` inside a case is still fatal, and ends the run where it failed. Use it for a
 precondition a case cannot meaningfully continue past.
 
-### `expect` is for tests
+### `expect` is for cases
 
-`expect` records its failure with the reporter, and only a `describe` block has one — the
-blocks are stripped from `run`, `compile`, and `build`, so an `expect` in ordinary code would
-have nothing to record into. Writing one outside a `describe` block is a **compile error**
-pointing at `assert`, rather than a program that silently drops its failures. (The rule is
-lexical: an `expect` belongs inside a `describe`, not in a top-level helper a case calls.)
+`expect` marks the running **case** failed, and `it` is what closes a case and tallies it — so
+an `expect` belongs inside an `it`, inside a `describe`. Anywhere else it is a **compile
+error** pointing at `assert`:
+
+- outside a `describe` block there is no reporter at all, the blocks being stripped from
+  `run`, `compile`, and `build`;
+- inside a `describe` but outside an `it` there is no case to mark, so the failure would be
+  printed and never counted.
+
+The rule is lexical, so a top-level helper a case calls uses `assert`, not `expect`.
 
 ### Tests beside the code, costing a release build nothing
 

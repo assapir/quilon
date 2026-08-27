@@ -37,9 +37,9 @@
   assert("a🌍b🌍c".replaceAll("🌍", "é"), equals("aébéc"))
 
   ~ contains -> Bool.
-  assert("Hello, World".contains("World"), equals(true))
-  assert(!"Hello".contains("zzz"), equals(true))
-  assert("a🌍b".contains("🌍"), equals(true))
+  assert("Hello, World", contains("World"))
+  assert("Hello", not(contains("zzz")))
+  assert("a🌍b", contains("🌍"))
 
   ~ indexOf -> Ok(grapheme index) when found, NotOk when absent.
   assert("héllo".indexOf("llo"), isOk())

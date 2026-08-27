@@ -19,6 +19,11 @@ pub struct Program {
 /// parser (see `Parser::parse_program`) with no annotation to keep in sync.
 pub const TEST_BLOCK_MARKER: &str = "describe";
 
+/// The name of a test CASE, written `it("…", () => …)`. A recorded assertion belongs
+/// inside one: `it` is what closes a case and tallies it, so an `expect` anywhere else in
+/// a suite would set a failure mark nothing ever reports.
+pub const TEST_CASE_MARKER: &str = "it";
+
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 /// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
 #[derive(Debug, Clone, PartialEq)]
@@ -153,8 +158,8 @@ pub struct BuiltinOverload {
 /// these names ADDS a member to its set rather than shadowing the built-in, and dispatch
 /// picks by exact argument types like any other set.
 ///
-/// The `__`-prefixed entries are internal primitives (`core.test` builds its `assert` on
-/// them) that no module exports and no `.qn` declares. They are members on the same terms
+/// The `__`-prefixed entries are internal primitives (`core.test`'s harness and reporter
+/// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
 /// all the same, so the one rule covers them too.
 ///
 /// This is the single table the type checker registers from, codegen mangles and dispatches
@@ -280,12 +285,16 @@ pub fn is_matcher(name: &str) -> bool {
     MATCHERS.contains(&name)
 }
 
-/// The sum variant `isOk()` / `isNotOk()` asks about. Shared by the checker (which requires
-/// the value's type to carry that variant) and codegen (which compares against its tag).
-pub fn matcher_variant(matcher: &str) -> &'static str {
+/// The sum variant `isOk()` / `isNotOk()` asks about, or `None` for a matcher that reads no
+/// variant. Shared by the checker (which requires the value's type to carry that variant) and
+/// codegen (which compares against its tag), so the two can never disagree — and named
+/// exhaustively, so a matcher added later has to say what it reads rather than inheriting
+/// `NotOk`.
+pub fn matcher_variant(matcher: &str) -> Option<&'static str> {
     match matcher {
-        "isOk" => "Ok",
-        _ => "NotOk",
+        "isOk" => Some("Ok"),
+        "isNotOk" => Some("NotOk"),
+        _ => None,
     }
 }
 
@@ -400,7 +409,7 @@ pub fn site_type() -> Type {
 /// receive its CALLER's location. A trailing `Site` parameter left off at a call site is
 /// filled in by the compiler with that call's `file:line:column`; passing one explicitly
 /// forwards the caller's own site instead, which is how a location propagates through a
-/// chain of wrappers (`assertEq` -> `assert`).
+/// chain of wrappers (a check of your own forwarding its `site` to `failAt`).
 pub fn is_site_type(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, .. } if name == SITE_TYPE_NAME)
 }

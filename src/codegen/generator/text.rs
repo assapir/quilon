@@ -170,11 +170,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         expression: &Expression,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
-        let val = self.generate_expression(expression)?;
-        let BasicValueEnum::StructValue(s) = val else {
-            return Err("Text method receiver/argument must be a Text value".to_string());
+        let value = self.generate_expression(expression)?;
+        self.text_fields(value)
+    }
+
+    /// Split an already-evaluated `Text` into its `(data_ptr, byte_len)` fields — the one
+    /// place a `Text`'s `{ptr, i64}` struct is taken apart.
+    pub(super) fn text_fields(
+        &self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let BasicValueEnum::StructValue(text) = value else {
+            return Err("expected a Text value".to_string());
         };
-        self.split_text(s, "txt")
+        self.split_text(text, "txt")
     }
 
     /// Split an already-evaluated `Text` value into its `(data_ptr, byte_len)` fields, named
