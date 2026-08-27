@@ -95,9 +95,8 @@ a live GET.
 
 The parser's and serialiser's edge cases are covered by the suite that lives in
 `corelib/http.qn` itself, beside the code it tests. Only the root program's `describe` blocks
-survive the import resolver, and the harness those blocks need comes in under
-[`<<?`](test/report.md#test-only-imports), so `<< core.http` brings you the client and nothing
-of its tests. The suite runs when the module is the file being tested:
+survive the import resolver, so `<< core.http` brings you the client and nothing of its
+tests. The suite runs when the module is the file being tested:
 
 ```bash
 quilon test corelib/http.qn

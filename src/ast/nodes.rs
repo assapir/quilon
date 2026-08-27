@@ -33,11 +33,6 @@ pub const RECEIVER: &str = "it";
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub path: ModulePath,
-    /// Written `<<?`: the module is there for the file's [`TEST_BLOCK_MARKER`] blocks, so it
-    /// shares their fate. `quilon test` resolves it; every other command erases it exactly as
-    /// it erases the blocks, and it is never resolved for an imported module — a `<< core.http`
-    /// brings the module's own code and nothing its tests needed.
-    pub test_only: bool,
     pub span: Span,
 }
 

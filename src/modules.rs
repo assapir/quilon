@@ -8,8 +8,6 @@
 //! - `<< core.io` resolves to bundled built-in module source (embedded via `include_str!`).
 //! - `<< "path/to.qn"` reads a user module from disk (relative to the importing file, or
 //!   absolute); `\` is normalised to `/` for cross-platform paths.
-//! - `<<?` marks a [test-only](crate::ast::Import::test_only) import, which an imported
-//!   module's list never contributes.
 //!
 //! Visibility: only items marked exported (`>>` prefix) are merged. Non-exported items are
 //! module-private, so referencing them from an importer surfaces as a normal "undefined"
@@ -28,11 +26,6 @@ use std::path::Path;
 /// importing program, and a [`SourceMap`] naming every module those items came from (the
 /// root file is the caller's to record). `base_dir` is the directory of the importing file
 /// (used to resolve relative file-path imports).
-///
-/// Every import in the list given is resolved, `<<?` included — dropping the test-only ones
-/// is the caller's decision, made in `driver::front_end_with`. What IS decided here: an
-/// imported module's own `<<?` imports are never resolved, since its test blocks are not this
-/// compilation's to run.
 pub fn resolve_imports(
     program: &Program,
     base_dir: &Path,
@@ -40,28 +33,6 @@ pub fn resolve_imports(
     let mut loader = Loader::new();
     loader.resolve_list(&program.imports, base_dir)?;
     Ok((loader.out, loader.sources))
-}
-
-/// The import among `imports` that contributes the top-level name `name`, if any.
-///
-/// Asked only to explain an error — a name that went missing because its `<<?` import was
-/// erased — so a module that will not resolve simply contributes nothing.
-pub fn providing_import<'a>(
-    imports: &'a [Import],
-    base_dir: &Path,
-    name: &str,
-) -> Option<&'a ModulePath> {
-    imports.iter().find_map(|import| {
-        let mut loader = Loader::new();
-        loader
-            .resolve_list(std::slice::from_ref(import), base_dir)
-            .ok()?;
-        loader
-            .out
-            .iter()
-            .any(|item| item.name() == name)
-            .then_some(&import.path)
-    })
 }
 
 struct Loader {
@@ -147,9 +118,8 @@ impl Loader {
         let sub = parser::parse(&tokens)
             .map_err(|e| format!("parse error in module `{}`: {}", canonical, e))?;
 
-        // Resolve the module's own imports first (transitive), then collect its exports. Its
-        // `<<?` imports served its own test blocks, which this compilation does not run.
-        for import in sub.imports.iter().filter(|import| !import.test_only) {
+        // Resolve the module's own imports first (transitive), then collect its exports.
+        for import in &sub.imports {
             self.resolve_one(&import.path, &next_base)?;
         }
         for mut item in sub.items {
@@ -172,7 +142,6 @@ impl Loader {
 // from the same strings — they cannot drift.
 const CORE_IO: &str = include_str!("../corelib/io.qn");
 const CORE_TEST: &str = include_str!("../corelib/test.qn");
-const CORE_TEST_REPORT: &str = include_str!("../corelib/test/report.qn");
 const CORE_CLI: &str = include_str!("../corelib/cli.qn");
 const CORE_TIME: &str = include_str!("../corelib/time.qn");
 const CORE_NET: &str = include_str!("../corelib/net.qn");
@@ -180,29 +149,16 @@ const CORE_HTTP: &str = include_str!("../corelib/http.qn");
 
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
-const CORELIB_SOURCES: &[&str] = &[
-    CORE_IO,
-    CORE_TEST,
-    CORE_TEST_REPORT,
-    CORE_CLI,
-    CORE_TIME,
-    CORE_NET,
-    CORE_HTTP,
-];
+const CORELIB_SOURCES: &[&str] = &[CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(CORE_IO),
-        // core.test — what a harness and a reporter are built from: `failAt`, the run's
-        // recorded state, and the case lifecycle. Depends transitively on core.io (`failAt`
-        // renders its frame via `eprint`). It defines no `describe`/`it`/`report*`, which is
-        // what leaves those names free for a suite that brings its own.
+        // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
+        // a check of your own, the run's recorded state, and the case lifecycle. Depends
+        // transitively on core.io (it prints, and `failAt` renders its frame via `eprint`).
         "core.test" => Some(CORE_TEST),
-        // core.test.report — the harness and reporter Quilon ships, written against
-        // core.test's functions like any other. A suite importing this gets the default
-        // output; one importing only `core.test` supplies its own.
-        "core.test.report" => Some(CORE_TEST_REPORT),
         // core.cli — thin, pure-Quilon helpers over the `^` entry point's
         // `args :: []Text` and `env :: [|Text => Text|]`.
         "core.cli" => Some(CORE_CLI),

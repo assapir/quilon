@@ -66,7 +66,7 @@
       "patterns": [
         {
           "name": "meta.import.quilon",
-          "match": "(<<\\??)\\s*([A-Za-z0-9_.\\/\\\\\"-]+)?",
+          "match": "(<<)\\s*([A-Za-z0-9_.\\/\\\\\"-]+)?",
           "captures": {
             "1": { "name": "keyword.control.import.quilon" },
             "2": { "name": "entity.name.namespace.quilon" }

@@ -12,7 +12,7 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 Quilon's identity, and the rules that guide its design:
 
-- **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>` (`<<?` for a test-only import), mutability is `:=`, sum-type alternatives are `/`. Not one word is reserved: `if`, `while`, `for` and the rest are ordinary identifiers you may bind.
+- **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. Not one word is reserved: `if`, `while`, `for` and the rest are ordinary identifiers you may bind.
 - **Symbols mirror notation that already exists.** A symbol reuses a notation the world already has rather than inventing one: `/` separates sum-type alternatives the way you already write "red / green / blue".
 - **The playful choice wins.** On a genuine toss-up, the more delightful option is picked — `^` for the entry point, `$` for Unit. Syntax is allowed a sense of humor.
 - **Deliberate simplicity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
@@ -38,7 +38,6 @@ Quilon's identity, and the rules that guide its design:
 | `^` | Entry point (main) | `^ = () -> Num => 0` |
 | `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
-| `<<?` | [Test-only import](corelib/test/report.md#test-only-imports) — for the file's `describe` blocks | `<<? core.test.report` |
 | `>>` | Export an item from a module | `>> add = (a :: Num, b :: Num) => a + b` |
 | `\|>` | Pipe (first-argument injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |

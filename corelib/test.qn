@@ -1,6 +1,14 @@
-~ core.test — what a test harness and its reporter are built from. Import with
-~ `<< core.test`. For the harness and output Quilon ships, import `<< core.test.report`
-~ instead. Reference: docs/corelib/test.md.
+~ core.test — the test harness: `describe`/`it`, the report they print, and what both are
+~ built from. Import with `<< core.test`. Reference: docs/corelib/test/README.md.
+~
+~ ── Writing a suite ────────────────────────────────────────────────────────────────
+~
+~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
+~   it(name, body)        one case, reported once it has run.
+~
+~   describe("trimming", () => <
+~     it("drops both ends", () => expect("  x  ".trim(), equals("x")))
+~   >)
 ~
 ~ ── Assertions ─────────────────────────────────────────────────────────────────────
 ~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
@@ -10,7 +18,7 @@
 ~   expect(2 + 2, equals(4))    report, mark the case failed, and carry on (tests only)
 ~
 ~ The matchers are `equals`, `contains`, `not`, `isOk`, `isNotOk` — see
-~ docs/corelib/test.md.
+~ docs/corelib/test/README.md.
 ~
 ~   failAt(message)       fail outright at the CALLER's location, the way `assert` does —
 ~                         what a check of your own is built from. Take a trailing
@@ -21,12 +29,9 @@
 ~ ── The run's state, and the case lifecycle ────────────────────────────────────────
 ~ `quilon test` runs a file's top-level `describe` blocks and ends by calling
 ~ `reportSummary()`, whose result is the run's status — 0 passes the suite, anything else
-~ fails it. Neither `describe`,
-~ `it`, nor any `report*` function lives here: they are what `core.test.report` builds
-~ out of the functions below, and what a harness of your own defines instead.
+~ fails it.
 ~
-~ Everything the run records is reachable through these — a reporter never names a
-~ registry primitive:
+~ Everything the run records is reachable through these, and a suite may ask about it too:
 ~
 ~   casesPassed()  casesFailed()  nestingDepth()      what the run has recorded
 ~   enterSuite()   leaveSuite()                       open and close a group
@@ -74,12 +79,12 @@
 >> nestingDepth = () -> Num => __test_depth()
 
 ~ ── The case lifecycle ─────────────────────────────────────────────────────────────
-~ What a `describe` and an `it` of your own call, in this order:
+~ What `describe` and `it` call, in this order:
 ~   enterSuite() … the group's body … leaveSuite()
 ~   the case's body … caseFailing() … finishCase()
 
-~ Open a group; yields the depth it sits at (1 for an outermost group), which is what a
-~ reporter indents by.
+~ Open a group; yields the depth it sits at (1 for an outermost group), which is what the
+~ report indents by.
 >> enterSuite = () -> Num => __test_suite_enter()
 
 ~ Close the group just entered; yields the depth that remains.
@@ -92,3 +97,46 @@
 ~ Close the case that just ran, tallying it as passed or failed; yields the depth to
 ~ report it at.
 >> finishCase = () -> Num => __test_case_finish()
+
+~ ── The harness ────────────────────────────────────────────────────────────────────
+~ The output is fixed. Its two ANSI wraps and its two-space indent are written out at each
+~ site below rather than shared through helpers, because a name a program never calls has
+~ no business in the scope `<< core.test` merges.
+
+~ A group of cases, nestable. `body` runs immediately; the group is only there to name and
+~ indent what it contains.
+>> describe = (name :: Text, body :: () -> $) -> $ => <
+  depth = enterSuite()
+  lead = "  ".repeat(depth - 1)
+  print("`lead``name`")
+  body()
+  leaveSuite()
+  $
+>
+
+~ One case, reported once `body` has run. A failing `expect` inside `body` marks the case
+~ and skips what is left of it, so the report says which way the case went and the run
+~ continues with the next one.
+>> it = (name :: Text, body :: () -> $) -> $ => <
+  body()
+  failed = caseFailing()
+  depth = finishCase()
+  lead = "  ".repeat(depth)
+  mark = failed
+    ? (__color_enabled(stdout) ? "\e[31m✗\e[0m" : "✗")
+    : (__color_enabled(stdout) ? "\e[32m✓\e[0m" : "✓")
+  print("`lead``mark` `name`")
+>
+
+~ The run's total, and its status — non-zero when any case failed. The synthesized entry
+~ point `quilon test` runs ends with this call, so what it returns is what the suite exits
+~ with.
+>> reportSummary = () -> Num => <
+  failed = casesFailed()
+  tally = "`casesPassed()` passed, `failed` failed"
+  print("")
+  print(failed == 0
+    ? (__color_enabled(stdout) ? "\e[32m`tally`\e[0m" : tally)
+    : (__color_enabled(stdout) ? "\e[31m`tally`\e[0m" : tally))
+  failed == 0 ? 0 : 1
+>

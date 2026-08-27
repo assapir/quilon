@@ -18,7 +18,7 @@
 //!
 //! The one name the over-approximation does NOT stretch to is the receiver, `it`: it is bound
 //! by the method it appears in, so a bare `it` is not a mention. An `it` in CALLEE position —
-//! the one place it can name a top-level function, `core.test.report`'s case function — is
+//! the one place it can name a top-level function, `core.test`'s case function — is
 //! (see [`mentions_callee`]).
 
 use super::nodes::{

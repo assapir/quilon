@@ -90,8 +90,11 @@ pub struct Checked {
 }
 
 /// What the front end does with a file's top-level `describe` blocks (see
-/// [`ast::TEST_BLOCK_MARKER`]) — and, with them, its test-only `<<?` imports (see
-/// [`ast::Import::test_only`]).
+/// [`ast::TEST_BLOCK_MARKER`]).
+///
+/// An import that exists only to serve those blocks needs no marker of its own: erasing the
+/// blocks leaves nothing referencing what it brought in, and the reachability pass then keeps
+/// none of it out of the emitted program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestBlocks {
     /// Leave them out of the compilation unit. `check`, `compile`, `build`, and `run` all
@@ -103,16 +106,14 @@ pub enum TestBlocks {
     Run,
 }
 
-/// The reporter function the synthesized test entry point ends with: it renders the run's
-/// summary and yields the run's status. Bound by NAME, in the linked program's scope, so
-/// the definition that answers is `core.test.report`'s when a suite imports it and the suite's
-/// own when it does not — which is the whole of how a reporter is selected. See the seam in
-/// `docs/corelib/test.md`.
+/// The function the synthesized test entry point ends with: it renders the run's summary and
+/// yields the run's status. Bound by NAME, in the linked program's scope, which is
+/// `core.test`'s definition.
 pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
 
-/// The module carrying the reporter Quilon ships, named in the diagnostic a suite gets when
-/// no reporter is in scope at all.
-pub const DEFAULT_REPORTER_MODULE: &str = "core.test.report";
+/// The module carrying the harness, named in the diagnostic a suite gets when its summary
+/// function is not in scope at all.
+pub const DEFAULT_REPORTER_MODULE: &str = "core.test";
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, leaving its test blocks out (see [`TestBlocks`]).
@@ -169,20 +170,6 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
 
     let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
 
-    // Erase the test-only imports, exactly as the test blocks are erased: they serve those
-    // blocks, so they follow them. Kept aside rather than dropped so a name that went missing
-    // with them can be explained. `quilon test` compiles the blocks, so it keeps the imports.
-    let erased_imports: Vec<ast::Import> = match tests {
-        TestBlocks::Erase => {
-            let (erased, kept) = std::mem::take(&mut program.imports)
-                .into_iter()
-                .partition(|import| import.test_only);
-            program.imports = kept;
-            erased
-        }
-        TestBlocks::Run => Vec::new(),
-    };
-
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let (mut program, mut sources) =
         modules::link(program, base_dir).map_err(FrontEndError::plain)?;
@@ -195,12 +182,7 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
 
     let types = typechecker::TypeChecker::new()
         .check_program(&program)
-        .map_err(|e| {
-            let message =
-                erased_import_explanation(&erased_imports, base_dir, &sources, &program, &e)
-                    .unwrap_or_else(|| e.to_string());
-            FrontEndError::at_span(&sources, e.span(), &message)
-        })?;
+        .map_err(|e| FrontEndError::at_span(&sources, e.span(), &e.to_string()))?;
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
@@ -229,59 +211,6 @@ fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
         }
         _ => None,
     })
-}
-
-/// Explain an undefined name that one of the `erased_imports` would have provided, or `None`
-/// when the error is about something else.
-///
-/// Resolving the erased modules costs a parse, so it happens here — on the failure path — and
-/// nowhere else.
-fn erased_import_explanation(
-    erased_imports: &[ast::Import],
-    base_dir: &Path,
-    sources: &SourceMap,
-    program: &ast::Program,
-    error: &crate::typechecker::checker::TypeError,
-) -> Option<String> {
-    let crate::typechecker::checker::TypeError::UndefinedVariable { name, span } = error else {
-        return None;
-    };
-    if !report_is_over_the_name(sources, span, name) {
-        return None;
-    }
-    // A name the compilation unit DOES define is missing for another reason — Quilon resolves
-    // top to bottom, so a use above the definition reads as undefined — and the erased import
-    // is not the answer.
-    if program.items.iter().any(|item| item.name() == name) {
-        return None;
-    }
-    let module = modules::providing_import(erased_imports, base_dir, name)?;
-    Some(format!(
-        "`{name}` comes in through `<<? {module}`, a test-only import: it is resolved for \
-         the `{}` blocks under `quilon test` and erased everywhere else, so nothing outside \
-         a block can use it. Move this use into a block, or import the module with `<<`",
-        ast::TEST_BLOCK_MARKER,
-    ))
-}
-
-/// Whether `span` covers `name` itself — a use of that name — rather than a larger expression
-/// that merely contains it.
-///
-/// `UndefinedVariable` carries two different mistakes: a name nothing defines, reported over
-/// exactly that name (or over `Name { … }` for a constructor), and an unknown FIELD, reported
-/// over the whole access, `point.red`. Telling them apart is what keeps a mistyped field from
-/// being blamed on a test-only import that happens to export something spelled the same.
-fn report_is_over_the_name(sources: &SourceMap, span: &Span, name: &str) -> bool {
-    let text = sources
-        .get_text(span.file)
-        .unwrap_or_else(|| sources.root_text());
-    let Some(quoted) = text.get(span.start as usize..span.end as usize) else {
-        return false;
-    };
-    quoted == name
-        || quoted
-            .strip_prefix(name)
-            .is_some_and(|rest| rest.trim_start().starts_with('{'))
 }
 
 /// Whether `program` defines the `^` entry point required to build an executable.
@@ -325,7 +254,7 @@ fn synthesized_span(node: Synthesized) -> Span {
 }
 
 /// Append the entry point that runs `program`'s test blocks: each `describe(…)` in source
-/// order, then the reporter's summary, whose `Num` result becomes the exit code.
+/// order, then the run's summary, whose `Num` result becomes the exit code.
 ///
 /// A file's tests may sit beside its code, `^` included, so the program reaching here may
 /// already have something under that name. Whatever it is, it belongs to the program and not
@@ -336,16 +265,15 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
         return Ok(());
     };
     program.items.retain(|item| !names_entry_point(item));
-    // The reporter has to be in scope, since the entry ends by calling it. Said here, at the
-    // first test block, rather than by the type checker at the synthesized call — which has
-    // no source location to point a diagnostic at.
+    // The summary function has to be in scope, since the entry ends by calling it. Said here,
+    // at the first test block, rather than by the type checker at the synthesized call — which
+    // has no source location to point a diagnostic at.
     if !defines_function(program, REPORTER_SUMMARY_FUNCTION) {
         return Err((
             first_block.span().clone(),
             format!(
                 "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
-                 Add `<< {DEFAULT_REPORTER_MODULE}` for the one Quilon ships, or define \
-                 `{REPORTER_SUMMARY_FUNCTION}` yourself"
+                 Add `<< {DEFAULT_REPORTER_MODULE}`"
             ),
         ));
     }
