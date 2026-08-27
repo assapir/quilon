@@ -70,6 +70,27 @@ All notable changes to Quilon are documented here.
   cannot continue past. `reportCase` gained a `failed :: Bool` parameter, so a reporter of
   your own says which way each case went.
 
+- **BREAKING: a test suite imports `core.test.report`, and its output is replaceable.** The
+  harness and the report Quilon ships move to a module of their own — `describe`, `it`,
+  `reportSuite`, `reportCase`, `reportSummary` — and a suite gets them with
+  `<< core.test.report`. Migration is one line per suite: `<< core.test` becomes
+  `<< core.test.report`. (A file that imported `core.test` only for `assert` needs no change;
+  assertions are compiler-provided.)
+
+  What `core.test` keeps is what those five are built from, none of it privileged: `failAt`,
+  the run's recorded state (`casesPassed`, `casesFailed`, `nestingDepth`), and the case
+  lifecycle (`enterSuite`, `leaveSuite`, `caseFailing`, `finishCase`). So a suite that imports
+  `core.test` alone and defines the five names itself gets its own report, in ordinary `.qn`
+  and without naming a runtime primitive — `examples/custom_test_reporter.qn` is a working TAP
+  reporter in 30 lines. This is what the split is for: those names had to leave `core.test` to
+  be definable at all, since imports are transitive and a second definition collides.
+
+  `quilon test` binds `reportSummary` by name in the linked program, so whichever definition
+  is in scope ends the run and decides whether it passed; a top-level `describe(…)` is
+  recognized by name too, so a `describe` of your own marks test blocks identically. A suite
+  with no reporter in scope is a compile error at its first `describe`, naming the import that
+  fixes it.
+
 - **BREAKING: a setter is now declared with `:=`, and `=` methods are verified
   non-mutating ([#198](https://github.com/assapir/quilon/issues/198)).** A method that
   mutates its receiver is written `name := (…) => …`; one written `name = (…) => …`

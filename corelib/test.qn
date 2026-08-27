@@ -1,5 +1,6 @@
-~ core.test — the test harness and its reporter. Import with `<< core.test`.
-~ Reference: docs/corelib/test.md.
+~ core.test — what a test harness and its reporter are built from. Import with
+~ `<< core.test`. For the harness and output Quilon ships, import `<< core.test.report`
+~ instead. Reference: docs/corelib/test.md.
 ~
 ~ ── Assertions ─────────────────────────────────────────────────────────────────────
 ~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
@@ -17,26 +18,19 @@
 ~                           assertEven = (n :: Num, site :: Site) -> $ =>
 ~                             n % 2 == 0 ? $ : failAt("`n` is odd", site)
 ~
-~ ── The harness ────────────────────────────────────────────────────────────────────
-~ `quilon test` runs a file's top-level `describe` blocks; every other command compiles
-~ the file without them. A test file has no `^`. A failing `expect` skips the rest of its
-~ case, so a run reports every case — see docs/corelib/test.md.
+~ ── The run's state, and the case lifecycle ────────────────────────────────────────
+~ `quilon test` runs a file's top-level `describe` blocks and ends by calling
+~ `reportSummary()`, whose result is the run's status — 0 passes the suite, anything else
+~ fails it. Neither `describe`,
+~ `it`, nor any `report*` function lives here: they are what `core.test.report` builds
+~ out of the functions below, and what a harness of your own defines instead.
 ~
-~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
-~   it(name, body)        one case, reported once it has run.
+~ Everything the run records is reachable through these — a reporter never names a
+~ registry primitive:
 ~
-~   describe("trimming", () => <
-~     it("drops both ends", () => expect("  x  ".trim(), equals("x")))
-~   >)
-~
-~ ── Reporters ──────────────────────────────────────────────────────────────────────
-~ What a run looks like is decided here, not in the compiler: the harness records what
-~ happened through the reporter-agnostic registry (`__test_*`) and renders through the
-~ `report*` functions below. A reporter of your own defines the same three, and the
-~ entry `quilon test` synthesizes calls `reportSummary()` last, for the exit code.
-~
-~ A reporter reads the run's state through `casesPassed`, `casesFailed` and
-~ `nestingDepth`, never through the registry primitives those three wrap.
+~   casesPassed()  casesFailed()  nestingDepth()      what the run has recorded
+~   enterSuite()   leaveSuite()                       open and close a group
+~   caseFailing()  finishCase()                       ask about, then close, a case
 << core.io
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
@@ -68,8 +62,6 @@
 >
 
 ~ ── The run's state ────────────────────────────────────────────────────────────────
-~ Everything the registry knows, as named functions. A reporter is written against these
-~ three; the registry primitives behind them stay the harness's own plumbing.
 
 ~ How many cases have run with no failing `expect`.
 >> casesPassed = () -> Num => __test_passed()
@@ -81,57 +73,22 @@
 ~ How many `describe` groups are open: 0 outside any group, 1 inside an outermost one.
 >> nestingDepth = () -> Num => __test_depth()
 
-~ ── The default reporter ───────────────────────────────────────────────────────────
+~ ── The case lifecycle ─────────────────────────────────────────────────────────────
+~ What a `describe` and an `it` of your own call, in this order:
+~   enterSuite() … the group's body … leaveSuite()
+~   the case's body … caseFailing() … finishCase()
 
-~ Two spaces per level of `describe` nesting.
->> indent = (depth :: Num) -> Text => "  ".repeat(depth)
+~ Open a group; yields the depth it sits at (1 for an outermost group), which is what a
+~ reporter indents by.
+>> enterSuite = () -> Num => __test_suite_enter()
 
-~ The two colors the report uses, each plain when stdout is not a terminal that wants
-~ color. Not folded into one `paint(code, text)` helper: a module's non-exported names are
-~ not linked into a program, and the shared body is not worth a third exported name.
->> green = (text :: Text) -> Text =>
-  __color_enabled(stdout) ? "\e[32m`text`\e[0m" : text
+~ Close the group just entered; yields the depth that remains.
+>> leaveSuite = () -> Num => __test_suite_leave()
 
->> red = (text :: Text) -> Text =>
-  __color_enabled(stdout) ? "\e[31m`text`\e[0m" : text
+~ Whether the case now running has already failed an `expect`. Ask BEFORE closing it —
+~ closing clears the mark for the next case.
+>> caseFailing = () -> Bool => __test_case_failing() == 1
 
-~ A `describe` group was entered, at `depth` (1 for an outermost group).
->> reportSuite = (name :: Text, depth :: Num) -> $ => print("`indent(depth - 1)``name`")
-
-~ A case ran, at `depth`; `failed` says whether an `expect` in it failed.
->> reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ => <
-  mark = failed ? red("✗") : green("✓")
-  print("`indent(depth)``mark` `name`")
->
-
-~ The run's total, and its exit code — non-zero when any case failed. The synthesized
-~ entry point ends with this call, so what it returns IS the process status.
->> reportSummary = () -> Num => <
-  passed = casesPassed()
-  failed = casesFailed()
-  tally = "`passed` passed, `failed` failed"
-  print("")
-  print(failed == 0 ? green(tally) : red(tally))
-  failed == 0 ? 0 : 1
->
-
-~ ── describe / it ──────────────────────────────────────────────────────────────────
-
-~ A group of cases, nestable. `body` runs immediately; the group is only there to name
-~ and indent what it contains.
->> describe = (name :: Text, body :: () -> $) -> $ => <
-  depth = __test_suite_enter()
-  reportSuite(name, depth)
-  body()
-  __test_suite_leave()
-  $
->
-
-~ One case, reported once `body` has run. A failing `expect` inside `body` marks the case
-~ and skips what is left of it, so the report says which way the case went and the run
-~ continues with the next one.
->> it = (name :: Text, body :: () -> $) -> $ => <
-  body()
-  failed = __test_case_failing() == 1
-  reportCase(name, __test_case_finish(), failed)
->
+~ Close the case that just ran, tallying it as passed or failed; yields the depth to
+~ report it at.
+>> finishCase = () -> Num => __test_case_finish()

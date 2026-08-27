@@ -3,10 +3,17 @@
 **Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every
 example in `examples/` does. They are **compiler-provided**, like `print`: no import. The
 **harness** (`describe`, `it`) groups those checks into named cases that `quilon test` runs
-and reports, and comes from `core.test` (`<< core.test`).
+and reports.
 
-See the [corelib index](../LANGUAGE.md#corelib), `examples/assert_demo.qn`, and
-`examples/test_suite.qn`.
+Two modules, because the output is replaceable:
+
+| Module | Import | What it gives you |
+|--------|--------|-------------------|
+| `core.test.report` | `<< core.test.report` | The harness and the report Quilon ships — `describe`, `it`, and the three `report*` functions. Pulls in `core.test`, so a suite needs nothing else. |
+| `core.test` | `<< core.test` | What those are built from: `failAt`, the run's recorded state, and the case lifecycle. Defines no `describe`/`it`/`report*`, which is what leaves those names free for [a reporter of your own](#writing-a-reporter). |
+
+See the [corelib index](../LANGUAGE.md#corelib), `examples/assert_demo.qn`,
+`examples/test_suite.qn`, and `examples/custom_test_reporter.qn`.
 
 ## Assertions
 
@@ -87,7 +94,7 @@ each block in order; every other command leaves the blocks out of the program. A
 itself with `expect`.
 
 ```quilon
-<< core.test
+<< core.test.report
 
 describe("Text", () => <
   it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
@@ -120,6 +127,10 @@ Text
 |----------|--------|
 | `describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
 | `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
+
+Both come from `core.test.report`, and neither is privileged: the compiler recognizes a
+top-level `describe(…)` call **by name**, so a `describe`/`it` you define yourself drives the
+same machinery — see [Writing a reporter](#writing-a-reporter).
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
 straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
@@ -183,8 +194,8 @@ test code passes unnoticed.
 ### Writing a reporter
 
 What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it` and a failing
-`expect` only record what happened; every line of output comes from three functions
-`core.test` exports, and a reporter is those three:
+`expect` only record what happened; every line of output comes from three functions, and a
+reporter is those three:
 
 | Function | Called |
 |----------|--------|
@@ -192,11 +203,17 @@ What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it`
 | `reportCase(name :: Text, depth :: Num, failed :: Bool) -> $` | Once a case's body has run, `failed` saying which way it went. |
 | `reportSummary() -> Num` | Last, from the entry point `quilon test` synthesizes. |
 
-`depth` is **1 for an outermost `describe`**, one more per level of nesting; a case is reported
-at the depth of the group holding it. `reportSummary`'s **return value is the process exit
-code** — so a run passes only if it returns 0.
+`depth` is **1 for an outermost `describe`** and one more per level of nesting; a case is
+reported at the depth of the group holding it. **`reportSummary`'s result is the run's status:**
+0 passes the suite, anything else fails it — which is what `quilon test` exits non-zero on.
 
-The run's state, for the summary and for anything else a reporter wants to say:
+To swap in your own, import **`core.test`** instead of `core.test.report` and define all five
+names — the two harness functions as well, since `describe` and `it` are what call
+`reportSuite` and `reportCase`. `quilon test` binds `reportSummary` **by name** in the linked
+program, so yours is the one that ends the run; and a top-level `describe(…)` is recognized by
+name too, so your `describe` marks test blocks exactly as the shipped one does.
+
+`core.test` gives you everything the run records — a reporter never names a runtime primitive:
 
 | Function | Yields |
 |----------|--------|
@@ -204,27 +221,61 @@ The run's state, for the summary and for anything else a reporter wants to say:
 | `casesFailed() -> Num` | Cases that ran with at least one. |
 | `nestingDepth() -> Num` | How many `describe` groups are open — 0 outside any. |
 
-That is the whole state; the registry primitives behind these three are the harness's own
-plumbing, not API. What `core.test` ships is a reporter and nothing more:
+and the case lifecycle a `describe`/`it` of your own drives:
+
+| Function | Effect |
+|----------|--------|
+| `enterSuite() -> Num` | Open a group; yields the depth it sits at. |
+| `leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
+| `caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
+| `finishCase() -> Num` | Close the case, tallying it passed or failed; yields the depth to report it at. |
+
+A complete replacement — one line per case in TAP order, no indentation, no color. This is
+`examples/custom_test_reporter.qn` cut down to two cases; under `quilon test` it reports
+exactly the lines below the snippet (after the suite's path, which the runner prints):
 
 ```quilon
->> reportSuite = (name :: Text, depth :: Num) -> $ => print("`indent(depth - 1)``name`")
+<< core.io
+<< core.test
 
->> reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ => <
-  mark = failed ? red("✗") : green("✓")
-  print("`indent(depth)``mark` `name`")
+reportSuite = (name :: Text, depth :: Num) -> $ => $
+
+reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ =>
+  print("`failed ? "not ok" : "ok"` `casesPassed() + casesFailed()` - `name`")
+
+reportSummary = () -> Num => <
+  print("1..`casesPassed() + casesFailed()`")
+  casesFailed() == 0 ? 0 : 1
 >
 
->> reportSummary = () -> Num => <
-  failed = casesFailed()
-  tally = "`casesPassed()` passed, `failed` failed"
-  print("")
-  print(failed == 0 ? green(tally) : red(tally))
-  failed == 0 ? 0 : 1
+describe = (name :: Text, body :: () -> $) -> $ => <
+  reportSuite(name, enterSuite())
+  body()
+  leaveSuite()
+  $
 >
+
+it = (name :: Text, body :: () -> $) -> $ => <
+  body()
+  failed = caseFailing()
+  reportCase(name, finishCase(), failed)
+>
+
+describe("Text", () => <
+  it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
+  it("finds a part", () => expect("haystack", contains("stack")))
+>)
 ```
 
-**Swapping one in** is not yet possible from a suite: `<< core.test` brings these three names
-into scope, and imports are transitive, so a module that defines its own is a duplicate
-definition. Selecting a reporter waits on the harness and the default reporter shipping as
-separate modules.
+```
+ok 1 - trims both ends
+ok 2 - finds a part
+1..2
+```
+
+Nothing is re-exported here, so the five names may stay module-private (no `>>`) when the
+reporter lives in the suite itself; put them in their own module with `>>` to share one
+reporter across suites, and import that module instead of `core.test.report`.
+
+A suite that imports neither `core.test.report` nor a reporter of its own is a compile error at
+its first `describe`, naming the import that fixes it — never a silent run with no output.

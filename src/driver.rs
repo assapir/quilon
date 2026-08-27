@@ -103,9 +103,15 @@ pub enum TestBlocks {
 }
 
 /// The reporter function the synthesized test entry point ends with: it renders the run's
-/// summary and yields the process exit code. Naming it here rather than inlining it is what
-/// makes the reporter selectable — see the seam in `docs/corelib/test.md`.
+/// summary and yields the run's status. Bound by NAME, in the linked program's scope, so
+/// the definition that answers is `core.test.report`'s when a suite imports it and the suite's
+/// own when it does not — which is the whole of how a reporter is selected. See the seam in
+/// `docs/corelib/test.md`.
 pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
+
+/// The module carrying the reporter Quilon ships, named in the diagnostic a suite gets when
+/// no reporter is in scope at all.
+pub const DEFAULT_REPORTER_MODULE: &str = "core.test.report";
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, leaving its test blocks out (see [`TestBlocks`]).
@@ -265,7 +271,8 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
             first_block.span().clone(),
             format!(
                 "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
-                 Add `<< core.test`, or define a reporter of your own"
+                 Add `<< {DEFAULT_REPORTER_MODULE}` for the one Quilon ships, or define \
+                 `{REPORTER_SUMMARY_FUNCTION}` yourself"
             ),
         ));
     }

@@ -952,7 +952,7 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 
 >> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.test.report`, `core.cli`, `core.time`, and `core.net`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -969,7 +969,8 @@ signatures, behavior, and a small example per function.
 | Module | Import | What it gives you |
 |--------|--------|-------------------|
 | [`core.io`](corelib/io.md) | `<< core.io` | Output to file descriptors and stdin: `print` / `eprint` / `write`, the `stdout` / `stderr` descriptors, and the deferred `@readStdin` line read. |
-| [`core.test`](corelib/test.md) | `<< core.test` | The [test harness](corelib/test.md#the-test-harness) `quilon test` runs — `describe` / `it` and the reporter — plus `failAt`, for a check of your own. The assertions themselves need no import: `assert` / `expect` and their matchers are compiler-provided. |
+| [`core.test.report`](corelib/test.md#the-test-harness) | `<< core.test.report` | The [test harness](corelib/test.md#the-test-harness) `quilon test` runs and the report it prints: `describe` / `it` and `reportSuite` / `reportCase` / `reportSummary`. Pulls in `core.test`. |
+| [`core.test`](corelib/test.md) | `<< core.test` | What a harness and reporter are built from: `failAt` for a check of your own, the run's recorded state (`casesPassed` / `casesFailed` / `nestingDepth`), and the case lifecycle (`enterSuite` / `leaveSuite` / `caseFailing` / `finishCase`). Defines no `describe` / `it` / `report*`, so [a reporter of your own](corelib/test.md#writing-a-reporter) can. The assertions need no import at all: `assert` / `expect` and their matchers are compiler-provided. |
 | [`core.cli`](corelib/cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](corelib/time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
 | [`core.net`](corelib/net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
@@ -1205,7 +1206,7 @@ quilon test    [path]       # run the test suites under a file or directory (def
 `quilon test` is JIT-only, and exits non-zero if any case failed. It runs a file's top-level
 `describe` blocks, which every other command erases — so tests may sit in the file they test,
 its `^` included, and still cost a release build nothing. See
-[`core.test`](corelib/test.md#the-test-harness).
+[the test harness](corelib/test.md#the-test-harness).
 
 `quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt`, which carries the GC) into a native executable:
 ```bash
@@ -1318,11 +1319,12 @@ pathological input.
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
-| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.net`, file-path imports, `>>` exports | ✅ |
+| Modules: `<< core.io`, `<< core.test`, `<< core.test.report`, `<< core.cli`, `<< core.time`, `<< core.net`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
 | Test harness: [`quilon test`](corelib/test.md#the-test-harness) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
+| [Replaceable reporter](corelib/test.md#writing-a-reporter): the harness and its output are ordinary `.qn` in `core.test.report`, so a suite importing `core.test` alone defines its own `describe` / `it` / `report*` and gets its own report | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |

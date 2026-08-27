@@ -136,21 +136,35 @@ impl Loader {
 // from the same strings — they cannot drift.
 const CORE_IO: &str = include_str!("../corelib/io.qn");
 const CORE_TEST: &str = include_str!("../corelib/test.qn");
+const CORE_TEST_REPORT: &str = include_str!("../corelib/test/report.qn");
 const CORE_CLI: &str = include_str!("../corelib/cli.qn");
 const CORE_TIME: &str = include_str!("../corelib/time.qn");
 const CORE_NET: &str = include_str!("../corelib/net.qn");
 
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
-const CORELIB_SOURCES: &[&str] = &[CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET];
+const CORELIB_SOURCES: &[&str] = &[
+    CORE_IO,
+    CORE_TEST,
+    CORE_TEST_REPORT,
+    CORE_CLI,
+    CORE_TIME,
+    CORE_NET,
+];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(CORE_IO),
-        // core.test — assertions (`assert` + wrappers) for self-verifying programs.
-        // Depends transitively on core.io (its wrappers render values via `eprint`).
+        // core.test — what a harness and a reporter are built from: `failAt`, the run's
+        // recorded state, and the case lifecycle. Depends transitively on core.io (`failAt`
+        // renders its frame via `eprint`). It defines no `describe`/`it`/`report*`, which is
+        // what leaves those names free for a suite that brings its own.
         "core.test" => Some(CORE_TEST),
+        // core.test.report — the harness and reporter Quilon ships, written against
+        // core.test's functions like any other. A suite importing this gets the default
+        // output; one importing only `core.test` supplies its own.
+        "core.test.report" => Some(CORE_TEST_REPORT),
         // core.cli — thin, pure-Quilon helpers over the `^` entry point's
         // `args :: []Text` and `env :: [|Text => Text|]`.
         "core.cli" => Some(CORE_CLI),

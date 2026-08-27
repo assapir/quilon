@@ -563,16 +563,23 @@ fn split_source_path(path: &Path) -> (String, String) {
 ///
 /// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) goes
 /// through [`split_source_path`]. A bundled built-in module is named by its dotted module path
-/// (`core.test`) rather than a file path; its source lives at `corelib/<leaf>.qn` in the
-/// repository, so it maps there — which is what lets a debugger open `corelib/test.qn` when a
-/// step lands in a corelib function in the in-repo dev flow.
+/// (`core.test`) rather than a file path; the segments after `core` are its path under
+/// `corelib/`, so `core.test` maps to `corelib/test.qn` and `core.test.report` to
+/// `corelib/test/report.qn` — which is what lets a debugger open the right file when a step
+/// lands in a corelib function in the in-repo dev flow.
 fn dwarf_file_location(path: &str) -> (String, String) {
     if path.ends_with(".qn") {
-        split_source_path(Path::new(path))
-    } else {
-        let leaf = path.rsplit('.').next().unwrap_or(path);
-        ("corelib".to_string(), format!("{leaf}.qn"))
+        return split_source_path(Path::new(path));
     }
+    let mut segments: Vec<&str> = path.split('.').collect();
+    // Anything before the last segment nests under `corelib/`; the leading `core.` is the
+    // corelib itself and is not a directory of its own.
+    let leaf = segments.pop().unwrap_or(path);
+    let directory = std::iter::once("corelib")
+        .chain(segments.into_iter().skip(1))
+        .collect::<Vec<&str>>()
+        .join("/");
+    (directory, format!("{leaf}.qn"))
 }
 
 /// The byte offset at which each line begins. `line_starts[0]` is always `0`; a new entry

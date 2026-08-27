@@ -6,7 +6,7 @@
 ~ Run: cargo run -- run  examples/tests_alongside_code.qn    ~ prints the program's line only
 ~ Run: cargo run -- test examples/tests_alongside_code.qn    ~ runs the cases instead
 << core.io
-<< core.test
+<< core.test.report
 
 >> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
 

@@ -7,7 +7,7 @@
 ~ There is no `^` here — a file of nothing but tests. A top-level `describe(…)` is test code:
 ~ `quilon test` synthesizes the entry point that runs each block in order, and every other
 ~ command leaves the blocks out of the program entirely.
-<< core.test
+<< core.test.report
 
 describe("Text", () => <
   it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))

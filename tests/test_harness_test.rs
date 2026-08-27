@@ -20,7 +20,7 @@ use common::{ensure_runtime_lib, tool_available};
 
 /// A passing suite: two groups, one nested inside the other.
 const PASSING_SUITE: &str = r#"
-<< core.test
+<< core.test.report
 
 describe("numbers", () => <
   it("adds", () => expect(1 + 1, equals(2)))
@@ -39,7 +39,7 @@ describe("text", () => <
 /// A passing case, then a failing one, then another that passes. A failed `expect` marks its
 /// own case and nothing else, so the third case still runs and the summary tallies both ways.
 const FAILING_SUITE: &str = r#"
-<< core.test
+<< core.test.report
 
 describe("arithmetic", () => <
   it("holds", () => expect(2 + 2, equals(4)))
@@ -142,7 +142,8 @@ fn build_and_execute(source: &Path, directory: &Path, linker: &str) -> Output {
 
 #[test]
 fn a_top_level_describe_call_parses_as_a_test_block() {
-    let tokens = Lexer::tokenize("<< core.test\ndescribe(\"g\", () => 0)\n").expect("lexing");
+    let tokens =
+        Lexer::tokenize("<< core.test.report\ndescribe(\"g\", () => 0)\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert_eq!(program.test_blocks.len(), 1);
     assert!(
@@ -154,8 +155,8 @@ fn a_top_level_describe_call_parses_as_a_test_block() {
 
 #[test]
 fn a_describe_definition_is_still_an_ordinary_item() {
-    // `core.test` DEFINES `describe`, and a program may define its own — only a CALL is
-    // the marker, so the two are told apart by what follows the name.
+    // `core.test.report` DEFINES `describe`, and a program may define its own — only a CALL
+    // is the marker, so the two are told apart by what follows the name.
     let tokens = Lexer::tokenize("describe = (n :: Num) -> Num => n\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert!(program.test_blocks.is_empty());
@@ -174,7 +175,7 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
         &dir,
         "mixed.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             "<< core.io\n",
             "double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
@@ -270,7 +271,7 @@ fn quilon_test_ignores_the_entry_point_beside_the_blocks_it_runs() {
         &format!(
             r#"
 << core.io
-<< core.test
+<< core.test.report
 
 ^ = () -> $ => print("{PROGRAM_MARKER}")
 
@@ -382,7 +383,7 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             "describe(\"skipping\", () => <\n",
             "  it(\"stops at the first failure\", () => <\n",
             "    expect(1, equals(2))\n",
@@ -452,7 +453,7 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             "describe(\"g\", () => <\n",
             "  expect(1, equals(2))\n",
             "  it(\"unaffected\", () => expect(1, equals(1)))\n",
@@ -477,7 +478,7 @@ fn expect_outside_an_it_case_is_a_compile_error() {
 
 /// The run's state is a `.qn` API, not a set of runtime symbol names: a reporter — or a case —
 /// reads how many cases have passed and failed and how deep the nesting is through
-/// `core.test`'s own functions.
+/// `core.test`'s own functions, which `core.test.report` re-exports by importing it.
 #[test]
 fn the_run_state_is_readable_through_named_functions() {
     let dir = work_dir("state");
@@ -486,7 +487,7 @@ fn the_run_state_is_readable_through_named_functions() {
         "suite.qn",
         concat!(
             "<< core.io\n",
-            "<< core.test\n",
+            "<< core.test.report\n",
             "describe(\"outer\", () => <\n",
             "  it(\"sits at depth 1\", () => expect(nestingDepth(), equals(1)))\n",
             "  describe(\"inner\", () => <\n",
@@ -514,31 +515,145 @@ fn the_run_state_is_readable_through_named_functions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The point of those functions: the reporter `core.test` ships is written against them, so
-/// nobody writing a reporter has to know a registry symbol's name. The primitives stay behind
-/// `describe`/`it` and the three wrappers.
+/// The module split that makes a reporter replaceable, asserted on the corelib itself:
+/// `core.test` carries the state and the lifecycle and defines NONE of the names a reporter
+/// owns, while `core.test.report` defines all of them and names no registry primitive. The
+/// first half is what leaves `describe`/`it`/`report*` free for a suite to define; the second
+/// is what proves those names are reachable in `.qn`.
 #[test]
-fn the_shipped_reporter_names_no_registry_primitive() {
-    let corelib = Path::new(env!("CARGO_MANIFEST_DIR")).join("corelib/test.qn");
-    let source = std::fs::read_to_string(&corelib).expect("read corelib/test.qn");
+fn the_corelib_split_leaves_the_reporter_names_free() {
+    let corelib = Path::new(env!("CARGO_MANIFEST_DIR")).join("corelib");
+    let toolkit = std::fs::read_to_string(corelib.join("test.qn")).expect("read corelib/test.qn");
+    let reporter =
+        std::fs::read_to_string(corelib.join("test/report.qn")).expect("read test/report.qn");
 
-    for wrapper in ["casesPassed", "casesFailed", "nestingDepth"] {
+    for provided in [
+        "casesPassed",
+        "casesFailed",
+        "nestingDepth",
+        "enterSuite",
+        "leaveSuite",
+        "caseFailing",
+        "finishCase",
+    ] {
         assert!(
-            source.contains(&format!(">> {wrapper} = ")),
-            "`{wrapper}` must be exported for a reporter to read the run through"
+            toolkit.contains(&format!(">> {provided} = ")),
+            "`core.test` must export `{provided}` for a harness to be written against it"
         );
     }
-    for reporter in ["reportSuite", "reportCase", "reportSummary"] {
-        let body = source
-            .split(&format!(">> {reporter} = "))
-            .nth(1)
-            .and_then(|rest| rest.split("\n\n").next())
-            .unwrap_or_else(|| panic!("`{reporter}` is missing from corelib/test.qn"));
+    for owned in [
+        "describe",
+        "it",
+        "reportSuite",
+        "reportCase",
+        "reportSummary",
+    ] {
         assert!(
-            !body.contains("__test_"),
-            "`{reporter}` reaches for a registry primitive instead of a wrapper:\n{body}"
+            !toolkit.contains(&format!(">> {owned} = ")),
+            "`core.test` must not export `{owned}` — a suite defining its own would collide"
+        );
+        assert!(
+            reporter.contains(&format!(">> {owned} = ")),
+            "`core.test.report` must export `{owned}`"
         );
     }
+    assert!(
+        !reporter.contains("__test_"),
+        "the shipped reporter must go through `core.test`, not the registry:\n{reporter}"
+    );
+}
+
+/// The whole point, end to end: a suite that imports `core.test` alone and defines its own
+/// `describe`, `it` and `report*` gets ITS output and none of the default's. `reportSummary` is
+/// bound by name, so the suite's is what ends the run and decides whether it passed — a
+/// non-zero return failing the suite, which `quilon test` reports as its own failure.
+#[test]
+fn a_suite_can_replace_the_reporter_entirely() {
+    let dir = work_dir("own_reporter");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.io\n",
+            "<< core.test\n",
+            "reportSuite = (name :: Text, depth :: Num) -> $ => print(\"GROUP `name`\")\n",
+            "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ =>\n",
+            "  print(\"CASE `name` `failed ? \"BAD\" : \"GOOD\"`\")\n",
+            "reportSummary = () -> Num => <\n",
+            "  print(\"TOTAL `casesPassed()`/`casesFailed()`\")\n",
+            "  casesFailed() == 0 ? 0 : 7\n",
+            ">\n",
+            "describe = (name :: Text, body :: () -> $) -> $ => <\n",
+            "  reportSuite(name, enterSuite())\n",
+            "  body()\n",
+            "  leaveSuite()\n",
+            "  $\n",
+            ">\n",
+            "it = (name :: Text, body :: () -> $) -> $ => <\n",
+            "  body()\n",
+            "  failed = caseFailing()\n",
+            "  reportCase(name, finishCase(), failed)\n",
+            ">\n",
+            "describe(\"group\", () => <\n",
+            "  it(\"passes\", () => expect(1, equals(1)))\n",
+            "  it(\"fails\", () => expect(1, equals(2)))\n",
+            ">)\n"
+        ),
+    );
+
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    // The suite's own summary decided the run failed: it returned non-zero, and `quilon test`
+    // turned that into a failing suite.
+    assert_ne!(
+        out.code, 0,
+        "the suite's `reportSummary` returned non-zero, so the run must fail:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    for line in [
+        "GROUP group",
+        "CASE passes GOOD",
+        "CASE fails BAD",
+        "TOTAL 1/1",
+    ] {
+        assert!(
+            out.stdout.contains(line),
+            "`{line}` is missing from the custom report:\n{}",
+            out.stdout
+        );
+    }
+    // And nothing of the default reporter: no ✓/✗ marks, no "N passed, M failed" tally.
+    for absent in ["✓", "✗", "passed,"] {
+        assert!(
+            !out.stdout.contains(absent),
+            "the default reporter still rendered `{absent}`:\n{}",
+            out.stdout
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shipped demonstration of the same thing, so the documented example is a gate.
+#[test]
+fn the_custom_reporter_example_replaces_the_default() {
+    let suite = example("custom_test_reporter.qn");
+    let out = quilon(&["test", suite.to_str().unwrap()]);
+
+    assert_eq!(
+        out.code, 0,
+        "examples/custom_test_reporter.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains("ok 1 - trims both ends") && out.stdout.contains("1..4"),
+        "the example's own reporter did not render:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("passed,") && !out.stdout.contains("✓"),
+        "the default reporter leaked into the example's output:\n{}",
+        out.stdout
+    );
 }
 
 /// `assert` in a case is still FATAL: it ends the run where it failed rather than recording.
@@ -550,7 +665,7 @@ fn an_assert_in_a_case_is_still_fatal() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             "describe(\"fatal\", () => <\n",
             "  it(\"asserts\", () => assert(1, equals(2)))\n",
             "  it(\"never reached\", () => expect(1, equals(1)))\n",
@@ -579,7 +694,7 @@ fn a_directory_runs_every_suite_it_holds() {
         &dir,
         "mixed.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             "describe(\"mixed\", () => it(\"runs\", () => expect(true, equals(true))))\n",
             "^ = () -> Num => 7\n"
         ),
@@ -637,15 +752,16 @@ fn a_suite_that_does_not_compile_fails_the_run() {
     let source = write(
         &dir,
         "suite.qn",
-        "<< core.test\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
+        "<< core.test.report\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0, "a suite that fails to type-check must fail");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A suite with no `<< core.test` has no reporter, and says so at its own `describe` —
-/// rather than blaming the entry point the compiler synthesized, which has no location.
+/// A suite that imports neither `core.test.report` nor a reporter of its own has none at all,
+/// and is told so at its own `describe` — rather than at the entry point the compiler
+/// synthesized, which has no location — with the import that fixes it named.
 #[test]
 fn a_suite_without_a_reporter_is_reported_at_its_own_describe() {
     let dir = work_dir("noimport");
@@ -655,6 +771,11 @@ fn a_suite_without_a_reporter_is_reported_at_its_own_describe() {
     assert!(
         out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test reporter"),
         "the diagnostic must point at the `describe` call:\n{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("<< core.test.report"),
+        "the diagnostic must name the import that fixes it:\n{}",
         out.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -681,7 +802,7 @@ fn a_suite_that_does_not_parse_fails_the_run() {
     write(
         &dir,
         "suite.qn",
-        "<< core.test\ndescribe(\"g\", () => <<<\n",
+        "<< core.test.report\ndescribe(\"g\", () => <<<\n",
     );
     let out = quilon(&["test", dir.to_str().unwrap()]);
     assert_ne!(
@@ -702,7 +823,7 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test\n",
+            "<< core.test.report\n",
             ">> double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
             "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
