@@ -91,7 +91,7 @@ fn run_aot(tag: &str, src: &str, linker: &str) -> (i32, String) {
     )
 }
 
-// --- No import, and no old forms ------------------------------------------
+// --- The form itself ------------------------------------------------------
 
 /// `assert` and the matchers are the COMPILER's, like `print` — a program reaches them with
 /// no import at all.
@@ -101,34 +101,23 @@ fn assert_needs_no_import() {
     assert_eq!(code, 0, "unexpected failure: {stderr}");
 }
 
-/// The pre-matcher forms are gone, and each says so at compile time rather than resolving to
-/// something surprising.
+/// An assertion takes a value AND a matcher. A bare condition, or a second argument that is
+/// not one of the provided matchers, names the vocabulary instead of resolving to something
+/// surprising.
 #[test]
-fn the_old_assertion_forms_no_longer_compile() {
+fn an_assertion_without_a_matcher_names_the_vocabulary() {
     for (tag, body) in [
-        ("old_bare", "assert(1 + 1 == 2)"),
-        ("old_eq", "assertEq(6 * 7, 42)"),
-        ("old_not_eq", "assertNotEq(1, 2)"),
-        ("old_ok", "assertOk([1].at(0))"),
+        ("bare_condition", "assert(1 + 1 == 2)"),
+        ("not_a_matcher", "assert(1 + 1, true)"),
+        ("a_call_that_is_not_a_matcher", "assert(1 + 1, equal(2))"),
     ] {
-        let (code, stderr) = run_jit(tag, &format!("<< core.test\n^ = () -> $ => {body}\n"));
-        assert_ne!(code, 0, "`{body}` must no longer compile");
+        let (code, stderr) = run_entry(tag, body);
+        assert_ne!(code, 0, "`{body}` must be refused");
         assert!(
-            !stderr.is_empty(),
-            "`{body}` must be refused with a diagnostic"
+            stderr.contains("takes the value and a matcher") && stderr.contains("`equals`"),
+            "the diagnostic for `{body}` must name the vocabulary, got: {stderr:?}"
         );
     }
-}
-
-/// A second argument that is not one of the provided matchers names the vocabulary.
-#[test]
-fn a_non_matcher_second_argument_is_refused() {
-    let (code, stderr) = run_entry("not_a_matcher", "assert(1 + 1, true)");
-    assert_ne!(code, 0);
-    assert!(
-        stderr.contains("takes the value and a matcher") && stderr.contains("`equals`"),
-        "the diagnostic must name the matcher vocabulary, got: {stderr:?}"
-    );
 }
 
 // --- equals ---------------------------------------------------------------
@@ -236,6 +225,31 @@ fn equals_on_a_type_without_equality_is_refused() {
         stderr.contains("compares with `==`") && stderr.contains("P"),
         "unexpected diagnostic: {stderr:?}"
     );
+}
+
+/// A sum payload whose type is not yet concrete is REPRESENTED as a `Num`, while the checker
+/// treats it as compatible with anything — so pairing one with a `Text` or a `Bool` has to be
+/// refused here, or codegen would be handed two different representations to compare.
+#[test]
+fn a_generic_payload_is_only_compared_against_a_num() {
+    let program = "f = (n :: Num) -> Result => n > 0 ? Ok(n) : NotOk($)\n\
+                   ^ = () -> $ => f(1) ? | Ok(v) => assert(v, MATCHER) | NotOk(_) => $\n";
+    for (tag, matcher) in [
+        ("generic_text", "equals(\"x\")"),
+        ("generic_bool", "equals(true)"),
+        ("generic_contains", "contains(\"x\")"),
+    ] {
+        let (code, stderr) = run_jit(tag, &program.replace("MATCHER", matcher));
+        assert_ne!(code, 0, "`{matcher}` on a generic payload must be refused");
+        assert!(
+            stderr.contains("error:"),
+            "`{matcher}` must be refused with a diagnostic, got: {stderr:?}"
+        );
+    }
+
+    // Against a `Num` it is exactly the comparison it looks like.
+    let (code, stderr) = run_jit("generic_num", &program.replace("MATCHER", "equals(1)"));
+    assert_eq!(code, 0, "unexpected failure: {stderr:?}");
 }
 
 // --- contains -------------------------------------------------------------

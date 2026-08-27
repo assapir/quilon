@@ -165,23 +165,32 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Evaluate a `Text` expression and split it into its `(data_ptr, byte_len)` fields —
     /// the shared primitive for lowering Text-method calls, whose intrinsics take a `Text`
-    /// as its two fields (mirrors the extraction in `generate_text_compare`).
+    /// as its two fields.
     pub(super) fn extract_text(
         &mut self,
         expression: &Expression,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
-        let val = self.generate_expression(expression)?;
-        let BasicValueEnum::StructValue(s) = val else {
-            return Err("Text method receiver/argument must be a Text value".to_string());
+        let value = self.generate_expression(expression)?;
+        self.text_fields(value)
+    }
+
+    /// Split an already-evaluated `Text` into its `(data_ptr, byte_len)` fields — the one
+    /// place a `Text`'s `{ptr, i64}` struct is taken apart.
+    pub(super) fn text_fields(
+        &self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let BasicValueEnum::StructValue(text) = value else {
+            return Err("expected a Text value".to_string());
         };
         let ptr = self
             .builder
-            .build_extract_value(s, 0, "txt_ptr")
+            .build_extract_value(text, 0, "txt_ptr")
             .map_err(ctx("Failed to extract text ptr"))?
             .into_pointer_value();
         let len = self
             .builder
-            .build_extract_value(s, 1, "txt_len")
+            .build_extract_value(text, 1, "txt_len")
             .map_err(ctx("Failed to extract text len"))?
             .into_int_value();
         Ok((ptr, len))
@@ -357,18 +366,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) else {
             return Err("Text comparison requires two Text values".to_string());
         };
-        let extract = |s: inkwell::values::StructValue<'ctx>,
-                       idx: u32,
-                       name: &str|
-         -> Result<BasicValueEnum<'ctx>, String> {
-            self.builder
-                .build_extract_value(s, idx, name)
-                .map_err(ctx("Failed to extract text field"))
-        };
-        let l_ptr = extract(l, 0, "lcmp_ptr")?.into_pointer_value();
-        let l_len = extract(l, 1, "lcmp_len")?.into_int_value();
-        let r_ptr = extract(r, 0, "rcmp_ptr")?.into_pointer_value();
-        let r_len = extract(r, 1, "rcmp_len")?.into_int_value();
+        let (l_ptr, l_len) = self.text_fields(l.into())?;
+        let (r_ptr, r_len) = self.text_fields(r.into())?;
 
         let cmp_fn = self.get_intrinsic("__text_cmp")?;
         use inkwell::values::AnyValue;

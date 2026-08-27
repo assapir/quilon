@@ -130,41 +130,44 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            Pattern::Constructor { name, .. } => {
-                // Tagged-union dispatch: a value is `{ i8 tag, <payload> }`; the tag is
-                // the variant's declaration index, looked up from the sum-variant
-                // registry (generalizes the old hardcoded Ok=0/NotOk=1).
-                let expected_tag = self
-                    .sum_variants
-                    .get(name.as_str())
-                    .map(|(tag, _)| *tag)
-                    .ok_or_else(|| format!("Unknown constructor: {}", name))?;
-
-                // Extract tag from struct (field 0)
-                if let BasicValueEnum::StructValue(struct_val) = value {
-                    let tag_val = self
-                        .builder
-                        .build_extract_value(struct_val, 0, "tag")
-                        .map_err(ctx("Failed to extract tag"))?
-                        .into_int_value();
-
-                    let expected_tag_val =
-                        self.context.i8_type().const_int(expected_tag as u64, false);
-
-                    self.builder
-                        .build_int_compare(
-                            inkwell::IntPredicate::EQ,
-                            tag_val,
-                            expected_tag_val,
-                            "tag_match",
-                        )
-                        .map_err(ctx("Failed to compare tags"))
-                } else {
-                    // Not a struct - pattern doesn't match
-                    Ok(self.context.bool_type().const_zero())
-                }
-            }
+            Pattern::Constructor { name, .. } => match value {
+                BasicValueEnum::StructValue(_) => self.variant_tag_matches(name, value),
+                // Not a struct - pattern doesn't match
+                _ => Ok(self.context.bool_type().const_zero()),
+            },
         }
+    }
+
+    /// Whether a sum value carries the `variant` variant. A tagged union is
+    /// `{ i8 tag, <payload> }`, and the tag is the variant's declaration index, looked up
+    /// from the sum-variant registry. Shared by constructor patterns and the `isOk`/`isNotOk`
+    /// matchers, so the two can never disagree about a variant's tag.
+    pub(super) fn variant_tag_matches(
+        &mut self,
+        variant: &str,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let expected = self
+            .sum_variants
+            .get(variant)
+            .map(|(tag, _)| *tag)
+            .ok_or_else(|| format!("Unknown constructor: {}", variant))?;
+        let BasicValueEnum::StructValue(sum) = value else {
+            return Err(format!("`{variant}` needs a sum value"));
+        };
+        let tag = self
+            .builder
+            .build_extract_value(sum, 0, "tag")
+            .map_err(ctx("Failed to extract tag"))?
+            .into_int_value();
+        self.builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                self.context.i8_type().const_int(expected as u64, false),
+                "tag_match",
+            )
+            .map_err(ctx("Failed to compare tags"))
     }
 
     /// Concrete per-value payload types for the matched constructor `variant`, read from

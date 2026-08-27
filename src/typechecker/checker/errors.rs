@@ -64,9 +64,10 @@ impl std::fmt::Display for TypeError {
             TypeError::ExpectOutsideTest { .. } => {
                 write!(
                     f,
-                    "`{}` records a failure with the test reporter, so it only works inside a \
-                     `{}` block. Use `{}`, which reports and exits, in ordinary code",
+                    "`{}` marks the running test case failed, so it only works inside an `{}` \
+                     case in a `{}` block. Use `{}`, which reports and exits, everywhere else",
                     crate::ast::EXPECT,
+                    crate::ast::TEST_CASE_MARKER,
                     crate::ast::TEST_BLOCK_MARKER,
                     crate::ast::ASSERT
                 )
@@ -89,7 +90,7 @@ impl std::fmt::Display for TypeError {
                     "isOk" | "isNotOk" => write!(
                         f,
                         "`{matcher}` reads a `Result`, and {label} has no `{}` variant",
-                        crate::ast::matcher_variant(matcher)
+                        crate::ast::matcher_variant(matcher).unwrap_or_default()
                     ),
                     _ => write!(
                         f,
@@ -304,8 +305,8 @@ pub(super) fn fmt_candidates(candidates: &[Vec<Type>]) -> String {
     candidates
         .iter()
         // A trailing `Site` is filled in by the compiler and can never be written at a call
-        // site, so a candidate list must not ask for it — `assertEq(1)` reports the
-        // candidates as `(Num, Num)`, not `(Num, Num, Site)`.
+        // site, so a candidate list must not ask for it — `failAt(message, site)` reports
+        // its candidate as `(Text)`, not `(Text, Site)`.
         .map(|parameters| {
             format!(
                 "({})",

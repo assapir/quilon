@@ -300,8 +300,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Lower the `__exit(code)` primitive: convert the `Num` `code` to an `i32` and
     /// call the `__exit` runtime intrinsic, which terminates the process. This is the
-    /// single native primitive `core.test` builds on (its `assert` calls `__exit(101)`
-    /// on failure). The intrinsic never returns, but the call is left as ordinary
+    /// native primitive `core.test`'s `failAt` ends with, and what the reporter's summary
+    /// exit code is not (that one is the entry point's return value). The intrinsic never returns, but the call is left as ordinary
     /// (non-`unreachable`) flow so it composes wherever an expression is expected —
     /// e.g. a `< >` block statement or a ternary arm inside `assert` — without
     /// clashing with the surrounding construct's own terminator. The code after it is

@@ -44,8 +44,8 @@ assertEven = (n :: Num, site :: Site) -> $ =>
   assert(callerWidth(), equals("callerWidth()".length))
 
   ~ The file is this example, and the source line is the one the call is written on.
-  assert(callerFile().contains("call_site.qn"), equals(true))
-  assert(callerSource().contains("callerSource()"), equals(true))
+  assert(callerFile(), contains("call_site.qn"))
+  assert(callerSource(), contains("callerSource()"))
 
   ~ A custom assertion holds without a peep, and would report right here if it failed.
   assertEven(4)

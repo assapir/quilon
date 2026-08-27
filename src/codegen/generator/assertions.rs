@@ -77,7 +77,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         pieces.push(Piece::Literal(", got ".to_string()));
         pieces.push(Piece::Value(actual_type, actual_value));
         let message = self.build_message(pieces)?;
-        let (message_ptr, message_len) = self.split_text(message)?;
+        let (message_ptr, message_len) = self.text_fields(message)?;
         let site = self.site_value(span)?;
         let report = self.get_intrinsic(match fatal {
             true => "__assert_failed",
@@ -154,9 +154,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to negate a matcher"))
             }
             variant_matcher => {
-                let variant = crate::ast::matcher_variant(variant_matcher);
+                let variant = crate::ast::matcher_variant(variant_matcher)
+                    .ok_or_else(|| format!("`{variant_matcher}` is not a matcher"))?;
                 wanted.push(Piece::Literal(variant.to_string()));
-                self.sum_is_variant(variant, actual)
+                self.variant_tag_matches(variant, actual)
             }
         }
     }
@@ -211,8 +212,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         haystack: BasicValueEnum<'ctx>,
         part: BasicValueEnum<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let (haystack_ptr, haystack_len) = self.split_text(haystack)?;
-        let (part_ptr, part_len) = self.split_text(part)?;
+        let (haystack_ptr, haystack_len) = self.text_fields(haystack)?;
+        let (part_ptr, part_len) = self.text_fields(part)?;
         let contains = self.get_intrinsic("__text_contains")?;
         let found = self
             .builder
@@ -228,14 +229,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             )
             .map_err(ctx("Failed to build a text-contains call"))?;
         let found = Self::call_result_to_basic(found)?.into_int_value();
-        self.builder
-            .build_int_compare(
-                inkwell::IntPredicate::NE,
-                found,
-                self.context.i64_type().const_zero(),
-                "text_contains_found",
-            )
-            .map_err(ctx("Failed to narrow a text-contains answer"))
+        Ok(self
+            .int_to_bool(found, "text_contains_found")?
+            .into_int_value())
     }
 
     /// Whether the array holds an element equal to `part`. Scans with the element type's own
@@ -248,7 +244,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let data = self.array_data_field(array)?;
         let size = self.array_size_field(array)?;
-        let element_llvm = self.type_to_llvm(element_type)?;
+        let element_llvm = self.value_repr_type(element_type)?;
         let bool_type = self.context.bool_type();
         let found = self.create_entry_block_alloca("contains_found", bool_type.into())?;
         self.builder
@@ -280,37 +276,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into_int_value())
     }
 
-    /// Whether a sum value is the `variant` variant: a tagged union is `{ i8 tag, payload }`,
-    /// and the tag is the variant's declaration index (the same registry pattern dispatch
-    /// reads).
-    fn sum_is_variant(
-        &mut self,
-        variant: &str,
-        value: BasicValueEnum<'ctx>,
-    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let tag = self
-            .sum_variants
-            .get(variant)
-            .map(|(tag, _)| *tag)
-            .ok_or_else(|| format!("Unknown constructor: {variant}"))?;
-        let BasicValueEnum::StructValue(sum) = value else {
-            return Err(format!("`is{variant}` needs a sum value"));
-        };
-        let actual_tag = self
-            .builder
-            .build_extract_value(sum, 0, "matcher_tag")
-            .map_err(ctx("Failed to extract a sum tag"))?
-            .into_int_value();
-        self.builder
-            .build_int_compare(
-                inkwell::IntPredicate::EQ,
-                actual_tag,
-                self.context.i8_type().const_int(tag as u64, false),
-                "matcher_tag_match",
-            )
-            .map_err(ctx("Failed to compare a sum tag"))
-    }
-
     /// Concatenate a failure message's pieces into one `Text`. A value renders through its
     /// `` ` `` — quoted when it is a `Text`, so a trailing space or an empty string shows.
     fn build_message(&mut self, pieces: Vec<Piece<'ctx>>) -> Result<BasicValueEnum<'ctx>, String> {
@@ -319,16 +284,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let rendered = match piece {
                 Piece::Literal(text) => self.text_literal(&text)?,
                 Piece::Value(Type::Text, value) => {
-                    let quote = self.text_literal("\"")?;
-                    let opened = self.generate_text_concat(
-                        quote.into_struct_value(),
-                        value.into_struct_value(),
-                    )?;
-                    let quote = self.text_literal("\"")?;
-                    self.generate_text_concat(
-                        opened.into_struct_value(),
-                        quote.into_struct_value(),
-                    )?
+                    let quote = self.text_literal("\"")?.into_struct_value();
+                    let opened = self.generate_text_concat(quote, value.into_struct_value())?;
+                    self.generate_text_concat(opened.into_struct_value(), quote)?
                 }
                 Piece::Value(ty, value) => self.render_value(&ty, value)?,
             };
@@ -344,26 +302,5 @@ impl<'ctx> CodeGenerator<'ctx> {
             Some(message) => Ok(message),
             None => self.text_literal(""),
         }
-    }
-
-    /// Split a `Text` value into the `(data_ptr, byte_len)` pair the runtime takes.
-    fn split_text(
-        &mut self,
-        text: BasicValueEnum<'ctx>,
-    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
-        let BasicValueEnum::StructValue(text) = text else {
-            return Err("expected a Text value".to_string());
-        };
-        let data = self
-            .builder
-            .build_extract_value(text, 0, "text_data")
-            .map_err(ctx("Failed to extract text data"))?
-            .into_pointer_value();
-        let length = self
-            .builder
-            .build_extract_value(text, 1, "text_len")
-            .map_err(ctx("Failed to extract text length"))?
-            .into_int_value();
-        Ok((data, length))
     }
 }

@@ -5,10 +5,11 @@
 //! entry point that runs those blocks. Running is always through the in-process JIT, never
 //! a native build.
 //!
-//! ONE suite per process. A case asserts with `core.test`'s assertions, which are fail-fast:
-//! a failing one exits 101 there and then, so several suites in one process would end the
-//! whole run at the first failure. A run of many therefore spawns this same binary once per
-//! suite, stdio inherited so each report goes straight through.
+//! ONE suite per process. The registry a suite records through is per thread, so its counts
+//! and its summary have to be its own; and a case may use the fatal `assert`, which exits
+//! 101 there and then and would take every later suite with it. A run of many therefore
+//! spawns this same binary once per suite, stdio inherited so each report goes straight
+//! through.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -66,8 +67,8 @@ pub fn run(root: &Path) -> usize {
 /// Run one suite by re-invoking this binary on it, its output going straight to our own
 /// stdout/stderr. `true` when the child exited 0.
 ///
-/// Handing the suite to a child is what keeps a fail-fast assertion — which calls `exit` —
-/// from ending the whole run at the first failing suite. Named with exactly one file, the
+/// Handing the suite to a child is what keeps a fatal `assert` — which exits — from ending
+/// the whole run at the first failing suite, and keeps each suite's tally its own. Named with exactly one file, the
 /// child takes the single-suite path above and does not spawn again.
 fn run_in_its_own_process(suite: &Path) -> bool {
     let quilon = match std::env::current_exe() {

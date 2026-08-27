@@ -326,12 +326,44 @@ fn expect_outside_a_describe_block_is_a_compile_error() {
             out.stdout
         );
         assert!(
-            out.stderr.contains("only works inside a `describe` block")
-                && out.stderr.contains("`assert`"),
+            out.stderr.contains("in a `describe` block") && out.stderr.contains("`assert`"),
             "the diagnostic must point at `assert`:\n{}",
             out.stderr
         );
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An `expect` in a `describe` body but OUTSIDE any `it` has no case to mark: `it` is what
+/// closes a case and tallies it, so such an `expect` would print a failure that no summary
+/// counts — and would poison the next case, whose assertions the mark then skips. Refused at
+/// compile time instead.
+#[test]
+fn expect_outside_an_it_case_is_a_compile_error() {
+    let dir = work_dir("expect_no_case");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.test\n",
+            "describe(\"g\", () => <\n",
+            "  expect(1, equals(2))\n",
+            "  it(\"unaffected\", () => expect(1, equals(1)))\n",
+            ">\n",
+            ")\n"
+        ),
+    );
+    let out = quilon(&["test", source.to_str().unwrap()]);
+    assert_ne!(
+        out.code, 0,
+        "an `expect` with no case to mark must be refused:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("only works inside an `it` case"),
+        "the diagnostic must name the case:\n{}",
+        out.stderr
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

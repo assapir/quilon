@@ -42,9 +42,10 @@ All notable changes to Quilon are documented here.
   carries on with the next case. A run therefore prints `N passed, M failed`, marks each case
   `✓` or `✗`, and exits non-zero when any case failed.
 
-  `expect` outside a `describe` block is a compile error pointing at `assert`: the blocks are
-  stripped from `run`/`compile`/`build`, so an `expect` in ordinary code would have no
-  reporter to record into. `assert` inside a case stays fatal, for a precondition the case
+  `expect` outside an `it` case is a compile error pointing at `assert`: outside a `describe`
+  block there is no reporter at all (the blocks are stripped from `run`/`compile`/`build`),
+  and inside one but outside a case there is nothing to mark, so the failure would print and
+  never be counted. `assert` inside a case stays fatal, for a precondition the case
   cannot continue past. `reportCase` gained a `failed :: Bool` parameter, so a reporter of
   your own says which way each case went.
 

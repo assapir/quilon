@@ -2,7 +2,7 @@
 //!
 //! `@readStdin()` launches a background stdin line read and returns a DEFERRED `Text`; the deferred
 //! value flows through a binding and is FORCED where a strict primitive reads its bytes (a
-//! comparison inside `assertEq`, or a `print`). The standard examples gate can't drive `@readStdin`
+//! comparison behind `equals`, or a `print`). The standard examples gate can't drive `@readStdin`
 //! (it pipes no input), so these tests spawn the compiler as a subprocess with a controlled
 //! stdin — proving the read value flowed through and forced correctly on both the in-process
 //! JIT (`quilon run`) and, when a linker is present, a native AOT binary (`quilon build`).
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A program that binds `@readStdin()` to `line` and asserts it equals `"hello"`. The deferred
-/// value is forced at the `assertEq` comparison: matching input exits 0, anything else trips
+/// value is forced at the `equals` comparison: matching input exits 0, anything else trips
 /// the assertion (exit 101) — which is what proves the real read value reached the compare.
 const ASSERT_READ: &str = r#"
 << core.io
