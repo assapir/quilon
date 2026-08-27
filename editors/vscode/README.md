@@ -8,7 +8,7 @@ compiles to native code via LLVM. Files use the `.qn` extension.
 
 - **Syntax highlighting** for the full symbol set:
   - Comments (`~ to end of line`), strings (`"…"` with escapes), numbers, `true`/`false`, wildcard `_`.
-  - The entry point `^`, module import `<<` (with the imported path), and export marker `>>`.
+  - The entry point `^`, module import `<<` and its test-only form `<<?` (with the imported path), and export marker `>>`.
   - Operators: `|>` (pipe), `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
     `=>` (function body / match arm), `->` (return type), `<-` (inclusive range),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,

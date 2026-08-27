@@ -139,6 +139,49 @@ fn an_overload_member_reached_only_by_dispatch_survives() {
 }
 
 #[test]
+fn a_methods_receiver_is_not_a_mention_of_a_top_level_name() {
+    // Reading the receiver as a top-level mention keeps the harness's `it` function, and the
+    // reporter's whole chain behind it, in any program that declares a type with a method.
+    let ir = emit(concat!(
+        "it = (name :: Text) -> Num => name.size\n",
+        "Box = { size :: Num, doubled = => it.size * 2 }\n",
+        "^ = () -> Num => Box { size = 21 }.doubled()"
+    ));
+    assert!(
+        !defines(&ir, "it"),
+        "the receiver in `it.size` must not keep the top-level `it`:\n{ir}"
+    );
+}
+
+#[test]
+fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
+    // The other side of the narrowing: callee position is where a bare `it` CAN name a
+    // top-level function, and dropping it there would break the harness itself.
+    assert_exit(
+        concat!(
+            "it = (name :: Text) -> Num => name.size\n",
+            "Box = { size :: Num, doubled = => it.size * 2 }\n",
+            "^ = () -> Num => Box { size = 20 }.doubled() + it(\"ab\")"
+        ),
+        42,
+    );
+}
+
+#[test]
+fn a_pipeline_into_a_top_level_function_named_it_reaches_it() {
+    // `x |> f` desugars to a call of `f`, so a bare name on the right of a pipe is a callee
+    // too — the second position where a bare `it` names a top-level function.
+    assert_exit(
+        concat!(
+            "it = (n :: Num) -> Num => n + 1\n",
+            "Box = { size :: Num, doubled = => it.size * 2 }\n",
+            "^ = () -> Num => Box { size = 20 }.doubled() + 1 |> it"
+        ),
+        42,
+    );
+}
+
+#[test]
 fn a_module_with_no_entry_point_keeps_everything() {
     // Nothing is reachable from an entry point that does not exist, so a module compiled on
     // its own must not be emptied out — a later program may call any of it.

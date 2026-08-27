@@ -8,6 +8,8 @@
 //! - `<< core.io` resolves to bundled built-in module source (embedded via `include_str!`).
 //! - `<< "path/to.qn"` reads a user module from disk (relative to the importing file, or
 //!   absolute); `\` is normalised to `/` for cross-platform paths.
+//! - `<<?` marks a [test-only](crate::ast::Import::test_only) import, which an imported
+//!   module's list never contributes.
 //!
 //! Visibility: only items marked exported (`>>` prefix) are merged. Non-exported items are
 //! module-private, so referencing them from an importer surfaces as a normal "undefined"
@@ -26,18 +28,40 @@ use std::path::Path;
 /// importing program, and a [`SourceMap`] naming every module those items came from (the
 /// root file is the caller's to record). `base_dir` is the directory of the importing file
 /// (used to resolve relative file-path imports).
+///
+/// Every import in the list given is resolved, `<<?` included — dropping the test-only ones
+/// is the caller's decision, made in `driver::front_end_with`. What IS decided here: an
+/// imported module's own `<<?` imports are never resolved, since its test blocks are not this
+/// compilation's to run.
 pub fn resolve_imports(
     program: &Program,
     base_dir: &Path,
 ) -> Result<(Vec<Item>, SourceMap), String> {
-    let mut loader = Loader {
-        visited: HashSet::new(),
-        out: Vec::new(),
-        sources: SourceMap::default(),
-        next_file: ROOT_FILE + 1,
-    };
+    let mut loader = Loader::new();
     loader.resolve_list(&program.imports, base_dir)?;
     Ok((loader.out, loader.sources))
+}
+
+/// The import among `imports` that contributes the top-level name `name`, if any.
+///
+/// Asked only to explain an error — a name that went missing because its `<<?` import was
+/// erased — so a module that will not resolve simply contributes nothing.
+pub fn providing_import<'a>(
+    imports: &'a [Import],
+    base_dir: &Path,
+    name: &str,
+) -> Option<&'a ModulePath> {
+    imports.iter().find_map(|import| {
+        let mut loader = Loader::new();
+        loader
+            .resolve_list(std::slice::from_ref(import), base_dir)
+            .ok()?;
+        loader
+            .out
+            .iter()
+            .any(|item| item.name() == name)
+            .then_some(&import.path)
+    })
 }
 
 struct Loader {
@@ -54,6 +78,15 @@ struct Loader {
 }
 
 impl Loader {
+    fn new() -> Self {
+        Self {
+            visited: HashSet::new(),
+            out: Vec::new(),
+            sources: SourceMap::default(),
+            next_file: ROOT_FILE + 1,
+        }
+    }
+
     fn resolve_list(&mut self, imports: &[Import], base_dir: &Path) -> Result<(), String> {
         for import in imports {
             self.resolve_one(&import.path, base_dir)?;
@@ -114,8 +147,11 @@ impl Loader {
         let sub = parser::parse(&tokens)
             .map_err(|e| format!("parse error in module `{}`: {}", canonical, e))?;
 
-        // Resolve the module's own imports first (transitive), then collect its exports.
-        self.resolve_list(&sub.imports, &next_base)?;
+        // Resolve the module's own imports first (transitive), then collect its exports. Its
+        // `<<?` imports served its own test blocks, which this compilation does not run.
+        for import in sub.imports.iter().filter(|import| !import.test_only) {
+            self.resolve_one(&import.path, &next_base)?;
+        }
         for mut item in sub.items {
             if item_is_exported(&item) {
                 // A bundled module's functions carry their origin: it is what marks the

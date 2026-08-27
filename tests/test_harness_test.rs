@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use quilon::ast::Item;
+use quilon::driver;
 use quilon::lexer::Lexer;
 use quilon::parser;
 
@@ -168,9 +169,39 @@ fn a_describe_definition_is_still_an_ordinary_item() {
 
 // ── Erasure: what a release build does with a suite ─────────────────────────────────────
 
+/// What `core.test.report` and `core.test` define, none of which may reach a build: the
+/// harness, the reporter's three entry points, and the colors and lifecycle behind them.
+const HARNESS_SYMBOLS: [&str; 8] = [
+    "describe",
+    "@it(",
+    "report",
+    "indent",
+    "green",
+    "red",
+    "caseFailing",
+    "finishCase",
+];
+
+/// Assert that `ir` defines none of [`HARNESS_SYMBOLS`]; `what` names the build for the report.
+fn assert_no_harness_emitted(ir: &str, what: &str) {
+    let defined: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("define"))
+        .collect();
+    for absent in HARNESS_SYMBOLS {
+        assert!(
+            !defined.iter().any(|line| line.contains(absent)),
+            "`{absent}` reached {what}:\n{defined:#?}"
+        );
+    }
+}
+
 #[test]
 fn a_build_of_a_file_with_tests_omits_the_test_code() {
     let dir = work_dir("erase");
+    // The record with methods is load-bearing: a method body mentions `it`, its receiver, and
+    // a pass that reads that as a mention of the harness's top-level `it` keeps the whole
+    // reporter alive. A fixture with no methods never asks the question.
     let source = write(
         &dir,
         "mixed.qn",
@@ -178,10 +209,15 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
             "<< core.test.report\n",
             "<< core.io\n",
             "double = (n :: Num) -> Num => n * 2\n",
+            "Counter = {\n",
+            "  total :: Num,\n",
+            "  bumped = => it.total + 1,\n",
+            "  ` = => \"counter\"\n",
+            "}\n",
             "describe(\"double\", () => <\n",
             "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n",
-            "^ = () -> Num => double(0)\n"
+            "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
         ),
     );
 
@@ -192,20 +228,12 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     // The program's own function is emitted, and NOTHING of the harness: the blocks were
     // never checked or lowered, so nothing reaches `describe`, `it`, or the reporter, and
     // reachability pruning drops all three.
-    let defined: Vec<&str> = ir
-        .lines()
-        .filter(|line| line.starts_with("define"))
-        .collect();
     assert!(
-        defined.iter().any(|line| line.contains("@double(")),
-        "the program's code must be emitted:\n{defined:#?}"
+        ir.lines()
+            .any(|line| line.starts_with("define") && line.contains("@double(")),
+        "the program's code must be emitted:\n{ir}"
     );
-    for absent in ["describe", "@it(", "report", "indent", "green"] {
-        assert!(
-            !defined.iter().any(|line| line.contains(absent)),
-            "`{absent}` reached a release build:\n{defined:#?}"
-        );
-    }
+    assert_no_harness_emitted(&ir, "a release build");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -253,6 +281,191 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
         !source.with_extension("ll").exists(),
         "nothing should have been emitted for a tests-only file"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Test-only imports: `<<?` follows the blocks it serves ───────────────────────────────
+
+/// A suite whose harness comes in under `<<?`, beside code and an `^` of its own. The record
+/// with a method is deliberate: its body mentions the receiver `it`, which is what once kept
+/// the harness's own `it` — and the reporter behind it — reachable in a build.
+const TEST_ONLY_IMPORT_SUITE: &str = concat!(
+    "<<? core.test.report\n",
+    "double = (n :: Num) -> Num => n * 2\n",
+    "Counter = { total :: Num, bumped = => it.total + 1 }\n",
+    "describe(\"double\", () => <\n",
+    "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
+    ">)\n",
+    "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
+);
+
+#[test]
+fn a_test_only_import_is_marked_as_such_by_the_parser() {
+    let tokens = Lexer::tokenize("<<? core.test.report\n<< core.io\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let marked: Vec<bool> = program
+        .imports
+        .iter()
+        .map(|import| import.test_only)
+        .collect();
+    assert_eq!(marked, [true, false]);
+}
+
+#[test]
+fn a_test_only_import_serves_the_blocks_and_is_erased_with_them() {
+    let dir = work_dir("test_only");
+    let source = write(&dir, "suite.qn", TEST_ONLY_IMPORT_SUITE);
+
+    let tested = quilon(&["test", source.to_str().unwrap()]);
+    assert_eq!(
+        tested.code, 0,
+        "`quilon test` resolves the `<<?` import, so the suite runs:\n{}\n{}",
+        tested.stdout, tested.stderr
+    );
+    assert!(
+        tested.stdout.contains("1 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        tested.stdout
+    );
+
+    let run = quilon(&["run", source.to_str().unwrap()]);
+    assert_eq!(
+        run.code, 0,
+        "the program still runs with its import erased:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+
+    let compile = quilon(&["compile", source.to_str().unwrap()]);
+    assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
+    let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
+    assert_no_harness_emitted(&ir, "a build whose harness import was erased");
+
+    // Directly, ahead of any pruning: the harness is not in the compilation unit at all under
+    // `Erase`, and is under `Run`.
+    let erased = driver::front_end(&source).unwrap_or_else(|e| panic!("the erased front end: {e}"));
+    assert!(
+        !erased
+            .program
+            .items
+            .iter()
+            .any(|item| item.name() == "green"),
+        "the `<<?` module's items must not be linked in"
+    );
+    let compiled = driver::front_end_with(&source, driver::TestBlocks::Run)
+        .unwrap_or_else(|e| panic!("the `quilon test` front end: {e}"));
+    assert!(
+        compiled
+            .program
+            .items
+            .iter()
+            .any(|item| item.name() == "green"),
+        "`quilon test` must link the `<<?` module in"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn importing_core_http_contributes_no_harness_item() {
+    // The rule at the module layer, ahead of any symptom: `corelib/http.qn` needs the harness
+    // for its own 71 cases, and `<<?` is what keeps every name of it out of an importer.
+    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let (items, _sources) =
+        quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
+    let contributed: Vec<&str> = items.iter().map(Item::name).collect();
+    for absent in [
+        "describe",
+        "it",
+        "green",
+        "red",
+        "indent",
+        "failAt",
+        "reportSuite",
+        "reportCase",
+        "reportSummary",
+        "casesPassed",
+        "casesFailed",
+        "caseFailing",
+        "finishCase",
+        "enterSuite",
+        "leaveSuite",
+        "nestingDepth",
+    ] {
+        assert!(
+            !contributed.contains(&absent),
+            "`<< core.http` must not contribute `{absent}`: {contributed:?}"
+        );
+    }
+    assert!(
+        contributed.contains(&"get"),
+        "the client itself must still arrive: {contributed:?}"
+    );
+}
+
+#[test]
+fn a_test_only_name_used_outside_a_block_is_a_compile_error() {
+    let dir = work_dir("test_only_leak");
+    let source = write(
+        &dir,
+        "leaky.qn",
+        concat!(
+            "<<? core.test.report\n",
+            "shout = (text :: Text) -> Text => green(text)\n",
+            "describe(\"shout\", () => <\n",
+            "  it(\"shouts\", () => expect(shout(\"x\"), contains(\"x\")))\n",
+            ">)\n",
+            "^ = () -> Num => shout(\"x\").size\n"
+        ),
+    );
+
+    let check = quilon(&["check", source.to_str().unwrap()]);
+    assert_ne!(
+        check.code, 0,
+        "a `<<?` name used outside a block must not check clean:\n{}",
+        check.stdout
+    );
+    for said in ["green", "test-only import", "core.test.report"] {
+        assert!(
+            check.stderr.contains(said),
+            "the diagnostic must mention `{said}`:\n{}",
+            check.stderr
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The symptom a user sees: a program importing `core.http` and defining a `green`, a `red`,
+/// an `indent` — any name the module's own suite needed — used to fail on a `Duplicate
+/// definition` of a name it never asked for.
+///
+/// Each definition repeats the harness member's EXACT signature. Overloading is by parameter
+/// types, so a definition with any other signature would merely join the merged member in an
+/// overload set and the case would pass whether or not the harness was erased. Names whose
+/// signature cannot collide at all (`it`, `describe`) are covered by
+/// [`importing_core_http_contributes_no_harness_item`] instead.
+#[test]
+fn an_importer_never_sees_what_the_modules_own_tests_needed() {
+    let dir = work_dir("no_harness_clash");
+    for (name, signature) in [
+        ("green", "(text :: Text) -> Text => text"),
+        ("red", "(text :: Text) -> Text => text"),
+        ("indent", "(depth :: Num) -> Text => \"\""),
+        ("failAt", "(message :: Text, site :: Site) -> $ => $"),
+        ("caseFailing", "() -> Bool => false"),
+        ("casesPassed", "() -> Num => 0"),
+    ] {
+        let source = write(
+            &dir,
+            &format!("{name}.qn"),
+            &format!("<< core.http\n{name} = {signature}\n^ = () -> Num => 0\n"),
+        );
+        let out = quilon(&["run", source.to_str().unwrap()]);
+        assert_eq!(
+            out.code, 0,
+            "a program importing `core.http` may define its own `{name}`:\n{}\n{}",
+            out.stdout, out.stderr
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

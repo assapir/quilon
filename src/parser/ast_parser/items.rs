@@ -22,7 +22,7 @@ impl<'a> Parser<'a> {
         let mut test_blocks = Vec::new();
 
         while !self.is_at_end() {
-            if self.check(&TokenKind::Import) {
+            if self.check(&TokenKind::Import) || self.check(&TokenKind::TestImport) {
                 imports.push(self.parse_import()?);
             } else if self.at_test_block() {
                 test_blocks.push(self.parse_expression()?);
@@ -48,10 +48,16 @@ impl<'a> Parser<'a> {
             && self.check_same_line_at(1, &TokenKind::ParenOpen)
     }
 
-    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).
+    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file
+    /// path). A `<<?` marker instead of `<<` makes it [test-only](crate::ast::Import::test_only).
     pub(super) fn parse_import(&mut self) -> Result<Import, ParseError> {
         let start = self.current_span();
-        self.expect(&TokenKind::Import)?;
+        let test_only = self.check(&TokenKind::TestImport);
+        self.expect(if test_only {
+            &TokenKind::TestImport
+        } else {
+            &TokenKind::Import
+        })?;
 
         let path = if let TokenKind::String(chunks) = self.peek().kind.clone() {
             // File-path import: << "some/path.qn". A path is a plain literal — an
@@ -80,6 +86,7 @@ impl<'a> Parser<'a> {
         let end = self.previous_span();
         Ok(Import {
             path,
+            test_only,
             span: self.span(start.start, end.end),
         })
     }

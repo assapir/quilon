@@ -194,7 +194,7 @@
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
 ~ other command erases them, and the fixtures below carry no `>>`, so a program importing
 ~ `core.http` never sees them.
-<< core.test.report
+<<? core.test.report
 
 ~ A well-formed CRLF reply with two headers and a five-character body.
 crlfReply = () -> Text =>

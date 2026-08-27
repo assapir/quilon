@@ -90,7 +90,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<(), String> {
         let mut parameters = Vec::with_capacity(method.parameters.len() + 1);
         parameters.push(crate::ast::Parameter {
-            name: "it".to_string(),
+            name: crate::ast::RECEIVER.to_string(),
             type_annotation: Some(Type::named_ref(type_name)),
             span: method.span.clone(),
         });
@@ -137,23 +137,29 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Parameter 0 is the implicit receiver `it` (a pointer to the record struct).
         let it_parameter = function.get_nth_param(0).unwrap();
-        it_parameter.set_name("it");
+        it_parameter.set_name(crate::ast::RECEIVER);
         let it_type = it_parameter.as_basic_value_enum().get_type();
-        let it_alloca = self.create_entry_block_alloca("it", it_type)?;
+        let it_alloca = self.create_entry_block_alloca(crate::ast::RECEIVER, it_type)?;
         self.builder
             .build_store(it_alloca, it_parameter)
             .map_err(ctx("Failed to store it"))?;
         self.variables
-            .insert("it".to_string(), (it_alloca, it_type));
+            .insert(crate::ast::RECEIVER.to_string(), (it_alloca, it_type));
         // So `it.field` and `it.method()` resolve against this type.
         self.record_types
-            .insert("it".to_string(), field_names.to_vec());
+            .insert(crate::ast::RECEIVER.to_string(), field_names.to_vec());
         self.var_named_types
-            .insert("it".to_string(), type_name.to_string());
+            .insert(crate::ast::RECEIVER.to_string(), type_name.to_string());
         // `it` is the record receiver (parameter #1); build its type only when debug is on.
         if self.debug.is_some() {
             let it_qty = Type::named_ref(type_name);
-            self.declare_variable("it", it_alloca, &it_qty, &method.span, Some(1));
+            self.declare_variable(
+                crate::ast::RECEIVER,
+                it_alloca,
+                &it_qty,
+                &method.span,
+                Some(1),
+            );
         }
 
         // Remaining parameters follow the receiver.

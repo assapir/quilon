@@ -4,6 +4,23 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- **`<<?` — the test-only import.** A file's `describe` blocks are erased by `check`,
+  `compile`, `build` and `run` and compiled only by `quilon test`; the import that serves
+  them now follows the same rule:
+
+  ```quilon ignore
+  << core.io             ~ the program uses this
+  <<? core.test.report   ~ only the blocks use this
+  ```
+
+  A `<<?` module reaches no build, and it is never merged into an importer's scope: `<<
+  core.http` brings the client and not the reporter its own suite runs under, so a program
+  importing it is free to define a `green`, an `it` or a `describe` of its own. Reading a
+  `<<?` name from ordinary code is a compile error that names the import. See
+  `docs/corelib/test/report.md`.
+
 ### Changed
 
 - **`>` closes a block by default; it is greater-than only when an operand follows it.**
@@ -116,6 +133,14 @@ All notable changes to Quilon are documented here.
   its declaration.
 
 ### Fixed
+
+- **A method's receiver no longer keeps unreachable code alive.** Reachability collects
+  names mentioned without resolving them, and every method body mentions `it`, the receiver
+  — read as a top-level mention, that kept `core.test.report`'s `it` function and the whole
+  reporter chain behind it (`reportCase`, `green`, `red`, `indent`, `finishCase`,
+  `caseFailing`) in any program that declared a type with a method. A bare `it` is no longer
+  a mention; an `it` in callee position — the callee of a call, or the right side of a `|>`,
+  which desugars to one — still is, since that is where it can name a top-level function.
 
 - **`print` writes the whole `Text`, and renders it deliberately
   ([#220](https://github.com/assapir/quilon/issues/220)).** `print`/`eprint` took only a

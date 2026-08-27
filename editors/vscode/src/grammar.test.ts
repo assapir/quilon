@@ -92,6 +92,11 @@ test("<< import marker is a single token", () => {
   assert.equal(token.scope, "keyword.control.import.quilon");
 });
 
+test("<<? test-only import marker is a single token", () => {
+  const token = uniqueToken("<<? core.test.report", "<<?");
+  assert.equal(token.scope, "keyword.control.import.quilon");
+});
+
 test(">> export marker is a single token", () => {
   const token = uniqueToken(">> add = (a, b) => a + b", ">>");
   assert.equal(token.scope, "keyword.control.export.quilon");

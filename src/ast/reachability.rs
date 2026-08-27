@@ -15,9 +15,15 @@
 //!
 //! What is NOT pruned: type declarations and their methods, and top-level bindings. Their
 //! bodies are therefore roots — a method that calls a helper keeps that helper.
+//!
+//! The one name the over-approximation does NOT stretch to is the receiver, `it`: it is bound
+//! by the method it appears in, so a bare `it` is not a mention. An `it` in CALLEE position —
+//! the one place it can name a top-level function, `core.test.report`'s case function — is
+//! (see [`mentions_callee`]).
 
 use super::nodes::{
-    BinaryOperator, Expression, InterpolationPart, Item, Program, Statement, UnaryOperator,
+    BinaryOperator, Expression, InterpolationPart, Item, Program, RECEIVER, Statement,
+    UnaryOperator,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -76,8 +82,19 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
 /// names it selects. Duplicates are fine — the caller de-duplicates as it walks. Names are
 /// borrowed from the AST rather than copied: on a large program this walk sees hundreds of
 /// thousands of mentions, and allocating for each one cost more than the emission it saves.
+/// [`mentions`] of an expression in CALLEE position — the `function` of a call, or the right
+/// side of a pipeline, which desugars to one. This is the one place a bare `it` names a
+/// top-level function rather than a method's receiver, since a receiver is not callable.
+fn mentions_callee<'a>(callee: &'a Expression, out: &mut Vec<&'a str>) {
+    match callee {
+        Expression::Identifier { name, .. } if name == RECEIVER => out.push(name),
+        other => mentions(other, out),
+    }
+}
+
 fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
     match expression {
+        Expression::Identifier { name, .. } if name == RECEIVER => {}
         Expression::Identifier { name, .. } => out.push(name),
         Expression::Number { .. }
         | Expression::String { .. }
@@ -112,8 +129,12 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
             }
             mentions(expression, out);
         }
-        Expression::Pipeline { left, right, .. }
-        | Expression::Range {
+        Expression::Pipeline { left, right, .. } => {
+            // `x |> f` desugars to a call of `f`, so the right side is a CALLEE.
+            mentions(left, out);
+            mentions_callee(right, out);
+        }
+        Expression::Range {
             start: left,
             end: right,
             ..
@@ -143,7 +164,7 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
             arguments,
             ..
         } => {
-            mentions(function, out);
+            mentions_callee(function, out);
             for a in arguments {
                 mentions(a, out);
             }

@@ -90,7 +90,8 @@ pub struct Checked {
 }
 
 /// What the front end does with a file's top-level `describe` blocks (see
-/// [`ast::TEST_BLOCK_MARKER`]).
+/// [`ast::TEST_BLOCK_MARKER`]) — and, with them, its test-only `<<?` imports (see
+/// [`ast::Import::test_only`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestBlocks {
     /// Leave them out of the compilation unit. `check`, `compile`, `build`, and `run` all
@@ -168,6 +169,20 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
 
     let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
 
+    // Erase the test-only imports, exactly as the test blocks are erased: they serve those
+    // blocks, so they follow them. Kept aside rather than dropped so a name that went missing
+    // with them can be explained. `quilon test` compiles the blocks, so it keeps the imports.
+    let erased_imports: Vec<ast::Import> = match tests {
+        TestBlocks::Erase => {
+            let (erased, kept) = std::mem::take(&mut program.imports)
+                .into_iter()
+                .partition(|import| import.test_only);
+            program.imports = kept;
+            erased
+        }
+        TestBlocks::Run => Vec::new(),
+    };
+
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let (mut program, mut sources) =
         modules::link(program, base_dir).map_err(FrontEndError::plain)?;
@@ -180,7 +195,12 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
 
     let types = typechecker::TypeChecker::new()
         .check_program(&program)
-        .map_err(|e| FrontEndError::at_span(&sources, e.span(), &e.to_string()))?;
+        .map_err(|e| {
+            let message =
+                erased_import_explanation(&erased_imports, base_dir, &sources, &program, &e)
+                    .unwrap_or_else(|| e.to_string());
+            FrontEndError::at_span(&sources, e.span(), &message)
+        })?;
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
@@ -209,6 +229,59 @@ fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
         }
         _ => None,
     })
+}
+
+/// Explain an undefined name that one of the `erased_imports` would have provided, or `None`
+/// when the error is about something else.
+///
+/// Resolving the erased modules costs a parse, so it happens here — on the failure path — and
+/// nowhere else.
+fn erased_import_explanation(
+    erased_imports: &[ast::Import],
+    base_dir: &Path,
+    sources: &SourceMap,
+    program: &ast::Program,
+    error: &crate::typechecker::checker::TypeError,
+) -> Option<String> {
+    let crate::typechecker::checker::TypeError::UndefinedVariable { name, span } = error else {
+        return None;
+    };
+    if !report_is_over_the_name(sources, span, name) {
+        return None;
+    }
+    // A name the compilation unit DOES define is missing for another reason — Quilon resolves
+    // top to bottom, so a use above the definition reads as undefined — and the erased import
+    // is not the answer.
+    if program.items.iter().any(|item| item.name() == name) {
+        return None;
+    }
+    let module = modules::providing_import(erased_imports, base_dir, name)?;
+    Some(format!(
+        "`{name}` comes in through `<<? {module}`, a test-only import: it is resolved for \
+         the `{}` blocks under `quilon test` and erased everywhere else, so nothing outside \
+         a block can use it. Move this use into a block, or import the module with `<<`",
+        ast::TEST_BLOCK_MARKER,
+    ))
+}
+
+/// Whether `span` covers `name` itself — a use of that name — rather than a larger expression
+/// that merely contains it.
+///
+/// `UndefinedVariable` carries two different mistakes: a name nothing defines, reported over
+/// exactly that name (or over `Name { … }` for a constructor), and an unknown FIELD, reported
+/// over the whole access, `point.red`. Telling them apart is what keeps a mistyped field from
+/// being blamed on a test-only import that happens to export something spelled the same.
+fn report_is_over_the_name(sources: &SourceMap, span: &Span, name: &str) -> bool {
+    let text = sources
+        .get_text(span.file)
+        .unwrap_or_else(|| sources.root_text());
+    let Some(quoted) = text.get(span.start as usize..span.end as usize) else {
+        return false;
+    };
+    quoted == name
+        || quoted
+            .strip_prefix(name)
+            .is_some_and(|rest| rest.trim_start().starts_with('{'))
 }
 
 /// Whether `program` defines the `^` entry point required to build an executable.

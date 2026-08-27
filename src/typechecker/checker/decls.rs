@@ -361,7 +361,7 @@ impl TypeChecker {
         for method in methods {
             self.env.push_scope();
             self.env.define(
-                "it".to_string(),
+                crate::ast::RECEIVER.to_string(),
                 self_type.clone(),
                 false,
                 method.span.clone(),
@@ -513,7 +513,7 @@ impl TypeChecker {
     fn node_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
         match expression {
             Expression::FieldAssign { target, .. } => {
-                Self::field_path_root_name(target).as_deref() == Some("it")
+                Self::field_path_root_name(target).as_deref() == Some(crate::ast::RECEIVER)
             }
             // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter applied to
             // `it` propagates "mutating" to the caller.
@@ -524,9 +524,9 @@ impl TypeChecker {
             } => {
                 // The receiver test is free; the set probe allocates a key, so it goes
                 // second — this runs on every call node in every method body.
-                arguments.first().is_some_and(
-                    |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
-                ) && matches!(function.as_ref(), Expression::Identifier { name, .. }
+                arguments.first().is_some_and(|recv| {
+                    matches!(recv, Expression::Identifier { name, .. } if name == crate::ast::RECEIVER)
+                }) && matches!(function.as_ref(), Expression::Identifier { name, .. }
                     if self.setter_methods.contains(&(type_name.to_string(), name.clone())))
             }
             _ => false,
@@ -550,7 +550,7 @@ impl TypeChecker {
     /// setter-call mutability gates so they can never diverge.
     pub(super) fn immutable_mutation_root(&self, receiver: &Expression) -> Option<String> {
         let name = Self::field_path_root_name(receiver)?;
-        if name != "it" && !self.env.is_mutable(&name) {
+        if name != crate::ast::RECEIVER && !self.env.is_mutable(&name) {
             Some(name)
         } else {
             None

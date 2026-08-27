@@ -250,6 +250,10 @@ mod tests {
         let two = Lexer::tokenize("< <").unwrap();
         assert_eq!(two[0].kind, TokenKind::BlockOpen);
         assert_eq!(two[1].kind, TokenKind::BlockOpen);
+        // `<<?` is the test-only import — one token, not `<<` followed by a `?`.
+        let test_only = Lexer::tokenize("<<? core.test.report").unwrap();
+        assert_eq!(test_only[0].kind, TokenKind::TestImport);
+        assert_eq!(test_only[1].kind, TokenKind::Ident);
     }
 
     #[test]

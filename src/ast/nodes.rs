@@ -24,11 +24,20 @@ pub const TEST_BLOCK_MARKER: &str = "describe";
 /// a suite would set a failure mark nothing ever reports.
 pub const TEST_CASE_MARKER: &str = "it";
 
+/// The implicit receiver of a method or operator member — its subject, and an operator
+/// member's left operand. Unrelated to [`TEST_CASE_MARKER`], which happens to be spelled the
+/// same.
+pub const RECEIVER: &str = "it";
+
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
-/// NOTE: parsing of imports is implemented in Workstream B1; for now `imports` is always empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub path: ModulePath,
+    /// Written `<<?`: the module is there for the file's [`TEST_BLOCK_MARKER`] blocks, so it
+    /// shares their fate. `quilon test` resolves it; every other command erases it exactly as
+    /// it erases the blocks, and it is never resolved for an imported module — a `<< core.http`
+    /// brings the module's own code and nothing its tests needed.
+    pub test_only: bool,
     pub span: Span,
 }
 
@@ -40,12 +49,33 @@ pub enum ModulePath {
     FilePath(String),
 }
 
+impl std::fmt::Display for ModulePath {
+    /// The path as it was written, so a diagnostic can quote the import line back.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModulePath::BuiltinDotted(parts) => write!(f, "{}", parts.join(".")),
+            ModulePath::FilePath(path) => write!(f, "\"{path}\""),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum Item {
     VariableDeclaration(VariableDeclaration),
     FunctionDeclaration(FunctionDeclaration),
     TypeDeclaration(TypeDeclaration),
+}
+
+impl Item {
+    /// The name this item declares, whichever kind of declaration it is.
+    pub fn name(&self) -> &str {
+        match self {
+            Item::VariableDeclaration(declaration) => &declaration.name,
+            Item::FunctionDeclaration(declaration) => &declaration.name,
+            Item::TypeDeclaration(declaration) => &declaration.name,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

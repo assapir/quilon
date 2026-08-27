@@ -112,6 +112,39 @@ to `check`, `compile`, `build`, and `run`** — they erase the block before the 
 and succeed. Only `quilon test` compiles the blocks. **Run `quilon test` in CI**, or broken
 test code passes unnoticed.
 
+## Test-only imports
+
+The blocks need the harness; the code beside them does not. Import it with **`<<?`** and it
+follows the blocks — `quilon test` resolves it, every other command erases it:
+
+```quilon ignore
+<< core.io             ~ the program uses this
+<<? core.test.report   ~ only the blocks use this
+
+>> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
+
+describe("slugify", () => <
+  it("hyphenates", () => expect(slugify("Hello World"), equals("hello-world")))
+>)
+```
+
+A `<<?` module reaches **no build**: nothing of it is checked, emitted, or linked. And it is
+**never merged into an importer's scope** — `<< core.http` brings that module's own code, not
+the reporter its own suite runs under, so a program is free to define a `green`, an `it` or a
+`describe` of its own.
+
+The names are the blocks' to use. Reading one from ordinary code — a fixture included — is a
+compile error under `check`, `compile`, `build`, and `run`, naming the import:
+
+```
+error: `green` comes in through `<<? core.test.report`, a test-only import: …
+```
+
+Nothing else resolves the import, so the **path** is checked by `quilon test` alone — one more
+reason to run it in CI.
+
+`examples/tests_alongside_code.qn` is the shipped example.
+
 ## Writing a reporter
 
 What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it` and a failing

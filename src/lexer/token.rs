@@ -196,6 +196,12 @@ pub enum TokenKind {
     #[token("<<")]
     Import,
 
+    /// A **test-only** import: `<<? core.test.report`. The module serves the file's
+    /// `describe` blocks, so it follows them — resolved under `quilon test`, erased by every
+    /// other command, and never merged into an importer's scope.
+    #[token("<<?")]
+    TestImport,
+
     #[token("?")]
     Question,
 
