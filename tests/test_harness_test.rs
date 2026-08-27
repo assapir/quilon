@@ -729,7 +729,12 @@ fn the_shipped_example_runs_its_tests_under_quilon_test() {
         "`quilon test` called the example's own `^`:\n{}",
         out.stdout
     );
-    for expected in ["slugify", "wordCount", "the erased block", "4 passed, 0 failed"] {
+    for expected in [
+        "slugify",
+        "wordCount",
+        "the erased block",
+        "4 passed, 0 failed",
+    ] {
         assert!(
             out.stdout.contains(expected),
             "`{expected}` is missing from the report:\n{}",
