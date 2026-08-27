@@ -80,10 +80,10 @@ assertEven = (n :: Num, site :: Site) -> $ =>
 
 ## The test harness
 
-A **suite** is a `.qn` file with top-level `describe(…)` blocks and no `^` — it may declare
-whatever fixtures its cases need. `quilon test` synthesizes the entry point that runs each
-block in order; every other command leaves the blocks out of the program. A case checks
-itself with `expect`.
+A **suite** is any `.qn` file with top-level `describe(…)` blocks — a file of nothing but
+tests, or the module or program they test, with whatever fixtures the cases need. `quilon test`
+synthesizes the entry point that runs each block in order; every other command leaves the
+blocks out of the program. A case checks itself with `expect`.
 
 ```quilon
 << core.test
@@ -168,13 +168,24 @@ A `< >` block closes on a [line-final `>`](../LANGUAGE.md#expressions), so a lam
 with a block body puts the call's closing `)` on the next line. Writing each `it` as a single
 expression keeps that to the `describe` alone.
 
-### Suites cost a release build nothing
+### Tests beside the code, costing a release build nothing
 
-`describe` is the marker — there is no `cfg` or attribute. A top-level `describe(…)` call is
-test code, so `run`, `compile`, and `build` never type-check or emit it — nothing of the
-harness reaches the binary. And a file with test blocks but no `^` is not a compilation unit
-at all: those three pass over it in silence rather than reporting a missing entry point.
-Tests can therefore sit in the file they test.
+Tests may sit in the same file as the code they test — beside its `>>` exports, beside its `^`,
+or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker; there is no `cfg`
+or attribute:
+
+- `check`, `compile`, `build`, `run`: every top-level `describe(…)` is **erased** before the
+  checker sees it, so nothing of the harness is type-checked, emitted, or linked. The file's
+  own `^` is its entry point and behaves exactly as it would without the blocks. A file whose
+  blocks are all it has is no program at all — `compile`, `build`, and `run` pass over it in
+  silence rather than reporting a missing entry point.
+- `quilon test`: the blocks are **compiled and run**, under the entry point it synthesizes. A
+  file's own `^` is not the test run's, so it is ignored rather than called.
+
+Never type-checking them cuts both ways: **a type error inside a `describe` block is invisible
+to `check`, `compile`, `build`, and `run`** — they erase the block before the checker sees it
+and succeed. Only `quilon test` compiles the blocks, and there a suite that fails to compile
+counts as a failed suite. **Run `quilon test` in CI**, or broken test code passes unnoticed.
 
 ### Reporters
 

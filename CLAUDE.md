@@ -64,9 +64,10 @@ cargo run -- compile examples/hello_world.qn   # emit LLVM IR -> .ll (for inspec
 cargo run -- test    examples/test_suite.qn    # run a test suite (JIT only; default path: .)
 ```
 
-`quilon test` runs a file's top-level `describe(...)` blocks under a synthesized `^`; every
-other subcommand strips them. `src/test_command.rs` is the runner; `docs/corelib/test.md` is
-the reference.
+`quilon test` runs a file's top-level `describe(...)` blocks under a synthesized `^` (the
+file's own `^`, if it has one, is ignored); every other subcommand erases the blocks. Tests
+may therefore live in the file they test. `src/test_command.rs` is the runner;
+`docs/corelib/test.md` is the reference.
 
 `quilon run` is implemented (in-process JIT). A program's `^` entry point return value is its exit code (e.g. `factorial(5)` → 120) — this is how most run tests verify behavior. (The exit code is the `^` body's `Num` value, or 0 if the body isn't a `Num`.)
 

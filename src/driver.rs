@@ -84,7 +84,8 @@ pub struct Checked {
     pub defer: crate::deferral::DeferInfo,
     /// The file is a test suite rather than a program: it has top-level test blocks and no
     /// `^` of its own (whatever fixtures its cases need are fine). Stripping the blocks
-    /// leaves nothing to run, so `run`/`compile`/`build` pass over it in silence. Recorded
+    /// leaves nothing to run, so `run`/`compile`/`build` pass over it in silence. A file that
+    /// has BOTH is a program whose tests sit beside it, and builds like any other. Recorded
     /// before the link, which merges an `^` from nowhere but would blur "of its own".
     pub tests_only: bool,
 }
@@ -246,22 +247,16 @@ fn synthesized_span(node: Synthesized) -> Span {
 /// Append the entry point that runs `program`'s test blocks: each `describe(…)` in source
 /// order, then the reporter's summary, whose `Num` result becomes the exit code.
 ///
-/// Fails (with the offending span and message) if the file also defines its own `^` — a
-/// test file has no entry point, because this is it.
+/// A file's tests may sit beside its code, `^` included, so the program reaching here may
+/// already define one. That `^` is the program's entry point, not the test run's: it is
+/// dropped, because this is the entry point now and two would collide on one symbol.
 fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String)> {
     let Some(first_block) = program.test_blocks.first() else {
         return Ok(());
     };
-    if let Some(existing) = entry_point(program) {
-        return Err((
-            existing.span.clone(),
-            format!(
-                "a file with top-level `{}` blocks must not define `^`: `quilon test` \
-                 synthesizes the entry point that runs them",
-                ast::TEST_BLOCK_MARKER
-            ),
-        ));
-    }
+    program
+        .items
+        .retain(|item| !matches!(item, ast::Item::FunctionDeclaration(func) if func.name == "^"));
     // The reporter has to be in scope, since the entry ends by calling it. Said here, at the
     // first test block, rather than by the type checker at the synthesized call — which has
     // no source location to point a diagnostic at.

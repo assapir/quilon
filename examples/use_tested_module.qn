@@ -1,0 +1,11 @@
+~ Imports `tests_alongside_code.qn` and uses its exports. That module's `describe` blocks are
+~ no part of this build, so the marker below is the only line this program prints.
+<< "tests_alongside_code.qn"
+<< core.io
+<< core.test
+
+^ = () -> $ => <
+  print("IMPORTER-RAN-WITHOUT-THE-MODULE-TEST-BLOCKS")
+  assert(slugify("  Hello World  "), equals("hello-world"))
+  assert(wordCount("one two three"), equals(3))
+>

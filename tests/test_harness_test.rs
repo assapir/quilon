@@ -5,6 +5,8 @@
 //! tally them, and exit non-zero when one failed. And a suite has to cost a release build
 //! nothing: the blocks are not part of the compilation unit, so `run`/`compile`/`build`
 //! neither check them nor emit them, and a file that is only tests is not a program at all.
+//! Both halves apply to ONE file: tests may sit beside the code they test, `^` included,
+//! which is where the two meet.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,6 +14,9 @@ use std::process::Command;
 use quilon::ast::Item;
 use quilon::lexer::Lexer;
 use quilon::parser;
+
+mod common;
+use common::{ensure_runtime_lib, tool_available};
 
 /// A passing suite: two groups, one nested inside the other.
 const PASSING_SUITE: &str = r#"
@@ -47,6 +52,19 @@ describe("arithmetic", () => <
 )
 "#;
 
+/// The line `examples/tests_alongside_code.qn` prints from inside a `describe` block. Nothing
+/// else in the repository prints it, so finding it in a build's output means the block ran.
+const ERASED_BLOCK_MARKER: &str = "ERASED-TEST-BLOCK-RAN";
+
+/// The line `examples/tests_alongside_code.qn` prints from its own `^`. Its presence is what
+/// tells a build that erased the test blocks apart from a build that never ran at all — and
+/// its ABSENCE under `quilon test` is what proves that `^` is not the test run's entry point.
+const PROGRAM_MARKER: &str = "PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS";
+
+/// The line `examples/use_tested_module.qn` prints from its `^`, so an importer's run is told
+/// apart from the imported module's own.
+const IMPORTER_MARKER: &str = "IMPORTER-RAN-WITHOUT-THE-MODULE-TEST-BLOCKS";
+
 /// Where a test's `.qn` files go, unique per process so parallel runs never collide.
 fn work_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("quilon_harness_{}_{tag}", std::process::id()));
@@ -76,6 +94,54 @@ fn quilon(arguments: &[&str]) -> Output {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// A file shipped in `examples/`.
+fn example(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(name)
+}
+
+/// The first linker available on PATH, or `None` on a box that has neither — which is where
+/// the native half of a gate skips instead of failing.
+fn available_linker() -> Option<&'static str> {
+    ["clang", "gcc"]
+        .into_iter()
+        .find(|tool| tool_available(tool))
+}
+
+/// `quilon build` `source` into `directory` with `linker`, then execute what it produced.
+fn build_and_execute(source: &Path, directory: &Path, linker: &str) -> Output {
+    ensure_runtime_lib(
+        Path::new(env!("CARGO_BIN_EXE_quilon"))
+            .parent()
+            .expect("the compiler's directory"),
+    );
+    let binary = directory.join("built");
+    let build = quilon(&[
+        "build",
+        source.to_str().unwrap(),
+        "--linker",
+        linker,
+        "-o",
+        binary.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        build.code, 0,
+        "`quilon build --linker {linker}` failed:\n{}",
+        build.stderr
+    );
+
+    let run = Command::new(&binary)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run the built executable");
+    Output {
+        code: run.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&run.stderr).into_owned(),
     }
 }
 
@@ -150,6 +216,75 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A program with its tests beside it, as source: an `^` that prints [`PROGRAM_MARKER`], and a
+/// `describe` block over the same function that prints [`ERASED_BLOCK_MARKER`]. Which line
+/// comes out says which halves of the file were compiled.
+fn program_with_tests_beside_it() -> String {
+    format!(
+        r#"
+<< core.io
+<< core.test
+
+double = (n :: Num) -> Num => n * 2
+
+describe("double", () => <
+  it("doubles", () => <
+    print("{ERASED_BLOCK_MARKER}")
+    expect(double(21), equals(42))
+  >
+  )
+>
+)
+
+^ = () -> $ => <
+  print("{PROGRAM_MARKER}")
+  assert(double(4), equals(8))
+>
+"#
+    )
+}
+
+/// The whole point, in three assertions: `out` is a run of a program whose file also holds test
+/// blocks, so it exits 0 having printed `marker` — which tells "the blocks were erased" apart
+/// from "nothing ran at all" — and no [`ERASED_BLOCK_MARKER`].
+fn assert_ran_without_its_tests(what: &str, marker: &str, out: &Output) {
+    assert_eq!(
+        out.code, 0,
+        "{what} must exit 0:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains(marker),
+        "{what} printed nothing of its own, so nothing ran:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains(ERASED_BLOCK_MARKER),
+        "{what} ran a test block that should have been erased:\n{}",
+        out.stdout
+    );
+}
+
+/// The erasure, observed rather than inferred: the `describe` block's `print` never executes
+/// in a build of the file it sits in — under the JIT and a native build alike.
+#[test]
+fn a_describe_block_beside_an_entry_point_never_runs_in_a_build() {
+    let dir = work_dir("beside");
+    let source = write(&dir, "program.qn", &program_with_tests_beside_it());
+
+    let run = quilon(&["run", source.to_str().unwrap()]);
+    assert_ran_without_its_tests("`quilon run`", PROGRAM_MARKER, &run);
+
+    match available_linker() {
+        Some(linker) => {
+            let native = build_and_execute(&source, &dir, linker);
+            assert_ran_without_its_tests("the built program", PROGRAM_MARKER, &native);
+        }
+        None => eprintln!("skipping the native half: need a linker (`clang` or `gcc`) on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_file_that_is_only_tests_is_silently_ignored() {
     let dir = work_dir("only");
@@ -176,20 +311,29 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The other direction on that same file: `quilon test` compiles the blocks the build erased,
+/// and the file's own `^` is not the test run's entry point — the synthesized one is — so the
+/// program's line never appears.
 #[test]
-fn a_suite_may_not_define_an_entry_point() {
-    let dir = work_dir("entry");
-    let source = write(
-        &dir,
-        "both.qn",
-        "<< core.test\ndescribe(\"g\", () => 0)\n^ = () -> Num => 0\n",
-    );
+fn quilon_test_runs_the_blocks_beside_an_entry_point_and_ignores_it() {
+    let dir = work_dir("beside_test");
+    let source = write(&dir, "program.qn", &program_with_tests_beside_it());
+
     let out = quilon(&["test", source.to_str().unwrap()]);
-    assert_ne!(out.code, 0, "a suite with its own `^` must be rejected");
+    assert_eq!(
+        out.code, 0,
+        "the cases pass, so the suite must exit 0:\n{}\n{}",
+        out.stdout, out.stderr
+    );
     assert!(
-        out.stderr.contains("must not define `^`"),
-        "unexpected diagnostic:\n{}",
-        out.stderr
+        out.stdout.contains(ERASED_BLOCK_MARKER) && out.stdout.contains("1 passed, 0 failed"),
+        "the block beside `^` did not run:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains(PROGRAM_MARKER),
+        "`quilon test` called the file's own `^`:\n{}",
+        out.stdout
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -506,17 +650,18 @@ fn a_suite_that_does_not_parse_fails_the_run() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A suite may carry its own fixtures — helper functions, record types — and is still not a
-/// program: stripping its blocks leaves nothing to run, so `build` passes over it.
+/// The other shape tests come in: a module — `>>` exports, whatever fixtures its cases need,
+/// and no `^`. Erasing its blocks leaves nothing to run, so `build` passes over it, while
+/// `quilon test` runs the same file as a suite.
 #[test]
-fn a_suite_with_its_own_helpers_is_still_not_a_program() {
+fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
     let dir = work_dir("helpers");
     let source = write(
         &dir,
         "suite.qn",
         concat!(
             "<< core.test\n",
-            "double = (n :: Num) -> Num => n * 2\n",
+            ">> double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
             "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">\n",
@@ -527,7 +672,7 @@ fn a_suite_with_its_own_helpers_is_still_not_a_program() {
     let build = quilon(&["build", source.to_str().unwrap()]);
     assert_eq!(
         build.code, 0,
-        "`quilon build` must pass over a suite with helpers:\n{}\n{}",
+        "`quilon build` must pass over a module that is not a program:\n{}\n{}",
         build.stdout, build.stderr
     );
     assert!(
@@ -549,8 +694,8 @@ fn a_suite_with_its_own_helpers_is_still_not_a_program() {
 /// The shipped example is the documented demonstration of the framework, so it is a gate.
 #[test]
 fn the_example_suite_passes() {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/test_suite.qn");
-    let out = quilon(&["test", example.to_str().unwrap()]);
+    let suite = example("test_suite.qn");
+    let out = quilon(&["test", suite.to_str().unwrap()]);
     assert_eq!(
         out.code, 0,
         "examples/test_suite.qn must pass:\n{}\n{}",
@@ -560,5 +705,81 @@ fn the_example_suite_passes() {
         out.stdout.contains("passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
+    );
+}
+
+// ── The shipped example: tests beside the code, and what each command does with them ─────
+
+/// The shipped demonstration, built and run: `examples/tests_alongside_code.qn` holds its `>>`
+/// exports, its `^`, and the `describe` blocks checking them in ONE file, so a build of it
+/// prints the program's own line and never a word of test output — under the JIT and a native
+/// build alike.
+#[test]
+fn the_shipped_example_builds_without_the_tests_beside_its_entry_point() {
+    let source = example("tests_alongside_code.qn");
+
+    let run = quilon(&["run", source.to_str().unwrap()]);
+    assert_ran_without_its_tests("`quilon run` on the example", PROGRAM_MARKER, &run);
+
+    match available_linker() {
+        Some(linker) => {
+            let dir = work_dir("shipped");
+            let native = build_and_execute(&source, &dir, linker);
+            assert_ran_without_its_tests("the built example", PROGRAM_MARKER, &native);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        None => eprintln!("skipping the native half: need a linker (`clang` or `gcc`) on PATH"),
+    }
+}
+
+/// The other direction, on the very file the build erased: `quilon test` compiles those blocks,
+/// so the line no build ever showed is on stdout and its case is reported — while the file's
+/// own `^` stays uncalled.
+#[test]
+fn the_shipped_example_runs_its_tests_under_quilon_test() {
+    let source = example("tests_alongside_code.qn");
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_eq!(
+        out.code, 0,
+        "the shipped suite must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains(ERASED_BLOCK_MARKER),
+        "the test block did not run under `quilon test`:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains(PROGRAM_MARKER),
+        "`quilon test` called the example's own `^`:\n{}",
+        out.stdout
+    );
+    for expected in [
+        "slugify",
+        "wordCount",
+        "the erased block",
+        "4 passed, 0 failed",
+    ] {
+        assert!(
+            out.stdout.contains(expected),
+            "`{expected}` is missing from the report:\n{}",
+            out.stdout
+        );
+    }
+}
+
+/// A program that imports a tested module gets its exports and none of its tests: the blocks
+/// are the module's own, dropped at the link rather than merged in.
+#[test]
+fn the_shipped_program_importing_the_tested_module_gets_none_of_its_tests() {
+    let program = example("use_tested_module.qn");
+
+    let run = quilon(&["run", program.to_str().unwrap()]);
+    assert_ran_without_its_tests("`quilon run` on the importer", IMPORTER_MARKER, &run);
+    assert!(
+        !run.stdout.contains(PROGRAM_MARKER),
+        "the imported module's `^` is not the importer's:\n{}",
+        run.stdout
     );
 }
