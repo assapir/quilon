@@ -12,9 +12,12 @@ primes :: [|Num|] = [|2, 3, 5, 7|]                        ~ a Set
 none   :: [|Num|] = [||]                                  ~ empty set
 ```
 
-**Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), or `Bool`;
-duplicates collapse. A set is **immutable / persistent**: every mutator (`add`, the set
-operators) returns a **new** set and never touches the receiver.
+**Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or
+a **user type that opts in** — a record or sum defining both a `%` hash hook
+(`% = () -> Num => …`, `it` the value) and an `==` member; both are required, and `%`/`==`
+must agree (see [Map](map.md#user-defined-key-types)). Duplicates collapse. A set is
+**immutable / persistent**: every mutator (`add`, the set operators) returns a **new** set
+and never touches the receiver.
 
 **Iteration order is UNSPECIFIED** — conceptually a set is unordered, so never rely on the
 order of `items`/`each`. (It is the hash order, *not* insertion order. A fixed-seed hasher

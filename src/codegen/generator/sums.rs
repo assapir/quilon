@@ -390,13 +390,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// type — user types AND the built-in `Result` (which has one canonical `{ptr,i64}` slot
     /// into which any payload is packed) — has a registered canonical layout, so this defers
     /// to [`sum_struct_type`], giving `Result` the single shape `{ i8, {ptr,i64} }` whatever
-    /// its concrete `Ok`/`NotOk` payload.
-    ///
-    /// The per-position variant-scanning fallback below is only reached for an UNREGISTERED
-    /// `Type::Sum` (e.g. an IR-only test that skips declaration): per slot it takes the first
-    /// field that is neither `Generic` NOR `Unit` (the checker guarantees concrete fields at a
-    /// position agree) and lowers it via [`value_repr_type`]; a generic/unit/absent-only slot
-    /// falls back to `double`.
+    /// its concrete `Ok`/`NotOk` payload. An UNREGISTERED `Type::Sum` (e.g. an IR-only test
+    /// that skips declaration) is laid out from its variants with [`payload_slot_types`], the
+    /// same rule registration would have applied.
     pub(super) fn sum_value_struct_type(
         &self,
         name: &str,
@@ -406,18 +402,44 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(self.sum_struct_type(name));
         }
         let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
-        let max_fields = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
-        for i in 0..max_fields {
-            let concrete = variants
-                .iter()
-                .filter_map(|v| v.fields.get(i))
-                .find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
-            let slot = match concrete {
-                Some(f) => self.value_repr_type(f)?,
-                None => self.context.f64_type().into(),
-            };
-            field_types.push(slot);
-        }
+        field_types.extend(self.payload_slot_types(variants)?);
         Ok(self.context.struct_type(&field_types, false))
+    }
+
+    /// A sum type's canonical payload layout: one LLVM slot per payload position, sized to
+    /// the widest variant, so EVERY value of the type shares one struct shape. This is the
+    /// single rule — sum registration and the by-variant lowering above both come here, and
+    /// a slot they disagreed on would be a slot a payload is stored into at one size and
+    /// read out of at another.
+    ///
+    /// Per position the slot takes the first field that is neither `$` (Unit) nor a type
+    /// variable — the checker has validated that the concrete fields at a position agree —
+    /// lowered through [`value_repr_type`], the shape a payload VALUE is materialized and
+    /// stored as rather than the standalone lowering of its type. Falling back: a position
+    /// that is only ever a type variable gets `double`, the representation a generic payload
+    /// is materialized as; one that is only ever `$` (or absent) gets a zero `i8`
+    /// placeholder, keeping one slot per position while storing nothing. A wholly nullary
+    /// sum still gets a single `double` slot, so its `{ i8, .. }` value keeps that shape.
+    pub(super) fn payload_slot_types(
+        &self,
+        variants: &[crate::ast::SumVariant],
+    ) -> Result<Vec<BasicTypeEnum<'ctx>>, String> {
+        let arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+        let mut slots: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(arity.max(1));
+        for position in 0..arity {
+            let at = || variants.iter().filter_map(|v| v.fields.get(position));
+            let concrete = at().find(|f| !matches!(f, Type::Generic { .. } | Type::Unit));
+            slots.push(match concrete {
+                Some(field) => self.value_repr_type(field)?,
+                None if at().any(|f| matches!(f, Type::Generic { .. })) => {
+                    self.context.f64_type().into()
+                }
+                None => self.context.i8_type().into(),
+            });
+        }
+        if slots.is_empty() {
+            slots.push(self.context.f64_type().into());
+        }
+        Ok(slots)
     }
 }

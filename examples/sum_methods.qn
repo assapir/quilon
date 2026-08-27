@@ -22,14 +22,14 @@ Shape = Circle(Num) / Rect(Num, Num) {
 
 ^ = () -> $ => <
   ~ A named method, dispatched on the receiver's type:
-  assertEq(Rect(6, 7).area(), 42)     ~ 6 * 7
-  assertEq(Circle(4).area(), 48)      ~ 3 * 4 * 4
+  assert(Rect(6, 7).area(), equals(42))     ~ 6 * 7
+  assert(Circle(4).area(), equals(48))      ~ 3 * 4 * 4
 
   ~ The `==` member, resolved from Shape's methods (equal areas):
-  assert(Rect(6, 7) == Rect(2, 21))   ~ 42 == 42
-  assert(!(Rect(6, 7) == Circle(4)))  ~ 42 != 48
+  assert(Rect(6, 7), equals(Rect(2, 21)))   ~ 42 == 42
+  assert(!(Rect(6, 7) == Circle(4)), equals(true))  ~ 42 != 48
 
   ~ The `` ` `` member renders a Shape (interpolation takes the same path as `print`):
-  assertEq("`Rect(6, 7)`", "Rect(6x7)")
-  assertEq("`Circle(4)`", "Circle(4)")
+  assert("`Rect(6, 7)`", equals("Rect(6x7)"))
+  assert("`Circle(4)`", equals("Circle(4)"))
 >

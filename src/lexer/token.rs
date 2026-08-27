@@ -10,6 +10,13 @@ pub type FileId = u32;
 /// The source the compiler was invoked on, as opposed to an imported module.
 pub const ROOT_FILE: FileId = 0;
 
+/// The file id of a node the compiler built rather than read — today the entry point
+/// `quilon test` synthesizes around a file's test blocks. Spans key the type oracle, so
+/// giving synthesized nodes a file of their own is what keeps them from colliding with the
+/// real nodes of any module; their offsets then only have to be distinct from each other.
+/// No source is registered under it, so a diagnostic on such a span names the root file.
+pub const SYNTHESIZED_FILE: FileId = FileId::MAX;
+
 /// Source code position span: a byte range within ONE source file.
 ///
 /// `file` says which source `start`/`end` index into. Every module is lexed on its own,
@@ -198,15 +205,16 @@ pub enum TokenKind {
     #[token("<")]
     BlockOpen,
 
-    // `>` is reclassified after lexing (see `Lexer::tokenize`): it stays `BlockClose`
-    // when it is the last token on its line (`>` + optional `[ \t]*` + newline/EOF),
-    // and becomes the greater-than operator `Gt` otherwise. This lets a bare `a > b`
-    // work everywhere while a block still closes on a line-final `>`.
+    /// The `< … >` block close — what a `>` is **by default**. `Lexer::reclassify_gt`
+    /// turns it into [`TokenKind::Gt`] only when the next token is on the same line and
+    /// [starts an operand](TokenKind::starts_operand), so a block closes before a `)`,
+    /// `]`, `}`, `,`, `.`, a `~` comment, or the end of the line — which is what lets
+    /// `f(() => < … >)` fit on one line — while `a > b` stays a comparison.
     #[token(">")]
     BlockClose,
 
-    /// The greater-than comparison operator. Produced from a `>` that is NOT the last
-    /// token on its line (see `BlockClose`). `<` is always `BlockOpen`; less-than is
+    /// The greater-than comparison operator: a `>` with an operand after it on the same
+    /// line (see [`TokenKind::BlockClose`]). `<` is always `BlockOpen`; less-than is
     /// recovered in the parser, where a `<` after a complete operand can only be `Lt`.
     Gt,
 
@@ -295,6 +303,31 @@ pub enum TokenKind {
 
     // End of file
     Eof,
+}
+
+impl TokenKind {
+    /// Whether this kind can be the first token of an operand — exactly the parser's
+    /// `parse_unary`/`parse_primary` entry set, which a `debug_assert!` there keeps in
+    /// step with this list. It is what makes a preceding `>` a comparison rather than a
+    /// [block close](TokenKind::BlockClose). `<` is deliberately absent: a block is not
+    /// an operand (in operand position a `<` is less-than), so a `>` before a `<` closes.
+    pub fn starts_operand(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::Number(_)
+                | TokenKind::String(_)
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Unit
+                | TokenKind::At
+                | TokenKind::Ident
+                | TokenKind::ParenOpen
+                | TokenKind::BracketOpen
+                | TokenKind::BraceOpen
+                | TokenKind::Minus
+                | TokenKind::Not
+        )
+    }
 }
 
 /// Lex a whole string literal, starting just after the opening `"` (which the `#[token]`

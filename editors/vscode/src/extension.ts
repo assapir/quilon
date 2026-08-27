@@ -8,15 +8,100 @@
 //      surface each as an editor squiggle in a shared DiagnosticCollection.
 
 import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as vscode from "vscode";
+import {
+  type CompilerProbe,
+  missingCompilerMessage,
+  resolveCompilerCommand,
+  type ResolvedCompiler,
+  shellCommand,
+} from "./compilerCommand";
 import { registerDebug } from "./debug";
-import { firstNonEmptyLine, splitCommand } from "./debugConfig";
+import { firstNonEmptyLine } from "./debugConfig";
 import { parseDiagnostics, type ParsedDiagnostic } from "./diagnostics";
 import { findEntryPoints } from "./entryPoints";
 
-/** Read the configured compiler invocation (default `quilon`). Shared with the debug integration. */
-export function quilonCommand(): string {
-  return vscode.workspace.getConfiguration("quilon").get<string>("command", "quilon");
+// --- Locating the compiler -------------------------------------------------
+
+/** The `quilon.command` value the user set, or "" when it is at its default. */
+function configuredCommand(): string {
+  const inspected = vscode.workspace.getConfiguration("quilon").inspect<string>("command");
+  const set =
+    inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue ?? "";
+  return typeof set === "string" ? set : "";
+}
+
+/** The machine as the resolver sees it: the setting, this host's environment, and fs probes. */
+function compilerProbe(): CompilerProbe {
+  return {
+    configured: configuredCommand(),
+    path: process.env["PATH"],
+    pathExt: process.env["PATHEXT"],
+    home: os.homedir(),
+    workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    platform: process.platform,
+    isExecutable: (file) => {
+      try {
+        if (!fs.statSync(file).isFile()) {
+          return false;
+        }
+        fs.accessSync(file, fs.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    readText: (file) => {
+      try {
+        return fs.readFileSync(file, "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/**
+ * The resolved invocation, cached for the session: resolution touches the disk,
+ * and every check/run/debug needs it. Invalidated when the setting or the open
+ * folders change, and whenever a spawn fails — so installing a compiler
+ * mid-session is picked up on the next attempt.
+ */
+let cachedCompiler: ResolvedCompiler | undefined;
+
+/** How to invoke the compiler — the setting when set, otherwise a located one. */
+export function resolvedQuilonCompiler(): ResolvedCompiler {
+  cachedCompiler ??= resolveCompilerCommand(compilerProbe());
+  return cachedCompiler;
+}
+
+/** Drop the cached invocation so the next call resolves afresh. */
+export function forgetResolvedCompiler(): void {
+  cachedCompiler = undefined;
+}
+
+/**
+ * Report a compiler that could not be spawned, offering the setting that fixes
+ * it. `severity` keeps a background diagnostics failure a warning while a
+ * user-initiated action reports an error.
+ */
+export function showMissingCompiler(
+  resolved: ResolvedCompiler,
+  prefix: string,
+  severity: "warning" | "error" = "error",
+): void {
+  const message = `Quilon: ${prefix}${missingCompilerMessage(resolved)}`;
+  const shown =
+    severity === "warning"
+      ? vscode.window.showWarningMessage(message, "Open Settings")
+      : vscode.window.showErrorMessage(message, "Open Settings");
+  void shown.then((choice) => {
+    if (choice === "Open Settings") {
+      void vscode.commands.executeCommand("workbench.action.openSettings", "quilon.command");
+    }
+  });
 }
 
 // --- Terminal commands -----------------------------------------------------
@@ -30,7 +115,7 @@ function runOnActiveFile(subcommand: string): void {
   const document = editor.document;
   // Save first so the compiler sees the latest content.
   void document.save().then(() => {
-    const cmd = quilonCommand();
+    const cmd = shellCommand(resolvedQuilonCompiler());
     const file = document.fileName;
     const term =
       vscode.window.terminals.find((t) => t.name === "Quilon") ??
@@ -111,7 +196,7 @@ function checkDocument(
     return;
   }
 
-  const { exe, baseArgs } = splitCommand(quilonCommand());
+  const compiler = resolvedQuilonCompiler();
   const cwd = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
 
   // Stamp this run so a slower earlier run can't clobber a faster later one.
@@ -120,19 +205,19 @@ function checkDocument(
   const seq = (latestCheck.get(key) ?? 0) + 1;
   latestCheck.set(key, seq);
 
-  execFile(exe, [...baseArgs, "check", document.fileName], { cwd }, (error, stdout, stderr) => {
+  const args = [...compiler.baseArgs, "check", document.fileName];
+  execFile(compiler.exe, args, { cwd }, (error, stdout, stderr) => {
     if (latestCheck.get(key) !== seq) {
       return; // A newer check superseded this one; drop its (stale) result.
     }
 
-    // ENOENT => the configured compiler isn't installed/on PATH.
+    // ENOENT => the compiler isn't where we resolved it. Forget the resolution
+    // so a compiler installed mid-session is found on the next check.
     if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      forgetResolvedCompiler();
       if (!warnedMissingCommand) {
         warnedMissingCommand = true;
-        void vscode.window.showWarningMessage(
-          `Quilon: could not run "${exe}" for diagnostics. ` +
-            `Set "quilon.command" to your compiler (e.g. "cargo run --").`,
-        );
+        showMissingCompiler(compiler, "diagnostics unavailable — ", "warning");
       }
       collection.delete(uri);
       return;
@@ -228,6 +313,18 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: "quilon" },
       new EntryPointCodeLensProvider(),
     ),
+    // A changed setting or a changed set of folders can change which compiler
+    // we should be running, so drop the cached resolution and re-check.
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("quilon.command")) {
+        forgetResolvedCompiler();
+        const document = vscode.window.activeTextEditor?.document;
+        if (document) {
+          check(document);
+        }
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => forgetResolvedCompiler()),
     vscode.workspace.onDidOpenTextDocument(check),
     vscode.workspace.onDidSaveTextDocument(check),
     // Re-check when focus lands on a file (e.g. switching to an already-open tab
@@ -258,4 +355,5 @@ export function deactivate(): void {
   // module-level state so a re-activation in the same host starts clean.
   latestCheck.clear();
   warnedMissingCommand = false;
+  forgetResolvedCompiler();
 }

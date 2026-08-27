@@ -34,6 +34,14 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // The provided assertions, which take a matcher rather than ordinary arguments —
+        // resolved here, ahead of every other dispatch, since they are the compiler's own.
+        if let Expression::Identifier { name, .. } = function
+            && crate::ast::is_assertion(name)
+        {
+            return self.check_assertion(name, arguments, span);
+        }
+
         // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.
         if let Expression::Identifier {
             name: constructor_name,
@@ -149,14 +157,20 @@ impl TypeChecker {
                         });
                     }
 
-                    // Type check arguments
+                    // An unannotated parameter is not unchecked: the body was checked with it
+                    // defaulted to `Num`, so the call has to meet that same commitment —
+                    // exactly as a plain function's unannotated parameter already does.
+                    // Skipping these let a `Text` argument reach codegen and surface as a raw
+                    // LLVM verifier dump.
+                    //
+                    // The annotation is deliberately NOT resolved here, unlike at the
+                    // definition site: a user-typed parameter is broken end to end today, and
+                    // resolving it only moves the failure from the checker into codegen, which
+                    // has no field types for a method parameter.
                     for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
                         let arg_type = self.infer_expression(arg)?;
-                        // Extract the type from the Parameter
-                        if let Some(parameter_type) = &parameter.type_annotation {
-                            self.check_type_compatibility(parameter_type, &arg_type, span)?;
-                        }
-                        // If no type annotation, we can't check (would need inference)
+                        let parameter_type = parameter.type_annotation.clone().unwrap_or(Type::Num);
+                        self.check_type_compatibility(&parameter_type, &arg_type, span)?;
                     }
 
                     // Return the method's return type (or Num if not specified)

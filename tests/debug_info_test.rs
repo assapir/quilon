@@ -57,7 +57,7 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
     let mut generator = CodeGenerator::new(&context, "main");
     generator.set_type_table(checked.types);
     generator.set_defer_info(checked.defer);
-    generator.enable_debug(&ql, checked.sources.root_text(), checked.imported_items);
+    generator.enable_debug(&ql, &checked.sources);
     generator.set_source_map(checked.sources);
 
     // `generate` runs `module.verify()` internally, so an Err here IS the verifier failure.
@@ -66,6 +66,27 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
         .unwrap_or_else(|e| panic!("debug codegen of a deferral program failed to verify: {e}"));
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A function VALUE — a closure passed as an argument — has no precise DWARF type, so it is
+/// described as an opaque pointer. LLVM rejects a basic type with an empty name, and the
+/// pointee's name was empty, which made every `-g` build of a program holding a function
+/// value panic. Any higher-order program under debug info is the gate.
+#[test]
+fn debug_codegen_handles_a_function_valued_parameter() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/higher_order.qn");
+    let checked = front_end(&example).unwrap_or_else(|e| panic!("front end failed: {e}"));
+
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "main");
+    generator.set_type_table(checked.types);
+    generator.set_defer_info(checked.defer);
+    generator.enable_debug(&example, &checked.sources);
+    generator.set_source_map(checked.sources);
+
+    generator
+        .generate(&checked.program)
+        .unwrap_or_else(|e| panic!("debug codegen of a higher-order program failed: {e}"));
 }
 
 #[test]
@@ -149,6 +170,51 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The own attributes of every `DW_TAG_subprogram` in `dump`, as `(name, decl_file,
+/// artificial)`. A subprogram's own `DW_AT_name`/`DW_AT_decl_file`/`DW_AT_artificial` all
+/// precede its first child DIE, so reading each subprogram block only up to the next
+/// `DW_TAG_` line captures exactly the subprogram's own attributes (not a parameter's or a
+/// local's). Used to tell the user's `^` entry from the artificial `main`/thunk shims and to
+/// find a corelib function's subprogram by its source file.
+fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
+    let lines: Vec<&str> = dump.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if !line.contains("DW_TAG_subprogram") {
+            continue;
+        }
+        let (mut name, mut file, mut artificial) = (None, None, false);
+        for body in lines.iter().skip(i + 1) {
+            if body.contains("DW_TAG_") {
+                break; // reached the first child DIE; the subprogram's own attributes are done
+            }
+            if name.is_none() && body.contains("DW_AT_name") {
+                name = quoted_attr(body, "DW_AT_name");
+            }
+            if file.is_none() && body.contains("DW_AT_decl_file") {
+                file = quoted_attr(body, "DW_AT_decl_file");
+            }
+            if body.contains("DW_AT_artificial") && body.contains("true") {
+                artificial = true;
+            }
+        }
+        if let Some(name) = name {
+            out.push((name, file.unwrap_or_default(), artificial));
+        }
+    }
+    out
+}
+
+/// The double-quoted value `llvm-dwarfdump` prints for attribute `attr` on `line`
+/// (e.g. `DW_AT_name\t("^")` yields `^`), or `None` if the attribute or its quoted value is
+/// absent. The one place the dump's `attr\t("value")` shape is parsed.
+fn quoted_attr(line: &str, attr: &str) -> Option<String> {
+    let rest = line.split(attr).nth(1)?;
+    let open = rest.find('"')?;
+    let close = rest[open + 1..].find('"')?;
+    Some(rest[open + 1..open + 1 + close].to_string())
+}
+
 /// The quoted DWARF type name `llvm-dwarfdump` prints on the `DW_AT_type` line of the
 /// variable/parameter named `var` (e.g. `Num`, `Text`, `[]Num`, `Point *`). `None` if the
 /// variable or its type is absent. Used to assert each Quilon type gets a DISTINCT entry.
@@ -161,11 +227,8 @@ fn di_var_type(dump: &str, var: &str) -> Option<String> {
         if line.contains("DW_TAG_") {
             break; // ran into the next DIE without finding a type
         }
-        if let Some(rest) = line.split("DW_AT_type").nth(1)
-            && let Some(open) = rest.find('"')
-            && let Some(close) = rest[open + 1..].find('"')
-        {
-            return Some(rest[open + 1..open + 1 + close].to_string());
+        if let Some(ty) = quoted_attr(line, "DW_AT_type") {
+            return Some(ty);
         }
     }
     None
@@ -448,4 +511,212 @@ fn non_debug_build_has_no_ql_debug_info() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The entry frame reads as `^`, a real corelib function is steppable, and an `@`-primitive
+/// wrapper is not. The program imports `core.cli` (whose `hasFlag` is a real `.qn` function)
+/// and `core.time` (whose `@sleep` is a leaf `@` primitive and `now` an inert built-in
+/// placeholder), so one build exercises all three:
+///
+/// - the user's `^` entry has a subprogram named `^` attributed to its own source, while the
+///   generated `main`/`__ql_entry` shims carry `^`-named `DW_AT_artificial` subprograms — so a
+///   backtrace shows `^` for the entry frame rather than the C shim's symbol;
+/// - `hasFlag` has a subprogram attributed to `corelib/cli.qn` (with parameters/locals on that
+///   file's lines), so a debugger steps INTO it;
+/// - nothing is attributed to `core.time`'s source: `@sleep`/`now` are lowered to intrinsics and
+///   never emitted, so a debugger steps OVER them with nothing to step into.
+#[test]
+fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping entry/corelib debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping entry/corelib debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+<< core.cli
+<< core.time
+
+^ = () -> Num => <
+  @sleep(0)
+  now()
+  hasFlag([\"-v\"], \"-v\") ? 1 : 0
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgentry_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("entry.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("entry");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(1), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+    let subs = subprograms(&out);
+
+    // The user's `^` entry: a subprogram named `^`, attributed to the user's own file, NOT
+    // artificial — this is the frame a backtrace should show as the entry point.
+    assert!(
+        subs.iter().any(|(name, file, artificial)| name == "^"
+            && file.ends_with("entry.qn")
+            && !artificial),
+        "expected a real `^` entry subprogram in entry.qn, got:\n{subs:#?}"
+    );
+    // The generated entry shim(s) (C `main`, and the `__ql_entry` thunk this deferral program
+    // uses) carry `^`-named artificial subprograms — the entry frame reads `^`, not `main`.
+    assert!(
+        subs.iter()
+            .any(|(name, _, artificial)| name == "^" && *artificial),
+        "expected an artificial `^` entry-shim subprogram, got:\n{subs:#?}"
+    );
+
+    // Step INTO corelib: `hasFlag` has its own subprogram, attributed to `corelib/cli.qn`.
+    assert!(
+        subs.iter()
+            .any(|(name, file, _)| name == "hasFlag" && file.ends_with("cli.qn")),
+        "expected a `hasFlag` subprogram attributed to corelib/cli.qn, got:\n{subs:#?}"
+    );
+
+    // Step OVER the primitives: `@sleep`/`now` are never emitted, so no subprogram — and their
+    // source file is referenced nowhere in the DWARF (no leaked, empty subprogram or file entry).
+    assert!(
+        !subs.iter().any(|(_, file, _)| file.ends_with("time.qn")),
+        "no subprogram should be attributed to core.time's source, got:\n{subs:#?}"
+    );
+    assert!(
+        !out.contains("time.qn"),
+        "core.time's `@`-primitive/inert exports must leak no `.qn` debug entry, got:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `<< "path.qn"` user-file import is attributed to that file's real on-disk path, so a
+/// debugger can open it. The source map records a file import under a `file:`-prefixed
+/// canonical key but a CLEAN display path; the `DW_AT_decl_file` must be the clean path (no
+/// `file:` scheme prefix), or a debugger would look for a file that does not exist.
+#[test]
+fn debug_build_attributes_user_file_import_to_its_real_path() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping file-import debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping file-import debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let dir = std::env::temp_dir().join(format!("quilon_dbgimport_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("lib")).expect("create temp lib dir");
+    std::fs::write(
+        dir.join("lib/util.qn"),
+        ">> triple = (n :: Num) -> Num => n * 3\n",
+    )
+    .expect("write imported module");
+    let ql = dir.join("main.qn");
+    std::fs::write(&ql, "<< \"lib/util.qn\"\n\n^ = () -> Num => triple(4)\n")
+        .expect("write root source");
+    let bin = dir.join("main");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(12), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    let out = String::from_utf8_lossy(&info.stdout);
+    let subs = subprograms(&out);
+
+    let triple = subs
+        .iter()
+        .find(|(name, _, _)| name == "triple")
+        .unwrap_or_else(|| panic!("expected a `triple` subprogram, got:\n{subs:#?}"));
+    assert!(
+        triple.1.ends_with("lib/util.qn") && !triple.1.contains("file:"),
+        "the imported function must be attributed to its real path, got {:?}",
+        triple.1
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A relative source path must still be recorded absolutely. A debugger resolves a
+/// relative `DW_AT_comp_dir` against *its own* working directory, so `quilon build --debug
+/// examples/hello_world.qn` used to produce a binary whose source only opened when lldb
+/// happened to run from the same directory the build did.
+#[test]
+fn a_relative_source_path_is_recorded_absolutely() {
+    // Cargo runs integration tests with the crate root as the working directory, so this
+    // relative path is the same shape a user types.
+    let relative = Path::new("examples/hello_world.qn");
+    assert!(relative.exists(), "the example this test builds must exist");
+
+    let checked = front_end(relative).unwrap_or_else(|e| panic!("front end failed: {e}"));
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "main");
+    generator.set_type_table(checked.types);
+    generator.set_defer_info(checked.defer);
+    generator.enable_debug(relative, &checked.sources);
+    generator.set_source_map(checked.sources);
+    let ir = generator
+        .generate(&checked.program)
+        .unwrap_or_else(|e| panic!("debug codegen failed: {e}"));
+
+    let file = ir
+        .lines()
+        .find(|line| line.contains("!DIFile(filename: \"hello_world.qn\""))
+        .unwrap_or_else(|| panic!("no !DIFile for the root source in:\n{ir}"));
+    let directory = file
+        .split("directory: \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no directory in {file:?}"));
+    assert!(
+        Path::new(directory).is_absolute(),
+        "the DIFile directory must be absolute, got {directory:?}"
+    );
+    assert!(
+        Path::new(directory).ends_with("examples"),
+        "the DIFile directory must still name the source's own directory, got {directory:?}"
+    );
 }

@@ -2,6 +2,281 @@
 
 All notable changes to Quilon are documented here.
 
+## Unreleased
+
+### Changed
+
+- **`>` closes a block by default; it is greater-than only when an operand follows it.**
+  A block-bodied lambda now fits inside a call on one line:
+
+  ```quilon
+  xs.each(x => <
+    total := total + x
+  >)
+  ```
+
+  Previously `>` closed a block only as the last token on its line, so the closer above
+  had to dangle on a line of its own with the `)` beneath it. A `>` is now the operator
+  only where a comparison can be written — when the next token is on the same line and can
+  begin an operand (identifier, literal, `(`, `[`, `{`, prefix `-`/`!`) — and closes before
+  a `)`, `]`, `}`, `,`, a `~` comment, or the end of the line. `a > b`, `f(x > y)`,
+  `a > -b` and `"b" > "a"` are unaffected, as are `>=` and the `>>` export marker.
+
+  Two consequences. A trailing comment no longer changes a `>`: `a > ~why` followed by the
+  operand on the next line was a comparison and is now a block close, so a comparison's
+  right operand must share its line. And two adjacent closers now need a space (`> >`),
+  because `>>` is the export marker — a diagnostic names that fix.
+
+- **BREAKING: assertions take a matcher, and the old forms are gone.** An assertion is now
+  the value under test first and a matcher second, with two entry points over one
+  vocabulary:
+
+  ```quilon
+  assert(2 + 2, equals(4))              ~ fatal: report at the call site and exit 101
+  expect(body, contains("HTTP/1.1"))    ~ recorded: mark the case failed, carry on
+  expect(status, not(equals(500)))
+  expect(response, isOk())
+  ```
+
+  `assert(cond)`, `assert(cond, opts)`, `AssertOpts`, `assertEq`, `assertNotEq`, `assertOk`
+  and `assertNotOk` are **removed**. Migration is mechanical: `assertEq(a, b)` becomes
+  `assert(a, equals(b))`, `assertNotEq(a, b)` becomes `assert(a, not(equals(b)))`,
+  `assertOk(r)` becomes `assert(r, isOk())`, and `assert(a == b)` becomes
+  `assert(a, equals(b))`. A custom failure message has no replacement — the matcher's own
+  report names what was expected and what was found.
+
+  The matchers are `equals`, `contains`, `not`, `isOk` and `isNotOk`. `equals` compares
+  through the `==` member and renders through `` ` ``, so a user record or sum works exactly
+  as far as its own members do; `contains` reads a `Text` or an array; `not` wraps any
+  matcher. A matcher applied to a type it cannot read is a compile error naming the missing
+  member. Comparisons (`greaterThan`, …) come later.
+
+  `assert` and the matchers are **compiler-provided**, like `print` — no `<< core.test`, and
+  a program reaches them with no import. That is what lets one matcher name work over every
+  type while the language has no generics: a matcher holds a value of the type under test,
+  which otherwise needs a matcher type per type. `core.test` keeps `failAt`, for building a
+  check of your own.
+
+- **A test run reports every case, and tallies them.** `expect` records its failure instead
+  of ending the process: the first failing `expect` in a case skips what is left of that case
+  — the assertions after it never run, so their subjects are never evaluated — and the suite
+  carries on with the next case. A run therefore prints `N passed, M failed`, marks each case
+  `✓` or `✗`, and exits non-zero when any case failed.
+
+  `expect` outside an `it` case is a compile error pointing at `assert`: outside a `describe`
+  block there is no reporter at all (the blocks are stripped from `run`/`compile`/`build`),
+  and inside one but outside a case there is nothing to mark, so the failure would print and
+  never be counted. `assert` inside a case stays fatal, for a precondition the case
+  cannot continue past. `reportCase` gained a `failed :: Bool` parameter, so a reporter of
+  your own says which way each case went.
+
+- **BREAKING: a test suite imports `core.test.report`, and its output is replaceable.** The
+  harness and the report Quilon ships move to a module of their own — `describe`, `it`,
+  `reportSuite`, `reportCase`, `reportSummary` — and a suite gets them with
+  `<< core.test.report`. Migration is one line per suite: `<< core.test` becomes
+  `<< core.test.report`. (A file that imported `core.test` only for `assert` needs no change;
+  assertions are compiler-provided.)
+
+  What `core.test` keeps is what those five are built from, none of it privileged: `failAt`,
+  the run's recorded state (`casesPassed`, `casesFailed`, `nestingDepth`), and the case
+  lifecycle (`enterSuite`, `leaveSuite`, `caseFailing`, `finishCase`). So a suite that imports
+  `core.test` alone and defines the five names itself gets its own report, in ordinary `.qn`
+  and without naming a runtime primitive — `examples/custom_test_reporter.qn` is a working TAP
+  reporter in 30 lines. This is what the split is for: those names had to leave `core.test` to
+  be definable at all, since imports are transitive and a second definition collides.
+
+  `quilon test` binds `reportSummary` by name in the linked program, so whichever definition
+  is in scope ends the run and decides whether it passed; a top-level `describe(…)` is
+  recognized by name too, so a `describe` of your own marks test blocks identically. A suite
+  with no reporter in scope is a compile error at its first `describe`, naming the import that
+  fixes it.
+
+- **BREAKING: a setter is now declared with `:=`, and `=` methods are verified
+  non-mutating ([#198](https://github.com/assapir/quilon/issues/198)).** A method that
+  mutates its receiver is written `name := (…) => …`; one written `name = (…) => …`
+  promises not to, and the checker holds it to that — writing `it.field := …` in an `=`
+  method, or calling a `:=` sibling on `it`, is now a compile error naming the fix
+  (`Method 'T.bump' mutates 'it' but is declared with '='; declare it with ':='`).
+
+  The binding operator now means the same thing for a method as it does for a variable or
+  a record binding, and a method's right to mutate becomes part of its signature. Before,
+  setter-ness was *inferred* from the body, so adding a cache write to a getter silently
+  reclassified it and broke every `=`-receiver call site with no visible change to the
+  method's shape. Migration is mechanical: re-declare each mutating method with `:=`. Only
+  `examples/mutation.qn` needed it in this repository; corelib had none.
+
+  `:=` is confined to where it is enforced. The receiver-mutability gate lives in the
+  method-call path, which operator, render and hash members never reach, and a sum has no
+  field to write, so `+ := …`, `` ` := … `` and a `:=` sum method are rejected rather than
+  accepted as promises nothing checks.
+
+  Calling a setter still requires a `:=` receiver — unchanged, and that rule is what the
+  contract exists to serve. What is gone is the inference that decided which methods were
+  setters, along with the fixpoint it needed: every sibling's contract is now known from
+  its declaration.
+
+### Fixed
+
+- **`print` writes the whole `Text`, and renders it deliberately
+  ([#220](https://github.com/assapir/quilon/issues/220)).** `print`/`eprint` took only a
+  pointer, so output stopped at the first NUL byte: a `Text` read from stdin as
+  `a<NUL>b` printed just `a`, while `write` of the same value emitted all three bytes.
+  Output now takes the `Text`'s length like `write` does, so the value reaches the
+  descriptor whole, and the difference between the two is deliberate rather than accidental:
+  `print` renders for a reader (an invalid UTF-8 byte shows as `�`), `write` is byte-exact —
+  the rule `docs/LANGUAGE.md` now carries. With length carried through, a `Text` is exactly
+  its bytes: nothing appends a terminator past them, so no future producer of one can
+  forget to.
+
+- **Type confusions in codegen, reachable if the checker ever loosened
+  ([#220](https://github.com/assapir/quilon/issues/220)).** Comparing two composite values
+  chose `Text` comparison from their LLVM *shape*, so an array (or closure, or sum) would
+  have been read as a `Text`'s pointer and length; and a sum's payload slots were laid out
+  by two rules that disagreed, either of which could size a slot below the payload stored in
+  it. Both now follow one rule, keyed on the type checker's own answer.
+
+- **`quilon build` on macOS: a comma in the runtime archive's path no longer mangles the
+  link.** The flag that force-loads `libquilon_rt.a` was passed as `-Wl,-force_load,<path>`,
+  which the compiler driver splits on commas — so a cache path containing one (it follows
+  `XDG_CACHE_HOME`/`HOME`, and a home directory may have a comma in it) reached ld64 as two
+  broken flags. The flag and the path are now separate `-Xlinker` arguments, which nothing
+  comma-parses.
+
+- **Method checking: an immutability bypass and an unchecked call site.** Two soundness
+  holes in how methods were checked, both of which let a broken program past the checker.
+
+  A method that mutated `it` from **inside a lambda** — `steps.each(s => it.value := s)` —
+  was not classified a setter, because the walk that looks for the write had no case for a
+  lambda (nor for array, record, index, field-access or spread forms). An unclassified
+  setter stays callable on an `=`-bound receiver, which it then mutates: the headline
+  immutability promise, breakable in four lines. The same was true of a write inside a
+  function *declared* in the body. That walk is now the **verifier** behind the declared
+  contract above, rather than a classifier: it is a flat per-node predicate
+  over the AST's shared structural walk — one traversal that every analysis uses, exhaustive
+  with no catch-all arm, so a new expression form cannot silently reopen the hole: it fails
+  to compile until it is classified. (That walk moved from `deferral.rs` to `src/ast/walk.rs`
+  to be reachable from the checker.) The transitive rule (a method that calls another setter
+  is a setter) composes on top as before, so a setter reached only through a lambda-writing
+  sibling is caught too.
+
+  Separately, a method parameter with **no type annotation** defaults to `Num` when the body
+  is checked, but the call site skipped those arguments entirely. `t.add("hello")` on
+  `add = (x) => it.v + x` passed the checker and then died in codegen, printing a raw LLVM
+  verifier dump at the user. Call sites now hold arguments to the same `Num` the body was
+  checked against — which is what a plain function's unannotated parameter already did, so
+  this makes methods consistent rather than introducing a rule.
+
+### Changed
+
+- **The release publishes a binary per platform, under a new name each
+  ([#49](https://github.com/assapir/quilon/issues/49)).** A release used to carry one asset,
+  named `quilon`, built on Ubuntu. It now carries two, each named for what it runs on —
+  which **breaks any script or link that fetched the old bare `quilon` asset**:
+
+  | Platform | Asset |
+  | --- | --- |
+  | Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
+  | macOS, Apple silicon | `quilon-aarch64-apple-darwin` |
+
+  Intel Macs are not covered: `macos-latest` is Apple silicon, and the asset is arm64 only.
+
+  Both are self-contained — LLVM is linked into them, as the collector already was, so they
+  run on a machine that has neither. That took work on macOS, where Homebrew's `llvm@22`
+  ships no static LLVM at all (it is built `LLVM_LINK_LLVM_DYLIB=ON`, and a binary linked
+  against it starts only where that formula is installed): the job links the static archives
+  from the upstream LLVM release package instead.
+
+  There is no separate Arch asset, because there is nothing for it to do. The Linux asset is
+  built against an older glibc than a rolling distro carries and glibc runs binaries built
+  against older versions of itself, so it is the portable one everywhere — Arch included,
+  where it was checked by hand. A native Arch build would be the opposite: Arch's `llvm`
+  ships only a shared `libLLVM.so`, and the upstream static package cannot be linked there
+  either (it names `/usr/lib/x86_64-linux-gnu/libzstd.a` by absolute path, a Debian layout,
+  and Arch ships no static `zstd` — the same gap that made the collector a vendored
+  submodule), so it would have named `libLLVM.so.22.1` and needed LLVM 22 installed. CI
+  still builds and tests on Arch.
+
+  Neither claim is asserted on trust: each job runs `ldd`/`otool -L` on the binary it built
+  and type-checks a program with it, publishes that output to the job summary, and fails the
+  release if an LLVM — or on macOS anything outside the system libraries — is named there.
+  Neither job is allowed to fail quietly either, so a release carries both assets or none.
+
+  A manual run of the workflow builds both and stops before publishing, so the matrix can be
+  exercised without spending a version number.
+
+- **`quilon build` works on macOS, and CI covers macOS and Arch Linux
+  ([#49](https://github.com/assapir/quilon/issues/49)).** The AOT link line was GNU-ld
+  shaped and Apple's ld64 rejects it: `--whole-archive` is not a flag it knows, and there is
+  no `-ldl` to link against (libSystem provides `dlopen`). `src/build.rs` now picks the
+  right spelling per platform — `-Wl,-force_load,<archive>` on macOS, the
+  `--whole-archive`/`--no-whole-archive` bracket elsewhere — so forcing every runtime object
+  in stays deterministic on both.
+
+  Two new jobs build and test on every run, both non-blocking until they have proven
+  themselves stable: `macos-latest` (Homebrew `llvm@22`), and Arch Linux in an
+  `archlinux:latest` container — the distro whose lack of a static `libgc.a` is why the
+  collector is vendored at all, and the maintainer's own environment. `fmt`/`clippy` are
+  platform-independent and keep gating on Ubuntu only, as do the benchmarks so the series
+  compares like with like.
+
+  Windows remains unreachable, and the blocker is the runtime rather than the GC —
+  `quilon-rt` does not compile for `x86_64-pc-windows-msvc` (stdin readiness via
+  `mio::unix::SourceFd`, `fcntl`/`sysconf`, and the collector's pthread threading model).
+  Tracked with the full error list in
+  [#183](https://github.com/assapir/quilon/issues/183) rather than shipped as a red job.
+
+- **`quilon build` binaries are self-contained: the Boehm GC is linked statically
+  ([#49](https://github.com/assapir/quilon/issues/49)).** A compiled Quilon program used to
+  name `libgc.so` among its dynamic dependencies, so shipping it anywhere meant shipping —
+  or installing — libgc too. The collector now comes from a pinned `quilon-rt/vendor/bdwgc`
+  submodule (bdwgc 8.2.12), compiled by `quilon-rt`'s build script into a single object and
+  linked statically. Because rustc bundles a static native library into a staticlib, it
+  travels inside `libquilon_rt.a` — the archive the compiler already embeds and
+  cache-extracts — so the AOT link needed nothing new beyond dropping `-lgc`. A produced
+  binary now runs on a machine with no libgc installed, gated by
+  `tests/build_command_test.rs`, which asserts the product names no shared `libgc`.
+
+  libgc stops being a dependency anywhere: the `quilon` binary and `quilon run`'s in-process
+  JIT carry the same statically linked collector, so `libgc-dev` is gone from both workflows
+  and CI's green run is itself the proof that nothing needs installing. Clone with
+  `--recurse-submodules` (or `git submodule update --init`) — the build stops with exactly
+  that instruction when the submodule is absent, rather than a wall of compiler errors.
+
+  `THIRD-PARTY-NOTICES.md` carries bdwgc's copyright and permission notice verbatim: the
+  collector's sources arrive as a submodule, so a source archive of this repository would
+  otherwise ship none of its notice text.
+
+  The collector is built with upstream's configure defaults for a threaded POSIX build, so
+  its behaviour is unchanged; `ALL_INTERIOR_POINTERS` is load bearing, since Quilon's
+  `Text`/array values are `{ ptr, len }` pairs whose pointer may be interior. Costs, measured
+  on x86_64: a compiled `hello_world` grows 202 KB (+3.1%) and the `quilon` binary 245 KB
+  (+2.8%). Runtime is flat to faster — `gc_churn` -6.0%, `text_loop` -7.1% — with peak RSS
+  unchanged.
+
+### Fixed
+
+- **Debugging works from a GUI-launched editor, and from any directory
+  ([#200](https://github.com/assapir/quilon/issues/200)).** Two independent reasons a debug
+  session could not start:
+
+  The VS Code extension ran a bare `quilon`, so it only worked when the editor's process had
+  inherited a `PATH` containing it. An editor started from a desktop launcher usually has
+  not — `~/.cargo/bin` is added by a shell rc file — so an installed compiler still produced
+  `debug build failed: could not run "quilon"`. When `quilon.command` is left at its default
+  the extension now looks for the compiler itself: `PATH`, then the usual install directories
+  (`~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), then a
+  `target/release`|`debug` build in an open folder, then `cargo run --quiet --` when an open
+  folder is a checkout of this repository. An explicitly configured `quilon.command` is still
+  used verbatim (bar a bare `"quilon"`, which is the value that fails in the first place),
+  and when nothing can be spawned the notification says where it looked and
+  opens the setting.
+
+  A `--debug` build recorded the source directory exactly as typed, so
+  `quilon build --debug examples/hello.qn` wrote a relative `DW_AT_comp_dir` of `examples`.
+  A debugger resolves that against its own working directory, so the source only opened for a
+  debugger that happened to run from the directory the build did. The `DIFile` directory is
+  now absolute.
+
 ## 0.9.2 "Hegemon" — 2026-08-24
 
 ### Added

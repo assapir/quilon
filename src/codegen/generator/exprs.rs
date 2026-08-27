@@ -41,9 +41,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             Expression::String { value, .. } => {
-                // Text is { ptr data, i64 byte_len }. `data` points at a global,
-                // NUL-terminated C string (so `print` can treat it as a C string);
-                // `byte_len` is the UTF-8 byte length, excluding the terminator.
+                // Text is { ptr data, i64 byte_len }: a global byte constant and its
+                // UTF-8 byte length.
                 let global = self
                     .builder
                     .build_global_string_ptr(value, "str")
@@ -418,26 +417,38 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_short_circuit(operator, left, right);
         }
 
-        let lhs = self.generate_expression(left)?;
-        let rhs = self.generate_expression(right)?;
-
-        // Text comparison: both operands are `Text` { ptr, i64 } structs. Lower
-        // equality and lexicographic ordering via the `__text_cmp` runtime intrinsic
-        // (returns -1/0/1), then compare its result against 0 with the matching
-        // integer predicate. (Num operands fall through to the float paths below.)
+        // The built-in `Text` operators: `+` concatenates, and `==`/`!=`/`<`/`<=`/`>`/`>=`
+        // go through the `__text_cmp` runtime intrinsic (which returns -1/0/1, compared
+        // against 0 with the matching integer predicate). Routed on BOTH operands' Quilon
+        // type, never on their LLVM shape — arrays, closures and sums are `{ .. }` structs
+        // too, and reading one of those as a `{ ptr, len }` Text would be a type confusion.
+        // Everything below this point is numeric or Bool, and Text never reaches it.
         if matches!(
             operator,
-            BinaryOperator::Eq
+            BinaryOperator::Add
+                | BinaryOperator::Eq
                 | BinaryOperator::Ne
                 | BinaryOperator::Lt
                 | BinaryOperator::Le
                 | BinaryOperator::Gt
                 | BinaryOperator::Ge
-        ) && matches!(lhs, BasicValueEnum::StructValue(_))
-            && matches!(rhs, BasicValueEnum::StructValue(_))
+        ) && self.is_text_expression(left)
+            && self.is_text_expression(right)
         {
-            return self.generate_text_compare(operator, lhs, rhs);
+            let lhs = self.generate_expression(left)?;
+            let rhs = self.generate_expression(right)?;
+            if operator != BinaryOperator::Add {
+                return self.generate_text_compare(operator, lhs, rhs);
+            }
+            let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs)
+            else {
+                return Err("Text concatenation requires two Text values".to_string());
+            };
+            return self.generate_text_concat(l, r);
         }
+
+        let lhs = self.generate_expression(left)?;
+        let rhs = self.generate_expression(right)?;
 
         match operator {
             BinaryOperator::Add => match (lhs, rhs) {
@@ -446,10 +457,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_float_add(l, r, "addtmp")
                     .map_err(ctx("Failed to build add"))?
                     .into()),
-                // Text + Text = concatenation (both are { ptr, i64 } structs).
-                (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) => {
-                    self.generate_text_concat(l, r)
-                }
                 _ => Err("Add requires two Nums or two Texts".to_string()),
             },
             BinaryOperator::Sub => {

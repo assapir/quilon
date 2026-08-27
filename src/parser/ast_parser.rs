@@ -132,7 +132,7 @@ impl<'a> Parser<'a> {
 
     /// Like `check`, but false when the current token is the first token on its source
     /// line. This is the statement-boundary rule (the grammar's second line-aware rule,
-    /// alongside the lexer's line-final `>`): a line-first `(`, `[`, or `{` never
+    /// alongside the lexer's `>` classification): a line-first `(`, `[`, or `{` never
     /// continues the previous expression as a call, index, or record constructor — it
     /// begins a NEW statement. Call arguments, index brackets, and constructor braces
     /// must open on the same line as the expression they apply to. Without this,
@@ -144,7 +144,16 @@ impl<'a> Parser<'a> {
     /// line may still span lines. Every postfix consumption of `(` / `[` / `{` must go
     /// through this guard.
     fn check_same_line(&self, kind: &TokenKind) -> bool {
-        self.check(kind) && !self.peek().first_on_line
+        self.check_same_line_at(0, kind)
+    }
+
+    /// [`check_same_line`](Self::check_same_line), asked of the token `offset` past the
+    /// cursor — so a rule that has to look one token ahead (is this identifier the start of
+    /// a CALL?) still asks the statement-boundary question in one place.
+    fn check_same_line_at(&self, offset: usize, kind: &TokenKind) -> bool {
+        self.tokens
+            .get(self.pos + offset)
+            .is_some_and(|token| &token.kind == kind && !token.first_on_line)
     }
 
     fn expect(&mut self, kind: &TokenKind) -> Result<(), ParseError> {

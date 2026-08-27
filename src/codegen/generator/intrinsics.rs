@@ -58,8 +58,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
             "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
-            // void __print_text_fd(i64 fd, i8*) — C string + newline to fd.
-            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into()], false),
+            // void __print_text_fd(i64 fd, i8* ptr, i64 len) — text + newline to fd.
+            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
             // { ptr, i64 } __num_to_text(double) — render a Num (integer-valued without
             // decimals, else shortest round-trip). Backs the built-in `` ` `` for Num.
             "__num_to_text" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
@@ -72,9 +72,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__argv_to_text_array" => self
                 .ptr_len_struct_type()
                 .fn_type(&[i64t.into(), ptr.into()], false),
-            // { ptr, i64 } __envp_to_pairs(i8** envp) — build a `[][]Text` (array of
-            // 2-element `[]Text` `[key, value]` pairs) from the C envp.
-            "__envp_to_pairs" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
+            // ptr __envp_to_map(i8** envp) — build a `[|Text => Text|]` Map (an opaque
+            // native-map pointer, the same representation `[|…|]` literals lower to) from
+            // the C envp.
+            "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
             // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
             // { ptr, i64 } trimStart / trimEnd / toUpper / toLower (i8*, i64). `trim` is
@@ -140,6 +141,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             // double __now() — read the monotonic clock, in seconds. Backs `core.time`'s
             // plain (non-`@`) `now()`; only differences between readings are meaningful.
             "__now" => f64t.fn_type(&[], false),
+            // void __assert_failed(Site* site, i8* message, i64 length) — report a failing
+            // `assert` at `site` and terminate with 101. Never returns; the call is left as
+            // ordinary flow so an assertion composes in expression position.
+            // void __expect_failed(Site*, i8*, i64) — the same report, but it marks the
+            // running test case failed and RETURNS, so the suite carries on.
+            "__assert_failed" | "__expect_failed" => {
+                void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
+            }
+            // double __test_*() — the test registry (see `is_test_registry_intrinsic`): the
+            // harness's event sink, which `core.test`'s `describe` and `it` drive. Every one
+            // takes no arguments and yields a count or a depth.
+            name if crate::ast::is_test_registry_intrinsic(name) => f64t.fn_type(&[], false),
             // { ptr, i64 } __read_launch(Site* site) — the `@read` leaf IO primitive: launch
             // a background read of one line from stdin and return the DEFERRED Text
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
@@ -170,8 +183,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 false,
             ),
             // Map/Set collection intrinsics. A Map/Set/value-box is an opaque `ptr`; keys
-            // and elements cross as the ABI triple `(i64 tag, i64 a, i64 b)`. See
-            // `quilon-rt/src/collections.rs` and `codegen/generator/collections.rs`.
+            // and elements cross as the ABI triple `(i64 tag, i64 a, i64 b)` followed by two
+            // `ptr`s: a key type's monomorphized `%` hash and `==` (both null for the
+            // built-in Num/Text/Bool keys). See `quilon-rt/src/collections/` and
+            // `codegen/generator/collections.rs`.
             "__map_new" | "__set_new" => ptr.fn_type(&[], false),
             // Persistent insert, returning a new table.
             "__map_set" => ptr.fn_type(
@@ -180,6 +195,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     i64t.into(),
                     i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
                     ptr.into(),
                 ],
                 false,
@@ -192,17 +209,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     i64t.into(),
                     ptr.into(),
+                    ptr.into(),
+                    ptr.into(),
                 ],
                 false,
             ),
             // Persistent removal, returning a new table without the key/element.
-            "__map_remove" | "__set_remove" => {
-                ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
+            "__map_remove" | "__set_remove" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             // Membership, as 0/1.
-            "__map_has" | "__set_has" => {
-                i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false)
-            }
+            "__map_has" | "__set_has" => i64t.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             "__map_len" | "__set_len" => i64t.fn_type(&[ptr.into()], false),
             // The `a`/`b` key words of the i-th entry, in iteration order.
             "__map_key_a" | "__map_key_b" | "__set_item_a" | "__set_item_b" => {
@@ -211,7 +246,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Value box of the i-th entry.
             "__map_val" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
             // Persistent insert, returning a new set.
-            "__set_add" => ptr.fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
+            "__set_add" => ptr.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             "__set_union" | "__set_diff" | "__set_intersect" => {
                 ptr.fn_type(&[ptr.into(), ptr.into()], false)
             }
@@ -240,14 +285,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let fd = if name == "eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
         let text = self.render_expression(&args[0])?;
-        let data = self
-            .builder
-            .build_extract_value(text.into_struct_value(), 0, "print_data")
-            .map_err(ctx("Failed to extract render data"))?
-            .into_pointer_value();
+        let (data, len) = self.split_text(text.into_struct_value(), "print")?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;
         self.builder
-            .build_call(print_fn, &[fd_val.into(), data.into()], "")
+            .build_call(print_fn, &[fd_val.into(), data.into(), len.into()], "")
             .map_err(ctx("Failed to build print call"))?;
         // `print`/`eprint` yield Unit (`$`); their result is meaningless.
         Ok(self.unit_value().into())
@@ -255,8 +296,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Lower the `__exit(code)` primitive: convert the `Num` `code` to an `i32` and
     /// call the `__exit` runtime intrinsic, which terminates the process. This is the
-    /// single native primitive `core.test` builds on (its `assert` calls `__exit(101)`
-    /// on failure). The intrinsic never returns, but the call is left as ordinary
+    /// native primitive `core.test`'s `failAt` ends with, and what the reporter's summary
+    /// exit code is not (that one is the entry point's return value). The intrinsic never returns, but the call is left as ordinary
     /// (non-`unreachable`) flow so it composes wherever an expression is expected —
     /// e.g. a `< >` block statement or a ternary arm inside `assert` — without
     /// clashing with the surrounding construct's own terminator. The code after it is
@@ -314,6 +355,26 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.int_to_bool(enabled, "color_bool")
     }
 
+    /// Lower one of the test registry's primitives (see
+    /// [`crate::ast::is_test_registry_intrinsic`]) to its runtime intrinsic. They take no
+    /// arguments and yield a `Num` — a nesting depth or a count — so the whole family
+    /// lowers through this one path.
+    pub(super) fn generate_test_registry(
+        &mut self,
+        name: &str,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err(format!("{name} expects no arguments, got {}", args.len()));
+        }
+        let f = self.get_intrinsic(name)?;
+        let call = self
+            .builder
+            .build_call(f, &[], name)
+            .map_err(ctx("Failed to call a test registry primitive"))?;
+        Self::call_result_to_basic(call)
+    }
+
     /// Lower the `now()` builtin: seconds on a monotonic clock, read through the `__now`
     /// runtime intrinsic. Only differences between two readings are meaningful.
     pub(super) fn generate_now(&mut self) -> Result<BasicValueEnum<'ctx>, String> {
@@ -350,16 +411,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ));
             }
         };
-        let data = self
-            .builder
-            .build_extract_value(s, 0, "write_data")
-            .map_err(ctx("Failed to extract text data"))?
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(s, 1, "write_len")
-            .map_err(ctx("Failed to extract text len"))?
-            .into_int_value();
+        let (data, len) = self.split_text(s, "write")?;
         let fd_float = match fd_num {
             BasicValueEnum::FloatValue(f) => f,
             other => {

@@ -2,7 +2,7 @@
 //!
 //! `@readStdin()` launches a background stdin line read and returns a DEFERRED `Text`; the deferred
 //! value flows through a binding and is FORCED where a strict primitive reads its bytes (a
-//! comparison inside `assertEq`, or a `print`). The standard examples gate can't drive `@readStdin`
+//! comparison behind `equals`, or a `print`). The standard examples gate can't drive `@readStdin`
 //! (it pipes no input), so these tests spawn the compiler as a subprocess with a controlled
 //! stdin — proving the read value flowed through and forced correctly on both the in-process
 //! JIT (`quilon run`) and, when a linker is present, a native AOT binary (`quilon build`).
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A program that binds `@readStdin()` to `line` and asserts it equals `"hello"`. The deferred
-/// value is forced at the `assertEq` comparison: matching input exits 0, anything else trips
+/// value is forced at the `equals` comparison: matching input exits 0, anything else trips
 /// the assertion (exit 101) — which is what proves the real read value reached the compare.
 const ASSERT_READ: &str = r#"
 << core.io
@@ -23,7 +23,7 @@ const ASSERT_READ: &str = r#"
 
 ^ = () -> Num => <
   line = @readStdin()
-  assertEq(line, "hello")
+  assert(line, equals("hello"))
   0
 >
 "#;
@@ -49,8 +49,22 @@ const TWO_READS: &str = r#"
 ^ = () -> Num => <
   first = @readStdin()
   second = @readStdin()
-  assertEq(first, "hello")
-  assertEq(second, "world")
+  assert(first, equals("hello"))
+  assert(second, equals("world"))
+  0
+>
+"#;
+
+/// A program that echoes the line it read TWICE — first through `write` (raw bytes, no
+/// newline), then through `print` (rendered, plus a newline). Whatever bytes stdin carried,
+/// the two output paths are visible side by side in one stdout capture.
+const WRITE_THEN_PRINT: &str = r#"
+<< core.io
+
+^ = () -> Num => <
+  line = @readStdin()
+  write(line, stdout)
+  print(line)
   0
 >
 "#;
@@ -71,7 +85,9 @@ fn temp_ql(tag: &str, source: &str) -> PathBuf {
 }
 
 /// Run `command`, feeding `input` to its stdin, and return `(exit code, captured stdout)`.
-fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, String) {
+/// Stdout stays RAW BYTES: the byte-fidelity test below compares output that is deliberately
+/// not valid UTF-8, which a lossy decode would erase.
+fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u8>) {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -87,14 +103,11 @@ fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, String) {
     let output = child
         .wait_with_output()
         .expect("wait for quilon subprocess");
-    (
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-    )
+    (output.status.code(), output.stdout)
 }
 
 /// `quilon run <file>` (in-process JIT) with `input` piped to stdin.
-fn jit_run(file: &Path, input: &[u8]) -> (Option<i32>, String) {
+fn jit_run(file: &Path, input: &[u8]) -> (Option<i32>, Vec<u8>) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_quilon"));
     command.args(["run", file.to_str().unwrap()]);
     run_with_stdin(command, input)
@@ -142,7 +155,7 @@ fn jit_read_forces_at_a_print() {
     let (code, stdout) = jit_run(&file, b"transform me\n");
     assert_eq!(code, Some(0));
     assert_eq!(
-        stdout, "transform me\n",
+        stdout, b"transform me\n",
         "print should force the deferred @readStdin value and echo the line"
     );
     let _ = std::fs::remove_file(&file);
@@ -201,4 +214,28 @@ fn aot_read_forces_at_a_strict_comparison() {
 
     let _ = std::fs::remove_file(&source);
     let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn write_is_byte_verbatim_and_print_renders_the_same_text() {
+    // stdin is the one door a Text arrives through unvalidated, so it is where the two
+    // output paths can be told apart: `write` emits the bytes as they came, `print` emits
+    // the same text rendered for a reader — each invalid byte as U+FFFD — plus a newline.
+    // A NUL is content in both: neither path stops at it or shortens the output.
+    let file = temp_ql("bytes", WRITE_THEN_PRINT);
+    let (code, stdout) = jit_run(&file, b"a\0b\xffc\n");
+    assert_eq!(code, Some(0));
+
+    let (verbatim, rendered) = stdout.split_at(5);
+    assert_eq!(
+        verbatim, b"a\0b\xffc",
+        "`write` should pass the bytes through"
+    );
+    assert_eq!(
+        rendered,
+        "a\0b\u{fffd}c\n".as_bytes(),
+        "`print` should render the invalid byte and keep the NUL"
+    );
+
+    let _ = std::fs::remove_file(&file);
 }

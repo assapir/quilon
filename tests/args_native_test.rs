@@ -1,8 +1,8 @@
 //! Native-AOT tests for the `^` entry point receiving `args :: []Text` and
-//! `env :: [][]Text`. Unlike the JIT (which threads in this test process's own
+//! `env :: [|Text => Text|]`. Unlike the JIT (which threads in this test process's own
 //! argv/environment), a freshly built native binary lets us pass an EXPLICIT argv
-//! and environment and assert that `args.size`, `args[i]`, and the `[key, value]`
-//! env pairs reflect exactly what we passed. Skips gracefully if no C toolchain
+//! and environment and assert that `args.size`, `args[i]`, and the env Map's entries
+//! reflect exactly what we passed. Skips gracefully if no C toolchain
 //! (`clang`/`gcc` + the `quilon` binary's runtime lib) is available.
 
 use std::path::Path;
@@ -127,17 +127,17 @@ fn jit_and_aot_argv_agree() {
 }
 
 #[test]
-fn native_env_pairs_split_on_first_equals() {
-    // The env is `[][]Text` of `[key, value]` pairs split on the FIRST `=`. Print the
-    // first pair's key and value, then exit on the env size. Run with a controlled env
-    // (`env -i` would be ideal but isn't portable; instead pass a known var and count).
+fn native_env_map_split_on_first_equals() {
+    // The env is a `[|Text => Text|]` Map keyed by variable name and split on the FIRST
+    // `=`. Look a known variable up and print its value, then exit on the env size. Run
+    // with a controlled env (`env -i` would be ideal but isn't portable; instead pass a
+    // known var and count).
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let bin = std::env::temp_dir().join(format!("quilon_env_pairs_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("quilon_env_map_{}", std::process::id()));
     let src = "<< core.io\n\
-               ^ = (args :: []Text, env :: [][]Text) -> Num => <\n\
-               \x20 pair = env[0]\n\
-               \x20 print(pair[0])\n\
-               \x20 print(pair[1])\n\
+               ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <\n\
+               \x20 value = env.get(\"KEY\") ? | Ok(v) => v | NotOk(_) => \"?\"\n\
+               \x20 print(value)\n\
                \x20 env.size\n\
                >";
     if !build_native(quilon, src, &bin) {
@@ -157,8 +157,8 @@ fn native_env_pairs_split_on_first_equals() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
-        stdout, "KEY\na=b=c\n",
-        "first pair should be [KEY, a=b=c] (split on the FIRST '=')"
+        stdout, "a=b=c\n",
+        "KEY should map to a=b=c (value split on the FIRST '=')"
     );
 
     let _ = std::fs::remove_file(&bin);

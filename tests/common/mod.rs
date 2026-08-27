@@ -23,6 +23,18 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The `file:line:column:` position line a report prints for `path` — with the path
+/// elided exactly as the report elides it.
+///
+/// A report shortens a path wider than `MAX_PATH_WIDTH` from its start, so an expectation
+/// built from the raw path only holds where the temp directory is short. Linux's `/tmp/...`
+/// always is; macOS's `/var/folders/<random>/T/...` never is, which is where an expectation
+/// spelled with `path.display()` fails while the compiler is behaving exactly as documented.
+pub fn position(path: &Path, line: usize, column: usize) -> String {
+    let shown = quilon::source_map::shorten_path(&path.display().to_string());
+    format!("{shown}:{line}:{column}:")
+}
+
 /// LLVM's JIT and native-target initialization are not safe to run from several threads
 /// at once, and cargo runs a binary's tests in parallel — so every execution below is
 /// serialized through this.

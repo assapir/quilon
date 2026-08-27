@@ -82,19 +82,18 @@ fn test_user_defined_print_not_shadowed() {
 
 #[test]
 fn test_core_test_module_resolves_and_type_checks() {
-    // `<< core.test` is a registered built-in module; `assert` and its wrappers
-    // (over Num / Text / Bool / Result) must all resolve and type-check.
+    // `<< core.test` is a registered built-in module: importing it resolves, and the
+    // provided assertions type-check beside what it exports.
     let source = r#"
         << core.test
         ^ = () -> $ => <
-          assert(1 == 1)
-          assert(1 == 1, AssertOpts { message = "should hold" })
-          assertEq(6 * 7, 42)
-          assertEq("a" + "b", "ab")
-          assertEq(1 < 2, true)
-          assertNotEq(1, 2)
-          assertOk([1, 2].at(0))
-          assertNotOk([1, 2].at(9))
+          assert(1, equals(1))
+          assert(6 * 7, equals(42))
+          assert("a" + "b", equals("ab"))
+          assert(1 < 2, equals(true))
+          assert(1, not(equals(2)))
+          assert([1, 2].at(0), isOk())
+          assert([1, 2].at(9), isNotOk())
         >
     "#;
     let result = check_with_base(source, Path::new("."));

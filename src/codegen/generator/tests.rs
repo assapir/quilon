@@ -240,3 +240,120 @@ fn every_runtime_intrinsic_can_be_declared() {
         "a name the runtime does not export must be refused, not declared"
     );
 }
+
+/// `Text` comparison is chosen by the operands' TYPE, never by their LLVM shape. Arrays
+/// (and closures, and sums) are `{ .. }` structs too, so a shape-keyed rule would hand an
+/// array to `__text_cmp`, which reads field 0 as a byte pointer and field 1 as a byte
+/// length. The type checker rejects `[]Num == []Num` before codegen ever sees it; codegen
+/// is asked here directly, without that pass, so the routing itself is what's under test.
+#[test]
+fn comparing_arrays_is_not_lowered_as_a_text_comparison() {
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+
+    let code = "same = () -> Bool => < a = [1, 2] b = [1, 2] a == b >";
+    let tokens = Lexer::tokenize(code).unwrap();
+    let program = parse(&tokens).unwrap();
+
+    let result = codegen.generate(&program);
+    let error = result.expect_err("array comparison has no lowering");
+    assert!(
+        error.contains("Eq requires"),
+        "expected a refusal, not a Text comparison: {error}"
+    );
+}
+
+/// The mixed pair too: one `Text` operand does not make the comparison a `Text` comparison,
+/// or the other operand is the one read as a pointer and a length.
+#[test]
+fn comparing_a_text_against_an_array_is_not_lowered_as_a_text_comparison() {
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+
+    let code = r#"same = () -> Bool => < a = "x" b = [1, 2] a == b >"#;
+    let tokens = Lexer::tokenize(code).unwrap();
+    let program = parse(&tokens).unwrap();
+
+    let error = codegen
+        .generate(&program)
+        .expect_err("a Text/array comparison has no lowering");
+    assert!(
+        error.contains("Eq requires"),
+        "expected a refusal, not a Text comparison: {error}"
+    );
+}
+
+/// The same routing, from the other side: two `Text` operands DO reach `__text_cmp`.
+#[test]
+fn comparing_texts_calls_the_text_compare_intrinsic() {
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+
+    let code = r#"same = () -> Bool => < a = "x" b = "y" a == b >"#;
+    let tokens = Lexer::tokenize(code).unwrap();
+    let program = parse(&tokens).unwrap();
+
+    let ir = codegen
+        .generate(&program)
+        .expect("text comparison compiles");
+    assert!(ir.contains("@__text_cmp"), "expected __text_cmp in:\n{ir}");
+}
+
+/// A sum's payload slot must be sized by the payload's VALUE representation — the shape a
+/// payload is actually stored as — not by the standalone lowering of its type. The two
+/// differ for a composite payload: an array value is the `{ ptr, i64 }` struct, while the
+/// type alone lowers to a bare pointer, so a pointer-sized slot would leave a stored payload
+/// overrunning the one beside it. Today's checker admits only payloads where the two
+/// coincide, which is exactly why the rule needs pinning here rather than in a `.qn` program.
+#[test]
+fn a_sum_payload_slot_is_sized_by_the_payloads_value_representation() {
+    let context = Context::create();
+    let codegen = CodeGenerator::new(&context, "test");
+
+    let slots = codegen
+        .payload_slot_types(&[
+            variant("Full", vec![Type::Array(Box::new(Type::Num))]),
+            variant("Empty", vec![]),
+        ])
+        .expect("lay out the payload slots");
+
+    assert_eq!(
+        slots,
+        vec![codegen.ptr_len_struct_type().into()],
+        "the array payload's slot should hold the ptr/len value, not a bare pointer"
+    );
+}
+
+/// A position where one variant is still a type variable and another is concrete takes the
+/// CONCRETE type: the type variable's `double` representation is narrower than a `{ptr,i64}`
+/// payload, so choosing it would size the slot below what is stored there.
+#[test]
+fn a_payload_slot_prefers_a_concrete_field_over_a_type_variable() {
+    let context = Context::create();
+    let codegen = CodeGenerator::new(&context, "test");
+
+    let generic = Type::Generic {
+        name: "T".to_string(),
+        arguments: vec![],
+    };
+    let slots = codegen
+        .payload_slot_types(&[
+            variant("Pending", vec![generic.clone()]),
+            variant("Done", vec![Type::Text]),
+        ])
+        .expect("lay out the payload slots");
+    assert_eq!(slots, vec![codegen.ptr_len_struct_type().into()]);
+
+    // With nothing concrete anywhere, the slot holds a type variable's own representation.
+    let only_generic = codegen
+        .payload_slot_types(&[variant("Pending", vec![generic])])
+        .expect("lay out the payload slots");
+    assert_eq!(only_generic, vec![context.f64_type().into()]);
+}
+
+fn variant(name: &str, fields: Vec<Type>) -> crate::ast::SumVariant {
+    crate::ast::SumVariant {
+        name: name.to_string(),
+        fields,
+    }
+}

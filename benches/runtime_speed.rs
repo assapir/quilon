@@ -138,7 +138,7 @@ fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
     let tiny_import = workdir.join("tiny_import.qn");
     std::fs::write(
         &tiny_import,
-        "<< core.test\n^ = () -> $ => assertEq(1 + 1, 2)\n",
+        "<< core.test\n^ = () -> $ => assert(1 + 1, equals(2))\n",
     )
     .expect("writing the importing latency program");
 

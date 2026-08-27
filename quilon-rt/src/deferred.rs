@@ -440,7 +440,7 @@ mod tests {
         mem_base: *mut c_void,
     }
 
-    #[link(name = "gc")]
+    #[link(name = "gc", kind = "static")]
     unsafe extern "C" {
         fn GC_register_my_thread(sb: *const GcStackBase) -> c_int;
         fn GC_get_stack_base(sb: *mut GcStackBase) -> c_int;

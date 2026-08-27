@@ -67,7 +67,12 @@ version 2 — the copyleft is intact.
 3. Third-party runtime dependencies
 ------------------------------------
 
-Compiled Quilon programs also link the Boehm-Demers-Weiser conservative garbage
+Compiled Quilon programs also carry the Boehm-Demers-Weiser conservative garbage
 collector (libgc), which is a separate third-party work distributed under its
-own permissive, MIT-style license. libgc is not covered by, and does not need,
-this exception; its own license applies to it.
+own permissive, MIT-style license. Its sources come from the
+`quilon-rt/vendor/bdwgc` submodule, and its compiled object is linked statically
+into `libquilon_rt.a`, into the `quilon` binary, and into every executable
+`quilon build` produces, so those artifacts distribute libgc in binary form. Its
+copyright and permission notice is reproduced verbatim in
+THIRD-PARTY-NOTICES.md. libgc is not covered by, and does not need, this
+exception; its own license applies to it.

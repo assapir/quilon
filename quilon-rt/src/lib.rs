@@ -24,15 +24,17 @@
 //! The intrinsics are grouped by the surface they back: [`io`] (core.io — the one
 //! genuinely lib-aligned module), [`text`] (the built-in `Text` type), [`process`]
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
-//! `argv`/`envp` conversions), and [`mem`] (general memory primitives: allocation,
+//! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`), and
+//! [`mem`] (general memory primitives: allocation,
 //! GC, the shared `QlSlice` ABI type, bounds-check failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
 //!
-//! Memory is managed by the Boehm conservative GC (libgc); the `#[link(name = "gc")]`
-//! binding lives in [`mem`]. libgc must be installed (`libgc-dev` / `gc`). When
-//! linking an AOT binary with gcc, pass `-lgc` explicitly (the `#[link]` directive
-//! only drives rustc's own links, not a downstream gcc invocation).
+//! Memory is managed by the Boehm conservative GC, compiled from the
+//! `vendor/bdwgc` submodule by this crate's build script and linked statically;
+//! the binding lives in [`mem`]. Because rustc bundles a static native library
+//! into a staticlib, the collector travels inside `libquilon_rt.a` — an AOT-linked
+//! Quilon binary needs no `libgc` on the machine that runs it.
 
 pub mod collections;
 pub mod deferred;
@@ -45,6 +47,7 @@ pub mod reactor;
 // Only the `QlSite` type is public (re-exported below); the formatter is the runtime's own.
 mod report;
 pub mod scheduler;
+pub mod test_registry;
 pub mod text;
 pub mod time;
 
@@ -57,9 +60,15 @@ pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{__alloc, __gc_init, __index_fail, GcThread, register_thread};
 pub use net::__tcp_request_launch;
-pub use process::{__argv_to_text_array, __envp_to_pairs, __exit};
-pub use report::{MAX_PATH_WIDTH, QlSite, shorten_path};
+pub use process::{__argv_to_text_array, __envp_to_map, __exit};
+pub use report::{
+    __assert_failed, __expect_failed, ASSERTION_EXIT_CODE, MAX_PATH_WIDTH, QlSite, shorten_path,
+};
 pub use scheduler::__run_fiber_main;
+pub use test_registry::{
+    __test_case_failing, __test_case_finish, __test_depth, __test_failed, __test_passed,
+    __test_suite_enter, __test_suite_leave,
+};
 pub use text::{
     __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
     __text_repeat, __text_replace_all, __text_replace_n, __text_slice, __text_split,
@@ -100,9 +109,9 @@ macro_rules! intrinsic_registry {
         /// though nothing in this crate calls them (they are only ever called from the
         /// LLVM IR the code generator emits, which rustc never sees). Without an in-crate
         /// reference, the staticlib's link step could dead-strip an intrinsic, and this
-        /// `#[used]` table is the reachability root that pins all of them; the AOT link
-        /// then wraps the archive in `--whole-archive`, so every object in it is pulled
-        /// into the executable.
+        /// `#[used]` table is the reachability root that pins all of them into the archive; the
+        /// AOT link then retains those members again at the executable link — under GNU ld with a
+        /// narrow `-u <symbol>` per intrinsic, under ld64 by force-loading the archive.
         ///
         /// What checks that this still works is `tests/intrinsic_link_test.rs`: it builds
         /// a program reaching every intrinsic and links it under both linkers, so a
@@ -134,10 +143,10 @@ intrinsic_registry! {
     __text_length: extern "C" fn(*const u8, i64) -> i64,
     __text_cmp: extern "C" fn(*const u8, i64, *const u8, i64) -> i32,
     __write_bytes: extern "C" fn(i64, *const u8, i64) -> i64,
-    __print_text_fd: extern "C" fn(i64, *const c_char),
+    __print_text_fd: extern "C" fn(i64, *const u8, i64),
     __color_enabled: extern "C" fn(i64) -> i64,
     __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
-    __envp_to_pairs: extern "C" fn(*const *const c_char) -> QlSlice,
+    __envp_to_map: extern "C" fn(*const *const c_char) -> *mut c_void,
     __text_repeat: extern "C" fn(*const u8, i64, f64, *const QlSite) -> QlSlice,
     __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
@@ -172,24 +181,54 @@ intrinsic_registry! {
         *const *const c_char,
     ) -> c_int,
     __map_new: extern "C" fn() -> *mut c_void,
-    __map_set: extern "C" fn(*const c_void, i64, i64, i64, *const c_void) -> *mut c_void,
-    __map_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __map_get: extern "C" fn(*const c_void, i64, i64, i64, *mut i64) -> *const c_void,
-    __map_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __map_set: extern "C" fn(
+        *const c_void,
+        i64,
+        i64,
+        i64,
+        *const c_void,
+        *const c_void,
+        *const c_void,
+    ) -> *mut c_void,
+    __map_remove:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __map_get: extern "C" fn(
+        *const c_void,
+        i64,
+        i64,
+        i64,
+        *const c_void,
+        *const c_void,
+        *mut i64,
+    ) -> *const c_void,
+    __map_has:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> i64,
     __map_len: extern "C" fn(*const c_void) -> i64,
     __map_key_a: extern "C" fn(*const c_void, i64) -> i64,
     __map_key_b: extern "C" fn(*const c_void, i64) -> i64,
     __map_val: extern "C" fn(*const c_void, i64) -> *const c_void,
     __set_new: extern "C" fn() -> *mut c_void,
-    __set_add: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __set_remove: extern "C" fn(*const c_void, i64, i64, i64) -> *mut c_void,
-    __set_has: extern "C" fn(*const c_void, i64, i64, i64) -> i64,
+    __set_add:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __set_remove:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> *mut c_void,
+    __set_has:
+        extern "C" fn(*const c_void, i64, i64, i64, *const c_void, *const c_void) -> i64,
     __set_len: extern "C" fn(*const c_void) -> i64,
     __set_item_a: extern "C" fn(*const c_void, i64) -> i64,
     __set_item_b: extern "C" fn(*const c_void, i64) -> i64,
     __set_union: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_diff: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_intersect: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
+    __test_suite_enter: extern "C" fn() -> f64,
+    __test_suite_leave: extern "C" fn() -> f64,
+    __test_depth: extern "C" fn() -> f64,
+    __test_case_failing: extern "C" fn() -> f64,
+    __test_case_finish: extern "C" fn() -> f64,
+    __test_passed: extern "C" fn() -> f64,
+    __test_failed: extern "C" fn() -> f64,
+    __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
+    __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

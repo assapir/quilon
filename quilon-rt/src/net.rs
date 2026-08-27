@@ -315,7 +315,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    #[link(name = "gc")]
+    #[link(name = "gc", kind = "static")]
     unsafe extern "C" {
         fn GC_gcollect();
         fn GC_register_my_thread(sb: *const GcStackBase) -> c_int;

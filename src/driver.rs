@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::diagnostic::{self, Severity};
-use crate::lexer::Span;
+use crate::lexer::{SYNTHESIZED_FILE, Span};
 use crate::source_map::SourceMap;
 use crate::{ast, lexer, modules, parser, typechecker};
 use std::rc::Rc;
@@ -78,19 +78,49 @@ pub struct Checked {
     /// back to a path, line, and column. Shared (`Rc`) because codegen keeps it for the
     /// whole emission while the caller may still read the root text from it.
     pub sources: Rc<SourceMap>,
-    /// How many leading items came from `<<` imports — `link` prepends them, so anything
-    /// before this index belongs to another file. A `--debug` build uses it to attribute
-    /// DWARF line info to the user's own source only.
-    pub imported_items: usize,
     /// The deferred-value coloring: which expressions evaluate to a deferred (promise)
     /// value, and whether any `@` primitive launch is reachable. Codegen reads it to emit
     /// the promise representation and forces; empty for pure programs.
     pub defer: crate::deferral::DeferInfo,
+    /// The file is a test suite rather than a program: it has top-level test blocks and no
+    /// `^` of its own (whatever fixtures its cases need are fine). Erasing the blocks leaves
+    /// nothing to run, so `run`/`compile`/`build` pass over it in silence. Recorded before
+    /// the link, which merges an `^` from nowhere but would blur "of its own".
+    pub tests_only: bool,
 }
 
+/// What the front end does with a file's top-level `describe` blocks (see
+/// [`ast::TEST_BLOCK_MARKER`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestBlocks {
+    /// Leave them out of the compilation unit. `check`, `compile`, `build`, and `run` all
+    /// take this path, so a file's tests are never checked, never emitted, and cannot
+    /// reach a release binary.
+    Erase,
+    /// Compile them, under an entry point synthesized to run each block in order. What
+    /// `quilon test` uses.
+    Run,
+}
+
+/// The reporter function the synthesized test entry point ends with: it renders the run's
+/// summary and yields the run's status. Bound by NAME, in the linked program's scope, so
+/// the definition that answers is `core.test.report`'s when a suite imports it and the suite's
+/// own when it does not — which is the whole of how a reporter is selected. See the seam in
+/// `docs/corelib/test.md`.
+pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
+
+/// The module carrying the reporter Quilon ships, named in the diagnostic a suite gets when
+/// no reporter is in scope at all.
+pub const DEFAULT_REPORTER_MODULE: &str = "core.test.report";
+
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
-/// type-check the program at `file`.
+/// type-check the program at `file`, leaving its test blocks out (see [`TestBlocks`]).
 pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
+    front_end_with(file, TestBlocks::Erase)
+}
+
+/// [`front_end`], choosing what happens to the file's top-level `describe` blocks.
+pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEndError> {
     let path = file.display().to_string();
     crate::source_extension::require_source(&path).map_err(FrontEndError::plain)?;
 
@@ -136,13 +166,17 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
         ));
     }
 
-    // The source file's own item count, captured before linking prepends imported items.
-    let own_item_count = program.items.len();
+    let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
+
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
-    let (program, mut sources) = modules::link(program, base_dir).map_err(FrontEndError::plain)?;
+    let (mut program, mut sources) =
+        modules::link(program, base_dir).map_err(FrontEndError::plain)?;
     sources.set_root(path.clone(), source.clone());
-    // `link` prepends imported items, so everything before the source's own items is imported.
-    let imported_items = program.items.len() - own_item_count;
+
+    if tests == TestBlocks::Run {
+        synthesize_test_entry(&mut program)
+            .map_err(|(span, message)| FrontEndError::at_span(&sources, &span, &message))?;
+    }
 
     let types = typechecker::TypeChecker::new()
         .check_program(&program)
@@ -158,8 +192,8 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
         program,
         types,
         sources: Rc::new(sources),
-        imported_items,
         defer,
+        tests_only,
     })
 }
 
@@ -179,10 +213,121 @@ fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
 
 /// Whether `program` defines the `^` entry point required to build an executable.
 pub fn has_entry_point(program: &ast::Program) -> bool {
+    defines_function(program, "^")
+}
+
+/// Whether `program` declares a top-level function called `name`.
+fn defines_function(program: &ast::Program, name: &str) -> bool {
     program
         .items
         .iter()
-        .any(|item| matches!(item, ast::Item::FunctionDeclaration(func) if func.name == "^"))
+        .any(|item| matches!(item, ast::Item::FunctionDeclaration(func) if func.name == name))
+}
+
+/// Whether `item` claims the `^` name — as the entry-point function, or as a top-level
+/// binding that would collide with one.
+fn names_entry_point(item: &ast::Item) -> bool {
+    match item {
+        ast::Item::FunctionDeclaration(declaration) => declaration.name == "^",
+        ast::Item::VariableDeclaration(declaration) => declaration.name == "^",
+        _ => false,
+    }
+}
+
+/// The four nodes [`synthesize_test_entry`] builds, as the offsets that tell their spans
+/// apart. Spans key the type oracle, so each synthesized node needs its own — and none may
+/// collide with a node read from a real source, which is what [`SYNTHESIZED_FILE`]
+/// guarantees.
+#[derive(Clone, Copy)]
+enum Synthesized {
+    ReporterName,
+    ReporterCall,
+    EntryBody,
+    EntryDeclaration,
+}
+
+fn synthesized_span(node: Synthesized) -> Span {
+    let offset = node as u32;
+    Span::in_file(offset, offset, SYNTHESIZED_FILE)
+}
+
+/// Append the entry point that runs `program`'s test blocks: each `describe(…)` in source
+/// order, then the reporter's summary, whose `Num` result becomes the exit code.
+///
+/// A file's tests may sit beside its code, `^` included, so the program reaching here may
+/// already have something under that name. Whatever it is, it belongs to the program and not
+/// to the test run, and only one thing can carry the name: it is dropped, because the entry
+/// appended below is the entry point now.
+fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String)> {
+    let Some(first_block) = program.test_blocks.first() else {
+        return Ok(());
+    };
+    program.items.retain(|item| !names_entry_point(item));
+    // The reporter has to be in scope, since the entry ends by calling it. Said here, at the
+    // first test block, rather than by the type checker at the synthesized call — which has
+    // no source location to point a diagnostic at.
+    if !defines_function(program, REPORTER_SUMMARY_FUNCTION) {
+        return Err((
+            first_block.span().clone(),
+            format!(
+                "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
+                 Add `<< {DEFAULT_REPORTER_MODULE}` for the one Quilon ships, or define \
+                 `{REPORTER_SUMMARY_FUNCTION}` yourself"
+            ),
+        ));
+    }
+
+    let summary = ast::Expression::Call {
+        function: Box::new(ast::Expression::Identifier {
+            name: REPORTER_SUMMARY_FUNCTION.to_string(),
+            span: synthesized_span(Synthesized::ReporterName),
+        }),
+        arguments: Vec::new(),
+        span: synthesized_span(Synthesized::ReporterCall),
+    };
+    let statements = program
+        .test_blocks
+        .drain(..)
+        .chain(std::iter::once(summary))
+        .map(ast::Statement::Expression)
+        .collect();
+
+    program
+        .items
+        .push(ast::Item::FunctionDeclaration(ast::FunctionDeclaration {
+            name: "^".to_string(),
+            parameters: Vec::new(),
+            return_type: Some(ast::Type::Num),
+            body: ast::Expression::Block {
+                statements,
+                span: synthesized_span(Synthesized::EntryBody),
+            },
+            exported: false,
+            from_corelib: false,
+            span: synthesized_span(Synthesized::EntryDeclaration),
+        }));
+    Ok(())
+}
+
+/// Whether `file` is a suite `quilon test` should run: it has top-level test blocks — or it
+/// cannot be parsed at all, in which case running it is the only safe answer. Passing over a
+/// broken source in silence would let `quilon test` report success on a suite whose syntax
+/// someone had just broken; running it makes the front end say what is wrong.
+///
+/// Answered from a parse alone — no import resolution, no type check — which is what makes it
+/// cheap enough to ask of every `.qn` file under a directory. A file that cannot even be READ
+/// is not a suite: there is nothing to run and nothing to report.
+pub fn is_test_suite(file: &Path) -> bool {
+    let Ok(source) = std::fs::read_to_string(file) else {
+        return false;
+    };
+    let Ok(tokens) = lexer::Lexer::tokenize(&source) else {
+        return true;
+    };
+    match parser::parse(&tokens) {
+        Ok(program) => !program.test_blocks.is_empty(),
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]

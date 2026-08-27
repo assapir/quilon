@@ -10,10 +10,10 @@
 use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 
-// Link the Boehm GC and tie it to these symbol references so the linker keeps
-// libgc for every target (binary, tests, JIT harness) regardless of `--as-needed`
-// ordering. libgc must be installed (`libgc-dev` / `gc`); CI installs it.
-#[link(name = "gc")]
+// The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
+// script and linked statically, so a compiled Quilon program carries its own
+// collector and needs no `libgc` installed where it runs.
+#[link(name = "gc", kind = "static")]
 unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut c_void;
     fn GC_init();
@@ -158,13 +158,12 @@ impl QlSlice {
     }
 }
 
-/// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC
-/// (so it outlives the C `argv`/`envp` buffers, which the program may not keep), and is
-/// NUL-terminated past `len` so `print`/`eprint` (which expect a C string) work too.
+/// GC-allocate a `Text` whose bytes are a copy of `bytes`. The copy is owned by the GC, so
+/// it outlives the C `argv`/`envp` buffers, which the program may not keep. A `Text` is
+/// exactly its `{ ptr, len }` bytes — nothing reads past `len`.
 pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     let len = bytes.len();
-    // +1 for a trailing NUL so the buffer doubles as a C string for `print`.
-    let buf = __alloc(len as i64 + 1) as *mut u8;
+    let buf = __alloc(len as i64) as *mut u8;
     if !buf.is_null() && len > 0 {
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len) };
     }

@@ -2,7 +2,7 @@
 
 **Version:** 0.9.2 — "Hegemon" (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.qn` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.qn` program is **self-asserting** — it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
 ---
 
@@ -16,7 +16,7 @@ Quilon's identity, and the rules that guide its design:
 - **Deliberate simplicity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
 - **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](#error-messages). (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
 - **No magic.** No hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
-- **Immutable by default.** `=` binds immutably, `:=` binds mutably; because `:=` is visible wherever mutation happens, a method is a setter exactly when its body writes `it.field := …`.
+- **Immutable by default.** `=` binds immutably, `:=` binds mutably — for variables, for record bindings, and for methods: a method declared `name := …` may mutate its receiver, and one declared `name = …` is checked to make sure it does not.
 - **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
 - **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (`print(x)`, never `print(show(x))`).
 
@@ -29,8 +29,8 @@ Quilon's identity, and the rules that guide its design:
 | `=` | Immutable binding | `x = 42` |
 | `:=` | Mutable bind / reassign / in-place field write | `counter := 0`, `obj.field := v` |
 | `::` | Type annotation | `x :: Num` |
-| `=>` | Function body / match arm | `f = x => x + 1` |
-| `->` | Return type | `f = x -> Num => x` |
+| `=>` | Function body / match arm | `f = (x :: Num) => x + 1` |
+| `->` | Return type; also a [function type](#function-types--higher-order-functions) | `f = (x :: Num) -> Num => x` · `(Num) -> Bool` |
 | `+` `-` `*` `/` `%` | [Arithmetic](#expressions) (`-x` negates) | `a + b` · `x % 2` |
 | `==` `!=` `<` `<=` `>` `>=` | [Comparison](#expressions) → `Bool` · `==`/`!=` over `Num`/`Text`/`Bool`, ordering over `Num`/`Text` | `a == b` · `x <= 3` |
 | `&&` `\|\|` `!` | Logical and / or / not (short-circuit) | `a && !b` |
@@ -38,7 +38,7 @@ Quilon's identity, and the rules that guide its design:
 | `^` | Entry point (main) | `^ = () -> Num => 0` |
 | `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
-| `>>` | Export an item from a module | `>> add = (a, b) => a + b` |
+| `>>` | Export an item from a module | `>> add = (a :: Num, b :: Num) => a + b` |
 | `\|>` | Pipe (first-arg injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
 | `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` · `Vec {<-p, x = 9}` |
@@ -180,6 +180,11 @@ back to the default rather than recursing forever.)
 
 There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.qn`.)
 
+**On output, `print` renders and `write` does not.** `print`/`eprint` write text for a
+reader: a `Text` whose bytes are not valid UTF-8 arrives with each invalid byte shown as the
+replacement character `�`. [`write`](corelib/io.md) is the byte-exact form — a `Text`'s bytes
+as they are. Both write the whole `Text`: a NUL byte is content, never a terminator.
+
 ### `Bool`
 `true` / `false` (the literals are lowercase; note that a `Bool` *renders* as capitalized
 `True`/`False` — see [interpolation](#string-interpolation-and-the-render-operator)).
@@ -280,14 +285,16 @@ lowering, so it is element-repr-correct for `[]Num`, `[]Text`, and nested arrays
 
 A `Map` is a **built-in parametric collection** — like `[]T`, not a user-defined generic —
 written with a **pipe fence** `[|K => V|]` (`=>` reads "maps to"). It is immutable, keyed by
-`Num`/`Text`/`Bool`, and read through `.get` (which returns a `Result` — there is no bracket
-indexing on a map). Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
+`Num`/`Text`/`Bool` or a **user type** that defines both a `%` hash hook and an `==` member,
+and read through `.get` (which returns a `Result` — there is no bracket indexing on a map).
+Full reference: [`docs/collections/map.md`](collections/map.md) (and `examples/maps.qn`).
 
 ### Sets
 
 A `Set` is a **built-in parametric collection** — like `[]T`, not a user-defined generic —
 written with the same **pipe fence** `[|T|]` (which keeps a set literal distinct from an array).
-It is immutable, holds unique `Num`/`Text`/`Bool` elements, and supports set algebra
+It is immutable, holds unique `Num`/`Text`/`Bool` elements (or a **user type** defining both
+a `%` hash hook and an `==` member), and supports set algebra
 (`+` union, `-` difference, `+-`/`-+` intersection). Full reference:
 [`docs/collections/set.md`](collections/set.md) (and `examples/sets.qn`).
 
@@ -318,9 +325,13 @@ a = u.olderBy(5)       ~ 35
 ```
 (See `examples/methods.qn`.)
 
-A method is a **setter** (mutating) iff its body writes `it.field := …` (or calls
-another setter on `it`); there is no marker — the visible `:=` *is* the signal.
-Calling a setter requires a mutable (`:=`) receiver (see [Mutation](#mutation-in-place-field-writes--setters)).
+A method declared with `:=` instead of `=` is a **setter** — it may mutate its
+receiver — and calling one requires a mutable (`:=`) receiver
+(see [Mutation](#mutation-in-place-field-writes--setters)).
+
+An unannotated method parameter defaults to `Num` (as in any [ordinary
+definition](#overloading--ad-hoc-and-explicit)), and call sites are held to that default:
+`t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
 
 ### Sum types — `/`
 A sum type (tagged union / enum) is a set of named **variants**, declared with `/`
@@ -360,7 +371,8 @@ A sum type may carry a trailing `{ }` block of **methods** (the block is optiona
 with no methods is written exactly as above). `it` is the whole sum value, so a method
 typically matches on it. A member is a named method, an
 [operator](#operator-overloading), or the render `` ` ``. The block holds **methods only**
-— a sum has no fields, so a field-like entry there is a compile error.
+— a sum has no fields, so a field-like entry there is a compile error, and its methods are
+always `=` (see [Mutation](#mutation-in-place-field-writes--setters)).
 ```quilon
 Shape = Circle(Num) / Rect(Num, Num) {
   area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
@@ -378,7 +390,7 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
 Use it exactly like any other sum type:
 ```quilon
-classify = v => v ?
+classify = (v :: Result) => v ?
   | Ok(x)    => x * 2
   | NotOk(e) => 0
 ```
@@ -394,8 +406,8 @@ fallback). This holds across a function boundary too: a function returning `Ok("
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
-`(r :: Result)` parameter or return. This is what lets `assertOk` / `assertNotOk`
-([`core.test`](#coretest--assertions)) accept a `Result` of any shape, including the
+`(r :: Result)` parameter or return. This is what lets the `isOk()` / `isNotOk()`
+[matchers](corelib/test.md#the-matchers) read a `Result` of any shape, including the
 composite-payload results of `getEnv` / `getOpt` (see `examples/cli.qn`). Extracting a
 payload still needs its concrete type in scope at the match site (there are no generics),
 but *matching by variant* (`Ok` vs `NotOk`) works on any `Result` anywhere.
@@ -441,7 +453,7 @@ included, and a `:=` global is writable from inside a function like any other.
 ```quilon
 limit = 10              ~ fine
 enabled = true          ~ fine
-scale = n => n * 3      ~ fine — a function value
+scale = (n :: Num) => n * 3   ~ fine — a function value
 counter := 4            ~ fine — and writable from a function
 
 doubled = limit * 2     ~ error: has to be computed
@@ -469,10 +481,15 @@ reassignment:
   read-only — a location is a value, not a variable — so writing one of its fields is an
   error even through a `:=` binding.
 
+A method is a **setter** when it is **declared** with `:=`, and the binding operator is
+the marker exactly as it is for a variable — a method's right to mutate is part of its
+signature.
+
 ```quilon
 Counter = {
   value :: Num,
-  bump = (by :: Num) => it.value := it.value + by   ~ setter: writes `it.value := …`
+  bump := (by :: Num) => it.value := it.value + by  ~ may mutate `it`
+  peek = => it.value                                ~ promises not to
 }
 
 c := Counter { value = 30 }   ~ `:=` -> mutable
@@ -480,8 +497,18 @@ c.bump(5)                      ~ setter mutates in place -> value = 35
 c.value := c.value + 7         ~ direct field write    -> value = 42
 ```
 
-A method is a **setter** iff its body writes `it.field := …` (or calls another setter on
-`it`) — no marker; the `:=` is the signal. A setter call requires a `:=` receiver:
+An `=` method is **held to its promise**: writing `it.field := …` in one, or calling a
+`:=` sibling on `it`, is a compile error telling you to declare it `:=`. The write counts
+**wherever it appears in the body** — nested inside a lambda, an array or record literal,
+a match arm, an argument list, or a function declared inside the body. Nesting does not
+launder a mutation:
+
+```quilon
+~ error: Method 'Counter.bumpAll' mutates 'it' but is declared with '='
+bumpAll = (steps :: []Num) => steps.each(s => it.value := s)
+```
+
+A setter call requires a `:=` receiver:
 
 ```quilon
 c = Counter { value = 30 }   ~ `=` -> immutable
@@ -489,8 +516,24 @@ c.value := 99                 ~ error: cannot write a field of immutable `c`
 c.bump(5)                     ~ error: cannot call mutating method `bump` on immutable `c`
 ```
 
-Getter methods carry no `it.field := …`, so they are callable on `=` instances too. (See
-`examples/mutation.qn`.)
+**Setters live on records.** Only a record's named methods may be declared `:=`. A sum's
+methods, and operator members on either kind (`` ` ``, `==`, `+`, …), are always `=` and
+non-mutating; `:=` on one is a compile error. Nothing they can do mutates the receiver
+anyway: a sum keeps its data in variant payloads, whose match bindings are immutable, and
+an operator or render member yields a value.
+
+```quilon
+Shape = Circle(Num) / Rect(Num, Num) {
+  area := () -> Num => 0      ~ error: a sum cannot have a mutating method
+}
+
+Counter = {
+  value :: Num,
+  + := (other :: Counter) -> Num => it.value   ~ error: an operator member is never `:=`
+}
+```
+
+(See `examples/mutation.qn`.)
 
 ---
 
@@ -498,22 +541,52 @@ Getter methods carry no `it.field := …`, so they are callable on `=` instances
 
 ```quilon
 greet  = => "Hello!"                       ~ no params
-double = x => x * 2                        ~ one param, no parens
-add    = (a, b) => a + b                   ~ multiple params
+double = (x :: Num) => x * 2               ~ one param
+add    = (a :: Num, b :: Num) => a + b     ~ multiple params
 typed  = (a :: Num, b :: Num) -> Num => a + b
 ```
+Every function and method parameter must be annotated — there is no default type; an
+unannotated parameter is a compile error that names it. The one exception is a lambda
+passed to a built-in collection method (`.map` / `.filter` / `.reduce` / `.each`), whose
+parameter type is taken from the element type of the receiver.
 Multi-statement bodies use `< >` blocks (the last expression is the value):
 ```quilon
-compute = x => <
+compute = (x :: Num) => <
   doubled = x * 2
   doubled * doubled
 >
 ```
 Functions may recurse; a recursive function needs a `-> Type` annotation:
 ```quilon
-factorial = n -> Num => n == 0 ? 1 : n * factorial(n - 1)
+factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.qn`, `examples/fibonacci.qn`.)
+
+### Function types & higher-order functions
+
+A **function type** is written with the arrow, reusing `->`. The parameter types go in
+parentheses; `$` (Unit) names a function that returns nothing:
+
+```quilon
+() -> $              ~ takes nothing, returns unit
+(Num) -> Bool        ~ one parameter
+(Num, Text) -> Bool  ~ two parameters
+```
+
+A function type may be a **parameter type**, which is what makes a function *higher-order*
+— it takes another function as an argument and calls it:
+
+```quilon
+apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
+twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+
+^ = () -> Num => twice((n :: Num) => n * 2, 3)   ~ ((3*2)*2) = 12
+```
+
+The value passed in is a closure — a lambda literal (as above) or a named closure passed
+by its name. Function types may nest as parameter types (`((Num) -> Bool, Num) -> Bool`).
+A function-typed **return** (currying, `(A) -> (B) -> C`) is not supported yet. (See
+`examples/higher_order.qn`.)
 
 ### Names resolve top to bottom
 
@@ -568,7 +641,7 @@ bound it** — no capture list, no marker, mirroring the mutability rule for
 ```quilon
 ^ = () -> Num => <
   total := 0                 ~ `:=` -> captured BY REFERENCE
-  bump = n => <
+  bump = (n :: Num) => <
     total := total + n       ~ writes the SHARED cell; the effect persists across calls
     total
   >
@@ -576,19 +649,21 @@ bound it** — no capture list, no marker, mirroring the mutability rule for
   bump(20)                   ~ total -> 30  (same cell)
 
   base = 7                   ~ `=`  -> captured BY VALUE (a frozen copy)
-  addBase = x => x + base
+  addBase = (x :: Num) => x + base
 
   total + addBase(5)         ~ 30 + 12 = 42
 >
 ```
 
-A non-capturing nested function may **recurse** (`fact = n => … fact(n-1) …`); nested
-closures may capture from any enclosing frame (the shared `:=` cell is threaded through
-every level), and a closure value may itself be captured by another closure and called.
+A non-capturing nested function may **recurse** (`fact = (n :: Num) => … fact(n-1) …`);
+nested closures may capture from any enclosing frame (the shared `:=` cell is threaded
+through every level), and a closure value may itself be captured by another closure and
+called. A closure may also be **passed to a function** whose parameter has the matching
+[function type](#function-types--higher-order-functions) and called there.
 
 Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing a
-polymorphic value, generic closures, and passing or returning a closure across frames are
-deferred — see [Known limitations](#known-limitations). (See `examples/closures.qn`.)
+polymorphic value, generic closures, and **returning** a closure across frames are deferred
+— see [Known limitations](#known-limitations). (See `examples/closures.qn`.)
 
 ---
 
@@ -642,7 +717,9 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
 An operator is user-overloadable — `+ - * / %`, `== != < <= > >=` — as a **member of the
 type it operates on** (a [record](#named-record-types-with-methods) or a
 [sum](#sum-types--)). `it` is the **left** operand; a **binary** operator member takes one
-explicit parameter (the **right** operand), a unary one (the render `` ` ``) takes none:
+explicit parameter (the **right** operand), a unary one (the render `` ` ``) takes none.
+An operator member is always `=`-declared and yields a value; it never mutates `it`
+(see [Mutation](#mutation-in-place-field-writes--setters)):
 
 ```quilon
 Vec = {
@@ -665,9 +742,15 @@ A **comparison/equality** member (`== != < <= > >=`) **must return `Bool`**; **a
 members (`+ - * / %`) return whatever they declare. A **top-level** operator definition is
 rejected — the operator must be a member of its type.
 
-(See `examples/overloading.qn` and `examples/sum_methods.qn`, and
-`examples/overload_dispatch.qn` for dispatch on argument types out of an array element, a
-match, a call, or a lambda.)
+**The `%` hash hook.** A **unary** `% = () -> Num => …` member (`it` the value, no explicit
+parameter) is the type's **hash**, letting it be a [Map/Set key](#maps) alongside its `==`
+member. Both are required together, and `%`/`==` must agree (equal values hash the same).
+This unary `%` is distinct from the binary `%` remainder operator (which takes one
+parameter), and has no call syntax of its own — the collections invoke it.
+
+(See `examples/overloading.qn`, `examples/sum_methods.qn`, `examples/maps.qn`,
+`examples/sets.qn`, and `examples/overload_dispatch.qn` for dispatch on argument types out
+of an array element, a match, a call, or a lambda.)
 
 ---
 
@@ -678,14 +761,23 @@ match, a call, or a lambda.)
 - **Logical:** `&& || !` (short-circuit).
 
 > **`<` and `>` vs. `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
-> after a complete operand is always less-than (a block can't start mid-expression). A
-> `>` is the **block close** only when it is the **last token on its line** (followed by
-> only spaces/tabs then a newline or end-of-file); any other `>`, like `a > b`, is
-> greater-than. So: don't end a line with a comparison `>`. `<=`/`>=`/`>>` are distinct
-> tokens and unaffected.
+> after a complete operand is always less-than (a block can't start mid-expression). A `>`
+> **closes a block by default**; it is **greater-than only when an operand follows it on
+> the same line** — an identifier, a literal, `(`, `[`, `{`, or a prefix `-`/`!`. So `a > b`,
+> `f(x > y)`, `a > -b` and `"b" > "a"` are comparisons, while a `>` before a `)`, `]`, `}`,
+> `,`, a `~` comment, or the end of the line closes its block — which is what lets a
+> block-bodied lambda sit inside a call on one line:
+> ```quilon
+> xs.each(x => <
+>   total := total + x
+> >)
+> ```
+> Two rules follow: don't end a line with a comparison `>` (the right operand must be on
+> that line), and separate two adjacent closers with a space — `> >`, since `>>` is the
+> export marker. `<=`/`>=`/`>>` are distinct tokens and unaffected.
 
 > **Statement boundaries — line-first `(` / `[` / `{`.** Quilon has no statement separator,
-> and the grammar is newline-insensitive but for two rules: the line-final `>` above, and
+> and the grammar is newline-insensitive but for two rules: the `>` rule above, and
 > this one — a `(`, `[`, or `{` that is the **first token on its line** begins a new
 > statement rather than continuing the previous expression as a call, index, or constructor.
 > Those must open on the **same line** as the expression they apply to, though once opened
@@ -714,12 +806,14 @@ match, a call, or a lambda.)
 > ```
 > (See `examples/statements.qn`.)
 - **Ternary:** `cond ? then : else`.
-- **Blocks:** `< stmt… last >` are expressions that evaluate to their last expression — usable anywhere a value is, not just as a function body:
+- **Blocks:** `< stmt… last >` evaluate to their last expression. A block goes in **body**
+  position — a function's, a lambda's, or a method's — not in operand position, so a block
+  is never the left or right side of an operator:
 ```quilon
-result = <
+total = () -> Num => <
   x = 10
   y = 20
-  x + y          ~ result is 30
+  x + y          ~ total() is 30
 >
 ```
 
@@ -743,7 +837,9 @@ non-associative (`1 <- 2 <- 3` is a parse error).
 | more priority | `.field` · `.method(…)` · `f(…)` · `xs[i]` |
 
 So `2 + 3 |> double` is `double(5)`, `1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is
-`(1 < 2) == true`. Parenthesize anything else.
+`(1 < 2) == true`. Parenthesize anything else. `>` appears in the table in its operator
+reading; whether a given `>` gets that reading at all is settled first, in the lexer — see
+the [`>` rule](#expressions).
 
 ### Pipe — `|>`
 `|>` feeds its left operand in as the **first argument** of the right-hand call:
@@ -854,9 +950,9 @@ The type checker verifies matches are exhaustive (use `_` to cover the rest). (S
 << core.io                 ~ import the built-in IO module
 << "lib/math.qn"           ~ import a user module by path (/ or \)
 
->> add = (a, b) => a + b   ~ `>>` exports an item; unmarked items are file-private
+>> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
 ```
-- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, `core.net`, and `core.http`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.test.report`, `core.cli`, `core.time`, `core.net`, and `core.http`; their members are real functions. See the [corelib](#corelib) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A module exposes only its `>>`-exported items.
 
@@ -873,7 +969,8 @@ signatures, behavior, and a small example per function.
 | Module | Import | What it gives you |
 |--------|--------|-------------------|
 | [`core.io`](corelib/io.md) | `<< core.io` | Output to file descriptors and stdin: `print` / `eprint` / `write`, the `stdout` / `stderr` descriptors, and the deferred `@readStdin` line read. |
-| [`core.test`](corelib/test.md) | `<< core.test` | In-language assertions for self-verifying programs, reporting the caller's `file:line:column`: `assert` (+ `AssertOpts`) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt` (fail → exit 101). |
+| [`core.test.report`](corelib/test.md#the-test-harness) | `<< core.test.report` | The [test harness](corelib/test.md#the-test-harness) `quilon test` runs and the report it prints: `describe` / `it` and `reportSuite` / `reportCase` / `reportSummary`. Pulls in `core.test`. |
+| [`core.test`](corelib/test.md) | `<< core.test` | What a harness and reporter are built from: `failAt` for a check of your own, the run's recorded state (`casesPassed` / `casesFailed` / `nestingDepth`), and the case lifecycle (`enterSuite` / `leaveSuite` / `caseFailing` / `finishCase`). Defines no `describe` / `it` / `report*`, so [a reporter of your own](corelib/test.md#writing-a-reporter) can. The assertions need no import at all: `assert` / `expect` and their matchers are compiler-provided. |
 | [`core.cli`](corelib/cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](corelib/time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
 | [`core.net`](corelib/net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
@@ -936,7 +1033,7 @@ Filling one in **costs nothing at run time**: the fields are compile-time consta
 call site is a read-only constant whose address the call passes — no allocation, no unwinder,
 no debug info, and JIT and native builds report identically. Assert as often as you like, in
 the hottest loop you have. (A site does cost image space: the record plus two relocations for
-its `Text` fields.) [`core.test`'s assertions](corelib/test.md) are built on this; nothing
+its `Text` fields.) [`failAt`](corelib/test.md#building-a-check-of-your-own) is built on this; nothing
 about it is specific to them. See `examples/call_site.qn`.
 
 ---
@@ -947,20 +1044,21 @@ Every executable defines `^` (main); the compiler generates a C-compatible `main
 ```quilon
 ^ = () -> Num => 42                              ~ no args/env
 ^ = (args :: []Text) -> Num => args.size         ~ command-line arguments
-^ = (args :: []Text, env :: [][]Text) -> Num => args.size   ~ args + environment
+^ = (args :: []Text, env :: [|Text => Text|]) -> Num => env.get("HOME")   ~ args + environment
 ```
 **Arguments & environment.** `^` may declare, in order, two typed parameters that the
 generated `main()` wrapper fills from the C `argc`/`argv`/`envp`:
 - `args :: []Text` — the command-line arguments (argv), **including** `argv[0]` (the
   program name), so `args.size` is always at least 1, and `args[i]` is the *i*-th
   argument as a `Text`.
-- `env :: [][]Text` — the environment, as an array of `[key, value]` pairs. Each inner
-  array holds exactly two `Text`s: an entry `KEY=val` is split on its **first** `=`
-  (so `KEY=a=b` becomes `[KEY, a=b]`); an entry with no `=` becomes `[entry, ""]`.
+- `env :: [|Text => Text|]` — the environment, as a Map from each variable's name to its
+  value. An entry `KEY=val` is split on its **first** `=` (so `KEY=a=b` maps `KEY` to
+  `a=b`); an entry with no `=` maps the whole string to `""`. Read a variable with
+  `env.get("HOME")` (or `<< core.cli`'s `getEnv`), both giving `Ok(value)`/`NotOk`.
 
-Both are real Quilon arrays — `.size`, `[index]`, and the array methods work on them — and
-an element bound out of one is a full `Text`: the whole `Text` API, and
-[overload](#overloading) dispatch by its concrete type.
+`args` is a real Quilon array (`.size`, `[index]`, the array methods) and `env` a real Map
+(`.get`/`.has`/`.keys`/`.size`); a value read out of either is a full `Text`: the whole
+`Text` API, and [overload](#overloading) dispatch by its concrete type.
 `quilon run <file> [args...]` and a native build agree on `args`: under `run`, the
 program sees `argv = [<file>, <args...>]` (the `quilon`/`run` CLI prefix is stripped and
 the `.qn` path becomes `argv[0]`), so `quilon run f.qn a b c` gives the same `args.size`
@@ -979,7 +1077,7 @@ compile-time error, reported by `check` as well as `run`/`build`.
 
 ## Memory
 
-Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, etc.) are GC-managed — there is no manual free. In 0.9 this is the system's **dynamic `libgc`** (a documented build- and run-time dependency); a statically-linked / vendored GC is a post-0.9 goal.
+Quilon uses a **conservative garbage collector** (Boehm). Heap values (`Text`, etc.) are GC-managed — there is no manual free. The collector is **linked statically** into every binary, so a compiled program carries its own GC and needs nothing installed to run.
 
 ---
 
@@ -1054,17 +1152,16 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
 
 ```quilon
 << core.io
-<< core.test
 
 ^ = () -> Num => <
-  line = @readStdin()     ~ launches the read; returns a deferred Text (no wait here)
-  assertEq(line, "")      ~ the comparison FORCES it; "" at end-of-input (no piped input)
+  line = @readStdin()          ~ launches the read; returns a deferred Text (no wait here)
+  assert(line, equals(""))     ~ the comparison FORCES it; "" at end-of-input (no piped input)
   0
 >
 ~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.qn
 ```
 
-Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
+Binding `line` does not wait; the force is the `==` behind `equals`. Because
 `print`/`eprint` force and write eagerly, per-fiber output stays in program order.
 
 `core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Result`** is a one-shot
@@ -1104,9 +1201,15 @@ quilon check   program.qn   # front-end only (lex + parse + resolve imports + ty
 quilon run     program.qn   # front-end, then JIT-execute in-process (exit code = ^'s result)
 quilon build   program.qn   # produce a native executable
 quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
+quilon test    [path]       # run the test suites under a file or directory (default: .)
 ```
 
-`quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt` and the GC `libgc`) into a native executable:
+`quilon test` is JIT-only, and exits non-zero if any case failed. It runs a file's top-level
+`describe` blocks, which every other command erases — so tests may sit in the file they test,
+its `^` included, and still cost a release build nothing. See
+[the test harness](corelib/test.md#the-test-harness).
+
+`quilon build` emits an object file in-process and links it (with the Quilon runtime `libquilon_rt`, which carries the GC) into a native executable:
 ```bash
 quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
@@ -1127,10 +1230,12 @@ per-function scopes, and **locals, parameters, and debug types** — every `=`/`
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. Each Quilon type gets a distinct DWARF entry: `Num`/`Bool` as base types,
 and `Text`, arrays (`[]T`), records, and sum types as distinctly-named composites, so a
-debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Only the
-program's own source is attributed — functions from imported modules (`<<`) carry no line
-info yet, since emission builds one `DIFile` from the root source. Multi-file line info is a
-follow-up.
+debugger tells them apart despite their shared `{ptr, i64}`-ish machine shape. Line info is
+multi-file: a function from an imported module (`<<`) — corelib included — is attributed to
+its OWN source, so a debugger steps into it. The entry frame reads `^` (the generated C
+`main` shim is named for the entry point and marked artificial). The leaf `@` primitives and
+the inert built-in placeholders (`print`/`now`/…) lower to intrinsics and emit no subprogram,
+so a debugger steps over them.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)
 
@@ -1160,7 +1265,7 @@ A multi-line span underlines its first line. A failure with no source location (
 file, an unresolved import) prints a plain one-line message. Any compile error exits 1.
 
 Runtime failures use the same frame at the expression responsible: a failing
-[`core.test` assertion](corelib/test.md) at the assertion's call site, a fail-loud check (a
+[assertion](corelib/test.md) at its own call site, a fail-loud check (a
 bad `arr[i]`, a violated `Text.replace`/`repeat` contract) at the call that broke the
 contract. Those are colored when stderr is a terminal, plain when redirected or under
 `NO_COLOR`/`TERM=dumb`; compile errors are not colored yet. Because a runtime report carries
@@ -1195,9 +1300,9 @@ pathological input.
 | Arrays: literals, `.size`, `[index]` | ✅ |
 | Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
 | Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
-| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`remove`/`keys`/`values`/`each`; keys Num/Text/Bool; immutable | ✅ |
+| Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`set`/`remove`/`keys`/`values`/`each`; keys Num/Text/Bool or a user type; immutable | ✅ |
 | Sets `[\|T\|]`: literals, `.size`, `has`/`add`/`remove`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection); immutable | ✅ |
-| Map/Set user-defined key types (via a `%` hash hook) | ❌ |
+| Map/Set user-defined key types (via a `%` hash hook + `==` member) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
@@ -1209,26 +1314,29 @@ pathological input.
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants) | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
-| Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields | ✅ |
+| Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields, no `:=` methods | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
-| Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `assertOk`/`assertNotOk` on `getEnv`/`getOpt` | ✅ |
-| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.net`, `<< core.http`, file-path imports, `>>` exports | ✅ |
-| HTTP client: `<< core.http` (`Method` / `Request` / `Response`, request building + response parsing, `send` / `get` over `core.net`; HTTP only, no TLS) | ✅ |
+| Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
+| Modules: `<< core.io`, `<< core.test`, `<< core.test.report`, `<< core.cli`, `<< core.time`, `<< core.net`, `<< core.http`, file-path imports, `>>` exports | ✅ |
+| HTTP client: `<< core.http` (`Method` / `Request` / `Response` with their methods, request building + response parsing, `request.send()` / `get` over `core.net`; HTTP only, no TLS) | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
-| Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |
+| Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
+| Test harness: [`quilon test`](corelib/test.md#the-test-harness) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
+| [Replaceable reporter](corelib/test.md#writing-a-reporter): the harness and its output are ordinary `.qn` in `core.test.report`, so a suite importing `core.test` alone defines its own `describe` / `it` / `report*` and gets its own report | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Conservative GC (Boehm) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |
-| `^` receives `args :: []Text` (argv) and `env :: [][]Text` (environment pairs) | ✅ |
+| `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
+| [Function types](#function-types--higher-order-functions) (`(Num) -> Bool`, `() -> $`) + higher-order functions: a function-typed parameter called inside, taking a closure by literal or by name | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
-| Overloaded name passed as a value, or a closure as a param / return (higher-order) | ❌ |
+| Overloaded or top-level function name passed as a value; a closure **returned** from a function | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
 | [Colorless implicit-futures concurrency](#concurrency--colorless-implicit-futures--in-progress) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, and the value-returning `@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |
@@ -1239,9 +1347,9 @@ pathological input.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
-- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, passing a closure **as a parameter**, and **returning one from a function**. An unsupported position is rejected at compile time (a called unannotated parameter reports `Not a function`), never miscompiled.
-- **Overloads (and closures) resolve at direct call sites only.** Passing an overloaded name as a value (higher-order use) is not yet supported.
+- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables — which is why the [matchers](corelib/test.md#the-matchers) are compiler-provided rather than written in `.qn`. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
+- **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. A closure can also be passed to a [function-typed parameter](#function-types--higher-order-functions) and called there. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, and **returning** a closure from a function.
+- **Overloaded and top-level function names are not first-class values.** A closure is passed as a *lambda literal* or a *named closure binding*; passing a top-level function or an overloaded name as a value is not yet supported.
 - **Sum-type payloads mixing types across variants aren't unified yet.** Payload slots have a fixed representation sized to the widest variant. Distinct payload *types* per slot across variants (a position that is `Num` in one variant and `Text` in another) is deferred; the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.
 - **A named-composite sum payload must be a record, and a record field cannot yet be a named composite.** A variant may carry a named **record** (`Post(Body)`), but not another named **sum**; and a record field is still limited to built-in types and arrays (a `{ inner :: Inner }` field of a user type is a deferred follow-up).
 - **Concurrency is partly built.** The [model](#concurrency--colorless-implicit-futures--in-progress) is locked; the fiber scheduler, reactor, `@sleep`, and the deferred-value primitives (`@readStdin`, `@tcpRequest`) run. Remaining for 1.0: overlap as a showcase, deferred composites, further `@` primitives (file), and multicore M:N.
@@ -1258,6 +1366,6 @@ A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs
 4. **Type checker** — `src/typechecker/checker.rs` plus its per-area child modules.
 5. **Code generator** — `src/codegen/generator.rs` plus its per-area child modules (`inkwell`, LLVM 22) → LLVM IR.
 6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting, GC glue), packaged as `libquilon_rt`.
-7. **LLVM** — `quilon build` emits an object in-process and links `libquilon_rt` + `libgc` into a native binary; `quilon run` uses an in-process JIT.
+7. **LLVM** — `quilon build` emits an object in-process and links `libquilon_rt` into a native binary; `quilon run` uses an in-process JIT.
 
 See `CLAUDE.md` for contributor guidance.

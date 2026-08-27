@@ -185,10 +185,10 @@ fn run_each_executes() {
 
 #[test]
 fn run_each_with_block_body() {
-    // The `.each` lambda body may be a `< ... >` block. The block-closing `>`
-    // must be the last token on its line, so the call's `)` goes on the next line.
+    // The `.each` lambda body may be a `< ... >` block, closing right before the
+    // call's `)`.
     assert_exit(
-        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  xs.each(val => <\n    x = val + 1\n    x\n  >\n  )\n  0\n>",
+        "^ = () -> Num => <\n  xs = [10, 20, 30]\n  xs.each(val => <\n    x = val + 1\n    x\n  >)\n  0\n>",
         0,
     );
 }
@@ -247,27 +247,27 @@ fn run_mutable_record_field_write_mutates_in_place() {
     // A `:=`-bound record allows a direct in-place field write `c.value := …`.
     // The mutation is observable on the same binding afterwards.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
         42,
     );
 }
 
 #[test]
 fn run_setter_method_mutates_mutable_instance() {
-    // A setter method (its body writes `it.field := …`) mutates a `:=` instance
-    // in place; the change is visible through the same binding after the call.
+    // A setter method (declared `:=`) mutates a `:=` instance in place; the change is
+    // visible through the same binding after the call.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
         42,
     );
 }
 
 #[test]
 fn run_setter_with_block_body_writes_multiple_fields() {
-    // A setter whose body is a `< >` block performing several `it.f := …` writes
+    // A `:=` method whose body is a `< >` block performing several `it.f := …` writes
     // mutates every field in place.
     assert_exit(
-        "Point = {\n  x :: Num,\n  y :: Num,\n  shift = (d :: Num) => <\n    it.x := it.x + d\n    it.y := it.y + d\n  >\n}\n^ = () -> Num => <\n  p := Point { x = 1, y = 2 }\n  p.shift(10)\n  p.x + p.y\n>",
+        "Point = {\n  x :: Num,\n  y :: Num,\n  shift := (d :: Num) => <\n    it.x := it.x + d\n    it.y := it.y + d\n  >\n}\n^ = () -> Num => <\n  p := Point { x = 1, y = 2 }\n  p.shift(10)\n  p.x + p.y\n>",
         23,
     );
 }
@@ -290,14 +290,160 @@ fn field_write_on_immutable_instance_is_a_type_error() {
 fn setter_call_on_immutable_instance_is_a_type_error() {
     // Calling a mutating (setter) method on an `=`-bound instance must fail type
     // checking; only a `:=` receiver may be mutated.
-    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_writing_through_a_lambda_is_rejected() {
+    // The contract is the DECLARATION: `=` promises the method does not mutate `it`.
+    // A write from inside a lambda breaks that promise as surely as a direct one — the
+    // write lands on the same receiver — so the verifier must see through the lambda.
+    //
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_writing_through_a_declared_function_is_rejected() {
+    // The write can also sit in a function DECLARED inside the body. That body is still
+    // code the method runs against the same receiver, so it breaks the same promise —
+    // the traversal must descend into a block's item declarations, not just its
+    // expression statements.
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    helper = () -> $ => it.v := 99\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_calling_a_mutating_sibling_is_rejected() {
+    // The transitive half: `viaBump` writes nothing itself, but calls a `:=` sibling on
+    // `it`, so it mutates by proxy and cannot be declared `=`. Every sibling's contract is known from its
+    // declaration, so this is a lookup rather than an inference.
+    let src = "T = {\n  v :: Num,\n  bump := () -> $ => it.v := 99,\n  viaBump = () -> Num => it.bump()\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.viaBump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn a_mutating_method_writing_through_a_lambda_runs_on_a_mutable_receiver() {
+    // The other half of the rule: declaring it `:=` must actually let it work. On a
+    // `:=` receiver it runs and mutates, leaving v = 2 — so the verifier rejects the
+    // undeclared case without making the declared one uncallable.
+    let src = "T = {\n  v :: Num,\n  bump := () -> Num => <\n    [1, 2].each(x => it.v := x)\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    assert_exit(src, 2);
+}
+
+#[test]
+fn a_method_is_a_setter_because_it_is_declared_one_not_because_it_writes() {
+    // The contract is the declaration, not the body: `bump` writes nothing at all, yet
+    // being declared `:=` still makes it require a `:=` receiver. Nothing else in the
+    // suite would fail if registration quietly went back to inspecting bodies.
+    let src = "T = {\n  v :: Num,\n  bump := () -> Num => it.v\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_operator_member_cannot_be_declared_mutating() {
+    // An operator yields a value, and its dispatch never consults the setter set, so a
+    // `:=` operator would promise a mutation no call site checks. Rejected at parse time,
+    // with the rule rather than a stray-symbol complaint.
+    let src = "Counter = {\n  value :: Num,\n  + := (other :: Counter) -> Num => it.value\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on an operator member must be rejected");
+    assert!(
+        err.message.contains("cannot be declared with `:=`"),
+        "expected the operator-member rule, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn the_render_member_cannot_be_declared_mutating() {
+    // Same rule for the render member: it renders a value, and `print`/interpolation
+    // never reach the receiver-mutability gate.
+    let src = "Counter = {\n  value :: Num,\n  ` := () -> Text => \"c\"\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on the render member must be rejected");
+    assert!(
+        err.message.contains("cannot be declared with ':='"),
+        "expected the render-member rule, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn a_sum_method_cannot_be_declared_mutating() {
+    // A sum's data lives in variant payloads, reached by matching, and a match binding is
+    // immutable — so there is no field to write and `:=` would declare a mutation nothing
+    // can perform. Rejected at parse time, like an operator member.
+    let src = "S = A(Num) / B {\n  poke := () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`:=` on a sum method must be rejected");
+    assert!(
+        err.message.contains("cannot have a mutating method"),
+        "expected a mutating-sum-method diagnostic, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
+    // Diagnostic ORDER, not just presence. The mutation verifier must not run for sums:
+    // if it did, `it.x := 99` on a sum would be answered with "declare it with ':='",
+    // advice that leads nowhere — following it hits the type error below anyway. The
+    // truthful complaint is that a sum has no such field.
+    let src = "S = A(Num) / B {\n  poke = () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
+    let message = checker
+        .check_program(&program)
+        .expect_err("a field write on a sum must be rejected")
+        .to_string();
     assert!(
-        checker.check_program(&program).is_err(),
-        "expected a setter call on an `=`-bound instance to be a type error"
+        !message.contains("declare it with ':='"),
+        "a sum field write must not be answered with setter advice, got: {message}"
     );
+    assert!(
+        message.contains("Type mismatch"),
+        "expected the field/type complaint, got: {message}"
+    );
+}
+
+#[test]
+fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
+    // The message is the whole remedy — it has to say which method and what to do — and
+    // `docs/LANGUAGE.md` quotes it, so pin the wording rather than merely "some error".
+    let src = "T = {\n  v :: Num,\n  bump = () -> $ => it.v := 99\n}\n^ = () -> Num => 0";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let err = checker
+        .check_program(&program)
+        .expect_err("an `=` method that mutates `it` must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("'T.bump'") && message.contains("declare it with ':='"),
+        "the diagnostic must name the method and the fix, got: {message}"
+    );
+}
+
+#[test]
+fn unannotated_method_parameter_is_checked_as_num_at_the_call_site() {
+    // An unannotated method parameter defaults to `Num` when the BODY is checked, so
+    // the call site must hold arguments to that same commitment — exactly as a plain
+    // function's unannotated parameter already does. Leaving these unchecked let a
+    // `Text` argument through to codegen, where it surfaced as a raw LLVM verifier
+    // dump instead of a type error.
+    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => it.v + x\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(\"hello\")\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn unannotated_method_parameter_still_accepts_a_num() {
+    // The tightening must not reject the case it defaulted for: a `Num` argument is
+    // exactly what the body was checked against.
+    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => it.v + x\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(41)\n>";
+    assert_exit(src, 42);
 }
 
 #[test]
@@ -306,7 +452,7 @@ fn setter_call_result_is_unit_not_num() {
     // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
     // fail type checking, keeping the checker in agreement with codegen (a setter
     // call emits an i8/Unit, not an f64). Regression for a check/compile divergence.
-    let src = "Counter = {\n  value :: Num,\n  bump = (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -318,8 +464,8 @@ fn setter_call_result_is_unit_not_num() {
 
 #[test]
 fn run_non_setter_method_on_immutable_instance_is_allowed() {
-    // A non-mutating (getter) method has no `it.field := …` in its body, so it may
-    // be called on an `=`-bound (frozen) instance — only setters need `:=`.
+    // An `=`-declared method may be called on an `=`-bound (frozen) instance — only
+    // `:=` methods need a `:=` receiver.
     assert_exit(
         "Counter = {\n  value :: Num,\n  peek = => it.value\n}\n^ = () -> Num => <\n  c = Counter { value = 42 }\n  c.peek()\n>",
         42,
@@ -363,13 +509,13 @@ fn run_eprint_returns_unit_as_last_expression() {
 
 #[test]
 fn run_unannotated_print_wrapper_compiles_and_runs() {
-    // Regression: `log = m => print(m)` has no return annotation; its body is a
+    // Regression: `log = (m :: Num) => print(m)` has no return annotation; its body is a
     // `print` call, which returns `$` (Unit). Codegen must infer the `$` return
     // type (i8) rather than defaulting to Num (f64), or the generated function
     // would `ret i8` into an f64 signature and fail LLVM module verification.
     assert_exit_linked(
         "<< core.io
-log = m => print(m)
+log = (m :: Num) => print(m)
 ^ = () -> Num => <
   log(5)
   0
@@ -777,7 +923,7 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
     assert_type_error("^ = () -> Num => 1 + true");
 }
 
-// --- Entry-point `^` receiving `args :: []Text` and `env :: [][]Text`. ---
+// --- Entry-point `^` receiving `args :: []Text` and `env :: [|Text => Text|]`. ---
 // Under the JIT, `args` is the exact slice the caller hands `run_program` (here the
 // helpers pass a single-element argv, mirroring a native binary invoked with no extra
 // args); `env` still comes from this process's real environment, which is not
@@ -795,10 +941,10 @@ fn run_entry_with_args_parameter_typechecks_and_runs() {
 
 #[test]
 fn run_entry_with_args_and_env_parameters_runs() {
-    // `^(args :: []Text, env :: [][]Text)` — touches both arrays; the result depends
-    // only on invocation-independent facts (sizes), so it is deterministic.
+    // `^(args :: []Text, env :: [|Text => Text|])` — touches both the array and the Map;
+    // the result depends only on invocation-independent facts (sizes), so it is deterministic.
     assert_exit(
-        "^ = (args :: []Text, env :: [][]Text) -> Num => <\n  args.size >= 1 && env.size >= 0 ? 9 : 0\n>",
+        "^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <\n  args.size >= 1 && env.size >= 0 ? 9 : 0\n>",
         9,
     );
 }
@@ -908,7 +1054,7 @@ fn entry_with_non_text_array_param_is_rejected() {
     );
 }
 
-// --- The `>` lexing rule: line-final `>` closes a block; otherwise it is `Gt`. ---
+// --- The `>` lexing rule: `>` closes a block unless a same-line operand follows. ---
 
 #[test]
 fn run_bare_greater_than_works_on_one_line() {
@@ -917,8 +1063,8 @@ fn run_bare_greater_than_works_on_one_line() {
 }
 
 #[test]
-fn run_greater_than_inside_block_closing_line_final() {
-    // A `>` comparison used inside a `< >` block whose closing `>` is line-final.
+fn run_greater_than_inside_a_block() {
+    // A `>` comparison used inside a `< >` block, whose own `>` still closes.
     assert_exit(
         "^ = () -> Num => <\n  ok = 10 > 2 ? 1 : 0\n  ok == 1 ? 42 : 0\n>",
         42,
@@ -926,27 +1072,65 @@ fn run_greater_than_inside_block_closing_line_final() {
 }
 
 #[test]
-fn dangling_comparison_at_line_end_is_an_error() {
-    // A `>` placed as the LAST token on its line is lexed as block-close, so using it
-    // as a comparison there must fail to parse (never silently miscompile).
-    let src = "^ = () -> Num => <\n  x = 5\n  x >\n  3\n>";
-    let tokens = Lexer::tokenize(src).expect("lexing failed");
-    assert!(
-        parser::parse(&tokens).is_err(),
-        "a line-final `>` used as comparison must be a parse error"
+fn run_block_bodied_lambda_as_a_call_argument_on_one_line() {
+    // The closer sits directly before the call's `)`, where no operand can follow.
+    assert_exit(
+        "^ = () -> Num => <\n  total := 0\n  [1, 2, 3].each(x => < total := total + x >)\n  total * 7\n>",
+        42,
     );
 }
 
 #[test]
-fn unterminated_block_with_only_midline_gt_is_an_error() {
-    // A block whose `>` is mid-line (a `Gt`) never gets its line-final closing `>`,
-    // so the block is unterminated -> a clear parse error (unexpected EOF).
+fn run_greater_than_survives_next_to_a_closer() {
+    // A `>` comparison as a call's last argument: the comparison keeps its operand,
+    // and the `)` right after it is not mistaken for a block close.
+    assert_exit(
+        "^ = () -> Num => <\n  big = [3, 1, 4].filter(x => x > 2)\n  big.size * 21\n>",
+        42,
+    );
+}
+
+#[test]
+fn dangling_comparison_at_line_end_is_an_error() {
+    // A `>` with nothing after it on its line is a block close, so using it as a
+    // comparison there must fail to parse (never silently miscompile).
+    let src = "^ = () -> Num => <\n  x = 5\n  x >\n  3\n>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    assert!(
+        parser::parse(&tokens).is_err(),
+        "a `>` at the end of its line used as comparison must be a parse error"
+    );
+}
+
+#[test]
+fn unterminated_block_with_only_a_comparison_gt_is_an_error() {
+    // The `>` here has an operand after it, so it is `Gt` and the block never closes
+    // -> a clear parse error (unexpected EOF), not a silent miscompile.
     let src = "^ = () -> Num => < x > 5";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     assert!(
         parser::parse(&tokens).is_err(),
         "an unterminated block must be a parse error"
     );
+}
+
+#[test]
+fn two_adjacent_closers_name_the_missing_space() {
+    // `>>` is the export marker by maximal munch, so two closers need a space between
+    // them. The diagnostic must say so rather than fail on a phantom export.
+    let src = "^ = () -> Num => <\n  f = () => < 1 >>";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let err = parser::parse(&tokens).expect_err("`>>` as two closers must be rejected");
+    assert!(
+        err.message.contains("separate them with a space"),
+        "expected the adjacent-closer hint, got: {}",
+        err.message
+    );
+
+    // With the space, the same program parses.
+    let spaced = "^ = () -> Num => <\n  f = () => < 1 > >";
+    let tokens = Lexer::tokenize(spaced).expect("lexing failed");
+    assert!(parser::parse(&tokens).is_ok(), "`> >` must parse");
 }
 
 #[test]
@@ -1347,7 +1531,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 ^ = () -> Num => <
   start = now()
   @sleep(0.05)
-  assert(now() - start >= 0.05)
+  assert(now() - start >= 0.05, equals(true))
   0
 >
 "#,

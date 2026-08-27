@@ -15,10 +15,13 @@ impl TypeError {
             | TypeError::ImmutableAssignment { span, .. }
             | TypeError::ImmutableFieldWrite { span, .. }
             | TypeError::MutatingMethodOnImmutable { span, .. }
+            | TypeError::MutatingMethodDeclaredImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
             | TypeError::NoMatchingOverload { span, .. }
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
+            | TypeError::UnannotatedParameter { span, .. }
+            | TypeError::UnsupportedFunctionReturn { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
@@ -31,7 +34,11 @@ impl TypeError {
             | TypeError::InvalidBuiltinArgument { span, .. }
             | TypeError::ComputedGlobalBinding { span, .. }
             | TypeError::OperatorMustBeMember { span, .. }
-            | TypeError::OperatorMemberArity { span, .. } => span,
+            | TypeError::OperatorMemberArity { span, .. }
+            | TypeError::AssertionNeedsMatcher { span, .. }
+            | TypeError::ExpectOutsideTest { span }
+            | TypeError::MatcherArity { span, .. }
+            | TypeError::MatcherTypeUnsupported { span, .. } => span,
         }
     }
 }
@@ -41,6 +48,55 @@ impl std::fmt::Display for TypeError {
         match self {
             TypeError::UndefinedVariable { name, .. } => {
                 write!(f, "Undefined variable '{}'", name)
+            }
+            TypeError::AssertionNeedsMatcher { name, .. } => {
+                write!(
+                    f,
+                    "`{name}` takes the value and a matcher: `{name}(actual, equals(expected))`. \
+                     The matchers are {}",
+                    crate::ast::MATCHERS
+                        .iter()
+                        .map(|matcher| format!("`{matcher}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            TypeError::ExpectOutsideTest { .. } => {
+                write!(
+                    f,
+                    "`{}` marks the running test case failed, so it only works inside an `{}` \
+                     case in a `{}` block. Use `{}`, which reports and exits, everywhere else",
+                    crate::ast::EXPECT,
+                    crate::ast::TEST_CASE_MARKER,
+                    crate::ast::TEST_BLOCK_MARKER,
+                    crate::ast::ASSERT
+                )
+            }
+            TypeError::MatcherArity {
+                matcher,
+                expected,
+                got,
+                ..
+            } => {
+                write!(f, "`{matcher}` takes {expected} argument(s), got {got}")
+            }
+            TypeError::MatcherTypeUnsupported { matcher, ty, .. } => {
+                let label = type_label(ty);
+                match matcher.as_str() {
+                    "contains" => write!(
+                        f,
+                        "`contains` reads a `Text` or an array, and {label} is neither"
+                    ),
+                    "isOk" | "isNotOk" => write!(
+                        f,
+                        "`{matcher}` reads a `Result`, and {label} has no `{}` variant",
+                        crate::ast::matcher_variant(matcher).unwrap_or_default()
+                    ),
+                    _ => write!(
+                        f,
+                        "`{matcher}` compares with `==`, which {label} has no member for"
+                    ),
+                }
             }
             TypeError::TypeMismatch { expected, got, .. } => {
                 write!(f, "Type mismatch: expected {:?}, got {:?}", expected, got)
@@ -63,6 +119,15 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Cannot write to a field of immutable '{}'; bind it with ':=' to allow in-place mutation",
                     name
+                )
+            }
+            TypeError::MutatingMethodDeclaredImmutable {
+                type_name, method, ..
+            } => {
+                write!(
+                    f,
+                    "Method '{}.{}' mutates 'it' but is declared with '='; declare it with ':=' to allow in-place mutation",
+                    type_name, method
                 )
             }
             TypeError::MutatingMethodOnImmutable {
@@ -112,6 +177,24 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Overloaded definition '{}' must annotate every parameter; '{}' has no type annotation",
                     name, parameter
+                )
+            }
+            TypeError::UnannotatedParameter {
+                function,
+                parameter,
+                ..
+            } => {
+                write!(
+                    f,
+                    "parameter '{}' of '{}' has no type: annotate it (its type cannot be inferred from context)",
+                    parameter, function
+                )
+            }
+            TypeError::UnsupportedFunctionReturn { function, .. } => {
+                write!(
+                    f,
+                    "'{}' returns a function, which is not supported yet — a function may take a function as a parameter, but not return one",
+                    function
                 )
             }
             TypeError::SiteIsImmutable { field, .. } => {
@@ -179,7 +262,7 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "Entry point '^' has an unsupported signature ({}). Valid signatures: \
-                     '()', '(args :: []Text)', '(args :: []Text, env :: [][]Text)' \
+                     '()', '(args :: []Text)', '(args :: []Text, env :: [|Text => Text|])' \
                      (or legacy '(argc :: Num, argv :: Num)').",
                     fmt_type_list(got)
                 )
@@ -222,8 +305,8 @@ pub(super) fn fmt_candidates(candidates: &[Vec<Type>]) -> String {
     candidates
         .iter()
         // A trailing `Site` is filled in by the compiler and can never be written at a call
-        // site, so a candidate list must not ask for it — `assertEq(1)` reports the
-        // candidates as `(Num, Num)`, not `(Num, Num, Site)`.
+        // site, so a candidate list must not ask for it — `failAt(message, site)` reports
+        // its candidate as `(Text)`, not `(Text, Site)`.
         .map(|parameters| {
             format!(
                 "({})",

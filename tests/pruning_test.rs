@@ -101,7 +101,7 @@ fn a_helper_called_only_from_a_global_function_value_survives() {
     assert_exit(
         concat!(
             "bump = (n :: Num) -> Num => n + 1\n",
-            "step = n => bump(n)\n",
+            "step = (n :: Num) => bump(n)\n",
             "^ = () -> Num => step(6)"
         ),
         7,
@@ -117,7 +117,7 @@ fn a_render_override_reached_only_by_interpolation_survives() {
             "Tag = { id :: Num, ` = => \"tag\" }\n",
             "^ = () -> $ => <\n",
             "  t = Tag { id = 1 }\n",
-            "  assertEq(\"a `t` b\", \"a tag b\")\n",
+            "  assert(\"a `t` b\", equals(\"a tag b\"))\n",
             ">"
         ),
         0,
@@ -153,11 +153,11 @@ fn imported_corelib_still_provides_what_the_program_uses() {
     // program does use has to keep working. (The AOT side of this — every example through
     // the real linker, all of which now prune — is `examples_test`'s JIT/AOT comparison.)
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assertEq(1 + 1, 2)\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(1 + 1, equals(2))\n>",
         0,
     );
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assertEq(\"a\", \"a\")\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(\"a\", equals(\"a\"))\n>",
         0,
     );
 }

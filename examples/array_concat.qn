@@ -14,33 +14,33 @@
   a :: []Num = [1, 2]
   b :: []Num = [3, 4]
   c :: []Num = a + b                   ~ [1, 2, 3, 4]
-  assertEq(c.size, 4)
+  assert(c.size, equals(4))
 
   ~ --- append / prepend ([]Num); the operands are left untouched ---
   appended :: []Num = a + 5            ~ [1, 2, 5]
   prepended :: []Num = 0 + a           ~ [0, 1, 2]
   chain :: []Num = 0 + a + 9           ~ ((0 + a) + 9) = [0, 1, 2, 9]
-  assertEq(appended.size, 3)
-  assertEq(prepended.size, 3)
-  assertEq(chain.size, 4)
-  assertEq(a.size, 2)                  ~ still 2 — `a` was not mutated by any `+` above
+  assert(appended.size, equals(3))
+  assert(prepended.size, equals(3))
+  assert(chain.size, equals(4))
+  assert(a.size, equals(2))                  ~ still 2 — `a` was not mutated by any `+` above
 
   ~ --- concat / append / prepend ([]Text) — repr-correct, not just Num ---
   hi :: []Text = ["h", "e"] + ["l", "l", "o"]   ~ ["h", "e", "l", "l", "o"]
   hi.each(w => print(w))               ~ prints h e l l o, one per line
   named :: []Text = ["Ada"] + "Lovelace"        ~ append -> ["Ada", "Lovelace"]
   greet :: []Text = "Hi" + ["there"]            ~ prepend -> ["Hi", "there"]
-  assertEq(hi.size, 5)
-  assertEq(named.size, 2)
-  assertEq(named[1], "Lovelace")
-  assertEq(greet.size, 2)
-  assertEq(greet[0], "Hi")
+  assert(hi.size, equals(5))
+  assert(named.size, equals(2))
+  assert(named[1], equals("Lovelace"))
+  assert(greet.size, equals(2))
+  assert(greet[0], equals("Hi"))
 
   ~ --- nested arrays: [][]Num + []Num is APPEND (one row), + [][]Num is CONCAT ---
   rows :: [][]Num = [[1, 2], [3, 4]]
   rows2 :: [][]Num = rows + [5, 6]     ~ append a row -> [[1,2], [3,4], [5,6]]
   grid :: [][]Num = rows + rows        ~ concat -> [[1,2], [3,4], [1,2], [3,4]]
-  assertEq(rows2.size, 3)
-  assertEq(grid.size, 4)
-  assertEq(rows2[2][1], 6)
+  assert(rows2.size, equals(3))
+  assert(grid.size, equals(4))
+  assert(rows2[2][1], equals(6))
 >

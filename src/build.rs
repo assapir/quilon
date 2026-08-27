@@ -2,9 +2,9 @@
 //!
 //! Emits an object file directly from the in-process LLVM module via inkwell's
 //! `TargetMachine` (so no external `llc` is needed), then links it against the
-//! `libquilon_rt` static library + Boehm GC using the system C toolchain
-//! (`clang` by default, or `gcc`). Backs the `quilon build` subcommand and
-//! supersedes the old `scripts/aot.sh`.
+//! `libquilon_rt` static library — which carries the Boehm GC — using the system C
+//! toolchain (`clang` by default, or `gcc`). Backs the `quilon build` subcommand
+//! and supersedes the old `scripts/aot.sh`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,16 +22,13 @@ use crate::source_map::SourceMap;
 use crate::typechecker::TypeTable;
 use std::rc::Rc;
 
-/// What DWARF line-number emission needs beyond the source map: the `.qn` file's path as
-/// the user named it (recorded in the DWARF `DIFile`), and the import boundary.
+/// What DWARF line-number emission needs beyond the source map: the root `.qn` file's path as
+/// the user named it (recorded in the DWARF `DIFile`).
 ///
 /// The file's TEXT is not here — it comes from the `SourceMap` the build already carries,
 /// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
-    /// How many leading program items came from imported modules (import linking prepends
-    /// them); those get no debug info, as their spans are relative to their own module source.
-    pub imported_items: usize,
 }
 
 /// Emit a native object file for `program` at `obj_path` using LLVM's
@@ -58,7 +55,7 @@ fn emit_object(
     // Turn on DWARF line-number emission before codegen so every function/expression is
     // attributed to its `.qn` source location.
     if let Some(d) = debug {
-        generator.enable_debug(d.file, sources.root_text(), d.imported_items);
+        generator.enable_debug(d.file, &sources);
     }
     // Populates, verifies, and builds the C `main` wrapper around `^`.
     generator.generate(program)?;
@@ -90,8 +87,9 @@ fn emit_object(
 /// the `quilon-rt` staticlib and bakes the compressed copy's path into
 /// `QUILON_RT_GZ`; embedding the archive makes a *distributed* `quilon` binary
 /// self-contained — `quilon build` works from a bare binary download, with no
-/// archive shipped alongside it (system libgc is still required, as documented
-/// in the README). Decompressed at most once per compiler version per machine:
+/// archive shipped alongside it, and since the archive carries the statically
+/// built Boehm GC, so is every binary it produces. Decompressed at most once per
+/// compiler version per machine:
 /// only when no system-provided archive exists and the cache misses.
 const QUILON_RT_ARCHIVE_GZ: &[u8] = include_bytes!(env!("QUILON_RT_GZ"));
 
@@ -197,8 +195,60 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
         .map_err(|e| format!("failed to extract the embedded runtime archive: {e}"))
 }
 
+/// System libraries the Rust staticlib needs. The Boehm GC is not among them:
+/// `quilon-rt`'s build script compiles it statically, so it is already inside the
+/// runtime archive — which is what makes a produced binary runnable on a machine
+/// with no libgc installed. Apple's libSystem provides `dlopen` and friends, so
+/// there is no `-ldl` to ask for there (and asking is a hard error).
+#[cfg(target_os = "macos")]
+pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
+#[cfg(not(target_os = "macos"))]
+pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
+
+/// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
+/// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
+/// the emitted LLVM IR — that a plain archive scan could otherwise drop (nondeterministically,
+/// depending on the staticlib's codegen-unit split and archive member order), surfacing as an
+/// `undefined reference`.
+///
+/// On GNU ld the retention is narrow: one `-u <symbol>` per intrinsic seeds an undefined
+/// reference the archive scan resolves, pinning exactly those members and pulling the rest in on
+/// demand — leaving out the unreferenced compiler-support and std objects that force-including
+/// the whole archive drags along, roughly a tenth of a hello-world's size. Driven from
+/// `quilon_rt::INTRINSICS`, so a new intrinsic needs no change here.
+///
+/// It does NOT drop the concurrency runtime (scheduler, `mio` reactor, `corosensei` stacks) from
+/// a program that never blocks, and cannot: rustc partitions the staticlib into codegen-unit
+/// objects freely, co-locating a generic instantiation an always-used intrinsic needs (`__exit`
+/// reaches `drop_glue::<Vec<u8>>`) in the same object as concurrency code, so pulling that object
+/// pulls the concurrency machinery transitively — no per-intrinsic `-u` partition changes that.
+/// Dropping it needs `--gc-sections` (with function-sections in the runtime build) or splitting
+/// the concurrency runtime into its own crate; both carry conservative-GC and retained-symbol
+/// correctness questions and are left as follow-up.
+///
+/// ld64 (macOS) force-loads the whole archive instead (`force_load`): a per-intrinsic `-u` would
+/// need each name spelled with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a
+/// hard link error, so force-loading is both correct and unconditionally safe there.
+///
+/// The archive is passed by path (not `-L`/`-l`) either way: the cache-extracted copy carries a
+/// content-hash suffix in its filename, which `-l` name lookup could not address. The force-load
+/// flag and that path are separate `-Xlinker` arguments rather than one `-Wl,` list, because the
+/// driver splits a `-Wl,` argument on commas and the archive path is user-controlled — a comma in
+/// it would arrive at the linker as two mangled flags.
+fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bool) {
+    if force_load {
+        command.arg("-Xlinker").arg("-force_load");
+        command.arg("-Xlinker").arg(rt_lib);
+    } else {
+        for (name, _) in quilon_rt::INTRINSICS {
+            command.arg("-u").arg(name);
+        }
+        command.arg(rt_lib);
+    }
+}
+
 /// Build `program` into a native executable at `out`, linking with `linker`
-/// (`clang` or `gcc`) against `libquilon_rt` + Boehm GC.
+/// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC.
 pub fn build_native(
     program: &Program,
     types: TypeTable,
@@ -212,36 +262,21 @@ pub fn build_native(
     emit_object(program, types, defer, sources, &obj, debug)?;
     let rt_lib = runtime_lib_path()?;
 
-    let status = Command::new(linker)
-        .arg(&obj)
-        // Pull EVERY object out of `libquilon_rt.a`, not just the members that resolve
-        // an already-undefined symbol. The Rust staticlib splits the `#[no_mangle]`
-        // runtime intrinsics across codegen-unit objects (and their order in the archive
-        // is unspecified), so a single linker pass over the archive can miss an
-        // intrinsic the program references (e.g. `__text_cmp`) when its defining object
-        // sits earlier than the object that first pulled the archive in — manifesting as
-        // an `undefined reference` only under whatever CU split CI happens to produce.
-        // `--whole-archive` makes inclusion deterministic; `--no-whole-archive` restores
-        // normal (on-demand) linking for the system libs that follow. The archive is
-        // passed by path (not `-L`/`-l`): the cache-extracted copy carries a content-hash
-        // suffix in its filename, which `-l` name lookup couldn't address.
-        .arg("-Wl,--whole-archive")
-        .arg(&rt_lib)
-        .arg("-Wl,--no-whole-archive")
-        // System libs the Rust staticlib needs, alongside Boehm GC.
-        .args(["-lgc", "-lpthread", "-ldl", "-lm"])
-        .arg("-o")
-        .arg(out)
-        .status()
-        .map_err(|e| match e.kind() {
-            // Name the missing binary instead of a bare "No such file or
-            // directory (os error 2)".
-            std::io::ErrorKind::NotFound => format!(
-                "linker `{linker}` not found on PATH. Install it, or pass \
+    let mut command = Command::new(linker);
+    command.arg(&obj);
+    append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
+    command.args(SYSTEM_LIBS);
+    command.arg("-o").arg(out);
+
+    let status = command.status().map_err(|e| match e.kind() {
+        // Name the missing binary instead of a bare "No such file or
+        // directory (os error 2)".
+        std::io::ErrorKind::NotFound => format!(
+            "linker `{linker}` not found on PATH. Install it, or pass \
                  `--linker <name>` (e.g. `--linker gcc`)."
-            ),
-            _ => format!("failed to invoke linker `{linker}`: {e}"),
-        });
+        ),
+        _ => format!("failed to invoke linker `{linker}`: {e}"),
+    });
 
     // Drop the intermediate object whether or not linking succeeded.
     let _ = std::fs::remove_file(&obj);
@@ -249,5 +284,76 @@ pub fn build_native(
     match status? {
         s if s.success() => Ok(()),
         s => Err(format!("linker `{linker}` failed with {s}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A comma in the archive path is enough to mangle a `-Wl,` flag, and the path comes from
+    /// the user's cache location, so neither retention shape may build one. Both are checked
+    /// from any host: the ld64 form is unreachable on Linux, where it would otherwise go
+    /// untested until someone with a comma in `$HOME` ran `quilon build` on a Mac.
+    #[test]
+    fn neither_retention_shape_passes_a_comma_bearing_path_through_wl() {
+        let archive = Path::new("/home/a,b/.cache/quilon/libquilon_rt.a");
+        for force_load in [true, false] {
+            let mut command = Command::new("cc");
+            append_runtime_link_args(&mut command, archive, force_load);
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+
+            assert!(
+                !args.iter().any(|arg| arg.starts_with("-Wl,")),
+                "a `-Wl,` argument is comma-split by the driver: {args:?}"
+            );
+            assert!(
+                args.iter().any(|arg| arg == archive.to_str().unwrap()),
+                "the archive path must reach the linker whole: {args:?}"
+            );
+        }
+    }
+
+    /// ld64 wants `-force_load <archive>` as two arguments, and `-Xlinker` is what keeps them
+    /// adjacent and unparsed.
+    #[test]
+    fn the_force_load_shape_is_two_xlinker_pairs() {
+        let archive = Path::new("/tmp/libquilon_rt.a");
+        let mut command = Command::new("cc");
+        append_runtime_link_args(&mut command, archive, true);
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            ["-Xlinker", "-force_load", "-Xlinker", "/tmp/libquilon_rt.a"]
+        );
+    }
+
+    /// The GNU-ld shape: one `-u` per intrinsic, all of them before the archive, since a
+    /// member is only pulled in for a reference the scan has already seen.
+    #[test]
+    fn the_undefined_symbol_shape_names_every_intrinsic_before_the_archive() {
+        let archive = Path::new("/tmp/libquilon_rt.a");
+        let mut command = Command::new("cc");
+        append_runtime_link_args(&mut command, archive, false);
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(args.len(), quilon_rt::INTRINSICS.len() * 2 + 1);
+        assert_eq!(args.last().unwrap(), "/tmp/libquilon_rt.a");
+        for (name, _) in quilon_rt::INTRINSICS {
+            let at = args
+                .iter()
+                .position(|arg| arg == name)
+                .unwrap_or_else(|| panic!("{name} is not forced onto the link"));
+            assert_eq!(args[at - 1], "-u");
+        }
     }
 }

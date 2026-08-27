@@ -162,6 +162,23 @@ impl<'a> Parser<'a> {
     /// Requiring the following `=` keeps a stray leading operator from being mistaken
     /// for a definition. `<`/`>` (block delimiters) are intentionally excluded here —
     /// a top-level `< ... >` would be a block, never an operator name.
+    /// The operator symbol at the cursor, if it is one — without asking what follows.
+    pub(super) fn operator_symbol_name(&self) -> Option<String> {
+        let sym = match self.peek().kind {
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            TokenKind::Star => "*",
+            TokenKind::Slash => "/",
+            TokenKind::Percent => "%",
+            TokenKind::Eq => "==",
+            TokenKind::Ne => "!=",
+            TokenKind::Le => "<=",
+            TokenKind::Ge => ">=",
+            _ => return None,
+        };
+        Some(sym.to_string())
+    }
+
     pub(super) fn operator_def_name(&self) -> Option<String> {
         let sym = match self.peek().kind {
             TokenKind::Plus => "+",
@@ -176,6 +193,10 @@ impl<'a> Parser<'a> {
             _ => return None,
         };
         // Only a definition (`operator = ...`); otherwise leave it for expression parsing.
+        // Deliberately NOT `:=`: an operator that mutates its left operand has no call-site
+        // enforcement (operator calls do not consult the setter set), so declaring one is a
+        // parse error rather than surface that looks checked and is not. An `=` operator
+        // whose body mutates `it` is still caught by the verifier.
         if self.peek_ahead(1).kind == TokenKind::Assign {
             Some(sym.to_string())
         } else {

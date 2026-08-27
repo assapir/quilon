@@ -5,6 +5,23 @@ All notable changes to the Quilon VS Code extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A debug session no longer fails with `could not run "quilon"` when the compiler is
+  installed.** The extension ran a bare `quilon`, which only resolves if the editor's process
+  inherited a `PATH` containing it — an editor started from a desktop launcher typically has
+  not, since `~/.cargo/bin` is added by a shell rc file. With `quilon.command` at its default,
+  the extension now locates the compiler itself: `PATH`, the usual install directories
+  (`~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), a
+  `target/release`|`target/debug` build in an open folder, and finally `cargo run --quiet --`
+  when an open folder is a checkout of the compiler repo. A `quilon.command` you set is still
+  used verbatim — except a bare `"quilon"`, which is exactly the value that leaves a
+  GUI-launched editor with nothing to run, and so searches too. Diagnostics, Run, Check, and Debug all share the one resolution, and when no
+  compiler can be spawned the notification says where it looked and offers to open the
+  setting.
+
 ## [0.9.2] - 2026-08-24
 
 Version matches the Quilon compiler it targets.

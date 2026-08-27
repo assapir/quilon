@@ -7,8 +7,9 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// The `{ ptr data, i64 len }` struct shared by arrays and `Text`. For `Text`,
-    /// `data` is a NUL-terminated UTF-8 buffer and `len` is its byte length.
+    /// The `{ ptr data, i64 len }` struct shared by arrays and `Text`. For `Text`, `data`
+    /// points at UTF-8 bytes and `len` is how many of them there are — the pair is the whole
+    /// value, so nothing reads past `len`.
     pub(super) fn ptr_len_struct_type(&self) -> inkwell::types::StructType<'ctx> {
         self.context.struct_type(
             &[
@@ -58,8 +59,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///   - `Array` — an array *value* is the `{ ptr, i64 }` struct `generate_array`
     ///     produces and stores inline (so a nested array `[][]T` keeps that struct as its
     ///     element), whereas `type_to_llvm` lowers `[]T` to a bare opaque pointer.
-    ///   - `Record` / `Named` — a record *value* is a POINTER to its struct (the record
-    ///     ABI: `generate_record` returns the alloca), not the struct by value.
+    ///   - `Record` — a record *value* is a POINTER to its struct (the record ABI:
+    ///     `generate_record` returns the alloca), not the struct by value. A `Named` keeps
+    ///     the `type_to_llvm` lowering, which already answers by-pointer for a named record
+    ///     and the tagged-union struct for a named sum.
     ///   - `Generic` — a payload type variable that survived to a read site (e.g. a match
     ///     whose result type was taken from a never-constructed variant's generic arm)
     ///     has no concrete LLVM type; it falls back to the canonical numeric payload
@@ -69,9 +72,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
-            Type::Record(_) | Type::Named { .. } => {
-                Ok(self.context.ptr_type(AddressSpace::default()).into())
-            }
+            Type::Record(_) => Ok(self.context.ptr_type(AddressSpace::default()).into()),
             Type::Generic { .. } => Ok(self.context.f64_type().into()),
             _ => self.type_to_llvm(ty),
         }
@@ -108,6 +109,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Whether `expression` is a `Text` — the operand test the built-in `Text` operators
+    /// (comparison and `+`) route on. Reads the checker's recorded type for the node where
+    /// there is one, and only falls back to [`infer_type`]'s structural inference (which
+    /// clones) where there is not: the codegen tests that skip the type-check pass.
+    pub(super) fn is_text_expression(&self, expression: &Expression) -> bool {
+        match self.oracle.expression_type(expression) {
+            Some(ty) => *ty == Type::Text,
+            None => self.infer_type(expression) == Type::Text,
+        }
+    }
+
     /// Best-effort Quilon type of `expression`, sufficient to mangle overloaded call sites.
     /// Codegen lacks the type checker's full inference, so this covers exactly the
     /// shapes that can be an overloaded argument: literals, locals/parameters (tracked in
@@ -119,7 +131,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Prefer the type checker's authoritative type for this exact node (the oracle) —
         // the same source codegen's read sites use. It knows shapes the structural fallback
         // below can't (an `arr[i]` element, a `.split(…)`/`.replace(…)` result, a field
-        // read), so an overloaded call taking one of those (e.g. `assertEq(parts[0], …)`)
+        // read), so an overloaded call taking one of those (e.g. `render(parts[0])`)
         // mangles to the right member. Falls back to structural inference only when the
         // oracle has no entry — the IR-only codegen tests that skip the type-check pass.
         if let Some(ty) = self.oracle.expression_type(expression) {
@@ -335,6 +347,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             // user operator overload) is passed by pointer — record instances are
             // represented as a pointer to their struct alloca (see `generate_record`).
             Type::Named { .. } => Ok(self.context.ptr_type(AddressSpace::default()).into()),
+            // A function-typed value (a closure passed as an argument, or a function-typed
+            // parameter) is the `{ ptr fn, ptr env }` closure pair. Validate the parameter
+            // and return types, then lower to that shared struct.
+            Type::Function {
+                parameters,
+                return_type,
+            } => {
+                for parameter in parameters {
+                    let _ = self.type_to_llvm(parameter)?;
+                }
+                let _ = self.type_to_llvm(return_type)?;
+                Ok(self.closure_struct_type().into())
+            }
             _ => Err(format!("Unsupported type: {:?}", ty)),
         }
     }

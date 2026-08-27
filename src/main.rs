@@ -1,4 +1,4 @@
-use quilon::{ast, build, codegen, driver, jit};
+use quilon::{ast, build, codegen, driver, jit, test_command};
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(name = "quilon")]
 #[command(about = "Quilon - A fast, statically-typed web programming language", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -52,6 +53,12 @@ enum Commands {
         /// Path to the .qn file
         file: PathBuf,
     },
+    /// Run a Quilon test suite: every top-level `describe` block in a file or directory
+    Test {
+        /// File or directory to search for suites (defaults to the current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 /// Run the shared front-end (read → lex → parse → resolve imports → type-check),
@@ -65,6 +72,18 @@ fn checked(file: &Path) -> driver::Checked {
             std::process::exit(1);
         }
     }
+}
+
+/// [`checked`], exiting 0 without a word when the file is a test suite rather than a
+/// program. Erasing its blocks leaves nothing to run, so `run`, `compile`, and `build`
+/// pass over it rather than reporting a missing `^`; `quilon test` is what runs it. Call it
+/// before printing anything, so the skip is silent.
+fn checked_program_to_emit(file: &Path) -> driver::Checked {
+    let checked = checked(file);
+    if checked.tests_only {
+        std::process::exit(0);
+    }
+    checked
 }
 
 /// Exit with the standard diagnostic unless `program` defines the `^` entry point
@@ -83,7 +102,7 @@ fn main() {
 
     match cli.command {
         Commands::Run { file, args } => {
-            let checked = checked(&file);
+            let checked = checked_program_to_emit(&file);
             require_entry_point(&checked.program);
 
             // Mirror the argv a native build receives: `argv[0]` is the program
@@ -113,9 +132,8 @@ fn main() {
             }
         }
         Commands::Compile { file, output } => {
+            let checked = checked_program_to_emit(&file);
             println!("🔨 Compiling: {}", file.display());
-
-            let checked = checked(&file);
             let program = checked.program;
             println!("✅ Type checking passed!");
             require_entry_point(&program);
@@ -164,14 +182,11 @@ fn main() {
             linker,
             debug,
         } => {
+            // The source text and every file's path come from the source map the build already
+            // carries; a `--debug` build additionally needs the root file's path (below).
+            let checked = checked_program_to_emit(&file);
             println!("🔨 Building: {}", file.display());
-
-            // A `--debug` build also needs the import boundary, so only the user's own
-            // functions get DWARF line info; the source text comes from the source map the
-            // build already carries.
-            let checked = checked(&file);
             let sources = checked.sources;
-            let debug_imported_items = debug.then_some(checked.imported_items);
             let defer = checked.defer;
             let program = checked.program;
             require_entry_point(&program);
@@ -179,10 +194,7 @@ fn main() {
             // Default the output to the source name without its `.qn` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
-            let debug_source = debug_imported_items.map(|imported_items| build::DebugSource {
-                file: &file,
-                imported_items,
-            });
+            let debug_source = debug.then(|| build::DebugSource { file: &file });
 
             match build::build_native(
                 &program,
@@ -208,6 +220,32 @@ fn main() {
             println!(
                 "📋 Program contains {} top-level item(s)",
                 program.items.len()
+            );
+        }
+        Commands::Test { path } => {
+            let failed = test_command::run(&path);
+            std::process::exit(i32::from(failed > 0));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::{CommandFactory, error::ErrorKind};
+
+    #[test]
+    fn version_flags_print_the_package_version() {
+        for flag in ["--version", "-V"] {
+            let error = Cli::command()
+                .try_get_matches_from(["quilon", flag])
+                .expect_err("the version flags should exit before requiring a subcommand");
+
+            assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+            assert_eq!(error.exit_code(), 0);
+            assert_eq!(
+                error.to_string(),
+                format!("quilon {}\n", env!("CARGO_PKG_VERSION"))
             );
         }
     }

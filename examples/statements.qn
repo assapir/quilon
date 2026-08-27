@@ -1,6 +1,7 @@
 ~ Statement boundaries. Quilon has no statement separator; the grammar is
 ~ newline-insensitive except for two line-aware rules:
-~   1. a line-final `>` closes a block;
+~   1. a `>` closes a block unless a same-line operand follows it, which makes it
+~      greater-than instead;
 ~   2. a `(`, `[`, or `{` that is the FIRST token on its line never continues
 ~      the previous expression — it begins a NEW statement.
 ~ So call arguments, index brackets, and constructor braces must open on the
@@ -20,24 +21,23 @@ Point = { x :: Num, y :: Num }
   sum := 0
   [3, 4].each(x => <
     sum := sum + x
-  >
-  )
-  assertEq(a.size, 2)
-  assertEq(sum, 7)
+  >)
+  assert(a.size, equals(2))
+  assert(sum, equals(7))
 
   ~ `b` is the call's result: the next line's `(` begins a NEW statement.
   ~ (Without the rule the two lines would fuse into the call `double(4)(1 + 2)`.)
   b = double(4)
-  (1 + 2) |> assertEq(3)
-  assertEq(b, 8)
+  (1 + 2) |> assert(equals(3))
+  assert(b, equals(8))
 
   ~ `e` is the record: the next line's `{` begins a NEW statement.
   ~ (Without the rule the two lines would fuse into the constructor `e { x = 9, y = 9 }`.)
   e = Point { x = 5, y = 6 }
   f = e
   { x = 9, y = 9 }
-  assertEq(f.x, 5)
-  assertEq(f.y, 6)
+  assert(f.x, equals(5))
+  assert(f.y, equals(6))
 
   ~ Only a LINE-FIRST `(` / `[` / `{` ends the expression: an argument list or a
   ~ constructor body opened on its own line may span lines, and a `.`-led line
@@ -51,7 +51,26 @@ Point = { x :: Num, y :: Num }
     x = 1,
     y = 2
   }
-  assertEq(c, 20)
-  assertEq(d, 12)
-  assertEq(g.x + g.y, 3)
+  assert(c, equals(20))
+  assert(d, equals(12))
+  assert(g.x + g.y, equals(3))
+
+  ~ A `>` closes its block whenever no operand can follow — before a `)`, a `]`,
+  ~ a `,`, a comment, or the end of the line — so a block-bodied lambda needs no
+  ~ dangling closer, even all on one line.
+  assert([1, 2, 3].map(x => < x * 2 >).reduce(0, (acc, x) => acc + x), equals(12))
+  totals = [10, 20].map(x => <
+    x + 1
+  >)   ~ the closer sits right before the `)`
+  assert(totals[0], equals(11))
+
+  ~ With an operand after it, the same `>` is greater-than — including as a
+  ~ block's last expression, and over Text.
+  bigger = (left :: Num) -> Bool => <
+    right = 2
+    left > right
+  >
+  assert(bigger(3), equals(true))
+  assert("b" > "a", equals(true))
+  assert([3, 1, 4].filter(x => x > 2).size, equals(2))
 >

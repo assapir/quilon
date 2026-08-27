@@ -65,7 +65,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 | Closures (`=` by value, `:=` by reference) | ✅ |
 | Guaranteed self-tail-call optimization | ✅ |
 | Array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) | ✅ |
-| `^` entry point receives `args: []Text`, `env: [][]Text` | ✅ |
+| `^` entry point receives `args: []Text`, `env: [\|Text => Text\|]` | ✅ |
 | Remove the `for` loop | ✅ |
 | Spread — prefix `<-` in literals | ✅ |
 | Text methods (`split`/`trim`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower`) | ✅ |
@@ -111,8 +111,9 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | `quilon fmt` / linter | ⬜ |
-| Corelib | 🔨 (`core.io`/`core.test`/`core.cli`/`core.time`/`core.net` ship; grows with the language) |
-| Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types; stepping into corelib is a follow-up) |
+| `quilon test` — in-language test framework (`describe`/`it`, pluggable reporters, blocks erased from every other command), over the `assert`/`expect` matcher assertions | ✅ |
+| Corelib | 🔨 (`core.io`/`core.test`/`core.test.report`/`core.cli`/`core.time`/`core.net` ship; grows with the language) |
+| Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types, multi-file — steps into corelib; entry frame reads `^`) |
 | Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 

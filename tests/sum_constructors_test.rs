@@ -80,7 +80,7 @@ fn test_sum_constructor_in_match() {
     // Pattern match returns different Results
     let tokens = Lexer::tokenize(
         r#"
-        check = (x) => x ?
+        check = (x :: Num) => x ?
             | 0 => NotOk("zero")
             | _ => Ok(x)
     "#,

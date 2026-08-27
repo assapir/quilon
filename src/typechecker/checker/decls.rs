@@ -5,6 +5,8 @@
 //! run against.
 
 use super::*;
+use crate::ast::walk::try_for_each_subexpression;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 impl TypeChecker {
@@ -90,8 +92,8 @@ impl TypeChecker {
 
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`,
-    /// `(args :: []Text, env :: [][]Text)`, or the legacy `(argc :: Num, argv :: Num)`.
-    /// The runtime builds `Text`/`[]Text` elements for argv/env, so a differently-typed
+    /// `(args :: []Text, env :: [|Text => Text|])`, or the legacy `(argc :: Num, argv :: Num)`.
+    /// The runtime builds `Text` args and a `Text => Text` env Map, so a differently-typed
     /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
     /// elements. An unannotated parameter defaults to `Num` (matching codegen), so
     /// `^(x)` is the legacy shape only if it has exactly two such parameters.
@@ -104,13 +106,11 @@ impl TypeChecker {
             .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
             .collect();
         let text_array = Type::Array(Box::new(Type::Text));
-        let text_pairs = Type::Array(Box::new(text_array.clone()));
+        let text_map = Type::Map(Box::new(Type::Text), Box::new(Type::Text));
         let ok = match parameters.as_slice() {
             [] => true,
             [a] => *a == text_array,
-            [a, b] => {
-                (*a == text_array && *b == text_pairs) || (*a == Type::Num && *b == Type::Num)
-            }
+            [a, b] => (*a == text_array && *b == text_map) || (*a == Type::Num && *b == Type::Num),
             _ => false,
         };
         if ok {
@@ -173,6 +173,15 @@ impl TypeChecker {
         use crate::ast::{SumVariant, Type, TypeDefinition};
 
         // Build the type from the definition
+        // A setter is DECLARED, with `:=` — the binding operator means here what it means
+        // everywhere else. Records only: a sum's methods cannot mutate `it` (no fields to
+        // write), the parser rejects `:=` on them, and running the verifier over one would
+        // answer a field write with setter advice instead of the truth, which is that a
+        // sum has no such field.
+        if let TypeDefinition::Record { methods, .. } = &declaration.type_definition {
+            self.check_method_mutation_contracts(&declaration.name, methods)?;
+        }
+
         let type_value = match &declaration.type_definition {
             TypeDefinition::Sum { variants, .. } => {
                 // Resolve and validate each variant's payload types. A payload is either a
@@ -284,15 +293,10 @@ impl TypeChecker {
                         )?;
                     }
                 }
+
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
-                // Infer which methods mutate the receiver in place ("setters"), so
-                // a later call-site can require a `:=` receiver. A method is a setter
-                // iff its body writes `it.field := …` or calls a sibling setter on
-                // `it`. The latter is resolved to a fixpoint (setters calling setters).
-                self.infer_setter_methods(&declaration.name, methods);
-
                 // The declaration itself, built once: every method's `it` binding and the
                 // registered type are the same record, so they share one copy of it. Each
                 // field's annotation is resolved (like a parameter's) so a field typed as a
@@ -443,96 +447,80 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Populate `self.setter_methods` for `type_name`'s methods. A method is a
-    /// setter iff its body mutates the receiver: a direct `it.field := …`, or a
-    /// call to a sibling method on `it` that is itself a setter. Because setters
-    /// can call setters, this is iterated to a fixpoint over the method set.
-    pub(super) fn infer_setter_methods(
+    /// Apply the declared mutation contract to `type_name`'s methods: register the
+    /// `:=`-declared ones as setters, then hold each `=`-declared one to its promise.
+    ///
+    /// Registration comes first so the verifier sees every sibling, which is what lets the
+    /// transitive rule be a lookup: a method calling a `:=` sibling on `it` mutates by
+    /// proxy, and every sibling's contract is known from its declaration.
+    fn check_method_mutation_contracts(
         &mut self,
         type_name: &str,
         methods: &[crate::ast::MethodDeclaration],
-    ) {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for method in methods {
-                let key = (type_name.to_string(), method.name.clone());
-                if self.setter_methods.contains(&key) {
-                    continue;
-                }
-                if self.body_mutates_receiver(type_name, &method.body) {
-                    self.setter_methods.insert(key);
-                    changed = true;
-                }
+    ) -> Result<(), TypeError> {
+        for method in methods.iter().filter(|m| m.mutating) {
+            self.setter_methods
+                .insert((type_name.to_string(), method.name.clone()));
+        }
+        for method in methods.iter().filter(|m| !m.mutating) {
+            // Point at the write itself: that is what broke the promise, and the method's
+            // own span starts after the `=` the message tells the author to change.
+            if let Some(span) = self.body_mutates_receiver(type_name, &method.body) {
+                return Err(TypeError::MutatingMethodDeclaredImmutable {
+                    type_name: type_name.to_string(),
+                    method: method.name.clone(),
+                    span,
+                });
             }
+        }
+        Ok(())
+    }
+
+    /// Where does `expression` (a method body) mutate the receiver `it`, if anywhere?
+    /// Yields the span of the first such sub-expression: a field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a
+    /// call to a `:=`-declared sibling applied to `it`.
+    ///
+    /// A write anywhere in the body counts — nested in a lambda, an array or record
+    /// literal, a match arm, an argument list, or a locally declared function's body.
+    /// Missing one would let an `=`-declared method mutate its receiver in silence. Both
+    /// signals are node-local, so this is a flat predicate over the shared structural
+    /// walk, the one place that has to know every expression form.
+    pub(super) fn body_mutates_receiver(
+        &self,
+        type_name: &str,
+        expression: &Expression,
+    ) -> Option<Span> {
+        match try_for_each_subexpression(expression, &mut |e| match self
+            .node_mutates_receiver(type_name, e)
+        {
+            true => ControlFlow::Break(e.span().clone()),
+            false => ControlFlow::Continue(()),
+        }) {
+            ControlFlow::Break(span) => Some(span),
+            ControlFlow::Continue(()) => None,
         }
     }
 
-    /// Does `expression` (a method body) mutate the receiver `it`? True if it contains a
-    /// field write rooted at `it` (`it.field := …`, `it.a.b := …`) or a call to a
-    /// sibling method already known to be a setter, applied to `it`.
-    pub(super) fn body_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
+    /// Is THIS expression itself a mutation of `it` — ignoring its sub-expressions, which
+    /// the caller's walk visits separately?
+    fn node_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
         match expression {
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, .. } => {
                 Self::field_path_root_name(target).as_deref() == Some("it")
-                    || self.body_mutates_receiver(type_name, value)
             }
+            // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter applied to
+            // `it` propagates "mutating" to the caller.
             Expression::Call {
                 function,
                 arguments,
                 ..
             } => {
-                // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter
-                // applied to `it` propagates "mutating" to the caller.
-                if let Expression::Identifier { name, .. } = function.as_ref()
-                    && arguments.first().is_some_and(
-                        |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
-                    )
-                    && self
-                        .setter_methods
-                        .contains(&(type_name.to_string(), name.clone()))
-                {
-                    return true;
-                }
-                arguments
-                    .iter()
-                    .any(|a| self.body_mutates_receiver(type_name, a))
-            }
-            Expression::Block { statements, .. } => statements.iter().any(|s| match s {
-                crate::ast::Statement::Expression(e) => self.body_mutates_receiver(type_name, e),
-                crate::ast::Statement::Item(Item::VariableDeclaration(d)) => {
-                    self.body_mutates_receiver(type_name, &d.value)
-                }
-                crate::ast::Statement::Item(_) => false,
-            }),
-            Expression::If {
-                condition,
-                then,
-                else_,
-                ..
-            } => {
-                self.body_mutates_receiver(type_name, condition)
-                    || self.body_mutates_receiver(type_name, then)
-                    || self.body_mutates_receiver(type_name, else_)
-            }
-            Expression::Match {
-                expression, arms, ..
-            } => {
-                self.body_mutates_receiver(type_name, expression)
-                    || arms
-                        .iter()
-                        .any(|a| self.body_mutates_receiver(type_name, &a.body))
-            }
-            Expression::BinaryOperator { left, right, .. } => {
-                self.body_mutates_receiver(type_name, left)
-                    || self.body_mutates_receiver(type_name, right)
-            }
-            Expression::UnaryOperator { expression, .. } => {
-                self.body_mutates_receiver(type_name, expression)
-            }
-            Expression::Pipeline { left, right, .. } => {
-                self.body_mutates_receiver(type_name, left)
-                    || self.body_mutates_receiver(type_name, right)
+                // The receiver test is free; the set probe allocates a key, so it goes
+                // second — this runs on every call node in every method body.
+                arguments.first().is_some_and(
+                    |recv| matches!(recv, Expression::Identifier { name, .. } if name == "it"),
+                ) && matches!(function.as_ref(), Expression::Identifier { name, .. }
+                    if self.setter_methods.contains(&(type_name.to_string(), name.clone())))
             }
             _ => false,
         }
@@ -666,17 +654,21 @@ impl TypeChecker {
             return Ok(());
         }
 
-        // Build function type from parameters and return type
+        // Build function type from parameters and return type. A parameter with no
+        // annotation is a compile-time error: a function's own parameter has no context to
+        // be inferred from, so its type must be written down (there is no `Num` default).
         let parameter_types: Vec<Type> = declaration
             .parameters
             .iter()
-            .map(|p| {
-                p.type_annotation
-                    .as_ref()
-                    .map(|t| self.resolve_type(t))
-                    .unwrap_or(Type::Num)
+            .map(|p| match &p.type_annotation {
+                Some(t) => Ok(self.resolve_type(t)),
+                None => Err(TypeError::UnannotatedParameter {
+                    function: declaration.name.clone(),
+                    parameter: p.name.clone(),
+                    span: p.span.clone(),
+                }),
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         // Only a top-level function's LAST parameter can receive a call site.
         self.reject_unfillable_site_parameters(
@@ -733,6 +725,21 @@ impl TypeChecker {
         let body_type = self.infer_expression(&declaration.body)?;
 
         self.env.pop_scope();
+
+        // Returning a function value is deferred: a function may TAKE a function as a
+        // parameter, but handing one back across the call boundary is not supported yet.
+        // Checked on both the annotation and the inferred body so neither slips through.
+        let returns_function = matches!(body_type, Type::Function { .. })
+            || declaration
+                .return_type
+                .as_ref()
+                .is_some_and(|t| matches!(self.resolve_type(t), Type::Function { .. }));
+        if returns_function {
+            return Err(TypeError::UnsupportedFunctionReturn {
+                function: declaration.name.clone(),
+                span: declaration.span.clone(),
+            });
+        }
 
         // Verify the return type matches if annotated
         if let Some(ref annotated_type) = declaration.return_type {

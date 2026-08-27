@@ -38,17 +38,6 @@ impl Lexer {
                 Some(Ok(kind)) => {
                     let span = lexer.span();
                     let text = source[span.clone()].to_string();
-                    // `>` reclassification: a `>` is the block-close delimiter only when
-                    // it is the last token on its line — `>` followed by optional
-                    // horizontal whitespace and then a newline or end-of-file. Any other
-                    // `>` (something non-blank follows on the same line) is the
-                    // greater-than operator `Gt`, so `a > b` works everywhere.
-                    let kind = if kind == TokenKind::BlockClose && !is_line_final(source, span.end)
-                    {
-                        TokenKind::Gt
-                    } else {
-                        kind
-                    };
                     tokens.push(Token {
                         kind,
                         span: Span::in_file(span.start as u32, span.end as u32, file),
@@ -77,15 +66,41 @@ impl Lexer {
             }
         }
 
+        reclassify_gt(&mut tokens);
         Ok(tokens)
     }
 }
 
+/// Turn each `>` that is really the greater-than operator into [`TokenKind::Gt`], leaving
+/// the rest as the block close [`TokenKind::BlockClose`] — the rule stated on those two
+/// token kinds.
+///
+/// One token of lookahead settles it because a block is not an operand of anything: within
+/// a statement, a block close is never followed by the start of an operand, while a
+/// comparison's `>` always is. The successor must also be on the same line — otherwise the
+/// identifier opening the next statement would read as a comparison's right operand. What
+/// stays unexpressible (as under any one-token rule) is a block close and a following
+/// statement sharing a line: `< f = () => < 1 > y = 2 >` reads that `>` as a comparison.
+/// No `>`'s reading depends on another's, so one flat pass suffices.
+fn reclassify_gt(tokens: &mut [Token]) {
+    let mut rest = tokens;
+    while let [token, tail @ ..] = rest {
+        if token.kind == TokenKind::BlockClose
+            && tail
+                .first()
+                .is_some_and(|next| !next.first_on_line && next.kind.starts_operand())
+        {
+            token.kind = TokenKind::Gt;
+        }
+        rest = tail;
+    }
+}
+
 /// Whether the position `at` in `source` is at the start of its line: only horizontal
-/// whitespace (spaces/tabs) between it and the preceding newline or start of file. The
-/// mirror of `is_line_final` below, and exact for token starts: everything the lexer
-/// skips is whitespace or a `~` comment, and a comment always runs to end of line, so
-/// nothing but spaces/tabs can sit between a line's newline and its first token.
+/// whitespace (spaces/tabs) between it and the preceding newline or start of file. Exact
+/// for token starts: everything the lexer skips is whitespace or a `~` comment, and a
+/// comment always runs to end of line, so nothing but spaces/tabs can sit between a
+/// line's newline and its first token.
 /// Feeds `Token::first_on_line` (see `Parser::check_same_line` for the grammar rule).
 fn is_first_on_line(source: &str, at: usize) -> bool {
     for b in source.as_bytes()[..at].iter().rev() {
@@ -97,24 +112,6 @@ fn is_first_on_line(source: &str, at: usize) -> bool {
     }
     // Reached the start of the file over only horizontal whitespace: the file's first
     // token is the first on its line.
-    true
-}
-
-/// Whether the position `at` in `source` is at the end of its line: only horizontal
-/// whitespace (spaces/tabs) remains before a newline or the end of file. Used to tell a
-/// block-closing `>` (line-final) from the greater-than operator `>` (followed by more
-/// on the same line). A trailing `~` comment does NOT count as line-final — content
-/// follows on the line — so a `>` immediately before a comment reads as `Gt`.
-fn is_line_final(source: &str, at: usize) -> bool {
-    for b in source.as_bytes()[at..].iter() {
-        match b {
-            b' ' | b'\t' => continue,
-            b'\n' | b'\r' => return true,
-            _ => return false,
-        }
-    }
-    // Reached end of file with only horizontal whitespace: treat EOF as a line end so a
-    // file whose final token is a block-closing `>` (no trailing newline) still parses.
     true
 }
 
@@ -135,6 +132,16 @@ impl std::error::Error for LexerError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kinds of every non-EOF token of `source`, for the `>` classification tests.
+    fn kinds(source: &str) -> Vec<TokenKind> {
+        Lexer::tokenize(source)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.kind)
+            .filter(|k| *k != TokenKind::Eof)
+            .collect()
+    }
 
     #[test]
     #[allow(clippy::approx_constant)] // 3.14 is a generic decimal test value, not PI
@@ -247,8 +254,7 @@ mod tests {
 
     #[test]
     fn test_delimiters() {
-        // A `>` followed by more on the same line lexes as the greater-than operator
-        // (`Gt`), not the block-close delimiter — the block close is the line-final form.
+        // `>` here is followed by `{`, which starts an operand, so it is greater-than.
         let tokens = Lexer::tokenize("< > { } ( ) [ ]").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::BlockOpen);
         assert_eq!(tokens[1].kind, TokenKind::Gt);
@@ -259,28 +265,109 @@ mod tests {
     }
 
     #[test]
-    fn test_block_close_is_line_final_gt() {
-        // `>` at end of a line (only whitespace/newline after) closes a block.
-        let nl = Lexer::tokenize("<\n  x\n>").unwrap();
-        assert_eq!(nl[0].kind, TokenKind::BlockOpen);
-        assert_eq!(nl.last().unwrap().kind, TokenKind::Eof);
-        assert!(nl.iter().any(|t| t.kind == TokenKind::BlockClose));
-        assert!(!nl.iter().any(|t| t.kind == TokenKind::Gt));
+    fn test_block_close_is_the_default() {
+        // Nothing that can start an operand follows the `>`, so every one of these
+        // closes its block and produces no comparison.
+        for source in [
+            "<\n  x\n>",                             // end of line
+            "< x >",                                 // end of file, no newline
+            "f(() => <x>)",                          // before `)`
+            "[() => <x>]",                           // before `]`
+            "{ f = () => <x> }",                     // before `}`
+            "f(() => <x>, 1)",                       // before `,`
+            "<x> ~ trailing comment\ny",             // before a comment
+            "<x>.size",                              // before `.`
+            "<x> <= y",                              // before `<=`
+            "<x> ? 1 : 2",                           // before `?`
+            "<x> | y",                               // before `|`
+            "<x> _",                                 // before `_`
+            "describe(\"math\", () => < f(1, 1) >)", // one-line lambda argument
+            "f(g(() => <x>))",                       // nested closers `>))`
+        ] {
+            let got = kinds(source);
+            assert!(
+                got.contains(&TokenKind::BlockClose) && !got.contains(&TokenKind::Gt),
+                "`{source}` must close its block"
+            );
+        }
 
-        // A `>` at end of file (no trailing newline) still closes the block.
-        let eof = Lexer::tokenize("< x >").unwrap();
-        // `>` is line-final (EOF after the trailing space) -> BlockClose.
-        assert!(eof.iter().any(|t| t.kind == TokenKind::BlockClose));
+        // Two adjacent closers, which need the space: `>>` is the export marker.
+        assert_eq!(
+            kinds("< < x > >"),
+            vec![
+                TokenKind::BlockOpen,
+                TokenKind::BlockOpen,
+                TokenKind::Ident,
+                TokenKind::BlockClose,
+                TokenKind::BlockClose,
+            ]
+        );
+    }
 
-        // A `>` with an operand after it on the same line is the greater-than operator.
-        let gt = Lexer::tokenize("a > b").unwrap();
-        assert_eq!(gt[1].kind, TokenKind::Gt);
+    #[test]
+    fn test_greater_than_when_an_operand_follows() {
+        // Every operand-starting token after `>` keeps it a comparison, and none of these
+        // produces a block close.
+        for source in [
+            "a > b",
+            "a > 1",
+            "a > \"b\"",
+            "\"b\" > \"a\"",
+            "a > true",
+            "a > false",
+            "a > $",
+            "a > @now",
+            "a > (b + c)",
+            "a > -b",
+            "a > !flag",
+            "a > [1]",
+            "a > Point { x = 1 }",
+            "f(x > y)",
+            "[x > y, z]",
+            "(a > b) == true",
+            // A continuation line may lead with the operator.
+            "a\n> b",
+        ] {
+            let got = kinds(source);
+            assert!(
+                got.contains(&TokenKind::Gt) && !got.contains(&TokenKind::BlockClose),
+                "`{source}` must keep `>` as the comparison operator"
+            );
+        }
 
-        // `>=` and `>>` are independent tokens, unaffected by the `>` rule.
-        let ge = Lexer::tokenize("a >= b").unwrap();
-        assert_eq!(ge[1].kind, TokenKind::Ge);
-        let export = Lexer::tokenize(">> x = 1").unwrap();
-        assert_eq!(export[0].kind, TokenKind::Export);
+        // Chained comparisons: both `>` are operators.
+        assert_eq!(
+            kinds("a > b > c")
+                .iter()
+                .filter(|k| **k == TokenKind::Gt)
+                .count(),
+            2
+        );
+
+        // Comparisons inside a block, one of them its last expression: only the block's
+        // own `>` closes.
+        let inner = kinds("<\n  a > b\n  c > d\n>");
+        assert_eq!(inner.iter().filter(|k| **k == TokenKind::Gt).count(), 2);
+        assert_eq!(
+            inner
+                .iter()
+                .filter(|k| **k == TokenKind::BlockClose)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_neighbouring_tokens_are_unaffected() {
+        // `>=`, `>>`, `->` and `=>` are their own tokens, untouched by the `>` rule.
+        assert_eq!(kinds("a >= b")[1], TokenKind::Ge);
+        assert_eq!(kinds("a >= 1")[1], TokenKind::Ge);
+        assert_eq!(kinds(">> x = 1")[0], TokenKind::Export);
+        assert_eq!(kinds(">>\nx")[0], TokenKind::Export);
+        assert_eq!(kinds("() -> Num => 1")[2], TokenKind::ReturnArrow);
+        assert_eq!(kinds("() -> Num => 1")[4], TokenKind::Arrow);
+        // `<` never reclassifies: it is always `BlockOpen`, less-than being the parser's job.
+        assert_eq!(kinds("a < b")[1], TokenKind::BlockOpen);
     }
 
     #[test]
@@ -299,8 +386,8 @@ mod tests {
         assert_eq!(tokens[0].kind, TokenKind::Eq);
         assert_eq!(tokens[1].kind, TokenKind::Ne);
         assert_eq!(tokens[2].kind, TokenKind::BlockOpen); // `<` is always block-open
-        // `>` here is followed by ` <= >=` on the same line, so it's the operator.
-        assert_eq!(tokens[3].kind, TokenKind::Gt);
+        // `>` here is followed by `<=`, which cannot start an operand, so it closes.
+        assert_eq!(tokens[3].kind, TokenKind::BlockClose);
         assert_eq!(tokens[4].kind, TokenKind::Le);
         assert_eq!(tokens[5].kind, TokenKind::Ge);
     }

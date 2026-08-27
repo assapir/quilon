@@ -19,16 +19,33 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut imports = Vec::new();
         let mut items = Vec::new();
+        let mut test_blocks = Vec::new();
 
         while !self.is_at_end() {
             if self.check(&TokenKind::Import) {
                 imports.push(self.parse_import()?);
+            } else if self.at_test_block() {
+                test_blocks.push(self.parse_expression()?);
             } else {
                 items.push(self.parse_item()?);
             }
         }
 
-        Ok(Program { imports, items })
+        Ok(Program {
+            imports,
+            items,
+            test_blocks,
+        })
+    }
+
+    /// Whether the cursor is on a top-level test block: a CALL to
+    /// [`crate::ast::TEST_BLOCK_MARKER`] (`describe("…", () => < … >)`). A `describe`
+    /// followed by anything but an argument list — `describe = …`, which is how
+    /// `core.test` defines it — is an ordinary item.
+    fn at_test_block(&self) -> bool {
+        self.check(&TokenKind::Ident)
+            && self.peek().text == crate::ast::TEST_BLOCK_MARKER
+            && self.check_same_line_at(1, &TokenKind::ParenOpen)
     }
 
     /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).
@@ -333,6 +350,19 @@ impl<'a> Parser<'a> {
                 // requires the following `=`, so this never swallows a stray operator.
                 self.advance();
                 operator
+            } else if let Some(operator) = self.operator_symbol_name()
+                && self.peek_ahead(1).kind == TokenKind::MutAssign
+            {
+                // Caught here so the author gets the rule rather than "expected identifier":
+                // `operator_def_name` only recognizes `op = …`, so `op := …` would otherwise
+                // fall through to the name parser and fail as a stray symbol.
+                return Err(ParseError {
+                    message: format!(
+                        "operator member `{}` cannot be declared with `:=` — an operator yields a value and never mutates `it`",
+                        operator
+                    ),
+                    span: self.peek().span.clone(),
+                });
             } else {
                 self.expect_ident()?
             };
@@ -342,8 +372,20 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let field_type = self.parse_type()?;
                 fields.push((member_name, field_type));
-            } else if self.check(&TokenKind::Assign) {
-                // This is a method: name = parameters => body
+            } else if self.check(&TokenKind::Assign) || self.check(&TokenKind::MutAssign) {
+                // A method: `name = params => body`, or `name := params => body` for one
+                // that may mutate `it`.
+                let mutating = self.check(&TokenKind::MutAssign);
+                // An operator member yields a value; there is no receiver-mutability check
+                // at an operator's use site, so declaring one mutating would be a promise
+                // nothing enforces. (`operator_def_name` already refuses `+ := …` for the
+                // symbol operators; the render member reaches here by its own branch.)
+                if mutating && member_name == "`" {
+                    return Err(ParseError {
+                        message: "The render member ` cannot be declared with ':=' — it renders a value rather than mutating `it`".to_string(),
+                        span: self.peek().span.clone(),
+                    });
+                }
                 self.advance();
 
                 let method_start = self.current_span();
@@ -376,11 +418,12 @@ impl<'a> Parser<'a> {
                     parameters,
                     return_type,
                     body,
+                    mutating,
                     span: self.span(method_start.start, method_end.end),
                 });
             } else {
                 return Err(ParseError {
-                    message: "Expected :: or = after field/method name".to_string(),
+                    message: "Expected ::, = or := after field/method name".to_string(),
                     span: self.peek().span.clone(),
                 });
             }
@@ -462,6 +505,20 @@ impl<'a> Parser<'a> {
                     span: self.previous_span(),
                 });
             }
+            // A sum's receiver has no writable field — its data lives in variant payloads,
+            // reached by matching, and a match binding is immutable. So `:=` here would
+            // declare a mutation nothing can perform and nothing checks; the same reason
+            // operator members refuse it. If payload mutation ever lands, allowing `:=`
+            // then only widens what is accepted.
+            if let Some(mutating) = methods.iter().find(|m| m.mutating) {
+                return Err(ParseError {
+                    message: format!(
+                        "sum type `{}` cannot have a mutating method — `{}` is declared with `:=`, but a sum has no fields to write (its data lives in variant payloads)",
+                        name, mutating.name
+                    ),
+                    span: mutating.span.clone(),
+                });
+            }
             methods
         } else {
             Vec::new()
@@ -494,6 +551,18 @@ impl<'a> Parser<'a> {
         let mut statements = Vec::new();
 
         while !self.check(&TokenKind::BlockClose) && !self.is_at_end() {
+            // Two block closers written with no space between them (`… >>`) are one
+            // `Export` token by maximal munch, and an export is never a statement, so say
+            // what the fix is instead of failing further along on a phantom marker.
+            if self.check(&TokenKind::Export) {
+                return Err(ParseError {
+                    message: "`>>` here is the export marker, not two block closers — \
+                              separate them with a space (`> >`)"
+                        .to_string(),
+                    span: self.current_span(),
+                });
+            }
+
             // Try to parse as item first (for nested declarations / reassignments).
             // `name = …` is an immutable binding; `name := …` is a mutable bind/reassign;
             // `name :: Type = …` is an annotated binding. `::` at statement start is

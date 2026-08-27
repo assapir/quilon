@@ -7,14 +7,14 @@
 ^ = () -> $ => <
   nums :: []Num = [1, 2, 3, 4, 5]
   first :: Num = nums[0]
-  assertEq(first, 1)
-  assertEq(nums[4], 5)
-  assertEq(nums[4.6], 5)          ~ fractional index truncates toward zero
-  assertEq(nums.size, 5)
+  assert(first, equals(1))
+  assert(nums[4], equals(5))
+  assert(nums[4.6], equals(5))          ~ fractional index truncates toward zero
+  assert(nums.size, equals(5))
 
   ~ `at` returns Ok in bounds, NotOk otherwise — including a NaN index.
-  assertOk(nums.at(2))
-  assertNotOk(nums.at(9))
-  assertNotOk(nums.at(0 - 1))
-  assertNotOk(nums.at(0 / 0))
+  assert(nums.at(2), isOk())
+  assert(nums.at(9), isNotOk())
+  assert(nums.at(0 - 1), isNotOk())
+  assert(nums.at(0 / 0), isNotOk())
 >

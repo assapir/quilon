@@ -4,9 +4,9 @@ Import with `<< core.io`. See the [corelib index](../LANGUAGE.md#corelib) and `e
 
 | Function | Effect |
 |----------|--------|
-| `print(x) -> $` | Write `x` to stdout **with a trailing newline**. Any type, rendered through its [`` ` `` render operator](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — a `Bool` prints `True`/`False`; records, sum types, and arrays use their default or overridden rendering. Returns `$`. |
+| `print(x) -> $` | Write `x` to stdout **with a trailing newline**. Any type, rendered through its [`` ` `` render operator](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — a `Bool` prints `True`/`False`; records, sum types, and arrays use their default or overridden rendering. On output, text is [rendered for a reader](../LANGUAGE.md#string-interpolation-and-the-render-operator-): an invalid UTF-8 byte shows as `�`. Returns `$`. |
 | `eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
-| `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. |
+| `write(content :: Text, fd :: Num) -> Num` | Write raw bytes (no newline) to a file descriptor; returns bytes written. Byte-exact: the bytes as they are. |
 | `@readStdin() -> Text` | Read one line from stdin (without the trailing newline). A [leaf IO primitive](../LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress): it launches the read and returns a **deferred** `Text` forced on first strict use. Yields `""` at end-of-input. |
 | `stdout`, `stderr` | The standard file descriptors. |
 

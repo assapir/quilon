@@ -15,7 +15,7 @@ fn mutable_capture_counter_accumulates() {
     // `count` is `:=`, captured by reference. Each `bump(...)` writes the shared cell, so
     // the effect of the first call is visible to the second: 10 then +20 -> 30.
     assert_exit(
-        "^ = () -> Num => <\n  count := 0\n  bump = n => <\n    count := count + n\n    count\n  >\n  bump(10)\n  bump(20)\n  count\n>",
+        "^ = () -> Num => <\n  count := 0\n  bump = (n :: Num) => <\n    count := count + n\n    count\n  >\n  bump(10)\n  bump(20)\n  count\n>",
         30,
     );
 }
@@ -36,7 +36,7 @@ fn mutable_capture_sees_later_outer_write() {
 fn value_capture_is_frozen_snapshot() {
     // `base` is `=` (immutable), captured by value. add(10)=17, add(20)=27 -> 44.
     assert_exit(
-        "^ = () -> Num => <\n  base = 7\n  add = x => x + base\n  add(10) + add(20)\n>",
+        "^ = () -> Num => <\n  base = 7\n  add = (x :: Num) => x + base\n  add(10) + add(20)\n>",
         44,
     );
 }
@@ -45,7 +45,7 @@ fn value_capture_is_frozen_snapshot() {
 #[test]
 fn closure_with_no_captures() {
     assert_exit(
-        "^ = () -> Num => <\n  twice = x => x + x\n  twice(21)\n>",
+        "^ = () -> Num => <\n  twice = (x :: Num) => x + x\n  twice(21)\n>",
         42,
     );
 }
@@ -55,7 +55,7 @@ fn closure_with_no_captures() {
 #[test]
 fn two_closures_share_one_mutable_cell() {
     assert_exit(
-        "^ = () -> Num => <\n  total := 0\n  add = n => <\n    total := total + n\n    total\n  >\n  reset = () => <\n    total := 0\n    total\n  >\n  add(5)\n  add(37)\n  reset()\n  add(42)\n>",
+        "^ = () -> Num => <\n  total := 0\n  add = (n :: Num) => <\n    total := total + n\n    total\n  >\n  reset = () => <\n    total := 0\n    total\n  >\n  add(5)\n  add(37)\n  reset()\n  add(42)\n>",
         42,
     );
 }
@@ -76,7 +76,7 @@ fn mixed_value_and_reference_capture() {
 #[test]
 fn parameter_shadows_outer_binding() {
     assert_exit(
-        "^ = () -> Num => <\n  x = 99\n  f = x => x + 1\n  f(41)\n>",
+        "^ = () -> Num => <\n  x = 99\n  f = (x :: Num) => x + 1\n  f(41)\n>",
         42,
     );
 }
@@ -96,7 +96,7 @@ fn value_capture_stays_immutable() {
 #[test]
 fn non_capturing_nested_function_recurses() {
     assert_exit(
-        "^ = () -> Num => <\n  fact = n -> Num => n == 0 ? 1 : n * fact(n - 1)\n  fact(5)\n>",
+        "^ = () -> Num => <\n  fact = (n :: Num) -> Num => n == 0 ? 1 : n * fact(n - 1)\n  fact(5)\n>",
         120,
     );
 }
@@ -106,7 +106,7 @@ fn non_capturing_nested_function_recurses() {
 #[test]
 fn closure_captures_and_calls_another_closure() {
     assert_exit(
-        "^ = () -> Num => <\n  base = 40\n  f = x => x + base\n  g = () => f(1)\n  g() + 1\n>",
+        "^ = () -> Num => <\n  base = 40\n  f = (x :: Num) => x + base\n  g = () => f(1)\n  g() + 1\n>",
         42,
     );
 }
@@ -126,7 +126,7 @@ fn mutable_capture_shared_across_two_nesting_levels() {
 #[test]
 fn value_capture_threads_through_nested_closure() {
     assert_exit(
-        "^ = () -> Num => <\n  a = 42\n  mid = z => <\n    inner = w => a + w\n    inner(z)\n  >\n  mid(0)\n>",
+        "^ = () -> Num => <\n  a = 42\n  mid = (z :: Num) => <\n    inner = (w :: Num) => a + w\n    inner(z)\n  >\n  mid(0)\n>",
         42,
     );
 }

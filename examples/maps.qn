@@ -2,57 +2,82 @@
 ~   Map: get / has / set / remove / keys / values / size / each.
 ~ Values are read only through `.get`, which returns `Ok(value)` when the key is present
 ~   and `NotOk` when it is absent — there is no bracket indexing on a map.
+~ Keys are Num/Text/Bool, or a user type that defines both a `%` hash hook (unary,
+~   `it` the value, returning a Num) and an `==` equality — see the `Point` map below.
 ~ Maps are IMMUTABLE — every mutator returns a NEW map. Iteration order is UNSPECIFIED
 ~   (reproducible run-to-run via a fixed-seed hasher, but never rely on it).
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
 
+Point = {
+  x :: Num, y :: Num,
+  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
+  % = () -> Num => it.x * 31 + it.y
+}
+
 ^ = () -> $ => <
   ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41, "grace" => 45|]
 
-  assertEq(ages.size, 3)
-  assert(ages.has("grace"))
-  assert(!ages.has("nobody"))
+  assert(ages.size, equals(3))
+  assert(ages.has("grace"), equals(true))
+  assert(!ages.has("nobody"), equals(true))
 
   ~ Safe lookup returns a Result: Ok(value) present, NotOk absent.
-  assertOk(ages.get("alan"))
-  assertNotOk(ages.get("nobody"))
+  assert(ages.get("alan"), isOk())
+  assert(ages.get("nobody"), isNotOk())
   found :: Num = ages.get("alan") ?
     | Ok(v)    => v
     | NotOk(_) => 0
-  assertEq(found, 41)
+  assert(found, equals(41))
 
   ~ `set` is persistent: it returns a NEW map, leaving the original untouched.
   older :: [|Text => Num|] = ages.set("ada", 37)
-  assertNotOk(older.get("nobody"))
-  assertEq(older.size, 3)
+  assert(older.get("nobody"), isNotOk())
+  assert(older.size, equals(3))
   originalAge :: Num = ages.get("ada") ?
     | Ok(v)    => v
     | NotOk(_) => 0
   updatedAge :: Num = older.get("ada") ?
     | Ok(v)    => v
     | NotOk(_) => 0
-  assertEq(originalAge, 36)
-  assertEq(updatedAge, 37)
+  assert(originalAge, equals(36))
+  assert(updatedAge, equals(37))
 
   ~ remove is persistent too: a NEW map without the key, receiver untouched.
   fewer :: [|Text => Num|] = ages.remove("ada")
-  assertEq(ages.size, 3)
-  assertEq(fewer.size, 2)
-  assertNotOk(fewer.get("ada"))
+  assert(ages.size, equals(3))
+  assert(fewer.size, equals(2))
+  assert(fewer.get("ada"), isNotOk())
   ~ removing an absent key is a no-op (still a fresh, equal-size map).
-  assertEq(ages.remove("nobody").size, 3)
+  assert(ages.remove("nobody").size, equals(3))
 
   ~ keys / values are plain arrays (order unspecified), so array methods compose.
   total :: Num = ages.values().reduce(0, (acc, x) => acc + x)
-  assertEq(total, 122)
-  assertEq(ages.keys().size, 3)
+  assert(total, equals(122))
+  assert(ages.keys().size, equals(3))
 
   ~ each visits every entry for effect and returns the receiver (so it chains).
   sum := 0
   ages.each((name, age) => <
     sum := sum + age
-  >
-  )
-  assertEq(sum, 122)
+  >)
+  assert(sum, equals(122))
+
+  ~ A Map keyed by a user record type hashes and compares keys through `%`/`==`.
+  grid :: [|Point => Text|] = [|
+    Point { x = 0, y = 0 } => "origin",
+    Point { x = 1, y = 2 } => "here"
+  |]
+  assert(grid.has(Point { x = 0, y = 0 }), equals(true))
+  assert(!grid.has(Point { x = 9, y = 9 }), equals(true))
+  assert(grid.size, equals(2))
+
+  ~ `.get` looks up by value equality, returning a Result.
+  label :: Text = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
+  assert(label, equals("here"))
+
+  ~ Mutators return a NEW collection (the receiver is immutable).
+  bigger :: [|Point => Text|] = grid.set(Point { x = 3, y = 4 }, "new")
+  assert(bigger.size, equals(3))
+  assert(grid.size, equals(2))
 >

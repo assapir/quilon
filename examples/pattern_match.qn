@@ -11,7 +11,7 @@
   bound :: Num = r ?
     | Ok(x)     => x + 1
     | NotOk(_)  => 0
-  assertEq(bound, 3)
+  assert(bound, equals(3))
 
   ~ The compare-in-the-body idiom replacing the illegal `| Ok(1) =>` form.
   pick = (v :: Num) -> Num => <
@@ -20,8 +20,8 @@
       | Ok(n)    => n == 1 ? 10 : 20
       | NotOk(_) => 30
   >
-  assertEq(pick(1), 10)
-  assertEq(pick(2), 20)
+  assert(pick(1), equals(10))
+  assert(pick(2), equals(20))
 
   ~ Matching on a scalar value, with a wildcard fallthrough arm.
   value :: Num = 5
@@ -29,5 +29,5 @@
     | 0 => 10
     | 5 => 50      ~ matches here
     | _ => 99
-  assertEq(picked, 50)
+  assert(picked, equals(50))
 >

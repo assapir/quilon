@@ -167,10 +167,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to build store"))?;
             self.variables
                 .insert(parameter.name.clone(), (alloca, parameter_type));
+            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
+            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,
-                parameter.type_annotation.as_ref().unwrap_or(&Type::Num),
+                &qty,
                 &parameter.span,
                 Some((i + 2) as u32),
             );
@@ -387,6 +389,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.emit_module_function(declaration)
     }
 
+    /// Record a function-typed parameter's closure signature. Such a parameter arrives as a
+    /// `{ ptr fn, ptr env }` closure value (its slot holds that struct), so a call to it in
+    /// the body must dispatch through the indirect closure-call path — the env pointer is
+    /// appended implicitly at the call site — exactly like a local closure binding. Every
+    /// parameter-binding site (top-level functions, methods, and lifted closures) calls this
+    /// so the three stay in lockstep. A non-function parameter is left untouched.
+    pub(super) fn register_function_typed_parameter(
+        &mut self,
+        name: &str,
+        qty: &Type,
+    ) -> Result<(), String> {
+        if let Type::Function {
+            parameters,
+            return_type,
+        } = qty
+        {
+            let parameter_tys = parameters
+                .iter()
+                .map(|t| self.boundary_type(t))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret_ty = self.boundary_type(return_type)?;
+            self.closure_sigs
+                .insert(name.to_string(), (parameter_tys, ret_ty));
+        }
+        Ok(())
+    }
+
     /// Emit `declaration` as a top-level/module function (internal linkage). Clears and
     /// repopulates the per-function emission state (`variables`, `closure_sigs`,
     /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
@@ -485,6 +514,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .insert(parameter.name.clone(), fields.clone());
                 }
             }
+            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,

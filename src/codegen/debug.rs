@@ -32,7 +32,8 @@ use inkwell::module::{FlagBehavior, Module};
 use inkwell::values::PointerValue;
 
 use crate::codegen::generator::WATERMARK;
-use crate::lexer::Span;
+use crate::lexer::{FileId, ROOT_FILE, Span};
+use crate::source_map::SourceMap;
 
 // DWARF `DW_ATE_*` base-type encodings (see the DWARF spec, table 7.11). Passed to
 // `create_basic_type` so a debugger renders each primitive with the right interpretation.
@@ -65,10 +66,10 @@ fn member_align_bits(ty: DIType<'_>) -> u32 {
     (size.clamp(8, 64)) as u32
 }
 
-/// DWARF debug-info state for one module, created only under `--debug`.
-pub struct DebugInfo<'ctx> {
-    builder: DebugInfoBuilder<'ctx>,
-    compile_unit: DICompileUnit<'ctx>,
+/// One source file's DWARF handle and line index. A span is mapped to a `(line, column)` and
+/// a `DIFile` through the entry for its [`FileId`], so an imported module's function lands on
+/// its OWN source rather than the root file's.
+struct FileTables<'ctx> {
     file: DIFile<'ctx>,
     /// Byte offset at which each source line begins (`line_starts[0] == 0`). Used to find
     /// a span's line (and its line-start byte) by binary search.
@@ -76,6 +77,16 @@ pub struct DebugInfo<'ctx> {
     /// The source text, kept so a span's DWARF column can be counted in characters (not
     /// bytes) from its line start — matching how the compiler's diagnostics report columns.
     source: String,
+}
+
+/// DWARF debug-info state for one module, created only under `--debug`.
+pub struct DebugInfo<'ctx> {
+    builder: DebugInfoBuilder<'ctx>,
+    compile_unit: DICompileUnit<'ctx>,
+    /// A `DIFile` + line index per source [`FileId`] the program was assembled from — the root
+    /// file plus every imported module. A span resolves through the entry for its `file`, so a
+    /// corelib function's subprogram and line entries point at `corelib/*.qn`, not the root.
+    files: HashMap<FileId, FileTables<'ctx>>,
     /// Cache of built DWARF composite/derived types, keyed by a structural name (e.g.
     /// `"Text"`, `"[]Num"`, `"named$User"`, `"sum$Result"`). A type identity is emitted once
     /// and shared by every variable of that type, so `llvm-dwarfdump` shows one entry per
@@ -85,15 +96,18 @@ pub struct DebugInfo<'ctx> {
 }
 
 impl<'ctx> DebugInfo<'ctx> {
-    /// Install debug-info emission on `module` for the program compiled from `file_path`
-    /// with the given `source`. Adds the required module flags and creates the compile
-    /// unit + source-file handles.
+    /// Install debug-info emission on `module` for the program compiled from `file_path` (the
+    /// root source). `sources` carries the text and display path of every file the program was
+    /// assembled from — the root plus each imported module — so a `DIFile` + line table is
+    /// built for each and a span resolves to whichever file it belongs to. Adds the required
+    /// module flags and creates the compile unit + source-file handles.
     pub fn new(
         module: &Module<'ctx>,
         context: &'ctx Context,
         file_path: &Path,
-        source: &str,
+        sources: &SourceMap,
     ) -> Self {
+        let source = sources.root_text();
         // The verifier requires a "Debug Info Version" module flag; consumers key off it.
         let dwarf_version = context.i32_type().const_int(4, false);
         let debug_info_version = context.i32_type().const_int(3, false);
@@ -106,15 +120,7 @@ impl<'ctx> DebugInfo<'ctx> {
 
         // Split the path into a directory + filename for the DIFile. Both are recorded in
         // the line table so a debugger can locate the `.qn` source.
-        let directory = file_path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| ".".to_string());
-        let filename = file_path
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| file_path.display().to_string());
+        let (directory, filename) = split_source_path(file_path);
 
         let (builder, compile_unit) = module.create_debug_info_builder(
             true,
@@ -137,34 +143,74 @@ impl<'ctx> DebugInfo<'ctx> {
             "",
             "",
         );
-        let file = compile_unit.get_file();
+        let mut files = HashMap::new();
+        // The root file's `DIFile` is the compile unit's own; the other modules each get one
+        // built from their display path (see `dwarf_file_location`).
+        files.insert(
+            ROOT_FILE,
+            FileTables {
+                file: compile_unit.get_file(),
+                line_starts: line_starts(source),
+                source: source.to_string(),
+            },
+        );
+        for (id, source_file) in sources.iter() {
+            if id == ROOT_FILE {
+                continue;
+            }
+            let (directory, filename) = dwarf_file_location(&source_file.path);
+            files.insert(
+                id,
+                FileTables {
+                    file: builder.create_file(&filename, &directory),
+                    line_starts: line_starts(&source_file.text),
+                    source: source_file.text.clone(),
+                },
+            );
+        }
 
         DebugInfo {
             builder,
             compile_unit,
-            file,
-            line_starts: line_starts(source),
-            source: source.to_string(),
+            files,
             type_cache: RefCell::new(HashMap::new()),
         }
     }
 
-    /// The 1-based `(line, column)` of `offset` in the source. The column counts characters
-    /// (not bytes) from the line start, so multi-byte characters before `offset` advance it
-    /// by one each — matching the compiler's diagnostics. A byte offset past the end clamps
-    /// to the last line (defensive; spans always point inside the source).
-    fn line_col(&self, offset: usize) -> (u32, u32) {
+    /// The DWARF handles for the file a span belongs to, falling back to the root file when the
+    /// span's `FileId` has no entry (a defensive case: an in-memory program, or a span from a
+    /// file the source map never recorded).
+    fn tables(&self, file: FileId) -> &FileTables<'ctx> {
+        self.files
+            .get(&file)
+            .or_else(|| self.files.get(&ROOT_FILE))
+            .expect("the root file is always registered")
+    }
+
+    /// The root file's `DIFile`, used to anchor the file-agnostic DWARF composite types (a
+    /// `Text`/record/sum type is shared program-wide, so which file it names is immaterial —
+    /// the root is the natural choice).
+    fn root_file(&self) -> DIFile<'ctx> {
+        self.tables(ROOT_FILE).file
+    }
+
+    /// The 1-based `(line, column)` of `offset` within the file `file`. The column counts
+    /// characters (not bytes) from the line start, so multi-byte characters before `offset`
+    /// advance it by one each — matching the compiler's diagnostics. A byte offset past the end
+    /// clamps to the last line (defensive; spans always point inside the source).
+    fn line_col(&self, file: FileId, offset: usize) -> (u32, u32) {
+        let tables = self.tables(file);
         // Index of the last line start that is <= offset.
-        let idx = match self.line_starts.binary_search(&offset) {
+        let idx = match tables.line_starts.binary_search(&offset) {
             Ok(i) => i,
             Err(i) => i.saturating_sub(1),
         };
         let line = idx + 1;
-        let line_start = self.line_starts[idx];
-        let end = offset.min(self.source.len());
+        let line_start = tables.line_starts[idx];
+        let end = offset.min(tables.source.len());
         // Count characters from the line start; fall back to the byte delta if `offset` is
         // not on a char boundary (spans are token starts, so this is only a guard).
-        let col = self
+        let col = tables
             .source
             .get(line_start..end)
             .map(|s| s.chars().count())
@@ -174,24 +220,40 @@ impl<'ctx> DebugInfo<'ctx> {
     }
 
     /// Create a `DISubprogram` for a function named `name` beginning at `span`, to be
-    /// attached to its `FunctionValue` and used as the scope for its instructions.
+    /// attached to its `FunctionValue` and used as the scope for its instructions. The
+    /// subprogram is attributed to `span`'s own file, so an imported module's function points
+    /// at that module's source rather than the root file's.
     pub fn create_function(&self, name: &str, span: &Span) -> DISubprogram<'ctx> {
-        let (line, _) = self.line_col(span.start as usize);
+        self.build_subprogram(name, span, DIFlags::PUBLIC)
+    }
+
+    /// Create a `DISubprogram` for a generated entry shim (the C `main`, or the `__ql_entry`
+    /// fiber thunk) — named for the user's `^` entry point and marked `DW_AT_artificial` so a
+    /// debugger attributes the entry frame to `^` and treats the shim as compiler-generated
+    /// glue rather than user code. The underlying LLVM symbol (`main`/`__ql_entry`) is
+    /// unchanged; only the DWARF naming and the artificial flag differ.
+    pub fn create_entry_shim(&self, name: &str, span: &Span) -> DISubprogram<'ctx> {
+        self.build_subprogram(name, span, DIFlags::ARTIFICIAL)
+    }
+
+    fn build_subprogram(&self, name: &str, span: &Span, flags: DIFlags) -> DISubprogram<'ctx> {
+        let (line, _) = self.line_col(span.file, span.start as usize);
+        let file = self.tables(span.file).file;
         // Line info only: an empty subroutine type (no parameter/return types).
-        let subroutine_type =
-            self.builder
-                .create_subroutine_type(self.file, None, &[], DIFlags::PUBLIC);
+        let subroutine_type = self
+            .builder
+            .create_subroutine_type(file, None, &[], DIFlags::PUBLIC);
         self.builder.create_function(
             self.compile_unit.as_debug_info_scope(),
             name,
             None,
-            self.file,
+            file,
             line,
             subroutine_type,
             true,
             true,
             line,
-            DIFlags::PUBLIC,
+            flags,
             false,
         )
     }
@@ -203,7 +265,7 @@ impl<'ctx> DebugInfo<'ctx> {
         span: &Span,
         scope: DIScope<'ctx>,
     ) -> DILocation<'ctx> {
-        let (line, col) = self.line_col(span.start as usize);
+        let (line, col) = self.line_col(span.file, span.start as usize);
         self.builder
             .create_debug_location(context, line, col, scope, None)
     }
@@ -249,9 +311,12 @@ impl<'ctx> DebugInfo<'ctx> {
     }
 
     /// An opaque pointer (`i8*`), used for a type codegen can't model precisely (a bare
-    /// function value, or a recursive type broken to stop infinite metadata).
+    /// function value, or a recursive type broken to stop infinite metadata). The pointee
+    /// is NAMED, unlike the pointer: LLVM rejects a basic type with an empty name, so an
+    /// anonymous one turned every `-g` build of a program holding a function value into a
+    /// panic.
     pub fn opaque_pointer(&self) -> DIType<'ctx> {
-        let byte = self.basic_type("", 8, DW_ATE_SIGNED_CHAR);
+        let byte = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);
         self.pointer_to("", byte)
     }
 
@@ -262,7 +327,7 @@ impl<'ctx> DebugInfo<'ctx> {
             .as_type()
     }
 
-    /// `Text` — a `{ ptr data, i64 byte_len }` struct over a NUL-terminated UTF-8 buffer.
+    /// `Text` — a `{ ptr data, i64 byte_len }` struct over a UTF-8 byte buffer.
     /// Distinct from an array by name (`Text`) and by its `data` pointee (`char`, not `T`).
     pub fn text_type(&self) -> DIType<'ctx> {
         let char_ty = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);
@@ -336,7 +401,8 @@ impl<'ctx> DebugInfo<'ctx> {
     /// the offsets/sizes match LLVM's default (non-packed) struct layout on x86-64. Shared by
     /// every composite builder above.
     fn struct_type(&self, name: &str, members: &[(&str, DIType<'ctx>)]) -> DIType<'ctx> {
-        let scope = self.file.as_debug_info_scope();
+        let root_file = self.root_file();
+        let scope = root_file.as_debug_info_scope();
         let mut elements = Vec::with_capacity(members.len());
         let mut offset_bits = 0u64;
         let mut struct_align = 8u32;
@@ -348,7 +414,7 @@ impl<'ctx> DebugInfo<'ctx> {
             let member = self.builder.create_member_type(
                 scope,
                 mname,
-                self.file,
+                root_file,
                 0,
                 size,
                 align,
@@ -364,7 +430,7 @@ impl<'ctx> DebugInfo<'ctx> {
             .create_struct_type(
                 self.compile_unit.as_debug_info_scope(),
                 name,
-                self.file,
+                root_file,
                 0,
                 size_in_bits,
                 struct_align,
@@ -390,12 +456,12 @@ impl<'ctx> DebugInfo<'ctx> {
         span: &Span,
         ty: DIType<'ctx>,
     ) -> DILocalVariable<'ctx> {
-        let (line, _) = self.line_col(span.start as usize);
+        let (line, _) = self.line_col(span.file, span.start as usize);
         self.builder.create_parameter_variable(
             scope,
             name,
             arg_no,
-            self.file,
+            self.tables(span.file).file,
             line,
             ty,
             true,
@@ -411,9 +477,17 @@ impl<'ctx> DebugInfo<'ctx> {
         span: &Span,
         ty: DIType<'ctx>,
     ) -> DILocalVariable<'ctx> {
-        let (line, _) = self.line_col(span.start as usize);
-        self.builder
-            .create_auto_variable(scope, name, self.file, line, ty, true, DIFlags::ZERO, 0)
+        let (line, _) = self.line_col(span.file, span.start as usize);
+        self.builder.create_auto_variable(
+            scope,
+            name,
+            self.tables(span.file).file,
+            line,
+            ty,
+            true,
+            DIFlags::ZERO,
+            0,
+        )
     }
 
     /// Attach `var` to its storage `slot` with a `#dbg_declare` record at the end of `block`,
@@ -452,9 +526,9 @@ impl<'ctx> DebugInfo<'ctx> {
     /// A nested lexical block scope under `parent`, beginning at `span` — the scope for
     /// variables introduced inside a `{ }` block, so a debugger nests them correctly.
     pub fn lexical_block(&self, parent: DIScope<'ctx>, span: &Span) -> DIScope<'ctx> {
-        let (line, col) = self.line_col(span.start as usize);
+        let (line, col) = self.line_col(span.file, span.start as usize);
         self.builder
-            .create_lexical_block(parent, self.file, line, col)
+            .create_lexical_block(parent, self.tables(span.file).file, line, col)
             .as_debug_info_scope()
     }
 
@@ -463,6 +537,49 @@ impl<'ctx> DebugInfo<'ctx> {
     pub fn finalize(&self) {
         self.builder.finalize();
     }
+}
+
+/// Split a `.qn` path into the `(directory, filename)` a DWARF `DIFile` records.
+///
+/// The directory is made **absolute** (against the compiling process's working directory)
+/// because a debugger resolves a relative `DW_AT_comp_dir` against its own working directory,
+/// which is rarely the one the build ran in: `quilon build -g examples/hello.qn` recorded
+/// `examples`, so an lldb started anywhere else could not open the source.
+fn split_source_path(path: &Path) -> (String, String) {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let directory = absolute
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let filename = absolute
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| absolute.display().to_string());
+    (directory, filename)
+}
+
+/// Split a source map display path into the `(directory, filename)` a DWARF `DIFile` records.
+///
+/// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) goes
+/// through [`split_source_path`]. A bundled built-in module is named by its dotted module path
+/// (`core.test`) rather than a file path; the segments after `core` are its path under
+/// `corelib/`, so `core.test` maps to `corelib/test.qn` and `core.test.report` to
+/// `corelib/test/report.qn` — which is what lets a debugger open the right file when a step
+/// lands in a corelib function in the in-repo dev flow.
+fn dwarf_file_location(path: &str) -> (String, String) {
+    if path.ends_with(".qn") {
+        return split_source_path(Path::new(path));
+    }
+    let mut segments: Vec<&str> = path.split('.').collect();
+    // Anything before the last segment nests under `corelib/`; the leading `core.` is the
+    // corelib itself and is not a directory of its own.
+    let leaf = segments.pop().unwrap_or(path);
+    let directory = std::iter::once("corelib")
+        .chain(segments.into_iter().skip(1))
+        .collect::<Vec<&str>>()
+        .join("/");
+    (directory, format!("{leaf}.qn"))
 }
 
 /// The byte offset at which each line begins. `line_starts[0]` is always `0`; a new entry

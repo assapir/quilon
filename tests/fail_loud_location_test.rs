@@ -14,7 +14,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{ensure_runtime_lib, run_program, tool_available};
+use common::{ensure_runtime_lib, position, run_program, tool_available};
 
 fn quilon() -> &'static str {
     env!("CARGO_BIN_EXE_quilon")
@@ -39,15 +39,15 @@ fn expected_frame(line: usize, column: usize, source_line: &str, width: usize) -
 fn an_assertion_and_a_runtime_check_frame_alike() {
     let (assert_code, assert_stderr, assertion) = run_program(
         "assertion",
-        "<< core.test\n^ = () -> $ => <\n  assert(1 == 2)\n>\n",
+        "<< core.test\n^ = () -> $ => <\n  assert(1, equals(2))\n>\n",
     );
     assert_eq!(assert_code, 101);
     assert_eq!(
         assert_stderr,
         format!(
-            "{}:3:3:\nassertion failed\n{}\n",
-            assertion.display(),
-            expected_frame(3, 3, "  assert(1 == 2)", "assert(1 == 2)".len())
+            "{}\nassertion failed: expected 2, got 1\n{}\n",
+            position(&assertion, 3, 3),
+            expected_frame(3, 3, "  assert(1, equals(2))", "assert(1, equals(2))".len())
         )
     );
 
@@ -59,8 +59,8 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         bounds_stderr,
         format!(
-            "{}:4:3:\nindex 9 out of bounds for an array of size 1\n{}\n",
-            bounds.display(),
+            "{}\nindex 9 out of bounds for an array of size 1\n{}\n",
+            position(&bounds, 4, 3),
             expected_frame(4, 3, "  a[n]", "a[n]".len())
         )
     );

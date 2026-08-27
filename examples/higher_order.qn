@@ -1,0 +1,39 @@
+~ Higher-order functions: a function whose parameter is itself a function. A function
+~ type is written with the arrow — `(Num) -> Num`, `(Num) -> Bool`, `() -> $` — and the
+~ value passed in is a closure (here a lambda literal). The body calls it like any other
+~ function. `<< core.test` verifies each result; on success the program exits 0.
+<< core.test
+
+~ Value-first so `x |> apply(f)` reads naturally: the piped subject is the first arg.
+apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
+
+~ Calls `f` on its own result: f(f(x)).
+twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+
+~ A predicate parameter `(Num) -> Bool`: keep `x` when it holds, else 0.
+keepIf = (p :: (Num) -> Bool, x :: Num) -> Num => p(x) ? x : 0
+
+~ A `() -> $` parameter, called purely for effect: `run` invokes `action` twice.
+run = (action :: () -> $) -> $ => <
+  action()
+  action()
+>
+
+^ = () -> $ => <
+  assert(apply(10, (n :: Num) => n + 1), equals(11))
+  assert(10 |> apply((n :: Num) => n + 1), equals(11))
+  assert(twice((n :: Num) => n * 3, 2), equals(18))
+
+  assert(keepIf((n :: Num) => n > 5, 9), equals(9))
+  assert(keepIf((n :: Num) => n > 5, 3), equals(0))
+
+  ~ A named closure captures `total` by reference, so its writes escape and accumulate
+  ~ across the two calls `run` makes. Passing it by name hands `run` the closure value.
+  total := 0
+  tick = () -> $ => <
+    total := total + 5
+    $
+  >
+  run(tick)
+  assert(total, equals(10))
+>

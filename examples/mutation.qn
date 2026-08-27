@@ -1,25 +1,29 @@
-~ In-place record mutation. Mutability is decided by the binding operator:
-~   `=`  -> immutable (frozen): no field writes, no setter-method calls.
-~   `:=` -> mutable: in-place field writes AND setter methods are allowed.
-~ A method is a "setter" iff its body writes `it.field := …` (the visible `:=`
-~ is the signal — there is no marker). Calling a setter needs a `:=` receiver.
+~ In-place record mutation. The binding operator decides mutability, for instances
+~ and for methods alike:
+~   `=`  -> immutable: no field writes, and a method that promises not to mutate.
+~   `:=` -> mutable: in-place field writes, and a method that may mutate `it`.
+~ Calling a `:=` method needs a `:=` receiver.
 ~ `<< core.test` verifies each mutation; on success the program exits 0.
 << core.test
 
 Counter = {
   value :: Num,
 
-  ~ A setter: its body writes `it.value := …`, so it mutates in place.
-  bump = (by :: Num) => it.value := it.value + by,
+  ~ A setter: declared with `:=`, so it may mutate in place.
+  bump := (by :: Num) => it.value := it.value + by,
 
-  ~ A getter: no `it.field := …`, so it is callable on `=` instances too.
   peek = => it.value
+
+  ~ Also `:=`: the write is inside a lambda, but it still lands on `it`.
+  bumpEach := (steps :: []Num) => steps.each(s => it.value := it.value + s)
 }
 
 ^ = () -> $ => <
   c := Counter { value = 30 }   ~ `:=` -> mutable instance
   c.bump(5)                      ~ setter mutates: value = 35
-  assertEq(c.peek(), 35)
+  assert(c.peek(), equals(35))
   c.value := c.value + 7         ~ direct field write: value = 42
-  assertEq(c.peek(), 42)
+  assert(c.peek(), equals(42))
+  c.bumpEach([1, 2, 3])          ~ setter writing from inside a lambda: value = 48
+  assert(c.peek(), equals(48))
 >

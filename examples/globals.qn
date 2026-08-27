@@ -8,7 +8,7 @@
 
 limit = 10
 enabled = true
-scale = n => n * 3
+scale = (n :: Num) => n * 3
 
 ~ `$` is a value like any other, so a top-level binding may hold it. There is nothing to
 ~ assert about it — it has exactly one inhabitant.
@@ -18,13 +18,13 @@ nothing = $
 counter := 4
 
 ^ = () -> $ => <
-  assertEq(limit, 10)
-  assert(enabled)
+  assert(limit, equals(10))
+  assert(enabled, equals(true))
 
   ~ A top-level function value is called like any other function.
-  assertEq(scale(limit), 30)
+  assert(scale(limit), equals(30))
 
   ~ Writing a global: the store lands in the one cell, so the read that follows sees it.
   counter := counter + 1
-  assertEq(counter, 5)
+  assert(counter, equals(5))
 >
