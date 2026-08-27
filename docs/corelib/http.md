@@ -88,7 +88,7 @@ decoder for; the connection close alone delimits the body. `Content-Length` coun
 | `headers() -> []Text` | The header lines, trimmed and without the status line. A line carrying no colon is not a header and is left out. |
 | `body() -> Text` | Everything after the blank line, character for character; `""` when the reply has no blank line. |
 | `head() -> Text` | The status line and the header lines, with CRLF endings normalised to LF. |
-| `separator() -> Text` | The blank line this reply separates head from body with: `"\r\n\r\n"`, `"\n\n"`, or `""`. |
+| `separator() -> Text` | The blank line this reply separates head from body with: `"\r\n\r\n"`, `"\n\n"`, or `""`. The **earlier** of the two wins, so a body carrying a blank line in the other convention cannot move the split. |
 
 Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. `body()` never consults
 `Content-Length` — the close delimits the body — so a wrong or absent `Content-Length` cannot

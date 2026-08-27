@@ -194,6 +194,22 @@ describe("line endings", () => <
   it("reads a bare-LF reply's body", () =>
     expect(parsed(lineFeedReply()).body(), equals("hello")))
 
+  it("splits at the first blank line when the body carries a CRLF one", () => <
+    ~ LF headers, and a CRLF blank line inside the body: taking CRLF on sight would put
+    ~ the split inside the body and swallow most of it into the head.
+    mixed = parsed("HTTP/1.1 200 OK\nX-A: b\n\nbody with \r\n\r\n inside")
+    expect(mixed.statusLine(), equals("HTTP/1.1 200 OK"))
+    expect(mixed.headers().size, equals(1))
+    expect(mixed.body(), equals("body with \r\n\r\n inside"))
+  >)
+
+  it("splits at the first blank line when the body carries a bare-LF one", () => <
+    ~ The mirror case: CRLF headers, a bare-LF blank line in the body.
+    mixed = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nbody with \n\n inside")
+    expect(mixed.headers().size, equals(1))
+    expect(mixed.body(), equals("body with \n\n inside"))
+  >)
+
   it("agrees with the CRLF reply field for field", () => <
     ~ The two fixtures differ only in their line endings, so every field must match.
     crlf = parsed(crlfReply())

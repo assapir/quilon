@@ -38,9 +38,17 @@
   raw :: Text,
 
   ~ The blank line separating the headers from the body, as it appears in this reply:
-  ~ CRLF, bare LF, or "" for a reply that has none.
-  separator = () -> Text =>
-    it.raw.contains("\r\n\r\n") ? "\r\n\r\n" : (it.raw.contains("\n\n") ? "\n\n" : "")
+  ~ CRLF, bare LF, or "" for a reply that has none. The EARLIER of the two wins, which
+  ~ matters for a bare-LF reply whose body carries a CRLF blank line of its own: taking
+  ~ CRLF on sight would put the head/body split inside the body.
+  separator = () -> Text => <
+    lineFeedSplitsFirst = it.raw.indexOf("\n\n") ?
+      | Ok(lineFeedAt) => (it.raw.indexOf("\r\n\r\n") ?
+        | Ok(crlfAt) => lineFeedAt < crlfAt
+        | NotOk(_)   => true)
+      | NotOk(_) => false
+    lineFeedSplitsFirst ? "\n\n" : (it.raw.contains("\r\n\r\n") ? "\r\n\r\n" : "")
+  >
 
   ~ Everything before the blank line — the status line and the header lines — with CRLF
   ~ endings normalised to LF, so one code path reads a CRLF reply and a bare-LF one. The
