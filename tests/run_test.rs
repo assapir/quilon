@@ -880,9 +880,9 @@ fn result_nested_result_payload_boxes_and_extracts() {
 }
 
 #[test]
-fn print_remains_an_overload_over_builtins() {
-    // `print` is now a visible overload set over Num/Text/Bool (returning `$`), not a
-    // compiler special case. Each printable type type-checks and runs.
+fn print_takes_every_builtin_type() {
+    // One printing rule, not a member per type: each built-in renders through its own
+    // `` ` `` and `print` yields `$`.
     assert_exit_linked(
         "<< core.io\n^ = () -> Num => <\n  print(1)\n  print(\"two\")\n  print(true)\n  0\n>",
         0,
@@ -890,9 +890,9 @@ fn print_remains_an_overload_over_builtins() {
 }
 
 #[test]
-fn user_print_overload_is_added_not_shadowed() {
-    // A user `print` overload with its own signature is ADDED to the overload set; the
-    // built-in single-arg print/eprint still work, and the user 2-arg form dispatches.
+fn user_print_overload_at_another_arity_is_added_not_shadowed() {
+    // The built-in claims one argument (any renderable value); a definition at another
+    // arity forms an overload set beside it, and both calls dispatch.
     assert_exit_linked(
         "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  print(\"hi\")\n  print(40, 2)\n>",
         42,

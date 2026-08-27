@@ -232,6 +232,18 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
+    /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —
+    /// a function.
+    NotRenderable {
+        name: String,
+        got: Box<Type>,
+        span: Span,
+    },
+    /// A top-level definition took over an output built-in's own arity.
+    RenderableBuiltinRedefined {
+        name: String,
+        span: Span,
+    },
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars

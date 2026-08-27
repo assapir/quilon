@@ -7,25 +7,43 @@
 use super::*;
 
 impl TypeChecker {
-    /// Whether `function(arguments)` is a `print`/`eprint` call on a single argument of a type with
-    /// no exact overload — the generic "render anything" path (result `$`). A function
-    /// value is excluded (not a renderable value). Kept out of `check_call`'s frame.
-    pub(super) fn is_generic_print_call(
-        &self,
-        function: &Expression,
+    /// Check a call to an output built-in (`print`/`eprint`/`write`): the first argument is
+    /// rendered through its `` ` `` member, so any type but a function is accepted there,
+    /// and the rest are checked against the built-in's fixed parameter types. Reached only
+    /// for a call the built-in claims (see the guard in `check_call`), so a wrong argument
+    /// count here is an error rather than a fall-through. Kept out of `check_call`'s frame.
+    pub(super) fn check_renderable_builtin_call(
+        &mut self,
+        name: &str,
+        builtin: &crate::ast::RenderableBuiltin,
         arguments: &[Expression],
         first_ty: &Option<Type>,
-    ) -> bool {
-        if let Expression::Identifier { name, .. } = function
-            && (name == "print" || name == "eprint")
-            && arguments.len() == 1
-            && let Some(arg_ty) = first_ty
-            && !matches!(arg_ty, Type::Function { .. })
-        {
-            !self.has_exact_overload(name, std::slice::from_ref(arg_ty))
-        } else {
-            false
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        // The built-in's arity is always at least one, so a call of the right length always
+        // inferred a first argument (`first_ty`).
+        let Some(rendered) = first_ty
+            .as_ref()
+            .filter(|_| arguments.len() == builtin.arity())
+        else {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: builtin.arity(),
+                got: arguments.len(),
+                span: span.clone(),
+            });
+        };
+        if !crate::ast::is_renderable(rendered) {
+            return Err(TypeError::NotRenderable {
+                name: name.to_string(),
+                got: Box::new(rendered.clone()),
+                span: span.clone(),
+            });
         }
+        for (parameter, argument) in builtin.rest.iter().zip(&arguments[1..]) {
+            let argument_type = self.infer_expression(argument)?;
+            self.check_type_compatibility(parameter, &argument_type, span)?;
+        }
+        Ok(builtin.ret.clone())
     }
 
     pub(super) fn check_call(
@@ -179,11 +197,16 @@ impl TypeChecker {
             }
         }
 
-        // `print`/`eprint` render ANY value through its `` ` `` operator, so a single
-        // argument of any type is accepted and yields `$` (the probe is a separate method
-        // so its locals stay out of this hot, deeply-recursive frame).
-        if self.is_generic_print_call(function, arguments, &first_ty) {
-            return Ok(Type::Unit);
+        // `print`/`eprint`/`write` render their first argument through its `` ` `` operator,
+        // so a value of any type is accepted there. The built-in claims every call at its own
+        // arity — codegen asks the same question — and another arity belongs to a user set of
+        // the same name, where there is one. (The check itself is a separate method so its
+        // locals stay out of this hot, deeply-recursive frame.)
+        if let Expression::Identifier { name, .. } = function
+            && let Some(builtin) = crate::ast::renderable_builtin(name)
+            && (arguments.len() == builtin.arity() || !self.overloaded_names.contains(name))
+        {
+            return self.check_renderable_builtin_call(name, builtin, arguments, &first_ty, span);
         }
 
         // A name that forms an overload set but has no member registered yet is one whose
@@ -201,9 +224,7 @@ impl TypeChecker {
         }
 
         // Overload-set dispatch: if `function` names an overload set (a user overload set
-        // OR a built-in like `print`/`eprint`), resolve it by EXACT argument types.
-        // This is the general mechanism that replaces the old `print` special-casing —
-        // `print` is now just an overload set over Num/Text/Bool returning `$`.
+        // OR a built-in like `now`), resolve it by EXACT argument types.
         if let Expression::Identifier { name, .. } = function
             && self.overloads.contains_key(name)
         {

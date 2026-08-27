@@ -1,0 +1,48 @@
+~ `print` takes anything renderable. At the call site the compiler renders the argument
+~ through the `` ` `` member of its type and writes the result; `eprint` and `write` render
+~ the same way. A type becomes printable by defining that member — nothing extends `print`.
+~ `<< core.test` verifies every rendering; on success the program exits 0.
+<< core.io
+<< core.test
+
+~ A record with its own render member: `it` is the instance, the result is its Text form.
+Temperature = {
+  degrees :: Num,
+  scale :: Text,
+  ` = () -> Text => "`it.degrees`°`it.scale`"
+}
+
+~ A sum renders through the `` ` `` member in its methods block.
+Level = Low / High {
+  ` = () -> Text => it ?
+    | Low  => "low"
+    | High => "high"
+}
+
+~ A record with no render member: the default for its shape is the type name.
+Reading = { at :: Num }
+
+^ = () -> $ => <
+  here :: Temperature = Temperature { degrees = 21, scale = "C" }
+
+  ~ `print` writes the rendering, and interpolation splices the same Text.
+  print(here)                                ~ stdout: 21°C\n
+  assert("`here`", equals("21°C"))
+
+  ~ A sum's member, and a record that defines none.
+  level :: Level = High
+  print(level)                               ~ stdout: high\n
+  assert("`level`", equals("high"))
+  assert("`Reading { at = 3 }`", equals("Reading"))
+
+  ~ `write` renders too: no newline, and the rendered bytes as they are. "21°C" is
+  ~ 5 bytes — the degree sign takes two.
+  written :: Num = here |> write(stdout)
+  assert(written, equals(5))
+
+  ~ The built-in types take the same path.
+  print(42)                                  ~ stdout: 42\n
+  print(true)                                ~ stdout: True\n
+  print([1, 2, 3])                           ~ stdout: [1, 2, 3]\n
+  eprint(here)                               ~ stderr: 21°C\n
+>

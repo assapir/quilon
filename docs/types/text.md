@@ -84,9 +84,10 @@ A hole can be **any expression**, and its value can be of **any type** — every
 renderable. To write a **literal backtick**, double it: `` `` `` yields one `` ` `` (never
 starts a hole). A plain string with no holes is an ordinary `Text` literal.
 
-**One render path.** Both interpolation and `print`/`eprint` render a value by invoking
-its `` ` `` (backtick) operator. Every built-in type has a **default** `` ` ``. Any user
-type may **override** its rendering by defining its own `` ` `` operator as a member of
+**One render path.** Interpolation and [`print`/`eprint`/`write`](../corelib/io.md) all
+render a value by invoking its `` ` `` (backtick) operator. Every built-in type has a
+**default** `` ` ``. Any user type may **override** its rendering by defining its own
+`` ` `` operator as a member of
 the [record](records.md#named-record-types-with-methods) or [sum](sum-types.md#methods--the-optional---block).
 The member binds `it` to the value, returns `Text`, and may use interpolation itself:
 
@@ -114,9 +115,12 @@ back to the default rather than recursing forever.)
 | sum type | the **variant/constructor name** (unless overridden) | `Green`, `Ok` |
 | array | length **≤ 10** → full `[a, b, c]` (each element via its own `` ` ``); length **> 10** → truncated `[first <- last]` | `[1, 2, 3]`, `[1 <- 100]` |
 
-There are **no format specifiers** (width/precision/etc.). (See `examples/interpolation.qn`.)
+A **function** value is the one thing that does not render; handing one to `print` names the
+missing member. There are **no format specifiers** (width/precision/etc.). (See
+`examples/interpolation.qn`.)
 
-**On output, `print` renders and `write` does not.** `print`/`eprint` write text for a
-reader: a `Text` whose bytes are not valid UTF-8 arrives with each invalid byte shown as the
-replacement character `�`. [`write`](../corelib/io.md) is the byte-exact form — a `Text`'s bytes
-as they are. Both write the whole `Text`: a NUL byte is content, never a terminator.
+**On output, `print` shows the text for a reader and `write` does not.** `print`/`eprint`
+write text for a reader: a `Text` whose bytes are not valid UTF-8 arrives with each invalid
+byte shown as the replacement character `�`. [`write`](../corelib/io.md) renders its argument
+the same way but passes the bytes through as they are. Both write the whole `Text`: a NUL byte
+is content, never a terminator.
