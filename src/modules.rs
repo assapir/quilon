@@ -30,12 +30,7 @@ pub fn resolve_imports(
     program: &Program,
     base_dir: &Path,
 ) -> Result<(Vec<Item>, SourceMap), String> {
-    let mut loader = Loader {
-        visited: HashSet::new(),
-        out: Vec::new(),
-        sources: SourceMap::default(),
-        next_file: ROOT_FILE + 1,
-    };
+    let mut loader = Loader::new();
     loader.resolve_list(&program.imports, base_dir)?;
     Ok((loader.out, loader.sources))
 }
@@ -54,6 +49,15 @@ struct Loader {
 }
 
 impl Loader {
+    fn new() -> Self {
+        Self {
+            visited: HashSet::new(),
+            out: Vec::new(),
+            sources: SourceMap::default(),
+            next_file: ROOT_FILE + 1,
+        }
+    }
+
     fn resolve_list(&mut self, imports: &[Import], base_dir: &Path) -> Result<(), String> {
         for import in imports {
             self.resolve_one(&import.path, base_dir)?;
@@ -115,7 +119,9 @@ impl Loader {
             .map_err(|e| format!("parse error in module `{}`: {}", canonical, e))?;
 
         // Resolve the module's own imports first (transitive), then collect its exports.
-        self.resolve_list(&sub.imports, &next_base)?;
+        for import in &sub.imports {
+            self.resolve_one(&import.path, &next_base)?;
+        }
         for mut item in sub.items {
             if item_is_exported(&item) {
                 // A bundled module's functions carry their origin: it is what marks the
@@ -136,35 +142,23 @@ impl Loader {
 // from the same strings — they cannot drift.
 const CORE_IO: &str = include_str!("../corelib/io.qn");
 const CORE_TEST: &str = include_str!("../corelib/test.qn");
-const CORE_TEST_REPORT: &str = include_str!("../corelib/test/report.qn");
 const CORE_CLI: &str = include_str!("../corelib/cli.qn");
 const CORE_TIME: &str = include_str!("../corelib/time.qn");
 const CORE_NET: &str = include_str!("../corelib/net.qn");
+const CORE_HTTP: &str = include_str!("../corelib/http.qn");
 
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
-const CORELIB_SOURCES: &[&str] = &[
-    CORE_IO,
-    CORE_TEST,
-    CORE_TEST_REPORT,
-    CORE_CLI,
-    CORE_TIME,
-    CORE_NET,
-];
+const CORELIB_SOURCES: &[&str] = &[CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(CORE_IO),
-        // core.test — what a harness and a reporter are built from: `failAt`, the run's
-        // recorded state, and the case lifecycle. Depends transitively on core.io (`failAt`
-        // renders its frame via `eprint`). It defines no `describe`/`it`/`report*`, which is
-        // what leaves those names free for a suite that brings its own.
+        // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
+        // a check of your own, the run's recorded state, and the case lifecycle. Depends
+        // transitively on core.io (it prints, and `failAt` renders its frame via `eprint`).
         "core.test" => Some(CORE_TEST),
-        // core.test.report — the harness and reporter Quilon ships, written against
-        // core.test's functions like any other. A suite importing this gets the default
-        // output; one importing only `core.test` supplies its own.
-        "core.test.report" => Some(CORE_TEST_REPORT),
         // core.cli — thin, pure-Quilon helpers over the `^` entry point's
         // `args :: []Text` and `env :: [|Text => Text|]`.
         "core.cli" => Some(CORE_CLI),
@@ -178,6 +172,10 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // inert), so the import merges the primitive's signature and declares intent, nothing
         // more.
         "core.net" => Some(CORE_NET),
+        // core.http — a minimal HTTP client written entirely in Quilon over core.net's
+        // `@tcpRequest`. It declares no leaf IO primitives of its own; it is bundled so
+        // `<< core.http` resolves and so the module is trusted when checked directly.
+        "core.http" => Some(CORE_HTTP),
         // Text is a built-in primitive type (like Num/Bool/arrays): its operations
         // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
         // there is intentionally no `core.text` module.

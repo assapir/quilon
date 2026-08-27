@@ -1,0 +1,595 @@
+~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest. HTTP only,
+~ no TLS. Import with `<< core.http`. Reference: docs/corelib/http.md.
+
+<< core.net
+
+~ A request body: the text to send and the media type to advertise for it.
+>> Body = { content :: Text, contentType :: Text }
+
+~ The HTTP method. Body-bearing methods carry a `Body`; the rest are nullary. `Query` is
+~ RFC 10008's safe, idempotent method with a body.
+>> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head {
+  ~ The token this method writes in a request line.
+  token = () -> Text => it ?
+    | Get      => "GET"
+    | Post(_)  => "POST"
+    | Put(_)   => "PUT"
+    | Query(_) => "QUERY"
+    | Delete   => "DELETE"
+    | Head     => "HEAD"
+
+  ~ The body this method carries — an empty one for the methods that carry none.
+  payload = () -> Body => it ?
+    | Post(carried)  => carried
+    | Put(carried)   => carried
+    | Query(carried) => carried
+    | _              => Body { content = "", contentType = "" }
+
+  ~ Whether this method defines a meaning for an enclosed body. Such a method sends
+  ~ `Content-Length` even when its content is empty — servers answer a POST without one with
+  ~ 411 — while the nullary methods send neither body header.
+  carriesBody = () -> Bool => it ?
+    | Post(_)  => true
+    | Put(_)   => true
+    | Query(_) => true
+    | _        => false
+}
+
+~ A reply: the raw response text, read through the methods below.
+>> Response = {
+  raw :: Text,
+
+  ~ Reject a reply that does not open with an HTTP status line: `Ok(it)` for a reply worth
+  ~ reading, `NotOk(errorText)` for one that is not HTTP at all.
+  validate = () -> Result =>
+    it.raw.slice(0, 4) == "HTTP" && it.raw.contains("\n")
+      ? Ok(it)
+      : NotOk("malformed HTTP response")
+
+  ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
+  ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
+  ~ carrying a blank line in the other convention cannot move the split. `split(x)[0].length`
+  ~ is "where x first appears, or the whole length when it never does" — a reply with no
+  ~ separator splits into one piece. Each spelling is exactly two graphemes, so the body starts
+  ~ two past this index; searching `raw` directly keeps every offset in one index space.
+  blankLine = () -> Num => <
+    atCrlfCrlf = it.raw.split("\r\n\r\n")[0].length
+    atLfLf = it.raw.split("\n\n")[0].length
+    atCrlfLf = it.raw.split("\r\n\n")[0].length
+    atLfCrlf = it.raw.split("\n\r\n")[0].length
+    pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
+    mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
+    pureConvention < mixedConvention ? pureConvention : mixedConvention
+  >
+
+  ~ Everything before the blank line — the status line and the header lines — with CRLF endings
+  ~ rewritten to LF, so the methods below split on `\n` whichever convention the server used. A
+  ~ reply with no blank line at all is all head and no body.
+  head = () -> Text => it.raw.slice(0, it.blankLine()).replaceAll("\r\n", "\n")
+
+  ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
+  statusLine = () -> Text => it.head().split("\n")[0].trim()
+
+  ~ The header lines, trimmed and without the status line. A line carrying no colon is
+  ~ not a header and is left out, so a garbled reply yields the headers it does have.
+  headers = () -> []Text => <
+    section = it.head()
+    afterStatusLine = section.indexOf("\n") ?
+      | Ok(mark) => section.slice(mark + 1, section.length)
+      | NotOk(_) => ""
+    afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+  >
+
+  ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
+  ~ no code that is digits throughout — a garbled reply reads as 0 rather than guessing.
+  status = () -> Num => <
+    digitOf = (grapheme :: Text) -> Result => "0123456789".indexOf(grapheme)
+    isDigit = (grapheme :: Text) -> Bool => digitOf(grapheme) ?
+      | Ok(_)    => true
+      | NotOk(_) => false
+    fields = it.statusLine().split(" ")
+    code = fields.size > 1 ? fields[1] : ""
+    graphemes = code.split("")
+    allDigits = code.length > 0
+      && graphemes.filter(grapheme => isDigit(grapheme)).size == graphemes.size
+    allDigits
+      ? graphemes.reduce(0, (accumulator, grapheme) => digitOf(grapheme) ?
+        | Ok(digit) => accumulator * 10 + digit
+        | NotOk(_)  => accumulator)
+      : 0
+  >
+
+  ~ Look up a header by name, case-insensitively: `Ok(value)` or `NotOk(name)`. The value
+  ~ is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins.
+  header = (name :: Text) -> Result => <
+    wanted = name.trim().toLower()
+    ~ Every line `headers()` yields carries a colon, so splitting on it always has a name.
+    nameOf = (line :: Text) -> Text => line.split(":")[0].trim().toLower()
+    valueOf = (line :: Text) -> Text => line.indexOf(":") ?
+      | Ok(colon) => line.slice(colon + 1, line.length).trim()
+      | NotOk(_)  => ""
+    it.headers().find(line => nameOf(line) == wanted) ?
+      | Ok(line) => Ok(valueOf(line))
+      | NotOk(_) => NotOk(name)
+  >
+
+  ~ Everything after the blank line, sliced out of the RAW text so a body carrying its own CRLF
+  ~ survives intact; "" for a reply with no blank line. `Content-Length` is never consulted —
+  ~ the close delimits the body.
+  body = () -> Text => <
+    mark = it.blankLine()
+    mark < it.raw.length ? it.raw.slice(mark + 2, it.raw.length) : ""
+  >
+}
+
+~ A request: the method and the target URL (`http://host[:port]/path`, scheme optional).
+>> Request = {
+  method :: Method,
+  url :: Text,
+
+  ~ The URL with any `scheme://` prefix removed: `host[:port]/path`.
+  withoutScheme = () -> Text => it.url.indexOf("://") ?
+    | Ok(mark) => it.url.slice(mark + 3, it.url.length)
+    | NotOk(_) => it.url
+
+  ~ Where the authority ends: the first `/`, `?` or `#`, or the whole string for a bare host.
+  ~ Cutting at all three keeps a query string out of the host — `example.com?a=b` is the host
+  ~ `example.com` asking for `/?a=b`, not a host named `example.com?a=b`.
+  authorityEnd = () -> Num => <
+    rest = it.withoutScheme()
+    atPath = rest.split("/")[0].length
+    atQuery = rest.split("?")[0].length
+    atFragment = rest.split("#")[0].length
+    nearest = atPath < atQuery ? atPath : atQuery
+    nearest < atFragment ? nearest : atFragment
+  >
+
+  ~ The `host[:port]` to connect to, and what the `Host` header carries. Any `userinfo@` prefix
+  ~ is dropped: it is a credential, not part of the host.
+  authority = () -> Text => <
+    named = it.withoutScheme().slice(0, it.authorityEnd())
+    parts = named.split("@")
+    parts[parts.size - 1]
+  >
+
+  ~ The path the request line asks for, with a bare query string given the `/` root it implies
+  ~ and any `#fragment` dropped — a fragment never goes on the wire. `/` when the URL carries
+  ~ no path at all.
+  path = () -> Text => <
+    rest = it.withoutScheme()
+    start = it.authorityEnd()
+    end = rest.split("#")[0].length
+    target = start < end ? rest.slice(start, end) : ""
+    target == "" ? "/" : (target.slice(0, 1) == "/" ? target : "/" + target)
+  >
+
+  ~ The request serialised to the text that goes on the wire. A body-bearing method adds
+  ~ `Content-Type` and a `Content-Length` counted in BYTES — even for empty content, which is a
+  ~ body of length zero rather than no body — then the body after the blank line.
+  wire = () -> Text => <
+    carried = it.method.payload()
+    requestLine = "`it.method.token()` `it.path()` HTTP/1.0\r\n"
+    headers = "Host: `it.authority()`\r\nConnection: close\r\n"
+    bodyHeaders = it.method.carriesBody()
+      ? "Content-Type: `carried.contentType`\r\nContent-Length: `carried.content.size`\r\n"
+      : ""
+    requestLine + headers + bodyHeaders + "\r\n" + carried.content
+  >
+
+  ~ Perform the request over core.net and read the reply into `Ok(Response)`; a transport
+  ~ failure arrives as the `NotOk(errorText)` the primitive reported, never as a crash.
+  send = () -> Result => <
+    host = it.authority()
+    address = host.contains(":") ? host : host + ":80"
+    @tcpRequest(address, it.wire()) ?
+      | Ok(responseText) => Response { raw = responseText }.validate()
+      | NotOk(problem)   => NotOk(problem)
+  >
+}
+
+~ The suite for everything above: every parser and serialiser edge case, offline over canned
+~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
+~ other command erases them, and the fixtures below carry no `>>`, so a program importing
+~ `core.http` never sees them. The harness follows the blocks: nothing outside one names it,
+~ so no build it does not belong in emits it.
+<< core.test
+
+~ A well-formed CRLF reply with two headers and a five-character body.
+crlfReply = () -> Text =>
+  "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+
+~ The same reply with bare LF endings, as a sloppy server writes it.
+lineFeedReply = () -> Text =>
+  "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5\n\nhello"
+
+~ Read a header, or a marker when it is absent, so a case can assert on plain `Text`.
+headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text =>
+  response.header(name) ?
+    | Ok(value) => value
+    | NotOk(_)  => fallback
+
+~ Parse a reply the case knows is well-formed. `assert`, not `expect`: an unparseable fixture
+~ is a broken test rather than a failed case.
+parsed = (raw :: Text) -> Response => <
+  candidate = Response { raw = raw }
+  assert(candidate.validate(), isOk())
+  candidate.validate() ?
+    | Ok(response) => response
+    | NotOk(_)     => candidate
+>
+
+describe("validating a reply", () => <
+  it("rejects a reply that is not HTTP at all", () =>
+    expect(Response { raw = "not http at all\r\n\r\n" }.validate(), isNotOk()))
+
+  it("rejects a reply with no line ending", () =>
+    expect(Response { raw = "HTTP/1.1 200 OK" }.validate(), isNotOk()))
+
+  it("rejects an empty reply", () => expect(Response { raw = "" }.validate(), isNotOk()))
+>)
+
+describe("the status line", () => <
+  it("reads the code of a normal reply", () =>
+    expect(parsed(crlfReply()).status(), equals(200)))
+
+  it("hands back the whole line, trimmed", () =>
+    expect(parsed(crlfReply()).statusLine(), equals("HTTP/1.1 200 OK")))
+
+  it("accepts HTTP/1.0", () =>
+    expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status(), equals(301)))
+
+  it("accepts HTTP/1.1", () =>
+    expect(parsed("HTTP/1.1 301 Moved\r\n\r\n").status(), equals(301)))
+
+  it("reads a code with no reason phrase", () =>
+    expect(parsed("HTTP/1.1 204\r\n\r\n").status(), equals(204)))
+
+  it("reads a non-numeric code as 0 rather than guessing", () => <
+    ~ The letter O for a zero: no digit-salvaging, no plausible wrong number.
+    garbled = Response { raw = "HTTP/1.1 2O0 OK\r\n\r\n" }
+    expect(garbled.status(), equals(0))
+  >)
+
+  it("reads a missing code as 0", () => <
+    bare = Response { raw = "HTTP/1.1\r\n\r\n" }
+    expect(bare.status(), equals(0))
+  >)
+
+  it("reads a garbage first line as 0", () => <
+    garbage = Response { raw = "!!!\r\n\r\n" }
+    expect(garbage.status(), equals(0))
+  >)
+>)
+
+describe("headers", () => <
+  it("finds a header by its exact name", () =>
+    expect(headerOr(parsed(crlfReply()), "Content-Type", "absent"), equals("text/html")))
+
+  it("looks a header up case-insensitively", () =>
+    expect(headerOr(parsed(crlfReply()), "content-type", "absent"), equals("text/html")))
+
+  it("looks a header up whatever the mix of cases", () =>
+    expect(headerOr(parsed(crlfReply()), "CoNtEnT-tYpE", "absent"), equals("text/html")))
+
+  it("trims the name it is asked for", () =>
+    expect(headerOr(parsed(crlfReply()), "  Content-Type  ", "absent"), equals("text/html")))
+
+  it("reports an absent header as NotOk", () =>
+    expect(parsed(crlfReply()).header("X-Absent"), isNotOk()))
+
+  it("keeps the first of two headers with one name", () => <
+    twice = parsed("HTTP/1.1 200 OK\r\nX-Pick: first\r\nX-Pick: second\r\n\r\n")
+    expect(headerOr(twice, "x-pick", "absent"), equals("first"))
+  >)
+
+  it("reads a header with no value as an empty value", () => <
+    empty = parsed("HTTP/1.1 200 OK\r\nX-Empty:\r\n\r\n")
+    expect(empty.header("X-Empty"), isOk())
+    expect(headerOr(empty, "X-Empty", "absent"), equals(""))
+  >)
+
+  it("trims whitespace around the colon and the value", () => <
+    padded = parsed("HTTP/1.1 200 OK\r\nX-Pad :   spaced out   \r\n\r\n")
+    expect(headerOr(padded, "x-pad", "absent"), equals("spaced out"))
+  >)
+
+  it("keeps a colon inside a header value", () => <
+    dated = parsed("HTTP/1.1 200 OK\r\nDate: Tue, 01 Jan 2030 10:20:30 GMT\r\n\r\n")
+    expect(headerOr(dated, "date", "absent"), equals("Tue, 01 Jan 2030 10:20:30 GMT"))
+  >)
+
+  it("ignores a body line that looks like a header", () => <
+    sneaky = parsed("HTTP/1.1 200 OK\r\nX-Real: yes\r\n\r\nX-Body: no")
+    expect(sneaky.header("X-Real"), isOk())
+    expect(sneaky.header("X-Body"), isNotOk())
+  >)
+
+  it("leaves a line carrying no colon out of the headers", () => <
+    junk = parsed("HTTP/1.1 200 OK\r\ngarbage line\r\nX-Real: yes\r\n\r\n")
+    expect(junk.headers().size, equals(1))
+    expect(headerOr(junk, "x-real", "absent"), equals("yes"))
+  >)
+
+  it("lists the header lines without the status line", () => <
+    two = parsed(crlfReply())
+    expect(two.headers().size, equals(2))
+    expect(two.headers()[0], equals("Content-Type: text/html"))
+  >)
+
+  it("finds no headers in a reply that has none", () =>
+    expect(parsed("HTTP/1.1 200 OK\r\n\r\nbody").headers().size, equals(0)))
+>)
+
+describe("the body", () => <
+  it("reads the text after the blank line", () =>
+    expect(parsed(crlfReply()).body(), equals("hello")))
+
+  it("reads an empty body as empty", () =>
+    expect(parsed("HTTP/1.1 204 No Content\r\nX-A: b\r\n\r\n").body(), equals("")))
+
+  it("keeps a CRLF inside the body intact", () => <
+    multiline = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nfirst\r\nsecond\r\n\r\nthird")
+    expect(multiline.body(), equals("first\r\nsecond\r\n\r\nthird"))
+  >)
+
+  it("reads no body at all when the reply has no blank line", () => <
+    truncated = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n")
+    expect(truncated.body(), equals(""))
+    ~ The headers are still readable: the whole reply is head.
+    expect(headerOr(truncated, "content-type", "absent"), equals("text/html"))
+  >)
+
+  it("returns the body with no Content-Length to go by", () =>
+    expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\npayload").body(), equals("payload")))
+
+  it("ignores a Content-Length of zero", () => <
+    lying = parsed("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\npayload")
+    expect(lying.body(), equals("payload"))
+  >)
+
+  it("ignores a Content-Length that disagrees with the body", () => <
+    short = parsed("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\npayload")
+    expect(short.body(), equals("payload"))
+    long = parsed("HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\npayload")
+    expect(long.body(), equals("payload"))
+  >)
+>)
+
+describe("line endings", () => <
+  it("reads a bare-LF reply's status line", () =>
+    expect(parsed(lineFeedReply()).statusLine(), equals("HTTP/1.1 200 OK")))
+
+  it("reads a bare-LF reply's status code", () =>
+    expect(parsed(lineFeedReply()).status(), equals(200)))
+
+  it("reads a bare-LF reply's headers", () => <
+    reply = parsed(lineFeedReply())
+    expect(reply.headers().size, equals(2))
+    expect(headerOr(reply, "content-type", "absent"), equals("text/html"))
+  >)
+
+  it("reads a bare-LF reply's body", () =>
+    expect(parsed(lineFeedReply()).body(), equals("hello")))
+
+  it("splits at the first blank line when the body carries a CRLF one", () => <
+    ~ LF headers, and a CRLF blank line inside the body: taking CRLF on sight would put
+    ~ the split inside the body and swallow most of it into the head.
+    mixed = parsed("HTTP/1.1 200 OK\nX-A: b\n\nbody with \r\n\r\n inside")
+    expect(mixed.statusLine(), equals("HTTP/1.1 200 OK"))
+    expect(mixed.headers().size, equals(1))
+    expect(mixed.body(), equals("body with \r\n\r\n inside"))
+  >)
+
+  it("splits correctly when a header line ends in a stray CR", () => <
+    ~ `bar\r\r\n` is a malformed header line: the lone CR and the CRLF are two graphemes, but
+    ~ rewriting CRLF to LF would fuse them into one and shift every later offset by one, so the
+    ~ separator is located in the raw text instead.
+    strayCarriageReturn =
+      parsed("HTTP/1.1 200 OK\r\nX-Foo: bar\r\r\nContent-Type: t\r\n\r\nbody")
+    expect(strayCarriageReturn.body(), equals("body"))
+    expect(strayCarriageReturn.status(), equals(200))
+  >)
+
+  it("splits at the first blank line when the body carries a bare-LF one", () => <
+    ~ The mirror case: CRLF headers, a bare-LF blank line in the body.
+    mixed = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nbody with \n\n inside")
+    expect(mixed.headers().size, equals(1))
+    expect(mixed.body(), equals("body with \n\n inside"))
+  >)
+
+  it("agrees with the CRLF reply field for field", () => <
+    crlf = parsed(crlfReply())
+    lineFeed = parsed(lineFeedReply())
+    expect(lineFeed.statusLine(), equals(crlf.statusLine()))
+    expect(lineFeed.status(), equals(crlf.status()))
+    expect(lineFeed.body(), equals(crlf.body()))
+    expect(headerOr(lineFeed, "content-type", "?"), equals(headerOr(crlf, "content-type", "!")))
+  >)
+>)
+
+describe("the Method sum", () => <
+  it("writes GET", () => expect(Get.token(), equals("GET")))
+  it("writes DELETE", () => expect(Delete.token(), equals("DELETE")))
+  it("writes HEAD", () => expect(Head.token(), equals("HEAD")))
+
+  it("writes POST", () =>
+    expect(Post(Body { content = "x", contentType = "text/plain" }).token(), equals("POST")))
+
+  it("writes PUT", () =>
+    expect(Put(Body { content = "x", contentType = "text/plain" }).token(), equals("PUT")))
+
+  it("writes QUERY", () =>
+    expect(Query(Body { content = "x", contentType = "text/plain" }).token(), equals("QUERY")))
+
+  it("carries the body of a body-bearing method", () => <
+    carried = Post(Body { content = "sent", contentType = "text/plain" }).payload()
+    expect(carried.content, equals("sent"))
+    expect(carried.contentType, equals("text/plain"))
+  >)
+
+  it("carries an empty body for a nullary method", () => <
+    none = Get.payload()
+    expect(none.content, equals(""))
+    expect(none.contentType, equals(""))
+  >)
+>)
+
+~ From here down, the internals the blocks above rest on — reachable at all only because the
+~ suite lives in the module beside them.
+
+describe("the head/body split", () => <
+  it("hands back the head with its endings rewritten and the body left off", () =>
+    expect(parsed(crlfReply()).head(),
+      equals("HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5")))
+
+  it("hands back the whole reply as head when there is no blank line", () =>
+    expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n").head(), equals("HTTP/1.1 200 OK\nX-A: b\n")))
+>)
+
+describe("reading a URL apart", () => <
+  it("drops the scheme", () =>
+    expect(Request { method = Get, url = "http://example.com/a" }.withoutScheme(),
+      equals("example.com/a")))
+
+  it("takes the authority from a URL with a path", () =>
+    expect(Request { method = Get, url = "http://example.com/a/b" }.authority(),
+      equals("example.com")))
+
+  it("takes the authority from a URL with no path", () =>
+    expect(Request { method = Get, url = "example.com" }.authority(), equals("example.com")))
+
+  it("keeps a port in the authority", () =>
+    expect(Request { method = Get, url = "http://example.com:8080/a" }.authority(),
+      equals("example.com:8080")))
+
+  it("defaults an absent path to /", () =>
+    expect(Request { method = Get, url = "example.com" }.path(), equals("/")))
+
+  it("keeps a path with a query string", () =>
+    expect(Request { method = Get, url = "http://example.com/s?q=ada&n=1" }.path(),
+      equals("/s?q=ada&n=1")))
+
+  it("keeps a query string out of the authority", () => <
+    ~ A URL with a query and no path: the `?` must not be read as part of the host, or the
+    ~ Host header names a host that cannot resolve.
+    bare = Request { method = Get, url = "http://example.com?a=b" }
+    expect(bare.authority(), equals("example.com"))
+    expect(bare.path(), equals("/?a=b"))
+  >)
+
+  it("drops a fragment rather than putting it on the wire", () => <
+    fragmented = Request { method = Get, url = "http://example.com/a#section" }
+    expect(fragmented.authority(), equals("example.com"))
+    expect(fragmented.path(), equals("/a"))
+  >)
+
+  it("reads a bare host carrying only a fragment as the root path", () =>
+    expect(Request { method = Get, url = "http://example.com#top" }.path(), equals("/")))
+
+  it("drops userinfo from the authority", () =>
+    expect(Request { method = Get, url = "http://ada@example.com/x" }.authority(),
+      equals("example.com")))
+>)
+
+describe("serialising a request", () => <
+  it("writes a GET exactly", () => <
+    request = Request { method = Get, url = "http://example.com/index.html" }
+    expect(request.wire(), equals(
+      "GET /index.html HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"))
+  >)
+
+  it("writes a GET for a URL with no path exactly", () => <
+    request = Request { method = Get, url = "example.com" }
+    expect(request.wire(), equals(
+      "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"))
+  >)
+
+  it("writes a POST with its body exactly", () => <
+    request = Request {
+      method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
+      url = "http://example.com/submit"
+    }
+    expect(request.wire(), equals(
+      "POST /submit HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
+        + "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 8\r\n"
+        + "\r\nname=ada"))
+  >)
+
+  it("writes a QUERY with its body exactly", () => <
+    request = Request {
+      method = Query(Body { content = "{\"q\":\"ada\"}", contentType = "application/json" }),
+      url = "http://example.com/search"
+    }
+    expect(request.wire(), equals(
+      "QUERY /search HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
+        + "Content-Type: application/json\r\nContent-Length: 11\r\n"
+        + "\r\n{\"q\":\"ada\"}"))
+  >)
+
+  it("counts Content-Length in bytes, not characters", () => <
+    ~ "héllo" is five characters and six UTF-8 bytes; the wire wants bytes.
+    request = Request {
+      method = Put(Body { content = "héllo", contentType = "text/plain" }),
+      url = "example.com/x"
+    }
+    expect(request.wire(), contains("Content-Length: 6\r\n"))
+  >)
+
+  it("sends no body headers for a method carrying no body", () => <
+    request = Request { method = Delete, url = "example.com/gone" }
+    expect(request.wire(), not(contains("Content-Type")))
+    expect(request.wire(), not(contains("Content-Length")))
+  >)
+
+  it("sends Content-Length: 0 for a body-bearing method with empty content", () => <
+    ~ Empty content is a body of length zero, not the absence of a body; a POST with no
+    ~ Content-Length at all draws a 411 from real servers.
+    request = Request {
+      method = Post(Body { content = "", contentType = "text/plain" }),
+      url = "example.com/x"
+    }
+    expect(request.wire(), equals(
+      "POST /x HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
+        + "Content-Type: text/plain\r\nContent-Length: 0\r\n"
+        + "\r\n"))
+  >)
+
+  it("names the port in Host when the URL carries one", () =>
+    expect(Request { method = Head, url = "http://example.com:8080/p" }.wire(),
+      contains("Host: example.com:8080\r\n")))
+
+  it("writes a HEAD request line", () =>
+    expect(Request { method = Head, url = "example.com/p" }.wire(),
+      contains("HEAD /p HTTP/1.0\r\n")))
+
+  it("writes a DELETE request line", () =>
+    expect(Request { method = Delete, url = "example.com/p" }.wire(),
+      contains("DELETE /p HTTP/1.0\r\n")))
+
+  it("writes a PUT request line with its body", () => <
+    request = Request {
+      method = Put(Body { content = "replaced", contentType = "text/plain" }),
+      url = "example.com/p"
+    }
+    expect(request.wire(), equals(
+      "PUT /p HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
+        + "Content-Type: text/plain\r\nContent-Length: 8\r\n"
+        + "\r\nreplaced"))
+  >)
+>)
+
+describe("a round trip", () => <
+  it("parses a reply built from a request's own body", () => <
+    ~ Serialise a POST, then hand its body back as a reply's body: what goes out and what
+    ~ comes in agree on where the blank line falls.
+    sent = "name=ada"
+    request = Request {
+      method = Post(Body { content = sent, contentType = "text/plain" }),
+      url = "example.com/echo"
+    }
+    expect(request.wire(), contains("\r\n\r\n" + sent))
+    echoed = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + sent)
+    expect(echoed.body(), equals(sent))
+    expect(echoed.status(), equals(200))
+  >)
+>)

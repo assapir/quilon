@@ -4,6 +4,28 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- **`core.http` — an HTTP client written in Quilon** over `core.net`'s `@tcpRequest`. HTTP
+  only, no TLS. It exports four type names and no free functions, since every exported name is
+  a word an importer can no longer use:
+
+  ```quilon ignore
+  << core.http
+
+  ^ = () -> $ => <
+    reply = Request { method = Get, url = "http://example.com/" }.send() ?
+      | Ok(response) => response
+      | NotOk(_)     => Response { raw = "" }
+    assert(reply.status(), equals(200))
+  >
+  ```
+
+  A reply is wrapped and checked in one step — `Response { raw = text }.validate()` — then
+  read through `status()` / `statusLine()` / `header(name)` / `headers()` / `body()`. Replies
+  are read leniently (HTTP/1.0 or 1.1, CRLF or bare LF) and the close, not `Content-Length`,
+  delimits the body. See `docs/corelib/http.md`.
+
 ### Changed
 
 - **`>` closes a block by default; it is greater-than only when an operand follows it.**
@@ -64,32 +86,22 @@ All notable changes to Quilon are documented here.
   `✓` or `✗`, and exits non-zero when any case failed.
 
   `expect` outside an `it` case is a compile error pointing at `assert`: outside a `describe`
-  block there is no reporter at all (the blocks are stripped from `run`/`compile`/`build`),
-  and inside one but outside a case there is nothing to mark, so the failure would print and
-  never be counted. `assert` inside a case stays fatal, for a precondition the case
-  cannot continue past. `reportCase` gained a `failed :: Bool` parameter, so a reporter of
-  your own says which way each case went.
+  block there is no run to record with (the blocks are stripped from
+  `run`/`compile`/`build`), and inside one but outside a case there is nothing to mark, so
+  the failure would print and never be counted. `assert` inside a case stays fatal, for a
+  precondition the case cannot continue past.
 
-- **BREAKING: a test suite imports `core.test.report`, and its output is replaceable.** The
-  harness and the report Quilon ships move to a module of their own — `describe`, `it`,
-  `reportSuite`, `reportCase`, `reportSummary` — and a suite gets them with
-  `<< core.test.report`. Migration is one line per suite: `<< core.test` becomes
-  `<< core.test.report`. (A file that imported `core.test` only for `assert` needs no change;
-  assertions are compiler-provided.)
+- **`core.test` exports only what a suite and the test entry point call.** `describe`, `it`
+  and `reportSummary` ship in `core.test` beside `failAt`, the run's recorded state
+  (`casesPassed`, `casesFailed`, `nestingDepth`) and the case lifecycle (`enterSuite`,
+  `leaveSuite`, `caseFailing`, `finishCase`). The report's colors and its per-group and
+  per-case lines are written out inside those three rather than behind exported helpers, so
+  `indent`, `green`, `red`, `reportSuite` and `reportCase` are names a program is free to
+  define: imports are transitive, and an export nothing outside the module calls is a name
+  taken from every importer for nothing. What the report looks like is fixed for now.
 
-  What `core.test` keeps is what those five are built from, none of it privileged: `failAt`,
-  the run's recorded state (`casesPassed`, `casesFailed`, `nestingDepth`), and the case
-  lifecycle (`enterSuite`, `leaveSuite`, `caseFailing`, `finishCase`). So a suite that imports
-  `core.test` alone and defines the five names itself gets its own report, in ordinary `.qn`
-  and without naming a runtime primitive — `examples/custom_test_reporter.qn` is a working TAP
-  reporter in 30 lines. This is what the split is for: those names had to leave `core.test` to
-  be definable at all, since imports are transitive and a second definition collides.
-
-  `quilon test` binds `reportSummary` by name in the linked program, so whichever definition
-  is in scope ends the run and decides whether it passed; a top-level `describe(…)` is
-  recognized by name too, so a `describe` of your own marks test blocks identically. A suite
-  with no reporter in scope is a compile error at its first `describe`, naming the import that
-  fixes it.
+  A suite with no harness in scope is a compile error at its first `describe`, naming the
+  import that fixes it.
 
 - **BREAKING: a setter is now declared with `:=`, and `=` methods are verified
   non-mutating ([#198](https://github.com/assapir/quilon/issues/198)).** A method that
@@ -116,6 +128,19 @@ All notable changes to Quilon are documented here.
   its declaration.
 
 ### Fixed
+
+- **A method's receiver no longer keeps unreachable code alive.** Reachability collects
+  names mentioned without resolving them, and every method body mentions `it`, the receiver
+  — read as a top-level mention, that kept `core.test`'s `it` function and the whole
+  harness chain behind it (`finishCase`, `caseFailing`, `enterSuite`, `leaveSuite`) in any
+  program that declared a type with a method. A bare `it` is no longer
+  a mention; an `it` in callee position — the callee of a call, or the right side of a `|>`,
+  which desugars to one — still is, since that is where it can name a top-level function.
+
+  With that, an import the erased `describe` blocks were the only user of reaches no build
+  on its own: `check`, `compile`, `build` and `run` erase the blocks and with them every
+  reference the harness had, and a function nothing reaches is not emitted. So `<< core.test`
+  beside a program's own code costs that program's build nothing, and needs no marker.
 
 - **`print` writes the whole `Text`, and renders it deliberately
   ([#220](https://github.com/assapir/quilon/issues/220)).** `print`/`eprint` took only a

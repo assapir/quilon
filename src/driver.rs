@@ -102,16 +102,14 @@ pub enum TestBlocks {
     Run,
 }
 
-/// The reporter function the synthesized test entry point ends with: it renders the run's
-/// summary and yields the run's status. Bound by NAME, in the linked program's scope, so
-/// the definition that answers is `core.test.report`'s when a suite imports it and the suite's
-/// own when it does not — which is the whole of how a reporter is selected. See the seam in
-/// `docs/corelib/test.md`.
-pub const REPORTER_SUMMARY_FUNCTION: &str = "reportSummary";
+/// The function the synthesized test entry point ends with: it renders the run's summary and
+/// yields the run's status. Bound by NAME in the linked program's scope, where `core.test`'s
+/// definition answers.
+const SUMMARY_FUNCTION: &str = "reportSummary";
 
-/// The module carrying the reporter Quilon ships, named in the diagnostic a suite gets when
-/// no reporter is in scope at all.
-pub const DEFAULT_REPORTER_MODULE: &str = "core.test.report";
+/// The module carrying the harness, named in the diagnostic a suite gets when the summary
+/// function is not in scope at all.
+const HARNESS_MODULE: &str = "core.test";
 
 /// Read, lex, parse, resolve `<<` imports (relative to `file`'s directory), and
 /// type-check the program at `file`, leaving its test blocks out (see [`TestBlocks`]).
@@ -240,8 +238,8 @@ fn names_entry_point(item: &ast::Item) -> bool {
 /// guarantees.
 #[derive(Clone, Copy)]
 enum Synthesized {
-    ReporterName,
-    ReporterCall,
+    SummaryName,
+    SummaryCall,
     EntryBody,
     EntryDeclaration,
 }
@@ -252,7 +250,7 @@ fn synthesized_span(node: Synthesized) -> Span {
 }
 
 /// Append the entry point that runs `program`'s test blocks: each `describe(…)` in source
-/// order, then the reporter's summary, whose `Num` result becomes the exit code.
+/// order, then the run's summary, whose `Num` result becomes the exit code.
 ///
 /// A file's tests may sit beside its code, `^` included, so the program reaching here may
 /// already have something under that name. Whatever it is, it belongs to the program and not
@@ -263,27 +261,26 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
         return Ok(());
     };
     program.items.retain(|item| !names_entry_point(item));
-    // The reporter has to be in scope, since the entry ends by calling it. Said here, at the
-    // first test block, rather than by the type checker at the synthesized call — which has
-    // no source location to point a diagnostic at.
-    if !defines_function(program, REPORTER_SUMMARY_FUNCTION) {
+    // The summary function has to be in scope, since the entry ends by calling it. Said here,
+    // at the first test block, rather than by the type checker at the synthesized call — which
+    // has no source location to point a diagnostic at.
+    if !defines_function(program, SUMMARY_FUNCTION) {
         return Err((
             first_block.span().clone(),
             format!(
-                "no test reporter in scope: `{REPORTER_SUMMARY_FUNCTION}` is undefined. \
-                 Add `<< {DEFAULT_REPORTER_MODULE}` for the one Quilon ships, or define \
-                 `{REPORTER_SUMMARY_FUNCTION}` yourself"
+                "no test harness in scope: `{SUMMARY_FUNCTION}` is undefined. \
+                 Add `<< {HARNESS_MODULE}`"
             ),
         ));
     }
 
     let summary = ast::Expression::Call {
         function: Box::new(ast::Expression::Identifier {
-            name: REPORTER_SUMMARY_FUNCTION.to_string(),
-            span: synthesized_span(Synthesized::ReporterName),
+            name: SUMMARY_FUNCTION.to_string(),
+            span: synthesized_span(Synthesized::SummaryName),
         }),
         arguments: Vec::new(),
-        span: synthesized_span(Synthesized::ReporterCall),
+        span: synthesized_span(Synthesized::SummaryCall),
     };
     let statements = program
         .test_blocks

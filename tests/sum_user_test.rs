@@ -197,3 +197,83 @@ fn binding_and_wildcard_payload_patterns_still_accepted() {
         3,
     );
 }
+
+#[test]
+fn record_field_typed_as_user_sum() {
+    // A record field annotated as a user SUM type carries the sum: construct the
+    // record with a variant value, read the field back, and dispatch on it. `verb`
+    // maps Post to 2, so exit 2 proves the field really dispatched.
+    assert_exit(
+        "Method = Get / Post\n\
+         Request = { method :: Method, tag :: Num }\n\
+         verb = (method :: Method) -> Num => method ? | Get => 1 | Post => 2\n\
+         ^ = () -> Num => <\n\
+           request = Request { method = Post, tag = 9 }\n\
+           verb(request.method)\n\
+         >",
+        2,
+    );
+}
+
+#[test]
+fn bound_result_with_record_payload_matched() {
+    // A `Result` carrying a RECORD payload, bound to a `:: Result` variable and then
+    // matched extracting the record — the binding must keep the concrete payload type
+    // so the match unpacks the record (a pointer), not the numeric fallback.
+    // Point { x = 3, y = 4 } -> x + y = 7.
+    assert_exit(
+        "Point = { x :: Num, y :: Num }\n\
+         wrap = (point :: Point) -> Result => Ok(point)\n\
+         ^ = () -> Num => <\n\
+           boxed :: Result = wrap(Point { x = 3, y = 4 })\n\
+           got :: Point = boxed ?\n\
+             | Ok(inner) => inner\n\
+             | NotOk(_)  => Point { x = 0, y = 0 }\n\
+           got.x + got.y\n\
+         >",
+        7,
+    );
+}
+
+#[test]
+fn method_returning_result_keeps_a_text_payload() {
+    // A METHOD annotated `-> Result` returning `Ok(text)`: the generic annotation must be
+    // refined to the inferred body type, exactly as a top-level function's is, or the match
+    // below binds the payload at the numeric fallback and reads the Text back as garbage.
+    // `.length` of "hello" is 5.
+    assert_exit(
+        "Box = {\n\
+           tag :: Num,\n\
+           pick = () -> Result => Ok(\"hello\")\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           box = Box { tag = 1 }\n\
+           box.pick() ?\n\
+             | Ok(value) => value.length\n\
+             | NotOk(_)  => 0\n\
+         >",
+        5,
+    );
+}
+
+#[test]
+fn method_returning_result_keeps_a_record_payload() {
+    // The same refinement for an aggregate payload: a method's `-> Result` carrying a
+    // RECORD must unpack as that record and not as the numeric fallback (which segfaulted).
+    // Point { x = 3, y = 4 } -> x + y = 7.
+    assert_exit(
+        "Point = { x :: Num, y :: Num }\n\
+         Maker = {\n\
+           seed :: Num,\n\
+           build = () -> Result => Ok(Point { x = 3, y = 4 })\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           maker = Maker { seed = 0 }\n\
+           got = maker.build() ?\n\
+             | Ok(inner) => inner\n\
+             | NotOk(_)  => Point { x = 0, y = 0 }\n\
+           got.x + got.y\n\
+         >",
+        7,
+    );
+}

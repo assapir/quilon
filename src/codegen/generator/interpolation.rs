@@ -47,7 +47,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // DIFFERENT value of the same type — e.g. a child node `it.next` — still uses the
         // override and terminates for any finite structure.
         if let Expression::Identifier { name, .. } = expression
-            && name == "it"
+            && name == crate::ast::RECEIVER
             && let Type::Named { name: ty_name, .. } | Type::Sum { name: ty_name, .. } = &ty
             && self.generating_backtick_for.as_deref() == Some(ty_name.as_str())
         {

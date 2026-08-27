@@ -20,7 +20,7 @@ use common::{ensure_runtime_lib, tool_available};
 
 /// A passing suite: two groups, one nested inside the other.
 const PASSING_SUITE: &str = r#"
-<< core.test.report
+<< core.test
 
 describe("numbers", () => <
   it("adds", () => expect(1 + 1, equals(2)))
@@ -39,7 +39,7 @@ describe("text", () => <
 /// A passing case, then a failing one, then another that passes. A failed `expect` marks its
 /// own case and nothing else, so the third case still runs and the summary tallies both ways.
 const FAILING_SUITE: &str = r#"
-<< core.test.report
+<< core.test
 
 describe("arithmetic", () => <
   it("holds", () => expect(2 + 2, equals(4)))
@@ -142,8 +142,7 @@ fn build_and_execute(source: &Path, directory: &Path, linker: &str) -> Output {
 
 #[test]
 fn a_top_level_describe_call_parses_as_a_test_block() {
-    let tokens =
-        Lexer::tokenize("<< core.test.report\ndescribe(\"g\", () => 0)\n").expect("lexing");
+    let tokens = Lexer::tokenize("<< core.test\ndescribe(\"g\", () => 0)\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert_eq!(program.test_blocks.len(), 1);
     assert!(
@@ -155,8 +154,8 @@ fn a_top_level_describe_call_parses_as_a_test_block() {
 
 #[test]
 fn a_describe_definition_is_still_an_ordinary_item() {
-    // `core.test.report` DEFINES `describe`, and a program may define its own — only a CALL
-    // is the marker, so the two are told apart by what follows the name.
+    // `core.test` DEFINES `describe`, and a program may define its own — only a CALL is the
+    // marker, so the two are told apart by what follows the name.
     let tokens = Lexer::tokenize("describe = (n :: Num) -> Num => n\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert!(program.test_blocks.is_empty());
@@ -168,20 +167,62 @@ fn a_describe_definition_is_still_an_ordinary_item() {
 
 // ── Erasure: what a release build does with a suite ─────────────────────────────────────
 
+/// What `core.test` defines, none of which may reach a build: the harness, the summary it
+/// ends with, and the state and lifecycle behind them.
+const HARNESS_SYMBOLS: [&str; 11] = [
+    "describe",
+    "@it(",
+    "report",
+    "failAt",
+    "enterSuite",
+    "leaveSuite",
+    "casesPassed",
+    "casesFailed",
+    "nestingDepth",
+    "caseFailing",
+    "finishCase",
+];
+
+/// The `define` lines of an emitted `.ll` — what a build kept, by name and by count.
+fn defined_functions(ir: &str) -> Vec<&str> {
+    ir.lines()
+        .filter(|line| line.starts_with("define"))
+        .collect()
+}
+
+/// Assert that `ir` defines none of [`HARNESS_SYMBOLS`]; `what` names the build for the report.
+fn assert_no_harness_emitted(ir: &str, what: &str) {
+    let defined = defined_functions(ir);
+    for absent in HARNESS_SYMBOLS {
+        assert!(
+            !defined.iter().any(|line| line.contains(absent)),
+            "`{absent}` reached {what}:\n{defined:#?}"
+        );
+    }
+}
+
 #[test]
 fn a_build_of_a_file_with_tests_omits_the_test_code() {
     let dir = work_dir("erase");
+    // The record with methods is load-bearing: a method body mentions `it`, its receiver, and
+    // a pass that reads that as a mention of the harness's top-level `it` keeps the whole
+    // harness alive. A fixture with no methods never asks the question.
     let source = write(
         &dir,
         "mixed.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             "<< core.io\n",
             "double = (n :: Num) -> Num => n * 2\n",
+            "Counter = {\n",
+            "  total :: Num,\n",
+            "  bumped = => it.total + 1,\n",
+            "  ` = => \"counter\"\n",
+            "}\n",
             "describe(\"double\", () => <\n",
             "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n",
-            "^ = () -> Num => double(0)\n"
+            "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
         ),
     );
 
@@ -190,22 +231,14 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
 
     // The program's own function is emitted, and NOTHING of the harness: the blocks were
-    // never checked or lowered, so nothing reaches `describe`, `it`, or the reporter, and
-    // reachability pruning drops all three.
-    let defined: Vec<&str> = ir
-        .lines()
-        .filter(|line| line.starts_with("define"))
-        .collect();
+    // never checked or lowered, so nothing reaches `describe` or `it`, and reachability
+    // pruning drops the module's every item with them.
     assert!(
-        defined.iter().any(|line| line.contains("@double(")),
-        "the program's code must be emitted:\n{defined:#?}"
+        ir.lines()
+            .any(|line| line.starts_with("define") && line.contains("@double(")),
+        "the program's code must be emitted:\n{ir}"
     );
-    for absent in ["describe", "@it(", "report", "indent", "green"] {
-        assert!(
-            !defined.iter().any(|line| line.contains(absent)),
-            "`{absent}` reached a release build:\n{defined:#?}"
-        );
-    }
+    assert_no_harness_emitted(&ir, "a release build");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -256,6 +289,218 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ── Tree shaking: an import the erased blocks were the only user of ──────────────────────
+
+/// A suite whose harness comes in under a plain `<<`, beside code and an `^` of its own. The
+/// record with a method is deliberate: its body mentions the receiver `it`, which is what once
+/// kept the harness's own `it` — and everything behind it — reachable in a build.
+const TESTS_BESIDE_CODE_SUITE: &str = concat!(
+    "<< core.test\n",
+    "double = (n :: Num) -> Num => n * 2\n",
+    "Counter = { total :: Num, bumped = => it.total + 1 }\n",
+    "describe(\"double\", () => <\n",
+    "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
+    ">)\n",
+    "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
+);
+
+/// The import needs no marker of its own. `quilon test` compiles the blocks, so their calls
+/// keep the harness alive; every other command erases them, and with nothing left mentioning
+/// `describe` or `it` the reachability pass shakes every item the module contributed back out.
+#[test]
+fn an_import_only_the_blocks_used_reaches_no_build() {
+    let dir = work_dir("shaken");
+    let source = write(&dir, "suite.qn", TESTS_BESIDE_CODE_SUITE);
+
+    let tested = quilon(&["test", source.to_str().unwrap()]);
+    assert_eq!(
+        tested.code, 0,
+        "`quilon test` compiles the blocks, so the suite runs:\n{}\n{}",
+        tested.stdout, tested.stderr
+    );
+    assert!(
+        tested.stdout.contains("1 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        tested.stdout
+    );
+
+    let run = quilon(&["run", source.to_str().unwrap()]);
+    assert_eq!(
+        run.code, 0,
+        "the program still runs with its blocks erased:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+
+    let compile = quilon(&["compile", source.to_str().unwrap()]);
+    assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
+    let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
+    assert_no_harness_emitted(&ir, "a build whose blocks were erased");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same file, counted rather than named. Naming the harness from ORDINARY code is the
+/// control: every item it contributes is emitted then, which is what makes the erased build's
+/// smaller count a measurement rather than an accident of the module being small.
+#[test]
+fn the_shaken_build_emits_only_the_programs_own_functions() {
+    let dir = work_dir("shaken_count");
+
+    let erased = write(&dir, "erased.qn", TESTS_BESIDE_CODE_SUITE);
+    let compile = quilon(&["compile", erased.to_str().unwrap()]);
+    assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
+    let erased_ir = std::fs::read_to_string(erased.with_extension("ll")).expect("the erased IR");
+    let shaken = defined_functions(&erased_ir);
+
+    let referenced = write(
+        &dir,
+        "referenced.qn",
+        concat!(
+            "<< core.test\n",
+            "double = (n :: Num) -> Num => n * 2\n",
+            "Counter = { total :: Num, bumped = => it.total + 1 }\n",
+            "^ = () -> Num => <\n",
+            "  describe(\"double\", () => <\n",
+            "    it(\"doubles\", () => expect(double(21), equals(42)))\n",
+            "  >)\n",
+            "  reportSummary() + Counter { total = 0 }.bumped() - 1\n",
+            ">\n"
+        ),
+    );
+    let compile = quilon(&["compile", referenced.to_str().unwrap()]);
+    assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
+    let control_ir =
+        std::fs::read_to_string(referenced.with_extension("ll")).expect("the control IR");
+    let kept = defined_functions(&control_ir);
+
+    // The control names the harness from ordinary code, so the three it calls are emitted
+    // along with the lifecycle behind them: the same source with those calls inside `describe`
+    // blocks emits none of it. (`failAt` and `nestingDepth` are in [`HARNESS_SYMBOLS`] because
+    // no build may leak them, but nothing in the harness itself reaches them.)
+    for present in [
+        "describe",
+        "@it(",
+        "reportSummary",
+        "enterSuite",
+        "finishCase",
+    ] {
+        assert!(
+            kept.iter().any(|line| line.contains(present)),
+            "the control must emit `{present}`, or it measures nothing:\n{kept:#?}"
+        );
+    }
+    assert!(
+        shaken.len() < kept.len(),
+        "erasing the blocks must shrink the build:\n         erased: {shaken:#?}\ncontrol: {kept:#?}"
+    );
+    for own in ["@double(", "@\"^\"(", "@main("] {
+        assert!(
+            shaken.iter().any(|line| line.contains(own)),
+            "`{own}` is the program's own and must survive:\n{shaken:#?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The names `core.test` no longer exports, asserted where a user meets them: a program that
+/// imports `core.http` — which needs the harness for its own cases — and defines a `green`, a
+/// `red`, an `indent` and the two `report*` functions the harness now inlines.
+///
+/// Each definition repeats the member's former signature, since overloading is by parameter
+/// types: a definition with any other signature would merely join a merged member in an
+/// overload set and pass whether or not the name was still exported.
+#[test]
+fn an_importer_may_define_what_the_harness_no_longer_exports() {
+    let dir = work_dir("shrunk_surface");
+    let source = write(
+        &dir,
+        "own_names.qn",
+        concat!(
+            "<< core.io\n",
+            "<< core.http\n",
+            "<< core.test\n",
+            "indent = (depth :: Num) -> Text => \"..\".repeat(depth)\n",
+            "green = (text :: Text) -> Text => \"[green]\" + text\n",
+            "red = (text :: Text) -> Text => \"[red]\" + text\n",
+            "reportSuite = (name :: Text, depth :: Num) -> Text => indent(depth) + name\n",
+            "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> Text =>\n",
+            "  indent(depth) + (failed ? red(name) : green(name))\n",
+            "^ = () -> Num => <\n",
+            "  print(reportSuite(\"group\", 1))\n",
+            "  print(reportCase(\"case\", 2, false))\n",
+            "  0\n",
+            ">\n"
+        ),
+    );
+
+    let out = quilon(&["run", source.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "these names are the program's to define:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains("..group") && out.stdout.contains("....[green]case"),
+        "the program's own definitions did not run:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The names `<< core.http` puts in a program's scope, pinned EXACTLY rather than as a list of
+/// absences — the five the harness stopped exporting no longer exist anywhere, so asserting
+/// they are absent could never fail.
+///
+/// `corelib/http.qn` needs the harness for its own cases and imports it with a plain `<<`, so
+/// the resolver walks into `core.test` (and `core.io` behind it) and merges what they export.
+/// That is the accepted cost of dropping the test-only marker: a program importing the client
+/// cannot also define a `describe` or a `failAt` of its own. What it CAN define is everything
+/// the report was inlined out of, which is the shrink this asserts the other half of.
+#[test]
+fn importing_core_http_contributes_exactly_this_surface() {
+    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let (items, _sources) =
+        quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
+    let mut contributed: Vec<&str> = items.iter().map(Item::name).collect();
+    contributed.sort_unstable();
+
+    let mut expected = vec![
+        // core.io, behind the harness.
+        "stdout",
+        "stderr",
+        "print",
+        "eprint",
+        "write",
+        "@readStdin",
+        // core.test: the harness, the summary, the state and the lifecycle. NOT `indent`,
+        // `green`, `red`, `reportSuite` or `reportCase` — those are inlined into the three
+        // functions above them and export no name.
+        "failAt",
+        "casesPassed",
+        "casesFailed",
+        "nestingDepth",
+        "enterSuite",
+        "leaveSuite",
+        "caseFailing",
+        "finishCase",
+        "describe",
+        "it",
+        "reportSummary",
+        // core.net, and the client itself.
+        "@tcpRequest",
+        "Body",
+        "Method",
+        "Response",
+        "Request",
+    ];
+    expected.sort_unstable();
+
+    assert_eq!(
+        contributed, expected,
+        "`<< core.http` merges a different set of names than this pins"
+    );
+}
+
 // ── Running: `quilon test` ─────────────────────────────────────────────────────────────
 
 /// The file's own `^` is not the test run's entry point — the synthesized one is — so the
@@ -271,7 +516,7 @@ fn quilon_test_ignores_the_entry_point_beside_the_blocks_it_runs() {
         &format!(
             r#"
 << core.io
-<< core.test.report
+<< core.test
 
 ^ = () -> $ => print("{PROGRAM_MARKER}")
 
@@ -383,7 +628,7 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             "describe(\"skipping\", () => <\n",
             "  it(\"stops at the first failure\", () => <\n",
             "    expect(1, equals(2))\n",
@@ -415,7 +660,7 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `expect` records with the reporter, which only a `describe` block has — so outside one it
+/// `expect` records with the run, which only a `describe` block opens — so outside one it
 /// is a compile error naming `assert` instead, rather than a program that silently drops its
 /// failures. (`describe` blocks are stripped from every command but `quilon test`.)
 #[test]
@@ -453,7 +698,7 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             "describe(\"g\", () => <\n",
             "  expect(1, equals(2))\n",
             "  it(\"unaffected\", () => expect(1, equals(1)))\n",
@@ -474,11 +719,11 @@ fn expect_outside_an_it_case_is_a_compile_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ── The reporter seam: the run's state, as named functions ──────────────────────────────
+// ── The run's state, as named functions ─────────────────────────────────────────────────
 
-/// The run's state is a `.qn` API, not a set of runtime symbol names: a reporter — or a case —
-/// reads how many cases have passed and failed and how deep the nesting is through
-/// `core.test`'s own functions, which `core.test.report` re-exports by importing it.
+/// The run's state is a `.qn` API, not a set of runtime symbol names: a case reads how many
+/// cases have passed and failed and how deep the nesting is through `core.test`'s own
+/// functions.
 #[test]
 fn the_run_state_is_readable_through_named_functions() {
     let dir = work_dir("state");
@@ -487,7 +732,7 @@ fn the_run_state_is_readable_through_named_functions() {
         "suite.qn",
         concat!(
             "<< core.io\n",
-            "<< core.test.report\n",
+            "<< core.test\n",
             "describe(\"outer\", () => <\n",
             "  it(\"sits at depth 1\", () => expect(nestingDepth(), equals(1)))\n",
             "  describe(\"inner\", () => <\n",
@@ -515,19 +760,25 @@ fn the_run_state_is_readable_through_named_functions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The module split that makes a reporter replaceable, asserted on the corelib itself:
-/// `core.test` carries the state and the lifecycle and defines NONE of the names a reporter
-/// owns, while `core.test.report` defines all of them and names no registry primitive. The
-/// first half is what leaves `describe`/`it`/`report*` free for a suite to define; the second
-/// is what proves those names are reachable in `.qn`.
+/// The exported surface of `core.test`, asserted on the corelib itself: what a suite and the
+/// synthesized entry point name, and nothing more. The report's colors and its two per-group
+/// and per-case lines are written out inside `describe`, `it` and `reportSummary` rather than
+/// behind exported helpers, so a name no caller outside the module has is not in the scope
+/// `<< core.test` merges.
 #[test]
-fn the_corelib_split_leaves_the_reporter_names_free() {
-    let corelib = Path::new(env!("CARGO_MANIFEST_DIR")).join("corelib");
-    let toolkit = std::fs::read_to_string(corelib.join("test.qn")).expect("read corelib/test.qn");
-    let reporter =
-        std::fs::read_to_string(corelib.join("test/report.qn")).expect("read test/report.qn");
+fn the_corelib_exports_only_what_the_harness_needs() {
+    let harness = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("corelib")
+            .join("test.qn"),
+    )
+    .expect("read corelib/test.qn");
 
     for provided in [
+        "describe",
+        "it",
+        "reportSummary",
+        "failAt",
         "casesPassed",
         "casesFailed",
         "nestingDepth",
@@ -537,123 +788,17 @@ fn the_corelib_split_leaves_the_reporter_names_free() {
         "finishCase",
     ] {
         assert!(
-            toolkit.contains(&format!(">> {provided} = ")),
-            "`core.test` must export `{provided}` for a harness to be written against it"
+            harness.contains(&format!(">> {provided} = ")),
+            "`core.test` must export `{provided}` — a suite or the test entry point calls it"
         );
     }
-    for owned in [
-        "describe",
-        "it",
-        "reportSuite",
-        "reportCase",
-        "reportSummary",
-    ] {
+    for absent in ["indent", "green", "red", "reportSuite", "reportCase"] {
         assert!(
-            !toolkit.contains(&format!(">> {owned} = ")),
-            "`core.test` must not export `{owned}` — a suite defining its own would collide"
-        );
-        assert!(
-            reporter.contains(&format!(">> {owned} = ")),
-            "`core.test.report` must export `{owned}`"
+            !harness.contains(&format!(">> {absent} = ")),
+            "`core.test` must not export `{absent}` — nothing outside the module calls it, so \
+             it is a name taken from every importer for nothing"
         );
     }
-    assert!(
-        !reporter.contains("__test_"),
-        "the shipped reporter must go through `core.test`, not the registry:\n{reporter}"
-    );
-}
-
-/// The whole point, end to end: a suite that imports `core.test` alone and defines its own
-/// `describe`, `it` and `report*` gets ITS output and none of the default's. `reportSummary` is
-/// bound by name, so the suite's is what ends the run and decides whether it passed — a
-/// non-zero return failing the suite, which `quilon test` reports as its own failure.
-#[test]
-fn a_suite_can_replace_the_reporter_entirely() {
-    let dir = work_dir("own_reporter");
-    let source = write(
-        &dir,
-        "suite.qn",
-        concat!(
-            "<< core.io\n",
-            "<< core.test\n",
-            "reportSuite = (name :: Text, depth :: Num) -> $ => print(\"GROUP `name`\")\n",
-            "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ =>\n",
-            "  print(\"CASE `name` `failed ? \"BAD\" : \"GOOD\"`\")\n",
-            "reportSummary = () -> Num => <\n",
-            "  print(\"TOTAL `casesPassed()`/`casesFailed()`\")\n",
-            "  casesFailed() == 0 ? 0 : 7\n",
-            ">\n",
-            "describe = (name :: Text, body :: () -> $) -> $ => <\n",
-            "  reportSuite(name, enterSuite())\n",
-            "  body()\n",
-            "  leaveSuite()\n",
-            "  $\n",
-            ">\n",
-            "it = (name :: Text, body :: () -> $) -> $ => <\n",
-            "  body()\n",
-            "  failed = caseFailing()\n",
-            "  reportCase(name, finishCase(), failed)\n",
-            ">\n",
-            "describe(\"group\", () => <\n",
-            "  it(\"passes\", () => expect(1, equals(1)))\n",
-            "  it(\"fails\", () => expect(1, equals(2)))\n",
-            ">)\n"
-        ),
-    );
-
-    let out = quilon(&["test", source.to_str().unwrap()]);
-
-    // The suite's own summary decided the run failed: it returned non-zero, and `quilon test`
-    // turned that into a failing suite.
-    assert_ne!(
-        out.code, 0,
-        "the suite's `reportSummary` returned non-zero, so the run must fail:\n{}\n{}",
-        out.stdout, out.stderr
-    );
-    for line in [
-        "GROUP group",
-        "CASE passes GOOD",
-        "CASE fails BAD",
-        "TOTAL 1/1",
-    ] {
-        assert!(
-            out.stdout.contains(line),
-            "`{line}` is missing from the custom report:\n{}",
-            out.stdout
-        );
-    }
-    // And nothing of the default reporter: no ✓/✗ marks, no "N passed, M failed" tally.
-    for absent in ["✓", "✗", "passed,"] {
-        assert!(
-            !out.stdout.contains(absent),
-            "the default reporter still rendered `{absent}`:\n{}",
-            out.stdout
-        );
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The shipped demonstration of the same thing, so the documented example is a gate.
-#[test]
-fn the_custom_reporter_example_replaces_the_default() {
-    let suite = example("custom_test_reporter.qn");
-    let out = quilon(&["test", suite.to_str().unwrap()]);
-
-    assert_eq!(
-        out.code, 0,
-        "examples/custom_test_reporter.qn must pass:\n{}\n{}",
-        out.stdout, out.stderr
-    );
-    assert!(
-        out.stdout.contains("ok 1 - trims both ends") && out.stdout.contains("1..4"),
-        "the example's own reporter did not render:\n{}",
-        out.stdout
-    );
-    assert!(
-        !out.stdout.contains("passed,") && !out.stdout.contains("✓"),
-        "the default reporter leaked into the example's output:\n{}",
-        out.stdout
-    );
 }
 
 /// `assert` in a case is still FATAL: it ends the run where it failed rather than recording.
@@ -665,7 +810,7 @@ fn an_assert_in_a_case_is_still_fatal() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             "describe(\"fatal\", () => <\n",
             "  it(\"asserts\", () => assert(1, equals(2)))\n",
             "  it(\"never reached\", () => expect(1, equals(1)))\n",
@@ -694,7 +839,7 @@ fn a_directory_runs_every_suite_it_holds() {
         &dir,
         "mixed.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             "describe(\"mixed\", () => it(\"runs\", () => expect(true, equals(true))))\n",
             "^ = () -> Num => 7\n"
         ),
@@ -752,29 +897,29 @@ fn a_suite_that_does_not_compile_fails_the_run() {
     let source = write(
         &dir,
         "suite.qn",
-        "<< core.test.report\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
+        "<< core.test\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0, "a suite that fails to type-check must fail");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A suite that imports neither `core.test.report` nor a reporter of its own has none at all,
-/// and is told so at its own `describe` — rather than at the entry point the compiler
-/// synthesized, which has no location — with the import that fixes it named.
+/// A suite that imports no harness at all is told so at its own `describe` — rather than at
+/// the entry point the compiler synthesized, which has no location — with the import that
+/// fixes it named.
 #[test]
-fn a_suite_without_a_reporter_is_reported_at_its_own_describe() {
+fn a_suite_without_a_harness_is_reported_at_its_own_describe() {
     let dir = work_dir("noimport");
     let source = write(&dir, "suite.qn", "\ndescribe(\"g\", () => 0)\n");
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0);
     assert!(
-        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test reporter"),
+        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test harness"),
         "the diagnostic must point at the `describe` call:\n{}",
         out.stderr
     );
     assert!(
-        out.stderr.contains("<< core.test.report"),
+        out.stderr.contains("<< core.test"),
         "the diagnostic must name the import that fixes it:\n{}",
         out.stderr
     );
@@ -802,7 +947,7 @@ fn a_suite_that_does_not_parse_fails_the_run() {
     write(
         &dir,
         "suite.qn",
-        "<< core.test.report\ndescribe(\"g\", () => <<<\n",
+        "<< core.test\ndescribe(\"g\", () => <<<\n",
     );
     let out = quilon(&["test", dir.to_str().unwrap()]);
     assert_ne!(
@@ -823,7 +968,7 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         &dir,
         "suite.qn",
         concat!(
-            "<< core.test.report\n",
+            "<< core.test\n",
             ">> double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
             "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
@@ -865,6 +1010,44 @@ fn the_example_suite_passes() {
     );
     assert!(
         out.stdout.contains("passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+}
+
+/// A corelib module's own suite sits beside the code it tests, and the import resolver drops an
+/// imported module's blocks — so `corelib/http.qn` runs only when it is the file named. Gated
+/// here as well as in CI: the blocks are compiled by nothing else, so a type error in one is
+/// invisible to every other command.
+#[test]
+fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("corelib")
+        .join("http.qn");
+    let out = quilon(&["test", module.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "corelib/http.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    for group in [
+        "the status line",
+        "headers",
+        "the body",
+        "line endings",
+        "the Method sum",
+        "reading a URL apart",
+        "serialising a request",
+        "a round trip",
+    ] {
+        assert!(
+            out.stdout.contains(group),
+            "the `{group}` group is missing from the report:\n{}",
+            out.stdout
+        );
+    }
+    assert!(
+        out.stdout.contains("71 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

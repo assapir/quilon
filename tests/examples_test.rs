@@ -33,11 +33,20 @@ fn ql_files() -> Vec<PathBuf> {
     files
 }
 
+/// Whether any line of `path` opens with `prefix` — how both a `^` entry point and a
+/// top-level `describe(` block are spotted without parsing the file.
+fn any_line_starts_with(path: &Path, prefix: &str) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| {
+            src.lines()
+                .any(|line| line.trim_start().starts_with(prefix))
+        })
+        .unwrap_or(false)
+}
+
 /// A file defines an entry point (`^`) iff some line starts with `^`.
 fn defines_entry(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|src| src.lines().any(|l| l.trim_start().starts_with("^")))
-        .unwrap_or(false)
+    any_line_starts_with(path, "^")
 }
 
 /// The runnable examples: every `.qn` that defines `^` and is not a negative example. Every
@@ -51,6 +60,43 @@ fn runnable_examples() -> Vec<PathBuf> {
             !EXPECT_COMPILE_ERROR.contains(&name.as_str()) && defines_entry(p)
         })
         .collect()
+}
+
+/// A file is a test suite iff some line opens a `describe(` block.
+fn defines_test_blocks(path: &Path) -> bool {
+    any_line_starts_with(path, "describe(")
+}
+
+/// Every example carrying top-level `describe` blocks must PASS under `quilon test`. Compiling
+/// is not enough for these: every other command erases the blocks before the checker sees them,
+/// so a type error — or a failing case — inside one is invisible to the gates above. Picked up
+/// automatically, like the runnable examples.
+#[test]
+fn example_test_suites_pass() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let suites: Vec<PathBuf> = ql_files()
+        .into_iter()
+        .filter(|p| defines_test_blocks(p))
+        .collect();
+    assert!(
+        !suites.is_empty(),
+        "no example carries `describe` blocks — the gate would pass by iterating nothing"
+    );
+    for path in suites {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let out = Command::new(quilon)
+            .args(["test", path.to_str().unwrap()])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run quilon test");
+        assert_eq!(
+            out.status.code().unwrap_or(-1),
+            0,
+            "{name}: `quilon test` must pass:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 /// Every `.qn` in examples/ must either compile, or (if a known negative) fail to.

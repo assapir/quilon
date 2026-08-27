@@ -1,0 +1,48 @@
+~ The `core.http` client's offline half: building a `Request` and reading a reply through
+~ `Response`, over canned `Text`, so nothing here touches the network. On success the program
+~ exits 0.
+<< core.http
+
+^ = () -> $ => <
+  canned = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+
+  ~ A reply that is not HTTP is rejected as a value rather than a crash.
+  assert(Response { raw = "not http at all" }.validate(), isNotOk())
+
+  checked = Response { raw = canned }.validate()
+  assert(checked, isOk())
+  response = checked ?
+    | Ok(reply)  => reply
+    | NotOk(_)   => Response { raw = "" }
+  assert(response.status(), equals(200))
+  assert(response.statusLine(), equals("HTTP/1.1 200 OK"))
+  assert(response.body(), equals("hello"))
+
+  ~ Header lookup is case-insensitive, and absent means NotOk rather than a crash.
+  contentType = response.header("content-type") ?
+    | Ok(value) => value
+    | NotOk(_)  => "?"
+  assert(contentType, equals("text/html"))
+  assert(response.header("X-Absent"), isNotOk())
+  assert(response.headers().size, equals(2))
+
+  ~ A bare-LF reply from a sloppy server reads the same as a CRLF one.
+  lineFeed = Response { raw = "HTTP/1.0 404 Not Found\nX-A: b\n\ngone" }
+  assert(lineFeed.status(), equals(404))
+  assert(lineFeed.body(), equals("gone"))
+
+  ~ A body-bearing method carries the content to send and the media type to advertise for it;
+  ~ `send` is what puts it on the wire — see examples/http_get.qn.
+  submission = Request {
+    method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
+    url = "http://example.com/submit"
+  }
+  assert(submission.method.token(), equals("POST"))
+  carried = submission.method.payload()
+  assert(carried.content, equals("name=ada"))
+  assert(carried.contentType, equals("application/x-www-form-urlencoded"))
+
+  ~ A nullary method carries an empty body.
+  none = Get.payload()
+  assert(none.content, equals(""))
+>

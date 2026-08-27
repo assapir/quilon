@@ -13,7 +13,7 @@ impl TypeChecker {
     ///
     /// `expect` is rejected outside an `it` case in a `describe` block: it marks the running
     /// case failed, and the case's close is what tallies that. Outside a case nothing would
-    /// report the failure, and outside a `describe` there is no reporter at all — the blocks
+    /// report the failure, and outside a `describe` there is no run at all — the blocks
     /// are left out of everything but `quilon test`.
     pub(super) fn check_assertion(
         &mut self,

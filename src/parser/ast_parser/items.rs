@@ -48,7 +48,8 @@ impl<'a> Parser<'a> {
             && self.check_same_line_at(1, &TokenKind::ParenOpen)
     }
 
-    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file path).
+    /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file
+    /// path).
     pub(super) fn parse_import(&mut self) -> Result<Import, ParseError> {
         let start = self.current_span();
         self.expect(&TokenKind::Import)?;

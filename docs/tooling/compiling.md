@@ -21,7 +21,7 @@ quilon test    [path]       # run the test suites under a file or directory (def
 `quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
 any case failed. It runs a file's top-level `describe` blocks, which every other command
 erases — so tests may sit in the file they test, its `^` included, and still cost a release
-build nothing. See [the test harness](../corelib/test/report.md).
+build nothing. See [the test harness](../corelib/test/README.md).
 
 `quilon build` produces a **self-contained** native executable — it runs on a machine with nothing else installed:
 ```bash

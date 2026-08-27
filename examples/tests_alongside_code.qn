@@ -3,10 +3,12 @@
 ~ blocks — every other command erases them, so the line one case prints below reaches no
 ~ build, and `quilon test` in turn ignores the `^` and runs the blocks instead.
 ~
+~ The harness needs no marker of its own: it follows the blocks that name it.
+~
 ~ Run: cargo run -- run  examples/tests_alongside_code.qn    ~ prints the program's line only
 ~ Run: cargo run -- test examples/tests_alongside_code.qn    ~ runs the cases instead
 << core.io
-<< core.test.report
+<< core.test
 
 >> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
 

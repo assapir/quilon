@@ -40,14 +40,15 @@ sidebar:
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
-| Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function boundaries) | ✅ |
+| Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function **and method** boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` parameter or return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
-| Modules: `<< core.io`, `<< core.test`, `<< core.test.report`, `<< core.cli`, `<< core.time`, `<< core.net`, file-path imports, `>>` exports | ✅ |
+| Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.net`, `<< core.http`, file-path imports, `>>` exports | ✅ |
+| [HTTP client](../corelib/http.md): `<< core.http` — the `Method` sum and the `Request` / `Response` records with their methods (`request.send()`, `response.status()` / `.header(name)` / `.body()`), written in Quilon over `core.net`; HTTP only, no TLS | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
-| Test harness: [`quilon test`](../corelib/test/report.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
-| [Replaceable reporter](../corelib/test/report.md#writing-a-reporter): the harness and its output are ordinary `.qn` in `core.test.report`, so a suite importing `core.test` alone defines its own `describe` / `it` / `report*` and gets its own report | ✅ |
+| Test harness: [`quilon test`](../corelib/test/README.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
+| Tree-shaken imports: an item nothing in the compilation unit references is not emitted, so an import the erased `describe` blocks were the only user of reaches no build — no marker needed | ✅ |
 | [Call-site locations](../functions/site.md): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |

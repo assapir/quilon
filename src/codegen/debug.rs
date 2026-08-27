@@ -564,9 +564,9 @@ fn split_source_path(path: &Path) -> (String, String) {
 /// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) goes
 /// through [`split_source_path`]. A bundled built-in module is named by its dotted module path
 /// (`core.test`) rather than a file path; the segments after `core` are its path under
-/// `corelib/`, so `core.test` maps to `corelib/test.qn` and `core.test.report` to
-/// `corelib/test/report.qn` — which is what lets a debugger open the right file when a step
-/// lands in a corelib function in the in-repo dev flow.
+/// `corelib/`, so `core.test` maps to `corelib/test.qn` and a nested `core.a.b` would map to
+/// `corelib/a/b.qn` — which is what lets a debugger open the right file when a step lands in
+/// a corelib function in the in-repo dev flow.
 fn dwarf_file_location(path: &str) -> (String, String) {
     if path.ends_with(".qn") {
         return split_source_path(Path::new(path));

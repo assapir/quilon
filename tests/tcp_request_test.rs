@@ -221,3 +221,55 @@ fn aot_tcp_request_round_trips_and_forces() {
     let _ = std::fs::remove_file(&match_binary);
     let _ = std::fs::remove_file(&mismatch_binary);
 }
+
+/// The same exchange, but reached from inside a record METHOD — the shape `core.http`'s
+/// `Request.send()` has. The deferral analysis decides whether the entry runs on a scheduler
+/// fiber by looking for `@` primitives; a method body it never scanned left the program with no
+/// scheduler and the launch aborted the process instead of returning a `Result`.
+fn method_program(address: &str, expected: &str) -> String {
+    format!(
+        r#"
+<< core.io
+<< core.test
+<< core.net
+
+Caller = {{
+  address :: Text,
+
+  fetch = () -> Result => @tcpRequest(it.address, "PING\n")
+}}
+
+^ = () -> Num => <
+  caller = Caller {{ address = "{address}" }}
+  caller.fetch() ?
+    | Ok(response) => assert(response, equals("{expected}"))
+    | NotOk(error) => failAt(error)
+  0
+>
+"#
+    )
+}
+
+#[test]
+fn jit_tcp_request_reached_from_a_method_gets_a_scheduler() {
+    let (address, server) = spawn_pong_server(2);
+
+    let match_file = temp_ql("method_match", &method_program(&address, "PONG\\n"));
+    assert_eq!(
+        jit_run(&match_file),
+        Some(0),
+        "a @tcpRequest inside a method must run on the scheduler and force to the response"
+    );
+
+    // And the bytes really are the server's, not a silently-defaulted value.
+    let mismatch_file = temp_ql("method_mismatch", &method_program(&address, "NOPE\\n"));
+    assert_eq!(
+        jit_run(&mismatch_file),
+        Some(101),
+        "a non-matching expectation must trip the assertion, proving the real bytes flowed"
+    );
+
+    server.join().expect("server thread");
+    let _ = std::fs::remove_file(&match_file);
+    let _ = std::fs::remove_file(&mismatch_file);
+}

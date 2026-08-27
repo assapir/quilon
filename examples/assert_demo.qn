@@ -8,7 +8,7 @@
 ~   assert(result, isOk())            ~ a Result is Ok / NotOk
 ~
 ~ `expect(actual, matcher)` is the same vocabulary for a test case: it records the failure
-~ with the reporter instead of exiting, so the suite carries on. See examples/test_suite.qn.
+~ with the run instead of exiting, so the suite carries on. See examples/test_suite.qn.
 
 Version = {
   major :: Num,
