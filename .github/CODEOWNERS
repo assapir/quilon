@@ -1,0 +1,8 @@
+# Every pull request requests a review from the repository owner.
+#
+# A review request notifies the reviewer whether or not they watch the repo,
+# which is why this file exists: a first-time contributor's pull request
+# otherwise reaches nobody. GitHub never requests a review from the author, so
+# this has no effect on the owner's own pull requests.
+
+* @assapir
