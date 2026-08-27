@@ -16,7 +16,7 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 << core.http
 
 ^ = () -> $ => <
-  page = get("http://example.com/") ?
+  page = Request { method = Get, url = "http://example.com/" }.send() ?
     | Ok(response) => response
     | NotOk(_)     => Response { raw = "" }
   assert(page.status(), equals(200))
@@ -24,6 +24,9 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
   assert(page.header("Content-Type"), isOk())
 >
 ```
+
+The module exports **four type names and no free functions**: `Body`, `Method`, `Request`,
+`Response`. A request is built and sent through `Request`, a reply read through `Response`.
 
 `Request` and `Response` are **rich but lazy**: a `Request` holds its method and URL and a
 `Response` its raw reply text, and each derives a field only when a method asks for it.
@@ -37,13 +40,6 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 | `Request` | `{ method :: Method, url :: Text }` |
 | `Response` | `{ raw :: Text }` |
 
-## Free functions
-
-| Function | Result |
-|----------|--------|
-| `get(url :: Text) -> Result` | Build a GET `Request` for `url` and send it: `Ok(Response)` / `NotOk(Text)`. |
-| `parseResponse(raw :: Text) -> Result` | Wrap raw response text as a `Response`: `Ok(Response)`, or `NotOk(Text)` when `raw` does not open with `HTTP` followed by a terminated first line. |
-
 ## `Method`
 
 | Method | Result |
@@ -56,29 +52,26 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 
 | Method | Result |
 |--------|--------|
-| `send() -> Result` | Perform the request over `core.net` and parse the reply: `Ok(Response)`, or the `NotOk(Text)` the transport reported. A network failure is a value, never a crash. |
-| `wire() -> Text` | The request serialised to the text that goes on the wire. |
-| `authority() -> Text` | The `host[:port]` to connect to — what the `Host` header carries. Any `userinfo@` prefix is dropped. |
-| `path() -> Text` | The path the request line asks for; `/` when the URL carries none. A bare query string gets the `/` root it implies (`example.com?a=b` → `/?a=b`), and a `#fragment` is dropped — a fragment never goes on the wire. |
-| `authorityEnd() -> Num` | Where the authority ends in `withoutScheme()`: the first `/`, `?` or `#`. |
-| `withoutScheme() -> Text` | The URL with any `scheme://` prefix removed. |
+| `send() -> Result` | Perform the request over `core.net` and validate the reply: `Ok(Response)`, or the `NotOk(Text)` the transport reported. A network failure is a value, never a crash. |
 
-Requests go out as **HTTP/1.0**, which forbids the chunked transfer-encoding this module has no
-decoder for; the connection close alone delimits the body. `Content-Length` counts **bytes**
-(`.size`), not characters, and a body-bearing method sends it even for empty content — that is a
-body of length zero, not the absence of a body, and a `Content-Length`-less POST draws a 411.
+Requests go out as **HTTP/1.0** deliberately, until chunked decoding lands: 1.0 forbids the
+chunked transfer-encoding this module has no decoder for, so the connection close alone delimits
+the body. `Content-Length` counts **bytes** (`.size`), not characters, and a body-bearing method
+sends it even for empty content — that is a body of length zero, not the absence of a body, and a
+`Content-Length`-less POST draws a 411.
 
 ## `Response`
 
+Wrapped and checked in one step: `Response { raw = text }.validate()`.
+
 | Method | Result |
 |--------|--------|
+| `validate() -> Result` | `Ok(Response)` for a reply worth reading, or `NotOk(Text)` when `raw` does not open with `HTTP` followed by a terminated first line. |
 | `status() -> Num` | The status code (`HTTP/1.0 200 OK` → `200`), or `0` when the status line carries no code that is digits throughout — a garbled reply reads as `0` rather than a plausible wrong number. |
 | `statusLine() -> Text` | The reply's first line, trimmed. |
 | `header(name :: Text) -> Result` | A header value by name, **case-insensitive**: `Ok(Text)` / `NotOk(Text)`. The value is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins. |
 | `headers() -> []Text` | The header lines, trimmed and without the status line. A line carrying no colon is not a header and is left out. |
 | `body() -> Text` | Everything after the blank line, character for character; `""` when the reply has no blank line. |
-| `head() -> Text` | The status line and the header lines — everything before the blank line — with CRLF endings rewritten to LF. |
-| `blankLine() -> Num` | Where the blank line separating head from body begins, or `raw.length` when the reply has none. |
 
 Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. All four spellings of a blank
 line are measured and the **earliest** wins, so a body carrying a blank line in the other
@@ -90,13 +83,17 @@ Known gaps: an IPv6 literal host (`http://[::1]/p`) is read as already carrying 
 default `:80` is not appended; and a scheme-less URL whose query itself contains `://` is cut at
 that inner occurrence.
 
-See `examples/http_parse.qn` for serialising and parsing offline, and `examples/http_get.qn` for
-a live GET.
+The tables above are the whole supported surface; the records' other methods are implementation
+detail — Quilon has no per-member visibility yet.
+
+See `examples/http_parse.qn` for reading a reply offline, and `examples/http_get.qn` for a live
+GET.
 
 The parser's and serialiser's edge cases are covered by the suite that lives in
-`corelib/http.qn` itself, beside the code it tests. Only the root program's `describe` blocks
-survive the import resolver, so `<< core.http` brings you the client and nothing of its
-tests. The suite runs when the module is the file being tested:
+`corelib/http.qn` itself, beside the code it tests: the public surface first, the internals it
+rests on second. Only the root program's `describe` blocks survive the import resolver, so
+`<< core.http` brings you the client and nothing of its tests. The suite runs when the module is
+the file being tested:
 
 ```bash
 quilon test corelib/http.qn

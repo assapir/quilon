@@ -6,6 +6,26 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` — an HTTP client written in Quilon** over `core.net`'s `@tcpRequest`. HTTP
+  only, no TLS. It exports four type names and no free functions, since every exported name is
+  a word an importer can no longer use:
+
+  ```quilon ignore
+  << core.http
+
+  ^ = () -> $ => <
+    reply = Request { method = Get, url = "http://example.com/" }.send() ?
+      | Ok(response) => response
+      | NotOk(_)     => Response { raw = "" }
+    assert(reply.status(), equals(200))
+  >
+  ```
+
+  A reply is wrapped and checked in one step — `Response { raw = text }.validate()` — then
+  read through `status()` / `statusLine()` / `header(name)` / `headers()` / `body()`. Replies
+  are read leniently (HTTP/1.0 or 1.1, CRLF or bare LF) and the close, not `Content-Length`,
+  delimits the body. See `docs/corelib/http.md`.
+
 - **An import the erased `describe` blocks were the only user of reaches no build.** A
   file's test blocks are compiled by `quilon test` alone; `check`, `compile`, `build` and
   `run` erase them, and with them every reference the harness had. An item nothing in the

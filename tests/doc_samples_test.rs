@@ -11,7 +11,7 @@
 use quilon::driver::front_end;
 use std::path::{Path, PathBuf};
 
-/// Every corelib module, so a fragment may use `print`, `failAt`, `now`, `get`, …
+/// Every corelib module, so a fragment may use `print`, `failAt`, `now`, `Request`, …
 const PRELUDE: &str =
     "<< core.io\n<< core.test\n<< core.cli\n<< core.time\n<< core.net\n<< core.http\n";
 

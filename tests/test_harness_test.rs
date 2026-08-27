@@ -448,7 +448,7 @@ fn importing_core_http_contributes_no_report_internals() {
         );
     }
     assert!(
-        contributed.contains(&"get"),
+        contributed.contains(&"Request"),
         "the client itself must still arrive: {contributed:?}"
     );
 }

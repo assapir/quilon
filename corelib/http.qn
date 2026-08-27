@@ -39,6 +39,13 @@
 >> Response = {
   raw :: Text,
 
+  ~ Reject a reply that does not open with an HTTP status line: `Ok(it)` for a reply worth
+  ~ reading, `NotOk(errorText)` for one that is not HTTP at all.
+  validate = () -> Result =>
+    it.raw.slice(0, 4) == "HTTP" && it.raw.contains("\n")
+      ? Ok(it)
+      : NotOk("malformed HTTP response")
+
   ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
   ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
   ~ carrying a blank line in the other convention cannot move the split. `split(x)[0].length`
@@ -115,13 +122,6 @@
   >
 }
 
-~ Wrap raw response text as a `Response`, rejecting a reply with no HTTP status line:
-~ `Ok(Response)` / `NotOk(errorText)`.
->> parseResponse = (raw :: Text) -> Result =>
-  raw.slice(0, 4) == "HTTP" && raw.contains("\n")
-    ? Ok(Response { raw = raw })
-    : NotOk("malformed HTTP response")
-
 ~ A request: the method and the target URL (`http://host[:port]/path`, scheme optional).
 >> Request = {
   method :: Method,
@@ -182,13 +182,10 @@
     host = it.authority()
     address = host.contains(":") ? host : host + ":80"
     @tcpRequest(address, it.wire()) ?
-      | Ok(responseText) => parseResponse(responseText)
+      | Ok(responseText) => Response { raw = responseText }.validate()
       | NotOk(problem)   => NotOk(problem)
   >
 }
-
-~ Fetch a URL with a GET request: `Ok(Response)` / `NotOk(errorText)`.
->> get = (url :: Text) -> Result => Request { method = Get, url = url }.send()
 
 ~ The suite for everything above: every parser and serialiser edge case, offline over canned
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
@@ -214,11 +211,22 @@ headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text =>
 ~ Parse a reply the case knows is well-formed. `assert`, not `expect`: an unparseable fixture
 ~ is a broken test rather than a failed case.
 parsed = (raw :: Text) -> Response => <
-  assert(parseResponse(raw), isOk())
-  parseResponse(raw) ?
+  candidate = Response { raw = raw }
+  assert(candidate.validate(), isOk())
+  candidate.validate() ?
     | Ok(response) => response
-    | NotOk(_)     => Response { raw = "" }
+    | NotOk(_)     => candidate
 >
+
+describe("validating a reply", () => <
+  it("rejects a reply that is not HTTP at all", () =>
+    expect(Response { raw = "not http at all\r\n\r\n" }.validate(), isNotOk()))
+
+  it("rejects a reply with no line ending", () =>
+    expect(Response { raw = "HTTP/1.1 200 OK" }.validate(), isNotOk()))
+
+  it("rejects an empty reply", () => expect(Response { raw = "" }.validate(), isNotOk()))
+>)
 
 describe("the status line", () => <
   it("reads the code of a normal reply", () =>
@@ -235,14 +243,6 @@ describe("the status line", () => <
 
   it("reads a code with no reason phrase", () =>
     expect(parsed("HTTP/1.1 204\r\n\r\n").status(), equals(204)))
-
-  it("rejects a reply that is not HTTP at all", () =>
-    expect(parseResponse("not http at all\r\n\r\n"), isNotOk()))
-
-  it("rejects a reply with no line ending", () =>
-    expect(parseResponse("HTTP/1.1 200 OK"), isNotOk()))
-
-  it("rejects an empty reply", () => expect(parseResponse(""), isNotOk()))
 
   it("reads a non-numeric code as 0 rather than guessing", () => <
     ~ The letter O for a zero: no digit-salvaging, no plausible wrong number.
@@ -318,13 +318,6 @@ describe("headers", () => <
 
   it("finds no headers in a reply that has none", () =>
     expect(parsed("HTTP/1.1 200 OK\r\n\r\nbody").headers().size, equals(0)))
-
-  it("hands back the head with its endings rewritten and the body left off", () =>
-    expect(parsed(crlfReply()).head(),
-      equals("HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5")))
-
-  it("hands back the whole reply as head when there is no blank line", () =>
-    expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n").head(), equals("HTTP/1.1 200 OK\nX-A: b\n")))
 >)
 
 describe("the body", () => <
@@ -439,6 +432,18 @@ describe("the Method sum", () => <
     expect(none.content, equals(""))
     expect(none.contentType, equals(""))
   >)
+>)
+
+~ From here down, the internals the blocks above rest on — reachable at all only because the
+~ suite lives in the module beside them.
+
+describe("the head/body split", () => <
+  it("hands back the head with its endings rewritten and the body left off", () =>
+    expect(parsed(crlfReply()).head(),
+      equals("HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5")))
+
+  it("hands back the whole reply as head when there is no blank line", () =>
+    expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n").head(), equals("HTTP/1.1 200 OK\nX-A: b\n")))
 >)
 
 describe("reading a URL apart", () => <
