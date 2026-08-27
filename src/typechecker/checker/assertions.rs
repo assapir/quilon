@@ -102,9 +102,9 @@ impl TypeChecker {
             // A `Result` (or any sum carrying the variant being asked about).
             matcher_name => match actual_type {
                 Type::Sum { variants, .. }
-                    if variants
-                        .iter()
-                        .any(|variant| variant.name == crate::ast::matcher_variant(matcher_name)) =>
+                    if variants.iter().any(|variant| {
+                        variant.name == crate::ast::matcher_variant(matcher_name)
+                    }) =>
                 {
                     Ok(())
                 }
@@ -119,12 +119,7 @@ impl TypeChecker {
 
     /// `ty` must be comparable with `==` — the built-in member for a scalar, or the type's
     /// own `==` member. The matchers that compare values are exactly as capable as `==` is.
-    fn require_equality(
-        &self,
-        matcher: &str,
-        ty: &Type,
-        span: &Span,
-    ) -> Result<(), TypeError> {
+    fn require_equality(&self, matcher: &str, ty: &Type, span: &Span) -> Result<(), TypeError> {
         match self.has_exact_overload("==", &[ty.clone(), ty.clone()]) {
             true => Ok(()),
             false => Err(TypeError::MatcherTypeUnsupported {

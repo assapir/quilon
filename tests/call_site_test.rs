@@ -190,14 +190,14 @@ countdown = (n :: Num, acc :: Num, site :: Site) -> Num =>
 }
 
 /// A `Site` parameter is never part of the signature a CALLER has to satisfy, so no
-/// diagnostic may ask for one: the candidates for a wrong-arity call to `assertEq` are
-/// `(Num, Num)`, not `(Num, Num, Site)`.
+/// diagnostic may ask for one: a wrong-arity call to `core.test`'s `failAt(message, site)`
+/// reports its parameters as `(Text)`, not `(Text, Site)`.
 #[test]
 fn a_diagnostic_never_asks_for_the_filled_in_argument() {
-    let error = type_error_message("<< core.test\n^ = () -> $ => assertEq(1)\n");
+    let error = type_error_message("<< core.test\n^ = () -> $ => failAt()\n");
     assert!(
-        error.contains("(Num, Num)") && !error.contains("Site"),
-        "candidates must be shown without the filled-in Site, got: {error}"
+        error.contains("expected 1") && !error.contains("Site"),
+        "the arity must be counted without the filled-in Site, got: {error}"
     );
 }
 

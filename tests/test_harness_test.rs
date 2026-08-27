@@ -1,10 +1,10 @@
 //! The in-language test framework: `quilon test`, and what a top-level `describe` block does
 //! to every other command.
 //!
-//! Two halves, and both matter. A suite has to run — report each case, and exit non-zero
-//! when one failed. And a suite has to cost a release build nothing: the blocks are not part
-//! of the compilation unit, so `run`/`compile`/`build` neither check them nor emit them, and
-//! a file that is only tests is not a program at all.
+//! Two halves, and both matter. A suite has to run — report each case whichever way it went,
+//! tally them, and exit non-zero when one failed. And a suite has to cost a release build
+//! nothing: the blocks are not part of the compilation unit, so `run`/`compile`/`build`
+//! neither check them nor emit them, and a file that is only tests is not a program at all.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,31 +18,31 @@ const PASSING_SUITE: &str = r#"
 << core.test
 
 describe("numbers", () => <
-  it("adds", () => assertEq(1 + 1, 2))
-  it("orders", () => assert(2 > 1))
+  it("adds", () => expect(1 + 1, equals(2)))
+  it("orders", () => expect(2 > 1, equals(true)))
 
   describe("nested", () => <
-    it("still runs", () => assert(true))
+    it("still runs", () => expect(true, equals(true)))
   >
   )
 >
 )
 
 describe("text", () => <
-  it("contains", () => assert("haystack".contains("stack")))
+  it("contains", () => expect("haystack", contains("stack")))
 >
 )
 "#;
 
-/// A passing case, then a failing one, then another that would pass. The assertions are
-/// fail-fast, so the third never runs — which is what the report has to reflect.
+/// A passing case, then a failing one, then another that passes. A failed `expect` marks its
+/// own case and nothing else, so the third case still runs and the summary tallies both ways.
 const FAILING_SUITE: &str = r#"
 << core.test
 
 describe("arithmetic", () => <
-  it("holds", () => assertEq(2 + 2, 4))
-  it("does not hold", () => assertEq(2 + 2, 5))
-  it("never reached", () => assertEq("after", "after"))
+  it("holds", () => expect(2 + 2, equals(4)))
+  it("does not hold", () => expect(2 + 2, equals(5)))
+  it("runs after the failure", () => expect("after", equals("after")))
 >
 )
 "#;
@@ -119,7 +119,7 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
             "<< core.io\n",
             "double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
-            "  it(\"doubles\", () => assertEq(double(21), 42))\n",
+            "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">\n",
             ")\n",
             "^ = () -> Num => double(0)\n"
@@ -215,7 +215,7 @@ fn a_passing_suite_exits_zero_and_reports_every_case() {
         );
     }
     assert!(
-        out.stdout.contains("4 cases passed"),
+        out.stdout.contains("4 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
@@ -223,22 +223,29 @@ fn a_passing_suite_exits_zero_and_reports_every_case() {
 }
 
 #[test]
-fn a_failing_case_exits_non_zero_and_ends_the_run_where_it_failed() {
+fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
     let dir = work_dir("fail");
     let source = write(&dir, "suite.qn", FAILING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(out.code, 0, "a failing suite must exit non-zero");
-    // Cases before the failure are reported; the failing one and everything after it are
-    // not, the assertions being fail-fast. And no summary: the run never got there.
+    // Every case is reported — a failed `expect` marks its own case and nothing else — and
+    // the summary tallies both ways round.
+    for case in ["holds", "does not hold", "runs after the failure"] {
+        assert!(
+            out.stdout.contains(case),
+            "`{case}` is missing from the report:\n{}",
+            out.stdout
+        );
+    }
     assert!(
-        out.stdout.contains("holds"),
-        "the case before the failure should have been reported:\n{}",
+        out.stdout.contains("✓ holds") && out.stdout.contains("✗ does not hold"),
+        "each case must be marked as it went:\n{}",
         out.stdout
     );
     assert!(
-        !out.stdout.contains("never reached") && !out.stdout.contains("cases passed"),
-        "a fail-fast run must not report past the failure:\n{}",
+        out.stdout.contains("2 passed, 1 failed"),
+        "unexpected summary:\n{}",
         out.stdout
     );
     // The failure itself is reported in the compiler's own diagnostic format, on stderr,
@@ -252,6 +259,106 @@ fn a_failing_case_exits_non_zero_and_ends_the_run_where_it_failed() {
         out.stderr.contains("expected 5, got 4") && out.stderr.contains("^^^"),
         "the failure must carry the message and a caret run:\n{}",
         out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The isolation mechanism: the first failing `expect` in a case skips what is LEFT of that
+/// case — the later assertions never run, so their subjects are never even evaluated — while
+/// the next case starts clean.
+#[test]
+fn a_failed_expect_skips_the_rest_of_its_case() {
+    let dir = work_dir("skip");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.test\n",
+            "describe(\"skipping\", () => <\n",
+            "  it(\"stops at the first failure\", () => <\n",
+            "    expect(1, equals(2))\n",
+            "    expect(3, equals(4))\n",
+            "  >\n",
+            "  )\n",
+            "  it(\"starts clean\", () => expect(5, equals(5)))\n",
+            ">\n",
+            ")\n"
+        ),
+    );
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_ne!(out.code, 0);
+    assert_eq!(
+        out.stderr.matches("assertion failed").count(),
+        1,
+        "only the first failing expect in a case may report:\n{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("expected 2, got 1") && !out.stderr.contains("expected 4, got 3"),
+        "the assertions after the failure must not have run:\n{}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.contains("✓ starts clean") && out.stdout.contains("1 passed, 1 failed"),
+        "the next case must be unaffected:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `expect` records with the reporter, which only a `describe` block has — so outside one it
+/// is a compile error naming `assert` instead, rather than a program that silently drops its
+/// failures. (`describe` blocks are stripped from every command but `quilon test`.)
+#[test]
+fn expect_outside_a_describe_block_is_a_compile_error() {
+    let dir = work_dir("expect_outside");
+    let source = write(
+        &dir,
+        "program.qn",
+        "^ = () -> $ => <\n  expect(1, equals(1))\n>\n",
+    );
+    for command in ["check", "run", "build"] {
+        let out = quilon(&[command, source.to_str().unwrap()]);
+        assert_ne!(
+            out.code, 0,
+            "`quilon {command}` must refuse an `expect` outside a test:\n{}",
+            out.stdout
+        );
+        assert!(
+            out.stderr.contains("only works inside a `describe` block")
+                && out.stderr.contains("`assert`"),
+            "the diagnostic must point at `assert`:\n{}",
+            out.stderr
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `assert` in a case is still FATAL: it ends the run where it failed rather than recording.
+/// That is the whole difference between the two entry points.
+#[test]
+fn an_assert_in_a_case_is_still_fatal() {
+    let dir = work_dir("fatal");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.test\n",
+            "describe(\"fatal\", () => <\n",
+            "  it(\"asserts\", () => assert(1, equals(2)))\n",
+            "  it(\"never reached\", () => expect(1, equals(1)))\n",
+            ">\n",
+            ")\n"
+        ),
+    );
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_eq!(out.code, 101, "a failing `assert` exits 101");
+    assert!(
+        !out.stdout.contains("never reached") && !out.stdout.contains("passed,"),
+        "a fatal assert must end the run where it failed:\n{}",
+        out.stdout
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -282,11 +389,10 @@ fn a_directory_runs_every_suite_it_holds() {
         out.stdout
     );
 
-    // The passing suite's total is its own — a process per suite is what keeps one suite's
-    // counts out of another's summary. The failing suite ran one case before it failed, and
-    // that count must not have landed here.
+    // Each suite's totals are its own — a process per suite is what keeps one suite's counts
+    // out of another's summary.
     assert!(
-        out.stdout.contains("4 cases passed"),
+        out.stdout.contains("4 passed, 0 failed") && out.stdout.contains("2 passed, 1 failed"),
         "one suite's totals leaked into another's summary:\n{}",
         out.stdout
     );
@@ -313,7 +419,7 @@ fn a_suite_that_does_not_compile_fails_the_run() {
     let source = write(
         &dir,
         "suite.qn",
-        "<< core.test\ndescribe(\"g\", () => assertEq(1, \"one\"))\n",
+        "<< core.test\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0, "a suite that fails to type-check must fail");
@@ -380,7 +486,7 @@ fn a_suite_with_its_own_helpers_is_still_not_a_program() {
             "<< core.test\n",
             "double = (n :: Num) -> Num => n * 2\n",
             "describe(\"double\", () => <\n",
-            "  it(\"doubles\", () => assertEq(double(21), 42))\n",
+            "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">\n",
             ")\n"
         ),
@@ -419,7 +525,7 @@ fn the_example_suite_passes() {
         out.stdout, out.stderr
     );
     assert!(
-        out.stdout.contains("cases passed"),
+        out.stdout.contains("passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

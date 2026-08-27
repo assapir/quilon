@@ -23,7 +23,7 @@ const ASSERT_READ: &str = r#"
 
 ^ = () -> Num => <
   line = @readStdin()
-  assertEq(line, "hello")
+  assert(line, equals("hello"))
   0
 >
 "#;
@@ -49,8 +49,8 @@ const TWO_READS: &str = r#"
 ^ = () -> Num => <
   first = @readStdin()
   second = @readStdin()
-  assertEq(first, "hello")
-  assertEq(second, "world")
+  assert(first, equals("hello"))
+  assert(second, equals("world"))
   0
 >
 "#;

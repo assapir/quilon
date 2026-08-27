@@ -72,22 +72,19 @@ fn all_examples_compile() {
     }
 }
 
-/// The self-asserting contract, enforced statically: every runnable example must
-/// import `<< core.test` and actually call an `assert*` helper. Exiting 0 alone is a
-/// weak signal (a program with no checks trivially passes), so this keeps every
-/// example genuinely verifying its own results — the invariant the docs promise.
+/// The self-asserting contract, enforced statically: every runnable example must actually
+/// call `assert(value, matcher)`. Exiting 0 alone is a weak signal (a program with no checks
+/// trivially passes), so this keeps every example genuinely verifying its own results — the
+/// invariant the docs promise. (`assert` is compiler-provided, so there is no import to look
+/// for.)
 #[test]
 fn every_runnable_example_self_asserts() {
     for path in runnable_examples() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let src = std::fs::read_to_string(&path).unwrap();
         assert!(
-            src.contains("<< core.test"),
-            "{name} is runnable but does not import `<< core.test` (not self-asserting)"
-        );
-        assert!(
-            src.contains("assert"),
-            "{name} imports core.test but never calls an `assert*` helper"
+            src.contains("assert("),
+            "{name} is runnable but never asserts anything (not self-asserting)"
         );
     }
 }

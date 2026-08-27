@@ -77,10 +77,7 @@ impl std::fmt::Display for TypeError {
                 got,
                 ..
             } => {
-                write!(
-                    f,
-                    "`{matcher}` takes {expected} argument(s), got {got}"
-                )
+                write!(f, "`{matcher}` takes {expected} argument(s), got {got}")
             }
             TypeError::MatcherTypeUnsupported { matcher, ty, .. } => {
                 let label = type_label(ty);

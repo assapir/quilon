@@ -1493,7 +1493,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 ^ = () -> Num => <
   start = now()
   @sleep(0.05)
-  assert(now() - start >= 0.05)
+  assert(now() - start >= 0.05, equals(true))
   0
 >
 "#,
