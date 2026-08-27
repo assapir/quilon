@@ -19,7 +19,8 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 >
 ```
 
-`Request` and `Response` are **rich but lazy**: each holds the raw text and parses a field only
+`Request` and `Response` are **rich but lazy**: a `Request` holds its method and URL and a
+`Response` its raw reply text, and each derives a field — the path, the status, a header — only
 when a method asks for it.
 
 ## Types
@@ -33,7 +34,7 @@ when a method asks for it.
 
 ## Free functions
 
-Both build a value, so neither belongs on a type.
+Neither has a receiver to hang off: each takes what a `Request` or `Response` is built *from*.
 
 | Function | Result |
 |----------|--------|
@@ -87,12 +88,13 @@ decoder for; the connection close alone delimits the body. `Content-Length` coun
 | `header(name :: Text) -> Result` | A header value by name, **case-insensitive**: `Ok(Text)` / `NotOk(Text)`. The value is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins. |
 | `headers() -> []Text` | The header lines, trimmed and without the status line. A line carrying no colon is not a header and is left out. |
 | `body() -> Text` | Everything after the blank line, character for character; `""` when the reply has no blank line. |
-| `head() -> Text` | The status line and the header lines, with CRLF endings normalised to LF. |
-| `separator() -> Text` | The blank line this reply separates head from body with: `"\r\n\r\n"`, `"\n\n"`, or `""`. The **earlier** of the two wins, so a body carrying a blank line in the other convention cannot move the split. |
+| `head() -> Text` | The status line and the header lines — everything before the blank line — with CRLF endings rewritten to LF. |
 
-Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. `body()` never consults
-`Content-Length` — the close delimits the body — so a wrong or absent `Content-Length` cannot
-truncate it, and a body carrying its own CRLF survives intact.
+Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. The reply splits at the
+**first** blank line in either convention, so a body carrying a blank line in the other one
+cannot move the split. `body()` never consults `Content-Length` — the close delimits the body
+— so a wrong or absent `Content-Length` cannot truncate it, and a body carrying its own CRLF
+survives intact.
 
 ## Examples and tests
 

@@ -65,7 +65,6 @@ pub fn analyze(program: &Program) -> DeferInfo {
         Item::VariableDeclaration(v) => references_at_primitive(&v.value),
         // A method body reaches `@` primitives like any other body — `core.http`'s
         // `Request.send()` calls `@tcpRequest` — so a type's methods are scanned too.
-        // Missing them left the entry off the scheduler fiber and the launch aborted.
         Item::TypeDeclaration(t) => t
             .type_definition
             .methods()

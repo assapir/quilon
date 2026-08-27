@@ -2,8 +2,9 @@
 ~ Import with `<< core.http`. Reference: docs/corelib/http.md.
 ~
 ~ HTTP only (no TLS). Each request opens one connection, sends `Connection: close`, and
-~ reads the close-delimited reply. `Request` and `Response` are rich-but-lazy: they hold
-~ the raw text and parse a field only when a method asks for it.
+~ reads the close-delimited reply. `Request` and `Response` are rich-but-lazy: a `Request`
+~ holds its method and URL and a `Response` its raw reply text, and each derives a field —
+~ the path, the status, a header — only when a method asks for it.
 ~
 ~ Requests go out as HTTP/1.0, which forbids the chunked transfer-encoding this module
 ~ has no decoder for; the connection close alone delimits the body. Replies are read
@@ -37,39 +38,18 @@
 >> Response = {
   raw :: Text,
 
-  ~ The blank line separating the headers from the body, as it appears in this reply:
-  ~ CRLF, bare LF, or "" for a reply that has none. The EARLIER of the two wins, which
-  ~ matters for a bare-LF reply whose body carries a CRLF blank line of its own: taking
-  ~ CRLF on sight would put the head/body split inside the body.
-  separator = () -> Text => <
-    lineFeedSplitsFirst = it.raw.indexOf("\n\n") ?
-      | Ok(lineFeedAt) => (it.raw.indexOf("\r\n\r\n") ?
-        | Ok(crlfAt) => lineFeedAt < crlfAt
-        | NotOk(_)   => true)
-      | NotOk(_) => false
-    lineFeedSplitsFirst ? "\n\n" : (it.raw.contains("\r\n\r\n") ? "\r\n\r\n" : "")
-  >
-
   ~ Everything before the blank line — the status line and the header lines — with CRLF
-  ~ endings normalised to LF, so one code path reads a CRLF reply and a bare-LF one. The
-  ~ normalisation also keeps indices honest: `\r\n` is ONE grapheme cluster, so searching
-  ~ a CRLF text for `\n` and slicing at what it finds would land a character late. A reply
-  ~ with no blank line at all is all head and no body.
-  head = () -> Text => <
-    blankLine = it.separator()
-    section = blankLine == "" ? it.raw : (it.raw.indexOf(blankLine) ?
-      | Ok(mark) => it.raw.slice(0, mark)
-      | NotOk(_) => it.raw)
-    section.replaceAll("\r\n", "\n")
-  >
+  ~ endings rewritten to LF, so one code path reads a CRLF reply and a bare-LF one.
+  ~ Rewriting settles BOTH awkward parts at once. `\r\n` is ONE grapheme cluster and so is
+  ~ `\n`, and `Text` indices count graphemes, so the rewrite maps one grapheme to one and
+  ~ leaves every index alone — while searching un-rewritten CRLF text for `\n` would land a
+  ~ character late. And with a single convention left, the first blank line is simply the
+  ~ first, so a body carrying a blank line in the other convention cannot move the split.
+  ~ A reply with no blank line at all is all head and no body.
+  head = () -> Text => it.raw.replaceAll("\r\n", "\n").split("\n\n")[0]
 
   ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
-  statusLine = () -> Text => <
-    section = it.head()
-    section.indexOf("\n") ?
-      | Ok(mark) => section.slice(0, mark).trim()
-      | NotOk(_) => section.trim()
-  >
+  statusLine = () -> Text => it.head().split("\n")[0].trim()
 
   ~ The header lines, trimmed and without the status line. A line carrying no colon is
   ~ not a header and is left out, so a garbled reply yields the headers it does have.
@@ -116,14 +96,13 @@
   >
 
   ~ The body: everything after the blank line, character for character, and "" for a reply
-  ~ with no blank line. `Content-Length` is not consulted — the close delimits the body —
-  ~ so a body carrying its own CRLF survives intact.
-  body = () -> Text => <
-    blankLine = it.separator()
-    blankLine == "" ? "" : (it.raw.indexOf(blankLine) ?
-      | Ok(mark) => it.raw.slice(mark + blankLine.length, it.raw.length)
-      | NotOk(_) => "")
-  >
+  ~ with no blank line. The blank line is located in the rewritten copy (see `head`) but the
+  ~ body is sliced out of the RAW text, so a body carrying its own CRLF survives intact —
+  ~ the two agree because the rewrite preserves grapheme indices, and the blank line is two
+  ~ graphemes either way. `Content-Length` is not consulted: the close delimits the body.
+  body = () -> Text => it.raw.replaceAll("\r\n", "\n").indexOf("\n\n") ?
+    | Ok(mark) => it.raw.slice(mark + 2, it.raw.length)
+    | NotOk(_) => ""
 }
 
 ~ Wrap raw response text as a `Response`, rejecting a reply with no HTTP status line:

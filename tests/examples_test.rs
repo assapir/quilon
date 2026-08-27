@@ -33,11 +33,20 @@ fn ql_files() -> Vec<PathBuf> {
     files
 }
 
+/// Whether any line of `path` opens with `prefix` — how both a `^` entry point and a
+/// top-level `describe(` block are spotted without parsing the file.
+fn any_line_starts_with(path: &Path, prefix: &str) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| {
+            src.lines()
+                .any(|line| line.trim_start().starts_with(prefix))
+        })
+        .unwrap_or(false)
+}
+
 /// A file defines an entry point (`^`) iff some line starts with `^`.
 fn defines_entry(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|src| src.lines().any(|l| l.trim_start().starts_with("^")))
-        .unwrap_or(false)
+    any_line_starts_with(path, "^")
 }
 
 /// The runnable examples: every `.qn` that defines `^` and is not a negative example. Every
@@ -53,11 +62,9 @@ fn runnable_examples() -> Vec<PathBuf> {
         .collect()
 }
 
-/// A file is a test suite iff some line opens a top-level `describe(` block.
+/// A file is a test suite iff some line opens a `describe(` block.
 fn defines_test_blocks(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|src| src.lines().any(|l| l.starts_with("describe(")))
-        .unwrap_or(false)
+    any_line_starts_with(path, "describe(")
 }
 
 /// Every example carrying top-level `describe` blocks must PASS under `quilon test`. Compiling
