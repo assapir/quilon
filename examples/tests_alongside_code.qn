@@ -1,7 +1,10 @@
-~ Tests beside the code they test: the `>>` exports and the `describe` blocks checking them
-~ share one file. Only `quilon test` compiles those blocks — every other command strips them,
-~ so the line one case prints below reaches no build. `use_tested_module.qn` imports the
-~ exports.
+~ Tests beside the code they test: the `>>` exports, the `^` that uses them, and the
+~ `describe` blocks checking them all share one file. Only `quilon test` compiles those
+~ blocks — every other command erases them, so the line one case prints below reaches no
+~ build, and `quilon test` in turn ignores the `^` and runs the blocks instead.
+~
+~ Run: cargo run -- run  examples/tests_alongside_code.qn    ~ prints the program's line only
+~ Run: cargo run -- test examples/tests_alongside_code.qn    ~ runs the cases instead
 << core.io
 << core.test
 
@@ -20,11 +23,17 @@ describe("wordCount", () => <
 >
 )
 
-describe("the stripped block", () => <
+describe("the erased block", () => <
   it("runs under quilon test and nowhere else", () => <
-    print("STRIPPED-TEST-BLOCK-RAN")
+    print("ERASED-TEST-BLOCK-RAN")
     assertEq(slugify("Both Halves"), "both-halves")
   >
   )
 >
 )
+
+^ = () -> $ => <
+  print("PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS")
+  assertEq(slugify("  Hello World  "), "hello-world")
+  assertEq(wordCount("one two three"), 3)
+>

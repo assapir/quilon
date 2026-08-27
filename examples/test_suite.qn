@@ -3,10 +3,10 @@
 ~
 ~ Run: cargo run -- test examples/test_suite.qn    ~ exits 0 — every case passes
 ~
-~ There is no `^` here. A top-level `describe(…)` is test code: `quilon test` synthesizes
-~ the entry point that runs each block in order, and every other command leaves the blocks
-~ out of the program entirely — so a suite alongside the code it tests costs a release build
-~ nothing.
+~ There is no `^` here — a file of nothing but tests. A top-level `describe(…)` is test code:
+~ `quilon test` synthesizes the entry point that runs each block in order, and every other
+~ command leaves the blocks out of the program entirely. Blocks may just as well sit in the
+~ file they test; `tests_alongside_code.qn` does that.
 << core.test
 
 describe("Text", () => <

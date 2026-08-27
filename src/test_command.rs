@@ -1,9 +1,10 @@
 //! `quilon test` — find a project's test suites and run them.
 //!
 //! A suite is a `.qn` file with top-level `describe(…)` blocks (see
-//! [`crate::ast::TEST_BLOCK_MARKER`]) and no `^` of its own; the front end synthesizes the
-//! entry point that runs those blocks. Running is always through the in-process JIT, never
-//! a native build.
+//! [`crate::ast::TEST_BLOCK_MARKER`]); the front end synthesizes the entry point that runs
+//! those blocks. The blocks may sit beside the code they test — the file's own `^` included,
+//! and that `^` is not the test run's, so it is dropped rather than called. Running is always
+//! through the in-process JIT, never a native build.
 //!
 //! ONE suite per process. A case asserts with `core.test`'s assertions, which are fail-fast:
 //! a failing one exits 101 there and then, so several suites in one process would end the

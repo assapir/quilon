@@ -5,7 +5,7 @@
 << core.test
 
 ^ = () -> $ => <
-  print("PROGRAM-RAN-WITHOUT-TEST-BLOCKS")
+  print("IMPORTER-RAN-WITHOUT-THE-MODULE-TEST-BLOCKS")
   assertEq(slugify("  Hello World  "), "hello-world")
   assertEq(wordCount("one two three"), 3)
 >
