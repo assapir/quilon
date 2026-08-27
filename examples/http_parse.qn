@@ -1,56 +1,58 @@
-~ The `core.http` client's offline half: building request bytes and parsing a response,
-~ both operating on plain `Text` so they need no network. A GET and a POST request are
-~ serialised and checked field by field, then a canned response is parsed and its status
-~ line, a header, and the body are read back. `<< core.test` verifies every result; on
-~ success the program exits 0. See examples/http_get.qn for a live request.
+~ The `core.http` client's offline half: serialising a request and reading a reply, both
+~ over plain `Text`, so nothing here touches the network. A GET and a POST are serialised
+~ and checked field by field, then a canned reply is parsed and its status line, a header,
+~ and its body are read back through `Response`'s methods. On success the program exits 0.
+~ See examples/http_get.qn for a live request, and examples/http_test.qn for the suite
+~ that covers the parser's and serialiser's edge cases.
 << core.http
-<< core.test
 
 ^ = () -> $ => <
-  ~ A GET request serialises to a request line, a Host header, and Connection: close.
-  getWire :: Text = requestText(Request { method = Get, url = "http://example.com/index.html" })
-  assert(getWire.contains("GET /index.html HTTP/1.0\r\n"))
-  assert(getWire.contains("Host: example.com\r\n"))
-  assert(getWire.contains("Connection: close\r\n"))
+  ~ A GET serialises to a request line, a Host header, and Connection: close.
+  getRequest = Request { method = Get, url = "http://example.com/index.html" }
+  assert(getRequest.wire(), contains("GET /index.html HTTP/1.0\r\n"))
+  assert(getRequest.wire(), contains("Host: example.com\r\n"))
+  assert(getRequest.wire(), contains("Connection: close\r\n"))
 
-  ~ A POST carries its body: the Body payload adds Content-Type / Content-Length and the
-  ~ content after the blank line. A URL with no path defaults the request target to "/".
-  postWire :: Text = requestText(Request {
+  ~ A request reads its own URL back in pieces.
+  assert(getRequest.authority(), equals("example.com"))
+  assert(getRequest.path(), equals("/index.html"))
+
+  ~ A POST carries its body: the `Body` adds Content-Type and a byte-counted
+  ~ Content-Length, and the content follows the blank line. A URL with no path asks for "/".
+  postRequest = Request {
     method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
     url = "example.com"
-  })
-  assert(postWire.contains("POST / HTTP/1.0\r\n"))
-  assert(postWire.contains("Content-Type: application/x-www-form-urlencoded\r\n"))
-  assert(postWire.contains("Content-Length: 8\r\n"))
-  assert(postWire.contains("\r\n\r\nname=ada"))
+  }
+  assert(postRequest.wire(), contains("POST / HTTP/1.0\r\n"))
+  assert(postRequest.wire(), contains("Content-Type: application/x-www-form-urlencoded\r\n"))
+  assert(postRequest.wire(), contains("Content-Length: 8\r\n"))
+  assert(postRequest.wire(), contains("\r\n\r\nname=ada"))
 
-  ~ QUERY is a body-bearing method: the request line reads QUERY and, like POST, the body
-  ~ is sent with its Content-Length. Its Accept-Query reply header reads back via `header`.
-  queryWire :: Text = requestText(Request {
+  ~ QUERY is body-bearing too, and writes QUERY in its request line.
+  queryRequest = Request {
     method = Query(Body { content = "{\"q\":\"ada\"}", contentType = "application/json" }),
     url = "http://example.com/search"
-  })
-  assert(queryWire.contains("QUERY /search HTTP/1.0\r\n"))
-  assert(queryWire.contains("Content-Type: application/json\r\n"))
-  assert(queryWire.contains("Content-Length: 11\r\n"))
-  assert(queryWire.contains("\r\n\r\n{\"q\":\"ada\"}"))
+  }
+  assert(queryRequest.wire(), contains("QUERY /search HTTP/1.0\r\n"))
+  assert(queryRequest.wire(), contains("Content-Length: 11\r\n"))
 
-  ~ Parse a canned response, then read its fields on access.
-  canned :: Text = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
-  response :: Response = parseResponse(canned) ?
+  ~ Parse a canned reply, then read its fields on access.
+  canned = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+  assert(parseResponse(canned), isOk())
+  response = parseResponse(canned) ?
     | Ok(parsed) => parsed
     | NotOk(_)   => Response { raw = "" }
-  assertOk(parseResponse(canned))
-  assertEq(status(response), 200)
-  assertEq(body(response), "hello")
+  assert(response.status(), equals(200))
+  assert(response.statusLine(), equals("HTTP/1.1 200 OK"))
+  assert(response.body(), equals("hello"))
 
-  ~ Header lookup is case-insensitive and returns Ok(value) / NotOk.
-  contentType :: Text = header(response, "content-type") ?
+  ~ Header lookup is case-insensitive, and absent means NotOk rather than a crash.
+  contentType = response.header("content-type") ?
     | Ok(value) => value
     | NotOk(_)  => "?"
-  assertEq(contentType, "text/html")
-  assertNotOk(header(response, "X-Absent"))
+  assert(contentType, equals("text/html"))
+  assert(response.header("X-Absent"), isNotOk())
 
-  ~ A reply without a status line is rejected.
-  assertNotOk(parseResponse("not http at all"))
+  ~ A reply with no status line is rejected.
+  assert(parseResponse("not http at all"), isNotOk())
 >

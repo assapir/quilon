@@ -1,108 +1,182 @@
 ~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest.
 ~ Import with `<< core.http`. Reference: docs/corelib/http.md.
 ~
-~ HTTP only (no TLS). Each request opens one connection, sends `Connection: close`,
-~ and reads the close-delimited response. `Request` and `Response` are rich-but-lazy:
-~ they hold the raw data and parse fields when an accessor reads them.
+~ HTTP only (no TLS). Each request opens one connection, sends `Connection: close`, and
+~ reads the close-delimited reply. `Request` and `Response` are rich-but-lazy: they hold
+~ the raw text and parse a field only when a method asks for it.
+~
+~ Requests go out as HTTP/1.0, which forbids the chunked transfer-encoding this module
+~ has no decoder for; the connection close alone delimits the body. Replies are read
+~ leniently: HTTP/1.0 or 1.1, CRLF or bare LF.
 
 << core.net
 
-~ A request body: the bytes to send and the media type to advertise.
+~ A request body: the text to send and the media type to advertise for it.
 >> Body = { content :: Text, contentType :: Text }
 
 ~ The HTTP method. Body-bearing methods carry a `Body`; the rest are nullary.
->> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head
-
-~ A request: the method and the target URL (`http://host[:port]/path`, scheme optional).
->> Request = { method :: Method, url :: Text }
-
-~ A response: the raw response bytes. Read fields with `status` / `header` / `body`.
->> Response = { raw :: Text }
-
-~ Serialise a `Request` into the raw HTTP/1.0 request bytes sent over the wire.
->> requestText = (request :: Request) -> Text => <
-  verb = (method :: Method) -> Text => method ?
+>> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head {
+  ~ The token this method writes in a request line.
+  token = () -> Text => it ?
     | Get      => "GET"
     | Post(_)  => "POST"
     | Put(_)   => "PUT"
     | Query(_) => "QUERY"
     | Delete   => "DELETE"
     | Head     => "HEAD"
-  payload = (method :: Method) -> Body => method ?
+
+  ~ The body this method carries — an empty one for the methods that carry none.
+  payload = () -> Body => it ?
     | Post(carried)  => carried
     | Put(carried)   => carried
     | Query(carried) => carried
     | _              => Body { content = "", contentType = "" }
-  afterScheme = request.url.indexOf("://") ?
-    | Ok(mark) => request.url.slice(mark + 3, request.url.length)
-    | NotOk(_) => request.url
-  slashAt = afterScheme.indexOf("/")
-  authority = slashAt ?
-    | Ok(mark) => afterScheme.slice(0, mark)
-    | NotOk(_) => afterScheme
-  path = slashAt ?
-    | Ok(mark) => afterScheme.slice(mark, afterScheme.length)
-    | NotOk(_) => "/"
-  body = payload(request.method)
-  head = "`verb(request.method)` `path` HTTP/1.0\r\nHost: `authority`\r\nConnection: close\r\n"
-  bodyHeaders = body.content.size > 0
-    ? "Content-Type: `body.contentType`\r\nContent-Length: `body.content.size`\r\n"
-    : ""
-  head + bodyHeaders + "\r\n" + body.content
->
+}
 
-~ Wrap raw response bytes as a `Response`, validating the status line is present.
+~ A reply: the raw response text, read through the methods below.
+>> Response = {
+  raw :: Text,
+
+  ~ The blank line separating the headers from the body, as it appears in this reply:
+  ~ CRLF, bare LF, or "" for a reply that has none.
+  separator = () -> Text =>
+    it.raw.contains("\r\n\r\n") ? "\r\n\r\n" : (it.raw.contains("\n\n") ? "\n\n" : "")
+
+  ~ Everything before the blank line — the status line and the header lines — with CRLF
+  ~ endings normalised to LF, so one code path reads a CRLF reply and a bare-LF one. The
+  ~ normalisation also keeps indices honest: `\r\n` is ONE grapheme cluster, so searching
+  ~ a CRLF text for `\n` and slicing at what it finds would land a character late. A reply
+  ~ with no blank line at all is all head and no body.
+  head = () -> Text => <
+    blankLine = it.separator()
+    section = blankLine == "" ? it.raw : (it.raw.indexOf(blankLine) ?
+      | Ok(mark) => it.raw.slice(0, mark)
+      | NotOk(_) => it.raw)
+    section.replaceAll("\r\n", "\n")
+  >
+
+  ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
+  statusLine = () -> Text => <
+    section = it.head()
+    section.indexOf("\n") ?
+      | Ok(mark) => section.slice(0, mark).trim()
+      | NotOk(_) => section.trim()
+  >
+
+  ~ The header lines, trimmed and without the status line. A line carrying no colon is
+  ~ not a header and is left out, so a garbled reply yields the headers it does have.
+  headers = () -> []Text => <
+    section = it.head()
+    afterStatusLine = section.indexOf("\n") ?
+      | Ok(mark) => section.slice(mark + 1, section.length)
+      | NotOk(_) => ""
+    afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+  >
+
+  ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
+  ~ no code that is digits throughout — a garbled reply reads as 0 rather than guessing.
+  status = () -> Num => <
+    digitOf = (grapheme :: Text) -> Result => "0123456789".indexOf(grapheme)
+    isDigit = (grapheme :: Text) -> Bool => digitOf(grapheme) ?
+      | Ok(_)    => true
+      | NotOk(_) => false
+    fields = it.statusLine().split(" ")
+    code = fields.size > 1 ? fields[1] : ""
+    graphemes = code.split("")
+    allDigits = code.length > 0
+      && graphemes.filter(grapheme => isDigit(grapheme)).size == graphemes.size
+    allDigits
+      ? graphemes.reduce(0, (accumulator, grapheme) => digitOf(grapheme) ?
+        | Ok(digit) => accumulator * 10 + digit
+        | NotOk(_)  => accumulator)
+      : 0
+  >
+
+  ~ Look up a header by name, case-insensitively: `Ok(value)` or `NotOk(name)`. The value
+  ~ is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins.
+  header = (name :: Text) -> Result => <
+    wanted = name.trim().toLower()
+    nameOf = (line :: Text) -> Text => line.indexOf(":") ?
+      | Ok(colon) => line.slice(0, colon).trim().toLower()
+      | NotOk(_)  => ""
+    valueOf = (line :: Text) -> Text => line.indexOf(":") ?
+      | Ok(colon) => line.slice(colon + 1, line.length).trim()
+      | NotOk(_)  => ""
+    it.headers().find(line => nameOf(line) == wanted) ?
+      | Ok(line) => Ok(valueOf(line))
+      | NotOk(_) => NotOk(name)
+  >
+
+  ~ The body: everything after the blank line, character for character, and "" for a reply
+  ~ with no blank line. `Content-Length` is not consulted — the close delimits the body —
+  ~ so a body carrying its own CRLF survives intact.
+  body = () -> Text => <
+    blankLine = it.separator()
+    blankLine == "" ? "" : (it.raw.indexOf(blankLine) ?
+      | Ok(mark) => it.raw.slice(mark + blankLine.length, it.raw.length)
+      | NotOk(_) => "")
+  >
+}
+
+~ Wrap raw response text as a `Response`, rejecting a reply with no HTTP status line:
+~ `Ok(Response)` / `NotOk(errorText)`.
 >> parseResponse = (raw :: Text) -> Result =>
-  raw.slice(0, 4) == "HTTP" && raw.contains("\r\n")
+  raw.slice(0, 4) == "HTTP" && raw.contains("\n")
     ? Ok(Response { raw = raw })
     : NotOk("malformed HTTP response")
 
-~ The numeric status code from the response status line (`HTTP/1.0 200 OK` -> 200).
->> status = (response :: Response) -> Num => <
-  digitOf = (grapheme :: Text) -> Result => "0123456789".indexOf(grapheme)
-  statusLine = response.raw.split("\r\n")[0]
-  fields = statusLine.split(" ")
-  code = fields.size > 1 ? fields[1] : ""
-  code.split("").reduce(0, (accumulator, grapheme) => digitOf(grapheme) ?
-    | Ok(digit) => accumulator * 10 + digit
-    | NotOk(_)  => accumulator)
->
+~ A request: the method and the target URL (`http://host[:port]/path`, scheme optional).
+>> Request = {
+  method :: Method,
+  url :: Text,
 
-~ Look up a response header by name (case-insensitive): `Ok(value)` or `NotOk(name)`.
->> header = (response :: Response, name :: Text) -> Result => <
-  wanted = name.toLower()
-  matchHeader = (line :: Text) -> Result => line.indexOf(":") ?
-    | Ok(colon) => line.slice(0, colon).trim().toLower() == wanted
-        ? Ok(line.slice(colon + 1, line.length).trim())
-        : NotOk(name)
-    | NotOk(_)  => NotOk(name)
-  headSection = response.raw.split("\r\n\r\n")[0]
-  headSection.split("\r\n").find(line => matchHeader(line) ? | Ok(_) => true | NotOk(_) => false) ?
-    | Ok(line) => matchHeader(line)
-    | NotOk(_) => NotOk(name)
->
+  ~ The URL with any `scheme://` prefix removed: `host[:port]/path`.
+  withoutScheme = () -> Text => it.url.indexOf("://") ?
+    | Ok(mark) => it.url.slice(mark + 3, it.url.length)
+    | NotOk(_) => it.url
 
-~ The response body: everything after the blank line separating headers from body.
->> body = (response :: Response) -> Text => <
-  separator = "\r\n\r\n"
-  response.raw.indexOf(separator) ?
-    | Ok(mark) => response.raw.slice(mark + separator.length, response.raw.length)
-    | NotOk(_) => ""
->
+  ~ The `host[:port]` to connect to, and what the `Host` header carries.
+  authority = () -> Text => <
+    rest = it.withoutScheme()
+    rest.indexOf("/") ?
+      | Ok(mark) => rest.slice(0, mark)
+      | NotOk(_) => rest
+  >
 
-~ Perform `request` over core.net and parse the reply into `Ok(Response)` / `NotOk(error)`.
->> send = (request :: Request) -> Result => <
-  afterScheme = request.url.indexOf("://") ?
-    | Ok(mark) => request.url.slice(mark + 3, request.url.length)
-    | NotOk(_) => request.url
-  authority = afterScheme.indexOf("/") ?
-    | Ok(mark) => afterScheme.slice(0, mark)
-    | NotOk(_) => afterScheme
-  address = authority.contains(":") ? authority : authority + ":80"
-  @tcpRequest(address, requestText(request)) ?
-    | Ok(responseBytes) => parseResponse(responseBytes)
-    | NotOk(problem)    => NotOk(problem)
->
+  ~ The path the request line asks for; `/` when the URL carries none.
+  path = () -> Text => <
+    rest = it.withoutScheme()
+    rest.indexOf("/") ?
+      | Ok(mark) => rest.slice(mark, rest.length)
+      | NotOk(_) => "/"
+  >
 
-~ Fetch a URL with a GET request: `Ok(Response)` / `NotOk(error)`.
->> get = (url :: Text) -> Result => send(Request { method = Get, url = url })
+  ~ The request serialised to the text that goes on the wire. A body-bearing method adds
+  ~ `Content-Type` and a `Content-Length` counted in BYTES, then the body after the blank
+  ~ line.
+  wire = () -> Text => <
+    carried = it.method.payload()
+    requestLine = "`it.method.token()` `it.path()` HTTP/1.0\r\n"
+    headers = "Host: `it.authority()`\r\nConnection: close\r\n"
+    bodyHeaders = carried.content.size > 0
+      ? "Content-Type: `carried.contentType`\r\nContent-Length: `carried.content.size`\r\n"
+      : ""
+    requestLine + headers + bodyHeaders + "\r\n" + carried.content
+  >
+
+  ~ Perform the request over core.net and read the reply into `Ok(Response)`; a transport
+  ~ failure arrives as the `NotOk(errorText)` the primitive reported, never as a crash.
+  send = () -> Result => <
+    host = it.authority()
+    address = host.contains(":") ? host : host + ":80"
+    @tcpRequest(address, it.wire()) ?
+      | Ok(responseText) => parseResponse(responseText)
+      | NotOk(problem)   => NotOk(problem)
+  >
+}
+
+~ Fetch a URL with a GET request: `Ok(Response)` / `NotOk(errorText)`.
+>> get = (url :: Text) -> Result => <
+  request = Request { method = Get, url = url }
+  request.send()
+>
