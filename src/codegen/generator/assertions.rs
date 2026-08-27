@@ -320,10 +320,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Piece::Literal(text) => self.text_literal(&text)?,
                 Piece::Value(Type::Text, value) => {
                     let quote = self.text_literal("\"")?;
-                    let opened =
-                        self.generate_text_concat(quote.into_struct_value(), value.into_struct_value())?;
+                    let opened = self.generate_text_concat(
+                        quote.into_struct_value(),
+                        value.into_struct_value(),
+                    )?;
                     let quote = self.text_literal("\"")?;
-                    self.generate_text_concat(opened.into_struct_value(), quote.into_struct_value())?
+                    self.generate_text_concat(
+                        opened.into_struct_value(),
+                        quote.into_struct_value(),
+                    )?
                 }
                 Piece::Value(ty, value) => self.render_value(&ty, value)?,
             };

@@ -327,7 +327,7 @@ fn overload_program(members: usize) -> String {
 /// pruning shows up. The other corpora reach every function they define, so they keep
 /// measuring codegen; this one measures what an import costs.
 fn corelib_program() -> String {
-    "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => assert(1 + 1 == 2)\n".to_string()
+    "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => assert(1 + 1, equals(2))\n".to_string()
 }
 
 /// Assertions far down a long file: every one is a call whose trailing `Site` the compiler
@@ -346,7 +346,7 @@ fn call_site_program(count: usize) -> String {
     }
     out.push_str("\n^ = () -> $ => <\n");
     for n in 0..count {
-        out.push_str(&format!("  assertEq({n} + 1, {})\n", n + 1));
+        out.push_str(&format!("  assert({n} + 1, equals({}))\n", n + 1));
     }
     out.push_str(">\n");
     out

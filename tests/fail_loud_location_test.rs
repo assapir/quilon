@@ -39,15 +39,15 @@ fn expected_frame(line: usize, column: usize, source_line: &str, width: usize) -
 fn an_assertion_and_a_runtime_check_frame_alike() {
     let (assert_code, assert_stderr, assertion) = run_program(
         "assertion",
-        "<< core.test\n^ = () -> $ => <\n  assert(1 == 2)\n>\n",
+        "<< core.test\n^ = () -> $ => <\n  assert(1, equals(2))\n>\n",
     );
     assert_eq!(assert_code, 101);
     assert_eq!(
         assert_stderr,
         format!(
-            "{}\nassertion failed\n{}\n",
+            "{}\nassertion failed: expected 2, got 1\n{}\n",
             position(&assertion, 3, 3),
-            expected_frame(3, 3, "  assert(1 == 2)", "assert(1 == 2)".len())
+            expected_frame(3, 3, "  assert(1, equals(2))", "assert(1, equals(2))".len())
         )
     );
 

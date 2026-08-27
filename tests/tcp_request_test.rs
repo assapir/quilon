@@ -33,7 +33,7 @@ fn program(address: &str, expected: &str) -> String {
 
 ^ = () -> Num => <
   @tcpRequest("{address}", "PING\n") ?
-    | Ok(response) => assertEq(response, "{expected}")
+    | Ok(response) => assert(response, equals("{expected}"))
     | NotOk(error) => failAt(error)
   0
 >
