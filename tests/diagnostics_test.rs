@@ -10,10 +10,9 @@ use std::process::Command;
 mod common;
 use common::position;
 
-/// Write `source` to a temp `.qn` file, run `quilon check` on it, and return
-/// `(exit_success, stderr)`. The file lives under the cargo target tmp dir so
-/// parallel test runs don't collide.
-fn check(name: &str, source: &str) -> (bool, String) {
+/// Write `source` to a temp `.qn` file and run `quilon check` on it. The file
+/// lives under the cargo target tmp dir so parallel test runs don't collide.
+fn check_output(name: &str, source: &str) -> std::process::Output {
     let mut path = std::env::temp_dir();
     path.push(format!("quilon_diag_{}_{}.qn", std::process::id(), name));
     let mut f = std::fs::File::create(&path).expect("create temp .qn");
@@ -26,10 +25,41 @@ fn check(name: &str, source: &str) -> (bool, String) {
         .expect("run quilon");
 
     let _ = std::fs::remove_file(&path);
+    out
+}
+
+/// Return the exit status and diagnostic stream for an invalid program.
+fn check(name: &str, source: &str) -> (bool, String) {
+    let out = check_output(name, source);
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+#[test]
+fn check_writes_status_to_stderr_not_stdout() {
+    let out = check_output("status", "^ = () -> Num => 0\n");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(out.status.success(), "`quilon check` failed: {stderr}");
+    assert!(
+        stdout.is_empty(),
+        "`quilon check` wrote status to stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("🔍 Checking:"),
+        "missing check status from stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("✅ Type checking passed!"),
+        "missing type-check status from stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("📋 Program contains 1 top-level item(s)"),
+        "missing program summary from stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -131,7 +161,7 @@ fn a_type_error_in_an_imported_module_names_that_module() {
 
     assert!(!out.status.success(), "the program must be rejected");
     assert!(
-        stderr.starts_with(&format!("{}\nerror:", position(&module, 2, 1))),
+        stderr.contains(&format!("{}\nerror:", position(&module, 2, 1))),
         "the error must be reported against the imported module, got: {stderr:?}"
     );
     assert!(
