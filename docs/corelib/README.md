@@ -18,6 +18,6 @@ signatures, behavior, and a small example per function.
 | [`core.cli`](cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
 | [`core.net`](net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
-| [`core.http`](http.md) | `<< core.http` | An HTTP client written in Quilon over `core.net`: the `Method` sum, the `Request` / `Response` records and their methods, and the `get` shorthand. HTTP only, no TLS. |
+| [`core.http`](http.md) | `<< core.http` | An HTTP client written in Quilon over `core.net`: the `Body` / `Method` types and the `Request` / `Response` records. HTTP only, no TLS. |
 
 `Text` and the operators are built-ins and need **no** import. The [concurrency model](../concurrency/README.md) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.

@@ -397,7 +397,7 @@ fn importing_core_http_contributes_no_harness_item() {
         );
     }
     assert!(
-        contributed.contains(&"get"),
+        contributed.contains(&"Request"),
         "the client itself must still arrive: {contributed:?}"
     );
 }

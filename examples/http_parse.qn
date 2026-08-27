@@ -1,39 +1,18 @@
-~ The `core.http` client's offline half: serialising a request and reading a reply, both over
-~ plain `Text`, so nothing here touches the network. On success the program exits 0.
+~ The `core.http` client's offline half: building a `Request` and reading a reply through
+~ `Response`, over canned `Text`, so nothing here touches the network. On success the program
+~ exits 0.
 << core.http
 
 ^ = () -> $ => <
-  getRequest = Request { method = Get, url = "http://example.com/index.html" }
-  assert(getRequest.wire(), contains("GET /index.html HTTP/1.0\r\n"))
-  assert(getRequest.wire(), contains("Host: example.com\r\n"))
-  assert(getRequest.wire(), contains("Connection: close\r\n"))
-
-  assert(getRequest.authority(), equals("example.com"))
-  assert(getRequest.path(), equals("/index.html"))
-
-  ~ A POST adds Content-Type and a byte-counted Content-Length, and its content follows the
-  ~ blank line. A URL with no path asks for "/".
-  postRequest = Request {
-    method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
-    url = "example.com"
-  }
-  assert(postRequest.wire(), contains("POST / HTTP/1.0\r\n"))
-  assert(postRequest.wire(), contains("Content-Type: application/x-www-form-urlencoded\r\n"))
-  assert(postRequest.wire(), contains("Content-Length: 8\r\n"))
-  assert(postRequest.wire(), contains("\r\n\r\nname=ada"))
-
-  ~ QUERY is body-bearing too.
-  queryRequest = Request {
-    method = Query(Body { content = "{\"q\":\"ada\"}", contentType = "application/json" }),
-    url = "http://example.com/search"
-  }
-  assert(queryRequest.wire(), contains("QUERY /search HTTP/1.0\r\n"))
-  assert(queryRequest.wire(), contains("Content-Length: 11\r\n"))
-
   canned = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
-  assert(parseResponse(canned), isOk())
-  response = parseResponse(canned) ?
-    | Ok(parsed) => parsed
+
+  ~ A reply that is not HTTP is rejected as a value rather than a crash.
+  assert(Response { raw = "not http at all" }.validate(), isNotOk())
+
+  checked = Response { raw = canned }.validate()
+  assert(checked, isOk())
+  response = checked ?
+    | Ok(reply)  => reply
     | NotOk(_)   => Response { raw = "" }
   assert(response.status(), equals(200))
   assert(response.statusLine(), equals("HTTP/1.1 200 OK"))
@@ -45,7 +24,25 @@
     | NotOk(_)  => "?"
   assert(contentType, equals("text/html"))
   assert(response.header("X-Absent"), isNotOk())
+  assert(response.headers().size, equals(2))
 
-  ~ A reply with no status line is rejected.
-  assert(parseResponse("not http at all"), isNotOk())
+  ~ A bare-LF reply from a sloppy server reads the same as a CRLF one.
+  lineFeed = Response { raw = "HTTP/1.0 404 Not Found\nX-A: b\n\ngone" }
+  assert(lineFeed.status(), equals(404))
+  assert(lineFeed.body(), equals("gone"))
+
+  ~ A body-bearing method carries the content to send and the media type to advertise for it;
+  ~ `send` is what puts it on the wire — see examples/http_get.qn.
+  submission = Request {
+    method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
+    url = "http://example.com/submit"
+  }
+  assert(submission.method.token(), equals("POST"))
+  carried = submission.method.payload()
+  assert(carried.content, equals("name=ada"))
+  assert(carried.contentType, equals("application/x-www-form-urlencoded"))
+
+  ~ A nullary method carries an empty body.
+  none = Get.payload()
+  assert(none.content, equals(""))
 >
