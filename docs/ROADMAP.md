@@ -111,7 +111,7 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | `quilon fmt` / linter | ⬜ |
-| `quilon test` — in-language test framework (`describe`/`it`, pluggable reporters, blocks stripped from every other command) | 🔨 (cases assert with the fail-fast `assert*`, so a run stops at the first failure; a report-every-failure matcher API is next) |
+| `quilon test` — in-language test framework (`describe`/`it`, pluggable reporters, blocks stripped from every other command), over the `assert`/`expect` matcher assertions | ✅ |
 | Corelib | 🔨 (`core.io`/`core.test`/`core.cli`/`core.time`/`core.net` ship; grows with the language) |
 | Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types, multi-file — steps into corelib; entry frame reads `^`) |
 | Optimization levels — `quilon build` debug vs release (O3) | ⬜ |

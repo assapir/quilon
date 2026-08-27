@@ -2,7 +2,7 @@
 
 **Version:** 0.9.2 — "Hegemon" (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](#known-limitations)).
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.qn` program is **self-asserting** — it verifies its own results in-language with `<< core.test` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example below has a passing end-to-end test: each `examples/*.qn` program is **self-asserting** — it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
 ---
 
@@ -401,8 +401,8 @@ fallback). This holds across a function boundary too: a function returning `Ok("
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
-`(r :: Result)` parameter or return. This is what lets `assertOk` / `assertNotOk`
-([`core.test`](#coretest--assertions)) accept a `Result` of any shape, including the
+`(r :: Result)` parameter or return. This is what lets the `isOk()` / `isNotOk()`
+[matchers](corelib/test.md#the-matchers) read a `Result` of any shape, including the
 composite-payload results of `getEnv` / `getOpt` (see `examples/cli.qn`). Extracting a
 payload still needs its concrete type in scope at the match site (there are no generics),
 but *matching by variant* (`Ok` vs `NotOk`) works on any `Result` anywhere.
@@ -951,7 +951,7 @@ signatures, behavior, and a small example per function.
 | Module | Import | What it gives you |
 |--------|--------|-------------------|
 | [`core.io`](corelib/io.md) | `<< core.io` | Output to file descriptors and stdin: `print` / `eprint` / `write`, the `stdout` / `stderr` descriptors, and the deferred `@readStdin` line read. |
-| [`core.test`](corelib/test.md) | `<< core.test` | Assertions for self-verifying programs, reporting the caller's `file:line:column`: `assert` (+ `AssertOpts`) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt` (fail → exit 101). Plus the [test harness](corelib/test.md#the-test-harness) `quilon test` runs: `describe` / `it`. |
+| [`core.test`](corelib/test.md) | `<< core.test` | The [test harness](corelib/test.md#the-test-harness) `quilon test` runs — `describe` / `it` and the reporter — plus `failAt`, for a check of your own. The assertions themselves need no import: `assert` / `expect` and their matchers are compiler-provided. |
 | [`core.cli`](corelib/cli.md) | `<< core.cli` | Pipe-friendly helpers over the entry point's `args` / `env`: `getEnv` / `hasFlag` / `getOpt`. |
 | [`core.time`](corelib/time.md) | `<< core.time` | Time primitives: the `@sleep` pause and the monotonic `now()` clock. |
 | [`core.net`](corelib/net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
@@ -1013,7 +1013,7 @@ Filling one in **costs nothing at run time**: the fields are compile-time consta
 call site is a read-only constant whose address the call passes — no allocation, no unwinder,
 no debug info, and JIT and native builds report identically. Assert as often as you like, in
 the hottest loop you have. (A site does cost image space: the record plus two relocations for
-its `Text` fields.) [`core.test`'s assertions](corelib/test.md) are built on this; nothing
+its `Text` fields.) [`failAt`](corelib/test.md#building-a-check-of-your-own) is built on this; nothing
 about it is specific to them. See `examples/call_site.qn`.
 
 ---
@@ -1132,17 +1132,16 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
 
 ```quilon
 << core.io
-<< core.test
 
 ^ = () -> Num => <
-  line = @readStdin()     ~ launches the read; returns a deferred Text (no wait here)
-  assertEq(line, "")      ~ the comparison FORCES it; "" at end-of-input (no piped input)
+  line = @readStdin()          ~ launches the read; returns a deferred Text (no wait here)
+  assert(line, equals(""))     ~ the comparison FORCES it; "" at end-of-input (no piped input)
   0
 >
 ~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.qn
 ```
 
-Binding `line` does not wait; the force is the `==` inside `assertEq`. Because
+Binding `line` does not wait; the force is the `==` behind `equals`. Because
 `print`/`eprint` force and write eagerly, per-fiber output stays in program order.
 
 `core.net` — **`@tcpRequest(address :: Text, requestBytes :: Text) -> Result`** is a one-shot
@@ -1245,7 +1244,7 @@ A multi-line span underlines its first line. A failure with no source location (
 file, an unresolved import) prints a plain one-line message. Any compile error exits 1.
 
 Runtime failures use the same frame at the expression responsible: a failing
-[`core.test` assertion](corelib/test.md) at the assertion's call site, a fail-loud check (a
+[assertion](corelib/test.md) at its own call site, a fail-loud check (a
 bad `arr[i]`, a violated `Text.replace`/`repeat` contract) at the call that broke the
 contract. Those are colored when stderr is a terminal, plain when redirected or under
 `NO_COLOR`/`TERM=dumb`; compile errors are not colored yet. Because a runtime report carries
@@ -1299,11 +1298,11 @@ pathological input.
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` fn boundaries) | ✅ |
-| Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `assertOk`/`assertNotOk` on `getEnv`/`getOpt` | ✅ |
+| Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` param/return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
 | Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.net`, file-path imports, `>>` exports | ✅ |
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
-| Assertions: `<< core.test` (`assert` (+ `AssertOpts` message) / `assertEq` / `assertNotEq` / `assertOk` / `assertNotOk` / `failAt`; fail → exit 101) | ✅ |
+| Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, tests only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
 | Test harness: [`quilon test`](corelib/test.md#the-test-harness) over top-level `describe` / `it` blocks; the blocks are stripped from every other command | ✅ |
 | [Call-site locations](#call-site-locations--site): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
@@ -1325,7 +1324,7 @@ pathological input.
 
 0.9 is a stable **core**, not the whole language. Notably:
 
-- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
+- **No generics.** Overloading (ad-hoc, exact-type dispatch) is the only polymorphism; there are no type variables — which is why the [matchers](corelib/test.md#the-matchers) are compiler-provided rather than written in `.qn`. The module system is minimal (`core.io`/`core.test` built-ins + file-path imports).
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. A closure can also be passed to a [function-typed parameter](#function-types--higher-order-functions) and called there. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value, *generic* closures, and **returning** a closure from a function.
 - **Overloaded and top-level function names are not first-class values.** A closure is passed as a *lambda literal* or a *named closure binding*; passing a top-level function or an overloaded name as a value is not yet supported.
 - **Sum-type payloads mixing types across variants aren't unified yet.** Payload slots have a fixed representation sized to the widest variant. Distinct payload *types* per slot across variants (a position that is `Num` in one variant and `Text` in another) is deferred; the payload set (`Num`/`Text`/`Bool`/`$` and a named record, consistent per position) works.

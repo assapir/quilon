@@ -1,68 +1,99 @@
-# `core.test` — Assertions and the test harness
+# Assertions and the test harness
 
-Import with `<< core.test`. See the [corelib index](../LANGUAGE.md#corelib),
-`examples/assert_demo.qn`, and `examples/test_suite.qn`.
+**Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every
+example in `examples/` does. They are **compiler-provided**, like `print`: no import. The
+**harness** (`describe`, `it`) groups those checks into named cases that `quilon test` runs
+and reports, and comes from `core.test` (`<< core.test`).
 
-**Assertions** (`assert`, `assertEq`, …) make a program verify itself as it runs, exiting
-`101` at the first failure — what every example in `examples/` uses. The **harness**
-(`describe`, `it`) groups those checks into named cases that `quilon test` runs and reports.
+See the [corelib index](../LANGUAGE.md#corelib), `examples/assert_demo.qn`, and
+`examples/test_suite.qn`.
 
 ## Assertions
 
-In-language assertions for **self-verifying programs and examples**. A holding assertion does
-nothing; a failing one reports to stderr and exits **101** (the Rust-panic convention), so a
-broken program fails loudly in CI. Every example in `examples/` is written this way — it
-asserts each result it demonstrates and exits 0 — and the examples gate runs them all under
-the JIT and native AOT.
+An assertion takes the **value under test first** and a **matcher second**:
 
-A failure reports in the standard [error frame](../LANGUAGE.md#error-messages) at **your**
-call site — the line where your program called the assertion, including inside a helper
-rather than `^`.
+```quilon
+assert(2 + 2, equals(4))
+expect(response, isOk())
+```
+
+Two entry points, one vocabulary. They differ only in what a FAILURE does:
+
+| Function | On failure |
+|----------|-----------|
+| `assert(actual, matcher) -> $` | Report at the call site and **exit 101** (the Rust-panic convention). For examples and ordinary code. |
+| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test code only — see [`expect` is for tests](#expect-is-for-tests). |
+
+A holding assertion does nothing. A failure reports in the standard
+[error frame](../LANGUAGE.md#error-messages) at **your** call site — the line the assertion
+is written on, including inside a helper rather than `^`:
+
+```
+demo.qn:4:3:
+assertion failed: expected 41, got 42
+  |
+4 |   assert(6 * 7, equals(41))
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+### The matchers
+
+| Matcher | Holds when |
+|---------|-----------|
+| `equals(expected)` | `actual == expected`, through the [`==` member](../LANGUAGE.md#overloading) — so `Num`/`Text`/`Bool` and any user record or sum that declares one. |
+| `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (again through the element type's `==`). |
+| `not(matcher)` | The matcher it wraps does not hold. Composes around any of them. |
+| `isOk()` / `isNotOk()` | A [`Result`](../LANGUAGE.md#result) is `Ok` / `NotOk`. |
+
+```quilon
+assert(6 * 7, equals(42))
+assert("assertions and matchers", contains("matcher"))
+assert([2, 4, 6], not(contains(5)))
+assert([10, 20].at(0), isOk())       ~ Ok in bounds
+assert([10, 20].at(9), isNotOk())    ~ NotOk out of bounds
+```
+
+Both values in a report are
+[rendered](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
+directly, records, sum types and arrays through their `` ` `` operator, and a `Text` is
+quoted, so a trailing space or an empty string is visible. A matcher applied to a type it
+cannot read — `equals` on a type with no `==` member, `contains` on a `Num`, `isOk` on a sum
+with no such variant — is a compile error naming what is missing.
+
+The matchers are compiler-provided, not written in `.qn`: a matcher holds a value of the type
+under test, which without generics would need one matcher type per type. You can still
+compose the provided ones; a genuinely new matcher kind waits for generics. Until then,
+[`failAt`](#building-a-check-of-your-own) builds a check of your own.
+
+### Building a check of your own
 
 | Function | Effect |
 |----------|--------|
-| `assert(cond :: Bool) -> $` | The primitive. If `cond` is false, report `assertion failed` at the call site and exit `101`; otherwise do nothing. Returns `$` (Unit). |
-| `assert(cond :: Bool, opts :: AssertOpts) -> $` | Same, but reports `opts.message` instead of the default. An [overload](../LANGUAGE.md#overloading) of `assert`. |
-| `AssertOpts` | Options record for `assert`: `{ message :: Text }`. The extensible knob (more options may be added later). Records are nominal, so construct it by name: `AssertOpts { message = "..." }`. |
-| `assertEq(actual, expected) -> $` | Assert `actual == expected`; the report names both (`expected 42, got 41`; `Text` values quoted, so a stray space is visible). An [overload set](../LANGUAGE.md#overloading) over `Num`/`Text`/`Bool`. |
-| `assertNotEq(a, b) -> $` | Assert `a != b`; the report names the (equal) value. Overloaded over `Num`/`Text`/`Bool`. |
-| `assertOk(r :: Result) -> $` | Assert `r` is `Ok`; fail on `NotOk`. |
-| `assertNotOk(r :: Result) -> $` | Assert `r` is `NotOk`; fail on `Ok`. |
-| `failAt(message :: Text) -> $` | Fail outright: report `message` at the caller's location and exit `101`. Use it to build an assertion of your own that reports ITS caller — take a trailing [`site :: Site`](../LANGUAGE.md#call-site-locations--site) and forward it. |
+| `failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `101` — the same frame `assert` uses. Take a trailing [`site :: Site`](../LANGUAGE.md#call-site-locations--site) and forward it, and the report blames ITS caller. From `core.test`. |
 
 ```quilon
 << core.test
-^ = () -> $ => <
-  assert(1 + 1 == 2)
-  assert(1 + 1 == 2, AssertOpts { message = "math is broken" })
-  assertEq(6 * 7, 42)
-  assertNotEq("a", "b")
-  assertOk([10, 20].at(0))       ~ Ok in bounds
-  assertNotOk([10, 20].at(9))    ~ NotOk out of bounds
->
-```
 
-`assertEq`/`assertNotEq` show their values
-[rendered](../LANGUAGE.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
-directly, and records, sum types, and arrays through their `` ` `` render operator. (See
-`examples/assert_demo.qn`.)
+assertEven = (n :: Num, site :: Site) -> $ =>
+  n % 2 == 0 ? $ : failAt("`n` is odd", site)
+```
 
 ## The test harness
 
 A **suite** is a `.qn` file with top-level `describe(…)` blocks and no `^` — it may declare
 whatever fixtures its cases need. `quilon test` synthesizes the entry point that runs each
 block in order; every other command leaves the blocks out of the program. A case checks
-itself with the assertions above.
+itself with `expect`.
 
 ```quilon
 << core.test
 
 describe("Text", () => <
-  it("trims both ends", () => assertEq("  padded  ".trim(), "padded"))
-  it("finds a part", () => assert("haystack".contains("stack")))
+  it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
+  it("finds a part", () => expect("haystack", contains("stack")))
 
   describe("splitting", () => <
-    it("splits on a separator", () => assertEq("a,b,c".split(",").size, 3))
+    it("splits on a separator", () => expect("a,b,c".split(",").size, equals(3)))
   >
   )
 >
@@ -83,13 +114,13 @@ Text
   splitting
     ✓ splits on a separator
 
-3 cases passed
+3 passed, 0 failed
 ```
 
 | Function | Effect |
 |----------|--------|
 | `describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
-| `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run. |
+| `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
 straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
@@ -100,13 +131,31 @@ diagnostic, so each stream reads on its own when they are captured separately.
 
 Suites run one process each, so a failure in one does not stop the others.
 
-### A failing case ends its suite
+### A failing case does not stop the run
 
-The assertions are fail-fast: the first failure reports and exits 101. Within a suite, that
-means the failing case and everything after it go unreported, and no summary is printed — the
-frame naming `file:line:column` is what identifies the failure. A suite therefore reports
-"all N passed" or stops where it broke; there is no "N passed, M failed" tally across cases
-yet. (A matcher API that reports every failing case is the next step here.)
+The first failing `expect` in a case **skips the rest of that case** — the assertions after it
+do not run, and their subjects are never evaluated — and the suite carries on with the next
+case. Every case is therefore reported, the way it went, and the summary is a real tally:
+
+```
+arithmetic
+  ✓ holds
+  ✗ does not hold
+  ✓ runs after the failure
+
+2 passed, 1 failed
+```
+
+`assert` inside a case is still fatal, and ends the run where it failed. Use it for a
+precondition a case cannot meaningfully continue past.
+
+### `expect` is for tests
+
+`expect` records its failure with the reporter, and only a `describe` block has one — the
+blocks are stripped from `run`, `compile`, and `build`, so an `expect` in ordinary code would
+have nothing to record into. Writing one outside a `describe` block is a **compile error**
+pointing at `assert`, rather than a program that silently drops its failures. (The rule is
+lexical: an `expect` belongs inside a `describe`, not in a top-level helper a case calls.)
 
 ### Blocks as arguments
 
@@ -124,15 +173,16 @@ Tests can therefore sit in the file they test.
 
 ### Reporters
 
-What a run looks like is decided in `.qn`, not in the compiler. `describe` and `it` record
-what happened through a reporter-agnostic registry of `__test_*` primitives — nesting depth
-and a count, no rendering — and all rendering lives in three functions `core.test` exports:
+What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it`, and a
+failing `expect` record what happened through a reporter-agnostic registry of `__test_*`
+primitives — nesting depth, a per-case failed mark, and two counts, no rendering — and all
+rendering lives in three functions `core.test` exports:
 
 | Function | Called when |
 |----------|-------------|
 | `reportSuite(name :: Text, depth :: Num) -> $` | A `describe` group is entered. |
-| `reportCase(name :: Text, depth :: Num) -> $` | A case has run. |
-| `reportSummary() -> Num` | Last, from the synthesized entry point. Prints the total and returns the exit code. |
+| `reportCase(name :: Text, depth :: Num, failed :: Bool) -> $` | A case has run, `failed` saying which way. |
+| `reportSummary() -> Num` | Last, from the synthesized entry point. Prints the tally and returns the exit code. |
 
 A reporter of its own defines the same three; selecting it is a matter of pointing the
 synthesized entry at another module's `reportSummary`.
