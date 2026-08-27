@@ -198,16 +198,18 @@ pub enum TokenKind {
     #[token("<")]
     BlockOpen,
 
-    // `>` is reclassified after lexing (see `Lexer::tokenize`): it stays `BlockClose`
-    // when it is the last token on its line (`>` + optional `[ \t]*` + newline/EOF),
-    // and becomes the greater-than operator `Gt` otherwise. This lets a bare `a > b`
-    // work everywhere while a block still closes on a line-final `>`.
+    // `>` is reclassified after lexing (see `classify_block_closes`): it stays
+    // `BlockClose` — the default — unless the next token is on the same line and can
+    // begin an operand, in which case it is the greater-than operator `Gt`. So a block
+    // closes wherever a comparison could not be written (`>)`, `>]`, `>,`, `> ~comment`,
+    // end of line), and `a > b` stays a comparison.
     #[token(">")]
     BlockClose,
 
-    /// The greater-than comparison operator. Produced from a `>` that is NOT the last
-    /// token on its line (see `BlockClose`). `<` is always `BlockOpen`; less-than is
-    /// recovered in the parser, where a `<` after a complete operand can only be `Lt`.
+    /// The greater-than comparison operator. Produced from a `>` followed on the same
+    /// line by a token that can start an operand (see `BlockClose`). `<` is always
+    /// `BlockOpen`; less-than is recovered in the parser, where a `<` after a complete
+    /// operand can only be `Lt`.
     Gt,
 
     #[token("{")]
