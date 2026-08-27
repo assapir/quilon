@@ -22,9 +22,7 @@
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 
 use crate::ast::walk::for_each_subexpression;
-use crate::ast::{
-    Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement, TypeDefinition,
-};
+use crate::ast::{Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement};
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -65,7 +63,14 @@ pub fn analyze(program: &Program) -> DeferInfo {
     let uses_deferral = program.items.iter().any(|item| match item {
         Item::FunctionDeclaration(f) => references_at_primitive(&f.body),
         Item::VariableDeclaration(v) => references_at_primitive(&v.value),
-        Item::TypeDeclaration(_) => false,
+        // A method body reaches `@` primitives like any other body — `core.http`'s
+        // `Request.send()` calls `@tcpRequest` — so a type's methods are scanned too.
+        // Missing them left the entry off the scheduler fiber and the launch aborted.
+        Item::TypeDeclaration(t) => t
+            .type_definition
+            .methods()
+            .iter()
+            .any(|method| references_at_primitive(&method.body)),
     });
 
     let mut taint = Taint::default();
@@ -107,11 +112,11 @@ impl Taint {
             // escaping across the call boundary.
             Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
             Item::VariableDeclaration(v) => self.strict(&v.value, &Scope::new()),
+            // Either kind of type carries methods (a record's members, a sum's `{ }` block),
+            // and both are ordinary bodies to the taint.
             Item::TypeDeclaration(t) => {
-                if let TypeDefinition::Record { methods, .. } = &t.type_definition {
-                    for method in methods {
-                        self.analyze_method(method);
-                    }
+                for method in t.type_definition.methods() {
+                    self.analyze_method(method);
                 }
             }
         }

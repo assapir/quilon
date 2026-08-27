@@ -53,6 +53,45 @@ fn runnable_examples() -> Vec<PathBuf> {
         .collect()
 }
 
+/// A file is a test suite iff some line opens a top-level `describe(` block.
+fn defines_test_blocks(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| src.lines().any(|l| l.starts_with("describe(")))
+        .unwrap_or(false)
+}
+
+/// Every example carrying top-level `describe` blocks must PASS under `quilon test`. Compiling
+/// is not enough for these: every other command erases the blocks before the checker sees them,
+/// so a type error — or a failing case — inside one is invisible to the gates above. Picked up
+/// automatically, like the runnable examples.
+#[test]
+fn example_test_suites_pass() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let suites: Vec<PathBuf> = ql_files()
+        .into_iter()
+        .filter(|p| defines_test_blocks(p))
+        .collect();
+    assert!(
+        !suites.is_empty(),
+        "no example carries `describe` blocks — the gate would pass by iterating nothing"
+    );
+    for path in suites {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let out = Command::new(quilon)
+            .args(["test", path.to_str().unwrap()])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run quilon test");
+        assert_eq!(
+            out.status.code().unwrap_or(-1),
+            0,
+            "{name}: `quilon test` must pass:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// Every `.qn` in examples/ must either compile, or (if a known negative) fail to.
 /// This is the gate: a new example is covered automatically.
 #[test]

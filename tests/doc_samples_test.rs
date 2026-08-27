@@ -11,8 +11,9 @@
 use quilon::driver::front_end;
 use std::path::{Path, PathBuf};
 
-/// Every corelib module, so a fragment may use `print`, `assertEq`, `now`, …
-const PRELUDE: &str = "<< core.io\n<< core.test\n<< core.cli\n<< core.time\n<< core.net\n";
+/// Every corelib module, so a fragment may use `print`, `failAt`, `now`, `get`, …
+const PRELUDE: &str =
+    "<< core.io\n<< core.test\n<< core.cli\n<< core.time\n<< core.net\n<< core.http\n";
 
 fn docs_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("docs")

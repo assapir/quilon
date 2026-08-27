@@ -234,3 +234,46 @@ fn bound_result_with_record_payload_matched() {
         7,
     );
 }
+
+#[test]
+fn method_returning_result_keeps_a_text_payload() {
+    // A METHOD annotated `-> Result` returning `Ok(text)`: the generic annotation must be
+    // refined to the inferred body type, exactly as a top-level function's is, or the match
+    // below binds the payload at the numeric fallback and reads the Text back as garbage.
+    // `.length` of "hello" is 5.
+    assert_exit(
+        "Box = {\n\
+           tag :: Num,\n\
+           pick = () -> Result => Ok(\"hello\")\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           box = Box { tag = 1 }\n\
+           box.pick() ?\n\
+             | Ok(value) => value.length\n\
+             | NotOk(_)  => 0\n\
+         >",
+        5,
+    );
+}
+
+#[test]
+fn method_returning_result_keeps_a_record_payload() {
+    // The same refinement for an aggregate payload: a method's `-> Result` carrying a
+    // RECORD must unpack as that record and not as the numeric fallback (which segfaulted).
+    // Point { x = 3, y = 4 } -> x + y = 7.
+    assert_exit(
+        "Point = { x :: Num, y :: Num }\n\
+         Maker = {\n\
+           seed :: Num,\n\
+           build = () -> Result => Ok(Point { x = 3, y = 4 })\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           maker = Maker { seed = 0 }\n\
+           got = maker.build() ?\n\
+             | Ok(inner) => inner\n\
+             | NotOk(_)  => Point { x = 0, y = 0 }\n\
+           got.x + got.y\n\
+         >",
+        7,
+    );
+}
