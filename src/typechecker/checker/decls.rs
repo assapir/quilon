@@ -100,10 +100,8 @@ impl TypeChecker {
     pub(super) fn check_entry_point_signature(
         declaration: &FunctionDeclaration,
     ) -> Result<(), TypeError> {
-        let parameters: Vec<Type> = declaration
-            .parameters
-            .iter()
-            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
+        let parameters: Vec<Type> = (0..declaration.parameters.len())
+            .map(|i| declaration.parameter_type(i).cloned().unwrap_or(Type::Num))
             .collect();
         let text_array = Type::Array(Box::new(Type::Text));
         let text_map = Type::Map(Box::new(Type::Text), Box::new(Type::Text));
@@ -742,12 +740,11 @@ impl TypeChecker {
         // written annotation, else the matching slot of a function type declared on the
         // binding itself. With neither it is a compile-time error: there is no `Num`
         // default, and nothing else here to infer from.
-        let name = declaration.name.clone();
         let parameter_types = self.resolve_parameter_types(
             &declaration.parameters,
             declaration.declared_parameters(),
             |p| TypeError::UnannotatedParameter {
-                function: name.clone(),
+                function: declaration.name.clone(),
                 parameter: p.name.clone(),
                 span: p.span.clone(),
             },
@@ -905,16 +902,16 @@ impl TypeChecker {
         let slots = match target.stated() {
             Some(Type::Function {
                 parameters: slots, ..
-            }) if slots.len() == parameters.len() => Some(slots.as_slice()),
-            Some(Type::Function {
-                parameters: slots, ..
             }) => {
-                return Err(TypeError::SignatureArity {
-                    subject: "this lambda".to_string(),
-                    expected: slots.len(),
-                    got: parameters.len(),
-                    span: body.span().clone(),
-                });
+                if slots.len() != parameters.len() {
+                    return Err(TypeError::SignatureArity {
+                        subject: "this lambda".to_string(),
+                        expected: slots.len(),
+                        got: parameters.len(),
+                        span: body.span().clone(),
+                    });
+                }
+                Some(slots.as_slice())
             }
             _ => None,
         };

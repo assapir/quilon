@@ -359,13 +359,14 @@ pub struct Environment {
 /// A method's signature and body: (parameters, return type, body expression).
 type MethodDef = (Vec<Parameter>, Option<Type>, Expression);
 
-/// The **type oracle**: a side-table mapping each expression's source `Span` to the
-/// `Type` the checker inferred for it. Produced by `check_program` and consumed by
-/// codegen so that READ sites (array indexing, record-field access, match-arm results)
-/// recover the *declared* element / field / result type instead of guessing `f64` from
-/// a runtime LLVM value. Spans are unique per expression (every AST node carries its
-/// own source span), so they make a stable, AST-agnostic key. See the consumer-side
-/// wrapper `codegen::TypeOracle`.
+/// The **type oracle**: a side-table mapping each expression's — and each function
+/// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by
+/// `check_program` and consumed by codegen so that READ sites (array indexing,
+/// record-field access, match-arm results) recover the *declared* element / field / result
+/// type instead of guessing `f64` from a runtime LLVM value, and so a parameter typed from
+/// context rather than from a written annotation still has a type to lower. Spans are
+/// unique per node (every AST node carries its own source span), so they make a stable,
+/// AST-agnostic key. See the consumer-side wrapper `codegen::TypeOracle`.
 pub type TypeTable = std::collections::HashMap<Span, Type>;
 
 /// One member of an overload set: an exact parameter-type list and the result type.

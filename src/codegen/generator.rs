@@ -274,12 +274,15 @@ struct Tco<'ctx> {
 /// by the checker) through to the read sites.
 ///
 /// # API (for downstream M3 waves: array methods, spread, args/env)
-/// The single primitive is [`TypeOracle::expression_type`] — the inferred `Type` of any
-/// expression, looked up by its source `Span`. The checker records the *result* type of
-/// every node, so the element type of an `arr[i]` is `expression_type(<the Index node>)`, the
-/// type of `rec.field` is `expression_type(<the FieldAccess node>)`, and a `match`'s result is
+/// The single primitive is [`TypeOracle::type_at`] — the `Type` the checker recorded for a
+/// source `Span` — with [`TypeOracle::expression_type`] the expression-shaped convenience
+/// over it. The checker records the *result* type of every node, so the element type of an
+/// `arr[i]` is `expression_type(<the Index node>)`, the type of `rec.field` is
+/// `expression_type(<the FieldAccess node>)`, and a `match`'s result is
 /// `expression_type(<the Match node>)` — there is no need for per-shape accessors, the read
-/// site just asks for the type of the whole node it is lowering.
+/// site just asks for the type of the whole node it is lowering. A parameter is not an
+/// expression and is looked up by its own span (see `parameter_type`), which is how a
+/// lambda parameter typed from context reaches codegen.
 ///
 /// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
 /// additive: new expression kinds get types recorded automatically by `infer_expression`. A

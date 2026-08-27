@@ -92,7 +92,7 @@ fn binding_annotation_that_is_not_a_function_type_is_the_return_type() {
 #[test]
 fn written_annotations_win_over_the_binding_type() {
     // Read at the AST level, where the two may still disagree — the type checker is what
-    // rejects that (see `declared_type_and_*_must_agree`).
+    // rejects that (see `binding_type_and_*_must_agree`).
     let function = first_function("f :: (Num) -> Num = (n :: Text) -> Bool => true");
     assert_eq!(function.parameter_type(0), Some(&Type::Text));
     assert_eq!(function.declared_return_type(), Some(&Type::Bool));
@@ -226,7 +226,7 @@ fn declared_function_type_binding_at_the_top_level() {
 }
 
 #[test]
-fn explicit_annotation_wins_over_the_declared_type() {
+fn explicit_annotation_wins_over_the_binding_type() {
     // A written annotation is still legal in every one of these positions.
     assert_exit(
         "apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)\n\
@@ -236,12 +236,12 @@ fn explicit_annotation_wins_over_the_declared_type() {
 }
 
 #[test]
-fn declared_type_and_parameter_annotation_must_agree() {
+fn binding_type_and_parameter_annotation_must_agree() {
     assert_type_error("f :: (Num) -> Num = (n :: Text) => n.size\n^ = () -> Num => 0");
 }
 
 #[test]
-fn declared_type_and_return_annotation_must_agree() {
+fn binding_type_and_return_annotation_must_agree() {
     // Writing both must not let the `->` quietly override the type the binding declares.
     assert_type_error(
         "f :: (Num) -> Num = (n) -> Text => \"abc\"\n\
@@ -250,7 +250,7 @@ fn declared_type_and_return_annotation_must_agree() {
 }
 
 #[test]
-fn declared_type_and_parameter_count_must_agree() {
+fn binding_type_and_parameter_count_must_agree() {
     // Reported even where a parameter is unannotated — the arity is what is wrong, not the
     // missing annotation.
     for source in [
