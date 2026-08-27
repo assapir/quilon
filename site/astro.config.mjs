@@ -40,7 +40,10 @@ export default defineConfig({
       expressiveCode: {
         themes: [quilonDark, quilonLight],
       },
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/assapir/quilon' }],
+      social: [
+        { icon: 'rocket', label: 'quilon.run', href: 'https://quilon.run/' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/assapir/quilon' },
+      ],
       editLink: { baseUrl: 'https://github.com/assapir/quilon/edit/main/docs/' },
       routeMiddleware: './src/route-data.mjs',
       components: {
