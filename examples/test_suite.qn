@@ -1,5 +1,6 @@
-~ A test suite: `describe` groups and `it` cases from `core.test`, each case checking
-~ itself with the module's assertions.
+~ A test suite: `describe` groups and `it` cases from `core.test`, each case checking itself
+~ with `expect(value, matcher)` — the recorded assertion. A failing one marks its case, skips
+~ what is left of it, and lets the run carry on, so one report covers every case.
 ~
 ~ Run: cargo run -- test examples/test_suite.qn    ~ exits 0 — every case passes
 ~
@@ -9,24 +10,25 @@
 << core.test
 
 describe("Text", () => <
-  it("trims both ends", () => assert("  padded  ".trim(), equals("padded")))
-  it("finds a part", () => assert("haystack".contains("stack"), equals(true)))
-  it("counts graphemes, not bytes", () => assert("héllo".length, equals(5)))
+  it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
+  it("finds a part", () => expect("haystack", contains("stack")))
+  it("counts graphemes, not bytes", () => expect("héllo".length, equals(5)))
 
   ~ `describe` nests: the reporter indents by depth.
   describe("splitting", () => <
-    it("splits on a separator", () => assert("a,b,c".split(",").size, equals(3)))
+    it("splits on a separator", () => expect("a,b,c".split(","), contains("b")))
     it("keeps the whole text when the separator is absent", () =>
-      assert("a,b,c".split(";").size, equals(1)))
+      expect("a,b,c".split(";").size, equals(1)))
   >)
 >)
 
 describe("Num", () => <
-  it("adds", () => assert(2 + 2, equals(4)))
-  it("compares", () => assert(7 > 3, equals(true)))
+  it("adds", () => expect(2 + 2, equals(4)))
+  it("compares", () => expect(7 > 3, equals(true)))
+  it("is not something else", () => expect(2 + 2, not(equals(5))))
 >)
 
 describe("Result", () => <
-  it("is Ok in bounds", () => assert([10, 20].at(0), isOk()))
-  it("is NotOk out of bounds", () => assert([10, 20].at(9), isNotOk()))
+  it("is Ok in bounds", () => expect([10, 20].at(0), isOk()))
+  it("is NotOk out of bounds", () => expect([10, 20].at(9), isNotOk()))
 >)
