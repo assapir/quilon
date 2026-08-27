@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { stripLeadingH1 } from './src/remark-strip-leading-h1.mjs';
+import { rewriteDocsLinks } from './src/remark-docs-links.mjs';
 import { quilonDark, quilonLight } from './src/themes/quilon-code.mjs';
 
 // The one Quilon grammar: the VS Code extension's TextMate file, read in place
@@ -30,7 +31,8 @@ export default defineConfig({
     // Every docs page keeps its H1 for GitHub; Starlight renders the
     // frontmatter title as the page heading, so the in-content H1 is dropped
     // at build time rather than shown twice.
-    remarkPlugins: [stripLeadingH1],
+    // Links in docs/ name files (GitHub); the site serves directory routes.
+    remarkPlugins: [stripLeadingH1, rewriteDocsLinks],
   },
   integrations: [
     starlight({
