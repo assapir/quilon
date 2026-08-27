@@ -11,6 +11,9 @@
 use quilon::codegen::generator::WATERMARK;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static OBJECT_STAGE_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Is a tool available on PATH? (Used to skip the link step gracefully when no C
 /// toolchain is installed — matching `examples_test.rs`.)
@@ -112,6 +115,69 @@ fn build_hello_and_run(
 
     let run = run_allowing_busy_executable(&mut Command::new(out)).expect("run produced binary");
     run.status.code()
+}
+
+/// A failed native build must neither overwrite nor remove an object file owned
+/// by the caller next to its requested output. The compiler's own temporary
+/// object is isolated under the child process's temp directory and is gone once
+/// the linker failure is reported.
+#[test]
+fn failed_build_preserves_adjacent_object_and_removes_its_staged_object() {
+    let sequence = OBJECT_STAGE_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let stage = std::env::temp_dir().join(format!(
+        "quilon_object_stage_{}_{}",
+        std::process::id(),
+        sequence
+    ));
+    let temp = stage.join("temp");
+    let source = stage.join("program.qn");
+    let out = stage.join("out").join("prog");
+    let adjacent_object = out.with_extension("o");
+    let sentinel = b"do not overwrite this object";
+    std::fs::create_dir_all(out.parent().unwrap()).expect("create output directory");
+    std::fs::write(&source, "^ = () -> Num => 0\n").expect("write source");
+    std::fs::write(&adjacent_object, sentinel).expect("write adjacent object");
+
+    let missing_linker = format!("quilon-missing-linker-{}", std::process::id());
+    let runtime = env!("QUILON_RT_LIB");
+    let build = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["build", source.to_str().unwrap()])
+        .args(["-o", out.to_str().unwrap()])
+        .args(["--linker", &missing_linker])
+        .env("QUILON_RT_LIB", runtime)
+        .env("TMPDIR", &temp)
+        .env("TEMP", &temp)
+        .env("TMP", &temp)
+        .output()
+        .expect("run quilon build with a missing linker");
+
+    assert!(
+        !build.status.success(),
+        "the missing linker must fail the build"
+    );
+    assert!(
+        String::from_utf8_lossy(&build.stderr)
+            .contains(&format!("linker `{missing_linker}` not found")),
+        "build failed for the wrong reason: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&adjacent_object).expect("read preserved adjacent object"),
+        sentinel,
+        "a failed build changed the caller's adjacent object"
+    );
+
+    let cache = temp.join("quilon-cache");
+    let staged_entries: Vec<PathBuf> = std::fs::read_dir(&cache)
+        .expect("object staging cache exists")
+        .map(|entry| entry.expect("read staged-cache entry").path())
+        .collect();
+    assert!(
+        staged_entries.is_empty(),
+        "failed build left staged files behind: {staged_entries:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&stage);
 }
 
 /// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
