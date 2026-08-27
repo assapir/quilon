@@ -1,91 +1,12 @@
-# Assertions and the test harness
+# `core.test.report` — the test harness
 
-**Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every
-example in `examples/` does. They are **compiler-provided**, like `print`: no import. The
-**harness** (`describe`, `it`) groups those checks into named cases that `quilon test` runs
-and reports.
+The **harness** (`describe`, `it`) groups checks into named cases that `quilon test` runs
+and reports. `<< core.test.report` pulls in [`core.test`](README.md), so a suite needs
+nothing else. Every name it defines is ordinary `.qn`, which is what makes the output
+[replaceable](#writing-a-reporter).
 
-Two modules, because the output is replaceable:
-
-| Module | Import | What it gives you |
-|--------|--------|-------------------|
-| `core.test.report` | `<< core.test.report` | The harness and the report Quilon ships — `describe`, `it`, and the three `report*` functions. Pulls in `core.test`, so a suite needs nothing else. |
-| `core.test` | `<< core.test` | What those are built from: `failAt`, the run's recorded state, and the case lifecycle. Defines no `describe`/`it`/`report*`, which is what leaves those names free for [a reporter of your own](#writing-a-reporter). |
-
-See the [corelib index](README.md), `examples/assert_demo.qn`,
-`examples/test_suite.qn`, and `examples/custom_test_reporter.qn`.
-
-## Assertions
-
-An assertion takes the **value under test first** and a **matcher second**:
-
-```quilon ignore
-assert(2 + 2, equals(4))
-expect(response, isOk())
-```
-
-Two entry points, one vocabulary. They differ only in what a FAILURE does:
-
-| Function | On failure |
-|----------|-----------|
-| `assert(actual, matcher) -> $` | Report at the call site and **exit 101** (the Rust-panic convention). For examples and ordinary code. |
-| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
-
-A holding assertion does nothing. A failure reports in the standard
-[error frame](../tooling/errors.md) at **your** call site — the line the assertion
-is written on, including inside a helper rather than `^`:
-
-```
-demo.qn:4:3:
-assertion failed: expected 41, got 42
-  |
-4 |   assert(6 * 7, equals(41))
-  |   ^^^^^^^^^^^^^^^^^^^^^^^^^
-```
-
-### The matchers
-
-| Matcher | Holds when |
-|---------|-----------|
-| `equals(expected)` | `actual == expected`, through the [`==` member](../functions/overloading.md) — so `Num`/`Text`/`Bool` and any user record or sum that declares one. |
-| `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (again through the element type's `==`). |
-| `not(matcher)` | The matcher it wraps does not hold. Composes around any of them. |
-| `isOk()` / `isNotOk()` | A [`Result`](../types/sum-types.md#result-is-a-normal-sum-type) is `Ok` / `NotOk`. |
-
-```quilon
-assert(6 * 7, equals(42))
-assert("assertions and matchers", contains("matcher"))
-assert([2, 4, 6], not(contains(5)))
-assert([10, 20].at(0), isOk())       ~ Ok in bounds
-assert([10, 20].at(9), isNotOk())    ~ NotOk out of bounds
-```
-
-Both values in a report are
-[rendered](../types/text.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
-directly, records, sum types and arrays through their `` ` `` operator, and a `Text` is
-quoted, so a trailing space or an empty string is visible. A matcher applied to a type it
-cannot read — `equals` on a type with no `==` member, `contains` on a `Num`, `isOk` on a sum
-with no such variant — is a compile error naming what is missing.
-
-The matchers are compiler-provided, not written in `.qn`: a matcher holds a value of the type
-under test, which without generics would need one matcher type per type. You can still
-compose the provided ones; a genuinely new matcher kind waits for generics. Until then,
-[`failAt`](#building-a-check-of-your-own) builds a check of your own.
-
-### Building a check of your own
-
-| Function | Effect |
-|----------|--------|
-| `failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `101` — the same frame `assert` uses. Take a trailing [`site :: Site`](../functions/site.md) and forward it, and the report blames ITS caller. From `core.test`. |
-
-```quilon
-<< core.test
-
-assertEven = (n :: Num, site :: Site) -> $ =>
-  n % 2 == 0 ? $ : failAt("`n` is odd", site)
-```
-
-## The test harness
+See the [corelib index](../README.md), `examples/test_suite.qn`, and
+`examples/custom_test_reporter.qn`.
 
 A **suite** is any `.qn` file with top-level `describe(…)` blocks — a file of nothing but
 tests, or the module or program they test ([below](#tests-beside-the-code-costing-a-release-build-nothing)),
@@ -136,12 +57,12 @@ The **exit code** is 0 only when every case in every suite passed, so `quilon te
 straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
 
 The case tree and the summary go to **stdout**; a failing assertion's
-[error frame](../tooling/errors.md) goes to **stderr**, like every other compiler
+[error frame](../../tooling/errors.md) goes to **stderr**, like every other compiler
 diagnostic, so each stream reads on its own when they are captured separately.
 
 Suites run one process each, so a failure in one does not stop the others.
 
-### A failing case does not stop the run
+## A failing case does not stop the run
 
 The first failing `expect` in a case **skips the rest of that case** — the assertions after it
 do not run, and their subjects are never evaluated — and the suite carries on with the next
@@ -159,7 +80,7 @@ arithmetic
 `assert` inside a case is still fatal, and ends the run where it failed. Use it for a
 precondition a case cannot meaningfully continue past.
 
-### `expect` is for cases
+## `expect` is for cases
 
 `expect` marks the running **case** failed, and `it` is what closes a case and tallies it — so
 an `expect` belongs inside an `it`, inside a `describe`. Anywhere else it is a **compile
@@ -172,7 +93,7 @@ error** pointing at `assert`:
 
 The rule is lexical, so a top-level helper a case calls uses `assert`, not `expect`.
 
-### Tests beside the code, costing a release build nothing
+## Tests beside the code, costing a release build nothing
 
 Tests may sit in the same file as the code they test — beside its `>>` exports, beside its `^`,
 or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker; there is no `cfg`
@@ -191,7 +112,7 @@ to `check`, `compile`, `build`, and `run`** — they erase the block before the 
 and succeed. Only `quilon test` compiles the blocks. **Run `quilon test` in CI**, or broken
 test code passes unnoticed.
 
-### Writing a reporter
+## Writing a reporter
 
 What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it` and a failing
 `expect` only record what happened; every line of output comes from three functions, and a
@@ -213,22 +134,9 @@ names — the two harness functions as well, since `describe` and `it` are what 
 program, so yours is the one that ends the run; and a top-level `describe(…)` is recognized by
 name too, so your `describe` marks test blocks exactly as the shipped one does.
 
-`core.test` gives you everything the run records — a reporter never names a runtime primitive:
-
-| Function | Yields |
-|----------|--------|
-| `casesPassed() -> Num` | Cases that ran with no failing `expect`. |
-| `casesFailed() -> Num` | Cases that ran with at least one. |
-| `nestingDepth() -> Num` | How many `describe` groups are open — 0 outside any. |
-
-and the case lifecycle a `describe`/`it` of your own drives:
-
-| Function | Effect |
-|----------|--------|
-| `enterSuite() -> Num` | Open a group; yields the depth it sits at. |
-| `leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
-| `caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
-| `finishCase() -> Num` | Close the case, tallying it passed or failed; yields the depth to report it at. |
+`core.test` gives you everything the run records and the case lifecycle to drive — see
+[what the run records](README.md#what-the-run-records); a reporter never names a runtime
+primitive.
 
 A complete replacement — one line per case in TAP order, no indentation, no color. This is
 `examples/custom_test_reporter.qn` cut down to two cases; under `quilon test` it reports

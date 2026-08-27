@@ -40,8 +40,8 @@
 | I/O: `print` / `eprint` / `write` | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
-| Test harness: [`quilon test`](../corelib/test.md#the-test-harness) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
-| [Replaceable reporter](../corelib/test.md#writing-a-reporter): the harness and its output are ordinary `.qn` in `core.test.report`, so a suite importing `core.test` alone defines its own `describe` / `it` / `report*` and gets its own report | ✅ |
+| Test harness: [`quilon test`](../corelib/test/report.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
+| [Replaceable reporter](../corelib/test/report.md#writing-a-reporter): the harness and its output are ordinary `.qn` in `core.test.report`, so a suite importing `core.test` alone defines its own `describe` / `it` / `report*` and gets its own report | ✅ |
 | [Call-site locations](../functions/site.md): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |

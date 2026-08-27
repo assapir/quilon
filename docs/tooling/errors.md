@@ -24,7 +24,7 @@ A multi-line span underlines its first line. A failure with no source location (
 file, an unresolved import) prints a plain one-line message. Any compile error exits 1.
 
 Runtime failures use the same frame at the expression responsible: a failing
-[assertion](../corelib/test.md) at its own call site, a fail-loud check (a
+[assertion](../corelib/test/README.md) at its own call site, a fail-loud check (a
 bad `array[i]`, a violated `Text.replace`/`repeat` contract) at the call that broke the
 contract. Reports are colored when stderr is a terminal, and plain when redirected or under
 `NO_COLOR`/`TERM=dumb`. Compile errors are not colored yet. A runtime report carries the
