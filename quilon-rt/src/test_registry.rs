@@ -37,6 +37,14 @@ pub extern "C" fn __test_suite_enter() -> f64 {
     })
 }
 
+/// How many `describe` groups are open right now — 0 outside any group, 1 inside an
+/// outermost one. Reads the depth without moving it, which is what a reporter asked for the
+/// run's state needs (`enter`/`leave` are the harness's, and they move it).
+#[unsafe(no_mangle)]
+pub extern "C" fn __test_depth() -> f64 {
+    DEPTH.with(Cell::get) as f64
+}
+
 /// Close a `describe` group; yields the remaining nesting depth. Clamped at 0, so an
 /// unbalanced close cannot drive a reporter's indentation negative.
 #[unsafe(no_mangle)]
@@ -93,6 +101,8 @@ mod tests {
         // Three cases across two nesting levels, so the count and the depth cannot be
         // confused for each other.
         assert_eq!(__test_suite_enter(), 1.0);
+        assert_eq!(__test_depth(), 1.0, "reading the depth does not move it");
+        assert_eq!(__test_depth(), 1.0);
         assert_eq!(__test_case_finish(), 1.0, "outermost group: depth 1");
         assert_eq!(
             __test_case_finish(),

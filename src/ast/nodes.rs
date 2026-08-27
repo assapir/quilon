@@ -225,9 +225,10 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     },
     // The test registry (see `is_test_registry_intrinsic`): the harness's event sink, which
     // `core.test`'s `describe`/`it` and the provided `expect` drive. Enter and leave a
-    // `describe` group, each yielding the resulting nesting depth; ask whether the running
-    // case has already failed; close a case, yielding the depth to indent it at; and read
-    // the two totals back for the summary.
+    // `describe` group, each yielding the resulting nesting depth; read that depth without
+    // moving it; ask whether the running case has already failed; close a case, yielding the
+    // depth to indent it at; and read the two totals back for the summary. `core.test` wraps
+    // the three read-only ones as named `.qn` functions, which is the reporter's API.
     BuiltinOverload {
         name: "__test_suite_enter",
         parameters: &[],
@@ -235,6 +236,11 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     },
     BuiltinOverload {
         name: "__test_suite_leave",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_depth",
         parameters: &[],
         ret: Type::Num,
     },

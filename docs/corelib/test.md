@@ -180,18 +180,51 @@ to `check`, `compile`, `build`, and `run`** — they erase the block before the 
 and succeed. Only `quilon test` compiles the blocks. **Run `quilon test` in CI**, or broken
 test code passes unnoticed.
 
-### Reporters
+### Writing a reporter
 
-What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it`, and a
-failing `expect` record what happened through a reporter-agnostic registry of `__test_*`
-primitives — nesting depth, a per-case failed mark, and two counts, no rendering — and all
-rendering lives in three functions `core.test` exports:
+What a run looks like is decided in `.qn`, not in the compiler. `describe`, `it` and a failing
+`expect` only record what happened; every line of output comes from three functions
+`core.test` exports, and a reporter is those three:
 
-| Function | Called when |
-|----------|-------------|
-| `reportSuite(name :: Text, depth :: Num) -> $` | A `describe` group is entered. |
-| `reportCase(name :: Text, depth :: Num, failed :: Bool) -> $` | A case has run, `failed` saying which way. |
-| `reportSummary() -> Num` | Last, from the synthesized entry point. Prints the tally and returns the exit code. |
+| Function | Called |
+|----------|--------|
+| `reportSuite(name :: Text, depth :: Num) -> $` | On entering a `describe` group, before its body runs. |
+| `reportCase(name :: Text, depth :: Num, failed :: Bool) -> $` | Once a case's body has run, `failed` saying which way it went. |
+| `reportSummary() -> Num` | Last, from the entry point `quilon test` synthesizes. |
 
-A reporter of its own defines the same three; selecting it is a matter of pointing the
-synthesized entry at another module's `reportSummary`.
+`depth` is **1 for an outermost `describe`**, one more per level of nesting; a case is reported
+at the depth of the group holding it. `reportSummary`'s **return value is the process exit
+code** — so a run passes only if it returns 0.
+
+The run's state, for the summary and for anything else a reporter wants to say:
+
+| Function | Yields |
+|----------|--------|
+| `casesPassed() -> Num` | Cases that ran with no failing `expect`. |
+| `casesFailed() -> Num` | Cases that ran with at least one. |
+| `nestingDepth() -> Num` | How many `describe` groups are open — 0 outside any. |
+
+That is the whole state; the registry primitives behind these three are the harness's own
+plumbing, not API. What `core.test` ships is a reporter and nothing more:
+
+```quilon
+>> reportSuite = (name :: Text, depth :: Num) -> $ => print("`indent(depth - 1)``name`")
+
+>> reportCase = (name :: Text, depth :: Num, failed :: Bool) -> $ => <
+  mark = failed ? red("✗") : green("✓")
+  print("`indent(depth)``mark` `name`")
+>
+
+>> reportSummary = () -> Num => <
+  failed = casesFailed()
+  tally = "`casesPassed()` passed, `failed` failed"
+  print("")
+  print(failed == 0 ? green(tally) : red(tally))
+  failed == 0 ? 0 : 1
+>
+```
+
+**Swapping one in** is not yet possible from a suite: `<< core.test` brings these three names
+into scope, and imports are transitive, so a module that defines its own is a duplicate
+definition. Selecting a reporter waits on the harness and the default reporter shipping as
+separate modules.

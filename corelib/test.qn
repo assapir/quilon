@@ -34,6 +34,9 @@
 ~ happened through the reporter-agnostic registry (`__test_*`) and renders through the
 ~ `report*` functions below. A reporter of your own defines the same three, and the
 ~ entry `quilon test` synthesizes calls `reportSummary()` last, for the exit code.
+~
+~ A reporter reads the run's state through `casesPassed`, `casesFailed` and
+~ `nestingDepth`, never through the registry primitives those three wrap.
 << core.io
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
@@ -64,6 +67,20 @@
   __exit(101)
 >
 
+~ ── The run's state ────────────────────────────────────────────────────────────────
+~ Everything the registry knows, as named functions. A reporter is written against these
+~ three; the registry primitives behind them stay the harness's own plumbing.
+
+~ How many cases have run with no failing `expect`.
+>> casesPassed = () -> Num => __test_passed()
+
+~ How many cases have run with at least one failing `expect`. Non-zero is what makes a
+~ run exit non-zero.
+>> casesFailed = () -> Num => __test_failed()
+
+~ How many `describe` groups are open: 0 outside any group, 1 inside an outermost one.
+>> nestingDepth = () -> Num => __test_depth()
+
 ~ ── The default reporter ───────────────────────────────────────────────────────────
 
 ~ Two spaces per level of `describe` nesting.
@@ -90,8 +107,8 @@
 ~ The run's total, and its exit code — non-zero when any case failed. The synthesized
 ~ entry point ends with this call, so what it returns IS the process status.
 >> reportSummary = () -> Num => <
-  passed = __test_passed()
-  failed = __test_failed()
+  passed = casesPassed()
+  failed = casesFailed()
   tally = "`passed` passed, `failed` failed"
   print("")
   print(failed == 0 ? green(tally) : red(tally))

@@ -32,3 +32,9 @@ describe("Result", () => <
   it("is Ok in bounds", () => expect([10, 20].at(0), isOk()))
   it("is NotOk out of bounds", () => expect([10, 20].at(9), isNotOk()))
 >)
+
+~ The run's own state, as the reporter reads it — see docs/corelib/test.md.
+describe("the run", () => <
+  it("knows the group it is in", () => expect(nestingDepth(), equals(1)))
+  it("has counted every case that closed", () => expect(casesFailed(), equals(0)))
+>)

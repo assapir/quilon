@@ -456,8 +456,7 @@ fn expect_outside_an_it_case_is_a_compile_error() {
             "describe(\"g\", () => <\n",
             "  expect(1, equals(2))\n",
             "  it(\"unaffected\", () => expect(1, equals(1)))\n",
-            ">\n",
-            ")\n"
+            ">)\n"
         ),
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
@@ -472,6 +471,74 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         out.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── The reporter seam: the run's state, as named functions ──────────────────────────────
+
+/// The run's state is a `.qn` API, not a set of runtime symbol names: a reporter — or a case —
+/// reads how many cases have passed and failed and how deep the nesting is through
+/// `core.test`'s own functions.
+#[test]
+fn the_run_state_is_readable_through_named_functions() {
+    let dir = work_dir("state");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.io\n",
+            "<< core.test\n",
+            "describe(\"outer\", () => <\n",
+            "  it(\"sits at depth 1\", () => expect(nestingDepth(), equals(1)))\n",
+            "  describe(\"inner\", () => <\n",
+            "    it(\"sits one deeper\", () => expect(nestingDepth(), equals(2)))\n",
+            "    it(\"counts the cases behind it\", () => <\n",
+            "      expect(casesPassed(), equals(2))\n",
+            "      expect(casesFailed(), equals(0))\n",
+            "    >)\n",
+            "  >)\n",
+            ">)\n"
+        ),
+    );
+
+    let out = quilon(&["test", source.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "every case reads its own state correctly:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains("3 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The point of those functions: the reporter `core.test` ships is written against them, so
+/// nobody writing a reporter has to know a registry symbol's name. The primitives stay behind
+/// `describe`/`it` and the three wrappers.
+#[test]
+fn the_shipped_reporter_names_no_registry_primitive() {
+    let corelib = Path::new(env!("CARGO_MANIFEST_DIR")).join("corelib/test.qn");
+    let source = std::fs::read_to_string(&corelib).expect("read corelib/test.qn");
+
+    for wrapper in ["casesPassed", "casesFailed", "nestingDepth"] {
+        assert!(
+            source.contains(&format!(">> {wrapper} = ")),
+            "`{wrapper}` must be exported for a reporter to read the run through"
+        );
+    }
+    for reporter in ["reportSuite", "reportCase", "reportSummary"] {
+        let body = source
+            .split(&format!(">> {reporter} = "))
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .unwrap_or_else(|| panic!("`{reporter}` is missing from corelib/test.qn"));
+        assert!(
+            !body.contains("__test_"),
+            "`{reporter}` reaches for a registry primitive instead of a wrapper:\n{body}"
+        );
+    }
 }
 
 /// `assert` in a case is still FATAL: it ends the run where it failed rather than recording.

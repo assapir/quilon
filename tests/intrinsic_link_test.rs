@@ -82,6 +82,7 @@ const EVERY_INTRINSIC: &str = r#"
   ~ because `quilon test` is the only thing that compiles a `describe` block and this gate
   ~ is an ordinary program: one group, one case in it, and the total.
   assert(__test_suite_enter(), equals(1))
+  assert(__test_depth(), equals(1))
   assert(__test_case_failing(), equals(0))
   assert(__test_case_finish(), equals(1))
   ~ `core.test`'s `failAt`, on a branch that never runs — it is what reaches the exit
