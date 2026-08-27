@@ -123,8 +123,8 @@ or attribute:
 - `check`, `compile`, `build`, `run`: every top-level `describe(…)` is **erased** before the
   checker sees it, so nothing of the harness is type-checked, emitted, or linked. The file's
   own `^` is its entry point and behaves exactly as it would without the blocks. A file whose
-  blocks are all it has is not a compilation unit at all — those four pass over it in silence
-  rather than reporting a missing entry point.
+  blocks are all it has is no program at all — `compile`, `build`, and `run` pass over it in
+  silence rather than reporting a missing entry point.
 - `quilon test`: the blocks are **compiled and run**, under the entry point it synthesizes. A
   file's own `^` is not the test run's, so it is ignored rather than called.
 
