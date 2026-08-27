@@ -1,0 +1,212 @@
+---
+/**
+ * Starlight's SidebarSublist with one change: a group whose first entry is its
+ * own overview page renders its label as a LINK to that page, and the overview
+ * entry is dropped from the group body — one name, both behaviors. The caret
+ * (and the rest of the summary) still toggles, so a section can be opened
+ * without leaving the current page; the label is a real anchor, so middle-click
+ * and open-in-new-tab work and it is keyboard reachable on its own.
+ * Everything else is Starlight 0.41's component, copied verbatim.
+ */
+import { Icon, Badge } from '@astrojs/starlight/components';
+import SidebarRestorePoint from '@astrojs/starlight/components/SidebarRestorePoint.astro';
+
+interface Props {
+	sublist: any[];
+	nested?: boolean;
+}
+
+const { sublist, nested } = Astro.props;
+
+/** Whether any entry in the tree is the current page (Starlight's flattenSidebar test). */
+const hasCurrent = (entries: any[]): boolean =>
+	entries.some((entry) =>
+		entry.type === 'link' ? entry.isCurrent : hasCurrent(entry.entries)
+	);
+
+/**
+ * The group's overview page: its first entry, when that is a link every other
+ * link in the group sits under.
+ */
+const overviewOf = (entry: any) => {
+	const [first, ...rest] = entry.entries;
+	if (first?.type !== 'link') return undefined;
+	const inside = (e: any): boolean =>
+		e.type === 'link' ? e.href.startsWith(first.href) : e.entries.every(inside);
+	return rest.every(inside) ? first : undefined;
+};
+---
+
+<ul class:list={{ 'top-level': !nested }}>
+	{
+		sublist.map((entry) => {
+			const overview = entry.type === 'group' ? overviewOf(entry) : undefined;
+			return (
+				<li>
+					{entry.type === 'link' ? (
+						<a
+							href={entry.href}
+							aria-current={entry.isCurrent ? 'page' : undefined}
+							class:list={[{ large: !nested }, entry.attrs.class]}
+							{...entry.attrs}
+						>
+							<span>{entry.label}</span>
+							{entry.badge && (
+								<Badge
+									variant={entry.badge.variant}
+									class={entry.badge.class}
+									text={entry.badge.text}
+								/>
+							)}
+						</a>
+					) : (
+						<details open={hasCurrent(entry.entries) || !entry.collapsed}>
+							<summary>
+								{overview ? (
+									<a
+										class="group-label group-link"
+										href={overview.href}
+										aria-current={overview.isCurrent ? 'page' : undefined}
+									>
+										<span class="large">{entry.label}</span>
+										{entry.badge && (
+											<Badge
+												variant={entry.badge.variant}
+												class={entry.badge.class}
+												text={entry.badge.text}
+											/>
+										)}
+									</a>
+								) : (
+									<span class="group-label">
+										<span class="large">{entry.label}</span>
+										{entry.badge && (
+											<Badge
+												variant={entry.badge.variant}
+												class={entry.badge.class}
+												text={entry.badge.text}
+											/>
+										)}
+									</span>
+								)}
+								<Icon name="right-caret" class="caret" size="1.25rem" />
+							</summary>
+							<SidebarRestorePoint />
+							<Astro.self sublist={overview ? entry.entries.slice(1) : entry.entries} nested />
+						</details>
+					)}
+				</li>
+			);
+		})
+	}
+</ul>
+
+<style>
+	@layer starlight.core {
+		ul {
+			--sl-sidebar-item-padding-inline: 0.5rem;
+			list-style: none;
+			padding: 0;
+		}
+
+		li {
+			overflow-wrap: anywhere;
+		}
+
+		ul ul li {
+			margin-inline-start: var(--sl-sidebar-item-padding-inline);
+			border-inline-start: 1px solid var(--sl-color-hairline-light);
+			padding-inline-start: var(--sl-sidebar-item-padding-inline);
+		}
+
+		.large {
+			font-size: var(--sl-text-lg);
+			font-weight: 600;
+			color: var(--sl-color-white);
+		}
+
+		.top-level > li + li {
+			margin-top: 0.75rem;
+		}
+
+		summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 0.2em var(--sl-sidebar-item-padding-inline);
+			line-height: 1.4;
+			cursor: pointer;
+			user-select: none;
+		}
+		summary::marker,
+		summary::-webkit-details-marker {
+			display: none;
+		}
+
+		.caret {
+			transition: transform 0.2s ease-in-out;
+			flex-shrink: 0;
+		}
+		:global([dir='rtl']) .caret {
+			transform: rotateZ(180deg);
+		}
+		[open] > summary .caret {
+			transform: rotateZ(90deg);
+		}
+
+		a {
+			display: block;
+			border-radius: 0.25rem;
+			text-decoration: none;
+			color: var(--sl-color-gray-2);
+			padding: 0.3em var(--sl-sidebar-item-padding-inline);
+			line-height: 1.4;
+		}
+
+		/* The label-link sits inside the summary, which already pads. */
+		a.group-link {
+			padding: 0;
+		}
+		a.group-link:hover .large,
+		a.group-link:focus .large {
+			color: var(--sl-color-text-accent);
+		}
+
+		a:hover,
+		a:focus {
+			color: var(--sl-color-white);
+		}
+
+		[aria-current='page'],
+		[aria-current='page']:hover,
+		[aria-current='page']:focus {
+			font-weight: 600;
+			color: var(--sl-color-text-invert);
+			background-color: var(--sl-color-text-accent);
+		}
+		a.group-link[aria-current='page'],
+		a.group-link[aria-current='page'] .large {
+			color: var(--sl-color-text-invert);
+		}
+		a.group-link[aria-current='page'] {
+			padding-inline: 0.3em;
+		}
+
+		a > *:not(:last-child),
+		.group-label > *:not(:last-child) {
+			margin-inline-end: 0.25em;
+		}
+
+		@media (min-width: 50rem) {
+			.top-level > li + li {
+				margin-top: 0.5rem;
+			}
+			.large {
+				font-size: var(--sl-text-base);
+			}
+			a {
+				font-size: var(--sl-text-sm);
+			}
+		}
+	}
+</style>
