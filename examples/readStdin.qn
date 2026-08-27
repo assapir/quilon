@@ -1,4 +1,4 @@
-~ Deferred values — `@readStdin` (see docs/LANGUAGE.md, "Deferred values").
+~ Deferred values — `@readStdin` (see docs/concurrency/README.md).
 ~ `@readStdin()` is a value-returning leaf IO primitive: it LAUNCHES a stdin line read in the
 ~ background and hands back a DEFERRED Text immediately. The value threads through the `line`
 ~ binding untouched (promise pipelining); the fiber only WAITS (forces) at the first strict

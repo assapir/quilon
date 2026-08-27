@@ -98,8 +98,28 @@ Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking c
 
 Thanks to everyone who has contributed to Quilon. This table updates itself.
 
-<!-- readme: contributors,claude[bot]/-,github-actions[bot]/- -start -->
-<!-- readme: contributors,claude[bot]/-,github-actions[bot]/- -end -->
+<!-- readme: contributors -start -->
+<table>
+	<tbody>
+		<tr>
+            <td align="center">
+                <a href="https://github.com/assapir">
+                    <img src="https://avatars.githubusercontent.com/u/4030466?v=4" width="100;" alt="assapir"/>
+                    <br />
+                    <sub><b>Assaf Sapir</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/anisayakmitra-in">
+                    <img src="https://avatars.githubusercontent.com/u/266799942?v=4" width="100;" alt="anisayakmitra-in"/>
+                    <br />
+                    <sub><b>ANISAYAK MITRA</b></sub>
+                </a>
+            </td>
+		</tr>
+	<tbody>
+</table>
+<!-- readme: contributors -end -->
 
 ## Licensing
 
