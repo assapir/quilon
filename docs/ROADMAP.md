@@ -3,8 +3,9 @@
 The **milestone plan** for Quilon's path to 1.0: the stages and their status. High-level and
 evergreen — the durable record that survives across contributors and AI-agent sessions.
 
-- **Language semantics & the locked design decisions:** `LANGUAGE.md` (the authoritative reference +
-  the implemented/planned feature matrix). Design decisions are documented there, not here.
+- **Language semantics & the locked design decisions:** the language reference at
+  [`docs/README.md`](README.md) (+ the implemented/planned feature matrix at
+  [`status/feature-matrix.md`](status/feature-matrix.md)). Design decisions are documented there, not here.
 - **Vision:** `README.md`.
 - **How we build (multi-agent process + rules):** `docs/ORCHESTRATION.md`.
 - **Specific bugs, tasks, and detailed feature specs:** GitHub issues — **not** this file.
@@ -98,7 +99,7 @@ ever returns it will be **explicit** (a someday `mapParallel`), never inferred.
 Quilon's north-star **"parallelism"**: the **colorless implicit-futures / promise-pipelining**
 model — `@` leaf IO primitives, deferred values that propagate as they flow, and forcing
 only at strict operations, so independent IO overlaps with nothing written. The design is
-locked in [`LANGUAGE.md`](LANGUAGE.md#concurrency--colorless-implicit-futures--in-progress)
+locked in [`concurrency/README.md`](concurrency/README.md)
 and specified in full in [#120]. Built smallest-first:
 
 | Item | Status |

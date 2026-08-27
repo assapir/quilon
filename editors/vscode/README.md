@@ -219,7 +219,7 @@ the compiler emits: a `Text` shows as its string (not a `{data, byte_len}`
 struct), and a `[]T` expands to an indexed list of its elements, each keeping its
 own type — so a `[][]Text` expands to a list of inner `[]Text` arrays, each of
 its own `Text` values. Long arrays cap the default expansion and note the
-remaining count in the summary (an explicit `arr[i]` past the cap still works).
+remaining count in the summary (an explicit `array[i]` past the cap still works).
 Records and sum types currently fall back to lldb's default struct rendering.
 
 ## Publishing

@@ -58,7 +58,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Render `value` (of Quilon type `ty`) to a `Text` `{ptr,i64}` value. A type with its
     /// own `` ` `` override renders through that method; every other type uses the built-in
-    /// default (see the rendering table in docs/LANGUAGE.md). Dispatch is by the authoritative
+    /// default (see the rendering table in docs/types/text.md). Dispatch is by the authoritative
     /// oracle type `ty` — source positions carry file identity, so the oracle
     /// is reliable across imported modules and needs no shape-based hedge.
     pub(super) fn render_value(

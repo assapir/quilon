@@ -1,6 +1,6 @@
 # `Set` — unordered unique collection
 
-A built-in, no-import type. See the [Language reference](../LANGUAGE.md#sets) and `examples/sets.qn`.
+A built-in, no-import type. See the [Language reference](README.md#sets) and `examples/sets.qn`.
 
 A `Set` is written `[|T|]`. `Set` is a **built-in parametric collection** — like `[]T`,
 not a user-defined generic — written with the same **pipe fence** `[| … |]`; the fence is
@@ -20,9 +20,8 @@ must agree (see [Map](map.md#user-defined-key-types)). Duplicates collapse. A se
 and never touches the receiver.
 
 **Iteration order is UNSPECIFIED** — conceptually a set is unordered, so never rely on the
-order of `items`/`each`. (It is the hash order, *not* insertion order. A fixed-seed hasher
-makes it reproducible run-to-run so example asserts don't flake, but that is an
-implementation detail, not a contract.)
+order of `items`/`each`. (It is *not* insertion order. It may look stable run-to-run;
+that is not a contract.)
 
 A set carries a built-in `.size` **field** (element count, like an array's `.size`);
 everything else is a reserved method (resolved ahead of any same-named user overload when

@@ -5,7 +5,7 @@ short-lived **sub-agents**, each doing one scoped workstream in its own git work
 pull request. This document is the durable record of that model and its rules, so a fresh
 orchestrator session — or any agent — can reconstruct how we work from the repo itself.
 
-Companion docs: `docs/ROADMAP.md` (what to build), `LANGUAGE.md` (language reference),
+Companion docs: `docs/ROADMAP.md` (what to build), `docs/README.md` + its subfolders (language reference),
 `docs/ORCHESTRATION.md` (this — how to build).
 
 ---
@@ -44,12 +44,12 @@ the user's word.
 
 A feature/change is not done until **all** of these are true:
 
-- **Docs updated** — `LANGUAGE.md` (and any relevant docs) reflect the change, as part of the same PR.
+- **Docs updated** — the language reference under `docs/` (and any other relevant docs) reflects the change, as part of the same PR.
 - **Tests updated/added** — unit + integration; and for language features, a run-test asserting the
   compiled program's exit code via JIT and native AOT.
 - **An example** — every new language feature ships a runnable `examples/*.qn`, wired into the
   examples gate (`tests/examples_test.rs`) so it compiles + runs + asserts an exit code under JIT and
-  native AOT (clang **and** gcc), and referenced exactly once from `LANGUAGE.md`. (The user is
+  native AOT (clang **and** gcc), and referenced exactly once from the language reference under `docs/`. (The user is
   emphatic: examples are mandatory, never stripped.) Write examples **as explicitly as possible** —
   explicit type annotations on bindings (`parts :: []Text = …`), full forms, no reliance on inference
   — *unless the example's specific purpose is to demonstrate that something can be implicit*. Example
@@ -57,14 +57,14 @@ A feature/change is not done until **all** of these are true:
 - **`/code-review` + `/simplify`** run before committing, findings addressed. (When the review skill
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-- **No issue/PR references in code.** No source, test, example, or corelib file (`.qn` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — `LANGUAGE.md`/`README`/`ROADMAP` — may reference issues; code files may not.)
+- **No issue/PR references in code.** No source, test, example, or corelib file (`.qn` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — the `docs/` tree and the `README`s — may reference issues; code files may not.)
 
 **`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
 add items, not to restructure, not even to mark their own item done. The **orchestrator** updates a
 roadmap item's status when it judges that workstream's PR ready (the user owns the actual merge).
-(Agents still update `LANGUAGE.md`, tests, and their example — just never the roadmap.) The roadmap's
+(Agents still update the language reference, tests, and their example — just never the roadmap.) The roadmap's
 structure is the orchestrator's domain and the **language semantics / design decisions live in
-`LANGUAGE.md`, not the roadmap**; specific bugs, tasks, and detailed specs go to **GitHub issues**.
+the language reference under `docs/`, not the roadmap**; specific bugs, tasks, and detailed specs go to **GitHub issues**.
 
 Library APIs hide internals — never force callers to do the library's own conversion/desugaring
 (e.g. `print(x)`, never `print(show(x))`). Keep dependencies and toolchain on the latest versions;

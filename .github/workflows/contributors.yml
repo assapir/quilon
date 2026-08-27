@@ -1,0 +1,24 @@
+name: Contributors
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-contributors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update the contributor table in README.md
+        uses: akhilmhdh/contributors-readme-action@v2.3.11
+        with:
+          collaborators: outside
+          commit_message: 'README: update the contributor table'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

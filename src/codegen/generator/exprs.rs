@@ -408,7 +408,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_set_op(operator, left, right);
         }
 
-        // `&&`/`||` are SHORT-CIRCUIT (docs/LANGUAGE.md "Logical: `&& || !` (short-circuit)"):
+        // `&&`/`||` are SHORT-CIRCUIT (docs/expressions/README.md "Logical: `&& || !` (short-circuit)"):
         // the right operand must NOT be evaluated when the left already decides the
         // result — `i < a.size && a[i] == k` must never index out of bounds, and a
         // side-effecting right operand must not run. Lower with control flow BEFORE the

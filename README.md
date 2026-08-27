@@ -6,7 +6,7 @@
 
 Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
-> **Status: 0.9.2 — "stable basics."** The core language compiles, runs, and is tested end-to-end, but it is **not** feature-complete. For what is and isn't implemented, see the feature matrix in **[LANGUAGE.md](./docs/LANGUAGE.md)**.
+> **Status: 0.9.2 — "stable basics."** The core language compiles, runs, and is tested end-to-end, but it is **not** feature-complete. For what is and isn't implemented, see the **[feature matrix](./docs/status/feature-matrix.md)**.
 
 ## A taste
 
@@ -27,7 +27,7 @@ greet = name :: Text => "Hello, " + name
 >
 ```
 
-See **[LANGUAGE.md](./docs/LANGUAGE.md)** for the full reference — types, modules, pattern matching, I/O, the symbol table, and the feature matrix.
+See the **[language reference](./docs/README.md)** for the full reference — types, modules, pattern matching, I/O, the symbol table, and the feature matrix.
 
 ## Principles
 
@@ -37,7 +37,7 @@ See **[LANGUAGE.md](./docs/LANGUAGE.md)** for the full reference — types, modu
 - **Overloading, not generics** — ad-hoc overloading is the only polymorphism.
 - **Eat the rich** — APIs expose everything up front; parsing and computing happen only when you touch it.
 
-The full list lives in **[LANGUAGE.md](./docs/LANGUAGE.md#design-principles)**.
+The full list lives in the **[language reference](./docs/README.md#design-principles)**.
 
 ## Install
 
@@ -93,6 +93,13 @@ Run `./scripts/release.sh` from a clean `main`: it checks the `Cargo.toml`/`quil
 ## Vision (aspirational)
 
 Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language. The runtime is single-threaded today; the parallel machinery is direction, not delivery.
+
+## Contributors
+
+Thanks to everyone who has contributed to Quilon. This table updates itself.
+
+<!-- readme: contributors,claude[bot]/-,github-actions[bot]/- -start -->
+<!-- readme: contributors,claude[bot]/-,github-actions[bot]/- -end -->
 
 ## Licensing
 

@@ -1,15 +1,15 @@
 # `core.cli` — CLI helpers
 
-Import with `<< core.cli`. See the [corelib index](../LANGUAGE.md#corelib) and `examples/cli.qn`.
+Import with `<< core.cli`. See the [corelib index](README.md) and `examples/cli.qn`.
 
-Thin, pipe-friendly helpers over the [entry point](../LANGUAGE.md#entry-point)'s
+Thin, pipe-friendly helpers over the [entry point](../modules/entry-point.md)'s
 `args :: []Text` and `env :: [|Text => Text|]`. The data is always the **first** parameter, so
 `env |> getEnv("PATH")` and `args |> hasFlag("-v")` read naturally.
 
 | Function | Result |
 |----------|--------|
 | `getEnv(env :: [\|Text => Text\|], key :: Text) -> Result` | Look `key` up in the env Map; `Ok(value)` if the variable is set, else `NotOk`. The ergonomic name for the Map's own `env.get(key)`. |
-| `hasFlag(args :: []Text, flag :: Text) -> Bool` | `true` when the bare flag appears in `args`. The name works **with or without** a leading `--` (so `"verbose"` and `"--verbose"` both match an arg `"--verbose"`). |
+| `hasFlag(args :: []Text, flag :: Text) -> Bool` | `true` when the bare flag appears in `args`. The name works **with or without** a leading `--` (so `"verbose"` and `"--verbose"` both match an argument `"--verbose"`). |
 | `getOpt(args :: []Text, name :: Text) -> Result` | Collect the option's values (argv[0] skipped), recognising both `--name value` and `--name=value`; the name works with or without `--`. Returns `Ok([]Text)` of the values in argv order (an option may repeat), or `NotOk(name)` when no value is found — the name never appears, or appears only as a trailing `--name` with nothing after it. (The `--name=value` form always supplies a value, even the empty one in `--name=`.) |
 
 ```quilon
