@@ -1,5 +1,7 @@
 ---
 title: "Concurrency — colorless implicit futures (🚧 in progress)"
+sidebar:
+  label: "Concurrency"
 ---
 
 # Concurrency — colorless implicit futures (🚧 in progress)

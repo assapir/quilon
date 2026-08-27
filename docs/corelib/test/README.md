@@ -1,5 +1,7 @@
 ---
 title: "core.test — assertions and checks"
+sidebar:
+  label: "core.test"
 ---
 
 # `core.test` — assertions and checks
