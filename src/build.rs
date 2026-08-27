@@ -9,6 +9,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -119,6 +120,53 @@ fn cache_dir() -> PathBuf {
 /// Last-resort cache location, also used when the per-user cache is unwritable.
 fn temp_cache_dir() -> PathBuf {
     std::env::temp_dir().join("quilon-cache")
+}
+
+/// The process-local portion of a temporary object-stage name. Together with
+/// the PID and atomic directory creation, this also keeps builds from separate
+/// threads from sharing an intermediate object.
+static OBJECT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Run one build with its object file in an owned temporary directory. The
+/// directory reservation is atomic, so each build gets its own `program.o`, and
+/// removal happens whether emission, runtime extraction, or linking fails.
+fn with_staged_object(build: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    let root = temp_cache_dir();
+    std::fs::create_dir_all(&root).map_err(|e| {
+        format!(
+            "failed to create temporary object directory {}: {e}",
+            root.display()
+        )
+    })?;
+
+    let stage = loop {
+        let sequence = OBJECT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = root.join(format!(".build-object-{}-{sequence}", std::process::id()));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!(
+                    "failed to create temporary object directory {}: {e}",
+                    candidate.display()
+                ));
+            }
+        }
+    };
+
+    let result = build(&stage.join("program.o"));
+    let cleanup = std::fs::remove_dir_all(&stage).map_err(|e| {
+        format!(
+            "failed to remove temporary object directory {}: {e}",
+            stage.display()
+        )
+    });
+
+    match (result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(()), Err(cleanup)) => Err(cleanup),
+        (Err(build), Err(cleanup)) => Err(format!("{build}; additionally, {cleanup}")),
+    }
 }
 
 /// Extract the embedded runtime archive into `dir` as `libquilon_rt-<key>.a`.
@@ -258,38 +306,58 @@ pub fn build_native(
     linker: &str,
     debug: Option<&DebugSource<'_>>,
 ) -> Result<(), String> {
-    let obj = out.with_extension("o");
-    emit_object(program, types, defer, sources, &obj, debug)?;
-    let rt_lib = runtime_lib_path()?;
+    with_staged_object(|obj| {
+        emit_object(program, types, defer, sources, obj, debug)?;
+        let rt_lib = runtime_lib_path()?;
 
-    let mut command = Command::new(linker);
-    command.arg(&obj);
-    append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
-    command.args(SYSTEM_LIBS);
-    command.arg("-o").arg(out);
+        let mut command = Command::new(linker);
+        command.arg(obj);
+        append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
+        command.args(SYSTEM_LIBS);
+        command.arg("-o").arg(out);
 
-    let status = command.status().map_err(|e| match e.kind() {
-        // Name the missing binary instead of a bare "No such file or
-        // directory (os error 2)".
-        std::io::ErrorKind::NotFound => format!(
-            "linker `{linker}` not found on PATH. Install it, or pass \
+        let status = command.status().map_err(|e| match e.kind() {
+            // Name the missing binary instead of a bare "No such file or
+            // directory (os error 2)".
+            std::io::ErrorKind::NotFound => format!(
+                "linker `{linker}` not found on PATH. Install it, or pass \
                  `--linker <name>` (e.g. `--linker gcc`)."
-        ),
-        _ => format!("failed to invoke linker `{linker}`: {e}"),
-    });
+            ),
+            _ => format!("failed to invoke linker `{linker}`: {e}"),
+        });
 
-    // Drop the intermediate object whether or not linking succeeded.
-    let _ = std::fs::remove_file(&obj);
-
-    match status? {
-        s if s.success() => Ok(()),
-        s => Err(format!("linker `{linker}` failed with {s}")),
-    }
+        match status? {
+            s if s.success() => Ok(()),
+            s => Err(format!("linker `{linker}` failed with {s}")),
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staged_objects_are_unique_and_cleaned_after_a_failed_build() {
+        let mut objects = Vec::new();
+        let result = with_staged_object(|first| {
+            objects.push(first.to_path_buf());
+            std::fs::write(first, b"first object").map_err(|e| e.to_string())?;
+
+            with_staged_object(|second| {
+                objects.push(second.to_path_buf());
+                std::fs::write(second, b"second object").map_err(|e| e.to_string())?;
+                Err("link failed".to_string())
+            })
+        });
+
+        assert_eq!(result, Err("link failed".to_string()));
+        assert_ne!(objects[0], objects[1], "builds must use distinct objects");
+        assert!(
+            objects.iter().all(|object| !object.exists()),
+            "failed builds must remove their staged objects: {objects:?}"
+        );
+    }
 
     /// A comma in the archive path is enough to mangle a `-Wl,` flag, and the path comes from
     /// the user's cache location, so neither retention shape may build one. Both are checked
