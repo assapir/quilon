@@ -1,3 +1,9 @@
+---
+title: "Records"
+sidebar:
+  order: 2
+---
+
 # Records
 Anonymous structs with named fields:
 ```quilon

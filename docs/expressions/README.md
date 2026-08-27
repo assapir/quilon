@@ -1,3 +1,9 @@
+---
+title: "Expressions"
+sidebar:
+  order: 0
+---
+
 # Expressions
 
 - **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](../functions/overloading.md): `Num + Num` adds, `Text + Text` concatenates, and on arrays it concatenates / appends / prepends (`[]T + []T`, `[]T + T`, `T + []T`, all yielding a new `[]T` — see [Array concatenation](../collections/arrays.md#array-concatenation--)). `%` is the f64 remainder and works on fractional operands too (`7.5 % 2` → `1.5`); the result takes the **dividend's** sign (`-7 % 3` → `-1`, `7 % -3` → `1`), like C `fmod` / Rust `%`.

@@ -1,3 +1,9 @@
+---
+title: "Mutation: in-place field writes & setters"
+sidebar:
+  label: "Mutation"
+---
+
 # Mutation: in-place field writes & setters
 
 The binding operator decides mutability. It governs in-place mutation as well as

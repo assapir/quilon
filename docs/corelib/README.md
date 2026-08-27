@@ -1,3 +1,9 @@
+---
+title: "Corelib"
+sidebar:
+  order: 0
+---
+
 # Corelib
 
 The corelib — Quilon's standard library — ships with the compiler; import a module with

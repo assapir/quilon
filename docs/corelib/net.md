@@ -1,3 +1,10 @@
+---
+title: "core.net — Networking"
+sidebar:
+  label: "core.net"
+  order: 5
+---
+
 # `core.net` — Networking
 
 Import with `<< core.net`. See the [corelib index](README.md).

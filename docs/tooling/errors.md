@@ -1,3 +1,7 @@
+---
+title: "Error messages"
+---
+
 # Error messages
 
 Every located failure — a compile error, a failing assertion, a fail-loud runtime check —

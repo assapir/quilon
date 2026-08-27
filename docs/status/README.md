@@ -1,3 +1,9 @@
+---
+title: "Status"
+sidebar:
+  order: 0
+---
+
 # Status
 
 Where Quilon stands at 0.9.

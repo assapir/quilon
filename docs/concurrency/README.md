@@ -1,3 +1,9 @@
+---
+title: "Concurrency — colorless implicit futures (🚧 in progress)"
+sidebar:
+  label: "Concurrency"
+---
+
 # Concurrency — colorless implicit futures (🚧 in progress)
 
 > Colorless implicit futures on cooperative fibers: IO returns type-invisible deferreds, only strict operations force them — concurrency follows data dependence, not program order.

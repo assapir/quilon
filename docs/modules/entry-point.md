@@ -1,3 +1,7 @@
+---
+title: "Entry point"
+---
+
 # Entry point
 
 Every executable defines `^` (main); the program starts there.

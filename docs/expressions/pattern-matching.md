@@ -1,3 +1,9 @@
+---
+title: "Pattern matching"
+sidebar:
+  order: 4
+---
+
 # Pattern matching
 
 ```quilon ignore
