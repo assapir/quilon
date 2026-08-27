@@ -124,7 +124,15 @@ pub enum StrChunk {
     Hole { src: String, offset: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TokenLexError {
+    #[default]
+    InvalidToken,
+    UnterminatedString,
+}
+
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
+#[logos(error = TokenLexError)]
 #[logos(skip r"[ \t\r\n]+")] // Skip whitespace
 #[logos(skip("~[^\n]*", allow_greedy = true))] // Skip comments (rest of line)
 pub enum TokenKind {
@@ -341,7 +349,7 @@ impl TokenKind {
 /// (and their own holes, recursively), so a hole may itself contain a string with its own
 /// interpolation (`"sum `f("a")`"`) at any nesting depth; each nested string's holes are
 /// handled when the parser re-lexes the hole source.
-fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
+fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Result<Vec<StrChunk>, TokenLexError> {
     // Absolute byte offset of the first content byte (just past the opening quote).
     let base = lex.span().end;
     let rem = lex.remainder();
@@ -352,9 +360,10 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
 
     loop {
         if i >= bytes.len() {
-            return None; // unterminated string
+            return Err(TokenLexError::InvalidToken); // unterminated string at EOF
         }
         match bytes[i] {
+            b'\n' | b'\r' => return Err(TokenLexError::UnterminatedString),
             b'"' => {
                 i += 1; // consume the closing quote
                 break;
@@ -362,9 +371,10 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
             b'\\' => {
                 i += 1;
                 if i >= bytes.len() {
-                    return None;
+                    return Err(TokenLexError::InvalidToken);
                 }
                 match bytes[i] {
+                    b'\n' | b'\r' => return Err(TokenLexError::UnterminatedString),
                     b'n' => lit.push('\n'),
                     b'r' => lit.push('\r'),
                     b't' => lit.push('\t'),
@@ -376,7 +386,7 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
                     b'"' => lit.push('"'),
                     b'\\' => lit.push('\\'),
                     b'<' => lit.push('<'),
-                    _ => return None, // invalid escape
+                    _ => return Err(TokenLexError::InvalidToken),
                 }
                 i += 1;
             }
@@ -395,7 +405,7 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
                     i = scan_hole_end(bytes, i)?; // -> index of the closing backtick
                     let src = rem[hole_start..i].to_string();
                     if src.trim().is_empty() {
-                        return None; // empty hole `` `` `` is not an interpolation
+                        return Err(TokenLexError::InvalidToken); // empty hole `` `` `` is not an interpolation
                     }
                     chunks.push(StrChunk::Hole {
                         src,
@@ -418,35 +428,45 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Option<Vec<StrChunk>> {
         chunks.push(StrChunk::Lit(lit));
     }
     lex.bump(i);
-    Some(chunks)
+    Ok(chunks)
 }
 
 /// Scan from `i` (the first byte of a hole's content, just past its opening backtick) to
 /// the index of the hole's matching CLOSING backtick. A nested string literal inside the
 /// hole is skipped whole — including that string's own interpolation holes, recursively —
-/// so a `"` or `` ` `` within a nested string never ends the hole. `None` if unterminated.
-fn scan_hole_end(bytes: &[u8], mut i: usize) -> Option<usize> {
+/// so a `"` or `` ` `` within a nested string never ends the hole. An error if unterminated.
+fn scan_hole_end(bytes: &[u8], mut i: usize) -> Result<usize, TokenLexError> {
     while i < bytes.len() {
         match bytes[i] {
-            b'`' => return Some(i),
+            b'\n' | b'\r' => return Err(TokenLexError::UnterminatedString),
+            b'`' => return Ok(i),
             b'"' => i = scan_string_end(bytes, i)?,
             _ => i += 1,
         }
     }
-    None
+    Err(TokenLexError::InvalidToken)
 }
 
 /// Scan from `i` (at an opening `"`) to the index JUST PAST the matching closing `"`,
 /// honoring `\"` escapes, treating ` `` ` as a literal backtick, and recursing over any
-/// interpolation holes inside (whose contents may contain further strings). `None` if
+/// interpolation holes inside (whose contents may contain further strings). An error if
 /// unterminated. Used only to find bounds while skipping — string CONTENT is decoded when
 /// the piece is actually lexed.
-fn scan_string_end(bytes: &[u8], mut i: usize) -> Option<usize> {
+fn scan_string_end(bytes: &[u8], mut i: usize) -> Result<usize, TokenLexError> {
     i += 1; // past the opening quote
     while i < bytes.len() {
         match bytes[i] {
-            b'\\' => i += 2, // escaped char (possibly the closing-quote-looking `\"`)
-            b'"' => return Some(i + 1),
+            b'\n' | b'\r' => return Err(TokenLexError::UnterminatedString),
+            b'\\' => {
+                if bytes
+                    .get(i + 1)
+                    .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+                {
+                    return Err(TokenLexError::UnterminatedString);
+                }
+                i += 2; // escaped char (possibly the closing-quote-looking `\"`)
+            }
+            b'"' => return Ok(i + 1),
             b'`' => {
                 if i + 1 < bytes.len() && bytes[i + 1] == b'`' {
                     i += 2; // doubled backtick -> one literal backtick
@@ -457,7 +477,7 @@ fn scan_string_end(bytes: &[u8], mut i: usize) -> Option<usize> {
             _ => i += 1,
         }
     }
-    None
+    Err(TokenLexError::InvalidToken)
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -124,6 +124,64 @@ fn test_string_escapes() {
 }
 
 #[test]
+fn test_unterminated_string_stops_at_raw_newline() {
+    let source = "value = 1\n\"unterminated\nnext = 2";
+    let error = Lexer::tokenize(source).expect_err("raw newline must end a string");
+    let opening_quote = source.find('"').unwrap();
+
+    assert_eq!(error.message, "unterminated string literal");
+    assert_eq!(error.span.start, opening_quote as u32);
+    assert_eq!(error.span.end, opening_quote as u32 + 1);
+    assert_eq!(error.span.file, ROOT_FILE);
+    assert_eq!(quilon::lexer::Span::line_col(source, opening_quote), (2, 1));
+}
+
+#[test]
+fn test_interpolation_still_works_with_string_newline_guard() {
+    let tokens = Lexer::tokenize("\"hello `name`\"").unwrap();
+
+    match &tokens[0].kind {
+        TokenKind::String(chunks) => {
+            assert_eq!(chunks[0], quilon::lexer::StrChunk::Lit("hello ".into()));
+            assert_eq!(
+                chunks[1],
+                quilon::lexer::StrChunk::Hole {
+                    src: "name".into(),
+                    offset: 8,
+                }
+            );
+        }
+        other => panic!("expected interpolated string, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_invalid_string_escape_keeps_invalid_token_error() {
+    let error = Lexer::tokenize(r#""bad\q""#).expect_err("invalid escape must fail");
+
+    assert!(error.message.starts_with("Invalid token:"));
+
+    let error = Lexer::tokenize("\"bad\\q\rnext").expect_err("invalid escape must fail");
+    assert!(error.message.starts_with("Invalid token:"));
+}
+
+#[test]
+fn test_backslash_before_raw_newline_is_unterminated_string() {
+    for source in ["\"bad\\\nnext", "\"bad\\\rnext"] {
+        let error = Lexer::tokenize(source).expect_err("raw newline after backslash must fail");
+        assert_eq!(error.message, "unterminated string literal");
+    }
+}
+
+#[test]
+fn test_nested_interpolation_backslash_before_newline_is_unterminated_string() {
+    let source = "\"outer `f(\\\"bad\\\n\\\")`\"";
+    let error = Lexer::tokenize(source).expect_err("nested raw newline must fail");
+
+    assert_eq!(error.message, "unterminated string literal");
+}
+
+#[test]
 fn test_all_comparison_operators() {
     let source = "a == b && c != d && e <= f && g >= h";
     let tokens = Lexer::tokenize(source).unwrap();
