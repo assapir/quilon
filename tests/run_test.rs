@@ -412,7 +412,7 @@ fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
 #[test]
 fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
     // The message is the whole remedy — it has to say which method and what to do — and
-    // `docs/LANGUAGE.md` quotes it, so pin the wording rather than merely "some error".
+    // `docs/mutation.md` quotes it, so pin the wording rather than merely "some error".
     let src = "T = {\n  v :: Num,\n  bump = () -> $ => it.v := 99\n}\n^ = () -> Num => 0";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");

@@ -1,4 +1,4 @@
-~ Concurrency runtime — the `@sleep` leaf IO primitive (see docs/LANGUAGE.md).
+~ Concurrency runtime — the `@sleep` leaf IO primitive (see docs/concurrency/README.md).
 ~ `@sleep(seconds)` is an effect-only pause: used as a statement it waits right there on
 ~ the current fiber, then execution continues in program order. It carries no value yet —
 ~ the deferred-value / overlap story arrives with a value-returning primitive (`@readStdin`).

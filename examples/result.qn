@@ -1,6 +1,6 @@
 ~ The built-in `Result` sum type: `Ok(value)` for success, `NotOk(error)` for
 ~ failure. Pattern-match to extract the payload. Payloads may be Num, Bool, or Text
-~ (e.g. `Ok("done")`); see examples/composites.qn and docs/LANGUAGE.md.
+~ (e.g. `Ok("done")`); see examples/composites.qn and docs/types/sum-types.md.
 ~ `<< core.test` verifies the extracted value; on success the program exits 0.
 << core.test
 
