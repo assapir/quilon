@@ -408,13 +408,9 @@ impl TypeChecker {
                 // (`-> V`) compares against the body's fully-resolved type, not a bare name.
                 let resolved = self.resolve_type(return_type);
                 self.check_type_compatibility(&resolved, &body_type, &method.span)?;
-                // A GENERIC return annotation — in practice `-> Result`, whose `Ok(T)` /
-                // `NotOk(E)` payload slots are type variables the language cannot otherwise
-                // name — is refined to the inferred body type, exactly as a top-level
-                // function's is (see `check_function_declaration`, which carries the full
-                // reasoning). Without the refinement a caller matching on a method's
-                // `Result` binds the payload at the opaque `Generic` and reads an aggregate
-                // one back at the numeric fallback type.
+                // A generic return annotation (`-> Result`) is refined to the inferred body
+                // type, exactly as a top-level function's is — see
+                // `check_function_declaration` for why.
                 if resolved.contains_generic() {
                     body_type
                 } else {

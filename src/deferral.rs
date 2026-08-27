@@ -63,8 +63,7 @@ pub fn analyze(program: &Program) -> DeferInfo {
     let uses_deferral = program.items.iter().any(|item| match item {
         Item::FunctionDeclaration(f) => references_at_primitive(&f.body),
         Item::VariableDeclaration(v) => references_at_primitive(&v.value),
-        // A method body reaches `@` primitives like any other body — `core.http`'s
-        // `Request.send()` calls `@tcpRequest` — so a type's methods are scanned too.
+        // A method body reaches `@` primitives like any other body, so scan them too.
         Item::TypeDeclaration(t) => t
             .type_definition
             .methods()
@@ -111,8 +110,6 @@ impl Taint {
             // escaping across the call boundary.
             Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
             Item::VariableDeclaration(v) => self.strict(&v.value, &Scope::new()),
-            // Either kind of type carries methods (a record's members, a sum's `{ }` block),
-            // and both are ordinary bodies to the taint.
             Item::TypeDeclaration(t) => {
                 for method in t.type_definition.methods() {
                     self.analyze_method(method);

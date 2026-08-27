@@ -20,26 +20,23 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 ```
 
 `Request` and `Response` are **rich but lazy**: a `Request` holds its method and URL and a
-`Response` its raw reply text, and each derives a field — the path, the status, a header — only
-when a method asks for it.
+`Response` its raw reply text, and each derives a field only when a method asks for it.
 
 ## Types
 
 | Type | Shape |
 |------|-------|
 | `Body` | `{ content :: Text, contentType :: Text }` — the text to send and the media type to advertise. |
-| `Method` | `Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head` — the body-bearing methods carry a `Body`. |
+| `Method` | `Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head` — the body-bearing methods carry a `Body`. `Query` is RFC 10008's safe, idempotent method with a body. |
 | `Request` | `{ method :: Method, url :: Text }` |
 | `Response` | `{ raw :: Text }` |
 
 ## Free functions
 
-Neither has a receiver to hang off: each takes what a `Request` or `Response` is built *from*.
-
 | Function | Result |
 |----------|--------|
 | `get(url :: Text) -> Result` | Build a GET `Request` for `url` and send it: `Ok(Response)` / `NotOk(Text)`. |
-| `parseResponse(raw :: Text) -> Result` | Wrap raw response text as a `Response`: `Ok(Response)`, or `NotOk(Text)` when `raw` carries no HTTP status line. |
+| `parseResponse(raw :: Text) -> Result` | Wrap raw response text as a `Response`: `Ok(Response)`, or `NotOk(Text)` when `raw` does not open with `HTTP` followed by a terminated first line. |
 
 ## `Method`
 
@@ -47,8 +44,7 @@ Neither has a receiver to hang off: each takes what a `Request` or `Response` is
 |--------|--------|
 | `token() -> Text` | The token this method writes in a request line: `GET`, `POST`, `PUT`, `QUERY`, `DELETE`, `HEAD`. |
 | `payload() -> Body` | The `Body` a body-bearing method carries; an empty one for the rest. |
-
-`Query` serialises like `Post` — method token `QUERY`, the body, and its `Content-Length`.
+| `carriesBody() -> Bool` | Whether this method defines a meaning for an enclosed body — true for `Post` / `Put` / `Query`. |
 
 ## `Request`
 
@@ -56,28 +52,15 @@ Neither has a receiver to hang off: each takes what a `Request` or `Response` is
 |--------|--------|
 | `send() -> Result` | Perform the request over `core.net` and parse the reply: `Ok(Response)`, or the `NotOk(Text)` the transport reported. A network failure is a value, never a crash. |
 | `wire() -> Text` | The request serialised to the text that goes on the wire. |
-| `authority() -> Text` | The `host[:port]` to connect to — what the `Host` header carries. |
-| `path() -> Text` | The path the request line asks for; `/` when the URL carries none. |
+| `authority() -> Text` | The `host[:port]` to connect to — what the `Host` header carries. Any `userinfo@` prefix is dropped. |
+| `path() -> Text` | The path the request line asks for; `/` when the URL carries none. A bare query string gets the `/` root it implies (`example.com?a=b` → `/?a=b`), and a `#fragment` is dropped — a fragment never goes on the wire. |
+| `authorityEnd() -> Num` | Where the authority ends in `withoutScheme()`: the first `/`, `?` or `#`. |
 | `withoutScheme() -> Text` | The URL with any `scheme://` prefix removed. |
-
-```quilon
-<< core.http
-
-^ = () -> $ => <
-  request = Request {
-    method = Post(Body { content = "name=ada", contentType = "text/plain" }),
-    url = "http://example.com/submit"
-  }
-  assert(request.wire(), equals(
-    "POST /submit HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
-      + "Content-Type: text/plain\r\nContent-Length: 8\r\n"
-      + "\r\nname=ada"))
->
-```
 
 Requests go out as **HTTP/1.0**, which forbids the chunked transfer-encoding this module has no
 decoder for; the connection close alone delimits the body. `Content-Length` counts **bytes**
-(`.size`), not characters.
+(`.size`), not characters, and a body-bearing method sends it even for empty content — that is a
+body of length zero, not the absence of a body, and a `Content-Length`-less POST draws a 411.
 
 ## `Response`
 
@@ -89,17 +72,18 @@ decoder for; the connection close alone delimits the body. `Content-Length` coun
 | `headers() -> []Text` | The header lines, trimmed and without the status line. A line carrying no colon is not a header and is left out. |
 | `body() -> Text` | Everything after the blank line, character for character; `""` when the reply has no blank line. |
 | `head() -> Text` | The status line and the header lines — everything before the blank line — with CRLF endings rewritten to LF. |
+| `blankLine() -> Num` | Where the blank line separating head from body begins, or `raw.length` when the reply has none. |
 
-Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. The reply splits at the
-**first** blank line in either convention, so a body carrying a blank line in the other one
-cannot move the split. `body()` never consults `Content-Length` — the close delimits the body
-— so a wrong or absent `Content-Length` cannot truncate it, and a body carrying its own CRLF
-survives intact.
+Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. All four spellings of a blank
+line are measured and the **earliest** wins, so a body carrying a blank line in the other
+convention cannot move the split. `body()` never consults `Content-Length` — the close delimits
+the body — so a wrong or absent `Content-Length` cannot truncate it, and a body carrying its own
+CRLF survives intact.
 
-## Examples and tests
+Known gaps: an IPv6 literal host (`http://[::1]/p`) is read as already carrying a port, so the
+default `:80` is not appended; and a scheme-less URL whose query itself contains `://` is cut at
+that inner occurrence.
 
-| File | What it covers |
-|------|----------------|
-| `examples/http_test.qn` | The suite: parser and serialiser edge cases, offline over canned `Text`. Run it with `quilon test examples/http_test.qn`. |
-| `examples/http_parse.qn` | Serialising and parsing, offline — no network. |
-| `examples/http_get.qn` | A **live** GET to example.com. |
+See `examples/http_parse.qn` for serialising and parsing offline, `examples/http_get.qn` for a
+live GET, and `examples/http_test.qn` for the parser's and serialiser's edge cases — run that
+one with `quilon test examples/http_test.qn`.

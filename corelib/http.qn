@@ -1,21 +1,13 @@
-~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest.
-~ Import with `<< core.http`. Reference: docs/corelib/http.md.
-~
-~ HTTP only (no TLS). Each request opens one connection, sends `Connection: close`, and
-~ reads the close-delimited reply. `Request` and `Response` are rich-but-lazy: a `Request`
-~ holds its method and URL and a `Response` its raw reply text, and each derives a field —
-~ the path, the status, a header — only when a method asks for it.
-~
-~ Requests go out as HTTP/1.0, which forbids the chunked transfer-encoding this module
-~ has no decoder for; the connection close alone delimits the body. Replies are read
-~ leniently: HTTP/1.0 or 1.1, CRLF or bare LF.
+~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest. HTTP only,
+~ no TLS. Import with `<< core.http`. Reference: docs/corelib/http.md.
 
 << core.net
 
 ~ A request body: the text to send and the media type to advertise for it.
 >> Body = { content :: Text, contentType :: Text }
 
-~ The HTTP method. Body-bearing methods carry a `Body`; the rest are nullary.
+~ The HTTP method. Body-bearing methods carry a `Body`; the rest are nullary. `Query` is
+~ RFC 10008's safe, idempotent method with a body.
 >> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head {
   ~ The token this method writes in a request line.
   token = () -> Text => it ?
@@ -32,21 +24,41 @@
     | Put(carried)   => carried
     | Query(carried) => carried
     | _              => Body { content = "", contentType = "" }
+
+  ~ Whether this method defines a meaning for an enclosed body. Such a method sends
+  ~ `Content-Length` even when its content is empty — servers answer a POST without one with
+  ~ 411 — while the nullary methods send neither body header.
+  carriesBody = () -> Bool => it ?
+    | Post(_)  => true
+    | Put(_)   => true
+    | Query(_) => true
+    | _        => false
 }
 
 ~ A reply: the raw response text, read through the methods below.
 >> Response = {
   raw :: Text,
 
-  ~ Everything before the blank line — the status line and the header lines — with CRLF
-  ~ endings rewritten to LF, so one code path reads a CRLF reply and a bare-LF one.
-  ~ Rewriting settles BOTH awkward parts at once. `\r\n` is ONE grapheme cluster and so is
-  ~ `\n`, and `Text` indices count graphemes, so the rewrite maps one grapheme to one and
-  ~ leaves every index alone — while searching un-rewritten CRLF text for `\n` would land a
-  ~ character late. And with a single convention left, the first blank line is simply the
-  ~ first, so a body carrying a blank line in the other convention cannot move the split.
-  ~ A reply with no blank line at all is all head and no body.
-  head = () -> Text => it.raw.replaceAll("\r\n", "\n").split("\n\n")[0]
+  ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
+  ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
+  ~ carrying a blank line in the other convention cannot move the split. `split(x)[0].length`
+  ~ is "where x first appears, or the whole length when it never does" — a reply with no
+  ~ separator splits into one piece. Each spelling is exactly two graphemes, so the body starts
+  ~ two past this index; searching `raw` directly keeps every offset in one index space.
+  blankLine = () -> Num => <
+    atCrlfCrlf = it.raw.split("\r\n\r\n")[0].length
+    atLfLf = it.raw.split("\n\n")[0].length
+    atCrlfLf = it.raw.split("\r\n\n")[0].length
+    atLfCrlf = it.raw.split("\n\r\n")[0].length
+    pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
+    mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
+    pureConvention < mixedConvention ? pureConvention : mixedConvention
+  >
+
+  ~ Everything before the blank line — the status line and the header lines — with CRLF endings
+  ~ rewritten to LF, so the methods below split on `\n` whichever convention the server used. A
+  ~ reply with no blank line at all is all head and no body.
+  head = () -> Text => it.raw.slice(0, it.blankLine()).replaceAll("\r\n", "\n")
 
   ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
   statusLine = () -> Text => it.head().split("\n")[0].trim()
@@ -84,9 +96,8 @@
   ~ is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins.
   header = (name :: Text) -> Result => <
     wanted = name.trim().toLower()
-    nameOf = (line :: Text) -> Text => line.indexOf(":") ?
-      | Ok(colon) => line.slice(0, colon).trim().toLower()
-      | NotOk(_)  => ""
+    ~ Every line `headers()` yields carries a colon, so splitting on it always has a name.
+    nameOf = (line :: Text) -> Text => line.split(":")[0].trim().toLower()
     valueOf = (line :: Text) -> Text => line.indexOf(":") ?
       | Ok(colon) => line.slice(colon + 1, line.length).trim()
       | NotOk(_)  => ""
@@ -95,14 +106,13 @@
       | NotOk(_) => NotOk(name)
   >
 
-  ~ The body: everything after the blank line, character for character, and "" for a reply
-  ~ with no blank line. The blank line is located in the rewritten copy (see `head`) but the
-  ~ body is sliced out of the RAW text, so a body carrying its own CRLF survives intact —
-  ~ the two agree because the rewrite preserves grapheme indices, and the blank line is two
-  ~ graphemes either way. `Content-Length` is not consulted: the close delimits the body.
-  body = () -> Text => it.raw.replaceAll("\r\n", "\n").indexOf("\n\n") ?
-    | Ok(mark) => it.raw.slice(mark + 2, it.raw.length)
-    | NotOk(_) => ""
+  ~ Everything after the blank line, sliced out of the RAW text so a body carrying its own CRLF
+  ~ survives intact; "" for a reply with no blank line. `Content-Length` is never consulted —
+  ~ the close delimits the body.
+  body = () -> Text => <
+    mark = it.blankLine()
+    mark < it.raw.length ? it.raw.slice(mark + 2, it.raw.length) : ""
+  >
 }
 
 ~ Wrap raw response text as a `Response`, rejecting a reply with no HTTP status line:
@@ -122,30 +132,45 @@
     | Ok(mark) => it.url.slice(mark + 3, it.url.length)
     | NotOk(_) => it.url
 
-  ~ The `host[:port]` to connect to, and what the `Host` header carries.
-  authority = () -> Text => <
+  ~ Where the authority ends: the first `/`, `?` or `#`, or the whole string for a bare host.
+  ~ Cutting at all three keeps a query string out of the host — `example.com?a=b` is the host
+  ~ `example.com` asking for `/?a=b`, not a host named `example.com?a=b`.
+  authorityEnd = () -> Num => <
     rest = it.withoutScheme()
-    rest.indexOf("/") ?
-      | Ok(mark) => rest.slice(0, mark)
-      | NotOk(_) => rest
+    atPath = rest.split("/")[0].length
+    atQuery = rest.split("?")[0].length
+    atFragment = rest.split("#")[0].length
+    nearest = atPath < atQuery ? atPath : atQuery
+    nearest < atFragment ? nearest : atFragment
   >
 
-  ~ The path the request line asks for; `/` when the URL carries none.
+  ~ The `host[:port]` to connect to, and what the `Host` header carries. Any `userinfo@` prefix
+  ~ is dropped: it is a credential, not part of the host.
+  authority = () -> Text => <
+    named = it.withoutScheme().slice(0, it.authorityEnd())
+    parts = named.split("@")
+    parts[parts.size - 1]
+  >
+
+  ~ The path the request line asks for, with a bare query string given the `/` root it implies
+  ~ and any `#fragment` dropped — a fragment never goes on the wire. `/` when the URL carries
+  ~ no path at all.
   path = () -> Text => <
     rest = it.withoutScheme()
-    rest.indexOf("/") ?
-      | Ok(mark) => rest.slice(mark, rest.length)
-      | NotOk(_) => "/"
+    start = it.authorityEnd()
+    end = rest.split("#")[0].length
+    target = start < end ? rest.slice(start, end) : ""
+    target == "" ? "/" : (target.slice(0, 1) == "/" ? target : "/" + target)
   >
 
   ~ The request serialised to the text that goes on the wire. A body-bearing method adds
-  ~ `Content-Type` and a `Content-Length` counted in BYTES, then the body after the blank
-  ~ line.
+  ~ `Content-Type` and a `Content-Length` counted in BYTES — even for empty content, which is a
+  ~ body of length zero rather than no body — then the body after the blank line.
   wire = () -> Text => <
     carried = it.method.payload()
     requestLine = "`it.method.token()` `it.path()` HTTP/1.0\r\n"
     headers = "Host: `it.authority()`\r\nConnection: close\r\n"
-    bodyHeaders = carried.content.size > 0
+    bodyHeaders = it.method.carriesBody()
       ? "Content-Type: `carried.contentType`\r\nContent-Length: `carried.content.size`\r\n"
       : ""
     requestLine + headers + bodyHeaders + "\r\n" + carried.content
@@ -163,7 +188,4 @@
 }
 
 ~ Fetch a URL with a GET request: `Ok(Response)` / `NotOk(errorText)`.
->> get = (url :: Text) -> Result => <
-  request = Request { method = Get, url = url }
-  request.send()
->
+>> get = (url :: Text) -> Result => Request { method = Get, url = url }.send()

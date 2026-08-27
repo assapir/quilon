@@ -8,8 +8,6 @@
 << core.http
 << core.test.report
 
-~ Functions, not computed globals, so each case names the reply it is about.
-
 ~ A well-formed CRLF reply with two headers and a five-character body.
 crlfReply = () -> Text =>
   "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
@@ -24,8 +22,8 @@ headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text =>
     | Ok(value) => value
     | NotOk(_)  => fallback
 
-~ Parse a reply the case knows is well-formed. `assert`, not `expect`: a helper is not a
-~ case, and a fixture that will not parse is a broken test rather than a failed one.
+~ Parse a reply the case knows is well-formed. `assert`, not `expect`: an unparseable fixture
+~ is a broken test rather than a failed case.
 parsed = (raw :: Text) -> Response => <
   assert(parseResponse(raw), isOk())
   parseResponse(raw) ?
@@ -112,7 +110,6 @@ describe("headers", () => <
   >)
 
   it("ignores a body line that looks like a header", () => <
-    ~ `X-Body` sits AFTER the blank line, so it is body text, not a header.
     sneaky = parsed("HTTP/1.1 200 OK\r\nX-Real: yes\r\n\r\nX-Body: no")
     expect(sneaky.header("X-Real"), isOk())
     expect(sneaky.header("X-Body"), isNotOk())
@@ -149,8 +146,6 @@ describe("the body", () => <
     expect(parsed("HTTP/1.1 204 No Content\r\nX-A: b\r\n\r\n").body(), equals("")))
 
   it("keeps a CRLF inside the body intact", () => <
-    ~ The body's own blank line must not be mistaken for the header separator, and its
-    ~ line endings must survive un-normalised.
     multiline = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nfirst\r\nsecond\r\n\r\nthird")
     expect(multiline.body(), equals("first\r\nsecond\r\n\r\nthird"))
   >)
@@ -166,7 +161,6 @@ describe("the body", () => <
     expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\npayload").body(), equals("payload")))
 
   it("ignores a Content-Length of zero", () => <
-    ~ The close delimits the body, so a wrong Content-Length cannot truncate it.
     lying = parsed("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\npayload")
     expect(lying.body(), equals("payload"))
   >)
@@ -204,6 +198,16 @@ describe("line endings", () => <
     expect(mixed.body(), equals("body with \r\n\r\n inside"))
   >)
 
+  it("splits correctly when a header line ends in a stray CR", () => <
+    ~ `bar\r\r\n` is a malformed header line: the lone CR and the CRLF are two graphemes, but
+    ~ rewriting CRLF to LF would fuse them into one and shift every later offset by one, so the
+    ~ separator is located in the raw text instead.
+    strayCarriageReturn =
+      parsed("HTTP/1.1 200 OK\r\nX-Foo: bar\r\r\nContent-Type: t\r\n\r\nbody")
+    expect(strayCarriageReturn.body(), equals("body"))
+    expect(strayCarriageReturn.status(), equals(200))
+  >)
+
   it("splits at the first blank line when the body carries a bare-LF one", () => <
     ~ The mirror case: CRLF headers, a bare-LF blank line in the body.
     mixed = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nbody with \n\n inside")
@@ -212,7 +216,6 @@ describe("line endings", () => <
   >)
 
   it("agrees with the CRLF reply field for field", () => <
-    ~ The two fixtures differ only in their line endings, so every field must match.
     crlf = parsed(crlfReply())
     lineFeed = parsed(lineFeedReply())
     expect(lineFeed.statusLine(), equals(crlf.statusLine()))
@@ -271,6 +274,27 @@ describe("reading a URL apart", () => <
   it("keeps a path with a query string", () =>
     expect(Request { method = Get, url = "http://example.com/s?q=ada&n=1" }.path(),
       equals("/s?q=ada&n=1")))
+
+  it("keeps a query string out of the authority", () => <
+    ~ A URL with a query and no path: the `?` must not be read as part of the host, or the
+    ~ Host header names a host that cannot resolve.
+    bare = Request { method = Get, url = "http://example.com?a=b" }
+    expect(bare.authority(), equals("example.com"))
+    expect(bare.path(), equals("/?a=b"))
+  >)
+
+  it("drops a fragment rather than putting it on the wire", () => <
+    fragmented = Request { method = Get, url = "http://example.com/a#section" }
+    expect(fragmented.authority(), equals("example.com"))
+    expect(fragmented.path(), equals("/a"))
+  >)
+
+  it("reads a bare host carrying only a fragment as the root path", () =>
+    expect(Request { method = Get, url = "http://example.com#top" }.path(), equals("/")))
+
+  it("drops userinfo from the authority", () =>
+    expect(Request { method = Get, url = "http://ada@example.com/x" }.authority(),
+      equals("example.com")))
 >)
 
 describe("serialising a request", () => <
@@ -323,14 +347,17 @@ describe("serialising a request", () => <
     expect(request.wire(), not(contains("Content-Length")))
   >)
 
-  it("sends no body headers for a body-bearing method with empty content", () => <
+  it("sends Content-Length: 0 for a body-bearing method with empty content", () => <
+    ~ Empty content is a body of length zero, not the absence of a body; a POST with no
+    ~ Content-Length at all draws a 411 from real servers.
     request = Request {
       method = Post(Body { content = "", contentType = "text/plain" }),
       url = "example.com/x"
     }
-    expect(request.wire(), not(contains("Content-Length")))
     expect(request.wire(), equals(
-      "POST /x HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"))
+      "POST /x HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
+        + "Content-Type: text/plain\r\nContent-Length: 0\r\n"
+        + "\r\n"))
   >)
 
   it("names the port in Host when the URL carries one", () =>

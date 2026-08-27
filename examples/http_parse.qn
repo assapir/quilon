@@ -1,24 +1,18 @@
-~ The `core.http` client's offline half: serialising a request and reading a reply, both
-~ over plain `Text`, so nothing here touches the network. A GET and a POST are serialised
-~ and checked field by field, then a canned reply is parsed and its status line, a header,
-~ and its body are read back through `Response`'s methods. On success the program exits 0.
-~ See examples/http_get.qn for a live request, and examples/http_test.qn for the suite
-~ that covers the parser's and serialiser's edge cases.
+~ The `core.http` client's offline half: serialising a request and reading a reply, both over
+~ plain `Text`, so nothing here touches the network. On success the program exits 0.
 << core.http
 
 ^ = () -> $ => <
-  ~ A GET serialises to a request line, a Host header, and Connection: close.
   getRequest = Request { method = Get, url = "http://example.com/index.html" }
   assert(getRequest.wire(), contains("GET /index.html HTTP/1.0\r\n"))
   assert(getRequest.wire(), contains("Host: example.com\r\n"))
   assert(getRequest.wire(), contains("Connection: close\r\n"))
 
-  ~ A request reads its own URL back in pieces.
   assert(getRequest.authority(), equals("example.com"))
   assert(getRequest.path(), equals("/index.html"))
 
-  ~ A POST carries its body: the `Body` adds Content-Type and a byte-counted
-  ~ Content-Length, and the content follows the blank line. A URL with no path asks for "/".
+  ~ A POST adds Content-Type and a byte-counted Content-Length, and its content follows the
+  ~ blank line. A URL with no path asks for "/".
   postRequest = Request {
     method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
     url = "example.com"
@@ -28,7 +22,7 @@
   assert(postRequest.wire(), contains("Content-Length: 8\r\n"))
   assert(postRequest.wire(), contains("\r\n\r\nname=ada"))
 
-  ~ QUERY is body-bearing too, and writes QUERY in its request line.
+  ~ QUERY is body-bearing too.
   queryRequest = Request {
     method = Query(Body { content = "{\"q\":\"ada\"}", contentType = "application/json" }),
     url = "http://example.com/search"
@@ -36,7 +30,6 @@
   assert(queryRequest.wire(), contains("QUERY /search HTTP/1.0\r\n"))
   assert(queryRequest.wire(), contains("Content-Length: 11\r\n"))
 
-  ~ Parse a canned reply, then read its fields on access.
   canned = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
   assert(parseResponse(canned), isOk())
   response = parseResponse(canned) ?

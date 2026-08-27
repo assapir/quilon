@@ -201,12 +201,12 @@ fn binding_and_wildcard_payload_patterns_still_accepted() {
 #[test]
 fn record_field_typed_as_user_sum() {
     // A record field annotated as a user SUM type carries the sum: construct the
-    // record with a variant value, read the field back, and dispatch on it.
-    // Post is the second variant (POST -> exit 2).
+    // record with a variant value, read the field back, and dispatch on it. `verb`
+    // maps Post to 2, so exit 2 proves the field really dispatched.
     assert_exit(
         "Method = Get / Post\n\
          Request = { method :: Method, tag :: Num }\n\
-         verb = (m :: Method) -> Num => m ? | Get => 1 | Post => 2\n\
+         verb = (method :: Method) -> Num => method ? | Get => 1 | Post => 2\n\
          ^ = () -> Num => <\n\
            request = Request { method = Post, tag = 9 }\n\
            verb(request.method)\n\
@@ -223,7 +223,7 @@ fn bound_result_with_record_payload_matched() {
     // Point { x = 3, y = 4 } -> x + y = 7.
     assert_exit(
         "Point = { x :: Num, y :: Num }\n\
-         wrap = (p :: Point) -> Result => Ok(p)\n\
+         wrap = (point :: Point) -> Result => Ok(point)\n\
          ^ = () -> Num => <\n\
            boxed :: Result = wrap(Point { x = 3, y = 4 })\n\
            got :: Point = boxed ?\n\
