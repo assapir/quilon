@@ -45,3 +45,19 @@ code {
   --sl-color-gray-7: #f4f2ef;
   --sl-color-black: #fbfaf8;
 }
+
+/* Previous/next are secondary navigation — quieter than the content, still a
+ * full tap target on a phone. */
+.pagination-links a {
+  padding: 0.6rem 0.9rem;
+  gap: 0.4rem;
+  font-size: var(--sl-text-xs);
+  box-shadow: none;
+}
+.pagination-links .link-title {
+  font-size: var(--sl-text-base);
+  line-height: 1.35;
+}
+.pagination-links svg {
+  --sl-icon-size: 1.1rem;
+}

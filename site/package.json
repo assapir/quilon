@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "description": "The documentation site for the Quilon programming language — docs.quilon.run",
   "type": "module",
-  "packageManager": "pnpm@11.3.0",
+  "packageManager": "pnpm@11.24.0",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
