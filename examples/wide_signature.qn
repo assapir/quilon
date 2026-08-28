@@ -1,0 +1,36 @@
+~ A wide signature: 24 fully annotated parameters, a declared return type, a parameter
+~ list spread over several lines, and a recursive self-call. `blend` adds 1 to each of
+~ its 23 channels once per round, then returns their sum.
+~ Run: cargo run -- run examples/wide_signature.qn   (exits 0; assertions abort)
+
+blend = (
+  rounds :: Num,
+  c1 :: Num, c2 :: Num, c3 :: Num, c4 :: Num, c5 :: Num, c6 :: Num,
+  c7 :: Num, c8 :: Num, c9 :: Num, c10 :: Num, c11 :: Num, c12 :: Num,
+  c13 :: Num, c14 :: Num, c15 :: Num, c16 :: Num, c17 :: Num, c18 :: Num,
+  c19 :: Num, c20 :: Num, c21 :: Num, c22 :: Num, c23 :: Num
+) -> Num =>
+  rounds == 0
+    ? c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12
+      + c13 + c14 + c15 + c16 + c17 + c18 + c19 + c20 + c21 + c22 + c23
+    : blend(
+        rounds - 1,
+        c1 + 1, c2 + 1, c3 + 1, c4 + 1, c5 + 1, c6 + 1,
+        c7 + 1, c8 + 1, c9 + 1, c10 + 1, c11 + 1, c12 + 1,
+        c13 + 1, c14 + 1, c15 + 1, c16 + 1, c17 + 1, c18 + 1,
+        c19 + 1, c20 + 1, c21 + 1, c22 + 1, c23 + 1
+      )
+
+^ = () -> $ => <
+  ~ 1 + 2 + … + 23 = 276.
+  assert(
+    blend(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23),
+    equals(276)
+  )
+
+  ~ Two rounds add 1 to each of the 23 channels: 276 + 46 = 322.
+  assert(
+    blend(2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23),
+    equals(322)
+  )
+>

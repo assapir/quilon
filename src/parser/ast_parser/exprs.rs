@@ -651,7 +651,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a parameter list: `(a, b)`, `(a :: T, b :: T)`, `()`, or a single bare
     /// `name` / `name :: T` without parentheses. Stops before the `=>` / `->`.
-    /// Shared by lambdas and (via the existing inline logic) function declarations.
+    /// Shared by lambdas and function declarations.
     pub(super) fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
         if self.check(&TokenKind::ParenOpen) {

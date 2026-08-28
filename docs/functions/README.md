@@ -29,6 +29,10 @@ factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.qn`, `examples/fibonacci.qn`.)
 
+A parameter list has no length limit and may be spread over several lines. However wide it
+is, the definition is a function declaration — so the name is in scope for its own body and
+a recursive call resolves. (See `examples/wide_signature.qn`.)
+
 ## Function types & higher-order functions
 
 A **function type** is written with the arrow, reusing `->`. The parameter types go in

@@ -336,6 +336,29 @@ impl TokenKind {
                 | TokenKind::Not
         )
     }
+
+    /// Whether this kind can appear inside a WRITTEN TYPE — the alphabet the parser's
+    /// `parse_type` accepts, which a `debug_assert!` there keeps in step with this list.
+    /// A speculative scan over a `::` annotation or a parameter list stops at the first
+    /// token outside this set, which is how such a scan is bounded by the construct it is
+    /// reading rather than by a token count.
+    pub fn appears_in_type(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::Ident
+                | TokenKind::Unit
+                | TokenKind::ParenOpen
+                | TokenKind::ParenClose
+                | TokenKind::BracketOpen
+                | TokenKind::BracketClose
+                | TokenKind::BraceOpen
+                | TokenKind::BraceClose
+                | TokenKind::Comma
+                | TokenKind::Pipe
+                | TokenKind::ReturnArrow
+                | TokenKind::Arrow
+        )
+    }
 }
 
 /// Lex a whole string literal, starting just after the opening `"` (which the `#[token]`

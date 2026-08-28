@@ -156,6 +156,18 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A wide parameter list no longer changes what a definition means
+  ([#203](https://github.com/assapir/quilon/issues/203)).** The parser's speculative scans
+  gave up after a fixed number of tokens, so how a definition read depended on how many
+  tokens it happened to span: past ~17 annotated parameters a function silently became a
+  variable holding a lambda — its own recursive call then failed with `Undefined variable`
+  — and past ~20 it was rejected with `Expected ParenClose, got TypeAnnotation`. Each scan
+  is now bounded by the construct it reads: it walks the alphabet that construct can
+  contain and stops at the first token outside it. A parameter list of any width, spread
+  over any number of lines, parses as the function declaration it is, and a `::` annotation
+  carrying a function type (`f :: (Num, Text) -> Bool => …`) now reads as a lambda
+  parameter. See `examples/wide_signature.qn`.
+
 - **A method's receiver no longer keeps unreachable code alive.** Reachability collects
   names mentioned without resolving them, and every method body mentions `it`, the receiver
   — read as a top-level mention, that kept `core.test`'s `it` function and the whole
