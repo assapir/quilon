@@ -154,27 +154,17 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
-- **BREAKING: a member call resolves against the receiver's type, so a same-named top-level
-  function can no longer hijack a method
-  ([#265](https://github.com/assapir/quilon/issues/265)).** The parser desugars
-  `recv.name(a)` to `name(recv, a)`; codegen then resolved that name in the top-level
-  namespace *before* asking the receiver's type, so a program that imported a module and
-  defined its own `wire` had `request.wire()` emit a call to the global — the receiver
-  passed to a function that never expected it, surfacing as an LLVM verifier dump rather
-  than a diagnostic. Since `>>` applies to top-level items only, no module could defend its
-  methods by making them private.
-
-  A member call now asks the receiver's type alone, in the checker and in codegen alike:
-  a method the record or sum declares, or a built-in method reserved on `Text`, arrays,
-  `Map` or `Set`. A name the type does not have is a compile error naming both
-  (`'Counter' has no member 'bump'`), never a fall-through to a function of that name —
-  a compiler-provided one included, so a type is printable through `print(c)` and never
-  `c.print()`.
+- **BREAKING: a member call resolves against the receiver's type
+  ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
+  receiver's type for `name` and nothing else: a name the type does not have is a compile
+  error naming both (`'Counter' has no member 'bump'`), never a fall-through to a top-level
+  function of that name.
 
   What breaks: `.` on a value whose type has no such member no longer reaches a top-level
   function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
   Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
-  as before.
+  as before. The same goes for the names the compiler provides: `c.print()` is an error,
+  and prints as `print(c)`.
 
 ### Fixed
 

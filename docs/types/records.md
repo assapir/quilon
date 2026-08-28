@@ -39,30 +39,14 @@ An unannotated method parameter defaults to `Num` (as in any [ordinary
 definition](../functions/overloading.md)), and call sites are held to that default:
 `t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
 
-## A member call resolves against the receiver's type
-
-`recv.name(...)` asks `recv`'s type for `name` — a method it declares, or a built-in
-method reserved on `Text`, arrays, `Map` and `Set`. It never looks in the top-level
-namespace, so a name there — a function of your own, or one the compiler provides like
-[`print`](../corelib/io.md) — is a different thing and cannot take the call over:
-```quilon
-Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
-bump = (by :: Num) -> Num => by * 100
-
-^ = () -> Num => <
-  c :: Counter = Counter { value = 30 }
-  c.bump(5) + bump(5)     ~ 35 + 500: the method, then the function
->
-```
-A name the receiver's type does not have is an error naming both, even when a top-level
-function of that name is in scope:
+A method answers the plain form `name(recv, args)` too — and `recv |> name(args)`, which
+[is](../expressions/pipe.md) that call. Only the `.` form refuses the top-level fallback:
+`recv.name(...)` its type cannot answer is an error, where `name(recv, ...)` goes on to
+look the name up as usual.
 ```quilon ignore
 (5).double()   ~ error: 'Num' has no member 'double'
+double(5)      ~ 10
+5 |> double()  ~ 10
 ```
-So a type is printable through `print(c)`, never `c.print()` — printing renders the value
-through the type's `` ` `` member, and `print` itself is not a member of anything.
-
-A method also answers the plain form `name(recv, args)` — and `recv |> name(args)`, which
-[is](../expressions/pipe.md) that call. What only the `.` form does is refuse the top-level
-fallback: `recv.name(...)` its type cannot answer is the error above, where `name(recv, ...)`
-goes on to look the name up as usual.
+This holds for the names the compiler provides too: a record prints as `print(c)`, never
+`c.print()`.
