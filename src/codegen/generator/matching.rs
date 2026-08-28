@@ -97,10 +97,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to load result"))
     }
 
-    /// The block a match branches to when no arm matched it: the fail-loud backstop behind
-    /// the checker's exhaustiveness rule. It reports at `span` — the match's own location —
-    /// and terminates, so the no-match edge can never reach the continuation and load a
-    /// result slot no arm ever wrote.
+    /// The block a match branches to past its last arm: `__match_fail` at `span`, the
+    /// match's own location, and `unreachable`. It is what keeps the no-match edge from
+    /// reaching the continuation, which loads a result slot only a matching arm writes.
     ///
     /// The block is appended and filled without disturbing the current insert point, so a
     /// caller can build it before wiring its arms.

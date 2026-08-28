@@ -59,12 +59,7 @@ impl TypeChecker {
             }
         }
 
-        // A match with no arms at all yields nothing, and covers nothing either.
-        result_type.ok_or_else(|| TypeError::NonExhaustiveMatch {
-            scrutinee: Box::new(expression_type),
-            missing: Vec::new(),
-            span: span.clone(),
-        })
+        Ok(result_type.expect("the parser rejects a match with no arms"))
     }
 
     /// Every match must be total. A sum-typed scrutinee is covered arm by arm — one per
@@ -77,13 +72,7 @@ impl TypeChecker {
         arms: &[MatchArm],
         span: &Span,
     ) -> Result<(), TypeError> {
-        let catch_all = arms.iter().any(|arm| {
-            matches!(
-                arm.pattern,
-                Pattern::Wildcard { .. } | Pattern::Identifier { .. }
-            )
-        });
-        if catch_all {
+        if arms.iter().any(|arm| arm.pattern.is_irrefutable()) {
             return Ok(());
         }
 
@@ -169,14 +158,11 @@ impl TypeChecker {
                 // ANY payload of the variant, taking the wrong arm with no diagnostic.
                 // Reject it here until codegen tests payloads.
                 for pattern_arg in arguments {
-                    match pattern_arg {
-                        Pattern::Identifier { .. } | Pattern::Wildcard { .. } => {}
-                        Pattern::Number { .. } | Pattern::Constructor { .. } => {
-                            return Err(TypeError::RefutableConstructorArg {
-                                constructor: name.clone(),
-                                span: pattern_arg.span().clone(),
-                            });
-                        }
+                    if !pattern_arg.is_irrefutable() {
+                        return Err(TypeError::RefutableConstructorArg {
+                            constructor: name.clone(),
+                            span: pattern_arg.span().clone(),
+                        });
                     }
                 }
 

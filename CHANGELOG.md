@@ -208,8 +208,8 @@ All notable changes to Quilon are documented here.
   the `_` arm it was falling through to.
 
   Behind the checker, the no-match edge codegen emits — the backstop for what it cannot
-  prove — now reports where the match is and exits 101, instead of loading a result slot
-  no arm ever wrote.
+  prove — now reports where the match is and exits 1, the status every fail-loud runtime
+  check leaves, instead of loading a result slot no arm ever wrote.
 
 ### Fixed
 

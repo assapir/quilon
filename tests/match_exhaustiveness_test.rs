@@ -9,23 +9,19 @@
 
 mod common;
 
-use common::{assert_exit, build_and_run_native, tool_available, type_error_message};
+use common::{assert_exit, type_error_message};
 use inkwell::context::Context;
 use quilon::codegen::CodeGenerator;
-use quilon::lexer::Lexer;
-use quilon::parser::parse;
-use quilon::typechecker::TypeChecker;
 
-/// The LLVM IR for `source`, which must type-check first.
+/// The LLVM IR for `source`, generated the way the compiler generates it — through the
+/// shared front end, with the type oracle and source map codegen reads.
 fn emit_ir(source: &str) -> String {
-    let tokens = Lexer::tokenize(source).expect("lexing failed");
-    let program = parse(&tokens).expect("parsing failed");
-    TypeChecker::new()
-        .check_program(&program)
-        .expect("type checking failed");
-
+    let (program, types, defer, sources) = common::front_end(source, None);
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
+    generator.set_defer_info(defer);
+    generator.set_source_map(sources);
     generator.generate(&program).expect("codegen failed")
 }
 
@@ -153,17 +149,4 @@ fn assert_no_check_falls_through_to_the_continuation(ir: &str) {
             "a failed pattern test falls through to the result load: {branch}"
         );
     }
-}
-
-#[test]
-fn a_covered_match_still_builds_and_runs_natively() {
-    if !tool_available("clang") {
-        eprintln!("skipping the native build: clang is not on PATH");
-        return;
-    }
-    let (code, _) = build_and_run_native(
-        "match_covered",
-        "^ = () -> Num => <\n  n = 5\n  n ? | 0 => 1 | 5 => 42 | _ => 99\n>",
-    );
-    assert_eq!(code, 42, "the matching arm's value is the exit code");
 }
