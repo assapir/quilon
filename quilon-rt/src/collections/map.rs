@@ -5,7 +5,8 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, TAG_TEXT, debug_check_user_key, gc_alloc};
+use super::common::{FixedState, QlKey, TAG_TEXT, debug_check_user_key};
+use crate::mem::alloc_slots;
 use crate::mem::{QlSlice, alloc_text};
 use std::collections::HashMap;
 use std::os::raw::c_void;
@@ -24,9 +25,9 @@ struct QlMap {
 /// also anchors every key's bytes and value box for the collector).
 unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut QlMap {
     let n = table.len();
-    let snapshot_a = unsafe { gc_alloc::<u64>(n) };
-    let snapshot_b = unsafe { gc_alloc::<u64>(n) };
-    let snapshot_values = unsafe { gc_alloc::<*const c_void>(n) };
+    let snapshot_a = alloc_slots::<u64>(n);
+    let snapshot_b = alloc_slots::<u64>(n);
+    let snapshot_values = alloc_slots::<*const c_void>(n);
     for (i, (key, value)) in table.iter().enumerate() {
         unsafe {
             *snapshot_a.add(i) = key.a;
@@ -34,7 +35,7 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
             *snapshot_values.add(i) = *value;
         }
     }
-    let header = unsafe { gc_alloc::<QlMap>(1) };
+    let header = alloc_slots::<QlMap>(1);
     unsafe {
         std::ptr::write(
             header,
@@ -62,7 +63,7 @@ pub extern "C" fn __map_new() -> *mut c_void {
 pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> *mut c_void {
     // Until `build_map` builds the snapshot arrays, each inserted entry's key bytes and value
     // box are reachable ONLY from the system-heap HashMap, which the conservative collector
-    // does not scan. Every `alloc_text`/`gc_alloc` below can trigger a collection, so pause
+    // does not scan. Every `alloc_text`/`alloc_slots` below can trigger a collection, so pause
     // collection across the whole construction — otherwise a mid-build GC could reclaim an
     // already-inserted entry. Re-enable once the finished header's snapshots anchor everything.
     unsafe extern "C" {
@@ -80,7 +81,7 @@ pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8]
             std::ptr::null(),
             std::ptr::null(),
         );
-        let value_box = unsafe { gc_alloc::<QlSlice>(1) };
+        let value_box = alloc_slots::<QlSlice>(1);
         unsafe { std::ptr::write(value_box, alloc_text(value_bytes)) };
         table.insert(key, value_box as *const c_void);
     }

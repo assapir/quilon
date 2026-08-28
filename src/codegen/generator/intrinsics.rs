@@ -36,6 +36,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         let fn_type = match name {
             // i8* __alloc(i64) — GC-managed allocation.
             "__alloc" => ptr.fn_type(&[i64t.into()], false),
+            // i8* __alloc_array(i64 count, i64 elem_size) — GC-managed allocation of an
+            // array's backing store, sized by the runtime under an overflow check.
+            "__alloc_array" => ptr.fn_type(&[i64t.into(), i64t.into()], false),
             // void __gc_init() — initialize the Boehm GC.
             "__gc_init" => void.fn_type(&[], false),
             // void __exit(i32 code) — terminate the process with `code`. Backs the

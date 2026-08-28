@@ -31,7 +31,9 @@ Runtime failures use the same frame at the expression responsible: a failing
 [assertion](../corelib/test/README.md) at its own call site, a fail-loud check (a
 bad `array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-must-be-whole-numbers)
 that is not a whole number, a violated `Text.replace`/`repeat` contract) at the expression
-that broke the contract. Reports are colored when stderr is a terminal, and plain when redirected or under
+that broke the contract. A [failed or unrepresentable allocation](../memory.md) has no
+expression to point at and prints its message on its own. Reports are colored when stderr
+is a terminal, and plain when redirected or under
 `NO_COLOR`/`TERM=dumb`. Compile errors are not colored yet. A runtime report carries the
 source line it names, so that line's text is embedded in the built binary — with no way to
 strip it yet.

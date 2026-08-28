@@ -118,6 +118,73 @@ impl TypeChecker {
         })
     }
 
+    /// Check a call to overload set `name`. The arguments that are NOT lambdas are typed
+    /// first — they are what narrows the set — and each lambda argument is then typed
+    /// against the parameter every surviving candidate agrees on, so `record(1, (n) => n)`
+    /// works whenever the rest of the call picks the member out. Where the candidates
+    /// disagree the target type is unknown, and the lambda must annotate its parameters;
+    /// the error then says which set was left open.
+    pub(super) fn check_overloaded_call(
+        &mut self,
+        name: &str,
+        arguments: &[Expression],
+        first_ty: Option<&Type>,
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let mut arg_types: Vec<Option<Type>> = Vec::with_capacity(arguments.len());
+        for (i, argument) in arguments.iter().enumerate() {
+            arg_types.push(match (i, first_ty, argument) {
+                (0, Some(ty), _) => Some(ty.clone()),
+                (_, _, Expression::Lambda { .. }) => None,
+                _ => Some(self.infer_expression(argument)?),
+            });
+        }
+
+        for (i, argument) in arguments.iter().enumerate() {
+            if arg_types[i].is_some() {
+                continue;
+            }
+            let narrowed = self.narrowed_parameter(name, &arg_types, i);
+            let target = match &narrowed {
+                Some(ty) => LambdaTarget::Declared(ty),
+                None => LambdaTarget::OpenOverload(name),
+            };
+            arg_types[i] = Some(self.infer_argument(argument, target)?);
+        }
+
+        let arg_types: Vec<Type> = arg_types.into_iter().flatten().collect();
+        self.resolve_overload(name, &arg_types, span)
+    }
+
+    /// The type every still-possible member of `name` gives the argument at `index` — the
+    /// target a lambda there is typed against. A member is still possible when its arity
+    /// fits and every already-typed argument matches it exactly; `None` when the survivors
+    /// disagree (or none is left), which is precisely when the position states no type.
+    fn narrowed_parameter(
+        &self,
+        name: &str,
+        arg_types: &[Option<Type>],
+        index: usize,
+    ) -> Option<Type> {
+        let mut narrowed: Option<&Type> = None;
+        for overload in self.overloads.get(name)? {
+            // An argument still to be typed matches anything: it is what the surviving
+            // candidates are being asked about.
+            let possible =
+                crate::ast::parameters_accept(&overload.parameters, arg_types, |p, a| {
+                    a.as_ref().is_none_or(|a| types_match(p, a))
+                });
+            if !possible {
+                continue;
+            }
+            match narrowed {
+                Some(previous) if previous != &overload.parameters[index] => return None,
+                _ => narrowed = Some(&overload.parameters[index]),
+            }
+        }
+        narrowed.cloned()
+    }
+
     /// Resolve a call to overload set `name` by EXACT argument-type match (no implicit
     /// coercion). Returns the matched overload's return type. Errors on no match or
     /// (with exact matching, a duplicate-signature) ambiguity, listing the candidates.
@@ -183,8 +250,8 @@ impl TypeChecker {
         declaration: &FunctionDeclaration,
     ) -> Result<(), TypeError> {
         let mut parameters = Vec::with_capacity(declaration.parameters.len());
-        for p in &declaration.parameters {
-            match &p.type_annotation {
+        for (i, p) in declaration.parameters.iter().enumerate() {
+            match declaration.parameter_type(i) {
                 Some(t) => parameters.push(self.resolve_type(t)),
                 // Exact-type dispatch needs every overloaded member's parameters annotated.
                 None => {
@@ -211,8 +278,7 @@ impl TypeChecker {
         }
 
         let ret = declaration
-            .return_type
-            .as_ref()
+            .declared_return_type()
             .map(|t| self.resolve_type(t));
 
         self.finish_overload_registration(&declaration.name, &declaration.span, parameters, ret)

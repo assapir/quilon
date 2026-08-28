@@ -8,7 +8,7 @@
 //! `QlSlice` so it outlives this call and is collected like any heap value. See
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
-use crate::mem::{__alloc, QlSlice, alloc_text, format_num};
+use crate::mem::{QlSlice, alloc_slots, alloc_text, format_num};
 use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
@@ -274,7 +274,7 @@ pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen
         return QlSlice::empty();
     }
     // Backing array of `n` Text structs (GC-owned), one per piece.
-    let elems = __alloc((n * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+    let elems = alloc_slots::<QlSlice>(n);
     for (i, part) in parts.iter().enumerate() {
         // SAFETY: `elems` has room for `n` `QlSlice`s and `i < n`.
         unsafe { std::ptr::write(elems.add(i), alloc_text(part.as_bytes())) };

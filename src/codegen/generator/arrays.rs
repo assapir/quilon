@@ -274,13 +274,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// array shape, same as `generate_array`). The element count is `|hi - lo| + 1`
     /// and the direction (ascending vs descending) is decided at runtime, since the
     /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
-    /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage is GC-allocated (`__alloc`)
-    /// so the array may safely escape the current frame.
+    /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage comes from the shared
+    /// [`Self::alloc_array_data`], so the array may safely escape the current frame.
     ///
     /// Both ends go through the runtime's `__range_endpoint` rather than a raw `fptosi`,
     /// which rejects a fractional, NaN, or out-of-`i64` endpoint at `span` instead of
-    /// converting it to poison. The checker already refused a literal one; this covers the
-    /// computed ends, which are the reason the range is built at runtime at all.
+    /// converting it to poison — BEFORE any size is derived from it, so the checked
+    /// allocation never sees a count built out of one. The checker already refused a
+    /// literal end; this covers the computed ones, which are why a range is built at
+    /// runtime at all.
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
@@ -332,21 +334,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_int_add(span_abs, one, "range_count")
             .map_err(ctx("Failed to add range count"))?;
 
-        // GC-allocate count * sizeof(f64) bytes for the backing data.
-        let eight = i64_type.const_int(8, false);
-        let bytes = self
-            .builder
-            .build_int_mul(count, eight, "range_bytes")
-            .map_err(ctx("Failed to size range alloc"))?;
-        let alloc = self.get_intrinsic("__alloc")?;
-        let alloc_call = self
-            .builder
-            .build_call(alloc, &[bytes.into()], "range_data")
-            .map_err(ctx("Failed to allocate range"))?;
-        let data_ptr = {
-            use inkwell::values::AnyValue;
-            alloc_call.as_any_value_enum().into_pointer_value()
-        };
+        let data_ptr = self.alloc_array_data(f64_type.into(), count)?;
 
         // Fill loop: for i in 0..count: data[i] = (f64)(lo + i*step).
         let counter = self.create_entry_block_alloca("range_i", i64_type.into())?;
@@ -525,6 +513,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// GC-allocate a `{ ptr, size }` array of `count` elements of `elem_llvm`, returning
     /// the data pointer. The caller fills it, then builds the struct via `array_struct`.
+    ///
+    /// The element count and the element size go to the runtime as they are, rather than
+    /// as a product computed here: `__alloc_array` multiplies them under an overflow
+    /// check, which an `i64` `mul` in the emitted code cannot do.
     pub(super) fn alloc_array_data(
         &mut self,
         elem_llvm: BasicTypeEnum<'ctx>,
@@ -533,15 +525,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let elem_size = elem_llvm
             .size_of()
             .ok_or_else(|| "array element type has no compile-time size".to_string())?;
-        let bytes = self
-            .builder
-            .build_int_mul(count, elem_size, "am_bytes")
-            .map_err(ctx("Failed to size array alloc"))?;
-        let alloc = self.get_intrinsic("__alloc")?;
+        let alloc = self.get_intrinsic("__alloc_array")?;
         use inkwell::values::AnyValue;
         Ok(self
             .builder
-            .build_call(alloc, &[bytes.into()], "am_alloc")
+            .build_call(alloc, &[count.into(), elem_size.into()], "am_alloc")
             .map_err(ctx("Failed to allocate array"))?
             .as_any_value_enum()
             .into_pointer_value())

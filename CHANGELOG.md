@@ -6,6 +6,24 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A lambda takes its parameter types from the signature that receives it.** Where a
+  lambda lands on a known function type, that type says what its parameters are:
+
+  ```quilon ignore
+  apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
+
+  apply(10, (n) => n + 1)                ~ `f`'s type already says `n` is a Num
+  10 |> apply((n) => n + 1)              ~ the pipe injects the first argument
+  c.applyTo((n) => n * 2)                ~ a method's function-typed parameter
+  scale :: (Num) -> Num = (n) => n * 4   ~ a binding that declares its function type
+  ```
+
+  An annotation stays legal and wins where written. Where no target type is known — a
+  lambda in a plain expression, or an overload set the other arguments do not narrow to one
+  member — the parameters must still be annotated, and the error says which is missing
+  rather than assuming `Num`. An overload set may now also dispatch on a function-typed
+  parameter. See `docs/functions/README.md`.
+
 - **`core.http` — an HTTP client written in Quilon** over `core.net`'s `@tcpRequest`. HTTP
   only, no TLS. It exports four type names and no free functions, since every exported name is
   a word an importer can no longer use:
@@ -171,6 +189,10 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
+- **BREAKING: the `^ = (argc :: Num, argv :: Num)` entry form is gone.** An entry point
+  takes its arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any
+  other unsupported `^` signature.
+
 - **BREAKING: a member call resolves against the receiver's type
   ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
   receiver's type for `name` and nothing else: a name the type does not have is a compile
@@ -183,6 +205,23 @@ All notable changes to Quilon are documented here.
   as before.
 
 ### Fixed
+
+- **Allocation fails loudly** ([#224](https://github.com/assapir/quilon/issues/224)). Three
+  holes at the runtime/codegen boundary, all of which turned a bad allocation into memory
+  corruption instead of a message:
+
+  - A collector that could not satisfy a request returned null, and the null became a
+    `Text`/array whose `data` was null while its length said otherwise — undefined behavior
+    at the first read, far from the allocation that failed. `__alloc` now reports
+    `out of memory: cannot allocate N bytes` and exits 1.
+  - An array's `count * elem_size` was multiplied in the emitted code, where an `i64`
+    product wraps. A wrapped size is non-positive, the allocator clamped it to a single
+    byte, and the fill wrote every element past it (`1 <- 2000000000000000000` segfaulted).
+    The size is now computed by the runtime under an overflow check, so it reports
+    `allocation too large: …` and exits 1.
+  - `quilon run` replaced an argument containing a NUL byte with `""`, so the program ran
+    on a value nobody passed. Such an argument cannot reach a native binary at all — the
+    operating system refuses to start one — so the JIT now refuses it too.
 
 - **A method's receiver no longer keeps unreachable code alive.** Reachability collects
   names mentioned without resolving them, and every method body mentions `it`, the receiver

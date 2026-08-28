@@ -35,4 +35,11 @@
   assert(span.size, equals(6))
   assert(span[0], equals(-2))
   assert(span[5], equals(3))
+
+  ~ A wide range holds every element it claims: the backing array is sized from the
+  ~ count, and both ends read back.
+  wide :: []Num = 1 <- 100000
+  assert(wide.size, equals(100000))
+  assert(wide[0], equals(1))
+  assert(wide[99999], equals(100000))
 >

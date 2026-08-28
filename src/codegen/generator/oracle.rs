@@ -109,6 +109,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// The Quilon type of a function or lambda parameter: the annotation where one is
+    /// written, else the type the checker inferred for it from the receiving signature and
+    /// recorded against the parameter's own span. A lambda whose parameters are typed by
+    /// context (`apply(10, (n) => n + 1)`) carries nothing in the AST to read, so the
+    /// oracle is where its parameter types come from — exactly as read sites already
+    /// recover element and field types. `Num` stays the last resort for the IR-only
+    /// codegen tests, which build a module without a type-check pass.
+    pub(super) fn parameter_type(&self, parameter: &crate::ast::Parameter) -> Type {
+        parameter
+            .type_annotation
+            .clone()
+            .or_else(|| self.oracle.type_at(&parameter.span).cloned())
+            .unwrap_or(Type::Num)
+    }
+
+    /// [`Self::parameter_type`] over a whole parameter list — a signature as the checker
+    /// resolved it.
+    pub(super) fn parameter_types(&self, parameters: &[crate::ast::Parameter]) -> Vec<Type> {
+        parameters.iter().map(|p| self.parameter_type(p)).collect()
+    }
+
     /// Whether `expression` is a `Text` — the operand test the built-in `Text` operators
     /// (comparison and `+`) route on. Reads the checker's recorded type for the node where
     /// there is one, and only falls back to [`infer_type`]'s structural inference (which
@@ -370,9 +391,16 @@ impl TypeOracle {
         Self { table }
     }
 
+    /// The type the checker recorded for a source span. The one lookup into the table;
+    /// a parameter is not an expression and has no node of its own, so its inferred type
+    /// is read back by its own span.
+    pub(super) fn type_at(&self, span: &Span) -> Option<&Type> {
+        self.table.get(span)
+    }
+
     /// The inferred type of `expression`, by its span. `None` if the checker didn't record it.
     pub(super) fn expression_type(&self, expression: &Expression) -> Option<&Type> {
-        self.table.get(expression.span())
+        self.type_at(expression.span())
     }
 }
 

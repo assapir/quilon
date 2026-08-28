@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! Shared backing for the `Map` and `Set` collection types: the ABI key triple, the
-//! fixed-seed hasher, and the GC allocator both headers build their snapshots with.
+//! Shared backing for the `Map` and `Set` collection types: the ABI key triple and the
+//! fixed-seed hasher. Both headers build their snapshots with [`crate::mem::alloc_slots`].
 
-use crate::mem::__alloc;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::os::raw::c_void;
 
@@ -172,10 +171,4 @@ pub(crate) fn debug_check_user_key<'a>(
     _existing: impl Iterator<Item = &'a QlKey>,
     _new_key: &QlKey,
 ) {
-}
-
-/// GC-allocate space for `count` (at least one) values of type `T`, zeroed.
-pub(crate) unsafe fn gc_alloc<T>(count: usize) -> *mut T {
-    let bytes = std::mem::size_of::<T>() * count.max(1);
-    __alloc(bytes as i64) as *mut T
 }
