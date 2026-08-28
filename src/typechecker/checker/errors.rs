@@ -39,7 +39,9 @@ impl TypeError {
             | TypeError::ExpectOutsideTest { span }
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
-            | TypeError::UnknownMember { span, .. } => span,
+            | TypeError::UnknownMember { span, .. }
+            | TypeError::NotRenderable { span, .. }
+            | TypeError::RenderableBuiltinRedefined { span, .. } => span,
         }
     }
 }
@@ -275,6 +277,19 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "operator '{operator}' cannot be defined at the top level — define it as a member of the record or sum type it operates on, where 'it' is the left operand (e.g. inside the type's '{{ }}')",
+                )
+            }
+            TypeError::NotRenderable { name, got, .. } => {
+                write!(
+                    f,
+                    "'{name}' renders its argument through the type's '`' member, and {} has none",
+                    crate::ast::type_label(got),
+                )
+            }
+            TypeError::RenderableBuiltinRedefined { name, .. } => {
+                write!(
+                    f,
+                    "'{name}' is provided by the compiler and already takes any renderable value — give the type its own '`' render member rather than defining '{name}'",
                 )
             }
             TypeError::OperatorMemberArity { operator, got, .. } => {

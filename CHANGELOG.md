@@ -28,6 +28,33 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **`print` takes anything renderable: the per-type overload set is gone.** `print`,
+  `eprint` and `write` no longer carry a member per built-in type. At a call site the
+  compiler resolves the `` ` `` render member on the argument's type, calls it, and writes
+  the resulting `Text` — the path string interpolation already took:
+
+  ```quilon
+  Money = {
+    amount :: Num, currency :: Text,
+    ` = () -> Text => "`it.amount` `it.currency`"
+  }
+
+  price = Money { amount = 12, currency = "EUR" }
+  print(price)                ~ 12 EUR — no corelib involvement
+  ```
+
+  A type becomes printable by defining that member, never by extending `print`. `write`
+  renders too, so it is no longer limited to `Text` (a `Text` renders as itself, so its
+  bytes still go out as they are). A type with no member of its own keeps the default
+  rendering for its shape — a record shows its type name, a sum its variant. A **function**
+  value is the one thing that does not render, and the error now names the missing member
+  rather than listing overload candidates.
+
+  The compiler claims these three names at their own arity, so a definition there is
+  rejected and points at the render member; another arity is still an ordinary overload set
+  beside the built-in. An existing user `print` member migrates to a `` ` `` member on the
+  type it printed. See `docs/corelib/io.md` and `examples/printing.qn`.
+
 - **`>` closes a block by default; it is greater-than only when an operand follows it.**
   A block-bodied lambda now fits inside a call on one line:
 
@@ -140,7 +167,9 @@ All notable changes to Quilon are documented here.
   A member call now asks the receiver's type alone, in the checker and in codegen alike:
   a method the record or sum declares, or a built-in method reserved on `Text`, arrays,
   `Map` or `Set`. A name the type does not have is a compile error naming both
-  (`'Counter' has no member 'bump'`), never a fall-through to a function of that name.
+  (`'Counter' has no member 'bump'`), never a fall-through to a function of that name —
+  a compiler-provided one included, so a type is printable through `print(c)` and never
+  `c.print()`.
 
   What breaks: `.` on a value whose type has no such member no longer reaches a top-level
   function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.

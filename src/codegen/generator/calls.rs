@@ -37,11 +37,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Which runtime intrinsic a call lowers to, when it lowers to one rather than to a
-    /// Quilon function. The compiler's built-ins are overload MEMBERS, so one claims a call
-    /// only at its own arity and only while no user member of the same set matches the
-    /// argument types. Call lowering and the tail-call analysis both ask this one question,
-    /// so they can never disagree about what a call is — a built-in name a user overloaded
-    /// is an ordinary function, and a self-call in it still becomes a loop.
+    /// Quilon function. A built-in claims a call only at its own arity; an output built-in
+    /// claims every such call outright (nothing may be defined at that arity), while an
+    /// overload member yields to a user member of the same set that matches the argument
+    /// types. This mirrors what the type checker resolved. Call lowering and the tail-call
+    /// analysis both ask this one question, so they can never disagree about what a call is —
+    /// a built-in name a user overloaded is an ordinary function, and a self-call in it still
+    /// becomes a loop.
     pub(super) fn intrinsic_lowering(
         &self,
         name: &str,
@@ -56,8 +58,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
             _ => return None,
         };
-        if arguments.len() != crate::ast::builtin_overload_arity(name)? {
+        if arguments.len() != crate::ast::builtin_arity(name)? {
             return None;
+        }
+        // An output built-in takes any renderable value at its arity, so no user member can
+        // stand between this call and it.
+        if crate::ast::renderable_builtin(name).is_some() {
+            return Some(lowering);
         }
         // No user member can match unless the name is an overload set here at all, and
         // inferring every argument's type is the expensive part — so ask that first.
@@ -134,7 +141,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // The single argument renders through its `` ` `` operator (built-in
                 // default or user override). A function-typed argument is not a renderable
                 // value — the type checker already rejects `print(f)` (see
-                // `is_generic_print_call`), so it never reaches here.
+                // `check_renderable_builtin_call`), so it never reaches here.
                 IntrinsicLowering::Print => self.generate_print(function_name, arguments),
                 IntrinsicLowering::Write => self.generate_write(arguments),
                 IntrinsicLowering::Now => self.generate_now(),

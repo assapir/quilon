@@ -1,8 +1,8 @@
 ~ core.io — output to file descriptors.
 ~ Import with `<< core.io`. Exposes:
-~   write(content, fd)   ~ raw write of a Text to a file descriptor (no newline);
-~                          returns the number of bytes written (Num)
-~   print(x)             ~ write x to stdout, with a trailing newline (Num/Text/Bool)
+~   write(content, fd)   ~ write content's rendered bytes to a file descriptor (no
+~                          newline); returns the number of bytes written (Num)
+~   print(x)             ~ write x to stdout, with a trailing newline (any renderable value)
 ~   eprint(x)            ~ same, to stderr
 ~   @readStdin()         ~ read one line from stdin (Text, without the trailing newline)
 ~   stdout, stderr       ~ the standard file descriptors (Num: 1 and 2)
@@ -25,18 +25,19 @@
 >> stdout = 1
 >> stderr = 2
 
-~ Write a value to stdout followed by a newline. Polymorphic over Num / Text / Bool.
-~ `print(x)` is the ergonomic form of `x |> write(stdout)` (plus the newline).
+~ Write a value to stdout followed by a newline. Takes anything renderable: the value is
+~ rendered through its type's `` ` `` member. `print(x)` is the ergonomic form of
+~ `x |> write(stdout)` (plus the newline).
 ~ Returns Unit (`$`) — the printed value's "result" is meaningless.
 >> print = x -> $ => $
 
-~ Write a value to stderr followed by a newline. Polymorphic over Num / Text / Bool.
+~ Write a value to stderr followed by a newline. Takes anything renderable.
 ~ Returns Unit (`$`).
 >> eprint = x -> $ => $
 
-~ Write a Text's raw bytes to a file descriptor (no trailing newline).
+~ Write a value's rendered bytes to a file descriptor (no trailing newline).
 ~ Returns the number of bytes written. e.g. `"hi" |> write(stdout)`.
->> write = (content :: Text, fd :: Num) -> Num => 0
+>> write = (content, fd :: Num) -> Num => 0
 
 ~ Read one line from stdin, returning it as a Text WITHOUT the trailing newline.
 ~ `@readStdin` is a leaf IO primitive (the `@` marker): calling it launches the read in the

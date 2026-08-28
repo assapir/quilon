@@ -27,16 +27,17 @@ impl TypeChecker {
                 *fn_counts.entry(declaration.name.as_str()).or_insert(0) += 1;
             }
         }
-        // A name forms an overload set if it is operator-named, has 2+ definitions, OR
-        // already has a built-in overload set (e.g. `print`/`eprint` — a user
-        // definition of one ADDS an overload, it does not shadow the builtins).
+        // A name forms an overload set if it is operator-named, has 2+ definitions, OR the
+        // compiler provides it (e.g. `now` — a user definition of one ADDS an overload, it
+        // does not shadow the built-in). Codegen asks the same question, so the two passes
+        // agree on what a single definition of such a name is.
         // `^` (entry point) is never an overload set, even if (erroneously) repeated.
         self.overloaded_names = fn_counts
             .iter()
             .filter(|(name, count)| {
                 (crate::ast::is_operator_symbol(name)
                     || **count > 1
-                    || self.overloads.contains_key(**name))
+                    || crate::ast::is_compiler_provided_name(name))
                     && **name != "^"
             })
             .map(|(name, _)| name.to_string())

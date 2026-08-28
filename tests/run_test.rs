@@ -585,6 +585,31 @@ fn a_method_may_be_named_like_a_compiler_provided_form() {
 }
 
 #[test]
+fn a_method_answers_a_member_call_at_an_output_built_ins_own_arity() {
+    // `c.print()` is `print(c)`, exactly the arity `print` claims — and it is still a member
+    // call, so `Counter`'s own `print` answers it in both passes. Letting the built-in claim
+    // it in codegen alone is how the checker and codegen come apart. 5 + 1 = 6.
+    assert_exit(
+        "Counter = {\n  value :: Num,\n  print = () -> Num => it.value + 1\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n>",
+        6,
+    );
+}
+
+#[test]
+fn a_member_call_never_reaches_an_output_built_in() {
+    // A type with a render member is printable — but through `print(c)`, the top-level form.
+    // `c.print()` asks `Counter` for a `print` it does not have, and the advice names the
+    // compiler-provided one rather than pretending nothing of that name exists.
+    let message = common::type_error_message(
+        "<< core.io\nCounter = {\n  value :: Num,\n  ` = () -> Text => \"Counter(`it.value`)\"\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n  0\n>",
+    );
+    assert!(
+        message.contains("'Counter' has no member 'print'") && message.contains("call it as"),
+        "expected the diagnostic to name the member and point at the built-in, got: {message}"
+    );
+}
+
+#[test]
 fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
     // A method calling a sibling declared below it (there is no hoisting inside a type)
     // gets the plain error — pointing at a top-level function that does not exist would
@@ -1006,9 +1031,9 @@ fn result_nested_result_payload_boxes_and_extracts() {
 }
 
 #[test]
-fn print_remains_an_overload_over_builtins() {
-    // `print` is now a visible overload set over Num/Text/Bool (returning `$`), not a
-    // compiler special case. Each printable type type-checks and runs.
+fn print_takes_every_builtin_type() {
+    // One printing rule, not a member per type: each built-in renders through its own
+    // `` ` `` and `print` yields `$`.
     assert_exit_linked(
         "<< core.io\n^ = () -> Num => <\n  print(1)\n  print(\"two\")\n  print(true)\n  0\n>",
         0,
@@ -1016,9 +1041,9 @@ fn print_remains_an_overload_over_builtins() {
 }
 
 #[test]
-fn user_print_overload_is_added_not_shadowed() {
-    // A user `print` overload with its own signature is ADDED to the overload set; the
-    // built-in single-arg print/eprint still work, and the user 2-arg form dispatches.
+fn user_print_overload_at_another_arity_is_added_not_shadowed() {
+    // The built-in claims one argument (any renderable value); a definition at another
+    // arity forms an overload set beside it, and both calls dispatch.
     assert_exit_linked(
         "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  print(\"hi\")\n  print(40, 2)\n>",
         42,

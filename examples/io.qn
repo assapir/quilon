@@ -1,16 +1,16 @@
 ~ Console output lives in the core.io module (imported explicitly).
-~   print(x)   writes x + a newline to stdout (Num / Text / Bool)
+~   print(x)   writes x + a newline to stdout (any renderable value)
 ~   eprint(x)  same, to stderr
-~   write(content, fd)  raw bytes to a file descriptor; returns the byte count
+~   write(content, fd)  the rendered bytes to a file descriptor; returns the byte count
 ~ `print(x)` is the ergonomic form of `x |> write(stdout)` plus the newline. On output,
-~ `print` renders its value for a reader; `write` is byte-exact. Both measure a Text in bytes.
+~ `print` shows its value for a reader; `write` is byte-exact. Both measure a Text in bytes.
 ~ `<< core.test` verifies the byte count `write` returns; on success the program exits 0.
 << core.io
 << core.test
 
-~ The corelib names are overload sets, not reserved words: this ADDS a `write` member
-~ taking just the content, and the built-in two-argument member it calls still reaches
-~ the runtime. Every call picks the member its argument types match.
+~ The built-in claims `write` at two arguments, leaving every other arity free: this ADDS a
+~ one-argument `write` member, and the built-in it calls still reaches the runtime. Every
+~ call picks the member its argument types match.
 write = (content :: Text) -> Num => write(content, stdout)
 
 ^ = () -> $ => <

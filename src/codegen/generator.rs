@@ -3,7 +3,7 @@
 use crate::ast::{
     BinaryOperator, Expression, FunctionDeclaration, InterpolationPart, Item, MatchArm,
     MethodDeclaration, Pattern, Program, Type, TypeDeclaration, TypeDefinition, UnaryOperator,
-    VariableDeclaration, is_builtin_overload_name, is_operator_symbol,
+    VariableDeclaration, is_compiler_provided_name, is_operator_symbol,
 };
 use crate::codegen::debug::DebugInfo;
 use crate::lexer::Span;
@@ -497,7 +497,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .copied()
                         .unwrap_or(0)
                         > 1
-                    || is_builtin_overload_name(&declaration.name))
+                    || is_compiler_provided_name(&declaration.name))
                 && declaration.name != "^"
             {
                 let parameters: Vec<Type> = declaration

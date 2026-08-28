@@ -43,8 +43,8 @@ definition](../functions/overloading.md)), and call sites are held to that defau
 
 `recv.name(...)` asks `recv`'s type for `name` — a method it declares, or a built-in
 method reserved on `Text`, arrays, `Map` and `Set`. It never looks in the top-level
-namespace, so a function that happens to share the name is a different function and
-cannot take the call over:
+namespace, so a name there — a function of your own, or one the compiler provides like
+[`print`](../corelib/io.md) — is a different thing and cannot take the call over:
 ```quilon
 Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
 bump = (by :: Num) -> Num => by * 100
@@ -59,6 +59,9 @@ function of that name is in scope:
 ```quilon ignore
 (5).double()   ~ error: 'Num' has no member 'double'
 ```
+So a type is printable through `print(c)`, never `c.print()` — printing renders the value
+through the type's `` ` `` member, and `print` itself is not a member of anything.
+
 A method also answers the plain form `name(recv, args)` — and `recv |> name(args)`, which
 [is](../expressions/pipe.md) that call. What only the `.` form does is refuse the top-level
 fallback: `recv.name(...)` its type cannot answer is the error above, where `name(recv, ...)`
