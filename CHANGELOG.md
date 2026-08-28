@@ -2,7 +2,7 @@
 
 All notable changes to Quilon are documented here.
 
-## Unreleased
+## 0.9.3 "Hegemon" — 2026-08-28
 
 ### Added
 
