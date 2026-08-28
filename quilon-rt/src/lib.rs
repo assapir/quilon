@@ -65,7 +65,8 @@ pub use mem::{
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
-    __assert_failed, __expect_failed, ASSERTION_EXIT_CODE, MAX_PATH_WIDTH, QlSite, shorten_path,
+    __assert_failed, __expect_failed, __match_fail, ASSERTION_EXIT_CODE, MAX_PATH_WIDTH, QlSite,
+    shorten_path,
 };
 pub use scheduler::__run_fiber_main;
 pub use test_registry::{
@@ -142,6 +143,7 @@ intrinsic_registry! {
     __bool_to_text: extern "C" fn(i64) -> QlSlice,
     __exit: extern "C" fn(c_int) -> !,
     __index_fail: extern "C" fn(f64, i64, *const QlSite) -> !,
+    __match_fail: extern "C" fn(*const QlSite) -> !,
     __range_endpoint: extern "C" fn(f64, *const QlSite) -> i64,
     __range_count: extern "C" fn(i64, i64, *const QlSite) -> i64,
     __alloc: extern "C" fn(i64) -> *mut c_void,

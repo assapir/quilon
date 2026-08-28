@@ -46,6 +46,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
+        let no_match_block = self.no_match_block_for(arms, match_expression.span())?;
+
         // Jump to first check
         self.builder
             .build_unconditional_branch(check_blocks[0])
@@ -59,18 +61,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Check if pattern matches
             let matches = self.check_pattern(&arm.pattern, match_val)?;
 
-            // Conditional branch to arm or next check
-            let next_block = if i + 1 < check_blocks.len() {
-                check_blocks[i + 1]
-            } else {
-                // Last arm - if it doesn't match, it's an error
-                // For now, just go to continuation with a default value
-                cont_block
+            // Branch to the arm or to the next check; past the last arm, to the abort —
+            // unless the last arm takes everything, in which case there is no edge past it.
+            let next_block = match i + 1 < check_blocks.len() {
+                true => Some(check_blocks[i + 1]),
+                false => no_match_block,
             };
-
-            self.builder
-                .build_conditional_branch(matches, arm_blocks[i], next_block)
-                .map_err(ctx("Failed to build conditional branch"))?;
+            self.branch_to_arm(matches, arm_blocks[i], next_block)?;
 
             // Generate arm body
             self.builder.position_at_end(arm_blocks[i]);
@@ -95,6 +92,79 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(result_llvm, result_alloca, "match_result")
             .map_err(ctx("Failed to load result"))
+    }
+
+    /// Where a match goes past its last arm, or `None` when there is no past: a last arm
+    /// whose pattern is irrefutable always matches, so the edge would be dead code — and a
+    /// dead block is not free, since its report interns the match's whole source line into
+    /// the module, and nothing strips it at `OptimizationLevel::None`.
+    ///
+    /// This reads only what codegen itself emits (an irrefutable pattern lowers to a
+    /// constant-true test), so it is not a second copy of the checker's coverage rule.
+    pub(super) fn no_match_block_for(
+        &mut self,
+        arms: &[MatchArm],
+        span: &Span,
+    ) -> Result<Option<inkwell::basic_block::BasicBlock<'ctx>>, String> {
+        match arms.last().is_some_and(|arm| arm.pattern.is_irrefutable()) {
+            true => Ok(None),
+            false => self.build_no_match_block(span).map(Some),
+        }
+    }
+
+    /// Enter `arm` when `matches`, otherwise carry on to `next` — or enter it
+    /// unconditionally when there is no `next`, the arm having been shown to take
+    /// everything that reaches it.
+    pub(super) fn branch_to_arm(
+        &mut self,
+        matches: inkwell::values::IntValue<'ctx>,
+        arm: inkwell::basic_block::BasicBlock<'ctx>,
+        next: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<(), String> {
+        match next {
+            Some(next) => self
+                .builder
+                .build_conditional_branch(matches, arm, next)
+                .map(|_| ())
+                .map_err(ctx("Failed to build conditional branch")),
+            None => self
+                .builder
+                .build_unconditional_branch(arm)
+                .map(|_| ())
+                .map_err(ctx("Failed to build branch")),
+        }
+    }
+
+    /// The block a match branches to past its last arm: `__match_fail` at `span`, the
+    /// match's own location, and `unreachable`. It is what keeps the no-match edge from
+    /// reaching the continuation, which loads a result slot only a matching arm writes.
+    ///
+    /// The block is appended and filled without disturbing the current insert point, so a
+    /// caller can build it before wiring its arms.
+    fn build_no_match_block(
+        &mut self,
+        span: &Span,
+    ) -> Result<inkwell::basic_block::BasicBlock<'ctx>, String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| "Match expression must be in a function".to_string())?;
+        let resume = self.builder.get_insert_block();
+        let block = self.context.append_basic_block(function, "match_no_arm");
+
+        self.builder.position_at_end(block);
+        let fail = self.get_intrinsic("__match_fail")?;
+        let site = self.site_value(span)?;
+        self.builder
+            .build_call(fail, &[site.into()], "")
+            .map_err(ctx("Failed to call __match_fail"))?;
+        self.builder
+            .build_unreachable()
+            .map_err(ctx("Failed to build unreachable"))?;
+
+        if let Some(resume) = resume {
+            self.builder.position_at_end(resume);
+        }
+        Ok(block)
     }
 
     pub(super) fn check_pattern(

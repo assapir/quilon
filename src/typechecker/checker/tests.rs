@@ -176,50 +176,66 @@ fn test_unannotated_parameter_is_rejected() {
 }
 
 #[test]
-fn test_sum_type_option() {
-    // Pattern match on Result type with OK/NotOK
-    let tokens = Lexer::tokenize(
-        "^ = () -> Num => <
-  val = 5
-  result = val ? | OK(x) => x | NotOK => 0
-  result
->",
-    )
-    .unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
+fn test_sum_type_result_match() {
+    // A `Result` scrutinee matched over both its variants.
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | Ok(x) => x | NotOk(_) => 0\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
+    // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  val = 5\n  val ? | Ok(x) => x | _ => 0\n>"),
+        Err(TypeError::ConstructorPatternOnNonSum { .. })
+    ));
+}
+
+#[test]
+fn test_unknown_constructor_is_rejected() {
+    // `Maybe` is no variant of `Result`, and saying so here is what keeps codegen from
+    // meeting a constructor it has no tag for.
+    assert!(matches!(
+        check_ok(
+            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | Maybe(x) => x | _ => 0\n>"
+        ),
+        Err(TypeError::UnknownConstructor { .. })
+    ));
 }
 
 #[test]
 fn test_exhaustiveness_with_wildcard() {
-    // Wildcard makes match exhaustive
-    let tokens = Lexer::tokenize(
-        "^ = () -> Num => <
-  val = 5
-  result = val ? | OK(x) => x | _ => 0
-  result
->",
-    )
-    .unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
+    // A wildcard covers the variants the listed arms don't.
+    assert!(
+        check_ok(
+            "Color = Red / Green / Blue\n^ = () -> Num => <\n  c :: Color = Green\n  c ? | Red => 0 | _ => 1\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_non_exhaustive_match_on_a_non_sum_is_rejected() {
+    // Nothing enumerates the values of a `Num`, so a match on one needs a `_` arm.
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  val = 5\n  val ? | 0 => 1 | 1 => 2\n>"),
+        Err(TypeError::NonExhaustiveMatch { .. })
+    ));
 }
 
 #[test]
 fn test_constructor_arity() {
-    // Constructor with wrong number of arguments should fail when we have proper sum types
-    // For now this will pass, but once we implement full sum type checking it should fail
-    let tokens = Lexer::tokenize(
-        "val = 5
-result = val ? | OK(x, y) => x | NotOK => 0",
-    )
-    .unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    // Currently passes - will fail when sum types are fully implemented
-    let _ = checker.check_program(&program);
+    // A constructor pattern binds one sub-pattern per payload slot; `Ok` carries one.
+    assert!(matches!(
+        check_ok(
+            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | Ok(x, y) => x | NotOk(_) => 0\n>"
+        ),
+        Err(TypeError::WrongNumberOfArguments { .. })
+    ));
 }
 
 #[test]

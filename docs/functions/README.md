@@ -31,6 +31,30 @@ factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
 (See `examples/factorial.qn`, `examples/fibonacci.qn`.)
 
+## At most ten parameters
+
+A function, method or lambda declares **at most 10 parameters**. The eleventh is a compile
+error, reported at the parameter that crosses the line:
+
+```quilon ignore
+~ error: a function takes at most 10 parameters — group them into a record type and
+~        take that record as one parameter instead
+place = (a :: Num, b :: Num, c :: Num, d :: Num, e :: Num, f :: Num,
+         g :: Num, h :: Num, i :: Num, j :: Num, k :: Num) -> Num => a
+```
+
+Past ten, the arguments are a thing in their own right and want a name. Take a
+[record](../types/records.md) instead — it names the group, labels each value at the call
+site, and carries **no field limit** of its own:
+
+```quilon
+Parcel = { lengthCm :: Num, widthCm :: Num, heightCm :: Num }
+
+volume = (p :: Parcel) -> Num => p.lengthCm * p.widthCm * p.heightCm
+```
+
+(See `examples/record_parameter.qn`.)
+
 ## Function types & higher-order functions
 
 A **function type** is written with the arrow, reusing `->`. The parameter types go in

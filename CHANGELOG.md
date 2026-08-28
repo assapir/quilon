@@ -67,6 +67,20 @@ All notable changes to Quilon are documented here.
   allocation was sized and segfaulted. A program relying on the truncation must round its
   ends itself.
 
+- **A function takes at most 10 parameters.** The rule covers every parameter list a
+  program writes — top-level functions, methods and lambdas alike — and the eleventh
+  parameter is a compile error reported where it is written:
+
+  ```
+  error: a function takes at most 10 parameters — group them into a record type and take
+         that record as one parameter instead
+  ```
+
+  Past ten, the arguments are a thing in their own right and want a name. A record names
+  the group, labels each value at the call site, and carries no field limit of its own, so
+  it is the way to pass more. See `docs/functions/README.md` and
+  `examples/record_parameter.qn`.
+
 - **`print` takes anything renderable: the per-type overload set is gone.** `print`,
   `eprint` and `write` no longer carry a member per built-in type. At a call site the
   compiler resolves the `` ` `` render member on the argument's type, calls it, and writes
@@ -197,16 +211,39 @@ All notable changes to Quilon are documented here.
   takes its arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any
   other unsupported `^` signature.
 
-- **BREAKING: a member call resolves against the receiver's type
-  ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
-  receiver's type for `name` and nothing else: a name the type does not have is a compile
-  error naming both (`'Counter' has no member 'bump'`), never a fall-through to a top-level
-  function of that name.
+- **BREAKING: `recv.name(...)` looks for `name` on the receiver's type and nowhere else
+  ([#265](https://github.com/assapir/quilon/issues/265)).** A name the type does not have is
+  a compile error naming both (`'Counter' has no member 'bump'`); a top-level function of
+  that name no longer answers the call.
 
-  What breaks: `.` on a value whose type has no such member no longer reaches a top-level
-  function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
-  Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
-  as before.
+  What breaks: `(5).double()` is an error where it used to call `double = (x :: Num) …`.
+  Write `double(5)`, or pipe it (`5 |> double()`) — both still find the function. Where
+  there is one, the error spells that call out for you.
+
+- **Every match is total, and every pattern in one names something real
+  ([#202](https://github.com/assapir/quilon/issues/202)).** A match on a non-sum scrutinee
+  carried no coverage requirement, so `n ? | 0 => 1 | 1 => 2` type-checked, ran, and — for
+  any `n` no arm listed — produced whatever its result slot happened to hold, exiting 0.
+  It is now a compile error:
+
+  ```text
+  error: this match on Num is not exhaustive — add a '_' arm for the values no arm lists
+  ```
+
+  A sum-typed scrutinee is still covered by listing its variants; anything else needs a
+  catch-all — `_`, or a binding arm (`| rest => rest * 2`), which is irrefutable too. A
+  constructor pattern is now checked against the scrutinee as well: `'Purple' is not a
+  variant of 'Color'`, and `'Ok' is a sum-type variant pattern, and this match is on Num`,
+  both at the pattern's own location, where they used to be accepted and then abort in
+  codegen with an unlocated `Unknown constructor`.
+
+  What breaks: a program that relied on the silent fall-through no longer compiles. Add
+  the `_` arm it was falling through to.
+
+  Behind the checker, the no-match edge codegen emits — the backstop for what it cannot
+  prove — now reports where the match is and exits 1, the status every fail-loud runtime
+  check leaves, instead of loading a result slot no arm ever wrote. A match whose last arm
+  takes everything has no such edge and emits no backstop at all.
 
 ### Fixed
 
@@ -226,6 +263,15 @@ All notable changes to Quilon are documented here.
   - `quilon run` replaced an argument containing a NUL byte with `""`, so the program ran
     on a value nobody passed. Such an argument cannot reach a native binary at all — the
     operating system refuses to start one — so the JIT now refuses it too.
+
+- **A wide parameter list no longer changes what a definition means
+  ([#203](https://github.com/assapir/quilon/issues/203)).** The parser's speculative scans
+  gave up after a fixed number of tokens, so how a definition read depended on how many
+  tokens it happened to span: past ~17 annotated parameters a function silently became a
+  variable holding a lambda — its own recursive call then failed with `Undefined variable`
+  — and past ~20 it was rejected with `Expected ParenClose, got TypeAnnotation`. The scans
+  now run to the construct's own end, so a definition is read as what it is written as
+  whatever its length.
 
 - **A method's receiver no longer keeps unreachable code alive.** Reachability collects
   names mentioned without resolving them, and every method body mentions `it`, the receiver

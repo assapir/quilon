@@ -50,6 +50,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // expression's own location) and terminate with status 1. Never returns;
             // codegen emits `unreachable` after the call.
             "__index_fail" => void.fn_type(&[f64t.into(), i64t.into(), ptr.into()], false),
+            // void __match_fail(Site* site) — report a `?`/`|` match that no arm matched at
+            // `site` (the match expression's own location) and terminate. Never returns;
+            // codegen emits `unreachable` after the call.
+            "__match_fail" => void.fn_type(&[ptr.into()], false),
             // i64 __range_endpoint(double value, Site* site) — one endpoint of `lo <- hi`
             // as an i64, or a report at `site` (the range expression) and status 1 for a
             // fractional, NaN, or out-of-i64 value.

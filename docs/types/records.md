@@ -40,9 +40,9 @@ definition](../functions/overloading.md)), and call sites are held to that defau
 `t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
 
 A method answers the plain form `name(recv, args)` too — and `recv |> name(args)`, which
-[is](../expressions/pipe.md) that call. Only the `.` form refuses the top-level fallback:
-`recv.name(...)` its type cannot answer is an error, where `name(recv, ...)` goes on to
-look the name up as usual.
+[is](../expressions/pipe.md) that call. The `.` form is the strict one: `recv.name(...)`
+looks for `name` on `recv`'s type and nowhere else, so a top-level function of the same
+name does not answer it. Written plainly, `name(recv, ...)` finds that function as usual.
 ```quilon ignore
 (5).double()   ~ error: 'Num' has no member 'double'
 double(5)      ~ 10

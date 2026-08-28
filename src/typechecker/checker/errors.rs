@@ -31,7 +31,9 @@ impl TypeError {
             | TypeError::UnannotatedOverloadMember { span, .. }
             | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::RefutableConstructorArg { span, .. }
-            | TypeError::NonExhaustiveMatch { span }
+            | TypeError::NonExhaustiveMatch { span, .. }
+            | TypeError::UnknownConstructor { span, .. }
+            | TypeError::ConstructorPatternOnNonSum { span, .. }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. }
             | TypeError::ComputedGlobalBinding { span, .. }
@@ -292,9 +294,56 @@ impl std::fmt::Display for TypeError {
                     constructor
                 )
             }
-            TypeError::NonExhaustiveMatch { .. } => {
-                write!(f, "Non-exhaustive pattern match")
+            TypeError::NonExhaustiveMatch {
+                scrutinee, missing, ..
+            } => match missing.is_empty() {
+                true => write!(
+                    f,
+                    "this match on {} is not exhaustive — add a '_' arm for the values no arm \
+                     lists",
+                    type_label(scrutinee)
+                ),
+                false => write!(
+                    f,
+                    "this match on {} is not exhaustive — no arm covers {}. Add the missing \
+                     arms, or a '_' arm",
+                    type_label(scrutinee),
+                    fmt_name_list(missing)
+                ),
+            },
+            TypeError::UnknownConstructor {
+                constructor,
+                sum,
+                known,
+                ..
+            } => {
+                write!(
+                    f,
+                    "'{constructor}' is not a variant of '{sum}' — its variants are {}",
+                    fmt_name_list(known)
+                )
             }
+            TypeError::ConstructorPatternOnNonSum {
+                constructor, got, ..
+            } => match **got {
+                // An un-specialized payload (the `Result` slot nothing pinned to a concrete
+                // type) has no variants to dispatch on either, but saying it "has no
+                // variants" would describe the wrong problem: the type is missing, not
+                // variant-less.
+                Type::Generic { .. } => write!(
+                    f,
+                    "'{constructor}' is a sum-type variant pattern, and the type of this \
+                     match's value is not known here — annotate it, or match it where its \
+                     type is concrete",
+                ),
+                _ => write!(
+                    f,
+                    "'{constructor}' is a sum-type variant pattern, and this match is on {}, \
+                     which has no variants — match the value itself instead: a literal, a \
+                     binding, or '_'",
+                    type_label(got)
+                ),
+            },
             TypeError::InvalidEntryPointSignature { got, .. } => {
                 write!(
                     f,
@@ -335,21 +384,26 @@ impl std::fmt::Display for TypeError {
                 type_name,
                 member,
                 in_scope,
+                receiver,
+                more_arguments,
                 ..
             } => {
+                write!(f, "'{type_name}' has no member '{member}'")?;
+                if !in_scope {
+                    return Ok(());
+                }
+                // There IS a function of that name, so say why it did not answer the call —
+                // in terms of what was written, and with the call that would reach it.
+                let receiver = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
+                };
                 write!(
                     f,
-                    "'{type_name}' has no member '{member}'. A member call resolves against the \
-                     receiver's type only"
-                )?;
-                match in_scope {
-                    true => write!(
-                        f,
-                        "; the '{member}' in scope is a different function — call it as \
-                         '{member}(receiver, ...)'"
-                    ),
-                    false => Ok(()),
-                }
+                    ". There is a '{member}' in scope, but '{receiver}.{member}(...)' only \
+                     looks on {type_name} — call it as '{member}({receiver}{rest})'"
+                )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(
@@ -362,6 +416,16 @@ impl std::fmt::Display for TypeError {
             }
         }
     }
+}
+
+/// Render a comma-separated quoted name list (`'Red', 'Green'`), for the variants a
+/// diagnostic names.
+pub(super) fn fmt_name_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render a parameter count as English (`1 parameter`, `2 parameters`).

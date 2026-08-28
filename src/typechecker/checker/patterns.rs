@@ -1,5 +1,5 @@
 //! `?`/`|` matching: checking each arm's pattern against the scrutinee, binding what it
-//! names, and requiring a sum-typed match to cover every variant.
+//! names, and requiring every match to be exhaustive.
 //!
 //! Part of the type checker; see `super` for the `TypeChecker` state these methods
 //! run against.
@@ -15,21 +15,28 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let expression_type = self.infer_expression(expression)?;
 
+        // The parser rejects an armless match, but the checker is a library entry point and
+        // an AST can be built by hand — so answer with the diagnostic rather than falling
+        // through to a match that yields nothing.
         if arms.is_empty() {
-            return Err(TypeError::NonExhaustiveMatch { span: span.clone() });
+            return Err(TypeError::NonExhaustiveMatch {
+                scrutinee: Box::new(expression_type),
+                missing: Vec::new(),
+                span: span.clone(),
+            });
         }
 
-        // Check exhaustiveness for sum types
-        if let Type::Sum { ref variants, .. } = expression_type {
-            self.check_exhaustiveness(variants, arms, span)?;
+        // Each pattern first, then coverage: a pattern that cannot match this scrutinee at
+        // all is the more specific complaint, and reporting "not exhaustive" over it would
+        // send the reader to add an arm rather than fix the one they wrote.
+        for arm in arms {
+            self.check_pattern(&arm.pattern, &expression_type)?;
         }
+        self.check_exhaustiveness(&expression_type, arms, span)?;
 
-        // Check each arm's pattern against expression_type
         let mut result_type = None;
 
         for arm in arms {
-            self.check_pattern(&arm.pattern, &expression_type)?;
-
             // Bind pattern variables and check body
             self.env.push_scope();
             self.bind_pattern_vars(&arm.pattern, &expression_type)?;
@@ -63,44 +70,49 @@ impl TypeChecker {
             }
         }
 
-        Ok(result_type.unwrap())
+        Ok(result_type.expect("an armless match was rejected above"))
     }
 
+    /// Every match must be total. A sum-typed scrutinee is covered arm by arm — one per
+    /// variant, or a catch-all. Any other scrutinee has no enumerable set of values, so a
+    /// catch-all (`_`, or a binding) is the only way to cover it: without one, a value no
+    /// arm lists would fall off the end of the match with no value to yield.
     pub(super) fn check_exhaustiveness(
         &self,
-        variants: &[crate::ast::SumVariant],
+        scrutinee: &Type,
         arms: &[MatchArm],
         span: &Span,
     ) -> Result<(), TypeError> {
-        // Collect all constructor patterns
-        let mut covered_variants = std::collections::HashSet::new();
-        let mut has_wildcard = false;
-
-        for arm in arms {
-            match &arm.pattern {
-                Pattern::Wildcard { .. } | Pattern::Identifier { .. } => {
-                    has_wildcard = true;
-                }
-                Pattern::Constructor { name, .. } => {
-                    covered_variants.insert(name.clone());
-                }
-                _ => {}
-            }
-        }
-
-        // If we have a wildcard, we're exhaustive
-        if has_wildcard {
+        if arms.iter().any(|arm| arm.pattern.is_irrefutable()) {
             return Ok(());
         }
 
-        // Check if all variants are covered
-        for variant in variants {
-            if !covered_variants.contains(&variant.name) {
-                return Err(TypeError::NonExhaustiveMatch { span: span.clone() });
-            }
-        }
+        let not_covered = |missing: Vec<String>| TypeError::NonExhaustiveMatch {
+            scrutinee: Box::new(scrutinee.clone()),
+            missing,
+            span: span.clone(),
+        };
 
-        Ok(())
+        let Type::Sum { variants, .. } = scrutinee else {
+            return Err(not_covered(Vec::new()));
+        };
+        let covered: std::collections::HashSet<&str> = arms
+            .iter()
+            .filter_map(|arm| match &arm.pattern {
+                Pattern::Constructor { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<String> = variants
+            .iter()
+            .filter(|variant| !covered.contains(variant.name.as_str()))
+            .map(|variant| variant.name.clone())
+            .collect();
+
+        match missing.is_empty() {
+            true => Ok(()),
+            false => Err(not_covered(missing)),
+        }
     }
 
     pub(super) fn check_pattern(
@@ -119,55 +131,53 @@ impl TypeChecker {
                 arguments,
                 span,
             } => {
-                // Check if the constructor matches the expected type
-                // For now, accept all constructors - proper sum type checking would verify
-                // that the constructor belongs to the expected sum type
-                match expected_type {
-                    Type::Sum { variants, .. } => {
-                        // Find the variant with this constructor name
-                        let variant = variants.iter().find(|v| v.name == *name);
+                // A constructor pattern names a variant of the scrutinee's sum type. Both
+                // ways of getting that wrong — a scrutinee with no variants at all, and a
+                // name none of them has — are rejected here: codegen dispatches on a tag it
+                // looks up by name, so anything reaching it without a tag dies at run time.
+                let Type::Sum {
+                    name: sum,
+                    variants,
+                } = expected_type
+                else {
+                    return Err(TypeError::ConstructorPatternOnNonSum {
+                        constructor: name.clone(),
+                        got: Box::new(expected_type.clone()),
+                        span: span.clone(),
+                    });
+                };
+                let Some(variant) = variants.iter().find(|v| v.name == *name) else {
+                    return Err(TypeError::UnknownConstructor {
+                        constructor: name.clone(),
+                        sum: sum.clone(),
+                        known: variants.iter().map(|v| v.name.clone()).collect(),
+                        span: span.clone(),
+                    });
+                };
 
-                        if let Some(variant) = variant {
-                            // Check that argument count matches
-                            if variant.fields.len() != arguments.len() {
-                                return Err(TypeError::WrongNumberOfArguments {
-                                    expected: variant.fields.len(),
-                                    got: arguments.len(),
-                                    span: span.clone(),
-                                });
-                            }
+                if variant.fields.len() != arguments.len() {
+                    return Err(TypeError::WrongNumberOfArguments {
+                        expected: variant.fields.len(),
+                        got: arguments.len(),
+                        span: span.clone(),
+                    });
+                }
 
-                            // A payload sub-pattern must be IRREFUTABLE (a binding or
-                            // `_`). Codegen dispatches on the constructor tag alone, so
-                            // a refutable sub-pattern (`Ok(1)`, `Ok(Ok(x))`) would be
-                            // silently ignored — the arm would match ANY payload of the
-                            // variant, taking the wrong arm with no diagnostic. Reject
-                            // it here until codegen tests payloads.
-                            for pattern_arg in arguments {
-                                match pattern_arg {
-                                    Pattern::Identifier { .. } | Pattern::Wildcard { .. } => {}
-                                    Pattern::Number { .. } | Pattern::Constructor { .. } => {
-                                        return Err(TypeError::RefutableConstructorArg {
-                                            constructor: name.clone(),
-                                            span: pattern_arg.span().clone(),
-                                        });
-                                    }
-                                }
-                            }
-
-                            Ok(())
-                        } else {
-                            // Constructor not found in sum type
-                            Ok(()) // For now, accept it
-                        }
-                    }
-                    _ => {
-                        // Not a sum type, but we have a constructor pattern
-                        // This is okay for now - we may be matching against
-                        // a value that will be a sum type later
-                        Ok(())
+                // A payload sub-pattern must be IRREFUTABLE (a binding or `_`). Codegen
+                // dispatches on the constructor tag alone, so a refutable sub-pattern
+                // (`Ok(1)`, `Ok(Ok(x))`) would be silently ignored — the arm would match
+                // ANY payload of the variant, taking the wrong arm with no diagnostic.
+                // Reject it here until codegen tests payloads.
+                for pattern_arg in arguments {
+                    if !pattern_arg.is_irrefutable() {
+                        return Err(TypeError::RefutableConstructorArg {
+                            constructor: name.clone(),
+                            span: pattern_arg.span().clone(),
+                        });
                     }
                 }
+
+                Ok(())
             }
         }
     }
@@ -188,20 +198,14 @@ impl TypeChecker {
                 arguments,
                 ..
             } => {
-                // For sum type constructors, bind arguments with their field types
-                if let Type::Sum { variants, .. } = type_ {
-                    // Find the variant that matches this constructor
-                    if let Some(variant) = variants.iter().find(|v| &v.name == constructor_name) {
-                        // Bind each argument with its corresponding field type
-                        for (arg_pattern, field_type) in arguments.iter().zip(variant.fields.iter())
-                        {
-                            self.bind_pattern_vars(arg_pattern, field_type)?;
-                        }
-                    }
-                } else {
-                    // Not a sum type - fall back to binding with the same type
-                    for arg in arguments {
-                        self.bind_pattern_vars(arg, type_)?;
+                // Each payload sub-pattern binds at its variant's field type. `check_pattern`
+                // has already established that the scrutinee is that sum and that the
+                // constructor is one of its variants, so anything else binds nothing.
+                if let Type::Sum { variants, .. } = type_
+                    && let Some(variant) = variants.iter().find(|v| &v.name == constructor_name)
+                {
+                    for (arg_pattern, field_type) in arguments.iter().zip(variant.fields.iter()) {
+                        self.bind_pattern_vars(arg_pattern, field_type)?;
                     }
                 }
                 Ok(())

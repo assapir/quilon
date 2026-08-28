@@ -212,10 +212,15 @@ pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! 
     )
 }
 
-/// One past the largest `f64` an `i64` can hold (2^63). `i64::MAX` itself is not
-/// representable as an `f64`, so the bound is stated as the power of two both types
-/// round to, and tested with a half-open comparison.
-const I64_BOUND: f64 = 9_223_372_036_854_775_808.0;
+/// One past the largest `f64` an `i64` can hold, and the reason the comparisons against it
+/// are half-open.
+///
+/// It cannot be written in terms of `i64::MAX`: 2^63−1 is not representable as an `f64`, so
+/// `i64::MAX as f64` rounds UP to this same 2^63 — one PAST the maximum, despite its name —
+/// and `(i64::MAX - 1) as f64` rounds to it too, making the `- 1` a no-op. Stating the power
+/// of two both types round to is exact, and `-I64_BOUND` is exactly `i64::MIN`, which is why
+/// the low end is inclusive and the high end is not.
+const I64_BOUND: f64 = (1u64 << 63) as f64;
 
 /// A range endpoint as the whole number it must be, or the message saying why it is not.
 ///

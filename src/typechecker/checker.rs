@@ -206,7 +206,29 @@ pub enum TypeError {
         constructor: String,
         span: Span,
     },
+    /// A `?`/`|` match that does not cover its scrutinee: a sum type with `missing`
+    /// variants left unlisted, or any other type with no catch-all arm at all (nothing
+    /// enumerates the values of a `Num`, so only `_` — or a binding — covers the rest).
+    /// Total either way, so no value can fall off the end of a match.
     NonExhaustiveMatch {
+        scrutinee: Box<Type>,
+        missing: Vec<String>,
+        span: Span,
+    },
+    /// A constructor pattern naming something the scrutinee's sum type has no variant for
+    /// (`Ok(x)` against a `Color`). Codegen dispatches on a tag looked up by name, so this
+    /// is caught here rather than left to fail at run time.
+    UnknownConstructor {
+        constructor: String,
+        sum: String,
+        known: Vec<String>,
+        span: Span,
+    },
+    /// A constructor pattern against a scrutinee that is not a sum type at all
+    /// (`5 ? | Ok(x) => …`). Only a sum has variants to dispatch on.
+    ConstructorPatternOnNonSum {
+        constructor: String,
+        got: Box<Type>,
         span: Span,
     },
     /// The `^` entry point declared an unsupported parameter signature. The only
@@ -249,14 +271,17 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
-    /// `recv.name(...)` where `name` is not a member of the receiver's type. A member call
-    /// resolves against that type alone, so a function of the same name is never a fallback
+    /// `recv.name(...)` where `name` is not a member of the receiver's type. The name is
+    /// looked for on that type alone, so a function of the same name is never a fallback
     /// — it would otherwise hijack the call. `in_scope` says whether such a function is
-    /// there to point the reader at.
+    /// there to point the reader at; `receiver` is what the caller wrote as the receiver,
+    /// where that is a plain name, so the advice can spell out the call to write instead.
     UnknownMember {
         type_name: String,
         member: String,
         in_scope: bool,
+        receiver: Option<String>,
+        more_arguments: bool,
         span: Span,
     },
     /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —

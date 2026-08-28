@@ -653,13 +653,24 @@ impl<'a> Parser<'a> {
 
     /// Parse a parameter list: `(a, b)`, `(a :: T, b :: T)`, `()`, or a single bare
     /// `name` / `name :: T` without parentheses. Stops before the `=>` / `->`.
-    /// Shared by lambdas and (via the existing inline logic) function declarations.
+    /// Shared by lambdas, methods and function declarations — so this is also where the
+    /// `MAX_PARAMETERS` rule is enforced, once, for every parameter list a program writes.
     pub(super) fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
         if self.check(&TokenKind::ParenOpen) {
             self.advance();
             if !self.check(&TokenKind::ParenClose) {
                 loop {
+                    if parameters.len() == MAX_PARAMETERS {
+                        return Err(ParseError {
+                            message: format!(
+                                "a function takes at most {MAX_PARAMETERS} parameters — group \
+                                 them into a record type and take that record as one parameter \
+                                 instead"
+                            ),
+                            span: self.current_span(),
+                        });
+                    }
                     let parameter_name = self.expect_ident()?;
                     let parameter_type = if self.check(&TokenKind::TypeAnnotation) {
                         self.advance();
