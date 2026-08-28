@@ -2,6 +2,9 @@
 ~ IS a `[]Num`, so it has `.size`, indexes with `[i]`, and iterates with `.each`.
 ~   `1 <- 4` -> [1, 2, 3, 4]   (inclusive endpoints)
 ~   `4 <- 1` -> [4, 3, 2, 1]   (descends when the left end is larger)
+~ Both endpoints must be whole numbers an i64 can hold. `1.5 <- 3.9` is an ERROR,
+~ not `[1, 2, 3]`: a literal one is refused at compile time, a computed one at the
+~ range expression when it runs.
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.io
 << core.test
@@ -24,4 +27,12 @@
   ~ A range iterates with `.each`, since it's just a `[]Num`.
   asc.each(n => print(n))               ~ prints 1, 2, 3, 4
   assert(asc[1], equals(2))
+
+  ~ Endpoints may be negative, and may be computed — so long as what they compute is
+  ~ a whole number. `6 / 2` is exactly 3, so this range is [-2, -1, 0, 1, 2, 3].
+  half = 6 / 2
+  span :: []Num = -2 <- half
+  assert(span.size, equals(6))
+  assert(span[0], equals(-2))
+  assert(span[5], equals(3))
 >

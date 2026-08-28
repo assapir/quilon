@@ -28,6 +28,23 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **BREAKING: a range endpoint must be a whole number** ([#215](https://github.com/assapir/quilon/issues/215)).
+  `lo <- hi` counts from one end to the other, and an end that is fractional, NaN, or wider
+  than a 64-bit integer has nothing to count from. Each is now an error at the range
+  expression:
+
+  ```quilon ignore
+  1.5 <- 3.9                  ~ error: a range endpoint must be a whole number (got 1.5)
+  1 <- (0.0 / 0.0)            ~ error: a range endpoint must be a whole number (got NaN)
+  1 <- 10000000000000000000   ~ error: … a whole number that fits 64 bits
+  ```
+
+  A **literal** end is refused by the compiler; a **computed** one is refused when the range
+  runs, framed at the range expression and exiting 1. Previously the ends were truncated by
+  an unchecked `fptosi`: `1.5 <- 3.9` silently became `[1, 2, 3]`, and a NaN or out-of-range
+  end became poison — which, for a constant one, folded before the allocation was sized and
+  segfaulted. A program relying on the truncation must round its ends itself.
+
 - **`print` takes anything renderable: the per-type overload set is gone.** `print`,
   `eprint` and `write` no longer carry a member per built-in type. At a call site the
   compiler resolves the `` ` `` render member on the argument's type, calls it, and writes

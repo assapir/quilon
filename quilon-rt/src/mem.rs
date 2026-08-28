@@ -3,11 +3,12 @@
 //! Internal runtime primitives with no `core.*` language home: allocation and the
 //! Boehm-GC binding (`__alloc`, `__gc_init`), the shared `QlSlice` `{ ptr, len }`
 //! ABI type and its `alloc_text` helper, the `format_num` render helper, and the
-//! fail-loud `__index_fail` bounds-check primitive (checked `arr[i]` has no
-//! `core.*` module, so it lives in this internal tier). This tier is where the
-//! future fiber scheduler and reactor will also live.
+//! fail-loud primitives behind checked `arr[i]` (`__index_fail`) and a range's
+//! endpoints (`__range_endpoint`) — neither operation has a `core.*` module, so both
+//! live in this internal tier. This tier is where the future fiber scheduler and
+//! reactor will also live.
 
-use crate::report::{QlSite, fail_at};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, fail_at};
 use std::os::raw::c_void;
 
 // The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
@@ -117,8 +118,55 @@ pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! 
             format_num(index),
             size
         ),
-        1,
+        RUNTIME_EXIT_CODE,
     )
+}
+
+/// One past the largest `f64` an `i64` can hold (2^63). `i64::MAX` itself is not
+/// representable as an `f64`, so the bound is stated as the power of two both types
+/// round to, and tested with a half-open comparison.
+const I64_BOUND: f64 = 9_223_372_036_854_775_808.0;
+
+/// A range endpoint as the whole number it must be, or the message saying why it is not.
+///
+/// `lo <- hi` counts from one endpoint to the other, which only means anything for whole
+/// numbers that fit the counter: a fractional end has no next element, NaN has no order,
+/// and a magnitude past `i64` has no representation to count in. Each of those is an
+/// ERROR, never a truncation — `1.5 <- 3.9` is not `[1, 2, 3]`.
+///
+/// Shared with the compiler, which applies it to a literal endpoint at compile time so the
+/// static and the runtime rejection read identically.
+pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(format!(
+            "a range endpoint must be a whole number (got {})",
+            format_num(value)
+        ));
+    }
+    if !(-I64_BOUND..I64_BOUND).contains(&value) {
+        return Err(format!(
+            "a range endpoint must be a whole number that fits 64 bits (got {})",
+            format_num(value)
+        ));
+    }
+    Ok(value as i64)
+}
+
+/// The checked `f64` -> `i64` conversion of one endpoint of `lo <- hi`: the endpoint as an
+/// `i64`, or a report at the range expression and exit status 1.
+///
+/// Codegen calls this instead of emitting `fptosi`, which is where the unchecked version
+/// went wrong: converting a NaN or an out-of-range `f64` yields poison, and a constant one
+/// folds to poison before the range's allocation is even sized.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid [`QlSite`].
+#[unsafe(no_mangle)]
+pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
+    match check_range_endpoint(value) {
+        Ok(endpoint) => endpoint,
+        Err(message) => fail_at(site, &message, RUNTIME_EXIT_CODE),
+    }
 }
 
 /// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
@@ -194,6 +242,36 @@ mod tests {
         assert_eq!(format_num(3.0), "3");
         assert_eq!(format_num(120.0), "120");
         assert_eq!(format_num(3.5), "3.5");
+    }
+
+    #[test]
+    fn a_whole_range_endpoint_converts() {
+        assert_eq!(check_range_endpoint(0.0), Ok(0));
+        assert_eq!(check_range_endpoint(-4.0), Ok(-4));
+        assert_eq!(check_range_endpoint(1e15), Ok(1_000_000_000_000_000));
+    }
+
+    #[test]
+    fn a_range_endpoint_that_is_not_whole_is_refused() {
+        for (value, shown) in [(1.5, "1.5"), (f64::NAN, "NaN"), (f64::INFINITY, "inf")] {
+            let message = check_range_endpoint(value).expect_err("must be refused");
+            assert_eq!(
+                message,
+                format!("a range endpoint must be a whole number (got {shown})")
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_endpoint_wider_than_an_i64_is_refused() {
+        // 2^63 is the first whole `f64` with no `i64` to convert to; -2^63 is `i64::MIN`
+        // and stays legal, so the bound is half-open rather than symmetric.
+        assert_eq!(check_range_endpoint(-I64_BOUND), Ok(i64::MIN));
+        let message = check_range_endpoint(I64_BOUND).expect_err("must be refused");
+        assert!(
+            message.starts_with("a range endpoint must be a whole number that fits 64 bits"),
+            "{message}"
+        );
     }
 
     #[test]

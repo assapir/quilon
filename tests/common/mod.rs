@@ -138,10 +138,11 @@ pub fn run_file(file: &Path) -> Run {
     }
 }
 
-/// Build `src` into a native executable with `quilon build` and run it, returning
-/// `(exit code, stdout)`. The caller must have checked that a linker is on PATH
-/// ([`tool_available`]); `tag` names the program's file and its binary.
-pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
+/// `quilon build` `src` into a native executable, returning what the BUILD did and where
+/// the executable was asked to go — for a program the compiler must REFUSE, which
+/// [`build_and_run_native`] would panic on instead. The caller must have checked that a
+/// linker is on PATH ([`tool_available`]); `tag` names the program's file and its binary.
+pub fn build_native(tag: &str, src: &str) -> (Run, std::path::PathBuf) {
     let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
 
@@ -158,11 +159,21 @@ pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
         .args(["-o".as_ref(), binary.as_os_str()])
         .output()
         .expect("spawn quilon build");
-    assert!(
-        build.status.success(),
-        "quilon build failed:\n{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
+    let build = Run {
+        code: build.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&build.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&build.stderr).into_owned(),
+        path: file,
+    };
+    (build, binary)
+}
+
+/// Build `src` into a native executable with `quilon build` and run it, returning
+/// `(exit code, stdout)`. The build must succeed: a program that does not compile is a
+/// broken test, not a passing one.
+pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
+    let (build, binary) = build_native(tag, src);
+    assert_eq!(build.code, 0, "quilon build failed:\n{}", build.stderr);
 
     let run = Command::new(&binary)
         .stdin(std::process::Stdio::null())

@@ -276,10 +276,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
     /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage is GC-allocated (`__alloc`)
     /// so the array may safely escape the current frame.
+    ///
+    /// Both ends go through the runtime's `__range_endpoint` rather than a raw `fptosi`,
+    /// which rejects a fractional, NaN, or out-of-`i64` endpoint at `span` instead of
+    /// converting it to poison. The checker already refused a literal one; this covers the
+    /// computed ends, which are the reason the range is built at runtime at all.
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
         end: &Expression,
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let function = self
             .current_function
@@ -288,17 +294,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_type = self.context.i64_type();
         let f64_type = self.context.f64_type();
 
-        // Evaluate both ends (Num = f64) and truncate to i64 endpoints.
+        // Evaluate both ends (Num = f64) and convert them to checked i64 endpoints.
         let lo_f = self.generate_expression(start)?.into_float_value();
         let hi_f = self.generate_expression(end)?.into_float_value();
-        let lo = self
-            .builder
-            .build_float_to_signed_int(lo_f, i64_type, "range_lo")
-            .map_err(ctx("Failed to convert range start"))?;
-        let hi = self
-            .builder
-            .build_float_to_signed_int(hi_f, i64_type, "range_hi")
-            .map_err(ctx("Failed to convert range end"))?;
+        let lo = self.checked_endpoint(lo_f, span, "range_lo")?;
+        let hi = self.checked_endpoint(hi_f, span, "range_hi")?;
 
         // Ascending iff lo <= hi; pick step = +1 / -1 and the inclusive span.
         let ascending = self
@@ -416,6 +416,28 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inside the TCO-lowered loop and re-allocate every iteration, overflowing the stack.
         self.builder.position_at_end(exit);
         self.array_struct(data_ptr, count)
+    }
+
+    /// One range endpoint as an `i64`, through the runtime check that refuses a fractional,
+    /// NaN, or out-of-`i64` value at `span`. The whole conversion lives in the runtime
+    /// rather than as a test-and-branch here: it is one call per range — next to nothing
+    /// beside the allocation and fill that follow — and it keeps the rejected shapes and
+    /// their wording in the one place the checker also reads them from.
+    fn checked_endpoint(
+        &mut self,
+        value: inkwell::values::FloatValue<'ctx>,
+        span: &Span,
+        name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let site = self.site_value(span)?;
+        let check = self.get_intrinsic("__range_endpoint")?;
+        use inkwell::values::AnyValue;
+        Ok(self
+            .builder
+            .build_call(check, &[value.into(), site.into()], name)
+            .map_err(ctx("Failed to call __range_endpoint"))?
+            .as_any_value_enum()
+            .into_int_value())
     }
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
