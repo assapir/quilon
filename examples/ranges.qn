@@ -2,7 +2,7 @@
 ~ IS a `[]Num`, so it has `.size`, indexes with `[i]`, and iterates with `.each`.
 ~   `1 <- 4` -> [1, 2, 3, 4]   (inclusive endpoints)
 ~   `4 <- 1` -> [4, 3, 2, 1]   (descends when the left end is larger)
-~ Both endpoints must be whole numbers an i64 can hold. `1.5 <- 3.9` is an ERROR,
+~ Both endpoints must be whole numbers a Num holds exactly (2^53). `1.5 <- 3.9` is an ERROR,
 ~ not `[1, 2, 3]`: a literal one is refused at compile time, a computed one at the
 ~ range expression when it runs.
 ~ `<< core.test` verifies every result; on success the program exits 0.

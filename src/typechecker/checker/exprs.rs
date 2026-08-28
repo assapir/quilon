@@ -769,33 +769,28 @@ impl TypeChecker {
     }
 }
 
-/// A range's type — always `[]Num` — once its extent has passed the fail-loud contract, over
-/// whatever its ends are literal enough to settle: an end that is not a whole number an
-/// `i64` holds, and a pair of ends spanning more elements than a count of them. Never a
-/// truncation. The runtime applies the same two rules to an end only it can see.
+/// A range's type — always `[]Num` — once every end the checker can evaluate passes the rule
+/// the runtime also applies to an end only it can see: an end must be a whole number a `Num`
+/// holds exactly.
 ///
-/// Kept out of line for the reason `check_interpolation` is: `infer_expression_inner`
-/// recurses once per expression node, so locals in its frame are paid at every level of the
-/// deepest expression a program contains (debug builds don't reuse stack slots). It returns
-/// the caller's OWN `Result<Type, _>` for the same reason — a differently-typed result would
-/// need a second return slot in that frame, which measurably costs as much again.
+/// Out of line, and returning the caller's own `Result<Type, _>`, to keep it out of
+/// `infer_expression_inner`'s frame: that recurses once per expression node, so a local or a
+/// second return slot there is paid at every level of the deepest expression in the program
+/// (debug builds don't reuse stack slots). `check_interpolation` is factored out for the same
+/// reason. Both halves are load-bearing — inlining either costs ~40KB on `deep_calls.qn`.
 #[inline(never)]
 fn checked_range_type(
     start: &Expression,
     end: &Expression,
     span: &Span,
 ) -> Result<Type, TypeError> {
-    let invalid = |message| TypeError::InvalidBuiltinArgument {
-        message,
-        span: span.clone(),
-    };
-    let ends: Vec<i64> = [start, end]
-        .into_iter()
-        .filter_map(literal_number)
-        .map(|value| quilon_rt::check_range_endpoint(value).map_err(invalid))
-        .collect::<Result<_, _>>()?;
-    if let [lo, hi] = ends[..] {
-        quilon_rt::check_range_count(lo, hi).map_err(invalid)?;
+    for value in [start, end].into_iter().filter_map(literal_number) {
+        quilon_rt::check_range_endpoint(value).map_err(|message| {
+            TypeError::InvalidBuiltinArgument {
+                message,
+                span: span.clone(),
+            }
+        })?;
     }
     Ok(Type::Array(Box::new(Type::Num)))
 }

@@ -1,6 +1,6 @@
-//! The extent contract of `lo <- hi`: an end that is not a whole number an `i64` holds, and
-//! a pair of ends spanning more elements than a count of them, are REFUSED — never
-//! truncated, and never a size derived from poison.
+//! The endpoint contract of `lo <- hi`: an end that is not a whole number a `Num` holds
+//! exactly — fractional, NaN, infinite, or past 2^53 — is REFUSED, never truncated and never
+//! a size derived from poison.
 //!
 //! What the checker can evaluate is a compile error; anything computed aborts at the range
 //! expression. The aborting path terminates the process, so those tests drive the real
@@ -15,70 +15,87 @@ use common::{
 /// reaches the emitted check rather than the checker.
 const NAN_END: &str = "^ = () -> Num => <\n  r = 1 <- (0.0 / 0.0)\n  r.size\n>";
 
-/// Every extent the CHECKER can settle from literal ends, and the message each earns.
+/// The limit the message names, spelled once.
+const LIMIT: &str = "a range endpoint must be a whole number a Num holds exactly, at most \
+                     9007199254740992 in magnitude";
+
+/// Every endpoint the CHECKER can settle from a literal, and the message each earns.
 #[test]
-fn a_literal_extent_that_cannot_be_counted_is_a_compile_error() {
+fn a_literal_endpoint_a_num_cannot_hold_is_a_compile_error() {
     for (source, expected) in [
         (
             "^ = () -> Num => <\n  r = 1.5 <- 3.9\n  r.size\n>",
-            "a range endpoint must be a whole number (got 1.5)",
+            "a range endpoint must be a whole number (got 1.5)".to_string(),
         ),
         (
             "^ = () -> Num => <\n  r = 0 <- -2.5\n  r.size\n>",
-            "a range endpoint must be a whole number (got -2.5)",
+            "a range endpoint must be a whole number (got -2.5)".to_string(),
+        ),
+        (
+            // Between 2^53 and 2^63: a whole number, and one an `i64` would have held — the
+            // case the old 64-bit rule wrongly accepted.
+            "^ = () -> Num => <\n  r = 1 <- 100000000000000000\n  r.size\n>",
+            format!("{LIMIT} (got 100000000000000000)"),
         ),
         (
             "^ = () -> Num => <\n  r = 1 <- 10000000000000000000\n  r.size\n>",
-            "a range endpoint must be a whole number that fits 64 bits (got 10000000000000000000)",
+            format!("{LIMIT} (got 10000000000000000000)"),
         ),
         (
-            // Both ends are legal on their own; there are just more elements between them
-            // than a count holds.
-            "^ = () -> Num => <\n  r = -5000000000000000000 <- 5000000000000000000\n  r.size\n>",
-            "a range from -5000000000000000000 to 5000000000000000000 has more elements than a \
-             64-bit count holds",
+            "^ = () -> Num => <\n  r = -10000000000000000000 <- 0\n  r.size\n>",
+            format!("{LIMIT} (got -10000000000000000000)"),
         ),
     ] {
         assert_eq!(type_error_message(source), expected, "for:\n{source}");
     }
 }
 
-/// Every extent only the RUNTIME can settle, and the message each earns.
+/// 2^53 itself is exactly representable, so it is a LEGAL endpoint — the bound is inclusive.
+/// A one-element range at the limit builds and reads back.
 #[test]
-fn a_computed_extent_that_cannot_be_counted_aborts() {
+fn the_limit_itself_is_a_legal_endpoint() {
+    assert_exit(
+        "^ = () -> Num => <\n  r = 9007199254740992 <- 9007199254740992\n  r.size\n>",
+        1,
+    );
+}
+
+/// Every endpoint only the RUNTIME can settle, and the message each earns.
+#[test]
+fn a_computed_endpoint_a_num_cannot_hold_aborts() {
     for (tag, source, expected) in [
         (
             "range_nan",
             NAN_END,
-            "a range endpoint must be a whole number (got NaN)",
+            "a range endpoint must be a whole number (got NaN)".to_string(),
         ),
         (
             "range_fractional",
             "^ = () -> Num => <\n  n = 7 / 2\n  r = 1 <- n\n  r.size\n>",
-            "a range endpoint must be a whole number (got 3.5)",
+            "a range endpoint must be a whole number (got 3.5)".to_string(),
+        ),
+        (
+            // Between 2^53 and 2^63, computed rather than written.
+            "range_past_exact",
+            "^ = () -> Num => <\n  n = 100000000000000 * 1000\n  r = 1 <- n\n  r.size\n>",
+            format!("{LIMIT} (got 100000000000000000)"),
         ),
         (
             "range_wide",
             "^ = () -> Num => <\n  n = 1000000000000000000 * 10\n  r = 1 <- n\n  r.size\n>",
-            "a range endpoint must be a whole number that fits 64 bits (got 10000000000000000000)",
+            format!("{LIMIT} (got 10000000000000000000)"),
         ),
         (
-            // An infinity is whole; what it lacks is an `i64` to count in.
+            // An infinity is whole; what it lacks is a magnitude a `Num` holds exactly.
             "range_infinite",
             "^ = () -> Num => <\n  n = 1.0 / 0.0\n  r = 1 <- n\n  r.size\n>",
-            "a range endpoint must be a whole number that fits 64 bits (got inf)",
-        ),
-        (
-            "range_span",
-            "^ = () -> Num => <\n  lo = 0 - 5000000000000000000\n  r = lo <- 5000000000000000000\n  r.size\n>",
-            "a range from -5000000000000000000 to 5000000000000000000 has more elements than a \
-             64-bit count holds",
+            format!("{LIMIT} (got inf)"),
         ),
     ] {
         let (code, stderr, _) = run_program(tag, source);
         assert_eq!(code, 1, "{tag} must exit 1: {stderr}");
         assert!(
-            stderr.contains(expected),
+            stderr.contains(&expected),
             "{tag} must say why, got: {stderr}"
         );
     }
@@ -105,8 +122,7 @@ fn an_abort_reports_the_range_expression() {
 }
 
 /// The emitted check is in the runtime both back ends share, so a native build refuses the
-/// computed end exactly as `run` does. (The literal shapes never reach a back end — the
-/// front end `build` and `run` share rejects them, which the compile-error test covers.)
+/// computed end exactly as `run` does.
 #[test]
 fn a_native_build_refuses_a_computed_endpoint() {
     if !tool_available("clang") {
@@ -118,8 +134,6 @@ fn a_native_build_refuses_a_computed_endpoint() {
 }
 
 /// Ends that ARE whole are untouched by any of this — negative, and computed.
-/// (`tests/ranges_test.rs` covers ordinary range behaviour; these are the shapes the new
-/// check could plausibly have broken.)
 #[test]
 fn whole_endpoints_are_unaffected() {
     // [-2, -1, 0, 1, 2]: size 5 + first -2 + last 2 + 2 = 7.

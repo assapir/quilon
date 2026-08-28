@@ -277,10 +277,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage comes from the shared
     /// [`Self::alloc_array_data`], so the array may safely escape the current frame.
     ///
-    /// The extent is checked, never truncated: an end that is not a whole number an `i64`
-    /// holds, or a pair of ends spanning more elements than a count of them, is refused at
-    /// `span`. Ends the checker already evaluated become constants here, so the ordinary
-    /// literal range keeps a constant count — and with it a fill loop of known trip count.
+    /// An end that is not a whole number a `Num` holds exactly is refused at `span`. Because
+    /// that bounds both ends by 2^53, the span below cannot overflow an `i64`. An end the
+    /// checker already evaluated becomes a constant, so a literal range's count — and its
+    /// fill loop's trip count — folds to a constant too.
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
@@ -294,8 +294,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_type = self.context.i64_type();
         let f64_type = self.context.f64_type();
 
-        let (lo, lo_known) = self.range_endpoint(start, span)?;
-        let (hi, hi_known) = self.range_endpoint(end, span)?;
+        let lo = self.range_endpoint(start, span)?;
+        let hi = self.range_endpoint(end, span)?;
 
         // Ascending iff lo <= hi; pick step = +1 / -1.
         let ascending = self
@@ -309,18 +309,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_select(ascending, one, neg_one, "range_step")
             .map_err(ctx("Failed to select range step"))?
             .into_int_value();
-        // `|hi - lo| + 1`, under the width check two legal-but-distant ends need: subtracted
-        // in the emitted code it would wrap to a negative count.
-        let count = match (lo_known, hi_known) {
-            (Some(lo), Some(hi)) => i64_type.const_int(
-                quilon_rt::check_range_count(lo, hi).map_err(|e| e.to_string())? as u64,
-                true,
-            ),
-            _ => {
-                let site = self.site_value(span)?;
-                self.call_rt_int("__range_count", &[lo.into(), hi.into(), site.into()])?
-            }
-        };
+        // |hi - lo| + 1: compute the signed delta once, then pick it or its negation so the
+        // span is non-negative in either direction.
+        let delta = self
+            .builder
+            .build_int_sub(hi, lo, "range_delta")
+            .map_err(ctx("Failed to subtract range ends"))?;
+        let neg_delta = self
+            .builder
+            .build_int_neg(delta, "range_neg_delta")
+            .map_err(ctx("Failed to negate range delta"))?;
+        let span_abs = self
+            .builder
+            .build_select(ascending, delta, neg_delta, "range_span")
+            .map_err(ctx("Failed to select range span"))?
+            .into_int_value();
+        let count = self
+            .builder
+            .build_int_add(span_abs, one, "range_count")
+            .map_err(ctx("Failed to add range count"))?;
 
         let data_ptr = self.alloc_array_data(f64_type.into(), count)?;
 
@@ -394,29 +401,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.array_struct(data_ptr, count)
     }
 
-    /// One end of a range as an `i64`, plus its value when that is known at compile time.
+    /// One end of a range as an `i64`.
     ///
-    /// A literal end the checker has already accepted becomes a constant, which is what
-    /// keeps `1 <- 100` a constant-count range. Anything else is converted by the runtime's
-    /// `__range_endpoint` rather than a raw `fptosi`, whose result for a fractional, NaN, or
-    /// out-of-`i64` value is poison — and, for a constant, poison folded before the range is
-    /// even sized. The runtime holds the rule either way; `check_range_endpoint` is the one
-    /// the checker refused the literal with.
+    /// A literal end the checker has already accepted becomes a constant. Anything else goes
+    /// through `__range_endpoint`, which converts it under the same `check_range_endpoint`
+    /// rule the checker applied — an `fptosi` here would yield poison for the values that
+    /// rule rejects.
     fn range_endpoint(
         &mut self,
         end: &Expression,
         span: &Span,
-    ) -> Result<(inkwell::values::IntValue<'ctx>, Option<i64>), String> {
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         if let Some(value) = crate::ast::literal_number(end)
             && let Ok(endpoint) = quilon_rt::check_range_endpoint(value)
         {
-            let constant = self.context.i64_type().const_int(endpoint as u64, true);
-            return Ok((constant, Some(endpoint)));
+            return Ok(self.context.i64_type().const_int(endpoint as u64, true));
         }
         let value = self.generate_expression(end)?.into_float_value();
         let site = self.site_value(span)?;
-        let checked = self.call_rt_int("__range_endpoint", &[value.into(), site.into()])?;
-        Ok((checked, None))
+        self.call_rt_int("__range_endpoint", &[value.into(), site.into()])
     }
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).

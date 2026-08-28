@@ -4,7 +4,7 @@
 //! Boehm-GC binding (`__alloc`, `__alloc_array`, `__gc_init`), the shared `QlSlice`
 //! `{ ptr, len }` ABI type and its `alloc_text` helper, the `format_num` render helper,
 //! and the fail-loud primitives behind checked `arr[i]` (`__index_fail`) and a range's
-//! extent (`__range_endpoint`, `__range_count`) — neither operation has a `core.*` module,
+//! endpoints (`__range_endpoint`) — neither operation has a `core.*` module,
 //! so both live in this internal tier. This tier is where the future fiber scheduler and
 //! reactor will also live.
 
@@ -212,22 +212,16 @@ pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! 
     )
 }
 
-/// One past the largest `f64` an `i64` can hold, and the reason the comparisons against it
-/// are half-open.
-///
-/// It cannot be written in terms of `i64::MAX`: 2^63−1 is not representable as an `f64`, so
-/// `i64::MAX as f64` rounds UP to this same 2^63 — one PAST the maximum, despite its name —
-/// and `(i64::MAX - 1) as f64` rounds to it too, making the `- 1` a no-op. Stating the power
-/// of two both types round to is exact, and `-I64_BOUND` is exactly `i64::MIN`, which is why
-/// the low end is inclusive and the high end is not.
-const I64_BOUND: f64 = (1u64 << 63) as f64;
+/// 2^53 — the largest whole number a `Num` (an `f64`) represents exactly. Past it,
+/// consecutive integers collide: 2^53 + 1 is not representable. Inclusive at both ends,
+/// since 2^53 itself is exact.
+pub const MAX_EXACT_NUM: f64 = (1u64 << 53) as f64;
 
 /// A range endpoint as the whole number it must be, or the message saying why it is not.
 ///
-/// `lo <- hi` counts from one endpoint to the other, which only means anything for whole
-/// numbers that fit the counter: a fractional end has no next element, NaN has no order,
-/// and a magnitude past `i64` (an infinity included) has none to count in. Each is an
-/// ERROR, never a truncation — `1.5 <- 3.9` is not `[1, 2, 3]`.
+/// `lo <- hi` counts from one endpoint to the other, so an end must be a whole number a
+/// `Num` holds exactly: at most [`MAX_EXACT_NUM`] in magnitude. A fractional end, NaN, and
+/// an infinity are all refused.
 pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
     if value.fract() != 0.0 && !value.is_infinite() {
         return Err(format!(
@@ -235,25 +229,15 @@ pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
             format_num(value)
         ));
     }
-    if !(-I64_BOUND..I64_BOUND).contains(&value) {
+    if value.abs() > MAX_EXACT_NUM {
         return Err(format!(
-            "a range endpoint must be a whole number that fits 64 bits (got {})",
+            "a range endpoint must be a whole number a Num holds exactly, at most {} in \
+             magnitude (got {})",
+            format_num(MAX_EXACT_NUM),
             format_num(value)
         ));
     }
     Ok(value as i64)
-}
-
-/// How many elements the inclusive range `lo <- hi` has — `|hi - lo| + 1` — or the message
-/// saying why there are more than a count of them holds.
-///
-/// Two endpoints that each fit an `i64` can still be further apart than one: `-5e18 <- 5e18`
-/// spans 10^19. The span is taken in `i128` so it is refused as what it is, rather than
-/// wrapping to a negative count the allocation refuses with nothing to point at.
-pub fn check_range_count(lo: i64, hi: i64) -> Result<i64, String> {
-    i64::try_from((hi as i128 - lo as i128).abs() + 1).map_err(|_| {
-        format!("a range from {lo} to {hi} has more elements than a 64-bit count holds")
-    })
 }
 
 /// [`check_range_endpoint`] for an end the compiler could not evaluate: the endpoint as an
@@ -263,22 +247,8 @@ pub fn check_range_count(lo: i64, hi: i64) -> Result<i64, String> {
 /// `site` is null or points to a valid [`QlSite`].
 #[unsafe(no_mangle)]
 pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
-    report_or(check_range_endpoint(value), site)
-}
-
-/// [`check_range_count`] for a range whose ends the compiler could not evaluate.
-///
-/// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid [`QlSite`].
-#[unsafe(no_mangle)]
-pub extern "C" fn __range_count(lo: i64, hi: i64, site: *const QlSite) -> i64 {
-    report_or(check_range_count(lo, hi), site)
-}
-
-/// A checked range quantity, or its message reported at `site` and the process ended.
-fn report_or(checked: Result<i64, String>, site: *const QlSite) -> i64 {
-    match checked {
-        Ok(value) => value,
+    match check_range_endpoint(value) {
+        Ok(endpoint) => endpoint,
         Err(message) => fail_at(site, &message, RUNTIME_EXIT_CODE),
     }
 }
@@ -379,29 +349,38 @@ mod tests {
     }
 
     #[test]
-    fn a_range_endpoint_wider_than_an_i64_is_refused() {
-        // 2^63 is the first whole `f64` with no `i64` to convert to; -2^63 is `i64::MIN`
-        // and stays legal, so the bound is half-open rather than symmetric. An infinity is
-        // whole and belongs here too, not with the fractions.
-        assert_eq!(check_range_endpoint(-I64_BOUND), Ok(i64::MIN));
-        for value in [I64_BOUND, f64::INFINITY, f64::NEG_INFINITY] {
+    fn a_range_endpoint_a_num_cannot_hold_exactly_is_refused() {
+        // The limit itself is exact, so both signs of it are legal — the bound is inclusive.
+        assert_eq!(
+            check_range_endpoint(MAX_EXACT_NUM),
+            Ok(9_007_199_254_740_992)
+        );
+        assert_eq!(
+            check_range_endpoint(-MAX_EXACT_NUM),
+            Ok(-9_007_199_254_740_992)
+        );
+        // An infinity is whole, so it fails on magnitude, not on being fractional.
+        for value in [
+            MAX_EXACT_NUM * 2.0,
+            -MAX_EXACT_NUM * 2.0,
+            1e19,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
             let message = check_range_endpoint(value).expect_err("must be refused");
             assert!(
-                message.starts_with("a range endpoint must be a whole number that fits 64 bits"),
+                message.starts_with("a range endpoint must be a whole number a Num holds exactly"),
                 "{message}"
             );
         }
     }
 
+    /// The largest legal endpoints are ~2^53 apart, so an inclusive count of them is ~2^54 —
+    /// far inside an `i64`. Nothing downstream needs a widened span.
     #[test]
-    fn a_range_count_is_inclusive_and_direction_free() {
-        let site = std::ptr::null();
-        assert_eq!(__range_count(1, 4, site), 4);
-        assert_eq!(__range_count(4, 1, site), 4);
-        assert_eq!(__range_count(5, 5, site), 1);
-        assert_eq!(__range_count(-2, 2, site), 5);
-        // The widest span an `i64` count holds, from ends that are themselves legal.
-        assert_eq!(__range_count(0, i64::MAX - 1, site), i64::MAX);
+    fn the_widest_legal_span_fits_a_count() {
+        let widest = 2.0 * MAX_EXACT_NUM + 1.0;
+        assert!(widest < i64::MAX as f64, "{widest}");
     }
 
     #[test]
