@@ -172,16 +172,14 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
-- **BREAKING: a member call resolves against the receiver's type
-  ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
-  receiver's type for `name` and nothing else: a name the type does not have is a compile
-  error naming both (`'Counter' has no member 'bump'`), never a fall-through to a top-level
-  function of that name.
+- **BREAKING: `recv.name(...)` looks for `name` on the receiver's type and nowhere else
+  ([#265](https://github.com/assapir/quilon/issues/265)).** A name the type does not have is
+  a compile error naming both (`'Counter' has no member 'bump'`); a top-level function of
+  that name no longer answers the call.
 
-  What breaks: `.` on a value whose type has no such member no longer reaches a top-level
-  function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
-  Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
-  as before.
+  What breaks: `(5).double()` is an error where it used to call `double = (x :: Num) …`.
+  Write `double(5)`, or pipe it (`5 |> double()`) — both still find the function. Where
+  there is one, the error spells that call out for you.
 
 ### Fixed
 
