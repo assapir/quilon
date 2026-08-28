@@ -20,22 +20,25 @@ impl TypeChecker {
         first_ty: &Option<Type>,
         span: &Span,
     ) -> Result<Type, TypeError> {
-        // The built-in's arity is always at least one, so a call of the right length always
-        // inferred a first argument (`first_ty`).
-        let Some(rendered) = first_ty
-            .as_ref()
-            .filter(|_| arguments.len() == builtin.arity())
-        else {
+        if arguments.len() != builtin.arity() {
             return Err(TypeError::WrongNumberOfArguments {
                 expected: builtin.arity(),
                 got: arguments.len(),
                 span: span.clone(),
             });
+        }
+        // The built-in's arity is always at least one, so the call has a first argument.
+        // It is usually already inferred (`first_ty`) — a LAMBDA there is not, since the
+        // dispatcher leaves a lambda's type to the signature the call resolves to, and this
+        // position states none. Typing it here is what lets the rendering rule name it.
+        let rendered = match first_ty {
+            Some(ty) => ty.clone(),
+            None => self.infer_argument(&arguments[0], LambdaTarget::None)?,
         };
-        if !crate::ast::is_renderable(rendered) {
+        if !crate::ast::is_renderable(&rendered) {
             return Err(TypeError::NotRenderable {
                 name: name.to_string(),
-                got: Box::new(rendered.clone()),
+                got: Box::new(rendered),
                 span: span.clone(),
             });
         }

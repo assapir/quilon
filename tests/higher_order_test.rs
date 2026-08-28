@@ -282,6 +282,31 @@ fn lambda_of_another_arity_than_the_target_is_an_arity_error() {
 }
 
 #[test]
+fn contextually_typed_parameter_resolves_its_render_member() {
+    // `p` is typed only by `describeIt`'s signature, and rendering it in a hole has to find
+    // the `` ` `` member of THAT type — the inferred parameter type must reach the render
+    // path as a written annotation would. "P7!" is 3 graphemes.
+    assert_exit(
+        "Point = {\n  x :: Num,\n  ` = () -> Text => \"P`it.x`\"\n}\n\
+         describeIt = (p :: Point, f :: (Point) -> Text) -> Text => f(p)\n\
+         ^ = () -> Num => describeIt(Point { x = 7 }, (p) => \"`p`!\").size",
+        3,
+    );
+}
+
+#[test]
+fn a_lambda_handed_to_print_is_refused_as_unrenderable() {
+    // `print` claims every one-argument call, and a lambda argument is left untyped by the
+    // dispatcher — so the rendering rule has to type it before it can say what is wrong,
+    // rather than mistaking the untyped argument for a miscounted one.
+    let message = type_error_message("^ = () -> $ => print((n :: Num) => n + 1)");
+    assert!(
+        message.contains("renders its argument") && message.contains("(Num) -> Num has none"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
 fn overload_members_may_declare_their_signature_on_the_binding() {
     // An overload member written in the declared-type form keeps its full signature, so
     // exact dispatch still resolves it.
