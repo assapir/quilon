@@ -101,10 +101,11 @@ impl<'a> Parser<'a> {
                 // `name :: <type> =>` — find the `=>` that closes the annotation. Types
                 // here are simple (a name with optional `{ … }` generic args); the first
                 // top-level `=>` after the `::` ends the parameter list of a lambda. A `<`
-                // block or anything else means it was not a lambda parameter.
+                // block, `Eof`, or anything else means it was not a lambda parameter. No
+                // token-distance bound: how long the annotation is must not decide this.
                 let mut idx = 2;
                 let mut brace_depth = 0i32;
-                while idx < 40 {
+                loop {
                     match &self.peek_ahead(idx).kind {
                         TokenKind::BraceOpen => brace_depth += 1,
                         TokenKind::BraceClose => brace_depth -= 1,
@@ -119,7 +120,6 @@ impl<'a> Parser<'a> {
                     }
                     idx += 1;
                 }
-                false
             }
             _ => false,
         }
@@ -127,17 +127,25 @@ impl<'a> Parser<'a> {
 
     /// At `(` in primary position, does a parenthesized parameter list (`(a, b) =>` /
     /// `() =>`) follow — making this a lambda — rather than a parenthesized expression?
-    /// Scans to the matching `)` and checks for a following `=>` or `->` (return type).
     pub(super) fn paren_starts_lambda(&self) -> bool {
         debug_assert!(self.check(&TokenKind::ParenOpen));
         // Inside a map-literal key, `(…) => …` is a map entry, not a lambda.
-        if self.suppress_lambda {
-            return false;
-        }
-        let mut depth = 1;
+        !self.suppress_lambda && self.parameter_list_ahead()
+    }
+
+    /// With the cursor on `(`, does a parenthesized parameter list followed by `=>` or
+    /// `->` start here — the shape shared by a lambda and a function declaration?
+    ///
+    /// Scans to the matching `)` and checks for a following `=>` or `->` (return type),
+    /// ending at `Eof` on a stream that never closes the paren. Deliberately unbounded
+    /// otherwise: a token-distance limit here would make a definition's MEANING depend on
+    /// how long it is, silently re-reading a wide function as a variable holding a lambda
+    /// instead of letting `parse_parameter_list` report what is actually wrong with it.
+    pub(super) fn parameter_list_ahead(&self) -> bool {
+        let mut depth = 1usize;
         let mut idx = 1;
-        while idx < 80 && depth > 0 {
-            match &self.peek_ahead(idx).kind {
+        loop {
+            match self.peek_ahead(idx).kind {
                 TokenKind::ParenOpen => depth += 1,
                 TokenKind::ParenClose => {
                     depth -= 1;
@@ -151,7 +159,6 @@ impl<'a> Parser<'a> {
             }
             idx += 1;
         }
-        false
     }
 
     // Helper methods

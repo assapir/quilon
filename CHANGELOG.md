@@ -46,6 +46,20 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **A function takes at most 10 parameters.** The rule covers every parameter list a
+  program writes — top-level functions, methods and lambdas alike — and the eleventh
+  parameter is a compile error reported where it is written:
+
+  ```
+  error: a function takes at most 10 parameters — group them into a record type and take
+         that record as one parameter instead
+  ```
+
+  Past ten, the arguments are a thing in their own right and want a name. A record names
+  the group, labels each value at the call site, and carries no field limit of its own, so
+  it is the way to pass more. See `docs/functions/README.md` and
+  `examples/record_parameter.qn`.
+
 - **`print` takes anything renderable: the per-type overload set is gone.** `print`,
   `eprint` and `write` no longer carry a member per built-in type. At a call site the
   compiler resolves the `` ` `` render member on the argument's type, calls it, and writes
@@ -205,6 +219,15 @@ All notable changes to Quilon are documented here.
   - `quilon run` replaced an argument containing a NUL byte with `""`, so the program ran
     on a value nobody passed. Such an argument cannot reach a native binary at all — the
     operating system refuses to start one — so the JIT now refuses it too.
+
+- **A wide parameter list no longer changes what a definition means
+  ([#203](https://github.com/assapir/quilon/issues/203)).** The parser's speculative scans
+  gave up after a fixed number of tokens, so how a definition read depended on how many
+  tokens it happened to span: past ~17 annotated parameters a function silently became a
+  variable holding a lambda — its own recursive call then failed with `Undefined variable`
+  — and past ~20 it was rejected with `Expected ParenClose, got TypeAnnotation`. The scans
+  now run to the construct's own end, so a definition is read as what it is written as
+  whatever its length.
 
 - **A method's receiver no longer keeps unreachable code alive.** Reachability collects
   names mentioned without resolving them, and every method body mentions `it`, the receiver

@@ -157,38 +157,15 @@ impl<'a> Parser<'a> {
         // Type declarations can't be mutable and don't have type annotations
         // AND they must have field declarations (name :: Type) or methods (name = => ...)
         if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
-            // Lookahead to check if this is a type declaration or record literal
-            // Type declaration has: { name :: Type ... } or { name = => ... }
-            // Record literal has: { name = value ... }
-
-            let mut idx = 1; // After {
-            let mut is_type_declaration = false;
-
-            // Skip to first field
-            while idx < 10 {
-                let tok = self.peek_ahead(idx);
-                if tok.kind == TokenKind::Ident {
-                    // Check what follows the identifier
-                    let next = self.peek_ahead(idx + 1);
-                    if next.kind == TokenKind::TypeAnnotation {
-                        // name :: Type - this is a field declaration
-                        is_type_declaration = true;
-                    } else if next.kind == TokenKind::Assign {
-                        // name = ... - check if it's a method (name = => ...)
-                        let after_assign = self.peek_ahead(idx + 2);
-                        if after_assign.kind == TokenKind::Arrow {
-                            // name = => ... - this is a method
-                            is_type_declaration = true;
-                        }
-                        // else: name = value - this is a record literal
-                    }
-                    break;
-                }
-                if tok.kind == TokenKind::BraceClose || tok.kind == TokenKind::Eof {
-                    break;
-                }
-                idx += 1;
-            }
+            // What opens the brace says which one this is: a type declaration starts with a
+            // field (`{ name :: Type … }`) or a method (`{ name = => … }`), a record literal
+            // with a value (`{ name = value … }`).
+            let is_type_declaration = self.peek_ahead(1).kind == TokenKind::Ident
+                && match self.peek_ahead(2).kind {
+                    TokenKind::TypeAnnotation => true,
+                    TokenKind::Assign => self.peek_ahead(3).kind == TokenKind::Arrow,
+                    _ => false,
+                };
 
             if is_type_declaration {
                 return self.parse_type_declaration(name, start, exported);
@@ -214,33 +191,9 @@ impl<'a> Parser<'a> {
         let is_function = if self.check(&TokenKind::Arrow) {
             true
         } else if self.check(&TokenKind::ParenOpen) {
-            // Look ahead to see if this is parameter list or expression
-            // Parameter list ends with ) =>
-            // We need to scan ahead to find matching )
-            let mut depth = 1;
-            let mut idx = 1;
-            let mut found_arrow = false;
-
-            while idx < 50 && depth > 0 {
-                // reasonable limit for lookahead
-                let ahead = self.peek_ahead(idx);
-                match ahead.kind {
-                    TokenKind::ParenOpen => depth += 1,
-                    TokenKind::ParenClose => {
-                        depth -= 1;
-                        if depth == 0 {
-                            // Check if next token after ) is => or ->
-                            let next = self.peek_ahead(idx + 1);
-                            found_arrow = next.kind == TokenKind::Arrow
-                                || next.kind == TokenKind::ReturnArrow;
-                        }
-                    }
-                    TokenKind::Eof => break,
-                    _ => {}
-                }
-                idx += 1;
-            }
-            found_arrow
+            // A parameter list (ending `) =>` or `) ->`) rather than a parenthesized
+            // expression — the same question a lambda in expression position asks.
+            self.parameter_list_ahead()
         } else if self.check(&TokenKind::Ident) {
             // Single parameter without parens: followed by `=>` (body), `::` (parameter type),
             // or `->` (return type, e.g. `print = x -> $ => $`).
