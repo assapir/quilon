@@ -75,6 +75,7 @@ impl TypeChecker {
             Expression::Call {
                 function,
                 arguments,
+                member_call,
                 span,
             } => {
                 // An `it` case inside a `describe` block is where `expect` is legal, so both
@@ -88,7 +89,7 @@ impl TypeChecker {
                 let opens_case = marker == Some(crate::ast::TEST_CASE_MARKER);
                 self.test_depth += usize::from(opens_block);
                 self.case_depth += usize::from(opens_case);
-                let checked = self.check_call(function, arguments, span);
+                let checked = self.check_call(function, arguments, *member_call, span);
                 self.test_depth -= usize::from(opens_block);
                 self.case_depth -= usize::from(opens_case);
                 checked

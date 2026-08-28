@@ -295,6 +295,32 @@ fn contextually_typed_parameter_resolves_its_render_member() {
 }
 
 #[test]
+fn a_member_call_types_its_lambda_from_the_receivers_member() {
+    // A member call resolves against the receiver's type ALONE, so the lambda takes its
+    // parameter from the method's `(Text) -> Num` — never from the top-level `applyTo`
+    // that shares the name and states `(Num) -> Num`. 4 ("abcd") + 11 (10 + 1).
+    assert_exit(
+        "Calc = {\n  factor :: Num,\n  applyTo = (f :: (Text) -> Num) -> Num => f(\"abcd\")\n}\n\
+         applyTo = (x :: Num, f :: (Num) -> Num) -> Num => f(x)\n\
+         ^ = () -> Num => <\n  c = Calc { factor = 1 }\n  \
+         c.applyTo((s) => s.size) + applyTo(10, (n) => n + 1)\n>",
+        15,
+    );
+}
+
+#[test]
+fn an_unknown_member_on_a_lambda_receiver_names_the_receivers_type() {
+    // A lambda receiver is left untyped by the dispatcher, and a member call resolves to no
+    // signature that would type it — so the unknown-member report has to type it itself
+    // rather than fall through to "undefined variable".
+    let message = type_error_message("^ = () -> Num => ((n :: Num) => n + 1).foo(2)");
+    assert!(
+        message.contains("'(Num) -> Num' has no member 'foo'"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
 fn a_lambda_handed_to_print_is_refused_as_unrenderable() {
     // `print` claims every one-argument call, and a lambda argument is left untyped by the
     // dispatcher — so the rendering rule has to type it before it can say what is wrong,

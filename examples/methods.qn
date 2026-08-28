@@ -8,7 +8,12 @@ Counter = {
   bump = (by :: Num) -> Num => it.value + by
 }
 
+~ A top-level function may share a name with a method. The two are unrelated: a member
+~ call asks the receiver's type, a plain call names this function.
+bump = (by :: Num) -> Num => by * 100
+
 ^ = () -> $ => <
   c :: Counter = Counter { value = 30 }
-  assert(c.bump(5), equals(35))   ~ it.value + 5
+  assert(c.bump(5), equals(35))   ~ Counter's method: it.value + 5
+  assert(bump(5), equals(500))    ~ the top-level function: 5 * 100
 >

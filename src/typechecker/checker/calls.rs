@@ -7,6 +7,17 @@
 use super::*;
 
 impl TypeChecker {
+    /// Whether `name` names something callable here — a binding in scope, an overload set,
+    /// or one of the forms the compiler provides. Asked only to decide whether an
+    /// unresolved member call has a same-named function worth pointing the reader at, so a
+    /// typo (or a sibling method declared below) is not sent after one that isn't there.
+    fn names_a_callable(&self, name: &str) -> bool {
+        self.env.lookup(name).is_some()
+            || self.overloads.contains_key(name)
+            || crate::ast::is_compiler_provided_name(name)
+            || crate::ast::is_assertion(name)
+    }
+
     /// Check a call to an output built-in (`print`/`eprint`/`write`): the first argument is
     /// rendered through its `` ` `` member, so any type but a function is accepted there,
     /// and the rest are checked against the built-in's fixed parameter types. Reached only
@@ -73,15 +84,21 @@ impl TypeChecker {
         Ok(ty)
     }
 
+    /// Type-check a call. `member_call` marks the `recv.name(args)` form (see
+    /// [`Expression::Call`]): its name resolves against the receiver's type alone, so
+    /// every namespace-level dispatch below is skipped for one and an unresolved name is
+    /// [`TypeError::UnknownMember`] rather than a fall-through to a top-level function.
     pub(super) fn check_call(
         &mut self,
         function: &Expression,
         arguments: &[Expression],
+        member_call: bool,
         span: &Span,
     ) -> Result<Type, TypeError> {
         // The provided assertions, which take a matcher rather than ordinary arguments —
         // resolved here, ahead of every other dispatch, since they are the compiler's own.
         if let Expression::Identifier { name, .. } = function
+            && !member_call
             && crate::ast::is_assertion(name)
         {
             return self.check_assertion(name, arguments, span);
@@ -92,6 +109,7 @@ impl TypeChecker {
             name: constructor_name,
             ..
         } = function
+            && !member_call
             && let Some(sum_type) =
                 self.check_constructor_call(constructor_name, arguments, span)?
         {
@@ -171,14 +189,15 @@ impl TypeChecker {
                 name: type_name, ..
             } = first_arg_type
             {
-                // Look up method in the type's method list
-                if let Some(method_sig) = self
+                // Look up method in the type's method list. Only the signature is taken —
+                // cloning the whole entry would deep-copy the method's body at every call.
+                if let Some((method_parameters, method_return_type)) = self
                     .methods
                     .get(&(type_name.clone(), name.clone()))
-                    .cloned()
+                    .map(|(parameters, return_type, _body)| {
+                        (parameters.clone(), return_type.clone())
+                    })
                 {
-                    let (method_parameters, method_return_type, _body) = method_sig;
-
                     // A mutating (setter) method requires a mutable (`:=`) receiver.
                     // The receiver is arguments[0]; `it` (a method calling a sibling
                     // setter on its own receiver) is allowed — its mutability is
@@ -228,6 +247,38 @@ impl TypeChecker {
                     return Ok(method_return_type.unwrap_or(Type::Num));
                 }
             }
+        }
+
+        // Everything below resolves the name in the TOP-LEVEL namespace — a user function,
+        // an overload set, one of the compiler's own output built-ins — which a member call
+        // never reaches: `recv.name(...)` asks the receiver's type for `name`, and a
+        // top-level name that happens to match is unrelated to it. So a member call ALWAYS
+        // stops here, never conditionally: a shape that slipped past the destructure would
+        // fall through and be hijacked after all. The parser builds one only as
+        // `name(recv, …)`, so both halves always bind.
+        if member_call {
+            let (Expression::Identifier { name, .. }, Some(receiver)) =
+                (function, arguments.first())
+            else {
+                return Err(TypeError::NotAFunction {
+                    got: self.infer_expression(function)?,
+                    span: span.clone(),
+                });
+            };
+            // The receiver is usually already inferred (`first_ty`) — a LAMBDA there is
+            // not, since the dispatcher leaves a lambda's type to the signature the call
+            // resolves to, and a member call resolves to none. Type it now: the member is
+            // unknown either way, and the report has to name what it was looked for on.
+            let receiver_type = match &first_ty {
+                Some(ty) => ty.clone(),
+                None => self.infer_argument(receiver, LambdaTarget::None)?,
+            };
+            return Err(TypeError::UnknownMember {
+                type_name: crate::ast::type_label(&receiver_type),
+                member: name.clone(),
+                in_scope: self.names_a_callable(name),
+                span: span.clone(),
+            });
         }
 
         // `print`/`eprint`/`write` render their first argument through its `` ` `` operator,

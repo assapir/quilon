@@ -41,6 +41,7 @@ impl TypeError {
             | TypeError::ExpectOutsideTest { span }
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
+            | TypeError::UnknownMember { span, .. }
             | TypeError::NotRenderable { span, .. }
             | TypeError::RenderableBuiltinRedefined { span, .. } => span,
         }
@@ -330,6 +331,26 @@ impl std::fmt::Display for TypeError {
                     f,
                     "operator member '{operator}' takes exactly one parameter (the right operand; 'it' is the left operand), but has {got}",
                 )
+            }
+            TypeError::UnknownMember {
+                type_name,
+                member,
+                in_scope,
+                ..
+            } => {
+                write!(
+                    f,
+                    "'{type_name}' has no member '{member}'. A member call resolves against the \
+                     receiver's type only"
+                )?;
+                match in_scope {
+                    true => write!(
+                        f,
+                        "; the '{member}' in scope is a different function — call it as \
+                         '{member}(receiver, ...)'"
+                    ),
+                    false => Ok(()),
+                }
             }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(

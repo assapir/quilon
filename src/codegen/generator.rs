@@ -199,6 +199,14 @@ pub struct CodeGenerator<'ctx> {
     // value of such a type renders via the user's `Type_op$backtick` method instead of the
     // built-in default (type name). Populated once, in the type-declaration pre-pass.
     render_overrides: std::collections::HashSet<String>,
+    // Which types declare each receiver-dispatched method: method name -> the types
+    // declaring it. A call resolves against what a type actually declares rather than
+    // against whether a symbol of the mangled shape happens to exist (a top-level
+    // `Counter_bump` is a function, not `Counter`'s `bump`). Keyed by METHOD name so the
+    // overwhelmingly common answer — no type has a method by this name — costs one
+    // borrowed lookup on the call-lowering hot path. Filled in source order, so a call
+    // sees only the methods declared above it, as the checker does.
+    declared_methods: HashMap<String, HashSet<String>>,
     // While emitting the body of a type's own `` ` `` override, this holds that type's
     // name. Rendering the receiver `it` wholesale (a hole that is literally `it`) then
     // falls back to the built-in default instead of re-invoking the override — breaking
@@ -337,6 +345,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             fn_return_types: HashMap::new(),
             tco: None,
             render_overrides: std::collections::HashSet::new(),
+            declared_methods: HashMap::new(),
             generating_backtick_for: None,
             debug: None,
             di_scope: None,
