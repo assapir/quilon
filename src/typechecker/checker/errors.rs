@@ -329,7 +329,8 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "'{constructor}' is a sum-type variant pattern, and this match is on {}, \
-                     which has no variants — match its values instead (a literal, or '_')",
+                     which has no variants — match the value itself instead: a literal, a \
+                     binding, or '_'",
                     type_label(got)
                 )
             }

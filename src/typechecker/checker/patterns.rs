@@ -15,14 +15,17 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let expression_type = self.infer_expression(expression)?;
 
+        // Each pattern first, then coverage: a pattern that cannot match this scrutinee at
+        // all is the more specific complaint, and reporting "not exhaustive" over it would
+        // send the reader to add an arm rather than fix the one they wrote.
+        for arm in arms {
+            self.check_pattern(&arm.pattern, &expression_type)?;
+        }
         self.check_exhaustiveness(&expression_type, arms, span)?;
 
-        // Check each arm's pattern against expression_type
         let mut result_type = None;
 
         for arm in arms {
-            self.check_pattern(&arm.pattern, &expression_type)?;
-
             // Bind pattern variables and check body
             self.env.push_scope();
             self.bind_pattern_vars(&arm.pattern, &expression_type)?;
@@ -56,7 +59,12 @@ impl TypeChecker {
             }
         }
 
-        Ok(result_type.unwrap())
+        // A match with no arms at all yields nothing, and covers nothing either.
+        result_type.ok_or_else(|| TypeError::NonExhaustiveMatch {
+            scrutinee: Box::new(expression_type),
+            missing: Vec::new(),
+            span: span.clone(),
+        })
     }
 
     /// Every match must be total. A sum-typed scrutinee is covered arm by arm — one per
