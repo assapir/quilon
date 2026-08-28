@@ -472,7 +472,7 @@ fn run_non_setter_method_on_immutable_instance_is_allowed() {
     );
 }
 
-// --- Member calls resolve against the receiver's type, never the top-level namespace. ---
+// --- A member call looks for the name on the receiver's type, never in the top level. ---
 
 #[test]
 fn run_method_wins_over_a_top_level_function_of_the_same_name() {
@@ -516,6 +516,12 @@ fn a_member_call_never_falls_back_to_a_top_level_function() {
     assert!(
         message.contains("'Counter' has no member 'bump'"),
         "the diagnostic must name the receiver's type and the member, got: {message}"
+    );
+    // And it spells out the call that DOES reach that function, with the receiver the
+    // reader wrote and an ellipsis for the arguments they passed.
+    assert!(
+        message.contains("call it as 'bump(c, ...)'"),
+        "the advice must spell out the plain call, got: {message}"
     );
 }
 
@@ -604,7 +610,8 @@ fn a_member_call_never_reaches_an_output_built_in() {
         "<< core.io\nCounter = {\n  value :: Num,\n  ` = () -> Text => \"Counter(`it.value`)\"\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n  0\n>",
     );
     assert!(
-        message.contains("'Counter' has no member 'print'") && message.contains("call it as"),
+        message.contains("'Counter' has no member 'print'")
+            && message.contains("call it as 'print(c)'"),
         "expected the diagnostic to name the member and point at the built-in, got: {message}"
     );
 }

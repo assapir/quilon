@@ -335,21 +335,26 @@ impl std::fmt::Display for TypeError {
                 type_name,
                 member,
                 in_scope,
+                receiver,
+                more_arguments,
                 ..
             } => {
+                write!(f, "'{type_name}' has no member '{member}'")?;
+                if !in_scope {
+                    return Ok(());
+                }
+                // There IS a function of that name, so say why it did not answer the call —
+                // in terms of what was written, and with the call that would reach it.
+                let receiver = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
+                };
                 write!(
                     f,
-                    "'{type_name}' has no member '{member}'. A member call resolves against the \
-                     receiver's type only"
-                )?;
-                match in_scope {
-                    true => write!(
-                        f,
-                        "; the '{member}' in scope is a different function — call it as \
-                         '{member}(receiver, ...)'"
-                    ),
-                    false => Ok(()),
-                }
+                    ". There is a '{member}' in scope, but '{receiver}.{member}(...)' only \
+                     looks on {type_name} — call it as '{member}({receiver}{rest})'"
+                )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(
