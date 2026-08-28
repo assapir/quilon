@@ -45,6 +45,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 continue;
             }
             let mangled = method_symbol(type_name, &method.name);
+            self.declared_methods
+                .entry(method.name.clone())
+                .or_default()
+                .insert(type_name.to_string());
             if self.module.get_function(&mangled).is_some() {
                 continue;
             }

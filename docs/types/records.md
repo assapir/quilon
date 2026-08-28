@@ -38,3 +38,13 @@ receiver — and calling one requires a mutable (`:=`) receiver
 An unannotated method parameter defaults to `Num` (as in any [ordinary
 definition](../functions/overloading.md)), and call sites are held to that default:
 `t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
+
+A method answers the plain form `name(recv, args)` too — and `recv |> name(args)`, which
+[is](../expressions/pipe.md) that call. Only the `.` form refuses the top-level fallback:
+`recv.name(...)` its type cannot answer is an error, where `name(recv, ...)` goes on to
+look the name up as usual.
+```quilon ignore
+(5).double()   ~ error: 'Num' has no member 'double'
+double(5)      ~ 10
+5 |> double()  ~ 10
+```
