@@ -1,7 +1,8 @@
 ~ Higher-order functions: a function whose parameter is itself a function. A function
 ~ type is written with the arrow — `(Num) -> Num`, `(Num) -> Bool`, `() -> $` — and the
-~ value passed in is a closure (here a lambda literal). The body calls it like any other
-~ function. `<< core.test` verifies each result; on success the program exits 0.
+~ value passed in is a closure (here a lambda literal). A lambda takes its parameter
+~ types from the signature that receives it, so the lambdas below write none of their own.
+~ `<< core.test` verifies each result; on success the program exits 0.
 << core.test
 
 ~ Value-first so `x |> apply(f)` reads naturally: the piped subject is the first arg.
@@ -13,6 +14,9 @@ twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
 ~ A predicate parameter `(Num) -> Bool`: keep `x` when it holds, else 0.
 keepIf = (p :: (Num) -> Bool, x :: Num) -> Num => p(x) ? x : 0
 
+~ A `Text` function parameter: the lambda's `s` is a Text because `f` says it is.
+around = (t :: Text, f :: (Text) -> Text) -> Text => f(t)
+
 ~ A `() -> $` parameter, called purely for effect: `run` invokes `action` twice.
 run = (action :: () -> $) -> $ => <
   action()
@@ -20,12 +24,21 @@ run = (action :: () -> $) -> $ => <
 >
 
 ^ = () -> $ => <
-  assert(apply(10, (n :: Num) => n + 1), equals(11))
-  assert(10 |> apply((n :: Num) => n + 1), equals(11))
-  assert(twice((n :: Num) => n * 3, 2), equals(18))
+  ~ `apply`'s `(Num) -> Num` parameter is what types `n`.
+  assert(apply(10, (n) => n + 1), equals(11))
+  assert(10 |> apply((n) => n + 1), equals(11))
+  assert(twice((n) => n * 3, 2), equals(18))
 
-  assert(keepIf((n :: Num) => n > 5, 9), equals(9))
-  assert(keepIf((n :: Num) => n > 5, 3), equals(0))
+  ~ Writing the annotation stays legal, and wins where written.
+  assert(apply(10, (n :: Num) => n + 1), equals(11))
+
+  assert(keepIf((n) => n > 5, 9), equals(9))
+  assert(keepIf((n) => n > 5, 3), equals(0))
+  assert(around("hi", (s) => s + "!"), equals("hi!"))
+
+  ~ A binding that declares its own function type states its parameter types too.
+  scale :: (Num) -> Num = (n) => n * 4
+  assert(scale(5), equals(20))
 
   ~ A named closure captures `total` by reference, so its writes escape and accumulate
   ~ across the two calls `run` makes. Passing it by name hands `run` the closure value.

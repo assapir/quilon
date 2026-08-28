@@ -6,6 +6,24 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A lambda takes its parameter types from the signature that receives it.** Where a
+  lambda lands on a known function type, that type says what its parameters are:
+
+  ```quilon ignore
+  apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
+
+  apply(10, (n) => n + 1)                ~ `f`'s type already says `n` is a Num
+  10 |> apply((n) => n + 1)              ~ the pipe injects the first argument
+  c.applyTo((n) => n * 2)                ~ a method's function-typed parameter
+  scale :: (Num) -> Num = (n) => n * 4   ~ a binding that declares its function type
+  ```
+
+  An annotation stays legal and wins where written. Where no target type is known — a
+  lambda in a plain expression, or an overload set the other arguments do not narrow to one
+  member — the parameters must still be annotated, and the error says which is missing
+  rather than assuming `Num`. An overload set may now also dispatch on a function-typed
+  parameter. See `docs/functions/README.md`.
+
 - **`core.http` — an HTTP client written in Quilon** over `core.net`'s `@tcpRequest`. HTTP
   only, no TLS. It exports four type names and no free functions, since every exported name is
   a word an importer can no longer use:
@@ -167,6 +185,17 @@ All notable changes to Quilon are documented here.
   contract exists to serve. What is gone is the inference that decided which methods were
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
+
+- **BREAKING: a member call resolves against the receiver's type
+  ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
+  receiver's type for `name` and nothing else: a name the type does not have is a compile
+  error naming both (`'Counter' has no member 'bump'`), never a fall-through to a top-level
+  function of that name.
+
+  What breaks: `.` on a value whose type has no such member no longer reaches a top-level
+  function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
+  Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
+  as before.
 
 ### Fixed
 

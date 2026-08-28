@@ -47,6 +47,7 @@ impl TypeChecker {
             function,
             arguments,
             span,
+            ..
         } = matcher
         else {
             return Err(TypeError::AssertionNeedsMatcher {

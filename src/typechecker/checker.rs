@@ -131,6 +131,23 @@ pub enum TypeError {
         parameter: String,
         span: Span,
     },
+    /// A definition with more or fewer parameters than the function type it must match —
+    /// `f :: (Num, Num) -> Num = (a :: Num) => a`, or a lambda handed to a position that
+    /// states a different arity. `subject` names the offending definition.
+    SignatureArity {
+        subject: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+    /// A lambda parameter left unannotated where the position it sits in states no function
+    /// type to take it from. Carries the overload set that the other arguments left open,
+    /// when that is what stopped the target type from being known.
+    UninferableLambdaParameter {
+        parameter: String,
+        open_overload: Option<String>,
+        span: Span,
+    },
     /// A function whose result is itself a function value. Taking a function as a parameter
     /// works, but returning one across the call boundary is deferred, so it is rejected
     /// rather than miscompiled.
@@ -232,6 +249,16 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
+    /// `recv.name(...)` where `name` is not a member of the receiver's type. A member call
+    /// resolves against that type alone, so a function of the same name is never a fallback
+    /// — it would otherwise hijack the call. `in_scope` says whether such a function is
+    /// there to point the reader at.
+    UnknownMember {
+        type_name: String,
+        member: String,
+        in_scope: bool,
+        span: Span,
+    },
     /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —
     /// a function.
     NotRenderable {
@@ -244,6 +271,45 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+}
+
+/// What the position a lambda sits in states about its type — the target of **contextual
+/// typing**. Only a `Declared` function type of matching arity can type the parameters the
+/// lambda leaves unannotated; the other variants are what an "annotate it" error reports as
+/// missing, so the reason travels as the situation rather than as prose.
+#[derive(Clone, Copy)]
+pub(crate) enum LambdaTarget<'a> {
+    /// The type this position states. A function type of matching arity types the lambda;
+    /// anything else leaves its unannotated parameters with nothing to take.
+    Declared(&'a Type),
+    /// The position states nothing — a lambda in a plain expression, an array element, a
+    /// sum payload.
+    None,
+    /// A call to an overload set the other arguments did not narrow to one member, so which
+    /// signature this position has is not decided yet.
+    OpenOverload(&'a str),
+}
+
+impl<'a> LambdaTarget<'a> {
+    /// The type the position states, if it states one.
+    fn stated(self) -> Option<&'a Type> {
+        match self {
+            Self::Declared(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    /// The error an unannotated `parameter` gets here — nothing stated a type to give it.
+    fn uninferable(self, parameter: &Parameter) -> TypeError {
+        TypeError::UninferableLambdaParameter {
+            parameter: parameter.name.clone(),
+            open_overload: match self {
+                Self::OpenOverload(name) => Some(name.to_string()),
+                _ => None,
+            },
+            span: parameter.span.clone(),
+        }
+    }
 }
 
 /// Exact-type match for overload dispatch (no implicit coercion). Built-in scalars
@@ -278,6 +344,24 @@ pub(crate) fn types_match(parameter: &Type, arg: &Type) -> bool {
             Type::Named { name: a, .. } | Type::Sum { name: a, .. },
             Type::Named { name: b, .. } | Type::Sum { name: b, .. },
         ) => a == b,
+        // A function-typed parameter matches an argument of the same shape — same arity,
+        // pairwise-matching parameters, matching result. So a set may overload on the
+        // closure it takes, and the member a lambda argument resolves to is the one whose
+        // signature it was typed against.
+        (
+            Type::Function {
+                parameters: pa,
+                return_type: ra,
+            },
+            Type::Function {
+                parameters: pb,
+                return_type: rb,
+            },
+        ) => {
+            pa.len() == pb.len()
+                && pa.iter().zip(pb).all(|(a, b)| types_match(a, b))
+                && types_match(ra, rb)
+        }
         _ => false,
     }
 }
@@ -297,13 +381,14 @@ pub struct Environment {
 /// A method's signature and body: (parameters, return type, body expression).
 type MethodDef = (Vec<Parameter>, Option<Type>, Expression);
 
-/// The **type oracle**: a side-table mapping each expression's source `Span` to the
-/// `Type` the checker inferred for it. Produced by `check_program` and consumed by
-/// codegen so that READ sites (array indexing, record-field access, match-arm results)
-/// recover the *declared* element / field / result type instead of guessing `f64` from
-/// a runtime LLVM value. Spans are unique per expression (every AST node carries its
-/// own source span), so they make a stable, AST-agnostic key. See the consumer-side
-/// wrapper `codegen::TypeOracle`.
+/// The **type oracle**: a side-table mapping each expression's — and each function
+/// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by
+/// `check_program` and consumed by codegen so that READ sites (array indexing,
+/// record-field access, match-arm results) recover the *declared* element / field / result
+/// type instead of guessing `f64` from a runtime LLVM value, and so a parameter typed from
+/// context rather than from a written annotation still has a type to lower. Spans are
+/// unique per node (every AST node carries its own source span), so they make a stable,
+/// AST-agnostic key. See the consumer-side wrapper `codegen::TypeOracle`.
 pub type TypeTable = std::collections::HashMap<Span, Type>;
 
 /// One member of an overload set: an exact parameter-type list and the result type.

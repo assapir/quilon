@@ -21,6 +21,8 @@ impl TypeError {
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
             | TypeError::UnannotatedParameter { span, .. }
+            | TypeError::SignatureArity { span, .. }
+            | TypeError::UninferableLambdaParameter { span, .. }
             | TypeError::UnsupportedFunctionReturn { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
@@ -39,6 +41,7 @@ impl TypeError {
             | TypeError::ExpectOutsideTest { span }
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
+            | TypeError::UnknownMember { span, .. }
             | TypeError::NotRenderable { span, .. }
             | TypeError::RenderableBuiltinRedefined { span, .. } => span,
         }
@@ -192,6 +195,38 @@ impl std::fmt::Display for TypeError {
                     parameter, function
                 )
             }
+            TypeError::SignatureArity {
+                subject,
+                expected,
+                got,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{} takes {}, but the function type it must match takes {}",
+                    subject,
+                    fmt_parameter_count(*got),
+                    expected
+                )
+            }
+            TypeError::UninferableLambdaParameter {
+                parameter,
+                open_overload,
+                ..
+            } => {
+                write!(
+                    f,
+                    "parameter '{parameter}' of this lambda has no type: annotate it — "
+                )?;
+                match open_overload {
+                    Some(name) => write!(
+                        f,
+                        "the other arguments do not narrow '{name}' to a single overload, \
+                         so what this position expects is not decided yet"
+                    ),
+                    None => write!(f, "nothing here states a function type to take it from"),
+                }
+            }
             TypeError::UnsupportedFunctionReturn { function, .. } => {
                 write!(
                     f,
@@ -297,6 +332,26 @@ impl std::fmt::Display for TypeError {
                     "operator member '{operator}' takes exactly one parameter (the right operand; 'it' is the left operand), but has {got}",
                 )
             }
+            TypeError::UnknownMember {
+                type_name,
+                member,
+                in_scope,
+                ..
+            } => {
+                write!(
+                    f,
+                    "'{type_name}' has no member '{member}'. A member call resolves against the \
+                     receiver's type only"
+                )?;
+                match in_scope {
+                    true => write!(
+                        f,
+                        "; the '{member}' in scope is a different function — call it as \
+                         '{member}(receiver, ...)'"
+                    ),
+                    false => Ok(()),
+                }
+            }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(
                     f,
@@ -307,6 +362,14 @@ impl std::fmt::Display for TypeError {
                 )
             }
         }
+    }
+}
+
+/// Render a parameter count as English (`1 parameter`, `2 parameters`).
+fn fmt_parameter_count(count: usize) -> String {
+    match count {
+        1 => "1 parameter".to_string(),
+        n => format!("{n} parameters"),
     }
 }
 

@@ -222,22 +222,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a function definition. `binding_type` is the `::` annotation written on the
+    /// binding, if any — a function type there states the whole signature, anything else
+    /// states the return type.
     pub(super) fn parse_function_declaration(
         &mut self,
         name: String,
         start: Span,
-        return_type: Option<crate::ast::Type>,
+        binding_type: Option<crate::ast::Type>,
         exported: bool,
     ) -> Result<Item, ParseError> {
         // Parse parameters: (a, b) or (a :: Type, b :: Type) or single parameter or just =>
         let parameters = self.parse_parameter_list()?;
 
-        // Optional return type annotation with ->
+        // Optional return type annotation with ->. The `::` annotation on the binding is
+        // kept as written beside it: what it states — the whole signature, or just the
+        // return type — is read off its shape where types are understood, not here.
         let return_type = if self.check(&TokenKind::ReturnArrow) {
             self.advance();
             Some(self.parse_type()?)
         } else {
-            return_type
+            None
         };
 
         // Expect =>
@@ -256,6 +261,7 @@ impl<'a> Parser<'a> {
             name,
             parameters,
             return_type,
+            binding_type,
             body,
             exported,
             // Parsing is provenance-blind: the module loader marks what it merges from a

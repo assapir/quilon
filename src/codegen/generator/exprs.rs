@@ -122,8 +122,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expression::Call {
                 function,
                 arguments,
+                member_call,
                 span,
-            } => self.generate_call(function, arguments, span),
+            } => self.generate_call(function, arguments, *member_call, span),
 
             Expression::Lambda {
                 parameters,
