@@ -210,8 +210,8 @@ pub enum TypeError {
         span: Span,
     },
     /// The `^` entry point declared an unsupported parameter signature. The only
-    /// accepted forms are `()`, `(args :: []Text)`, `(args :: []Text, env :: [|Text => Text|])`,
-    /// and the legacy `(argc :: Num, argv :: Num)`. Rejected here (not in codegen) so
+    /// accepted forms are `()`, `(args :: []Text)`, and
+    /// `(args :: []Text, env :: [|Text => Text|])`. Rejected here (not in codegen) so
     /// `quilon check` and `quilon run`/`build` all report the same clear diagnostic.
     InvalidEntryPointSignature {
         got: Vec<Type>,

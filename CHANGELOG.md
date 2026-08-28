@@ -186,6 +186,10 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
+- **BREAKING: the `^ = (argc :: Num, argv :: Num)` entry form is gone.** An entry point
+  takes its arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any
+  other unsupported `^` signature.
+
 - **BREAKING: a member call resolves against the receiver's type
   ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
   receiver's type for `name` and nothing else: a name the type does not have is a compile
@@ -198,6 +202,23 @@ All notable changes to Quilon are documented here.
   as before.
 
 ### Fixed
+
+- **Allocation fails loudly** ([#224](https://github.com/assapir/quilon/issues/224)). Three
+  holes at the runtime/codegen boundary, all of which turned a bad allocation into memory
+  corruption instead of a message:
+
+  - A collector that could not satisfy a request returned null, and the null became a
+    `Text`/array whose `data` was null while its length said otherwise — undefined behavior
+    at the first read, far from the allocation that failed. `__alloc` now reports
+    `out of memory: cannot allocate N bytes` and exits 1.
+  - An array's `count * elem_size` was multiplied in the emitted code, where an `i64`
+    product wraps. A wrapped size is non-positive, the allocator clamped it to a single
+    byte, and the fill wrote every element past it (`1 <- 2000000000000000000` segfaulted).
+    The size is now computed by the runtime under an overflow check, so it reports
+    `allocation too large: …` and exits 1.
+  - `quilon run` replaced an argument containing a NUL byte with `""`, so the program ran
+    on a value nobody passed. Such an argument cannot reach a native binary at all — the
+    operating system refuses to start one — so the JIT now refuses it too.
 
 - **A wide parameter list no longer changes what a definition means
   ([#203](https://github.com/assapir/quilon/issues/203)).** The parser's speculative scans

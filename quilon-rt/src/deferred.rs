@@ -33,7 +33,7 @@
 //! calls therefore read consecutive lines in launch order rather than racing the fd.
 
 use crate::mem::{__alloc, QlSlice, alloc_text};
-use crate::report::{QlSite, fail_at};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, fail_at};
 use crate::scheduler::{
     deregister_readiness, park_on_address, park_on_readiness, register_readiness,
     reregister_readiness, spawn, wake_address,
@@ -125,11 +125,7 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
     // The cell must be a fresh, GC-zeroed allocation, never a live one we would clobber.
     // `GC_malloc` zeroes, so a fresh cell reads as all-zero bytes; reading the not-yet-typed
     // memory as `u8` is well-defined (no invalid bit patterns), unlike reading it as `T`.
-    // Debug-only, evaluated after the non-null guard so the byte read never touches null.
-    debug_assert!(
-        !cell.is_null(),
-        "GC allocation for a Deferred returned null"
-    );
+    // Debug-only; `__alloc` aborts rather than handing back null, so the read is safe.
     debug_assert!(
         unsafe { std::slice::from_raw_parts(cell as *const u8, size) }
             .iter()
@@ -284,7 +280,11 @@ fn read_stdin_text(site: *const QlSite) -> QlSlice {
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid [`QlSite`].
 fn fail_read(site: *const QlSite, error: &io::Error) -> ! {
-    fail_at(site, &format!("@readStdin failed: {error}"), 1)
+    fail_at(
+        site,
+        &format!("@readStdin failed: {error}"),
+        RUNTIME_EXIT_CODE,
+    )
 }
 
 thread_local! {
