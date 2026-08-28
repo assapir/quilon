@@ -915,6 +915,25 @@ impl BinaryOperator {
     }
 }
 
+/// A literal `Num` expression's value: a `Number`, or a negated one (`-2` parses as
+/// `Neg(2)`). `None` for anything computed. Shared by the type checker, which rejects a
+/// bad literal where a built-in has a contract, and codegen, which emits a constant
+/// instead of the runtime check that literal has already passed.
+pub fn literal_number(expression: &Expression) -> Option<f64> {
+    match expression {
+        Expression::Number { value, .. } => Some(*value),
+        Expression::UnaryOperator {
+            operator: UnaryOperator::Neg,
+            expression,
+            ..
+        } => match expression.as_ref() {
+            Expression::Number { value, .. } => Some(-value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Whether `name` is an operator symbol — and thus always an overload set, never a
 /// plain value binding. Shared by the type checker and the code generator so both
 /// agree on exactly which names are operators (the binary operator symbols).

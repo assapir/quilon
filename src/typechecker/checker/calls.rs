@@ -739,20 +739,3 @@ impl TypeChecker {
         Ok(body_type)
     }
 }
-
-/// A literal `Num` argument's value: a `Number`, or a negated one (`-2` parses as
-/// `Neg(2)`). `None` for anything computed, which only the runtime can check.
-fn literal_number(expression: &Expression) -> Option<f64> {
-    match expression {
-        Expression::Number { value, .. } => Some(*value),
-        Expression::UnaryOperator {
-            operator: crate::ast::UnaryOperator::Neg,
-            expression,
-            ..
-        } => match expression.as_ref() {
-            Expression::Number { value, .. } => Some(-value),
-            _ => None,
-        },
-        _ => None,
-    }
-}

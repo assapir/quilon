@@ -24,6 +24,25 @@ r.each(x => print(x))   ~ a range iterates with `.each` like any array
 Both ends are full `Num` expressions — they may be dynamic, not just literals. The
 direction (ascending vs descending) is decided at runtime. (See `examples/ranges.qn`.)
 
+### Endpoints must be whole numbers
+A range counts from one end to the other, so each end must be a **whole number** — and one a
+`Num` holds exactly, so at most 2^53 in magnitude (the
+[exact-integer limit](../types/README.md#the-exact-integer-limit)). Anything else is an
+**error**, never a truncation (a range is also
+[materialized in full](../status/limitations.md)):
+
+```quilon ignore
+1.5 <- 3.9        ~ error: a range endpoint must be a whole number (got 1.5)
+1 <- (0.0 / 0.0)  ~ error: a range endpoint must be a whole number (got NaN)
+1 <- 100000000000000000
+~ error: a range endpoint must be a whole number a Num holds exactly, at most
+~        9007199254740992 in magnitude (got 100000000000000000)
+```
+
+What the compiler can evaluate it rejects at compile time; anything computed is rejected
+when the range runs, framed at the range expression and exiting 1 — the same fail-loud
+contract a bad [`array[i]`](../collections/arrays.md) has.
+
 ## Spread in literals
 The **prefix** `<-` splices a source's contents into an array or record literal:
 

@@ -1,11 +1,11 @@
 // Type checker implementation
 
-use crate::ast::type_label;
 use crate::ast::{BinaryOperator, UnaryOperator};
 use crate::ast::{
     Expression, FunctionDeclaration, InterpolationPart, Item, MatchArm, Parameter, Pattern,
     Program, Type, VariableDeclaration,
 };
+use crate::ast::{literal_number, type_label};
 use crate::lexer::Span;
 
 // The checker's methods live in child modules — one per checking area — as further
