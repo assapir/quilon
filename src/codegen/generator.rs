@@ -282,12 +282,15 @@ struct Tco<'ctx> {
 /// by the checker) through to the read sites.
 ///
 /// # API (for downstream M3 waves: array methods, spread, args/env)
-/// The single primitive is [`TypeOracle::expression_type`] — the inferred `Type` of any
-/// expression, looked up by its source `Span`. The checker records the *result* type of
-/// every node, so the element type of an `arr[i]` is `expression_type(<the Index node>)`, the
-/// type of `rec.field` is `expression_type(<the FieldAccess node>)`, and a `match`'s result is
+/// The single primitive is [`TypeOracle::type_at`] — the `Type` the checker recorded for a
+/// source `Span` — with [`TypeOracle::expression_type`] the expression-shaped convenience
+/// over it. The checker records the *result* type of every node, so the element type of an
+/// `arr[i]` is `expression_type(<the Index node>)`, the type of `rec.field` is
+/// `expression_type(<the FieldAccess node>)`, and a `match`'s result is
 /// `expression_type(<the Match node>)` — there is no need for per-shape accessors, the read
-/// site just asks for the type of the whole node it is lowering.
+/// site just asks for the type of the whole node it is lowering. A parameter is not an
+/// expression and is looked up by its own span (see `parameter_type`), which is how a
+/// lambda parameter typed from context reaches codegen.
 ///
 /// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
 /// additive: new expression kinds get types recorded automatically by `infer_expression`. A
@@ -500,14 +503,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     || is_compiler_provided_name(&declaration.name))
                 && declaration.name != "^"
             {
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 // The return type drives argument-type inference for a value bound to
                 // an overloaded call/operator (e.g. a user `+` returning a record).
-                let ret = declaration.return_type.clone().unwrap_or(Type::Num);
+                let ret = declaration
+                    .declared_return_type()
+                    .cloned()
+                    .unwrap_or(Type::Num);
                 self.overloads
                     .entry(declaration.name.clone())
                     .or_default()
@@ -534,10 +536,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else if method.parameters.len() == 1 {
                         vec![
                             self_type.clone(),
-                            method.parameters[0]
-                                .type_annotation
-                                .clone()
-                                .unwrap_or(Type::Num),
+                            self.parameter_type(&method.parameters[0]),
                         ]
                     } else {
                         continue;
@@ -559,15 +558,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = &declaration.return_type {
+                if let Some(ret) = declaration.declared_return_type() {
                     self.fn_return_types
                         .insert(declaration.name.clone(), ret.clone());
                 }
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
                         .insert(declaration.name.clone(), parameters.len());
@@ -607,13 +602,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => Some(
-                        declaration
-                            .parameters
-                            .iter()
-                            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                            .collect(),
-                    ),
+                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
+                        Some(self.parameter_types(&declaration.parameters))
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();

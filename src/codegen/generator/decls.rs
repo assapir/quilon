@@ -55,7 +55,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let mut parameter_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                 vec![receiver_llvm.into()];
             for p in &method.parameters {
-                let pt = self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num))?;
+                let pt = self.boundary_type(&self.parameter_type(p))?;
                 parameter_types.push(pt.into());
             }
             // Unannotated return type defaults to Num, except a setter body whose
@@ -103,6 +103,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             name: method.name.clone(),
             parameters,
             return_type: method.return_type.clone(),
+            binding_type: None,
             body: method.body.clone(),
             exported: false,
             from_corelib: false,
@@ -177,7 +178,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to build store"))?;
             self.variables
                 .insert(parameter.name.clone(), (alloca, parameter_type));
-            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
+            let qty = self.parameter_type(parameter);
             self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
@@ -441,7 +442,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let parameter_types: Vec<BasicTypeEnum> = declaration
             .parameters
             .iter()
-            .map(|p| self.boundary_type(&p.type_annotation.clone().unwrap_or(Type::Num)))
+            .map(|p| self.boundary_type(&self.parameter_type(p)))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Convert return type. The entry point `^` always returns a Num exit code at
@@ -455,7 +456,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // would emit `ret i8` into an f64 function and fail module verification.
             // The same boundary rule applies: an array return crosses as the value struct.
             let inferred =
-                self.default_return_type(declaration.return_type.as_ref(), &declaration.body);
+                self.default_return_type(declaration.declared_return_type(), &declaration.body);
             self.boundary_type(&inferred)?
         };
 
@@ -478,11 +479,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // emitted under a per-signature MANGLED name so the members don't collide; each
         // call site dispatches to the matching mangled symbol by exact argument type.
         let symbol = if self.overloads.contains_key(&declaration.name) {
-            let parameters: Vec<Type> = declaration
-                .parameters
-                .iter()
-                .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                .collect();
+            let parameters = self.parameter_types(&declaration.parameters);
             mangle_overload(&declaration.name, &parameters)
         } else {
             declaration.name.clone()
@@ -515,7 +512,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .insert(parameter.name.clone(), (alloca, parameter_type));
             // Track the parameter's Quilon type for overloaded-call mangling, and so a
             // record/sum parameter's methods/fields resolve.
-            let qty = parameter.type_annotation.clone().unwrap_or(Type::Num);
+            let qty = self.parameter_type(parameter);
             if let Type::Named { name, .. } | Type::Sum { name, .. } = &qty {
                 self.var_named_types
                     .insert(parameter.name.clone(), name.clone());
