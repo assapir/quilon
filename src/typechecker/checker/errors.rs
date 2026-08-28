@@ -21,6 +21,8 @@ impl TypeError {
             | TypeError::AmbiguousOverload { span, .. }
             | TypeError::OverloadMissingAnnotation { span, .. }
             | TypeError::UnannotatedParameter { span, .. }
+            | TypeError::SignatureArity { span, .. }
+            | TypeError::UninferableLambdaParameter { span, .. }
             | TypeError::UnsupportedFunctionReturn { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
@@ -195,6 +197,38 @@ impl std::fmt::Display for TypeError {
                     parameter, function
                 )
             }
+            TypeError::SignatureArity {
+                subject,
+                expected,
+                got,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{} takes {}, but the function type it must match takes {}",
+                    subject,
+                    fmt_parameter_count(*got),
+                    expected
+                )
+            }
+            TypeError::UninferableLambdaParameter {
+                parameter,
+                open_overload,
+                ..
+            } => {
+                write!(
+                    f,
+                    "parameter '{parameter}' of this lambda has no type: annotate it — "
+                )?;
+                match open_overload {
+                    Some(name) => write!(
+                        f,
+                        "the other arguments do not narrow '{name}' to a single overload, \
+                         so what this position expects is not decided yet"
+                    ),
+                    None => write!(f, "nothing here states a function type to take it from"),
+                }
+            }
             TypeError::UnsupportedFunctionReturn { function, .. } => {
                 write!(
                     f,
@@ -303,8 +337,7 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "Entry point '^' has an unsupported signature ({}). Valid signatures: \
-                     '()', '(args :: []Text)', '(args :: []Text, env :: [|Text => Text|])' \
-                     (or legacy '(argc :: Num, argv :: Num)').",
+                     '()', '(args :: []Text)', '(args :: []Text, env :: [|Text => Text|])'.",
                     fmt_type_list(got)
                 )
             }
@@ -377,6 +410,14 @@ pub(super) fn fmt_name_list(names: &[String]) -> String {
         .map(|name| format!("'{name}'"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Render a parameter count as English (`1 parameter`, `2 parameters`).
+fn fmt_parameter_count(count: usize) -> String {
+    match count {
+        1 => "1 parameter".to_string(),
+        n => format!("{n} parameters"),
+    }
 }
 
 /// Render a comma-separated parameter/argument type list (`Num, Text`).

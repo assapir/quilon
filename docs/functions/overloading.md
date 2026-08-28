@@ -29,6 +29,11 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   g = (n :: Num) => 1        ~ error: overload member 'g' (Num) has no return type
   g = (t :: Text) -> Num => 2
   ```
+  Stating the whole signature on the binding annotates both at once:
+  ```quilon ignore
+  g :: (Num) -> Num = (n) => 1
+  g :: (Text) -> Num = (t) => 2
+  ```
 - A single ordinary `name = …` definition is **not** an overload set. It keeps its
   inferred return type — no return annotation needed. Its parameters are still annotated;
   only an unannotated **method** parameter defaults to `Num` (see

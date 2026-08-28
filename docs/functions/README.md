@@ -11,10 +11,12 @@ add    = (a :: Num, b :: Num) => a + b     ~ multiple params
 typed  = (a :: Num, b :: Num) -> Num => a + b
 ```
 Every function parameter must be annotated — there is no default type; an
-unannotated parameter is a compile error that names it. There are two exceptions. A lambda
-passed to a built-in collection method (`.map` / `.filter` / `.reduce` / `.each`) takes its
-parameter type from the element type of the receiver. And an unannotated **method**
-parameter defaults to `Num` (see
+unannotated parameter is a compile error that names it. The exception is a **lambda**,
+which takes its parameter types from whatever receives it whenever that states them (see
+[below](#a-lambda-takes-its-parameter-types-from-the-target)) — a built-in collection
+method (`.map` / `.filter` / `.reduce` / `.each`) states the element type, and a
+function-typed parameter or binding states its own. An unannotated **method** parameter
+still defaults to `Num` (see
 [named record types](../types/records.md#named-record-types-with-methods)).
 Multi-statement bodies use `< >` blocks (the last expression is the value):
 ```quilon
@@ -47,13 +49,38 @@ A function type may be a **parameter type**, which is what makes a function *hig
 apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
 twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
 
-^ = () -> Num => twice((n :: Num) => n * 2, 3)   ~ ((3*2)*2) = 12
+^ = () -> Num => twice((n) => n * 2, 3)   ~ ((3*2)*2) = 12
 ```
 
 The value passed in is a closure — a lambda literal (as above) or a named closure passed
 by its name. Function types may nest as parameter types (`((Num) -> Bool, Num) -> Bool`).
 A function-typed **return** (currying, `(A) -> (B) -> C`) is not supported yet. (See
 `examples/higher_order.qn`.)
+
+### A lambda takes its parameter types from the target
+
+Where a lambda lands on a **known function type**, that type says what its parameters are
+and the lambda need not repeat them:
+
+```quilon ignore
+apply(10, (n) => n + 1)          ~ `apply`'s `(Num) -> Num` parameter types `n`
+c.applyTo((n) => n * 2)          ~ so does a method's function-typed parameter
+10 |> apply((n) => n + 1)        ~ the pipe injects the first argument; same signature
+scale :: (Num) -> Num = (n) => n * 4   ~ a binding that declares its function type
+```
+
+An annotation is always legal and wins where written (`(n :: Num) => n + 1`). Where the
+target type is **not** known, the annotation is required and the error says so rather than
+assuming a type:
+
+```quilon ignore
+fs = [(n) => n + 1]   ~ error: parameter 'n' of this lambda has no type: annotate it
+```
+
+For an **overload set** the target is only known once a member is chosen, so the other
+arguments are resolved first. If they pick one member out, that member's parameter types
+the lambda; if the set stays open, the lambda must annotate its parameters and the error
+names the set that left it open.
 
 ## Names resolve top to bottom
 

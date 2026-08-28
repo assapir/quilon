@@ -282,12 +282,15 @@ struct Tco<'ctx> {
 /// by the checker) through to the read sites.
 ///
 /// # API (for downstream M3 waves: array methods, spread, args/env)
-/// The single primitive is [`TypeOracle::expression_type`] — the inferred `Type` of any
-/// expression, looked up by its source `Span`. The checker records the *result* type of
-/// every node, so the element type of an `arr[i]` is `expression_type(<the Index node>)`, the
-/// type of `rec.field` is `expression_type(<the FieldAccess node>)`, and a `match`'s result is
+/// The single primitive is [`TypeOracle::type_at`] — the `Type` the checker recorded for a
+/// source `Span` — with [`TypeOracle::expression_type`] the expression-shaped convenience
+/// over it. The checker records the *result* type of every node, so the element type of an
+/// `arr[i]` is `expression_type(<the Index node>)`, the type of `rec.field` is
+/// `expression_type(<the FieldAccess node>)`, and a `match`'s result is
 /// `expression_type(<the Match node>)` — there is no need for per-shape accessors, the read
-/// site just asks for the type of the whole node it is lowering.
+/// site just asks for the type of the whole node it is lowering. A parameter is not an
+/// expression and is looked up by its own span (see `parameter_type`), which is how a
+/// lambda parameter typed from context reaches codegen.
 ///
 /// Lookups are by `Span` (one per AST node), so the oracle is AST-shape-agnostic and
 /// additive: new expression kinds get types recorded automatically by `infer_expression`. A
@@ -500,14 +503,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     || is_compiler_provided_name(&declaration.name))
                 && declaration.name != "^"
             {
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 // The return type drives argument-type inference for a value bound to
                 // an overloaded call/operator (e.g. a user `+` returning a record).
-                let ret = declaration.return_type.clone().unwrap_or(Type::Num);
+                let ret = declaration
+                    .declared_return_type()
+                    .cloned()
+                    .unwrap_or(Type::Num);
                 self.overloads
                     .entry(declaration.name.clone())
                     .or_default()
@@ -534,10 +536,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else if method.parameters.len() == 1 {
                         vec![
                             self_type.clone(),
-                            method.parameters[0]
-                                .type_annotation
-                                .clone()
-                                .unwrap_or(Type::Num),
+                            self.parameter_type(&method.parameters[0]),
                         ]
                     } else {
                         continue;
@@ -559,15 +558,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = &declaration.return_type {
+                if let Some(ret) = declaration.declared_return_type() {
                     self.fn_return_types
                         .insert(declaration.name.clone(), ret.clone());
                 }
-                let parameters: Vec<Type> = declaration
-                    .parameters
-                    .iter()
-                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                    .collect();
+                let parameters = self.parameter_types(&declaration.parameters);
                 if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
                         .insert(declaration.name.clone(), parameters.len());
@@ -599,7 +594,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
-        // real types (`[]Text` / `[|Text => Text|]` / legacy `Num`) — the lowered LLVM types are
+        // real types (`[]Text` / `[|Text => Text|]`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
@@ -607,13 +602,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => Some(
-                        declaration
-                            .parameters
-                            .iter()
-                            .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                            .collect(),
-                    ),
+                    Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
+                        Some(self.parameter_types(&declaration.parameters))
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -746,11 +737,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Dispatch on `^`'s DECLARED Quilon parameter types (not the lowered LLVM types:
         // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
         // can't tell them apart — dispatching on it would silently call a `Text` parameter
-        // with the argv array). The supported signatures are `^()`,
-        // `^(args :: []Text)`, and `^(args :: []Text, env :: [|Text => Text|])` (plus the
-        // legacy `^(argc :: Num, argv :: Num)`). We match on the EXACT element/key/value
-        // types — the runtime builds `Text` args and a `Text => Text` env Map, so a
-        // `[]Num` (or any other element) parameter must NOT reach the array arm.
+        // with the argv array). The supported signatures are `^()`, `^(args :: []Text)`,
+        // and `^(args :: []Text, env :: [|Text => Text|])`. We match on the EXACT
+        // element/key/value types — the runtime builds `Text` args and a `Text => Text`
+        // env Map, so a `[]Num` (or any other element) parameter must NOT reach the array arm.
         let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
         let is_text_map =
             |t: &Type| matches!(t, Type::Map(k, v) if **k == Type::Text && **v == Type::Text);
@@ -791,8 +781,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             format!(
                 "Entry point ^ has an unsupported signature ({}). \
                  Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
-                 '(args :: []Text, env :: [|Text => Text|]) -> Num' \
-                 (or legacy '(argc :: Num, argv :: Num) -> Num').",
+                 '(args :: []Text, env :: [|Text => Text|]) -> Num'.",
                 fmt_parameter_types(entry_parameters)
             )
         };
@@ -818,24 +807,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_call(user_entry, &[args.into(), env.into()], "entry_result")
                     .map_err(ctx("Failed to call entry point"))?
             }
-            // Legacy `^(argc :: Num, argv :: Num) -> Num`: argc as a Num, argv a `0`
-            // placeholder. Deprecated in favour of `^(args :: []Text)`.
-            [Type::Num, Type::Num] => {
-                let argc_as_f64 = self
-                    .builder
-                    .build_signed_int_to_float(argc, self.context.f64_type(), "argc_f64")
-                    .map_err(ctx("Failed to convert argc"))?;
-                let argv_placeholder = self.context.f64_type().const_zero();
-                self.builder
-                    .build_call(
-                        user_entry,
-                        &[argc_as_f64.into(), argv_placeholder.into()],
-                        "entry_result",
-                    )
-                    .map_err(ctx("Failed to call entry point"))?
-            }
             // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
-            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [|Text => Text|])`
+            // non-`Text` element, `^(a :: Num, b :: Num)`, `^(env :: [|Text => Text|])`
             // without args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
             // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
