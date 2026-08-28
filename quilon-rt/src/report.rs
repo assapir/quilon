@@ -21,8 +21,8 @@ use std::os::raw::c_int;
 pub const ASSERTION_EXIT_CODE: c_int = 101;
 
 /// The exit status every OTHER fail-loud runtime check leaves — an invalid `arr[i]`, a
-/// failed allocation, a range endpoint that is not a whole number, an `@` primitive that
-/// could not do what it was asked.
+/// failed allocation, a range endpoint that is not a whole number, a match no arm matched,
+/// an `@` primitive that could not do what it was asked.
 pub(crate) const RUNTIME_EXIT_CODE: c_int = 1;
 
 /// A call site as the code generator materializes it — the runtime mirror of the built-in
