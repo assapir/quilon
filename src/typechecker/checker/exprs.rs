@@ -484,23 +484,7 @@ impl TypeChecker {
                 self.check_type_compatibility(&Type::Num, &start_type, span)?;
                 let end_type = self.infer_expression(end)?;
                 self.check_type_compatibility(&Type::Num, &end_type, span)?;
-                // Fail-loud contract for the extent: whatever is determinable from literal
-                // ends is a compile error, over the same rules the runtime applies to a
-                // computed end. Never a truncation.
-                let invalid = |message| TypeError::InvalidBuiltinArgument {
-                    message,
-                    span: span.clone(),
-                };
-                let mut ends = Vec::new();
-                for endpoint in [start, end] {
-                    if let Some(value) = literal_number(endpoint) {
-                        ends.push(quilon_rt::check_range_endpoint(value).map_err(invalid)?);
-                    }
-                }
-                if let [lo, hi] = ends[..] {
-                    quilon_rt::check_range_count(lo, hi).map_err(invalid)?;
-                }
-                Ok(Type::Array(Box::new(Type::Num)))
+                checked_range_type(start, end, span)
             }
         }
     }
@@ -783,4 +767,35 @@ impl TypeChecker {
             }
         }
     }
+}
+
+/// A range's type — always `[]Num` — once its extent has passed the fail-loud contract, over
+/// whatever its ends are literal enough to settle: an end that is not a whole number an
+/// `i64` holds, and a pair of ends spanning more elements than a count of them. Never a
+/// truncation. The runtime applies the same two rules to an end only it can see.
+///
+/// Kept out of line for the reason `check_interpolation` is: `infer_expression_inner`
+/// recurses once per expression node, so locals in its frame are paid at every level of the
+/// deepest expression a program contains (debug builds don't reuse stack slots). It returns
+/// the caller's OWN `Result<Type, _>` for the same reason — a differently-typed result would
+/// need a second return slot in that frame, which measurably costs as much again.
+#[inline(never)]
+fn checked_range_type(
+    start: &Expression,
+    end: &Expression,
+    span: &Span,
+) -> Result<Type, TypeError> {
+    let invalid = |message| TypeError::InvalidBuiltinArgument {
+        message,
+        span: span.clone(),
+    };
+    let ends: Vec<i64> = [start, end]
+        .into_iter()
+        .filter_map(literal_number)
+        .map(|value| quilon_rt::check_range_endpoint(value).map_err(invalid))
+        .collect::<Result<_, _>>()?;
+    if let [lo, hi] = ends[..] {
+        quilon_rt::check_range_count(lo, hi).map_err(invalid)?;
+    }
+    Ok(Type::Array(Box::new(Type::Num)))
 }
