@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! Internal runtime primitives with no `core.*` language home: allocation and the
-//! Boehm-GC binding (`__alloc`, `__gc_init`), the shared `QlSlice` `{ ptr, len }`
-//! ABI type and its `alloc_text` helper, the `format_num` render helper, and the
-//! fail-loud `__index_fail` bounds-check primitive (checked `arr[i]` has no
+//! Boehm-GC binding (`__alloc`, `__alloc_array`, `__gc_init`), the shared `QlSlice`
+//! `{ ptr, len }` ABI type and its `alloc_text` helper, the `format_num` render helper,
+//! and the fail-loud `__index_fail` bounds-check primitive (checked `arr[i]` has no
 //! `core.*` module, so it lives in this internal tier). This tier is where the
 //! future fiber scheduler and reactor will also live.
 
-use crate::report::{QlSite, fail_at};
+use crate::io::write_to_fd;
+use crate::process::__exit;
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, fail_at};
 use std::os::raw::c_void;
 
 // The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
@@ -86,15 +88,103 @@ impl Drop for GcThread {
     }
 }
 
+/// Report `message` with no call site to frame it — the allocation checks run below the
+/// expression that asked, so there is no span to point at — and terminate.
+///
+/// Kept out of line so the formatting it does stays off the allocation path: what the
+/// allocators carry is a test and a branch to here.
+#[cold]
+#[inline(never)]
+fn alloc_fail(message: &str) -> ! {
+    fail_at(std::ptr::null(), message, RUNTIME_EXIT_CODE)
+}
+
 /// Allocate `size` bytes of GC-managed, zeroed-on-demand memory.
 ///
-/// Returns a pointer the collector tracks; callers never free it. A non-positive
-/// size yields a 1-byte allocation so the result is always a valid, unique-ish
-/// pointer.
+/// Returns a pointer the collector tracks; callers never free it. A zero size yields a
+/// 1-byte allocation so the result is always a valid, unique-ish pointer.
+///
+/// NEVER returns null, and never quietly shrinks a request. A collector that cannot satisfy
+/// the size aborts here, with the size it could not find; so does a NEGATIVE size, which is
+/// a size computation that went wrong upstream — clamped to one byte, it becomes a block the
+/// caller then fills as if it were the size it asked for. Handing either back is a
+/// `Text`/array whose `data` is null or too small while its `len` says otherwise, and the
+/// first read turns that into undefined behavior far from the allocation that failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn __alloc(size: i64) -> *mut c_void {
-    let n = if size <= 0 { 1 } else { size as usize };
-    unsafe { GC_malloc(n) }
+    if size < 0 {
+        alloc_fail(&format!("invalid allocation: {size} bytes"));
+    }
+    let n = if size == 0 { 1 } else { size as usize };
+    // SAFETY: `GC_malloc` is the collector's allocation entry point; `n` is positive.
+    let block = unsafe { GC_malloc(n) };
+    if block.is_null() {
+        out_of_memory(n);
+    }
+    block
+}
+
+/// Report an allocation the collector could not satisfy and terminate — WITHOUT allocating.
+///
+/// This is the one report that cannot afford a `String`: the collector just failed to find
+/// memory, and where the process is genuinely out of it the global allocator is next, which
+/// aborts on failure rather than returning. So the line is built in a stack buffer and
+/// written straight to stderr, in the same shape a site-less report prints.
+#[cold]
+#[inline(never)]
+fn out_of_memory(size: usize) -> ! {
+    const PREFIX: &[u8] = b"out of memory: cannot allocate ";
+    const SUFFIX: &[u8] = b" bytes\n";
+
+    // The size in decimal, filled from the end (a `usize` is at most 20 digits).
+    let mut digits = [0u8; 20];
+    let mut first = digits.len();
+    let mut left = size;
+    loop {
+        first -= 1;
+        digits[first] = b'0' + (left % 10) as u8;
+        left /= 10;
+        if left == 0 {
+            break;
+        }
+    }
+
+    let mut line = [0u8; PREFIX.len() + 20 + SUFFIX.len()];
+    let mut end = 0;
+    for part in [PREFIX, &digits[first..], SUFFIX] {
+        line[end..end + part.len()].copy_from_slice(part);
+        end += part.len();
+    }
+    write_to_fd(2, &line[..end]);
+    __exit(RUNTIME_EXIT_CODE)
+}
+
+/// Allocate the backing store for `count` values of `elem_size` bytes each — the array
+/// allocation, with the size computed HERE so the multiplication is checked.
+///
+/// Left to wrap in the caller, a `count * elem_size` too large for an `i64` lands on a
+/// non-positive size, and the fill that follows writes `count` elements into the one byte
+/// that comes back. A negative operand is reported as what it is, before the multiply turns
+/// it into an overflow.
+#[unsafe(no_mangle)]
+pub extern "C" fn __alloc_array(count: i64, elem_size: i64) -> *mut c_void {
+    if count < 0 || elem_size < 0 {
+        alloc_fail(&format!(
+            "invalid allocation: {count} elements of {elem_size} bytes each"
+        ));
+    }
+    match count.checked_mul(elem_size) {
+        Some(bytes) => __alloc(bytes),
+        None => alloc_fail(&format!(
+            "allocation too large: {count} elements of {elem_size} bytes each exceeds the \
+             largest representable size"
+        )),
+    }
+}
+
+/// GC-allocate room for `count` values of `T`, through the checked array allocation.
+pub(crate) fn alloc_slots<T>(count: usize) -> *mut T {
+    __alloc_array(count as i64, std::mem::size_of::<T>() as i64) as *mut T
 }
 
 /// Report an invalid array index — out of bounds, negative, or NaN — at the indexing
@@ -117,7 +207,7 @@ pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! 
             format_num(index),
             size
         ),
-        1,
+        RUNTIME_EXIT_CODE,
     )
 }
 
@@ -164,7 +254,9 @@ impl QlSlice {
 pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     let len = bytes.len();
     let buf = __alloc(len as i64) as *mut u8;
-    if !buf.is_null() && len > 0 {
+    if len > 0 {
+        // SAFETY: `__alloc` returned at least `len` writable bytes (it aborts rather
+        // than returning null), and a fresh allocation cannot overlap `bytes`.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len) };
     }
     QlSlice {
@@ -205,6 +297,43 @@ mod tests {
         unsafe {
             std::ptr::write_bytes(p, 0xAB, 16);
             assert_eq!(*p, 0xAB);
+        }
+    }
+
+    #[test]
+    fn an_array_allocation_is_the_product_of_its_operands() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // Every byte the count and element size ask for is writable — the check the
+        // multiplication exists for, since a wrapped product yields a single byte.
+        let p = __alloc_array(64, 8) as *mut u8;
+        assert!(!p.is_null());
+        unsafe {
+            std::ptr::write_bytes(p, 0xCD, 64 * 8);
+            assert_eq!(*p.add(64 * 8 - 1), 0xCD);
+        }
+    }
+
+    #[test]
+    fn an_empty_array_still_allocates() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // A zero-element array is ordinary, not a failure: it gets the same 1-byte
+        // placeholder `__alloc(0)` gives, so its data pointer is still valid.
+        assert!(!__alloc_array(0, 8).is_null());
+    }
+
+    #[test]
+    fn slots_size_themselves_from_the_type() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let slots = alloc_slots::<QlSlice>(3);
+        assert!(!slots.is_null());
+        unsafe {
+            for i in 0..3 {
+                std::ptr::write(slots.add(i), QlSlice::empty());
+            }
+            assert_eq!((*slots.add(2)).len, 0);
         }
     }
 }

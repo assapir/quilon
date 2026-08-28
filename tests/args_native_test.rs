@@ -5,21 +5,12 @@
 //! reflect exactly what we passed. Skips gracefully if no C toolchain
 //! (`clang`/`gcc` + the `quilon` binary's runtime lib) is available.
 
+use quilon::jit;
 use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::ensure_runtime_lib;
-
-/// Is a tool available on PATH?
-fn tool_available(tool: &str) -> bool {
-    Command::new(tool)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok()
-}
+use common::{JIT_LOCK, ensure_runtime_lib, front_end, tool_available};
 
 /// Compile `src` to a native binary at `out` via `quilon build`, returning whether a
 /// linker was available (false -> the caller should skip).
@@ -124,6 +115,40 @@ fn jit_and_aot_argv_agree() {
 
     let _ = std::fs::remove_file(&bin);
     let _ = std::fs::remove_file(&source);
+}
+
+/// An argument carrying a NUL byte is one no program can be given: a C argv holds
+/// NUL-TERMINATED strings, so the NUL is where the argument ends. Spawning any executable
+/// with one fails before the program starts, and the JIT must refuse it the same way rather
+/// than quietly handing the program a different value (it used to substitute `""`, so the
+/// program ran and read an argument nobody passed).
+#[test]
+fn neither_path_passes_an_argument_containing_a_nul() {
+    // The spawn side needs no build of its own: the refusal is in argv, whatever the
+    // executable, so the compiler's own binary stands in for a built program.
+    let spawned = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .arg("a\0b")
+        .output();
+    assert!(
+        spawned.is_err(),
+        "spawning with a NUL in argv must fail before the program starts"
+    );
+
+    let src = "^ = (args :: []Text) -> Num => args.size";
+    let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (program, types, defer, sources) = front_end(src, None);
+    let refused = jit::run_program(
+        &program,
+        types,
+        defer,
+        sources,
+        &["program".to_string(), "a\0b".to_string()],
+    )
+    .expect_err("the JIT must refuse a NUL in argv, not substitute a value for it");
+    assert!(
+        refused.contains("argument 1 contains a NUL byte at position 1"),
+        "the error must name the offending argument, got: {refused}"
+    );
 }
 
 #[test]

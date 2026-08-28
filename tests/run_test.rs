@@ -1160,29 +1160,26 @@ fn jit_uses_caller_supplied_argv() {
 }
 
 #[test]
-fn legacy_numeric_argc_argv_entry_still_runs() {
-    // Backward compatibility: the legacy `(argc :: Num, argv :: Num)` entry signature
-    // still compiles and runs (argv is a `0` placeholder), exiting on `argc`'s value.
-    // Under the JIT argc is this process's real argument count (>= 1), so assert it is
-    // positive rather than a fixed number.
+fn a_numeric_two_parameter_entry_is_rejected() {
+    // `^(argc :: Num, argv :: Num)` is not an entry signature: an entry takes its
+    // arguments as `args :: []Text`. It is rejected by the ordinary rule, with the
+    // ordinary diagnostic — no special case of its own.
     let src = "^ = (argc :: Num, argv :: Num) -> Num => argc >= 1 ? 3 : 0";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
-    let types = checker
+    let err = checker
         .check_program(&program)
-        .expect("legacy numeric entry should type-check");
-    let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let defer = quilon::deferral::analyze(&program);
-    let code = jit::run_program(
-        &program,
-        types,
-        defer,
-        common::no_sources(),
-        &["program".to_string()],
-    )
-    .expect("legacy numeric entry should run");
-    assert_eq!(code, 3, "legacy (Num, Num) entry should still run");
+        .expect_err("`^(argc :: Num, argv :: Num)` must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("unsupported signature"),
+        "expected an unsupported-signature diagnostic, got: {message}"
+    );
+    assert!(
+        !message.contains("legacy"),
+        "the diagnostic must not offer the removed form, got: {message}"
+    );
 }
 
 #[test]

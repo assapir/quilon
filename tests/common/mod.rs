@@ -207,7 +207,7 @@ pub fn type_error_message(src: &str) -> String {
 /// coloring, and the source map codegen fills call-site `Site` values from. The in-memory
 /// source is named [`TEST_FILE`], so a located runtime message (a failed assertion) is
 /// reproducible in a test's expected output.
-fn front_end(
+pub fn front_end(
     src: &str,
     base_dir: Option<&Path>,
 ) -> (quilon::ast::Program, TypeTable, DeferInfo, Rc<SourceMap>) {
