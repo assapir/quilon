@@ -6,7 +6,8 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, debug_check_user_key, gc_alloc};
+use super::common::{FixedState, QlKey, debug_check_user_key};
+use crate::mem::alloc_slots;
 use std::collections::HashSet;
 use std::os::raw::c_void;
 
@@ -21,15 +22,15 @@ struct QlSet {
 
 unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
     let n = table.len();
-    let snapshot_a = unsafe { gc_alloc::<u64>(n) };
-    let snapshot_b = unsafe { gc_alloc::<u64>(n) };
+    let snapshot_a = alloc_slots::<u64>(n);
+    let snapshot_b = alloc_slots::<u64>(n);
     for (i, key) in table.iter().enumerate() {
         unsafe {
             *snapshot_a.add(i) = key.a;
             *snapshot_b.add(i) = key.b;
         }
     }
-    let header = unsafe { gc_alloc::<QlSet>(1) };
+    let header = alloc_slots::<QlSet>(1);
     unsafe {
         std::ptr::write(
             header,

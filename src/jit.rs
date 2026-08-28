@@ -21,6 +21,32 @@ use std::rc::Rc;
 /// Signature of the generated C `main`: `int main(int argc, char** argv, char** envp)`.
 type MainFn = unsafe extern "C" fn(i32, *const *const c_char, *const *const c_char) -> i32;
 
+/// `values` as the NUL-terminated C strings a `main` receives, REFUSING one that carries a
+/// NUL of its own.
+///
+/// A NUL is where a C string ends, so a value containing one cannot be passed to a program
+/// at all: `execve` rejects it, and a native build therefore never sees such an argument or
+/// environment entry. The JIT rejects it for the same reason, rather than substituting a
+/// value (an empty string, or the bytes before the NUL) the program would read as real —
+/// which is a JIT/AOT parity break, and a silent one.
+fn c_strings(
+    values: impl Iterator<Item = impl Into<Vec<u8>>>,
+    what: &str,
+) -> Result<Vec<CString>, String> {
+    values
+        .enumerate()
+        .map(|(index, value)| {
+            CString::new(value).map_err(|e| {
+                format!(
+                    "{what} {index} contains a NUL byte at position {}, so it cannot be \
+                     passed to a program",
+                    e.nul_position()
+                )
+            })
+        })
+        .collect()
+}
+
 /// JIT-compile and execute a type-checked program in-process.
 ///
 /// `args` is the exact argument vector the program's `^` entry point should see
@@ -94,17 +120,15 @@ pub fn run_program(
     // JIT'd program sees exactly the argument vector a native build would — with no
     // `quilon run` CLI prefix leaked in. `envp` still comes from the
     // process environment, matching what the OS hands a native binary.
-    let arg_cstrings: Vec<CString> = args
-        .iter()
-        .map(|a| CString::new(a.as_str()).unwrap_or_default())
-        .collect();
+    let arg_cstrings = c_strings(args.iter().map(String::as_str), "argument")?;
     let mut argv: Vec<*const c_char> = arg_cstrings.iter().map(|c| c.as_ptr()).collect();
     argv.push(std::ptr::null()); // argv is conventionally NULL-terminated
     let argc = arg_cstrings.len() as i32;
 
-    let env_cstrings: Vec<CString> = std::env::vars()
-        .map(|(k, v)| CString::new(format!("{k}={v}")).unwrap_or_default())
-        .collect();
+    let env_cstrings = c_strings(
+        std::env::vars().map(|(k, v)| format!("{k}={v}")),
+        "environment entry",
+    )?;
     let mut envp: Vec<*const c_char> = env_cstrings.iter().map(|c| c.as_ptr()).collect();
     envp.push(std::ptr::null()); // envp is NULL-terminated
 

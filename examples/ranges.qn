@@ -24,4 +24,11 @@
   ~ A range iterates with `.each`, since it's just a `[]Num`.
   asc.each(n => print(n))               ~ prints 1, 2, 3, 4
   assert(asc[1], equals(2))
+
+  ~ A wide range holds every element it claims: the backing array is sized from the
+  ~ count, and both ends read back.
+  wide :: []Num = 1 <- 100000
+  assert(wide.size, equals(100000))
+  assert(wide[0], equals(1))
+  assert(wide[99999], equals(100000))
 >

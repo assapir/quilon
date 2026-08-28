@@ -594,7 +594,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
-        // real types (`[]Text` / `[|Text => Text|]` / legacy `Num`) — the lowered LLVM types are
+        // real types (`[]Text` / `[|Text => Text|]`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
         if self.module.get_function("^").is_some() {
@@ -737,11 +737,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Dispatch on `^`'s DECLARED Quilon parameter types (not the lowered LLVM types:
         // `Text`/record/sum/array all lower to `{ ptr, i64 }` structs, so the LLVM shape
         // can't tell them apart — dispatching on it would silently call a `Text` parameter
-        // with the argv array). The supported signatures are `^()`,
-        // `^(args :: []Text)`, and `^(args :: []Text, env :: [|Text => Text|])` (plus the
-        // legacy `^(argc :: Num, argv :: Num)`). We match on the EXACT element/key/value
-        // types — the runtime builds `Text` args and a `Text => Text` env Map, so a
-        // `[]Num` (or any other element) parameter must NOT reach the array arm.
+        // with the argv array). The supported signatures are `^()`, `^(args :: []Text)`,
+        // and `^(args :: []Text, env :: [|Text => Text|])`. We match on the EXACT
+        // element/key/value types — the runtime builds `Text` args and a `Text => Text`
+        // env Map, so a `[]Num` (or any other element) parameter must NOT reach the array arm.
         let is_text_array = |t: &Type| matches!(t, Type::Array(e) if **e == Type::Text);
         let is_text_map =
             |t: &Type| matches!(t, Type::Map(k, v) if **k == Type::Text && **v == Type::Text);
@@ -782,8 +781,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             format!(
                 "Entry point ^ has an unsupported signature ({}). \
                  Valid signatures: '() -> Num', '(args :: []Text) -> Num', \
-                 '(args :: []Text, env :: [|Text => Text|]) -> Num' \
-                 (or legacy '(argc :: Num, argv :: Num) -> Num').",
+                 '(args :: []Text, env :: [|Text => Text|]) -> Num'.",
                 fmt_parameter_types(entry_parameters)
             )
         };
@@ -809,24 +807,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_call(user_entry, &[args.into(), env.into()], "entry_result")
                     .map_err(ctx("Failed to call entry point"))?
             }
-            // Legacy `^(argc :: Num, argv :: Num) -> Num`: argc as a Num, argv a `0`
-            // placeholder. Deprecated in favour of `^(args :: []Text)`.
-            [Type::Num, Type::Num] => {
-                let argc_as_f64 = self
-                    .builder
-                    .build_signed_int_to_float(argc, self.context.f64_type(), "argc_f64")
-                    .map_err(ctx("Failed to convert argc"))?;
-                let argv_placeholder = self.context.f64_type().const_zero();
-                self.builder
-                    .build_call(
-                        user_entry,
-                        &[argc_as_f64.into(), argv_placeholder.into()],
-                        "entry_result",
-                    )
-                    .map_err(ctx("Failed to call entry point"))?
-            }
             // Any other signature (e.g. `^(x :: Text)`, `^(args :: []Num)` with a
-            // non-`Text` element, `^(a :: Num, b :: Text)`, `^(env :: [|Text => Text|])`
+            // non-`Text` element, `^(a :: Num, b :: Num)`, `^(env :: [|Text => Text|])`
             // without args, 3+ parameters) is rejected with a clear diagnostic instead of a silent
             // miscompile or an LLVM verification crash.
             _ => return Err(unsupported()),
