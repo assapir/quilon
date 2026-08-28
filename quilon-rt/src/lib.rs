@@ -26,7 +26,7 @@
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
 //! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`), and
 //! [`mem`] (general memory primitives: allocation,
-//! GC, the shared `QlSlice` ABI type, bounds-check failure). Each `#[no_mangle]`
+//! GC, the shared `QlSlice` ABI type, bounds-check and range-endpoint failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
 //!
@@ -58,7 +58,10 @@ pub use collections::{
 };
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
-pub use mem::{__alloc, __alloc_array, __gc_init, __index_fail, GcThread, register_thread};
+pub use mem::{
+    __alloc, __alloc_array, __gc_init, __index_fail, __range_endpoint, GcThread, MAX_EXACT_NUM,
+    check_range_endpoint, register_thread,
+};
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
@@ -141,6 +144,7 @@ intrinsic_registry! {
     __exit: extern "C" fn(c_int) -> !,
     __index_fail: extern "C" fn(f64, i64, *const QlSite) -> !,
     __match_fail: extern "C" fn(*const QlSite) -> !,
+    __range_endpoint: extern "C" fn(f64, *const QlSite) -> i64,
     __alloc: extern "C" fn(i64) -> *mut c_void,
     __alloc_array: extern "C" fn(i64, i64) -> *mut c_void,
     __text_length: extern "C" fn(*const u8, i64) -> i64,

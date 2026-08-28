@@ -46,6 +46,28 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **BREAKING: a range endpoint must be a whole number a `Num` holds exactly** ([#215](https://github.com/assapir/quilon/issues/215)).
+  `lo <- hi` counts from one end to the other, so an end must be a whole number — and a
+  `Num` is a double, which represents whole numbers exactly only up to 2^53
+  (`9007199254740992`). A fractional, NaN, infinite, or larger end is now an error at the
+  range expression:
+
+  ```quilon ignore
+  1.5 <- 3.9                ~ error: a range endpoint must be a whole number (got 1.5)
+  1 <- (0.0 / 0.0)          ~ error: a range endpoint must be a whole number (got NaN)
+  1 <- 100000000000000000
+  ~ error: a range endpoint must be a whole number a Num holds exactly, at most
+  ~        9007199254740992 in magnitude (got 100000000000000000)
+  ```
+
+  What the compiler can evaluate it refuses at compile time; anything computed is refused
+  when the range runs, framed at the range expression and exiting 1. Previously the ends
+  were truncated by an unchecked `fptosi`: `1.5 <- 3.9` silently became `[1, 2, 3]`, and a
+  NaN or out-of-range end became poison — which, for a constant one, folded before the
+  allocation was sized and segfaulted. A program relying on the truncation must round its
+  ends itself. The limit is documented with the type, under
+  [`Num`](docs/types/README.md#the-exact-integer-limit).
+
 - **A function takes at most 10 parameters.** The rule covers every parameter list a
   program writes — top-level functions, methods and lambdas alike — and the eleventh
   parameter is a compile error reported where it is written:

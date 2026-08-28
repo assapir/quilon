@@ -276,10 +276,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
     /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage comes from the shared
     /// [`Self::alloc_array_data`], so the array may safely escape the current frame.
+    ///
+    /// An end that is not a whole number a `Num` holds exactly is refused at `span`. Because
+    /// that bounds both ends by 2^53, the span below cannot overflow an `i64`. An end the
+    /// checker already evaluated becomes a constant, so a literal range's count — and its
+    /// fill loop's trip count — folds to a constant too.
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
         end: &Expression,
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let function = self
             .current_function
@@ -288,19 +294,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_type = self.context.i64_type();
         let f64_type = self.context.f64_type();
 
-        // Evaluate both ends (Num = f64) and truncate to i64 endpoints.
-        let lo_f = self.generate_expression(start)?.into_float_value();
-        let hi_f = self.generate_expression(end)?.into_float_value();
-        let lo = self
-            .builder
-            .build_float_to_signed_int(lo_f, i64_type, "range_lo")
-            .map_err(ctx("Failed to convert range start"))?;
-        let hi = self
-            .builder
-            .build_float_to_signed_int(hi_f, i64_type, "range_hi")
-            .map_err(ctx("Failed to convert range end"))?;
+        let lo = self.range_endpoint(start, span)?;
+        let hi = self.range_endpoint(end, span)?;
 
-        // Ascending iff lo <= hi; pick step = +1 / -1 and the inclusive span.
+        // Ascending iff lo <= hi; pick step = +1 / -1.
         let ascending = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, lo, hi, "range_asc")
@@ -312,8 +309,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_select(ascending, one, neg_one, "range_step")
             .map_err(ctx("Failed to select range step"))?
             .into_int_value();
-        // |hi - lo| + 1: compute the signed delta once, then pick it or its
-        // negation so the span is non-negative in either direction.
+        // |hi - lo| + 1: compute the signed delta once, then pick it or its negation so the
+        // span is non-negative in either direction.
         let delta = self
             .builder
             .build_int_sub(hi, lo, "range_delta")
@@ -402,6 +399,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inside the TCO-lowered loop and re-allocate every iteration, overflowing the stack.
         self.builder.position_at_end(exit);
         self.array_struct(data_ptr, count)
+    }
+
+    /// One end of a range as an `i64`.
+    ///
+    /// A literal end the checker has already accepted becomes a constant. Anything else goes
+    /// through `__range_endpoint`, which converts it under the same `check_range_endpoint`
+    /// rule the checker applied — an `fptosi` here would yield poison for the values that
+    /// rule rejects.
+    fn range_endpoint(
+        &mut self,
+        end: &Expression,
+        span: &Span,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        if let Some(value) = crate::ast::literal_number(end)
+            && let Ok(endpoint) = quilon_rt::check_range_endpoint(value)
+        {
+            return Ok(self.context.i64_type().const_int(endpoint as u64, true));
+        }
+        let value = self.generate_expression(end)?.into_float_value();
+        let site = self.site_value(span)?;
+        self.call_rt_int("__range_endpoint", &[value.into(), site.into()])
     }
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).

@@ -206,7 +206,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ..
             } => self.generate_match(expression, scrutinee, arms),
 
-            Expression::Range { start, end, .. } => self.generate_range(start, end),
+            Expression::Range { start, end, span } => self.generate_range(start, end, span),
 
             // `left |> right` desugars to a call with `left` as the first arg
             // (must match the type checker's desugaring exactly).

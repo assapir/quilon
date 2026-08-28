@@ -484,7 +484,7 @@ impl TypeChecker {
                 self.check_type_compatibility(&Type::Num, &start_type, span)?;
                 let end_type = self.infer_expression(end)?;
                 self.check_type_compatibility(&Type::Num, &end_type, span)?;
-                Ok(Type::Array(Box::new(Type::Num)))
+                checked_range_type(start, end, span)
             }
         }
     }
@@ -767,4 +767,30 @@ impl TypeChecker {
             }
         }
     }
+}
+
+/// A range's type — always `[]Num` — once every end the checker can evaluate passes the rule
+/// the runtime also applies to an end only it can see: an end must be a whole number a `Num`
+/// holds exactly.
+///
+/// Out of line, and returning the caller's own `Result<Type, _>`, to keep it out of
+/// `infer_expression_inner`'s frame: that recurses once per expression node, so a local or a
+/// second return slot there is paid at every level of the deepest expression in the program
+/// (debug builds don't reuse stack slots). `check_interpolation` is factored out for the same
+/// reason. Both halves are load-bearing — inlining either costs ~40KB on `deep_calls.qn`.
+#[inline(never)]
+fn checked_range_type(
+    start: &Expression,
+    end: &Expression,
+    span: &Span,
+) -> Result<Type, TypeError> {
+    for value in [start, end].into_iter().filter_map(literal_number) {
+        quilon_rt::check_range_endpoint(value).map_err(|message| {
+            TypeError::InvalidBuiltinArgument {
+                message,
+                span: span.clone(),
+            }
+        })?;
+    }
+    Ok(Type::Array(Box::new(Type::Num)))
 }
