@@ -110,17 +110,18 @@ fn a_constructor_pattern_on_a_non_sum_is_a_compile_error() {
 }
 
 /// The backstop, in the IR: past the last arm's check, control goes to an abort — never to
-/// the continuation, which loads a result slot only a matching arm writes.
+/// the continuation, which loads a result slot only a matching arm writes. Both matches
+/// here end in a REFUTABLE arm, so both carry the edge; a second match in the same function
+/// also pins the check below against LLVM's renaming of a repeated block name.
 #[test]
 fn the_no_match_edge_aborts_instead_of_loading_an_unwritten_slot() {
-    let ir = emit_ir("^ = () -> Num => <\n  n = 5\n  n ? | 0 => 1 | _ => 2\n>");
-    assert!(
-        ir.contains("match_no_arm:"),
-        "a match must emit its no-arm block, got:\n{ir}"
+    let ir = emit_ir(
+        "Color = Red / Green\n^ = () -> Num => <\n  c :: Color = Green\n  first = c ? | Red => 0 | Green => 1\n  second = c ? | Red => 2 | Green => 3\n  first + second\n>",
     );
-    assert!(
-        ir.contains("call void @__match_fail("),
-        "the no-arm block must fail loudly, got:\n{ir}"
+    assert_eq!(
+        ir.matches("call void @__match_fail(").count(),
+        2,
+        "each match's no-arm block must fail loudly, got:\n{ir}"
     );
     assert_no_check_falls_through_to_the_continuation(&ir);
 }
@@ -129,7 +130,7 @@ fn the_no_match_edge_aborts_instead_of_loading_an_unwritten_slot() {
 #[test]
 fn a_tail_position_match_aborts_on_its_no_match_edge_too() {
     let ir = emit_ir(
-        "countdown = (n :: Num) -> Num => n ? | 0 => 0 | _ => countdown(n - 1)\n^ = () -> Num => countdown(3)",
+        "Color = Red / Green\ncount = (c :: Color, n :: Num) -> Num => c ? | Red => n | Green => count(Red, n + 1)\n^ = () -> Num => count(Green, 0)",
     );
     assert!(
         ir.contains("call void @__match_fail("),
@@ -138,14 +139,32 @@ fn a_tail_position_match_aborts_on_its_no_match_edge_too() {
     assert_no_check_falls_through_to_the_continuation(&ir);
 }
 
-/// No arm's pattern test may branch to `match_cont` when it fails: that block loads the
+/// A last arm that takes everything leaves nothing past it, and codegen emits no edge —
+/// no dead block, and no `Site` interning the match's source line for a report that can
+/// never print. The abort is the backstop for a real edge, not a tax on every match.
+#[test]
+fn a_match_ending_in_a_catch_all_emits_no_abort_at_all() {
+    let ir = emit_ir("^ = () -> Num => <\n  n = 5\n  n ? | 0 => 1 | _ => 2\n>");
+    assert!(
+        !ir.contains("@__match_fail"),
+        "an always-matching last arm needs no abort, got:\n{ir}"
+    );
+    assert_no_check_falls_through_to_the_continuation(&ir);
+}
+
+/// No arm's pattern test may branch to a continuation when it fails: that block loads the
 /// result slot, and reaching it without a store is the read of uninitialized stack this
-/// whole change exists to remove.
+/// whole change exists to remove. LLVM uniquifies a repeated block name (`match_cont8`),
+/// so the target is compared by prefix rather than by the bare name.
 fn assert_no_check_falls_through_to_the_continuation(ir: &str) {
-    for line in ir.lines().filter(|line| line.contains("br i1 ")) {
-        let branch = line.trim();
+    for branch in ir
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("br i1 "))
+    {
+        let target = branch.rsplit("label %").next().unwrap_or_default();
         assert!(
-            !branch.ends_with("label %match_cont"),
+            !target.starts_with("match_cont"),
             "a failed pattern test falls through to the result load: {branch}"
         );
     }

@@ -381,7 +381,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
-        let no_match_block = self.build_no_match_block(match_expression.span())?;
+        let no_match_block = self.no_match_block_for(arms, match_expression.span())?;
 
         self.builder
             .build_unconditional_branch(check_blocks[0])
@@ -391,14 +391,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (i, arm) in arms.iter().enumerate() {
             self.builder.position_at_end(check_blocks[i]);
             let matches = self.check_pattern(&arm.pattern, match_val)?;
-            let next_block = if i + 1 < check_blocks.len() {
-                check_blocks[i + 1]
-            } else {
-                no_match_block
+            let next_block = match i + 1 < check_blocks.len() {
+                true => Some(check_blocks[i + 1]),
+                false => no_match_block,
             };
-            self.builder
-                .build_conditional_branch(matches, arm_blocks[i], next_block)
-                .map_err(ctx("Failed to build conditional branch"))?;
+            self.branch_to_arm(matches, arm_blocks[i], next_block)?;
 
             self.builder.position_at_end(arm_blocks[i]);
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;

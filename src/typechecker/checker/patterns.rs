@@ -15,6 +15,17 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let expression_type = self.infer_expression(expression)?;
 
+        // The parser rejects an armless match, but the checker is a library entry point and
+        // an AST can be built by hand — so answer with the diagnostic rather than falling
+        // through to a match that yields nothing.
+        if arms.is_empty() {
+            return Err(TypeError::NonExhaustiveMatch {
+                scrutinee: Box::new(expression_type),
+                missing: Vec::new(),
+                span: span.clone(),
+            });
+        }
+
         // Each pattern first, then coverage: a pattern that cannot match this scrutinee at
         // all is the more specific complaint, and reporting "not exhaustive" over it would
         // send the reader to add an arm rather than fix the one they wrote.
@@ -59,7 +70,7 @@ impl TypeChecker {
             }
         }
 
-        Ok(result_type.expect("the parser rejects a match with no arms"))
+        Ok(result_type.expect("an armless match was rejected above"))
     }
 
     /// Every match must be total. A sum-typed scrutinee is covered arm by arm — one per

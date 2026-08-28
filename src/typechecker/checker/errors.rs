@@ -325,15 +325,25 @@ impl std::fmt::Display for TypeError {
             }
             TypeError::ConstructorPatternOnNonSum {
                 constructor, got, ..
-            } => {
-                write!(
+            } => match **got {
+                // An un-specialized payload (the `Result` slot nothing pinned to a concrete
+                // type) has no variants to dispatch on either, but saying it "has no
+                // variants" would describe the wrong problem: the type is missing, not
+                // variant-less.
+                Type::Generic { .. } => write!(
+                    f,
+                    "'{constructor}' is a sum-type variant pattern, and the type of this \
+                     match's value is not known here — annotate it, or match it where its \
+                     type is concrete",
+                ),
+                _ => write!(
                     f,
                     "'{constructor}' is a sum-type variant pattern, and this match is on {}, \
                      which has no variants — match the value itself instead: a literal, a \
                      binding, or '_'",
                     type_label(got)
-                )
-            }
+                ),
+            },
             TypeError::InvalidEntryPointSignature { got, .. } => {
                 write!(
                     f,

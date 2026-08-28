@@ -209,7 +209,8 @@ All notable changes to Quilon are documented here.
 
   Behind the checker, the no-match edge codegen emits — the backstop for what it cannot
   prove — now reports where the match is and exits 1, the status every fail-loud runtime
-  check leaves, instead of loading a result slot no arm ever wrote.
+  check leaves, instead of loading a result slot no arm ever wrote. A match whose last arm
+  takes everything has no such edge and emits no backstop at all.
 
 ### Fixed
 
