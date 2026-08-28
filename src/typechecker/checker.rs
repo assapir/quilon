@@ -189,7 +189,29 @@ pub enum TypeError {
         constructor: String,
         span: Span,
     },
+    /// A `?`/`|` match that does not cover its scrutinee: a sum type with `missing`
+    /// variants left unlisted, or any other type with no catch-all arm at all (nothing
+    /// enumerates the values of a `Num`, so only `_` — or a binding — covers the rest).
+    /// Total either way, so no value can fall off the end of a match.
     NonExhaustiveMatch {
+        scrutinee: Box<Type>,
+        missing: Vec<String>,
+        span: Span,
+    },
+    /// A constructor pattern naming something the scrutinee's sum type has no variant for
+    /// (`Ok(x)` against a `Color`). Codegen dispatches on a tag looked up by name, so this
+    /// is caught here rather than left to fail at run time.
+    UnknownConstructor {
+        constructor: String,
+        sum: String,
+        known: Vec<String>,
+        span: Span,
+    },
+    /// A constructor pattern against a scrutinee that is not a sum type at all
+    /// (`5 ? | Ok(x) => …`). Only a sum has variants to dispatch on.
+    ConstructorPatternOnNonSum {
+        constructor: String,
+        got: Box<Type>,
         span: Span,
     },
     /// The `^` entry point declared an unsupported parameter signature. The only

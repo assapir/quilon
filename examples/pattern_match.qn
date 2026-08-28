@@ -1,4 +1,7 @@
 ~ Pattern matching with `?` and `|` arms; `_` is the wildcard.
+~ Every match is TOTAL: a sum-typed scrutinee lists every variant, and any other
+~ scrutinee needs a catch-all arm — `_`, or a binding like `| rest =>`. A match on
+~ a `Num` that lists only some numbers is a compile error.
 ~ A constructor pattern's argument must be IRREFUTABLE — a binding (`Ok(x)`) or
 ~ `_` (`Ok(_)`). A literal there (`Ok(1)`) is a compile error: dispatch tests the
 ~ constructor tag only, so it would silently match ANY payload. Bind the payload
@@ -30,4 +33,12 @@
     | 5 => 50      ~ matches here
     | _ => 99
   assert(picked, equals(50))
+
+  ~ A binding arm is the other way to cover the rest: it matches anything and names
+  ~ the value it matched.
+  other :: Num = 7
+  doubled :: Num = other ?
+    | 0    => 0
+    | rest => rest * 2
+  assert(doubled, equals(14))
 >

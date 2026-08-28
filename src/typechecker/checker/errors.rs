@@ -29,7 +29,9 @@ impl TypeError {
             | TypeError::UnannotatedOverloadMember { span, .. }
             | TypeError::ComparisonOverloadNotBool { span, .. }
             | TypeError::RefutableConstructorArg { span, .. }
-            | TypeError::NonExhaustiveMatch { span }
+            | TypeError::NonExhaustiveMatch { span, .. }
+            | TypeError::UnknownConstructor { span, .. }
+            | TypeError::ConstructorPatternOnNonSum { span, .. }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. }
             | TypeError::ComputedGlobalBinding { span, .. }
@@ -258,8 +260,44 @@ impl std::fmt::Display for TypeError {
                     constructor
                 )
             }
-            TypeError::NonExhaustiveMatch { .. } => {
-                write!(f, "Non-exhaustive pattern match")
+            TypeError::NonExhaustiveMatch {
+                scrutinee, missing, ..
+            } => match missing.is_empty() {
+                true => write!(
+                    f,
+                    "this match on {} is not exhaustive — add a '_' arm for the values no arm \
+                     lists",
+                    type_label(scrutinee)
+                ),
+                false => write!(
+                    f,
+                    "this match on {} is not exhaustive — no arm covers {}. Add the missing \
+                     arms, or a '_' arm",
+                    type_label(scrutinee),
+                    fmt_name_list(missing)
+                ),
+            },
+            TypeError::UnknownConstructor {
+                constructor,
+                sum,
+                known,
+                ..
+            } => {
+                write!(
+                    f,
+                    "'{constructor}' is not a variant of '{sum}' — its variants are {}",
+                    fmt_name_list(known)
+                )
+            }
+            TypeError::ConstructorPatternOnNonSum {
+                constructor, got, ..
+            } => {
+                write!(
+                    f,
+                    "'{constructor}' is a sum-type variant pattern, and this match is on {}, \
+                     which has no variants — match its values instead (a literal, or '_')",
+                    type_label(got)
+                )
             }
             TypeError::InvalidEntryPointSignature { got, .. } => {
                 write!(
@@ -329,6 +367,16 @@ impl std::fmt::Display for TypeError {
             }
         }
     }
+}
+
+/// Render a comma-separated quoted name list (`'Red', 'Green'`), for the variants a
+/// diagnostic names.
+pub(super) fn fmt_name_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render a comma-separated parameter/argument type list (`Num, Text`).

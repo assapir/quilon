@@ -46,6 +46,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
+        let no_match_block = self.build_no_match_block(match_expression.span())?;
+
         // Jump to first check
         self.builder
             .build_unconditional_branch(check_blocks[0])
@@ -59,13 +61,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Check if pattern matches
             let matches = self.check_pattern(&arm.pattern, match_val)?;
 
-            // Conditional branch to arm or next check
+            // Conditional branch to arm or next check; past the last arm, to the abort.
             let next_block = if i + 1 < check_blocks.len() {
                 check_blocks[i + 1]
             } else {
-                // Last arm - if it doesn't match, it's an error
-                // For now, just go to continuation with a default value
-                cont_block
+                no_match_block
             };
 
             self.builder
@@ -95,6 +95,39 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(result_llvm, result_alloca, "match_result")
             .map_err(ctx("Failed to load result"))
+    }
+
+    /// The block a match branches to when no arm matched it: the fail-loud backstop behind
+    /// the checker's exhaustiveness rule. It reports at `span` — the match's own location —
+    /// and terminates, so the no-match edge can never reach the continuation and load a
+    /// result slot no arm ever wrote.
+    ///
+    /// The block is appended and filled without disturbing the current insert point, so a
+    /// caller can build it before wiring its arms.
+    pub(super) fn build_no_match_block(
+        &mut self,
+        span: &Span,
+    ) -> Result<inkwell::basic_block::BasicBlock<'ctx>, String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| "Match expression must be in a function".to_string())?;
+        let resume = self.builder.get_insert_block();
+        let block = self.context.append_basic_block(function, "match_no_arm");
+
+        self.builder.position_at_end(block);
+        let fail = self.get_intrinsic("__match_fail")?;
+        let site = self.site_value(span)?;
+        self.builder
+            .build_call(fail, &[site.into()], "")
+            .map_err(ctx("Failed to call __match_fail"))?;
+        self.builder
+            .build_unreachable()
+            .map_err(ctx("Failed to build unreachable"))?;
+
+        if let Some(resume) = resume {
+            self.builder.position_at_end(resume);
+        }
+        Ok(block)
     }
 
     pub(super) fn check_pattern(

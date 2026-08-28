@@ -47,6 +47,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // expression's own location) and terminate with status 1. Never returns;
             // codegen emits `unreachable` after the call.
             "__index_fail" => void.fn_type(&[f64t.into(), i64t.into(), ptr.into()], false),
+            // void __match_fail(Site* site) — report a `?`/`|` match that no arm matched at
+            // `site` (the match expression's own location) and terminate. Never returns;
+            // codegen emits `unreachable` after the call.
+            "__match_fail" => void.fn_type(&[ptr.into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.

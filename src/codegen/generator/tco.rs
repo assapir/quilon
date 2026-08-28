@@ -381,6 +381,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let result_llvm = self.oracle_value_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
+        let no_match_block = self.build_no_match_block(match_expression.span())?;
+
         self.builder
             .build_unconditional_branch(check_blocks[0])
             .map_err(ctx("Failed to build branch"))?;
@@ -392,7 +394,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let next_block = if i + 1 < check_blocks.len() {
                 check_blocks[i + 1]
             } else {
-                cont_block
+                no_match_block
             };
             self.builder
                 .build_conditional_branch(matches, arm_blocks[i], next_block)
@@ -420,9 +422,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to load result"))?,
             ))
         } else {
-            // Every arm tail-recursed: control never produces a value here (the only edge
-            // into `cont_block` is the last check's no-match fallthrough, which an
-            // exhaustive match never takes). Terminate it as `unreachable` and report
+            // Every arm tail-recursed, so nothing branches here at all (the no-match edge
+            // goes to the abort instead). Terminate the block as `unreachable` and report
             // `None` — keeping the "a `None` leaves the block terminated" invariant.
             self.builder
                 .build_unreachable()
