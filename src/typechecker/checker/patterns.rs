@@ -87,31 +87,31 @@ impl TypeChecker {
             return Ok(());
         }
 
-        let missing: Vec<String> = match scrutinee {
-            Type::Sum { variants, .. } => {
-                let covered: std::collections::HashSet<&str> = arms
-                    .iter()
-                    .filter_map(|arm| match &arm.pattern {
-                        Pattern::Constructor { name, .. } => Some(name.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-                variants
-                    .iter()
-                    .filter(|variant| !covered.contains(variant.name.as_str()))
-                    .map(|variant| variant.name.clone())
-                    .collect()
-            }
-            _ => Vec::new(),
+        let not_covered = |missing: Vec<String>| TypeError::NonExhaustiveMatch {
+            scrutinee: Box::new(scrutinee.clone()),
+            missing,
+            span: span.clone(),
         };
 
-        match (scrutinee, missing.is_empty()) {
-            (Type::Sum { .. }, true) => Ok(()),
-            _ => Err(TypeError::NonExhaustiveMatch {
-                scrutinee: Box::new(scrutinee.clone()),
-                missing,
-                span: span.clone(),
-            }),
+        let Type::Sum { variants, .. } = scrutinee else {
+            return Err(not_covered(Vec::new()));
+        };
+        let covered: std::collections::HashSet<&str> = arms
+            .iter()
+            .filter_map(|arm| match &arm.pattern {
+                Pattern::Constructor { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<String> = variants
+            .iter()
+            .filter(|variant| !covered.contains(variant.name.as_str()))
+            .map(|variant| variant.name.clone())
+            .collect();
+
+        match missing.is_empty() {
+            true => Ok(()),
+            false => Err(not_covered(missing)),
         }
     }
 
