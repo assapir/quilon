@@ -249,14 +249,17 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
-    /// `recv.name(...)` where `name` is not a member of the receiver's type. A member call
-    /// resolves against that type alone, so a function of the same name is never a fallback
+    /// `recv.name(...)` where `name` is not a member of the receiver's type. The name is
+    /// looked for on that type alone, so a function of the same name is never a fallback
     /// — it would otherwise hijack the call. `in_scope` says whether such a function is
-    /// there to point the reader at.
+    /// there to point the reader at; `receiver` is what the caller wrote as the receiver,
+    /// where that is a plain name, so the advice can spell out the call to write instead.
     UnknownMember {
         type_name: String,
         member: String,
         in_scope: bool,
+        receiver: Option<String>,
+        more_arguments: bool,
         span: Span,
     },
     /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —

@@ -85,9 +85,10 @@ impl TypeChecker {
     }
 
     /// Type-check a call. `member_call` marks the `recv.name(args)` form (see
-    /// [`Expression::Call`]): its name resolves against the receiver's type alone, so
-    /// every namespace-level dispatch below is skipped for one and an unresolved name is
-    /// [`TypeError::UnknownMember`] rather than a fall-through to a top-level function.
+    /// [`Expression::Call`]): the name is looked for on the receiver's type and nowhere
+    /// else, so every namespace-level dispatch below is skipped for one, and a name that
+    /// type does not have is [`TypeError::UnknownMember`] — which spells out the plain
+    /// call where a function of that name exists — rather than a fall-through to it.
     pub(super) fn check_call(
         &mut self,
         function: &Expression,
@@ -277,6 +278,13 @@ impl TypeChecker {
                 type_name: crate::ast::type_label(&receiver_type),
                 member: name.clone(),
                 in_scope: self.names_a_callable(name),
+                // The advice spells out the plain call to write instead, so it needs the
+                // receiver as the reader wrote it — available when that is a plain name.
+                receiver: match receiver {
+                    Expression::Identifier { name, .. } => Some(name.clone()),
+                    _ => None,
+                },
+                more_arguments: arguments.len() > 1,
                 span: span.clone(),
             });
         }
