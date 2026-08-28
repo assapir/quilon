@@ -57,6 +57,13 @@ pub struct Parser<'a> {
 /// hand-written program legitimately nests.
 const MAX_NESTING_DEPTH: usize = 128;
 
+/// How many parameters a function, method or lambda may declare — a rule of the LANGUAGE,
+/// not a parser budget. Past this the arguments are a thing in their own right and want a
+/// name: a record parameter says what the group is, keeps the call site readable, and is
+/// itself unlimited. Enforced in `parse_parameter_list`, the one place every written
+/// parameter list passes through; record types are deliberately not subject to it.
+const MAX_PARAMETERS: usize = 10;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub message: String,

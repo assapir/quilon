@@ -98,31 +98,25 @@ impl<'a> Parser<'a> {
         match &self.peek_ahead(1).kind {
             TokenKind::Arrow => true,
             TokenKind::TypeAnnotation => {
-                // `name :: <type> =>` — the annotation runs up to the `=>` that opens the
-                // lambda body, so the scan reads the type's own bracketing (`(…)`, `[…]`,
-                // `{…}`) and takes the first `=>` outside it as the lambda arrow. A map
-                // type's `=>` sits inside a fence and is skipped. Anything that cannot
-                // appear in a written type ends the scan — `Eof` among it, which is what
-                // terminates on a truncated stream — and means this `::` was a binding
-                // annotation, not a lambda parameter.
+                // `name :: <type> =>` — find the `=>` that closes the annotation. Types
+                // here are simple (a name with optional `{ … }` generic args); the first
+                // top-level `=>` after the `::` ends the parameter list of a lambda. A `<`
+                // block, `Eof`, or anything else means it was not a lambda parameter. No
+                // token-distance bound: how long the annotation is must not decide this.
                 let mut idx = 2;
-                let mut depth = 0usize;
+                let mut brace_depth = 0i32;
                 loop {
-                    let kind = &self.peek_ahead(idx).kind;
-                    match kind {
-                        TokenKind::Arrow if depth == 0 => return true,
-                        TokenKind::ParenOpen | TokenKind::BracketOpen | TokenKind::BraceOpen => {
-                            depth += 1;
+                    match &self.peek_ahead(idx).kind {
+                        TokenKind::BraceOpen => brace_depth += 1,
+                        TokenKind::BraceClose => brace_depth -= 1,
+                        TokenKind::Arrow if brace_depth == 0 => return true,
+                        TokenKind::Eof => return false,
+                        // A return-arrow, block, comma, etc. at depth 0 means this `::`
+                        // was a binding annotation, not a lambda parameter — bail out.
+                        TokenKind::BlockOpen | TokenKind::Comma if brace_depth == 0 => {
+                            return false;
                         }
-                        TokenKind::ParenClose | TokenKind::BracketClose | TokenKind::BraceClose => {
-                            if depth == 0 {
-                                return false;
-                            }
-                            depth -= 1;
-                        }
-                        TokenKind::Comma if depth == 0 => return false,
-                        _ if kind.appears_in_type() => {}
-                        _ => return false,
+                        _ => {}
                     }
                     idx += 1;
                 }
@@ -142,28 +136,16 @@ impl<'a> Parser<'a> {
     /// With the cursor on `(`, does a parenthesized parameter list followed by `=>` or
     /// `->` start here — the shape shared by a lambda and a function declaration?
     ///
-    /// A parameter list holds only names, `::` annotations, written types and the commas
-    /// between them, so the scan stops at the first token outside that alphabet: `(1 + 2)`
-    /// is decided at the `1`, and `Eof` ends it on a stream that never closes the paren.
-    /// That bounds the scan by the parameter list itself rather than by a token distance,
-    /// which is what lets a definition of any width — and one whose parameters are all
-    /// annotated — still read as a function.
-    ///
-    /// Stopping early does not have to mean "not a parameter list". An expression has no
-    /// `::` of its own, so a `::` between these parens can only be a parameter annotation
-    /// — unless a `=>` has already opened a lambda body inside them (`(x :: Num => x + 1)`
-    /// is a parenthesized lambda). An annotated list that stops on a stray token is
-    /// therefore a MALFORMED parameter list, and saying so hands the error to
-    /// `parse_parameter_list`, which names the offending token instead of blaming the
-    /// first `::` from the expression side.
+    /// Scans to the matching `)` and checks for a following `=>` or `->` (return type),
+    /// ending at `Eof` on a stream that never closes the paren. Deliberately unbounded
+    /// otherwise: a token-distance limit here would make a definition's MEANING depend on
+    /// how long it is, silently re-reading a wide function as a variable holding a lambda
+    /// instead of letting `parse_parameter_list` report what is actually wrong with it.
     pub(super) fn parameter_list_ahead(&self) -> bool {
         let mut depth = 1usize;
         let mut idx = 1;
-        let mut annotated = false;
-        let mut lambda_body = false;
         loop {
-            let kind = &self.peek_ahead(idx).kind;
-            match kind {
+            match self.peek_ahead(idx).kind {
                 TokenKind::ParenOpen => depth += 1,
                 TokenKind::ParenClose => {
                     depth -= 1;
@@ -172,10 +154,8 @@ impl<'a> Parser<'a> {
                         return *next == TokenKind::Arrow || *next == TokenKind::ReturnArrow;
                     }
                 }
-                TokenKind::TypeAnnotation => annotated |= depth == 1,
-                TokenKind::Arrow => lambda_body |= depth == 1,
-                _ if kind.appears_in_type() => {}
-                _ => return annotated && !lambda_body,
+                TokenKind::Eof => return false,
+                _ => {}
             }
             idx += 1;
         }

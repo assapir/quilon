@@ -1,0 +1,50 @@
+~ Passing a group of values as one record instead of as many parameters. A function takes
+~ at most ten parameters; past that the arguments are a thing in their own right, and a
+~ record names that thing. `Shipment` carries twelve fields, `cost` takes one of them, and
+~ the call site reads as labelled fields rather than a row of positional numbers.
+~ Run: cargo run -- run examples/record_parameter.qn   (exits 0; assertions abort)
+
+Shipment = {
+  lengthCm :: Num
+  widthCm :: Num
+  heightCm :: Num
+  weightKg :: Num
+  distanceKm :: Num
+  insuredValue :: Num
+  handlingFee :: Num
+  fuelSurcharge :: Num
+  itemCount :: Num
+  isFragile :: Bool
+  isExpress :: Bool
+  origin :: Text
+}
+
+volumeCm3 = (s :: Shipment) -> Num => s.lengthCm * s.widthCm * s.heightCm
+
+~ One record parameter, plus the two rates that are not properties of the shipment.
+cost = (s :: Shipment, ratePerKg :: Num, ratePerKm :: Num) -> Num => <
+  base = s.weightKg * ratePerKg + s.distanceKm * ratePerKm
+  fragile = s.isFragile ? 12 : 0
+  express = s.isExpress ? 25 : 0
+  base + s.handlingFee + s.fuelSurcharge + fragile + express
+>
+
+^ = () -> $ => <
+  parcel = Shipment {
+    lengthCm = 30, widthCm = 20, heightCm = 10,
+    weightKg = 4, distanceKm = 250,
+    insuredValue = 500, handlingFee = 3, fuelSurcharge = 7,
+    itemCount = 2, isFragile = true, isExpress = false,
+    origin = "Tel Aviv"
+  }
+
+  assert(volumeCm3(parcel), equals(6000))
+
+  ~ 4 * 2.5 + 250 * 0.4 + 3 + 7 + 12 = 132
+  assert(cost(parcel, 2.5, 0.4), equals(132))
+
+  ~ A record is a value: one field replaced, everything else spread through.
+  express = Shipment { <-parcel, isExpress = true }
+  assert(cost(express, 2.5, 0.4), equals(157))
+  assert(express.origin, equals("Tel Aviv"))
+>

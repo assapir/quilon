@@ -10,20 +10,7 @@ impl<'a> Parser<'a> {
     /// of the expression grammar (`[]T` element types), so it needs the same
     /// `MAX_NESTING_DEPTH` bound to keep `[][]…[]T` from overflowing the stack.
     pub(super) fn parse_type(&mut self) -> Result<crate::ast::Type, ParseError> {
-        let start = self.pos;
-        let parsed = self.nested(Self::parse_type_inner);
-        // A speculative scan walks an annotation over `TokenKind::appears_in_type`, so that
-        // set must accept every token a written type is made of — a divergence would end
-        // such a scan early and silently re-read the definition around it as something
-        // else. Checked against what this parse actually consumed.
-        debug_assert!(
-            parsed.is_err()
-                || self.tokens[start..self.pos]
-                    .iter()
-                    .all(|t| t.kind.appears_in_type()),
-            "a written type uses a token appears_in_type rejects"
-        );
-        parsed
+        self.nested(Self::parse_type_inner)
     }
 
     pub(super) fn parse_type_inner(&mut self) -> Result<crate::ast::Type, ParseError> {
