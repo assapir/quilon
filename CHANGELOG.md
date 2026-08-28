@@ -154,11 +154,20 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
-### BREAKING
+- **BREAKING: the `^ = (argc :: Num, argv :: Num)` entry form is gone.** An entry point
+  takes its arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any
+  other unsupported `^` signature.
 
-- **The `^ = (argc :: Num, argv :: Num)` entry form is gone.** An entry point takes its
-  arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any other
-  unsupported `^` signature.
+- **BREAKING: a member call resolves against the receiver's type
+  ([#265](https://github.com/assapir/quilon/issues/265)).** `recv.name(...)` asks the
+  receiver's type for `name` and nothing else: a name the type does not have is a compile
+  error naming both (`'Counter' has no member 'bump'`), never a fall-through to a top-level
+  function of that name.
+
+  What breaks: `.` on a value whose type has no such member no longer reaches a top-level
+  function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
+  Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
+  as before.
 
 ### Fixed
 

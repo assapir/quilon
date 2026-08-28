@@ -77,12 +77,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             .then_some(lowering)
     }
 
-    /// Lower a call. `span` is the CALL's own span — the location a callee whose last
-    /// parameter is a `Site` receives (see [`Self::site_value`]).
+    /// The method a call resolves to on its receiver's type, as the symbol it was emitted
+    /// under. The parser desugars `recv.name(a)` to `name(recv, a)`, and the type checker
+    /// resolves that against the receiver's type ahead of every top-level name — so call
+    /// lowering, call-site filling and the tail-call analysis all ask this one question and
+    /// cannot disagree with the checker about which function a call names.
+    ///
+    /// Only a record/sum receiver can carry a method, so the built-ins reserved on
+    /// `Array`/`Text`/`Map`/`Set` receivers are never diverted by one.
+    pub(super) fn method_symbol_for(&self, name: &str, arguments: &[Expression]) -> Option<String> {
+        let declaring = self.declared_methods.get(name)?;
+        let type_name = self.receiver_type_name(arguments.first()?)?;
+        declaring
+            .contains(type_name)
+            .then(|| method_symbol(type_name, name))
+    }
+
+    /// Lower a call. `member_call` marks the `recv.name(args)` form, which resolves against
+    /// the receiver's type alone. `span` is the CALL's own span — the location a callee
+    /// whose last parameter is a `Site` receives (see [`Self::site_value`]).
     pub(super) fn generate_call(
         &mut self,
         function: &Expression,
         arguments: &[Expression],
+        member_call: bool,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Get function name - only support direct calls for now
@@ -94,7 +112,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // The provided assertions, whose second argument is a matcher rather than a value —
         // lowered here, ahead of every other dispatch, since the compiler provides the form.
-        if crate::ast::is_assertion(function_name) {
+        // Not for a member call: `recv.assert(m)` names the receiver's `assert`, if it has
+        // one, and the checker rejects it if it does not.
+        if !member_call && crate::ast::is_assertion(function_name) {
             return self.generate_assertion(function_name, arguments, span);
         }
 
@@ -105,10 +125,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
+        // A method declared on the receiver's type takes the name, ahead of everything the
+        // top-level namespace holds — the order the checker resolved the call in.
+        let method_callee = self
+            .method_symbol_for(function_name, arguments)
+            .and_then(|symbol| self.module.get_function(&symbol));
+
         // Only the calls a built-in itself claims are lowered to its runtime intrinsic
         // (see `intrinsic_lowering`); anything a user member of the same set matches is
         // dispatched as an ordinary mangled call below.
-        if let Some(lowering) = self.intrinsic_lowering(function_name, arguments) {
+        if method_callee.is_none()
+            && let Some(lowering) = self.intrinsic_lowering(function_name, arguments)
+        {
             return match lowering {
                 // The single argument renders through its `` ` `` operator (built-in
                 // default or user override). A function-typed argument is not a renderable
@@ -179,9 +207,33 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
         // resolved from the variant registry built from the predefined Result and all
-        // user `TypeDefinition::Sum` declarations.
-        if let Some((tag, type_name)) = self.sum_variants.get(function_name.as_str()).cloned() {
+        // user `TypeDefinition::Sum` declarations. A constructor is a top-level name, so a
+        // member call never reaches one.
+        if !member_call
+            && let Some((tag, type_name)) = self.sum_variants.get(function_name.as_str()).cloned()
+        {
             return self.generate_sum_constructor(tag, &type_name, arguments);
+        }
+
+        // The receiver's method answers the call, and nothing below is consulted: a method
+        // is reached through its receiver, never as a name. It can declare no `Site`
+        // parameter (the checker rejects one), so its arguments are exactly those written.
+        if let Some(method) = method_callee {
+            let arg_values: Vec<BasicValueEnum> = arguments
+                .iter()
+                .map(|arg| self.generate_expression(arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            return self.emit_call(method, &arg_values);
+        }
+
+        // Everything below looks the name up in the top-level namespace, which a member
+        // call never reaches. The checker rejects a member call that resolves to nothing,
+        // so reaching here means codegen and the checker disagree about the receiver's type.
+        if member_call {
+            return Err(format!(
+                "no member '{}' on the receiver's type",
+                function_name
+            ));
         }
 
         // A local variable bound to a closure value: call it indirectly, passing the
@@ -208,27 +260,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // before the argument values are generated, so the answer is one immutable lookup.
         let fills_call_site = self.fills_call_site(function_name, arguments);
 
-        // Get the function from the module. If there is no plain top-level function with this
-        // name, it may be a method call: the parser desugars `recv.method(a, b)` to
-        // `method(recv, a, b)`, so resolve `recv`'s named type and dispatch to `Type_method`.
-        let callee = if let Some(sym) = &overload_symbol {
-            self.module
+        // The resolved callee: the overload member chosen by argument types, else the
+        // plain top-level function of that name.
+        let callee = match &overload_symbol {
+            Some(sym) => self
+                .module
                 .get_function(sym)
-                .ok_or_else(|| format!("Overload not found: {}", sym))?
-        } else {
-            match self.module.get_function(function_name) {
-                Some(f) => f,
-                None => {
-                    let mangled = arguments
-                        .first()
-                        .and_then(|recv| self.receiver_type_name(recv))
-                        .map(|type_name| method_symbol(&type_name, function_name));
-                    match mangled.and_then(|m| self.module.get_function(&m)) {
-                        Some(f) => f,
-                        None => return Err(format!("Function not found: {}", function_name)),
-                    }
-                }
-            }
+                .ok_or_else(|| format!("Overload not found: {}", sym))?,
+            None => self
+                .module
+                .get_function(function_name)
+                .ok_or_else(|| format!("Function not found: {}", function_name))?,
         };
 
         // Generate argument values
@@ -258,6 +300,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// applied to whichever signature the name resolves to — a member of an overload set,
     /// or a plain top-level function.
     pub(super) fn fills_call_site(&self, name: &str, arguments: &[Expression]) -> bool {
+        // A method is not called by name, so it can declare no `Site` parameter (the
+        // checker rejects one) — and it claims the call ahead of any top-level signature.
+        if self.method_symbol_for(name, arguments).is_some() {
+            return false;
+        }
         match self.overloads.contains_key(name) {
             true => {
                 let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
@@ -490,23 +537,32 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Resolve the named record type of a method-call receiver, if known. Handles both a
-    /// variable holding a constructed instance and a constructor expression used directly.
-    pub(super) fn receiver_type_name(&self, expression: &Expression) -> Option<String> {
+    /// Resolve the named record type of a method-call receiver, if known.
+    ///
+    /// The oracle answers first and alone when it has this expression: it is keyed by span
+    /// and produced by the checker, so it knows which binding a name refers to. The
+    /// per-frame `var_named_types` does not — it is flat, so an inner binding that reuses
+    /// an outer record variable's name would otherwise still read as that record.
+    pub(super) fn receiver_type_name<'a>(&'a self, expression: &'a Expression) -> Option<&'a str> {
+        // Any record/sum-typed receiver — a variable, a sum constructor call
+        // (`Rect(6, 7).area()`), a field read, a match result — dispatches by its type name.
+        if let Some(ty) = self.oracle.expression_type(expression) {
+            return match ty {
+                Type::Named { name, .. } | Type::Sum { name, .. } => Some(name),
+                _ => None,
+            };
+        }
+        // No oracle entry (an expression the checker never saw, as the IR-only codegen
+        // tests build): fall back to what emission itself recorded.
         if let Expression::Identifier { name, .. } = expression
             && let Some(type_name) = self.var_named_types.get(name)
         {
-            return Some(type_name.clone());
+            return Some(type_name);
         }
         if let Expression::Constructor { type_name, .. } = expression {
-            return Some(type_name.clone());
+            return Some(type_name);
         }
-        // Fall back to the oracle: any record/sum-typed receiver — a sum constructor call
-        // (`Rect(6, 7).area()`), a field read, a match result — dispatches by its type name.
-        match self.oracle.expression_type(expression) {
-            Some(Type::Named { name, .. }) | Some(Type::Sum { name, .. }) => Some(name.clone()),
-            _ => None,
-        }
+        None
     }
 
     /// Build a direct call to an already-emitted function by symbol, given the

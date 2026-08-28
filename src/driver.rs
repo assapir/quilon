@@ -280,6 +280,7 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
             span: synthesized_span(Synthesized::SummaryName),
         }),
         arguments: Vec::new(),
+        member_call: false,
         span: synthesized_span(Synthesized::SummaryCall),
     };
     let statements = program

@@ -112,14 +112,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         {
             return false;
         }
-        let symbol = if self.overloads.contains_key(name.as_str()) {
-            let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
-            match self.resolve_overload_symbol(name, &arg_types) {
-                Some(s) => s,
-                None => return false,
+        // A method on the receiver's type claims the name first, exactly as in call
+        // lowering — so a function calling `recv.name(...)` on a type whose method shares
+        // its name is a call to that method, not a self-call.
+        let symbol = match self.method_symbol_for(name, arguments) {
+            Some(method) => method,
+            None if self.overloads.contains_key(name.as_str()) => {
+                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
+                match self.resolve_overload_symbol(name, &arg_types) {
+                    Some(s) => s,
+                    None => return false,
+                }
             }
-        } else {
-            name.clone()
+            None => name.clone(),
         };
         symbol == self_symbol
     }

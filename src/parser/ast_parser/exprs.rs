@@ -283,6 +283,7 @@ impl<'a> Parser<'a> {
                             span: span.clone(),
                         }),
                         arguments,
+                        member_call: true,
                         span,
                     };
                 } else {
@@ -325,6 +326,7 @@ impl<'a> Parser<'a> {
                 expression = Expression::Call {
                     function: Box::new(expression),
                     arguments,
+                    member_call: false,
                     span,
                 };
             } else {
