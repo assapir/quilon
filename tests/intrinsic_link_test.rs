@@ -69,8 +69,9 @@ const EVERY_INTRINSIC: &str = r#"
   xs :: []Num = [10, 20, 30]
   assert(xs[1], equals(20))
 
-  ~ __range_endpoint, once per end of a range.
-  assert((1 <- 3).size, equals(3))
+  ~ __range_endpoint (once per end) and __range_count. Both are folded away for a literal
+  ~ range, so the ends come from `args`, which is only known at run time.
+  assert((args.size <- args.size).size, equals(1))
 
   ~ __num_to_text and __bool_to_text, via interpolation.
   rendered = "n `xs[0]` ok `xs.size == 3`"

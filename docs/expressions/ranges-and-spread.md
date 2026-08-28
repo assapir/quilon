@@ -26,7 +26,8 @@ direction (ascending vs descending) is decided at runtime. (See `examples/ranges
 
 ### Endpoints must be whole numbers
 A range counts from one end to the other, so each end must be a **whole number** that fits
-a 64-bit integer. Anything else is an **error**, never a truncation:
+a 64-bit integer. Anything else is an **error**, never a truncation (a range is also
+[materialized in full](../status/limitations.md)):
 
 ```quilon ignore
 1.5 <- 3.9      ~ error: a range endpoint must be a whole number (got 1.5)
@@ -34,12 +35,12 @@ a 64-bit integer. Anything else is an **error**, never a truncation:
 1 <- 10000000000000000000   ~ error: … a whole number that fits 64 bits
 ```
 
-A **literal** end is rejected by the compiler; a **computed** one is rejected when the range
-runs, framed at the range expression and exiting 1 — the same fail-loud contract a bad
-[`array[i]`](../collections/arrays.md) has.
+Two ends that each fit but are further apart than a 64-bit count of the elements between
+them (`-5000000000000000000 <- 5000000000000000000`) are refused the same way.
 
-A range is **materialized in full**, so its element count is also its memory: `1 <- 100000`
-is an array of 100 000 `Num`s.
+What the compiler can evaluate it rejects at compile time; anything computed is rejected
+when the range runs, framed at the range expression and exiting 1 — the same fail-loud
+contract a bad [`array[i]`](../collections/arrays.md) has.
 
 ## Spread in literals
 The **prefix** `<-` splices a source's contents into an array or record literal:

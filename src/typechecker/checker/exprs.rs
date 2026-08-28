@@ -484,18 +484,21 @@ impl TypeChecker {
                 self.check_type_compatibility(&Type::Num, &start_type, span)?;
                 let end_type = self.infer_expression(end)?;
                 self.check_type_compatibility(&Type::Num, &end_type, span)?;
-                // Fail-loud contract for the endpoints: a LITERAL end that is not a whole
-                // number an `i64` can hold is a compile error (a computed one is the
-                // runtime's to reject, over the same rule). Never a truncation.
+                // Fail-loud contract for the extent: whatever is determinable from literal
+                // ends is a compile error, over the same rules the runtime applies to a
+                // computed end. Never a truncation.
+                let invalid = |message| TypeError::InvalidBuiltinArgument {
+                    message,
+                    span: span.clone(),
+                };
+                let mut ends = Vec::new();
                 for endpoint in [start, end] {
-                    if let Some(value) = super::calls::literal_number(endpoint)
-                        && let Err(message) = quilon_rt::check_range_endpoint(value)
-                    {
-                        return Err(TypeError::InvalidBuiltinArgument {
-                            message,
-                            span: span.clone(),
-                        });
+                    if let Some(value) = literal_number(endpoint) {
+                        ends.push(quilon_rt::check_range_endpoint(value).map_err(invalid)?);
                     }
+                }
+                if let [lo, hi] = ends[..] {
+                    quilon_rt::check_range_count(lo, hi).map_err(invalid)?;
                 }
                 Ok(Type::Array(Box::new(Type::Num)))
             }

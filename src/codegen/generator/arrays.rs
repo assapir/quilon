@@ -277,12 +277,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage comes from the shared
     /// [`Self::alloc_array_data`], so the array may safely escape the current frame.
     ///
-    /// Both ends go through the runtime's `__range_endpoint` rather than a raw `fptosi`,
-    /// which rejects a fractional, NaN, or out-of-`i64` endpoint at `span` instead of
-    /// converting it to poison — BEFORE any size is derived from it, so the checked
-    /// allocation never sees a count built out of one. The checker already refused a
-    /// literal end; this covers the computed ones, which are why a range is built at
-    /// runtime at all.
+    /// The extent is checked, never truncated: an end that is not a whole number an `i64`
+    /// holds, or a pair of ends spanning more elements than a count of them, is refused at
+    /// `span`. Ends the checker already evaluated become constants here, so the ordinary
+    /// literal range keeps a constant count — and with it a fill loop of known trip count.
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
@@ -296,13 +294,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_type = self.context.i64_type();
         let f64_type = self.context.f64_type();
 
-        // Evaluate both ends (Num = f64) and convert them to checked i64 endpoints.
-        let lo_f = self.generate_expression(start)?.into_float_value();
-        let hi_f = self.generate_expression(end)?.into_float_value();
-        let lo = self.checked_endpoint(lo_f, span, "range_lo")?;
-        let hi = self.checked_endpoint(hi_f, span, "range_hi")?;
+        let (lo, lo_known) = self.range_endpoint(start, span)?;
+        let (hi, hi_known) = self.range_endpoint(end, span)?;
 
-        // Ascending iff lo <= hi; pick step = +1 / -1 and the inclusive span.
+        // Ascending iff lo <= hi; pick step = +1 / -1.
         let ascending = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, lo, hi, "range_asc")
@@ -314,25 +309,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_select(ascending, one, neg_one, "range_step")
             .map_err(ctx("Failed to select range step"))?
             .into_int_value();
-        // |hi - lo| + 1: compute the signed delta once, then pick it or its
-        // negation so the span is non-negative in either direction.
-        let delta = self
-            .builder
-            .build_int_sub(hi, lo, "range_delta")
-            .map_err(ctx("Failed to subtract range ends"))?;
-        let neg_delta = self
-            .builder
-            .build_int_neg(delta, "range_neg_delta")
-            .map_err(ctx("Failed to negate range delta"))?;
-        let span_abs = self
-            .builder
-            .build_select(ascending, delta, neg_delta, "range_span")
-            .map_err(ctx("Failed to select range span"))?
-            .into_int_value();
-        let count = self
-            .builder
-            .build_int_add(span_abs, one, "range_count")
-            .map_err(ctx("Failed to add range count"))?;
+        // `|hi - lo| + 1`, under the width check two legal-but-distant ends need: subtracted
+        // in the emitted code it would wrap to a negative count.
+        let count = match (lo_known, hi_known) {
+            (Some(lo), Some(hi)) => i64_type.const_int(
+                quilon_rt::check_range_count(lo, hi).map_err(|e| e.to_string())? as u64,
+                true,
+            ),
+            _ => {
+                let site = self.site_value(span)?;
+                self.call_rt_int("__range_count", &[lo.into(), hi.into(), site.into()])?
+            }
+        };
 
         let data_ptr = self.alloc_array_data(f64_type.into(), count)?;
 
@@ -406,26 +394,29 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.array_struct(data_ptr, count)
     }
 
-    /// One range endpoint as an `i64`, through the runtime check that refuses a fractional,
-    /// NaN, or out-of-`i64` value at `span`. The whole conversion lives in the runtime
-    /// rather than as a test-and-branch here: it is one call per range — next to nothing
-    /// beside the allocation and fill that follow — and it keeps the rejected shapes and
-    /// their wording in the one place the checker also reads them from.
-    fn checked_endpoint(
+    /// One end of a range as an `i64`, plus its value when that is known at compile time.
+    ///
+    /// A literal end the checker has already accepted becomes a constant, which is what
+    /// keeps `1 <- 100` a constant-count range. Anything else is converted by the runtime's
+    /// `__range_endpoint` rather than a raw `fptosi`, whose result for a fractional, NaN, or
+    /// out-of-`i64` value is poison — and, for a constant, poison folded before the range is
+    /// even sized. The runtime holds the rule either way; `check_range_endpoint` is the one
+    /// the checker refused the literal with.
+    fn range_endpoint(
         &mut self,
-        value: inkwell::values::FloatValue<'ctx>,
+        end: &Expression,
         span: &Span,
-        name: &str,
-    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    ) -> Result<(inkwell::values::IntValue<'ctx>, Option<i64>), String> {
+        if let Some(value) = crate::ast::literal_number(end)
+            && let Ok(endpoint) = quilon_rt::check_range_endpoint(value)
+        {
+            let constant = self.context.i64_type().const_int(endpoint as u64, true);
+            return Ok((constant, Some(endpoint)));
+        }
+        let value = self.generate_expression(end)?.into_float_value();
         let site = self.site_value(span)?;
-        let check = self.get_intrinsic("__range_endpoint")?;
-        use inkwell::values::AnyValue;
-        Ok(self
-            .builder
-            .build_call(check, &[value.into(), site.into()], name)
-            .map_err(ctx("Failed to call __range_endpoint"))?
-            .as_any_value_enum()
-            .into_int_value())
+        let checked = self.call_rt_int("__range_endpoint", &[value.into(), site.into()])?;
+        Ok((checked, None))
     }
 
     /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).

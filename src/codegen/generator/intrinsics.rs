@@ -52,9 +52,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__index_fail" => void.fn_type(&[f64t.into(), i64t.into(), ptr.into()], false),
             // i64 __range_endpoint(double value, Site* site) — one endpoint of `lo <- hi`
             // as an i64, or a report at `site` (the range expression) and status 1 for a
-            // fractional, NaN, or out-of-i64 value. Replaces the `fptosi` that made any of
-            // those poison.
+            // fractional, NaN, or out-of-i64 value.
             "__range_endpoint" => i64t.fn_type(&[f64t.into(), ptr.into()], false),
+            // i64 __range_count(i64 lo, i64 hi, Site* site) — the inclusive element count
+            // `|hi - lo| + 1`, or a report at `site` when two individually legal ends are
+            // further apart than an i64 count holds.
+            "__range_count" => i64t.fn_type(&[i64t.into(), i64t.into(), ptr.into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
             "memcpy" => ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
             // i64 __text_length(i8*, i64) — grapheme-cluster count.

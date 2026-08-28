@@ -4,9 +4,9 @@
 //! Boehm-GC binding (`__alloc`, `__alloc_array`, `__gc_init`), the shared `QlSlice`
 //! `{ ptr, len }` ABI type and its `alloc_text` helper, the `format_num` render helper,
 //! and the fail-loud primitives behind checked `arr[i]` (`__index_fail`) and a range's
-//! endpoints (`__range_endpoint`) — neither operation has a `core.*` module, so both live
-//! in this internal tier. This tier is where the future fiber scheduler and reactor will
-//! also live.
+//! extent (`__range_endpoint`, `__range_count`) — neither operation has a `core.*` module,
+//! so both live in this internal tier. This tier is where the future fiber scheduler and
+//! reactor will also live.
 
 use crate::io::write_to_fd;
 use crate::process::__exit;
@@ -221,13 +221,10 @@ const I64_BOUND: f64 = 9_223_372_036_854_775_808.0;
 ///
 /// `lo <- hi` counts from one endpoint to the other, which only means anything for whole
 /// numbers that fit the counter: a fractional end has no next element, NaN has no order,
-/// and a magnitude past `i64` has no representation to count in. Each of those is an
+/// and a magnitude past `i64` (an infinity included) has none to count in. Each is an
 /// ERROR, never a truncation — `1.5 <- 3.9` is not `[1, 2, 3]`.
-///
-/// Shared with the compiler, which applies it to a literal endpoint at compile time so the
-/// static and the runtime rejection read identically.
 pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
-    if !value.is_finite() || value.fract() != 0.0 {
+    if value.fract() != 0.0 && !value.is_infinite() {
         return Err(format!(
             "a range endpoint must be a whole number (got {})",
             format_num(value)
@@ -242,19 +239,41 @@ pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
     Ok(value as i64)
 }
 
-/// The checked `f64` -> `i64` conversion of one endpoint of `lo <- hi`: the endpoint as an
-/// `i64`, or a report at the range expression and exit status 1.
+/// How many elements the inclusive range `lo <- hi` has — `|hi - lo| + 1` — or the message
+/// saying why there are more than a count of them holds.
 ///
-/// Codegen calls this instead of emitting `fptosi`, which is where the unchecked version
-/// went wrong: converting a NaN or an out-of-range `f64` yields poison, and a constant one
-/// folds to poison before the range's allocation is even sized.
+/// Two endpoints that each fit an `i64` can still be further apart than one: `-5e18 <- 5e18`
+/// spans 10^19. The span is taken in `i128` so it is refused as what it is, rather than
+/// wrapping to a negative count the allocation refuses with nothing to point at.
+pub fn check_range_count(lo: i64, hi: i64) -> Result<i64, String> {
+    i64::try_from((hi as i128 - lo as i128).abs() + 1).map_err(|_| {
+        format!("a range from {lo} to {hi} has more elements than a 64-bit count holds")
+    })
+}
+
+/// [`check_range_endpoint`] for an end the compiler could not evaluate: the endpoint as an
+/// `i64`, or a report at the range expression and exit status 1.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid [`QlSite`].
 #[unsafe(no_mangle)]
 pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
-    match check_range_endpoint(value) {
-        Ok(endpoint) => endpoint,
+    report_or(check_range_endpoint(value), site)
+}
+
+/// [`check_range_count`] for a range whose ends the compiler could not evaluate.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid [`QlSite`].
+#[unsafe(no_mangle)]
+pub extern "C" fn __range_count(lo: i64, hi: i64, site: *const QlSite) -> i64 {
+    report_or(check_range_count(lo, hi), site)
+}
+
+/// A checked range quantity, or its message reported at `site` and the process ended.
+fn report_or(checked: Result<i64, String>, site: *const QlSite) -> i64 {
+    match checked {
+        Ok(value) => value,
         Err(message) => fail_at(site, &message, RUNTIME_EXIT_CODE),
     }
 }
@@ -345,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_range_endpoint_that_is_not_whole_is_refused() {
-        for (value, shown) in [(1.5, "1.5"), (f64::NAN, "NaN"), (f64::INFINITY, "inf")] {
+        for (value, shown) in [(1.5, "1.5"), (-0.25, "-0.25"), (f64::NAN, "NaN")] {
             let message = check_range_endpoint(value).expect_err("must be refused");
             assert_eq!(
                 message,
@@ -357,13 +376,27 @@ mod tests {
     #[test]
     fn a_range_endpoint_wider_than_an_i64_is_refused() {
         // 2^63 is the first whole `f64` with no `i64` to convert to; -2^63 is `i64::MIN`
-        // and stays legal, so the bound is half-open rather than symmetric.
+        // and stays legal, so the bound is half-open rather than symmetric. An infinity is
+        // whole and belongs here too, not with the fractions.
         assert_eq!(check_range_endpoint(-I64_BOUND), Ok(i64::MIN));
-        let message = check_range_endpoint(I64_BOUND).expect_err("must be refused");
-        assert!(
-            message.starts_with("a range endpoint must be a whole number that fits 64 bits"),
-            "{message}"
-        );
+        for value in [I64_BOUND, f64::INFINITY, f64::NEG_INFINITY] {
+            let message = check_range_endpoint(value).expect_err("must be refused");
+            assert!(
+                message.starts_with("a range endpoint must be a whole number that fits 64 bits"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_count_is_inclusive_and_direction_free() {
+        let site = std::ptr::null();
+        assert_eq!(__range_count(1, 4, site), 4);
+        assert_eq!(__range_count(4, 1, site), 4);
+        assert_eq!(__range_count(5, 5, site), 1);
+        assert_eq!(__range_count(-2, 2, site), 5);
+        // The widest span an `i64` count holds, from ends that are themselves legal.
+        assert_eq!(__range_count(0, i64::MAX - 1, site), i64::MAX);
     }
 
     #[test]

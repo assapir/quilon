@@ -57,11 +57,15 @@ All notable changes to Quilon are documented here.
   1 <- 10000000000000000000   ~ error: … a whole number that fits 64 bits
   ```
 
-  A **literal** end is refused by the compiler; a **computed** one is refused when the range
-  runs, framed at the range expression and exiting 1. Previously the ends were truncated by
-  an unchecked `fptosi`: `1.5 <- 3.9` silently became `[1, 2, 3]`, and a NaN or out-of-range
-  end became poison — which, for a constant one, folded before the allocation was sized and
-  segfaulted. A program relying on the truncation must round its ends itself.
+  Two ends that each fit but span more elements than a 64-bit count of them
+  (`-5000000000000000000 <- 5000000000000000000`) are refused the same way.
+
+  What the compiler can evaluate it refuses at compile time; anything computed is refused
+  when the range runs, framed at the range expression and exiting 1. Previously the ends
+  were truncated by an unchecked `fptosi`: `1.5 <- 3.9` silently became `[1, 2, 3]`, and a
+  NaN or out-of-range end became poison — which, for a constant one, folded before the
+  allocation was sized and segfaulted. A program relying on the truncation must round its
+  ends itself.
 
 - **`print` takes anything renderable: the per-type overload set is gone.** `print`,
   `eprint` and `write` no longer carry a member per built-in type. At a call site the
