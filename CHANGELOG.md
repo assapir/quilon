@@ -199,6 +199,31 @@ All notable changes to Quilon are documented here.
   Write `double(5)`, or pipe it (`5 |> double()`) — both still find the function. Where
   there is one, the error spells that call out for you.
 
+- **Every match is total, and every pattern in one names something real
+  ([#202](https://github.com/assapir/quilon/issues/202)).** A match on a non-sum scrutinee
+  carried no coverage requirement, so `n ? | 0 => 1 | 1 => 2` type-checked, ran, and — for
+  any `n` no arm listed — produced whatever its result slot happened to hold, exiting 0.
+  It is now a compile error:
+
+  ```text
+  error: this match on Num is not exhaustive — add a '_' arm for the values no arm lists
+  ```
+
+  A sum-typed scrutinee is still covered by listing its variants; anything else needs a
+  catch-all — `_`, or a binding arm (`| rest => rest * 2`), which is irrefutable too. A
+  constructor pattern is now checked against the scrutinee as well: `'Purple' is not a
+  variant of 'Color'`, and `'Ok' is a sum-type variant pattern, and this match is on Num`,
+  both at the pattern's own location, where they used to be accepted and then abort in
+  codegen with an unlocated `Unknown constructor`.
+
+  What breaks: a program that relied on the silent fall-through no longer compiles. Add
+  the `_` arm it was falling through to.
+
+  Behind the checker, the no-match edge codegen emits — the backstop for what it cannot
+  prove — now reports where the match is and exits 1, the status every fail-loud runtime
+  check leaves, instead of loading a result slot no arm ever wrote. A match whose last arm
+  takes everything has no such edge and emits no backstop at all.
+
 ### Fixed
 
 - **Allocation fails loudly** ([#224](https://github.com/assapir/quilon/issues/224)). Three

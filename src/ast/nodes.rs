@@ -858,6 +858,14 @@ impl Pattern {
             Pattern::Wildcard { span } => span,
         }
     }
+
+    /// Whether this pattern matches every value of its type: `_`, or a name binding it.
+    /// One arm of these covers a whole match, and one of them as a constructor's payload
+    /// sub-pattern is what keeps tag-only dispatch honest — the checker asks both questions
+    /// here so they cannot drift apart, or from codegen's own always-true test.
+    pub fn is_irrefutable(&self) -> bool {
+        matches!(self, Pattern::Identifier { .. } | Pattern::Wildcard { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

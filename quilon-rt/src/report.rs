@@ -176,6 +176,24 @@ pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, lengt
     mark_case_failed();
 }
 
+/// A `?`/`|` match no arm matched: report at `site` (the match expression's own location)
+/// and terminate with [`RUNTIME_EXIT_CODE`]. Never returns.
+///
+/// The checker requires every match to be total, so this is the backstop for what it cannot
+/// prove — reached only if that guarantee is broken, which is why it fails loudly instead of
+/// letting the match yield a result slot no arm wrote.
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a valid [`QlSite`].
+#[unsafe(no_mangle)]
+pub extern "C" fn __match_fail(site: *const QlSite) -> ! {
+    fail_at(
+        site,
+        "no arm of this match matched the value",
+        RUNTIME_EXIT_CODE,
+    )
+}
+
 /// A `Text` argument's bytes as a `String`. Length is clamped at 0, and invalid UTF-8 is
 /// replaced rather than aborting: a diagnostic is the wrong place to fail.
 fn message_text(message: *const u8, length: i64) -> String {
