@@ -154,6 +154,12 @@ All notable changes to Quilon are documented here.
   setters, along with the fixpoint it needed: every sibling's contract is now known from
   its declaration.
 
+### BREAKING
+
+- **The `^ = (argc :: Num, argv :: Num)` entry form is gone.** An entry point takes its
+  arguments as `^ = (args :: []Text)`; the numeric pair is now rejected like any other
+  unsupported `^` signature.
+
 ### Fixed
 
 - **Allocation fails loudly** ([#224](https://github.com/assapir/quilon/issues/224)). Three

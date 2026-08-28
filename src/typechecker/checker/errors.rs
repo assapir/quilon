@@ -264,8 +264,7 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "Entry point '^' has an unsupported signature ({}). Valid signatures: \
-                     '()', '(args :: []Text)', '(args :: []Text, env :: [|Text => Text|])' \
-                     (or legacy '(argc :: Num, argv :: Num)').",
+                     '()', '(args :: []Text)', '(args :: []Text, env :: [|Text => Text|])'.",
                     fmt_type_list(got)
                 )
             }

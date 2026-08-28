@@ -92,12 +92,12 @@ impl TypeChecker {
     }
 
     /// The `^` entry point may only take one of these parameter shapes (checked by
-    /// TYPE, not by parameter name): `()`, `(args :: []Text)`,
-    /// `(args :: []Text, env :: [|Text => Text|])`, or the legacy `(argc :: Num, argv :: Num)`.
+    /// TYPE, not by parameter name): `()`, `(args :: []Text)`, or
+    /// `(args :: []Text, env :: [|Text => Text|])`.
     /// The runtime builds `Text` args and a `Text => Text` env Map, so a differently-typed
     /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
-    /// elements. An unannotated parameter defaults to `Num` (matching codegen), so
-    /// `^(x)` is the legacy shape only if it has exactly two such parameters.
+    /// elements. An unannotated parameter defaults to `Num` (matching codegen), so `^(x)`
+    /// is rejected like any other unsupported shape.
     pub(super) fn check_entry_point_signature(
         declaration: &FunctionDeclaration,
     ) -> Result<(), TypeError> {
@@ -111,7 +111,7 @@ impl TypeChecker {
         let ok = match parameters.as_slice() {
             [] => true,
             [a] => *a == text_array,
-            [a, b] => (*a == text_array && *b == text_map) || (*a == Type::Num && *b == Type::Num),
+            [a, b] => *a == text_array && *b == text_map,
             _ => false,
         };
         if ok {

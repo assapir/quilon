@@ -30,11 +30,9 @@ the `.qn` path becomes `argv[0]`. So `quilon run f.qn a b c` gives the same `arg
 and trailing arguments as a native `./f a b c` — `argv[0]` is the `.qn` path rather than
 the compiled binary's path, but everything the program indexes past it matches. An
 argument or environment entry containing a NUL byte is refused by `run`, exactly as the
-operating system refuses to start a native binary with one. (The
-legacy `^ = (argc :: Num, argv :: Num)` form, where `argv` was a placeholder `0`, still
-compiles for backward compatibility but is superseded by `args :: []Text`.) Any other
-`^` signature (e.g. a non-`Text` array element, or an unexpected parameter) is a
-compile-time error, reported by `check` as well as `run`/`build`.
+operating system refuses to start a native binary with one. Any other `^` signature (e.g.
+a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported
+by `check` as well as `run`/`build`.
 
 **Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
 
