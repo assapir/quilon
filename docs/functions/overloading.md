@@ -34,11 +34,15 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   only an unannotated **method** parameter defaults to `Num` (see
   [named record types](../types/records.md#named-record-types-with-methods)).
 - **The compiler's own definitions are members, not reserved names.** The built-in
-  operators, and the corelib functions the compiler provides (`print`/`eprint`, `write`,
-  `now`), are members of their sets like any other. Defining one of those names with a
-  different signature ADDS a member that wins for its argument types; the built-in
-  stays reachable for the types it claims. Defining the built-in's own signature is the
-  usual duplicate-definition error:
+  operators, and `core.time`'s `now`, are members of their sets like any other. Defining one
+  of those names with a different signature ADDS a member that wins for its argument types;
+  the built-in stays reachable for the types it claims. Defining the built-in's own signature
+  is the usual duplicate-definition error.
+- **The output built-ins claim their arity.** [`print`/`eprint`/`write`](../corelib/io.md)
+  already take any renderable value, so there is no argument type left for a member to
+  claim: a definition at their own arity is rejected and points at the type's
+  [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-)
+  instead. Another arity is an ordinary set beside them:
   ```quilon ignore
   write = (content :: Text) -> Num => write(content, stdout)  ~ adds a member…
   write("raw")           ~ …which this call picks

@@ -1,5 +1,5 @@
-//! The corelib built-ins (`print`/`eprint`, `write`, `now`) are overload MEMBERS, not
-//! reserved names.
+//! A corelib built-in a user also defines: `now` is an overload MEMBER, not a reserved
+//! name, and the output family (`print`/`eprint`/`write`) claims only its own arity.
 //!
 //! The failure this exists for: codegen used to intercept `write` and `now` by name,
 //! before any dispatch, so a program's own function of that name was replaced by the
@@ -12,19 +12,32 @@ mod common;
 use common::{assert_exit_linked, build_and_run_native, tool_available, type_error_message};
 
 #[test]
-fn a_user_write_member_wins_for_its_own_argument_types() {
-    assert_exit_linked(
+fn defining_an_output_builtin_at_its_own_arity_is_rejected() {
+    // The built-in already accepts every renderable value there, so a member would have no
+    // argument types left to claim; the diagnostic points at the render member instead.
+    for source in [
         r#"
 << core.io
-
-write = (a :: Num, b :: Num) -> Num => a + b
-
-^ = () -> Num => <
-  write(2, 3)
->
+print = (x :: Text) -> $ => $
+^ = () -> Num => 0
 "#,
-        5,
-    );
+        r#"
+<< core.io
+eprint = (n :: Num) -> $ => $
+^ = () -> Num => 0
+"#,
+        r#"
+<< core.io
+write = (content :: Text, fd :: Num) -> Num => 0
+^ = () -> Num => 0
+"#,
+    ] {
+        let message = type_error_message(source);
+        assert!(
+            message.contains("render member"),
+            "expected the render-member guidance, got: {message}"
+        );
+    }
 }
 
 #[test]
@@ -64,27 +77,19 @@ now = (scale :: Num) -> Num => now() * scale
 
 #[test]
 fn a_definition_of_the_builtin_signature_is_a_duplicate() {
-    // The built-in occupies its own signature in the set, exactly as `print`'s Num member
-    // does — redefining it is the ordinary duplicate-definition error, not a silent win
-    // for either side.
-    for source in [
-        r#"
-<< core.io
-write = (content :: Text, fd :: Num) -> Num => 0
-^ = () -> Num => 0
-"#,
+    // The built-in occupies its own signature in the set — redefining it is the ordinary
+    // duplicate-definition error, not a silent win for either side.
+    let message = type_error_message(
         r#"
 << core.time
 now = () -> Num => 7
 ^ = () -> Num => 0
 "#,
-    ] {
-        let message = type_error_message(source);
-        assert!(
-            message.contains("Duplicate definition"),
-            "expected a duplicate-definition error, got: {message}"
-        );
-    }
+    );
+    assert!(
+        message.contains("Duplicate definition"),
+        "expected a duplicate-definition error, got: {message}"
+    );
 }
 
 #[test]
@@ -92,8 +97,8 @@ fn an_under_annotated_definition_of_a_builtin_name_is_reported() {
     // A definition the compiler cannot make a member of — no parameter annotations — is a
     // user's mistake, not the corelib's inert placeholder, and says so. (The corelib's own
     // declarations are recognized by where they come from, so they are never confused with
-    // one of these.) `now` collides with the built-in's own empty signature; `print`'s
-    // unannotated parameter is what stops it becoming a member.
+    // one of these.) `now` collides with the built-in's own empty signature;
+    // `__color_enabled`'s unannotated parameter is what stops it becoming a member.
     for (source, expected) in [
         (
             r#"
@@ -105,8 +110,7 @@ now = () => 42
         ),
         (
             r#"
-<< core.io
-print = (x) => 5
+__color_enabled = (x) => 5
 ^ = () -> Num => 0
 "#,
             "must annotate every parameter",
@@ -145,10 +149,10 @@ fn a_user_write_recurses_as_a_loop() {
         r#"
 << core.io
 
-write = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : write(n - 1, acc + 1)
+write = (n :: Num) -> Num => n == 0 ? 1000000 : write(n - 1)
 
 ^ = () -> Num => <
-  write(1000000, 0) == 1000000 ? 9 : 0
+  write(1000000) == 1000000 ? 9 : 0
 >
 "#,
         9,
@@ -166,20 +170,20 @@ fn dispatch_holds_in_a_native_executable() {
         r#"
 << core.io
 
-write = (label :: Text, suffix :: Text) -> Num => write(label + suffix, stdout)
+write = (label :: Text) -> Num => write(label + "!", stdout)
 
 ^ = () -> Num => <
-  ~ Both members write: the built-in takes a file descriptor, the user member joins its
-  ~ two Texts and hands the result to the built-in.
+  ~ Both forms write: the built-in takes a file descriptor, the user member picks one
+  ~ itself and hands the built-in the suffixed Text.
   written = write("built-in ", stdout)
-  written + write("us", "er")
+  written + write("user")
 >
 "#,
     );
-    assert_eq!(stdout, "built-in user", "unexpected program output");
+    assert_eq!(stdout, "built-in user!", "unexpected program output");
     assert_eq!(
-        code, 13,
-        "9 bytes from the built-in member, plus the user member's 4"
+        code, 14,
+        "9 bytes from the built-in, plus the user member's 5"
     );
 }
 
