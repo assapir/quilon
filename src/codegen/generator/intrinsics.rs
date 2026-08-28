@@ -265,6 +265,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.module.add_function(name, fn_type, None))
     }
 
+    /// Render `expression` through its `` ` `` operator and split the resulting `Text` into
+    /// the `(bytes, byte length)` pair the writing intrinsics take. The one place the output
+    /// built-ins turn a value into bytes.
+    fn render_text_parts(
+        &mut self,
+        expression: &Expression,
+        label: &str,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let rendered = self.render_expression(expression)?;
+        let BasicValueEnum::StructValue(text) = rendered else {
+            return Err(format!(
+                "{label} expects a rendered Text, got {:?}",
+                rendered.get_type()
+            ));
+        };
+        self.split_text(text, label)
+    }
+
     /// Lower a `print`/`eprint` builtin call: render the single argument to `Text` through
     /// its `` ` `` operator (the same render path as string interpolation), then write it —
     /// followed by a newline — to stdout (`print`, fd 1) or stderr (`eprint`, fd 2). Any
@@ -284,8 +302,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let fd = if name == "eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
-        let text = self.render_expression(&args[0])?;
-        let (data, len) = self.split_text(text.into_struct_value(), "print")?;
+        let (data, len) = self.render_text_parts(&args[0], "print")?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;
         self.builder
             .build_call(print_fn, &[fd_val.into(), data.into(), len.into()], "")
@@ -386,9 +403,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call)
     }
 
-    /// Lower the `write(content, fd)` builtin: write the raw bytes of a `Text`
-    /// `content` to file descriptor `fd` (a `Num`), with no trailing newline.
-    /// Yields `Num` (bytes written).
+    /// Lower the `write(content, fd)` builtin: render `content` through its `` ` ``
+    /// operator (the same render path as `print` and string interpolation — a `Text`
+    /// renders as itself) and write those bytes to file descriptor `fd` (a `Num`), with no
+    /// trailing newline and no substitution. Yields `Num` (bytes written).
     pub(super) fn generate_write(
         &mut self,
         args: &[Expression],
@@ -399,19 +417,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args.len()
             ));
         }
-        let content = self.generate_expression(&args[0])?;
+        let (data, len) = self.render_text_parts(&args[0], "write")?;
         let fd_num = self.generate_expression(&args[1])?;
-        // content must be a Text { ptr data, i64 byte_len }.
-        let s = match content {
-            BasicValueEnum::StructValue(s) => s,
-            other => {
-                return Err(format!(
-                    "write expects a Text content, got {:?}",
-                    other.get_type()
-                ));
-            }
-        };
-        let (data, len) = self.split_text(s, "write")?;
         let fd_float = match fd_num {
             BasicValueEnum::FloatValue(f) => f,
             other => {

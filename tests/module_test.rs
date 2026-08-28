@@ -57,7 +57,7 @@ fn test_core_text_is_not_a_module() {
 
 #[test]
 fn test_print_accepts_text() {
-    // print is polymorphic over Num/Text; printing a Text must type-check.
+    // print takes any renderable value; printing a Text must type-check.
     // `print` returns `$` (Unit), so the entry point is annotated `-> $`.
     let source = r#"
         << core.io
@@ -70,8 +70,8 @@ fn test_print_accepts_text() {
 #[test]
 fn test_user_defined_print_not_shadowed() {
     // Regression: a user-defined `print` with its own signature must be resolved
-    // normally, not hard-shadowed by the polymorphic builtin (which only accepts a
-    // single Num/Text/Bool arg). A 2-arg user `print` must type-check.
+    // normally, not hard-shadowed by the built-in (which claims one argument, of any
+    // renderable type). A 2-arg user `print` must type-check.
     let source = r#"
         print = (a :: Num, b :: Num) -> Num => a + b
         ^ = () -> Num => print(2, 3)

@@ -249,6 +249,18 @@ pub enum TypeError {
         got: usize,
         span: Span,
     },
+    /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —
+    /// a function.
+    NotRenderable {
+        name: String,
+        got: Box<Type>,
+        span: Span,
+    },
+    /// A top-level definition took over an output built-in's own arity.
+    RenderableBuiltinRedefined {
+        name: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual

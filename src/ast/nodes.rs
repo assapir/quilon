@@ -165,15 +165,16 @@ pub struct FunctionDeclaration {
 
 impl FunctionDeclaration {
     /// Whether this is the corelib's own declaration of a name the compiler provides
-    /// itself (see [`BUILTIN_OVERLOADS`]) — an inert placeholder that documents the
-    /// signature while the real thing is a runtime intrinsic. It is ignored everywhere:
-    /// neither registered as an overload member (it would duplicate the built-in one) nor
-    /// type-checked or emitted. Provenance, not shape, is what marks it: a user's own
-    /// `print`/`write`/`now` is a real definition however it is written, and gets the
-    /// ordinary diagnostics — a duplicate signature, or a member missing an annotation.
+    /// itself (see [`BUILTIN_OVERLOADS`] and [`RENDERABLE_BUILTINS`]) — an inert placeholder
+    /// that documents the signature while the real thing is a runtime intrinsic. It is
+    /// ignored everywhere: neither registered as an overload member (it would duplicate the
+    /// built-in one) nor type-checked or emitted. Provenance, not shape, is what marks it: a
+    /// user's own `print`/`write`/`now` is a real definition however it is written, and gets
+    /// the ordinary diagnostics — a name the compiler claims outright, a duplicate
+    /// signature, or a member missing an annotation.
     /// Shared by the type checker and codegen so the two never disagree on what to skip.
     pub fn is_inert_corelib_placeholder(&self) -> bool {
-        self.from_corelib && is_builtin_overload_name(&self.name)
+        self.from_corelib && is_compiler_provided_name(&self.name)
     }
 
     /// The parameter slots of a function type on the binding (`f :: (Num) -> Num = …`),
@@ -221,11 +222,65 @@ pub struct BuiltinOverload {
     pub ret: Type,
 }
 
+/// One output built-in: its first argument is any renderable value, the rest a fixed
+/// signature.
+pub struct RenderableBuiltin {
+    pub name: &'static str,
+    /// The parameters AFTER the rendered one.
+    pub rest: &'static [Type],
+    pub ret: Type,
+}
+
+impl RenderableBuiltin {
+    pub fn arity(&self) -> usize {
+        1 + self.rest.len()
+    }
+}
+
+/// The output built-ins. Each renders its first argument to `Text` through that type's
+/// `` ` `` member — the path string interpolation takes — and writes those bytes:
+/// `print`/`eprint` with a newline, to stdout/stderr; `write` to a file descriptor as they
+/// are.
+///
+/// They have no signature per type, so the compiler claims these names at their own arity
+/// and nothing extends them: a type becomes printable by defining its own `` ` ``. A
+/// definition at a DIFFERENT arity is an ordinary overload set beside them.
+pub const RENDERABLE_BUILTINS: &[RenderableBuiltin] = &[
+    RenderableBuiltin {
+        name: "print",
+        rest: &[],
+        ret: Type::Unit,
+    },
+    RenderableBuiltin {
+        name: "eprint",
+        rest: &[],
+        ret: Type::Unit,
+    },
+    RenderableBuiltin {
+        name: "write",
+        rest: &[Type::Num],
+        ret: Type::Num,
+    },
+];
+
+/// The output built-in `name` names, if any.
+pub fn renderable_builtin(name: &str) -> Option<&'static RenderableBuiltin> {
+    RENDERABLE_BUILTINS.iter().find(|b| b.name == name)
+}
+
+/// Whether a value of `ty` can be rendered to `Text` for output. Every type has a rendering
+/// — its own `` ` `` member or the default for its shape — except a function, which is not a
+/// value to show.
+pub fn is_renderable(ty: &Type) -> bool {
+    !matches!(ty, Type::Function { .. })
+}
+
 /// The corelib functions the compiler provides itself, as the members they occupy in their
-/// overload sets — `print`/`eprint` over each printable built-in, `core.io`'s `write`, and
-/// `core.time`'s `now`, all lowered to runtime intrinsics. A user definition of one of
-/// these names ADDS a member to its set rather than shadowing the built-in, and dispatch
-/// picks by exact argument types like any other set.
+/// overload sets — `core.time`'s `now` and the internal primitives, all lowered to runtime
+/// intrinsics. A user definition of one of these names ADDS a member to its set rather than
+/// shadowing the built-in, and dispatch picks by exact argument types like any other set.
+/// The output family (`print`/`eprint`/`write`) takes no signature per type and lives in
+/// [`RENDERABLE_BUILTINS`] instead.
 ///
 /// The `__`-prefixed entries are internal primitives (`core.test`'s harness and report
 /// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
@@ -236,41 +291,6 @@ pub struct BuiltinOverload {
 /// make a user's definition unreachable, or intercept a call the checker resolved to it,
 /// which is exactly the class of bug the table exists to prevent.
 pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
-    BuiltinOverload {
-        name: "print",
-        parameters: &[Type::Num],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "print",
-        parameters: &[Type::Text],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "print",
-        parameters: &[Type::Bool],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "eprint",
-        parameters: &[Type::Num],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "eprint",
-        parameters: &[Type::Text],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "eprint",
-        parameters: &[Type::Bool],
-        ret: Type::Unit,
-    },
-    BuiltinOverload {
-        name: "write",
-        parameters: &[Type::Text, Type::Num],
-        ret: Type::Num,
-    },
     BuiltinOverload {
         name: "now",
         parameters: &[],
@@ -388,20 +408,21 @@ pub fn is_test_registry_intrinsic(name: &str) -> bool {
     name.starts_with(TEST_REGISTRY_PREFIX)
 }
 
-/// Whether the compiler provides built-in members for `name`, so a single user definition
-/// of it already forms an overload set (rather than being an ordinary function).
-pub fn is_builtin_overload_name(name: &str) -> bool {
-    BUILTIN_OVERLOADS.iter().any(|member| member.name == name)
+/// Whether the compiler provides `name` itself, so a single user definition of it already
+/// forms an overload set (rather than being an ordinary function).
+pub fn is_compiler_provided_name(name: &str) -> bool {
+    BUILTIN_OVERLOADS.iter().any(|member| member.name == name) || renderable_builtin(name).is_some()
 }
 
-/// The arity of `name`'s built-in members, or `None` if the compiler provides none. Every
-/// member of one set shares an arity — `print`'s three differ only in the type they take —
-/// so what a built-in claims of a call is an arity question.
-pub fn builtin_overload_arity(name: &str) -> Option<usize> {
+/// The arity the built-in `name` claims, or `None` if the compiler provides no `name`. What
+/// a built-in claims of a call is an arity question: an overload set's members all share one
+/// arity, and an output built-in claims every call at its own.
+pub fn builtin_arity(name: &str) -> Option<usize> {
     BUILTIN_OVERLOADS
         .iter()
         .find(|member| member.name == name)
         .map(|member| member.parameters.len())
+        .or_else(|| renderable_builtin(name).map(RenderableBuiltin::arity))
 }
 
 #[derive(Debug, Clone, PartialEq)]

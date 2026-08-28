@@ -10,7 +10,6 @@ impl TypeChecker {
     /// Register the built-in operator overloads so the standard operators dispatch
     /// through the SAME exact-match mechanism as user overloads — `+` on `Num` and
     /// `+` on `Text` (concat) are just two members of the `+` overload set, etc.
-    /// `print`/`eprint` get a member per printable built-in (`Num`/`Text`/`Bool`).
     pub(super) fn add_builtin_overloads(&mut self) {
         let arith = [
             BinaryOperator::Add,
@@ -82,12 +81,12 @@ impl TypeChecker {
             );
         }
 
-        // The functions the compiler provides itself — `print`/`eprint` over each
-        // printable built-in, `write`, `now`, and the internal `__` primitives — as
-        // members of their own sets, from the one table codegen also dispatches and
-        // mangles by. A user definition of one of these names adds a member beside them;
-        // the built-in signature itself stays taken, so redefining it is the usual
-        // duplicate-definition error.
+        // The functions the compiler provides itself — `now` and the internal `__`
+        // primitives — as members of their own sets, from the one table codegen also
+        // dispatches and mangles by. A user definition of one of these names adds a member
+        // beside them; the built-in signature itself stays taken, so redefining it is the
+        // usual duplicate-definition error. (The output built-ins take no signature per
+        // type; see `check_renderable_builtin_call`.)
         for member in crate::ast::BUILTIN_OVERLOADS {
             self.add_overload(
                 member.name,
@@ -108,8 +107,8 @@ impl TypeChecker {
     }
 
     /// Whether overload set `name` has a member whose parameters EXACTLY match `arg_types`
-    /// (no coercion) — a non-erroring probe used to decide whether `print`/`eprint` should
-    /// take the generic render path or dispatch to a concrete overload. A member whose
+    /// (no coercion) — a non-erroring probe, used to ask whether a type carries an operator
+    /// member (`==`, the `%` hash hook) without raising a dispatch error. A member whose
     /// LAST parameter is the built-in `Site` also matches one argument short of it: that
     /// argument is the caller's location, which the compiler fills in.
     pub(super) fn has_exact_overload(&self, name: &str, arg_types: &[Type]) -> bool {
@@ -264,6 +263,20 @@ impl TypeChecker {
                 }
             }
         }
+        // An output built-in claims its whole arity — it accepts every renderable value
+        // there, so there is no argument type left for a member to claim. The arity a caller
+        // sees is what counts: a trailing `Site` the compiler fills in would otherwise hide a
+        // member behind the built-in, reachable from no call. A definition at another arity
+        // is an ordinary set beside it.
+        if let Some(builtin) = crate::ast::renderable_builtin(&declaration.name)
+            && crate::ast::visible_parameters(&parameters).len() == builtin.arity()
+        {
+            return Err(TypeError::RenderableBuiltinRedefined {
+                name: declaration.name.clone(),
+                span: declaration.span.clone(),
+            });
+        }
+
         let ret = declaration
             .declared_return_type()
             .map(|t| self.resolve_type(t));
