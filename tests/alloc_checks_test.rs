@@ -4,14 +4,16 @@
 //! failing path terminates the process, so these tests spawn the real `quilon` binary (an
 //! in-process JIT run would take the harness down with it).
 //!
-//! A range is the only construct that names an element count without writing the elements,
-//! and its endpoints are capped at 2^53 (the largest whole number a `Num` holds exactly), so
-//! the widest array a program can ask for is ~1.4e17 bytes. That is unobtainable but
-//! representable: `__alloc_array`'s own `count * elem_size` overflow guard is below anything
-//! a program can now reach, and is covered by its unit tests in `quilon-rt`.
+//! A range is the only `.qn` construct that names an element count without writing the
+//! elements, and its endpoints are capped at 2^53 (the largest whole number a `Num` holds
+//! exactly), so the widest array a program can ask for is ~1.4e17 bytes — unobtainable, but
+//! representable. `__alloc_array`'s `count * elem_size` overflow guard therefore sits above
+//! what a `.qn` program reaches through a range; it still guards the runtime's own array
+//! builders (`alloc_slots` — `Text.split`, `argv`, the Map/Set snapshots), whose counts come
+//! from text length, the OS, and live data.
 
 mod common;
-use common::{build_and_run_native, run_program, tool_available, type_error_message};
+use common::{build_and_run_native, run_program, tool_available};
 
 /// The largest array a program can ask for: 2^53 elements of 8 bytes, 7.2e16 bytes. The
 /// collector returns null, which used to become an array whose `data` was null while its
@@ -38,18 +40,6 @@ fn a_native_build_refuses_the_same_size() {
     }
     let (code, _) = build_and_run_native("alloc_oom_native", UNOBTAINABLE_RANGE);
     assert_eq!(code, 1, "a native build must exit 1 on the same size");
-}
-
-/// Past 2^53 the program never gets as far as asking for memory: the range endpoint is
-/// refused at compile time, so a size that large cannot be built at all.
-#[test]
-fn a_count_past_the_exact_integer_limit_never_reaches_an_allocation() {
-    let message =
-        type_error_message("^ = () -> Num => <\n  xs = 1 <- 2000000000000000000\n  xs.size\n>");
-    assert!(
-        message.starts_with("a range endpoint must be a whole number a Num holds exactly"),
-        "got: {message}"
-    );
 }
 
 /// The check is on the size, not on the program: ordinary arrays — a literal, a range, a
