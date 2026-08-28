@@ -5,7 +5,7 @@
 //! startup conversions that turn the C `argv`/`envp` `main` receives into a Quilon
 //! `[]Text` (args) and a `[|Text => Text|]` Map (env).
 
-use crate::mem::{__alloc, QlSlice, alloc_text};
+use crate::mem::{QlSlice, alloc_slots, alloc_text};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 
@@ -51,7 +51,7 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
     }
     let n = argc as usize;
     // Allocate the backing array of `n` Text structs (GC-owned).
-    let elems = __alloc((n * std::mem::size_of::<QlSlice>()) as i64) as *mut QlSlice;
+    let elems = alloc_slots::<QlSlice>(n);
     for i in 0..n {
         // SAFETY: `argv[0..argc]` are valid C strings per the `main` contract.
         let cstr = unsafe { *argv.add(i) };
