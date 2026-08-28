@@ -163,8 +163,7 @@ All notable changes to Quilon are documented here.
   What breaks: `.` on a value whose type has no such member no longer reaches a top-level
   function — `(5).double()` is an error where it used to call `double = (x :: Num) …`.
   Call it as `double(5)`, or pipe it (`5 |> double()`); both name the top-level namespace
-  as before. The same goes for the names the compiler provides: `c.print()` is an error,
-  and prints as `print(c)`.
+  as before.
 
 ### Fixed
 

@@ -48,5 +48,3 @@ look the name up as usual.
 double(5)      ~ 10
 5 |> double()  ~ 10
 ```
-This holds for the names the compiler provides too: a record prints as `print(c)`, never
-`c.print()`.
