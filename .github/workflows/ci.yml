@@ -17,9 +17,57 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  # One gate on every platform Quilon targets. Only the install step differs.
+  # Platform-independent, so it runs once and the platforms wait on it. A style or
+  # lint failure fails here rather than four times over.
+  gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The Boehm GC; quilon-rt's build script compiles it from source.
+          submodules: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install LLVM 22
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc clang
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          # llvm-sys links statically, so it needs the dev libs and libPolly.a.
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            gate-cargo-
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # What only a real machine of that shape can answer: the build, the tests, and the
+  # numbers. Only the install step differs between them.
   build-and-test:
     name: build-and-test (${{ matrix.key }})
+    needs: gate
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
 
@@ -56,13 +104,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC; quilon-rt's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Install LLVM 22 and system dependencies (apt)
         if: matrix.pkg == 'apt'
@@ -74,7 +119,6 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
-          # llvm-sys links statically, so it needs the dev libs and libPolly.a.
           sudo apt-get install -y llvm-22-dev libpolly-22-dev
           sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
@@ -97,12 +141,6 @@ jobs:
           key: ${{ matrix.key }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ matrix.key }}-cargo-
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build
         run: cargo build --workspace --all-targets --verbose
