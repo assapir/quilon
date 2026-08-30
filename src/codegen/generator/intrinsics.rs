@@ -410,11 +410,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// The target comes from the module's own triple, so a cross-compiled binary reports the
     /// machine it will RUN on. The OS is spelled the way people say it rather than the way a
     /// triple does — `"macOS"`, never `"darwin"`.
-    pub(super) fn generate_build_fact(
+    pub(super) fn generate_info_member(
         &mut self,
-        fact: super::calls::BuildFact,
+        member: super::calls::InfoMember,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        use super::calls::BuildFact;
+        use super::calls::InfoMember;
         // The module carries a triple only when something set one (a cross-compiling build
         // would). With none set — the JIT, and a plain host build — the host's triple is the
         // target, so fall back to it rather than reporting "unknown" on every platform.
@@ -440,10 +440,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             t if t.contains("netbsd") => "NetBSD",
             _ => "unknown",
         };
-        let value = match fact {
-            BuildFact::Platform => arch,
-            BuildFact::Os => os,
-            BuildFact::QuilonVersion => env!("CARGO_PKG_VERSION"),
+        let value = match member {
+            InfoMember::Platform => arch,
+            InfoMember::Os => os,
+            InfoMember::QuilonVersion => env!("CARGO_PKG_VERSION"),
         };
         self.build_text_constant(value)
     }

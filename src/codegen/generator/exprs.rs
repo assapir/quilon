@@ -15,9 +15,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// else — including an already-ready value — straight through, so chaining them forces exactly
     /// the one that applies. A non-force-site span — every expression in a pure program — lowers
     /// to the call alone, with no force wrapper around it.
-    /// A `Text` whose bytes are known while emitting: a global byte constant paired with its
-    /// UTF-8 byte length, in the `{ ptr data, i64 byte_len }` shape every `Text` has. Backs
-    /// both string literals and the `core.info` members.
+    /// A `Text` whose bytes are known while emitting, so they become a global constant.
+    /// Backs both string literals and the `core.info` members.
     pub(super) fn build_text_constant(
         &mut self,
         value: &str,

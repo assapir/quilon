@@ -16,16 +16,18 @@ pub(super) enum IntrinsicLowering {
     Exit,
     /// One of the test registry's primitives, lowered by name (they share a signature).
     TestRegistry,
-    /// A `core.info` member: a `Text` the compiler knows while emitting, so it becomes a
-    /// constant in the binary rather than a call.
-    BuildFact(BuildFact),
+    /// A member of `core.info`, lowered per member by [`CodeGenerator::generate_info_member`].
+    InfoMember(InfoMember),
 }
 
-/// Which compile-time fact a `core.info` member yields. Read from the target the program is
-/// being emitted FOR, so a cross-compiled binary reports where it will run rather than where
-/// it was built.
+/// A member of `core.info` — what a program can ask about itself.
+///
+/// Every member today answers from something the compiler knows while emitting, so each lowers
+/// to a `Text` constant and no call survives. That is a property of these members, not of the
+/// module: one whose answer is only knowable at run time (the size of the GC heap, say) would
+/// join this enum and lower to an intrinsic call instead.
 #[derive(Clone, Copy)]
-pub(super) enum BuildFact {
+pub(super) enum InfoMember {
     /// Target CPU architecture: `"aarch64"`, `"x86_64"`.
     Platform,
     /// Target operating system, spelled the way people say it: `"linux"`, `"macOS"`.
@@ -69,9 +71,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             "print" | "eprint" => IntrinsicLowering::Print,
             "write" => IntrinsicLowering::Write,
             "now" => IntrinsicLowering::Now,
-            "platform" => IntrinsicLowering::BuildFact(BuildFact::Platform),
-            "os" => IntrinsicLowering::BuildFact(BuildFact::Os),
-            "quilonVersion" => IntrinsicLowering::BuildFact(BuildFact::QuilonVersion),
+            "platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
+            "os" => IntrinsicLowering::InfoMember(InfoMember::Os),
+            "quilonVersion" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
@@ -171,7 +173,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 IntrinsicLowering::TestRegistry => {
                     self.generate_test_registry(function_name, arguments)
                 }
-                IntrinsicLowering::BuildFact(fact) => self.generate_build_fact(fact),
+                IntrinsicLowering::InfoMember(member) => self.generate_info_member(member),
             };
         }
 
