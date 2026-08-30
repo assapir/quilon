@@ -34,10 +34,10 @@ pub(super) enum InfoMember {
     Os,
     /// The compiler's own version, e.g. `"0.9.3"`.
     QuilonVersion,
-    /// Pointer width in bits: `64`, `32`. A `Num`, unlike the rest.
-    Bits,
-    /// Byte order: `"little"`, `"big"`.
-    Endianness,
+    /// Pointer width in bits, as a `Num`.
+    PointerBits,
+    /// Whether the target is big-endian, as a `Bool`.
+    IsBigEndian,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -75,11 +75,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "print" | "eprint" => IntrinsicLowering::Print,
             "write" => IntrinsicLowering::Write,
             "now" => IntrinsicLowering::Now,
-            "platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
-            "os" => IntrinsicLowering::InfoMember(InfoMember::Os),
-            "quilonVersion" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
-            "bits" => IntrinsicLowering::InfoMember(InfoMember::Bits),
-            "endianness" => IntrinsicLowering::InfoMember(InfoMember::Endianness),
+            "__platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
+            "__os" => IntrinsicLowering::InfoMember(InfoMember::Os),
+            "__quilon_version" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
+            "__pointer_bits" => IntrinsicLowering::InfoMember(InfoMember::PointerBits),
+            "__is_big_endian" => IntrinsicLowering::InfoMember(InfoMember::IsBigEndian),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,

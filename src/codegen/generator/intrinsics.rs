@@ -436,20 +436,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             InfoMember::QuilonVersion => self.build_text_constant(env!("CARGO_PKG_VERSION")),
             // From LLVM, not the arch name: `powerpc64le` and `mips64el` are little-endian
             // despite their spelling, and `s390x` is 64-bit without saying so.
-            InfoMember::Bits => {
+            InfoMember::PointerBits => {
                 let bits = target_data(&triple)
                     .map(|data| u64::from(data.get_pointer_byte_size(None)) * 8)
                     .unwrap_or(u64::from(usize::BITS));
                 Ok(self.context.f64_type().const_float(bits as f64).into())
             }
-            InfoMember::Endianness => {
+            InfoMember::IsBigEndian => {
                 let big = match target_data(&triple) {
                     Some(data) => {
                         data.get_byte_ordering() == inkwell::targets::ByteOrdering::BigEndian
                     }
                     None => cfg!(target_endian = "big"),
                 };
-                self.build_text_constant(if big { "big" } else { "little" })
+                Ok(self.context.bool_type().const_int(big.into(), false).into())
             }
         }
     }

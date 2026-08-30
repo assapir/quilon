@@ -1,18 +1,80 @@
-~ core.info — facts about the build a program came from. Every member is a compile-time
-~ constant, so a call costs nothing at runtime and reads no machine state.
-~ Import with `<< core.info`.
+~ core.info — what a program can ask about itself. Import with `<< core.info`.
+~ The `__`-prefixed primitives below are compiler-provided constants, fixed when the program
+~ is compiled; the types and functions here are ordinary Quilon over them.
 
-~ The CPU architecture the program was built for: "aarch64", "x86_64".
->> platform = () -> Text => ""
+~ The CPU architecture the program was built for.
+>> Platform = Aarch64 / X86_64 / X86 / Arm / Riscv64 / Wasm32 / UnknownPlatform {
+  name = () -> Text => it ?
+    | Aarch64         => "aarch64"
+    | X86_64          => "x86_64"
+    | X86             => "x86"
+    | Arm             => "arm"
+    | Riscv64         => "riscv64"
+    | Wasm32          => "wasm32"
+    | UnknownPlatform => "unknown"
 
-~ The operating system it was built for: "linux", "macOS", "windows".
->> os = () -> Text => ""
+  ` = () -> Text => it.name()
+}
 
-~ Pointer width in bits: 64, 32.
->> bits = () -> Num => 0
+~ The operating system the program was built for.
+>> Os = Linux / MacOS / Windows / FreeBSD / OpenBSD / NetBSD / UnknownOs {
+  name = () -> Text => it ?
+    | Linux     => "linux"
+    | MacOS     => "macOS"
+    | Windows   => "windows"
+    | FreeBSD   => "FreeBSD"
+    | OpenBSD   => "OpenBSD"
+    | NetBSD    => "NetBSD"
+    | UnknownOs => "unknown"
 
-~ Byte order: "little" or "big".
->> endianness = () -> Text => ""
+  ` = () -> Text => it.name()
+}
+
+~ How wide a pointer is on the target.
+>> PointerWidth = Width64 / Width32 {
+  bits = () -> Num => it ?
+    | Width64 => 64
+    | Width32 => 32
+
+  ` = () -> Text => it ?
+    | Width64 => "64-bit"
+    | Width32 => "32-bit"
+}
+
+~ The order bytes are stored in on the target.
+>> Endianness = Little / Big {
+  name = () -> Text => it ?
+    | Little => "little"
+    | Big    => "big"
+
+  ` = () -> Text => it.name()
+}
+
+>> platform = () -> Platform => <
+  arch = __platform()
+  arch == "aarch64" ? Aarch64
+    : arch == "x86_64" ? X86_64
+    : arch == "x86" ? X86
+    : arch == "arm" ? Arm
+    : arch == "riscv64" ? Riscv64
+    : arch == "wasm32" ? Wasm32
+    : UnknownPlatform
+>
+
+>> os = () -> Os => <
+  name = __os()
+  name == "linux" ? Linux
+    : name == "macOS" ? MacOS
+    : name == "windows" ? Windows
+    : name == "FreeBSD" ? FreeBSD
+    : name == "OpenBSD" ? OpenBSD
+    : name == "NetBSD" ? NetBSD
+    : UnknownOs
+>
+
+>> pointerWidth = () -> PointerWidth => __pointer_bits() == 64 ? Width64 : Width32
+
+>> endianness = () -> Endianness => __is_big_endian() ? Big : Little
 
 ~ The version of the Quilon compiler that built this program, e.g. "0.9.3".
->> quilonVersion = () -> Text => ""
+>> quilonVersion = () -> Text => __quilon_version()
