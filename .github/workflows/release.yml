@@ -16,11 +16,23 @@ env:
 
 jobs:
   linux:
-    name: Build x86_64-unknown-linux-gnu
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+
+    # Native runners per architecture: the runtime archive bundles a `cc`-compiled
+    # Boehm GC and links against the host LLVM, so each target builds on its own
+    # machine rather than through a cross toolchain.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
 
     env:
-      ASSET: quilon-x86_64-unknown-linux-gnu
+      ASSET: quilon-${{ matrix.target }}
       LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
 
     steps:

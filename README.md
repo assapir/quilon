@@ -46,10 +46,11 @@ Download a binary from the [latest release](https://github.com/assapir/quilon/re
 | Platform | Asset |
 | --- | --- |
 | Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
+| Linux, aarch64 (glibc) | `quilon-aarch64-unknown-linux-gnu` |
 
-It is **self-contained** — LLVM and the collector are linked into it, so it runs on a machine that has neither. Every release publishes the `ldd` of the asset in its job summary, so that is checkable rather than promised.
+Both are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither. Every release publishes the `ldd` of each asset in its job summary, so that is checkable rather than promised.
 
-This asset is the one to use on **any** glibc distro, Arch included: it is built on Ubuntu, against an older glibc than a rolling distro carries, and glibc runs binaries built against older versions of itself — the reverse does not hold, which is why the portable build is the Ubuntu one.
+These assets are the ones to use on **any** glibc distro, Arch included: they are built on Ubuntu, against an older glibc than a rolling distro carries, and glibc runs binaries built against older versions of itself — the reverse does not hold, which is why the portable build is the Ubuntu one.
 
 **macOS has no prebuilt binary yet** — build from source. See [Prerequisites](#prerequisites).
 
