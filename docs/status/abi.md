@@ -101,6 +101,41 @@ mangled `_RNv…` names for the runtime's private Rust-to-Rust calls. Only the f
 ever reached from generated code, which is why the runtime could be replaced by a C or Zig
 implementation exporting the same symbols without changing the compiler.
 
+## Start-up, end to end
+
+```mermaid
+flowchart TD
+    start["_start · CRT<br/>.init_array constructors"]
+    main["main(argc, argv, envp)"]
+    gcinit["__gc_init"]
+    rfm["__run_fiber_main(__ql_entry, argc, argv, envp)"]
+    init["scheduler::run<br/>GC hooks · Scheduler · Reactor"]
+    spawn["spawn the seed fiber<br/>8 MiB stack"]
+    loop["scheduler loop"]
+    thunk["__ql_entry<br/>argv/envp → ^'s parameters"]
+    caret["^"]
+    done["CRT: flush stdio, exit"]
+
+    start --> main
+    main --> gcinit
+    gcinit --> rfm
+    rfm --> init
+    init --> spawn
+    spawn --> loop
+    loop -->|resume| thunk
+    thunk --> caret
+    caret -->|"Num in d0"| thunk
+    thunk -->|"i32 exit code"| loop
+    loop -->|nothing parked| rfm
+    rfm --> main
+    main --> done
+```
+
+The kernel jumps to `_start`, not to `main`. Everything from there to `^` is machinery: the C
+runtime, the collector, and the scheduler that gives `^` a fiber to park on. The exit code
+travels back up the same path — `^` returns a `Num` in `d0`, `__ql_entry` truncates it to
+`i32`, and `main` hands that to the C runtime as the process status.
+
 ## The process contract
 
 - The compiler generates `int main(int argc, char **argv, char **envp)` — the POSIX
