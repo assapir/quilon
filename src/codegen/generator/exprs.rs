@@ -13,8 +13,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// is threaded as its ordinary type. A deferred value is a `Text` (`@readStdin`) or a `Result`
     /// (`@tcpRequest`); each force helper acts only on its own representation and passes everything
     /// else — including an already-ready value — straight through, so chaining them forces exactly
-    /// the one that applies. For a non-force-site span (every expression in a pure program) this is
-    /// a direct call — byte-identical to before.
+    /// the one that applies. A non-force-site span — every expression in a pure program — lowers
+    /// to the call alone, with no force wrapper around it.
     pub(super) fn generate_expression(
         &mut self,
         expression: &Expression,

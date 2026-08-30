@@ -216,11 +216,10 @@ fn tail_call_args_use_pre_update_parameter_values() {
 }
 
 /// A tail self-call whose body builds AND indexes an array literal each iteration must
-/// still run in constant stack. Regression: array indexing used to `alloca` a temporary
-/// to read the `{ptr,size}` fields, and array literals used to `alloca` their backing
-/// store; either `alloca`, emitted at the loop's insert point, re-allocated every
-/// iteration and overflowed the stack at depth. Now the backing store is heap-allocated
-/// and the field reads use `extractvalue`, so no `alloca` lands in the loop body.
+/// still run in constant stack. No `alloca` may land in the loop body: one emitted at the
+/// loop's insert point re-allocates every iteration and overflows the stack at depth. So
+/// an array literal heap-allocates its backing store, and indexing reads the `{ptr,size}`
+/// fields with `extractvalue` rather than through a temporary.
 /// f(1_000_000, 0) sums a[0]==1 a million times -> 1_000_000 (the in-process harness
 /// returns the full value; a real process would mask it to 8 bits -> 64). Reaching a
 /// deterministic value AT ALL is the guarantee — without the fix this overflows.

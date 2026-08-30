@@ -48,7 +48,7 @@ impl TypeChecker {
         // above it. Registering just before the member's body is checked still lets that
         // body call itself (the same way a plain function's definition is in scope for
         // its own body); what it rules out is a call reaching forward to a definition
-        // below — which the checker used to accept and codegen then had no symbol for.
+        // below, which codegen has no symbol for.
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
                 && self.overloaded_names.contains(&declaration.name)
@@ -81,8 +81,8 @@ impl TypeChecker {
                 Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
                     Self::check_entry_point_signature(declaration)?;
                 }
-                // Same reason: a top-level binding that has to be computed used to pass
-                // the check and then break codegen from the inside.
+                // Same reason: a top-level binding that has to be computed passes the
+                // check and then breaks codegen from the inside.
                 Item::VariableDeclaration(declaration) => Self::check_global_binding(declaration)?,
                 _ => {}
             }
@@ -127,12 +127,12 @@ impl TypeChecker {
     /// value may be a `Num`, `Bool` or `$` literal, or a function (a lambda binding is
     /// emitted as a function, not as an initializer) — and nothing else.
     ///
-    /// Checked here rather than left to codegen, which had no way to say so: it would
-    /// build the value's instructions with the builder wherever the last function had left
-    /// it, so `x = 1 + 2` surfaced as the internal `Failed to build add: UnsetPosition`
-    /// and `x = f(1)` silently appended a call to the previously emitted function, leaving
-    /// a block with no terminator and failing module verification. Both passed
-    /// `quilon check` first.
+    /// Checked here because codegen cannot report it. Codegen builds the value's
+    /// instructions wherever the builder was last left, so `x = 1 + 2` surfaces as the
+    /// internal `Failed to build add: UnsetPosition`, and `x = f(1)` appends a call to the
+    /// function emitted before it — leaving a block with no terminator that fails module
+    /// verification. Neither says anything about the binding, and both reach codegen only
+    /// after passing `quilon check`.
     pub(super) fn check_global_binding(declaration: &VariableDeclaration) -> Result<(), TypeError> {
         let constant = matches!(
             declaration.value,

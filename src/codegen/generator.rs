@@ -273,13 +273,13 @@ struct Tco<'ctx> {
 /// Codegen-side view of the type checker's [`TypeTable`] — the "type oracle".
 ///
 /// # Why this exists
-/// Codegen used to recover LLVM types from runtime `BasicValueEnum::get_type()`, which
-/// loses element/field types at every READ site and hardcodes `f64`. That corrupts any
-/// non-`f64` payload nested in a composite — `Text` in a record/array, nested arrays,
-/// `Ok(text)`/`NotOk(text)`. The fix is to thread the *declared* types (already computed
-/// by the checker) through to the read sites.
+/// A runtime `BasicValueEnum::get_type()` cannot name the type a read should produce: it
+/// loses element and field types at every READ site and reports `f64`. That corrupts any
+/// non-`f64` payload nested in a composite — `Text` in a record or array, nested arrays,
+/// `Ok(text)`/`NotOk(text)`. So codegen reads the *declared* types from here instead, as
+/// the checker computed them.
 ///
-/// # API (for downstream M3 waves: array methods, spread, args/env)
+/// # API
 /// The single primitive is [`TypeOracle::type_at`] — the `Type` the checker recorded for a
 /// source `Span` — with [`TypeOracle::expression_type`] the expression-shaped convenience
 /// over it. The checker records the *result* type of every node, so the element type of an
@@ -568,11 +568,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // A function nothing can reach from `^` is not emitted. Importing a module brings
-        // in every function it defines, so a program that calls one assertion used to emit
-        // — and, under the JIT, compile — all of them. The analysis over-approximates (see
-        // `ast::reachability`), and `None` means there is no `^` to measure from, in which
-        // case nothing is pruned.
+        // A function nothing can reach from `^` is not emitted. Importing a module brings in
+        // every function it defines, so without this a program that calls one assertion emits
+        // — and, under the JIT, compiles — all of them. The analysis over-approximates (see
+        // `ast::reachability`). `None` means there is no `^` to measure from, so nothing is
+        // pruned.
         let reachable = crate::ast::reachability::reachable_functions(program);
 
         // Generate code for all top-level items. Reset the current-function context

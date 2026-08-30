@@ -123,8 +123,8 @@ pub enum TypeError {
         parameter: String,
         span: Span,
     },
-    /// A function parameter with no type annotation. A parameter type is no longer assumed
-    /// to be `Num`: it must be written down. (A lambda passed to a built-in collection
+    /// A function parameter with no type annotation. A parameter type must be written
+    /// down; it is not assumed to be `Num`. (A lambda passed to a built-in collection
     /// method is the exception — its parameter type comes from the element type.)
     UnannotatedParameter {
         function: String,
