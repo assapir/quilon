@@ -4,8 +4,8 @@ on:
   push:
     tags:
       - "v[0-9]*"
-  # A manual run builds every platform and stops before publishing, so the matrix
-  # can be proven without spending a version number on it.
+  # A manual run builds the release and stops before publishing, so the build can be
+  # proven without spending a version number on it. Run it before tagging.
   workflow_dispatch:
 
 permissions:
@@ -82,103 +82,12 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
-  macos:
-    name: Build aarch64-apple-darwin
-    runs-on: macos-latest
-
-    env:
-      ASSET: quilon-aarch64-apple-darwin
-      # Homebrew's `llvm@22` is built `LLVM_LINK_LLVM_DYLIB=ON` and ships no static
-      # LLVM at all, so a binary linked against it names `libLLVM.dylib` and starts
-      # only where that exact formula is installed. The upstream release package is a
-      # static build, so this job links the archives from it instead and the asset
-      # needs nothing installed.
-      LLVM_RELEASE: 22.1.8
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install LLVM ${{ env.LLVM_RELEASE }}
-        run: |
-          set -euxo pipefail
-          package="LLVM-${LLVM_RELEASE}-macOS-ARM64"
-          mkdir -p "$RUNNER_TEMP/llvm"
-          # Only what llvm-sys reads — the archives, the headers, and llvm-config.
-          # The whole package unpacks to ~8 GB, most of it tools this build never runs.
-          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_RELEASE}/${package}.tar.xz" \
-            | tar -xf - -C "$RUNNER_TEMP/llvm" \
-              "${package}/bin/llvm-config" "${package}/include" "${package}/lib"
-          prefix="$RUNNER_TEMP/llvm/${package}"
-          "$prefix/bin/llvm-config" --version
-          # Fail here, with a reason, rather than three steps later with a binary
-          # that silently needs an LLVM the user does not have.
-          mode="$("$prefix/bin/llvm-config" --shared-mode)"
-          if [ "$mode" != static ]; then
-            echo "::error::LLVM at $prefix links $mode, not static"
-            exit 1
-          fi
-          # That LLVM was built against Homebrew's zstd and names its static archive by
-          # absolute path in `--system-libs`. The archive goes into the binary, so the
-          # product depends on nothing, but the link needs the formula present.
-          brew list zstd >/dev/null 2>&1 || brew install zstd
-          for lib in $("$prefix/bin/llvm-config" --system-libs); do
-            case "$lib" in
-              /*)
-                test -f "$lib" && continue
-                echo "::error::LLVM links $lib, which is not installed here"
-                exit 1
-                ;;
-            esac
-          done
-          echo "LLVM_SYS_221_PREFIX=$prefix" >> "$GITHUB_ENV"
-
-      - name: Build release
-        run: |
-          set -euxo pipefail
-          cargo build --release --bin quilon
-          mv target/release/quilon "$ASSET"
-
-      - name: Verify the asset is self-contained
-        run: |
-          set -euo pipefail
-          file "$ASSET"
-          otool -L "$ASSET"
-          ./"$ASSET" check examples/hello_world.qn
-          # Anything under a package manager's prefix is a dependency the user
-          # would have to install; the system libraries under /usr/lib are on every
-          # macOS. LLVM must not appear at all.
-          if otool -L "$ASSET" | grep -Ei 'llvm|/opt/homebrew|/usr/local/(opt|Cellar)'; then
-            echo "::error::$ASSET names a library outside the macOS system libraries"
-            exit 1
-          fi
-          {
-            echo "### \`$ASSET\`"
-            echo
-            echo '```'
-            file "$ASSET"
-            otool -L "$ASSET"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload asset
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
-          if-no-files-found: error
-
   # Every asset or none: a release that quietly omits a platform it advertises is
-  # worse than a tag whose build failed in the open and can be re-run. Neither build
-  # job is `continue-on-error` for the same reason.
+  # worse than a tag whose build failed in the open and can be re-run. The build job
+  # is not `continue-on-error` for the same reason.
   publish:
     if: github.event_name == 'push'
-    needs: [linux, macos]
+    needs: [linux]
     runs-on: ubuntu-latest
 
     steps:
