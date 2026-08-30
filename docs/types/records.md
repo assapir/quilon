@@ -39,12 +39,18 @@ An unannotated method parameter defaults to `Num` (as in any [ordinary
 definition](../functions/overloading.md)), and call sites are held to that default:
 `t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
 
-A method answers the plain form `name(recv, args)` too — and `recv |> name(args)`, which
-[is](../expressions/pipe.md) that call. The `.` form is the strict one: `recv.name(...)`
-looks for `name` on `recv`'s type and nowhere else, so a top-level function of the same
-name does not answer it. Written plainly, `name(recv, ...)` finds that function as usual.
+A method is reached through `recv.name(...)` and nowhere else, and a top-level function
+through `name(args)` and nowhere else — neither answers for the other. `recv.name(...)`
+looks for `name` on `recv`'s type alone; `name(recv, args)` — and `recv |> name(args)`,
+which [is](../expressions/pipe.md) that call — looks in the top-level namespace alone.
 ```quilon ignore
+Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
+double = (x :: Num) -> Num => x * 2
+
+c.bump(5)      ~ 35
+bump(c, 5)     ~ error: no function 'bump' in scope
 (5).double()   ~ error: 'Num' has no member 'double'
 double(5)      ~ 10
-5 |> double()  ~ 10
 ```
+The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
+`Text`'s `split`, and `split("a,b", ",")` reaches nothing.

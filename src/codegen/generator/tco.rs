@@ -86,6 +86,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let Expression::Call {
             function,
             arguments,
+            member_call,
             ..
         } = expression
         else {
@@ -100,7 +101,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // call is emitted as a real call, and the language's only iteration mechanism
         // silently starts overflowing the stack.
         if arguments.len() != arity
-            && !(arguments.len() + 1 == arity && self.fills_call_site(name, arguments))
+            && !(arguments.len() + 1 == arity
+                && self.fills_call_site(name, arguments, *member_call))
         {
             return false;
         }
@@ -115,7 +117,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // A method on the receiver's type claims the name first, exactly as in call
         // lowering — so a function calling `recv.name(...)` on a type whose method shares
         // its name is a call to that method, not a self-call.
-        let symbol = match self.method_symbol_for(name, arguments) {
+        let symbol = match self.method_symbol_for(name, arguments, *member_call) {
             Some(method) => method,
             None if self.overloads.contains_key(name.as_str()) => {
                 let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();

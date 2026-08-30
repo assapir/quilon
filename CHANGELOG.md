@@ -46,6 +46,25 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **BREAKING: a method does not answer the plain call form**
+  ([#285](https://github.com/assapir/quilon/issues/285)). A method is reached through
+  `recv.name(...)` and nowhere else; `name(recv, args)` resolves in the top-level
+  namespace alone. The two halves now match: a member call never falls through to a
+  function, and a plain call never redirects into an argument's type.
+
+  ```quilon ignore
+  Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
+
+  c.bump(5)      ~ 35
+  bump(c, 5)     ~ error: no function 'bump' in scope — 'bump' is a member of Counter
+  split(s, ",")  ~ error: no function 'split' in scope — 'split' is a member of Text
+  ```
+
+  What breaks: any call reaching a method through the plain form `name(recv, args)` or the
+  pipe `recv |> name(args)`, which is that same call — including the methods reserved on
+  `Text`, arrays, `Map` and `Set`. Migration: write it as `recv.name(args)`. The error names
+  the type the member lives on and spells that call out.
+
 - **BREAKING: a range endpoint must be a whole number a `Num` holds exactly** ([#215](https://github.com/assapir/quilon/issues/215)).
   `lo <- hi` counts from one end to the other, so an end must be a whole number — and a
   `Num` is a double, which represents whole numbers exactly only up to 2^53

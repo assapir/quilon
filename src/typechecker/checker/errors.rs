@@ -44,6 +44,7 @@ impl TypeError {
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
             | TypeError::UnknownMember { span, .. }
+            | TypeError::MethodCalledAsFunction { span, .. }
             | TypeError::NotRenderable { span, .. }
             | TypeError::RenderableBuiltinRedefined { span, .. } => span,
         }
@@ -403,6 +404,25 @@ impl std::fmt::Display for TypeError {
                     f,
                     ". There is a '{member}' in scope, but '{receiver}.{member}(...)' only \
                      looks on {type_name} — call it as '{member}({receiver}{rest})'"
+                )
+            }
+            TypeError::MethodCalledAsFunction {
+                type_name,
+                member,
+                receiver,
+                more_arguments,
+                ..
+            } => {
+                let receiver = receiver.as_deref().unwrap_or("receiver");
+                let (rest, rest_only) = match more_arguments {
+                    true => (", ...", "..."),
+                    false => ("", ""),
+                };
+                write!(
+                    f,
+                    "no function '{member}' in scope — '{member}' is a member of \
+                     {type_name}, which '{member}({receiver}{rest})' does not look on. \
+                     Call it as '{receiver}.{member}({rest_only})'",
                 )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {

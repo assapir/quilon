@@ -549,13 +549,55 @@ fn a_free_call_still_reaches_a_top_level_function_over_a_same_named_method() {
 }
 
 #[test]
-fn the_free_form_of_a_method_call_still_reaches_the_method() {
-    // What the `.` form adds is refusing the top-level fallback, not receiver dispatch
-    // itself: `bump(c, 3)` and `c |> bump(3)` are the same call and both reach `Counter`'s
-    // method over the top-level `bump` (8 + 8 = 16).
+fn the_free_form_of_a_method_call_does_not_reach_the_method() {
+    // A method is reached through its receiver and nowhere else: `bump(c, 3)` names the
+    // top-level namespace, where this program has no `bump` at all.
+    let message = common::type_error_message(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+    );
+    assert!(
+        message.contains("no function 'bump' in scope"),
+        "the diagnostic must name the function that is missing, got: {message}"
+    );
+    // And it spells out the call that DOES reach the method, with the receiver written.
+    assert!(
+        message.contains("Call it as 'c.bump(...)'"),
+        "the advice must spell out the member call, got: {message}"
+    );
+}
+
+#[test]
+fn the_pipe_form_does_not_reach_a_method_either() {
+    // `c |> bump(3)` IS `bump(c, 3)`, so it resolves in the top-level namespace too.
+    let message = common::type_error_message(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c |> bump(3)\n>",
+    );
+    assert!(
+        message.contains("no function 'bump' in scope"),
+        "the pipe form is the free form, got: {message}"
+    );
+}
+
+#[test]
+fn a_built_in_method_does_not_answer_the_free_form() {
+    // The rule is the same for the methods reserved on a built-in type: `split` belongs
+    // to `Text`, so only `"a,b".split(",")` reaches it.
+    let message = common::type_error_message(
+        "^ = () -> Num => <\n  parts :: []Text = split(\"a,b\", \",\")\n  parts.size\n>",
+    );
+    assert!(
+        message.contains("no function 'split' in scope"),
+        "the diagnostic must name the function that is missing, got: {message}"
+    );
+}
+
+#[test]
+fn a_method_and_a_top_level_function_of_one_name_each_answer_their_own_form() {
+    // Both exist, and neither answers for the other: `c.bump(3)` is the method (5 + 3),
+    // `bump(c, 3)` the top-level function (900 + 3). 8 + 903 = 911.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3) + (c |> bump(3))\n>",
-        16,
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (c :: Counter, n :: Num) -> Num => 900 + n\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3) + bump(c, 3)\n>",
+        911,
     );
 }
 
