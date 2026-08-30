@@ -312,6 +312,16 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Text,
     },
+    BuiltinOverload {
+        name: "bits",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "endianness",
+        parameters: &[],
+        ret: Type::Text,
+    },
     // Terminates the process with an exit code — what `core.test`'s failing `assert`
     // calls. `__`-prefixed to mark it internal: there is no user-facing `exit`.
     BuiltinOverload {

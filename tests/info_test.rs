@@ -26,12 +26,12 @@ fn gen_ir(source: &str) -> String {
 
 #[test]
 fn every_member_yields_a_non_empty_text() {
-    // 1 + 2 + 4 = 7. An empty answer from any of the three would drop its bit.
+    // 1 + 2 + 4 + 8 = 15. An empty answer from any of them would drop its bit.
     assert_exit(
         "<< core.info\n\
          ^ = () -> Num => (platform().size > 0 ? 1 : 0) + (os().size > 0 ? 2 : 0) \
-           + (quilonVersion().size > 0 ? 4 : 0)",
-        7,
+           + (quilonVersion().size > 0 ? 4 : 0) + (endianness().size > 0 ? 8 : 0)",
+        15,
     );
 }
 
@@ -78,6 +78,31 @@ fn os_is_spelled_the_way_people_say_it() {
          ^ = () -> Num => os() == \"darwin\" ? 1 : 0",
         0,
     );
+}
+
+#[test]
+fn bits_is_the_targets_pointer_width() {
+    // 64 or 32 — every target Quilon builds for is one of the two, and the value comes from
+    // LLVM's data layout rather than the architecture's name.
+    assert_exit(
+        "<< core.info\n^ = () -> Num => bits() == 64 || bits() == 32 ? 7 : 1",
+        7,
+    );
+}
+
+#[test]
+fn endianness_is_little_or_big() {
+    assert_exit(
+        "<< core.info\n\
+         ^ = () -> Num => endianness() == \"little\" || endianness() == \"big\" ? 7 : 1",
+        7,
+    );
+}
+
+#[test]
+fn bits_is_a_num_not_a_text() {
+    // The one member that is not `Text`, so it has to arithmetic like any other `Num`.
+    assert_exit("<< core.info\n^ = () -> Num => bits() / 8", 8);
 }
 
 #[test]

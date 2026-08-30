@@ -34,6 +34,10 @@ pub(super) enum InfoMember {
     Os,
     /// The compiler's own version, e.g. `"0.9.3"`.
     QuilonVersion,
+    /// Pointer width in bits: `64`, `32`. A `Num`, unlike the rest.
+    Bits,
+    /// Byte order: `"little"`, `"big"`.
+    Endianness,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -74,6 +78,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             "platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
             "os" => IntrinsicLowering::InfoMember(InfoMember::Os),
             "quilonVersion" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
+            "bits" => IntrinsicLowering::InfoMember(InfoMember::Bits),
+            "endianness" => IntrinsicLowering::InfoMember(InfoMember::Endianness),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,

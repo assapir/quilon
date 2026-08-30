@@ -403,49 +403,55 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call)
     }
 
-    /// Lower a `core.info` member to the `Text` constant it names. Nothing runs at run time:
-    /// the target and the compiler's version are both known while emitting, so each becomes
-    /// the same global byte constant a `Text` literal would.
-    ///
-    /// The target comes from the module's own triple, so a cross-compiled binary reports the
-    /// machine it will RUN on. The OS is spelled the way people say it rather than the way a
-    /// triple does — `"macOS"`, never `"darwin"`.
-    pub(super) fn generate_info_member(
-        &mut self,
-        member: super::calls::InfoMember,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        use super::calls::InfoMember;
-        // The module carries a triple only when something set one (a cross-compiling build
-        // would). With none set — the JIT, and a plain host build — the host's triple is the
-        // target, so fall back to it rather than reporting "unknown" on every platform.
+    /// The target being emitted for. The module carries a triple only when something set one;
+    /// with none set the host is the target.
+    fn target_triple(&self) -> String {
         let module_triple = self.module.get_triple();
         let module_triple = module_triple.as_str().to_string_lossy().to_string();
-        let triple = if module_triple.is_empty() {
+        if module_triple.is_empty() {
             inkwell::targets::TargetMachine::get_default_triple()
                 .as_str()
                 .to_string_lossy()
                 .to_string()
         } else {
             module_triple
-        };
-        // A triple is `arch-vendor-os[-abi]`, but the vendor is omitted often enough
-        // (`aarch64-linux-gnu`) that the OS has to be recognised rather than counted to.
-        let arch = triple.split('-').next().unwrap_or("unknown");
-        let os = match triple.as_str() {
-            t if t.contains("darwin") || t.contains("apple") => "macOS",
-            t if t.contains("linux") => "linux",
-            t if t.contains("windows") => "windows",
-            t if t.contains("freebsd") => "FreeBSD",
-            t if t.contains("openbsd") => "OpenBSD",
-            t if t.contains("netbsd") => "NetBSD",
-            _ => "unknown",
-        };
-        let value = match member {
-            InfoMember::Platform => arch,
-            InfoMember::Os => os,
-            InfoMember::QuilonVersion => env!("CARGO_PKG_VERSION"),
-        };
-        self.build_text_constant(value)
+        }
+    }
+
+    /// Lower a `core.info` member to the constant it names, describing the target — so a
+    /// cross-compiled binary reports where it will run.
+    pub(super) fn generate_info_member(
+        &mut self,
+        member: super::calls::InfoMember,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use super::calls::InfoMember;
+        let triple = self.target_triple();
+        match member {
+            // A triple is `arch-vendor-os[-abi]`.
+            InfoMember::Platform => {
+                let arch = triple.split('-').next().unwrap_or("unknown");
+                self.build_text_constant(arch)
+            }
+            InfoMember::Os => self.build_text_constant(os_name(&triple)),
+            InfoMember::QuilonVersion => self.build_text_constant(env!("CARGO_PKG_VERSION")),
+            // From LLVM, not the arch name: `powerpc64le` and `mips64el` are little-endian
+            // despite their spelling, and `s390x` is 64-bit without saying so.
+            InfoMember::Bits => {
+                let bits = target_data(&triple)
+                    .map(|data| u64::from(data.get_pointer_byte_size(None)) * 8)
+                    .unwrap_or(u64::from(usize::BITS));
+                Ok(self.context.f64_type().const_float(bits as f64).into())
+            }
+            InfoMember::Endianness => {
+                let big = match target_data(&triple) {
+                    Some(data) => {
+                        data.get_byte_ordering() == inkwell::targets::ByteOrdering::BigEndian
+                    }
+                    None => cfg!(target_endian = "big"),
+                };
+                self.build_text_constant(if big { "big" } else { "little" })
+            }
+        }
     }
 
     /// Lower the `now()` builtin: seconds on a monotonic clock, read through the `__now`
@@ -506,4 +512,41 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to convert write result"))?
             .into())
     }
+}
+
+/// Triple substring to the name people use. First match wins, so a more specific needle
+/// precedes a more general one.
+const OS_NAMES: &[(&str, &str)] = &[
+    ("darwin", "macOS"),
+    ("apple", "macOS"),
+    ("linux", "linux"),
+    ("windows", "windows"),
+    ("freebsd", "FreeBSD"),
+    ("openbsd", "OpenBSD"),
+    ("netbsd", "NetBSD"),
+];
+
+fn os_name(triple: &str) -> &'static str {
+    OS_NAMES
+        .iter()
+        .find(|(needle, _)| triple.contains(needle))
+        .map_or("unknown", |(_, name)| *name)
+}
+
+/// `None` when the target is not registered — the IR-only codegen tests never initialize one,
+/// and fall back to the host they run on.
+fn target_data(triple: &str) -> Option<inkwell::targets::TargetData> {
+    use inkwell::OptimizationLevel;
+    use inkwell::targets::{CodeModel, RelocMode, Target, TargetTriple};
+    let triple = TargetTriple::create(triple);
+    let target = Target::from_triple(&triple).ok()?;
+    let machine = target.create_target_machine(
+        &triple,
+        "",
+        "",
+        OptimizationLevel::None,
+        RelocMode::PIC,
+        CodeModel::Default,
+    )?;
+    Some(machine.get_target_data())
 }

@@ -17,6 +17,8 @@ and makes no syscall.
 |----------|--------|
 | `platform() -> Text` | The CPU architecture the program was built for: `"aarch64"`, `"x86_64"`. |
 | `os() -> Text` | The operating system it was built for: `"linux"`, `"macOS"`, `"windows"`, `"FreeBSD"`, `"OpenBSD"`, `"NetBSD"`, else `"unknown"`. |
+| `bits() -> Num` | Pointer width: `64` or `32`. |
+| `endianness() -> Text` | Byte order: `"little"` or `"big"`. |
 | `quilonVersion() -> Text` | The version of the compiler that built it, e.g. `"0.9.3"`. |
 
 ```quilon
@@ -24,7 +26,7 @@ and makes no syscall.
 << core.info
 
 ^ = () -> Num => <
-  print("quilon `quilonVersion()` on `platform()`-`os()`")
+  print("`platform()`-`os()` `bits()`-bit `endianness()`-endian, quilon `quilonVersion()`")
   0
 >
 ```
@@ -38,6 +40,10 @@ target — which is the useful answer, since the program is the thing doing the 
 **Names people use, not triple spellings.** `os()` answers `"macOS"`, never `"darwin"`. A
 target triple is a build-system detail, and a program printing its own environment should
 print something a reader recognises.
+
+**`bits()` and `endianness()` come from LLVM's data layout**, not from the architecture's
+name — which is a poor guide, since `powerpc64le` and `mips64el` are little-endian despite
+their spelling, and `s390x` is 64-bit without saying so.
 
 **Constants, not queries.** These are resolved while the program is compiled, so they cannot
 change while it runs and cost nothing to read. `quilon compile` shows it — the calls do not
