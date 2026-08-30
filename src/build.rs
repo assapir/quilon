@@ -253,6 +253,21 @@ pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
 #[cfg(not(target_os = "macos"))]
 pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 
+/// Drop every section nothing reaches. Both halves of the runtime archive are already split
+/// per function and per datum — rustc and the `cc` crate that builds bdwgc each default to
+/// that — so this resolves per FUNCTION what the archive scan below can only resolve per
+/// object file: a stripped hello-world goes from 1.4 MB to 662 KB. The concurrency runtime
+/// stays, being reachable from the `-u` roots; what goes is the std and compiler-support code
+/// around it. ld64 spells it `-dead_strip`.
+///
+/// The object codegen emits is NOT split (LLVM does not default to it and inkwell exposes no
+/// setting), which costs nothing: it holds only functions `ast::reachability` already kept,
+/// and is kilobytes against the archive's megabytes.
+#[cfg(target_os = "macos")]
+pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "-dead_strip"];
+#[cfg(not(target_os = "macos"))]
+pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "--gc-sections"];
+
 /// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
 /// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
 /// the emitted LLVM IR — that a plain archive scan could otherwise drop (nondeterministically,
@@ -265,14 +280,10 @@ pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 /// the whole archive drags along, roughly a tenth of a hello-world's size. Driven from
 /// `quilon_rt::INTRINSICS`, so a new intrinsic needs no change here.
 ///
-/// It does NOT drop the concurrency runtime (scheduler, `mio` reactor, `corosensei` stacks) from
-/// a program that never blocks, and cannot: rustc partitions the staticlib into codegen-unit
-/// objects freely, co-locating a generic instantiation an always-used intrinsic needs (`__exit`
-/// reaches `drop_glue::<Vec<u8>>`) in the same object as concurrency code, so pulling that object
-/// pulls the concurrency machinery transitively — no per-intrinsic `-u` partition changes that.
-/// Dropping it needs `--gc-sections` (with function-sections in the runtime build) or splitting
-/// the concurrency runtime into its own crate; both carry conservative-GC and retained-symbol
-/// correctness questions and are left as follow-up.
+/// It pulls whole objects, and rustc partitions the staticlib into codegen units freely: the
+/// object defining `__exit` also defines the scheduler and the `mio` reactor, so a program
+/// that never blocks still pulls both. [`DEAD_STRIP_ARGS`] removes the unreached code
+/// afterwards.
 ///
 /// ld64 (macOS) force-loads the whole archive instead (`force_load`): a per-intrinsic `-u` would
 /// need each name spelled with the Mach-O leading underscore, and ld64 makes an unmatched `-u` a
@@ -314,6 +325,7 @@ pub fn build_native(
         command.arg(obj);
         append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
         command.args(SYSTEM_LIBS);
+        command.args(DEAD_STRIP_ARGS);
         command.arg("-o").arg(out);
 
         let status = command.status().map_err(|e| match e.kind() {
