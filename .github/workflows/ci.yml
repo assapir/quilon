@@ -19,8 +19,26 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
+  # Both Linux architectures the release publishes, on native runners — the runtime
+  # archive bundles a `cc`-compiled Boehm GC and links against the host LLVM, so an
+  # architecture is only covered by building on it.
+  #
+  # aarch64 is non-blocking to start (`continue-on-error`), like the macOS and Arch
+  # jobs: visible on every run, but not holding up a merge until it has proven
+  # itself stable. The release build blocks on it either way.
   build-and-test:
-    runs-on: ubuntu-latest
+    name: build-and-test (linux-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.arch != 'x86_64' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
@@ -67,16 +85,20 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
+      # Platform-independent, so they gate once rather than once per architecture —
+      # the same reason the macOS job leaves them out.
       - name: Format check
+        if: matrix.arch == 'x86_64'
         run: cargo fmt --all -- --check
 
       # Strict: clippy warnings (including its lints over all targets/features) are errors.
       # `--workspace` so the runtime crate is linted too, not just the compiler.
       - name: Clippy
+        if: matrix.arch == 'x86_64'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build
@@ -106,6 +128,7 @@ jobs:
       # written), and `restore-keys` finds the most recent one. A miss — first run, an
       # evicted cache, a fork with no main history — just means no delta column.
       - name: Restore benchmark series
+        if: matrix.arch == 'x86_64'
         uses: actions/cache/restore@v6
         with:
           path: bench-series.tsv
@@ -118,6 +141,7 @@ jobs:
       # absolute limits — only interleaved runs on one machine compare credibly — so the
       # deltas below are a hint about where to look, not a verdict.
       - name: Benchmarks
+        if: matrix.arch == 'x86_64'
         run: |
           set -euo pipefail
           # The restored file is the baseline; this run's numbers go to a new one, which
@@ -154,7 +178,7 @@ jobs:
       # the repo's own branches: a pull-request run measures a different runner under a
       # different load, and letting it overwrite the series would compare noise to noise.
       - name: Save benchmark series
-        if: github.event_name == 'push'
+        if: matrix.arch == 'x86_64' && github.event_name == 'push'
         uses: actions/cache/save@v6
         with:
           path: bench-series.tsv

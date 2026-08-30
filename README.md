@@ -45,8 +45,10 @@ Download a binary from the [latest release](https://github.com/assapir/quilon/re
 
 | Platform | Asset |
 | --- | --- |
-| Linux, x86_64 (glibc) | `quilon-x86_64-unknown-linux-gnu` |
-| Linux, aarch64 (glibc) | `quilon-aarch64-unknown-linux-gnu` |
+| Linux, x86_64 (glibc) | `quilon-linux-x86_64` |
+| Linux, aarch64 (glibc) | `quilon-linux-aarch64` |
+
+`uname -m` prints which one you want.
 
 Both are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither. Every release publishes the `ldd` of each asset in its job summary, so that is checkable rather than promised.
 
