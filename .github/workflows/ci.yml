@@ -13,34 +13,76 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # inkwell's llvm-sys (LLVM 22.x) looks for this prefix to find the toolchain.
+  # Every platform whose LLVM lives elsewhere overwrites it in its install step.
   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
   # Strict: any compiler/rustdoc warning is a hard error in build, test, and doc.
   RUSTFLAGS: "-D warnings"
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  # Both Linux architectures the release publishes, on native runners — the runtime
-  # archive bundles a `cc`-compiled Boehm GC and links against the host LLVM, so an
-  # architecture is only covered by building on it.
+  # One gate, run identically on every platform Quilon targets. Only the package
+  # manager differs; everything after the install step is the same commands in the
+  # same order, so a platform is covered by the whole suite or not at all.
+  #
+  # The platforms:
+  #   linux-x86_64, linux-aarch64  the two architectures the release publishes. The
+  #                                runtime archive bundles a `cc`-compiled Boehm GC
+  #                                and links against the host LLVM, so an
+  #                                architecture is only covered by building on it.
+  #   macos-arm64                  the other OS, and the only one exercising ld64's
+  #                                force-load link path in `quilon build`.
+  #   arch-linux                   the maintainer's own environment, and the distro
+  #                                that forced the vendored collector: its `gc`
+  #                                package ships only `libgc.so*`, no `libgc.a`.
   build-and-test:
-    name: build-and-test (linux-${{ matrix.arch }})
+    name: build-and-test (${{ matrix.key }})
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - key: linux-x86_64
             runner: ubuntu-latest
-          - arch: aarch64
+            pkg: apt
+          - key: linux-aarch64
             runner: ubuntu-24.04-arm
+            pkg: apt
+          - key: macos-arm64
+            runner: macos-latest
+            pkg: brew
+          - key: arch-linux
+            runner: ubuntu-latest
+            container: archlinux:latest
+            pkg: pacman
 
     steps:
+      # Before `actions/checkout`: without `git` in the image it falls back to
+      # downloading a source tarball, which would silently omit the bdwgc
+      # submodule. `safe.directory` keeps git from refusing the workspace it did
+      # not create — the container runs as root over a mounted host directory.
+      - name: Install toolchain (pacman)
+        if: matrix.pkg == 'pacman'
+        run: |
+          set -euxo pipefail
+          pacman -Syu --noconfirm git base-devel llvm clang curl
+          git config --global --add safe.directory '*'
+          # inkwell pins LLVM 22; Arch tracks upstream closely, so a major bump
+          # there is a real incompatibility and should fail loudly rather than
+          # produce a confusing llvm-sys error.
+          llvm-config --version
+          # Arch installs LLVM into /usr, not Debian's versioned prefix. Its `llvm`
+          # package builds against the shared `libLLVM.so`, so llvm-sys links
+          # dynamically and needs no separate static-Polly package.
+          echo "LLVM_SYS_221_PREFIX=/usr" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
           # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
-          # crate's build script compiles it from source.
+          # crate's build script compiles it from source. There is nothing else to
+          # install for it on any platform — no libgc, no `brew install bdw-gc`.
           submodules: true
 
       - name: Install Rust toolchain
@@ -48,7 +90,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install LLVM 22 and system dependencies
+      - name: Install LLVM 22 and system dependencies (apt)
+        if: matrix.pkg == 'apt'
         run: |
           set -euxo pipefail
           # No libgc package: the Boehm GC is vendored and built from source by
@@ -73,6 +116,18 @@ jobs:
           sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
+      - name: Install LLVM 22 (brew)
+        if: matrix.pkg == 'brew'
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install llvm@22
+          # Homebrew's prefix, not Debian's — and it differs between the Intel and
+          # Apple-silicon runner images, so resolve it rather than hardcode it.
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      # Keyed by platform, not by `runner.os`: the two Linux architectures share an
+      # OS name, and restoring a foreign-architecture `target` is worse than a miss.
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -80,20 +135,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.key }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+            ${{ matrix.key }}-cargo-
 
-      # Platform-independent, so they gate once rather than once per architecture —
-      # the same reason the macOS job leaves them out.
       - name: Format check
-        if: matrix.arch == 'x86_64'
         run: cargo fmt --all -- --check
 
       # Strict: clippy warnings (including its lints over all targets/features) are errors.
       # `--workspace` so the runtime crate is linted too, not just the compiler.
       - name: Clippy
-        if: matrix.arch == 'x86_64'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build
@@ -101,7 +152,8 @@ jobs:
 
       # `--workspace`: without it only the root package's tests build, so `quilon-rt`'s own
       # unit tests were never compiled here — a change to an intrinsic's signature could
-      # (and did) leave them broken with CI green.
+      # (and did) leave them broken with CI green. On macOS this also covers ld64's
+      # force-load of the runtime archive, where GNU ld takes a per-intrinsic `-u`.
       - name: Test
         run: cargo test --workspace --verbose
 
@@ -118,25 +170,25 @@ jobs:
           ./target/debug/quilon test examples
           ./target/debug/quilon test corelib
 
-      # The previous run-on-main's numbers, so each table can carry a delta column. Keyed
-      # per commit and restored by prefix: a fresh key every run (caches are immutable once
-      # written), and `restore-keys` finds the most recent one. A miss — first run, an
-      # evicted cache, a fork with no main history — just means no delta column.
+      # The previous run's numbers on this branch and platform, so each table can carry a
+      # delta column. One series per platform — a macOS number against a Linux baseline
+      # compares runner shapes, not commits. Keyed per commit and restored by prefix: a
+      # fresh key every run (caches are immutable once written), and `restore-keys` finds
+      # the most recent one. A miss — first run, an evicted cache, a fork with no main
+      # history — just means no delta column.
       - name: Restore benchmark series
-        if: matrix.arch == 'x86_64'
         uses: actions/cache/restore@v6
         with:
           path: bench-series.tsv
-          key: bench-series-${{ github.ref_name }}-${{ github.sha }}
+          key: bench-series-${{ matrix.key }}-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            bench-series-${{ github.ref_name }}-
-            bench-series-main-
+            bench-series-${{ matrix.key }}-${{ github.ref_name }}-
+            bench-series-${{ matrix.key }}-main-
 
       # Informational only: no threshold, no gate. Shared runners are too noisy for
       # absolute limits — only interleaved runs on one machine compare credibly — so the
       # deltas below are a hint about where to look, not a verdict.
       - name: Benchmarks
-        if: matrix.arch == 'x86_64'
         run: |
           set -euo pipefail
           # The restored file is the baseline; this run's numbers go to a new one, which
@@ -147,14 +199,14 @@ jobs:
             --baseline bench-series.tsv --metrics bench-series.next.tsv | tee runtime-bench.txt
           mv bench-series.next.tsv bench-series.tsv
           {
-            echo "### Benchmarks"
+            echo "### Benchmarks — ${{ matrix.key }}"
             echo
             echo "Informational — no pass/fail. A \`Δ\` column compares against the"
-            echo "previous run on this branch. Shared runners are noisy in absolute"
-            echo "terms and only interleaved runs on one machine compare credibly, so"
-            echo "a few percent either way is the floor: treat a delta as a hint about"
-            echo "where to look, not a verdict. No delta column means there was no"
-            echo "previous run to compare against."
+            echo "previous run on this branch and platform. Shared runners are noisy in"
+            echo "absolute terms and only interleaved runs on one machine compare"
+            echo "credibly, so a few percent either way is the floor: treat a delta as a"
+            echo "hint about where to look, not a verdict. No delta column means there"
+            echo "was no previous run to compare against."
             echo
             echo "#### Compile speed"
             echo
@@ -173,116 +225,8 @@ jobs:
       # the repo's own branches: a pull-request run measures a different runner under a
       # different load, and letting it overwrite the series would compare noise to noise.
       - name: Save benchmark series
-        if: matrix.arch == 'x86_64' && github.event_name == 'push'
+        if: github.event_name == 'push'
         uses: actions/cache/save@v6
         with:
           path: bench-series.tsv
-          key: bench-series-${{ github.ref_name }}-${{ github.sha }}
-
-  # macOS: the same build and test gate, on the other platform Quilon targets.
-  # Deliberately narrower than the Linux job: `fmt` and `clippy` are
-  # platform-independent and already gate there, and the benchmarks stay
-  # Linux-only so the series compares like with like (and to keep the 10x runner
-  # cost off every push).
-  macos-build-and-test:
-    runs-on: macos-latest
-
-    env:
-      # Homebrew's prefix, not Debian's — resolved in the install step below,
-      # since it differs between the Intel and Apple-silicon runner images.
-      LLVM_SYS_221_PREFIX: ""
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
-          # crate's build script compiles it from source. Nothing else to install
-          # for it — there is no `brew install bdw-gc` here.
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install LLVM 22
-        run: |
-          set -euxo pipefail
-          brew update
-          brew install llvm@22
-          # inkwell's llvm-sys finds the toolchain through this prefix.
-          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
-
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Build
-        run: cargo build --workspace --all-targets --verbose
-
-      # Covers the macOS-specific link path in `quilon build`: ld64 force-loads the runtime
-      # archive where GNU ld takes a per-intrinsic `-u`, and has no `-ldl`.
-      - name: Test
-        run: cargo test --workspace --verbose
-
-      - name: Quilon test suites
-        run: |
-          ./target/debug/quilon test examples
-          ./target/debug/quilon test corelib
-
-  # Arch Linux, in a container on the Ubuntu runner. Arch is the maintainer's own
-  # environment, and the one that forced the vendored collector: its `gc` package
-  # ships only `libgc.so*`, with no static `libgc.a` to link. Covering it here keeps
-  # that class of distro difference from being discovered by hand again.
-  #
-  # No benchmarks: the series is kept per-branch and only comparable when every
-  # run measures the same runner shape.
-  arch-build-and-test:
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-
-    env:
-      # Arch installs LLVM into /usr, not Debian's versioned prefix. Its `llvm`
-      # package builds against the shared `libLLVM.so`, so llvm-sys links
-      # dynamically and needs no separate static-Polly package.
-      LLVM_SYS_221_PREFIX: /usr
-
-    steps:
-      # Before `actions/checkout`: without `git` in the image it falls back to
-      # downloading a source tarball, which would silently omit the bdwgc
-      # submodule. `safe.directory` keeps git from refusing the workspace it did
-      # not create — the container runs as root over a mounted host directory.
-      - name: Install toolchain
-        run: |
-          set -euxo pipefail
-          pacman -Syu --noconfirm git base-devel llvm clang curl
-          git config --global --add safe.directory '*'
-          # inkwell pins LLVM 22; Arch tracks upstream closely, so a major bump
-          # there is a real incompatibility and should fail loudly rather than
-          # produce a confusing llvm-sys error.
-          llvm-config --version
-
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          submodules: true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: Test
-        run: cargo test --workspace --verbose
-
-      - name: Quilon test suites
-        run: |
-          ./target/debug/quilon test examples
-          ./target/debug/quilon test corelib
+          key: bench-series-${{ matrix.key }}-${{ github.ref_name }}-${{ github.sha }}
