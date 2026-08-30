@@ -4,8 +4,8 @@ on:
   push:
     tags:
       - "v[0-9]*"
-  # A manual run builds the release and stops before publishing, so the build can be
-  # proven without spending a version number on it. Run it before tagging.
+  # A manual run builds and stops before publishing, so the build can be proven
+  # without spending a version number. Run it before tagging.
   workflow_dispatch:
 
 permissions:
@@ -15,16 +15,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Native runners per architecture: the runtime archive bundles a `cc`-compiled
+  # Boehm GC and links against the host LLVM. `arch` is what `uname -m` prints.
   linux:
     name: Build linux-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
 
-    # Native runners per architecture: the runtime archive bundles a `cc`-compiled
-    # Boehm GC and links against the host LLVM, so each target builds on its own
-    # machine rather than through a cross toolchain.
-    #
-    # `arch` is what `uname -m` prints on that machine, so a user picks their asset
-    # by running it rather than by decoding a target triple.
     strategy:
       fail-fast: false
       matrix:
@@ -42,8 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
-          # crate's build script compiles it from source.
+          # The Boehm GC; quilon-rt's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
@@ -52,8 +47,6 @@ jobs:
       - name: Install LLVM 22 and system dependencies
         run: |
           set -euxo pipefail
-          # Same toolchain as CI: both C linkers and the LLVM 22 dev libs. The GC is
-          # vendored, so there is no libgc package to install.
           sudo apt-get update
           sudo apt-get install -y gcc clang
           wget https://apt.llvm.org/llvm.sh
@@ -76,7 +69,7 @@ jobs:
           ldd "$ASSET"
           ./"$ASSET" check examples/hello_world.qn
           # The asset promises it runs on a machine with nothing installed, so a
-          # dynamic LLVM is a release-blocking regression rather than a log line.
+          # dynamic LLVM is a release-blocking regression, not a log line.
           if ldd "$ASSET" | grep -qi 'llvm'; then
             echo "::error::$ASSET names an LLVM library: it would not start without LLVM installed"
             exit 1
@@ -98,8 +91,7 @@ jobs:
           if-no-files-found: error
 
   # Every asset or none: a release that quietly omits a platform it advertises is
-  # worse than a tag whose build failed in the open and can be re-run. The build job
-  # is not `continue-on-error` for the same reason.
+  # worse than a tag whose build failed in the open and can be re-run.
   publish:
     if: github.event_name == 'push'
     needs: [linux]

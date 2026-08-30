@@ -12,28 +12,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # inkwell's llvm-sys (LLVM 22.x) looks for this prefix to find the toolchain.
-  # Every platform whose LLVM lives elsewhere overwrites it in its install step.
   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
-  # Strict: any compiler/rustdoc warning is a hard error in build, test, and doc.
   RUSTFLAGS: "-D warnings"
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  # One gate, run identically on every platform Quilon targets. Only the package
-  # manager differs; everything after the install step is the same commands in the
-  # same order, so a platform is covered by the whole suite or not at all.
-  #
-  # The platforms:
-  #   linux-x86_64, linux-aarch64  the two architectures the release publishes. The
-  #                                runtime archive bundles a `cc`-compiled Boehm GC
-  #                                and links against the host LLVM, so an
-  #                                architecture is only covered by building on it.
-  #   macos-arm64                  the other OS, and the only one exercising ld64's
-  #                                force-load link path in `quilon build`.
-  #   arch-linux                   the maintainer's own environment, and the distro
-  #                                that forced the vendored collector: its `gc`
-  #                                package ships only `libgc.so*`, no `libgc.a`.
+  # One gate on every platform Quilon targets. Only the install step differs.
   build-and-test:
     name: build-and-test (${{ matrix.key }})
     runs-on: ${{ matrix.runner }}
@@ -58,31 +42,21 @@ jobs:
             pkg: pacman
 
     steps:
-      # Before `actions/checkout`: without `git` in the image it falls back to
-      # downloading a source tarball, which would silently omit the bdwgc
-      # submodule. `safe.directory` keeps git from refusing the workspace it did
-      # not create — the container runs as root over a mounted host directory.
+      # Before checkout: without git in the image it downloads a tarball, which
+      # silently omits the bdwgc submodule.
       - name: Install toolchain (pacman)
         if: matrix.pkg == 'pacman'
         run: |
           set -euxo pipefail
           pacman -Syu --noconfirm git base-devel llvm clang curl
           git config --global --add safe.directory '*'
-          # inkwell pins LLVM 22; Arch tracks upstream closely, so a major bump
-          # there is a real incompatibility and should fail loudly rather than
-          # produce a confusing llvm-sys error.
           llvm-config --version
-          # Arch installs LLVM into /usr, not Debian's versioned prefix. Its `llvm`
-          # package builds against the shared `libLLVM.so`, so llvm-sys links
-          # dynamically and needs no separate static-Polly package.
           echo "LLVM_SYS_221_PREFIX=/usr" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
-          # crate's build script compiles it from source. There is nothing else to
-          # install for it on any platform — no libgc, no `brew install bdw-gc`.
+          # The Boehm GC; quilon-rt's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
@@ -94,25 +68,14 @@ jobs:
         if: matrix.pkg == 'apt'
         run: |
           set -euxo pipefail
-          # No libgc package: the Boehm GC is vendored and built from source by
-          # `quilon-rt`'s build script, so a green run here is also the proof that
-          # the vendored build needs nothing installed. `quilon build` emits the
-          # object in-process and links with the system C toolchain; the JIT/AOT
-          # parity gate exercises BOTH linkers, so install gcc AND clang. (llc still
-          # ships with LLVM for the manual compile flow.)
+          # Both linkers: the JIT/AOT parity gate exercises each.
           sudo apt-get update
           sudo apt-get install -y gcc clang
-          # Install LLVM 22 via the official apt script (sets up the apt.llvm.org repo
-          # and installs clang/llc-22). LLVM 22 currently lives in apt.llvm.org's
-          # development channel.
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
-          # inkwell links llvm-sys *statically* by default, which needs the LLVM dev
-          # libraries including the Polly static lib (libPolly.a). llvm.sh alone does
-          # not install these, so pull them in explicitly.
+          # llvm-sys links statically, so it needs the dev libs and libPolly.a.
           sudo apt-get install -y llvm-22-dev libpolly-22-dev
-          # Make the unversioned `llc` resolve to the LLVM 22 build for the AOT step.
           sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
@@ -122,12 +85,8 @@ jobs:
           set -euxo pipefail
           brew update
           brew install llvm@22
-          # Homebrew's prefix, not Debian's — and it differs between the Intel and
-          # Apple-silicon runner images, so resolve it rather than hardcode it.
           echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
-      # Keyed by platform, not by `runner.os`: the two Linux architectures share an
-      # OS name, and restoring a foreign-architecture `target` is worse than a miss.
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -142,40 +101,24 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      # Strict: clippy warnings (including its lints over all targets/features) are errors.
-      # `--workspace` so the runtime crate is linted too, not just the compiler.
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build
         run: cargo build --workspace --all-targets --verbose
 
-      # `--workspace`: without it only the root package's tests build, so `quilon-rt`'s own
-      # unit tests were never compiled here — a change to an intrinsic's signature could
-      # (and did) leave them broken with CI green. On macOS this also covers ld64's
-      # force-load of the runtime archive, where GNU ld takes a per-intrinsic `-u`.
       - name: Test
         run: cargo test --workspace --verbose
 
-      # The `.qn` suites. Only `quilon test` compiles a `describe` block, so a type error
-      # inside one passes every other gate; the Rust tests name today's suites one by one,
-      # while this covers any suite added to `examples/` without one. Exits non-zero if a
-      # case fails or a suite does not compile.
-      #
-      # `corelib` as well as `examples`: a corelib module's tests sit beside the code they
-      # test, and the import resolver drops an imported module's blocks — so `corelib/http.qn`
-      # is only ever run by naming it, or the directory holding it, here.
+      # corelib too: an imported module's test blocks are dropped, so a corelib
+      # suite only runs when its directory is named here.
       - name: Quilon test suites
         run: |
           ./target/debug/quilon test examples
           ./target/debug/quilon test corelib
 
-      # The previous run's numbers on this branch and platform, so each table can carry a
-      # delta column. One series per platform — a macOS number against a Linux baseline
-      # compares runner shapes, not commits. Keyed per commit and restored by prefix: a
-      # fresh key every run (caches are immutable once written), and `restore-keys` finds
-      # the most recent one. A miss — first run, an evicted cache, a fork with no main
-      # history — just means no delta column.
+      # One series per platform and branch, keyed per commit (caches are immutable)
+      # and restored by prefix. A miss just means no delta column.
       - name: Restore benchmark series
         uses: actions/cache/restore@v6
         with:
@@ -185,14 +128,10 @@ jobs:
             bench-series-${{ matrix.key }}-${{ github.ref_name }}-
             bench-series-${{ matrix.key }}-main-
 
-      # Informational only: no threshold, no gate. Shared runners are too noisy for
-      # absolute limits — only interleaved runs on one machine compare credibly — so the
-      # deltas below are a hint about where to look, not a verdict.
+      # Informational: no threshold, no gate. Shared runners are too noisy.
       - name: Benchmarks
         run: |
           set -euo pipefail
-          # The restored file is the baseline; this run's numbers go to a new one, which
-          # becomes the next run's baseline.
           cargo bench --bench compile_speed -- \
             --baseline bench-series.tsv --metrics bench-series.next.tsv | tee compile-bench.txt
           cargo bench --bench runtime_speed -- \
@@ -221,9 +160,7 @@ jobs:
             sed -n '/^| command/,/^$/p' runtime-bench.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Keep this run's numbers for the next one to compare against. Only from a push to
-      # the repo's own branches: a pull-request run measures a different runner under a
-      # different load, and letting it overwrite the series would compare noise to noise.
+      # Pushes only: a PR run measures a different runner under a different load.
       - name: Save benchmark series
         if: github.event_name == 'push'
         uses: actions/cache/save@v6
