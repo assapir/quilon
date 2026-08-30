@@ -17,8 +17,6 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  # Platform-independent, so it runs once and the platforms wait on it. A style or
-  # lint failure fails here rather than four times over.
   gate:
     runs-on: ubuntu-latest
 
@@ -26,7 +24,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC; quilon-rt's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
@@ -42,7 +39,6 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
-          # llvm-sys links statically, so it needs the dev libs and libPolly.a.
           sudo apt-get install -y llvm-22-dev libpolly-22-dev
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
@@ -63,8 +59,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # What only a real machine of that shape can answer: the build, the tests, and the
-  # numbers. Only the install step differs between them.
   build-and-test:
     name: build-and-test (${{ matrix.key }})
     needs: gate
@@ -90,8 +84,7 @@ jobs:
             pkg: pacman
 
     steps:
-      # Before checkout: without git in the image it downloads a tarball, which
-      # silently omits the bdwgc submodule.
+      # Before checkout: without git it fetches a tarball, dropping the submodule.
       - name: Install toolchain (pacman)
         if: matrix.pkg == 'pacman'
         run: |
@@ -113,7 +106,6 @@ jobs:
         if: matrix.pkg == 'apt'
         run: |
           set -euxo pipefail
-          # Both linkers: the JIT/AOT parity gate exercises each.
           sudo apt-get update
           sudo apt-get install -y gcc clang
           wget https://apt.llvm.org/llvm.sh
@@ -148,15 +140,11 @@ jobs:
       - name: Test
         run: cargo test --workspace --verbose
 
-      # corelib too: an imported module's test blocks are dropped, so a corelib
-      # suite only runs when its directory is named here.
       - name: Quilon test suites
         run: |
           ./target/debug/quilon test examples
           ./target/debug/quilon test corelib
 
-      # One series per platform and branch, keyed per commit (caches are immutable)
-      # and restored by prefix. A miss just means no delta column.
       - name: Restore benchmark series
         uses: actions/cache/restore@v6
         with:
@@ -198,7 +186,6 @@ jobs:
             sed -n '/^| command/,/^$/p' runtime-bench.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Pushes only: a PR run measures a different runner under a different load.
       - name: Save benchmark series
         if: github.event_name == 'push'
         uses: actions/cache/save@v6

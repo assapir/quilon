@@ -4,8 +4,7 @@ on:
   push:
     tags:
       - "v[0-9]*"
-  # A manual run builds and stops before publishing, so the build can be proven
-  # without spending a version number. Run it before tagging.
+  # A manual run builds without publishing: prove the build before tagging.
   workflow_dispatch:
 
 permissions:
@@ -15,8 +14,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Native runners per architecture: the runtime archive bundles a `cc`-compiled
-  # Boehm GC and links against the host LLVM. `arch` is what `uname -m` prints.
   linux:
     name: Build linux-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -38,7 +35,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC; quilon-rt's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
@@ -68,8 +64,6 @@ jobs:
           file "$ASSET"
           ldd "$ASSET"
           ./"$ASSET" check examples/hello_world.qn
-          # The asset promises it runs on a machine with nothing installed, so a
-          # dynamic LLVM is a release-blocking regression, not a log line.
           if ldd "$ASSET" | grep -qi 'llvm'; then
             echo "::error::$ASSET names an LLVM library: it would not start without LLVM installed"
             exit 1
@@ -90,8 +84,6 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
-  # Every asset or none: a release that quietly omits a platform it advertises is
-  # worse than a tag whose build failed in the open and can be re-run.
   publish:
     if: github.event_name == 'push'
     needs: [linux]
