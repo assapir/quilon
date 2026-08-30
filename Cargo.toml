@@ -14,6 +14,19 @@ autobenches = false
 [workspace]
 members = ["quilon-rt"]
 
+# A warning is an error, in every crate here and for every cargo command — `build`, `test`,
+# `clippy`, a rust-analyzer check in an editor. CI enforced this through `RUSTFLAGS`, which
+# only the CI environment set, so a warning could survive a whole local session and fail on
+# push. Declared here instead, it applies wherever the workspace is built.
+#
+# Scoped to these crates: `[lints]` does not reach dependencies, unlike `RUSTFLAGS`, so a
+# warning inside a dependency cannot fail our build.
+[workspace.lints.rust]
+warnings = "deny"
+
+[lints]
+workspace = true
+
 [dependencies]
 # LLVM code generation - latest Inkwell targeting LLVM 22
 inkwell = { version = "0.10", features = ["llvm22-1"] }
