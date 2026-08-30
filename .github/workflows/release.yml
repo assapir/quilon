@@ -4,8 +4,7 @@ on:
   push:
     tags:
       - "v[0-9]*"
-  # A manual run builds the release and stops before publishing, so the build can be
-  # proven without spending a version number on it. Run it before tagging.
+  # A manual run builds without publishing: prove the build before tagging.
   workflow_dispatch:
 
 permissions:
@@ -16,19 +15,26 @@ env:
 
 jobs:
   linux:
-    name: Build x86_64-unknown-linux-gnu
-    runs-on: ubuntu-latest
+    name: Build linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
 
     env:
-      ASSET: quilon-x86_64-unknown-linux-gnu
+      ASSET: quilon-linux-${{ matrix.arch }}
       LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # The Boehm GC is a submodule (`quilon-rt/vendor/bdwgc`); the runtime
-          # crate's build script compiles it from source.
           submodules: true
 
       - name: Install Rust toolchain
@@ -37,8 +43,6 @@ jobs:
       - name: Install LLVM 22 and system dependencies
         run: |
           set -euxo pipefail
-          # Same toolchain as CI: both C linkers and the LLVM 22 dev libs. The GC is
-          # vendored, so there is no libgc package to install.
           sudo apt-get update
           sudo apt-get install -y gcc clang
           wget https://apt.llvm.org/llvm.sh
@@ -60,8 +64,6 @@ jobs:
           file "$ASSET"
           ldd "$ASSET"
           ./"$ASSET" check examples/hello_world.qn
-          # The asset promises it runs on a machine with nothing installed, so a
-          # dynamic LLVM is a release-blocking regression rather than a log line.
           if ldd "$ASSET" | grep -qi 'llvm'; then
             echo "::error::$ASSET names an LLVM library: it would not start without LLVM installed"
             exit 1
@@ -82,9 +84,6 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
-  # Every asset or none: a release that quietly omits a platform it advertises is
-  # worse than a tag whose build failed in the open and can be re-run. The build job
-  # is not `continue-on-error` for the same reason.
   publish:
     if: github.event_name == 'push'
     needs: [linux]
