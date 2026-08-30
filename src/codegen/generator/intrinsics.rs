@@ -403,6 +403,51 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call)
     }
 
+    /// Lower a `core.info` member to the `Text` constant it names. Nothing runs at run time:
+    /// the target and the compiler's version are both known while emitting, so each becomes
+    /// the same global byte constant a `Text` literal would.
+    ///
+    /// The target comes from the module's own triple, so a cross-compiled binary reports the
+    /// machine it will RUN on. The OS is spelled the way people say it rather than the way a
+    /// triple does — `"macOS"`, never `"darwin"`.
+    pub(super) fn generate_build_fact(
+        &mut self,
+        fact: super::calls::BuildFact,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use super::calls::BuildFact;
+        // The module carries a triple only when something set one (a cross-compiling build
+        // would). With none set — the JIT, and a plain host build — the host's triple is the
+        // target, so fall back to it rather than reporting "unknown" on every platform.
+        let module_triple = self.module.get_triple();
+        let module_triple = module_triple.as_str().to_string_lossy().to_string();
+        let triple = if module_triple.is_empty() {
+            inkwell::targets::TargetMachine::get_default_triple()
+                .as_str()
+                .to_string_lossy()
+                .to_string()
+        } else {
+            module_triple
+        };
+        // A triple is `arch-vendor-os[-abi]`, but the vendor is omitted often enough
+        // (`aarch64-linux-gnu`) that the OS has to be recognised rather than counted to.
+        let arch = triple.split('-').next().unwrap_or("unknown");
+        let os = match triple.as_str() {
+            t if t.contains("darwin") || t.contains("apple") => "macOS",
+            t if t.contains("linux") => "linux",
+            t if t.contains("windows") => "windows",
+            t if t.contains("freebsd") => "FreeBSD",
+            t if t.contains("openbsd") => "OpenBSD",
+            t if t.contains("netbsd") => "NetBSD",
+            _ => "unknown",
+        };
+        let value = match fact {
+            BuildFact::Platform => arch,
+            BuildFact::Os => os,
+            BuildFact::QuilonVersion => env!("CARGO_PKG_VERSION"),
+        };
+        self.build_text_constant(value)
+    }
+
     /// Lower the `now()` builtin: seconds on a monotonic clock, read through the `__now`
     /// runtime intrinsic. Only differences between two readings are meaningful.
     pub(super) fn generate_now(&mut self) -> Result<BasicValueEnum<'ctx>, String> {

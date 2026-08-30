@@ -296,6 +296,22 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Num,
     },
+    // `core.info` — each lowers to a `Text` constant fixed when the program is compiled.
+    BuiltinOverload {
+        name: "platform",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "os",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "quilonVersion",
+        parameters: &[],
+        ret: Type::Text,
+    },
     // Terminates the process with an exit code — what `core.test`'s failing `assert`
     // calls. `__`-prefixed to mark it internal: there is no user-facing `exit`.
     BuiltinOverload {

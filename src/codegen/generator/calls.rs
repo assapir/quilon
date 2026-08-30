@@ -16,6 +16,22 @@ pub(super) enum IntrinsicLowering {
     Exit,
     /// One of the test registry's primitives, lowered by name (they share a signature).
     TestRegistry,
+    /// A `core.info` member: a `Text` the compiler knows while emitting, so it becomes a
+    /// constant in the binary rather than a call.
+    BuildFact(BuildFact),
+}
+
+/// Which compile-time fact a `core.info` member yields. Read from the target the program is
+/// being emitted FOR, so a cross-compiled binary reports where it will run rather than where
+/// it was built.
+#[derive(Clone, Copy)]
+pub(super) enum BuildFact {
+    /// Target CPU architecture: `"aarch64"`, `"x86_64"`.
+    Platform,
+    /// Target operating system, spelled the way people say it: `"linux"`, `"macOS"`.
+    Os,
+    /// The compiler's own version, e.g. `"0.9.3"`.
+    QuilonVersion,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -53,6 +69,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             "print" | "eprint" => IntrinsicLowering::Print,
             "write" => IntrinsicLowering::Write,
             "now" => IntrinsicLowering::Now,
+            "platform" => IntrinsicLowering::BuildFact(BuildFact::Platform),
+            "os" => IntrinsicLowering::BuildFact(BuildFact::Os),
+            "quilonVersion" => IntrinsicLowering::BuildFact(BuildFact::QuilonVersion),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
@@ -152,6 +171,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 IntrinsicLowering::TestRegistry => {
                     self.generate_test_registry(function_name, arguments)
                 }
+                IntrinsicLowering::BuildFact(fact) => self.generate_build_fact(fact),
             };
         }
 

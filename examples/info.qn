@@ -1,0 +1,25 @@
+~ core.info — facts about the build this program came from (see docs/corelib/info.md).
+~ Every member is a compile-time constant: the compiler resolves it while emitting, so the
+~ calls below cost nothing at runtime and appear in the IR as strings, not calls.
+~ Self-asserting via core.test; exit 0 = pass.
+
+<< core.io
+<< core.test
+<< core.info
+
+^ = () -> Num => <
+  print("quilon `quilonVersion()` for `platform()`-`os()`")
+
+  ~ The version is the compiler's own, so it is never empty and never a placeholder.
+  assert(quilonVersion().size > 0, equals(true))
+
+  ~ The OS is spelled the way people say it: a `darwin` here would mean the triple leaked
+  ~ through instead of being translated.
+  assert(os() == "darwin", equals(false))
+  assert(os().size > 0, equals(true))
+
+  ~ Constants, so two reads in the same program always agree.
+  assert(platform(), equals(platform()))
+
+  0
+>

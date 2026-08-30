@@ -15,6 +15,33 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// else — including an already-ready value — straight through, so chaining them forces exactly
     /// the one that applies. A non-force-site span — every expression in a pure program — lowers
     /// to the call alone, with no force wrapper around it.
+    /// A `Text` whose bytes are known while emitting: a global byte constant paired with its
+    /// UTF-8 byte length, in the `{ ptr data, i64 byte_len }` shape every `Text` has. Backs
+    /// both string literals and the `core.info` members.
+    pub(super) fn build_text_constant(
+        &mut self,
+        value: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let global = self
+            .builder
+            .build_global_string_ptr(value, "str")
+            .map_err(ctx("Failed to build string"))?;
+        let data_ptr = global.as_pointer_value();
+        let len = self.context.i64_type().const_int(value.len() as u64, false);
+        let text_ty = self.ptr_len_struct_type();
+        let with_ptr = self
+            .builder
+            .build_insert_value(text_ty.get_undef(), data_ptr, 0, "text_ptr")
+            .map_err(ctx("Failed to insert text ptr"))?
+            .into_struct_value();
+        let text = self
+            .builder
+            .build_insert_value(with_ptr, len, 1, "text_len")
+            .map_err(ctx("Failed to insert text len"))?
+            .into_struct_value();
+        Ok(text.into())
+    }
+
     pub(super) fn generate_expression(
         &mut self,
         expression: &Expression,
@@ -40,28 +67,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.context.f64_type().const_float(*value).into())
             }
 
-            Expression::String { value, .. } => {
-                // Text is { ptr data, i64 byte_len }: a global byte constant and its
-                // UTF-8 byte length.
-                let global = self
-                    .builder
-                    .build_global_string_ptr(value, "str")
-                    .map_err(ctx("Failed to build string"))?;
-                let data_ptr = global.as_pointer_value();
-                let len = self.context.i64_type().const_int(value.len() as u64, false);
-                let text_ty = self.ptr_len_struct_type();
-                let with_ptr = self
-                    .builder
-                    .build_insert_value(text_ty.get_undef(), data_ptr, 0, "text_ptr")
-                    .map_err(ctx("Failed to insert text ptr"))?
-                    .into_struct_value();
-                let text = self
-                    .builder
-                    .build_insert_value(with_ptr, len, 1, "text_len")
-                    .map_err(ctx("Failed to insert text len"))?
-                    .into_struct_value();
-                Ok(text.into())
-            }
+            Expression::String { value, .. } => self.build_text_constant(value),
 
             Expression::Interpolation { parts, .. } => self.generate_interpolation(parts),
 

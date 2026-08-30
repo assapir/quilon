@@ -1,0 +1,14 @@
+~ core.info — facts about the build a program came from. Every member is a compile-time
+~ constant the compiler bakes in, so a call costs nothing at runtime and reads no machine
+~ state. Import with `<< core.info`.
+
+~ The CPU architecture the program was built for: "aarch64", "x86_64", and so on. Taken
+~ from the target, not the host, so a cross-compiled binary reports where it will RUN.
+>> platform = () -> Text => ""
+
+~ The operating system the program was built for: "linux", "macOS", "windows". Spelled the
+~ way people say it, not the way the target triple does ("macOS", never "darwin").
+>> os = () -> Text => ""
+
+~ The version of the Quilon compiler that built this program, e.g. "0.9.3".
+>> quilonVersion = () -> Text => ""
