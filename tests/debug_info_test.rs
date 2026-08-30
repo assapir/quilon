@@ -48,10 +48,6 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
     std::fs::write(&ql, src).expect("write temp source");
 
     let checked = front_end(&ql).unwrap_or_else(|e| panic!("front end failed: {e}"));
-    assert!(
-        checked.defer.uses_deferral,
-        "the `@sleep` program should use deferral (be the wrapped-entry codegen path)"
-    );
 
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "main");

@@ -47,8 +47,15 @@ can park at a force point without the compiler rewriting it into a state machine
 **Determinism.** Pure results are fully deterministic. The **ordering of side effects** across
 independent deferred IO is unspecified — the accepted cost of implicit overlap.
 
-**A program's entry runs on the fiber scheduler only when it uses an `@` primitive**, so pure
-programs are byte-identical (zero overhead).
+**A program's entry always runs on the fiber scheduler**, so every `@` primitive it reaches
+has a fiber to park on. A pure program pays the scheduler's fixed start-up — a reactor and one
+fiber stack — and nothing else. It never parks, so the loop resumes its single fiber once and
+returns.
+
+That seed fiber gets an 8 MiB stack, the usual process-stack default and much larger than a
+*spawned* fiber's. So `^` recurses about as deeply as it would on an ordinary process stack.
+A raised `ulimit -s` does not raise it further: the collector scans a parked fiber's stack
+whole, so a bigger seed would cost every collection taken while it is parked.
 
 ## Runnable today
 

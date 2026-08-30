@@ -27,12 +27,30 @@ use std::ptr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Per-fiber stack size. corosensei's `DefaultStack` adds a low-end guard page and
-/// rounds the mapping up to a page boundary. Keep this a multiple of the page size
-/// (512 KiB divides every common page size): then the writable region reaches
-/// `base()` exactly, so the GC scan range `[limit + page, base)` has no PROT_NONE
-/// gap at the top for `GC_push_all_eager` to fault on.
+/// Stack size for a spawned fiber. Small, because fibers are many and cheap.
+///
+/// Keep it a page multiple (512 KiB divides every common page size). The writable region
+/// then reaches `base()` exactly, so the GC scan range `[limit + page, base)` has no
+/// PROT_NONE gap for `GC_push_all_eager` to fault on.
 const FIBER_STACK_SIZE: usize = 512 * 1024;
+
+/// Stack size for the seed fiber, the one [`__run_fiber_main`] runs `^` on. The usual
+/// process stack default, so `^` recurses about as deeply as it would on one.
+///
+/// The seed carries the whole user call tree, so it is much larger than a spawned fiber's
+/// stack. A fiber that runs out of stack dies on its guard page with a bare SIGSEGV.
+///
+/// A fixed size, not the process `RLIMIT_STACK`. The collector pushes a parked fiber's
+/// whole registered range, so a scan costs what the stack MEASURES, not what it uses: on
+/// aarch64, ~0.06 ms at 512 KiB, ~0.9 ms at 8 MiB, ~7 ms at 64 MiB. A raised `ulimit -s`
+/// would buy a slower collector. For depth beyond this, a self-tail-call is lowered to a
+/// loop and runs in constant stack.
+///
+/// The ceiling: a seed fiber that parks (`@readStdin` and `@tcpRequest` park in `force`)
+/// costs ~0.9 ms per collection while parked. Scanning it from its suspended stack pointer
+/// would fix that. corosensei does not expose the pointer, but the parking helpers below
+/// run on the fiber and could record it.
+const SEED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// What a fiber yields to the scheduler when it parks.
 enum Park {
@@ -124,11 +142,9 @@ fn with_scheduler<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
     SCHEDULER.with(|s| f(s.borrow_mut().as_mut().expect("no active scheduler")))
 }
 
-/// Spawn `f` as a new fiber and enqueue it. Callable before [`run`] (to seed the
-/// first fiber) or from within a running fiber (to spawn children). Panics if no
-/// scheduler is active.
-pub fn spawn<F: FnOnce() + 'static>(f: F) {
-    let stack = DefaultStack::new(FIBER_STACK_SIZE).expect("failed to allocate fiber stack");
+/// Spawn `f` as a new fiber and enqueue it, with a stack of `stack_size` bytes.
+fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
+    let stack = DefaultStack::new(stack_size).expect("failed to allocate fiber stack");
     let base = stack.base().get();
     let limit = stack.limit().get();
     // Usable region is [limit + guard_page, base); the guard page sits at the low
@@ -153,6 +169,13 @@ pub fn spawn<F: FnOnce() + 'static>(f: F) {
         scheduler.ready.push_back(id);
         gc::register(id, stack_low, stack_high);
     });
+}
+
+/// Spawn `f` as a child fiber, with the standard [`FIBER_STACK_SIZE`] stack. Call it from
+/// within a running fiber; [`run`] seeds the program's own fiber directly, at
+/// [`SEED_STACK_SIZE`]. Panics if no scheduler is active.
+pub fn spawn<F: FnOnce() + 'static>(f: F) {
+    spawn_with_stack(FIBER_STACK_SIZE, f);
 }
 
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
@@ -268,7 +291,7 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
     let reactor = Reactor::new().expect("failed to create reactor");
     REACTOR.with(|r| *r.borrow_mut() = Some(reactor));
 
-    spawn(main);
+    spawn_with_stack(SEED_STACK_SIZE, main);
 
     loop {
         // Pop the next ready fiber AND move it out of the slab in one borrow, so no
@@ -359,11 +382,12 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
     SCHEDULER.with(|s| *s.borrow_mut() = None);
 }
 
-/// The C-ABI entry the generated `main` calls to run a program's entry on this scheduler
-/// (only when the program uses an `@` primitive — pure programs call the entry directly,
-/// unchanged). `entry` is the generated `__ql_entry` thunk with the C `main` signature; its
-/// `i32` result is the program's exit code. Running the entry as the seed fiber gives any
-/// `@` primitive it reaches a fiber to park on.
+/// The C-ABI entry the generated `main` calls to run any program's `^` on this scheduler.
+/// `entry` is the generated `__ql_entry` thunk, which has the C `main` signature; its `i32`
+/// result is the program's exit code.
+///
+/// Running `^` as the seed fiber gives every `@` primitive it reaches a fiber to park on.
+/// A program that never parks still pays [`run`]'s set-up: a reactor and one fiber stack.
 #[unsafe(no_mangle)]
 pub extern "C" fn __run_fiber_main(
     entry: extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int,
