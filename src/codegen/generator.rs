@@ -165,11 +165,9 @@ pub struct CodeGenerator<'ctx> {
     // Populated at the start of `generate`; empty before then.
     oracle: TypeOracle,
     // The deferred-value coloring from the taint pass: which expressions evaluate to a
-    // deferred (promise) value, and whether any `@` launch is reachable. Codegen emits the
-    // pointer representation for a deferred value and a `force` where a force-set primitive
-    // reads it; `uses_deferral` gates running the entry on a scheduler fiber and `< >`
-    // scope join. Empty (nothing deferred) for pure programs and IR-only tests, so their
-    // codegen is byte-identical.
+    // deferred (promise) value. Codegen emits the pointer representation for one, and a
+    // `force` where a force-set primitive reads it. Empty for pure programs and IR-only
+    // tests, which therefore carry no force sites.
     defer: crate::deferral::DeferInfo,
     // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
     // Each entry is the list of that name's overload parameter-type signatures. A name
@@ -666,47 +664,56 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(gc_init, &[], "")
             .map_err(ctx("Failed to call GC init"))?;
 
-        // Emit the entry dispatch (build argv/env, call `^`, convert to the i32 exit code).
-        // A program that uses deferral must run its entry ON a scheduler fiber, so any `@`
-        // primitive it reaches has a fiber to park on: the dispatch goes into a `__ql_entry`
-        // thunk that `main` runs via `__run_fiber_main`. A pure program keeps the dispatch
-        // inline in `main`, byte-identical to before this feature existed.
-        let return_val = if self.defer.uses_deferral {
-            let entry_fn = self.module.add_function("__ql_entry", main_type, None);
-            let thunk_scope = self.begin_di_entry_shim(entry_fn, &main_span);
-            let thunk_argc = entry_fn.get_nth_param(0).unwrap().into_int_value();
-            let thunk_argv = entry_fn.get_nth_param(1).unwrap().into_pointer_value();
-            let thunk_envp = entry_fn.get_nth_param(2).unwrap().into_pointer_value();
-            let thunk_block = self.context.append_basic_block(entry_fn, "entry");
-            self.builder.position_at_end(thunk_block);
-            let exit_code =
-                self.emit_entry_dispatch(entry_parameters, thunk_argc, thunk_argv, thunk_envp)?;
-            self.builder
-                .build_return(Some(&exit_code))
-                .map_err(ctx("Failed to build entry-thunk return"))?;
-            self.end_di_scope(thunk_scope);
+        // Every entry runs on a scheduler fiber, so every `@` primitive it reaches has a
+        // fiber to park on. The dispatch goes into a `__ql_entry` thunk, and `main` runs the
+        // thunk through `__run_fiber_main`.
+        //
+        // Gating this on whether the program reaches an `@` primitive would save nothing.
+        // Every binary carries the scheduler anyway: `__run_fiber_main` sits in the
+        // `INTRINSICS` retention table (`quilon-rt/src/lib.rs`), and the runtime's codegen
+        // units pull in the rest. A gate would only add a second GC root-scanning regime to
+        // keep correct, since an entry on the main thread scans through Boehm's ordinary
+        // stack scan and one on a fiber scans through `push_other_roots` and a per-switch
+        // `GC_set_stackbottom`.
+        //
+        // Start-up costs a fixed ~320us on aarch64: an epoll instance from `Reactor::new`,
+        // the seed fiber's stack mapping and guard page, and registering that range with the
+        // GC. A program that never parks uses none of it, so `scheduler::run` could reclaim
+        // it with a lazy reactor. Shrinking the seed stack would not — `^` recurses on it
+        // (see `scheduler::SEED_STACK_SIZE`).
+        let entry_fn = self.module.add_function("__ql_entry", main_type, None);
+        let thunk_scope = self.begin_di_entry_shim(entry_fn, &main_span);
+        let thunk_argc = entry_fn.get_nth_param(0).unwrap().into_int_value();
+        let thunk_argv = entry_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let thunk_envp = entry_fn.get_nth_param(2).unwrap().into_pointer_value();
+        let thunk_block = self.context.append_basic_block(entry_fn, "entry");
+        self.builder.position_at_end(thunk_block);
+        let exit_code =
+            self.emit_entry_dispatch(entry_parameters, thunk_argc, thunk_argv, thunk_envp)?;
+        self.builder
+            .build_return(Some(&exit_code))
+            .map_err(ctx("Failed to build entry-thunk return"))?;
+        self.end_di_scope(thunk_scope);
 
-            // Back in `main`: run the thunk on a scheduler fiber; its result is the exit code.
-            // Re-seed the builder's debug location to `main`'s scope — emitting the thunk left
-            // it pointing at `__ql_entry`'s subprogram, and the verifier rejects an instruction
-            // whose `!dbg` scope is a different function than the one it lives in.
-            self.builder.position_at_end(entry);
-            self.set_debug_loc(&main_span);
-            let runner = self.get_intrinsic("__run_fiber_main")?;
-            let entry_ptr = entry_fn.as_global_value().as_pointer_value();
-            use inkwell::values::AnyValue;
-            self.builder
-                .build_call(
-                    runner,
-                    &[entry_ptr.into(), argc.into(), argv.into(), envp.into()],
-                    "run_main",
-                )
-                .map_err(ctx("Failed to run entry on a fiber"))?
-                .as_any_value_enum()
-                .into_int_value()
-        } else {
-            self.emit_entry_dispatch(entry_parameters, argc, argv, envp)?
-        };
+        // Back in `main`: run the thunk on a scheduler fiber; its result is the exit code.
+        // Re-seed the builder's debug location to `main`'s scope — emitting the thunk left
+        // it pointing at `__ql_entry`'s subprogram, and the verifier rejects an instruction
+        // whose `!dbg` scope is a different function than the one it lives in.
+        self.builder.position_at_end(entry);
+        self.set_debug_loc(&main_span);
+        let runner = self.get_intrinsic("__run_fiber_main")?;
+        let entry_ptr = entry_fn.as_global_value().as_pointer_value();
+        use inkwell::values::AnyValue;
+        let return_val = self
+            .builder
+            .build_call(
+                runner,
+                &[entry_ptr.into(), argc.into(), argv.into(), envp.into()],
+                "run_main",
+            )
+            .map_err(ctx("Failed to run entry on a fiber"))?
+            .as_any_value_enum()
+            .into_int_value();
 
         self.builder
             .build_return(Some(&return_val))
@@ -718,8 +725,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Emit the entry-point dispatch into the current block and return the i32 exit code:
     /// build `args`/`env` from `argc`/`argv`/`envp` per `^`'s declared signature, call `^`,
-    /// and convert its result. Shared by the inline (pure-program) `main` and the
-    /// `__ql_entry` fiber thunk (deferral), so both dispatch identically.
+    /// then convert its result. Emitted into the `__ql_entry` thunk. Separate from
+    /// `generate_main_wrapper` because it is one piece: what `^`'s three legal shapes mean
+    /// to codegen.
     fn emit_entry_dispatch(
         &mut self,
         entry_parameters: &[Type],

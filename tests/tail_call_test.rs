@@ -128,6 +128,20 @@ fn non_tail_recursion_still_works() {
     );
 }
 
+/// A NON-tail self-call recurses about as deep as it would on an ordinary process stack.
+/// `^` runs on the scheduler's seed fiber, so its depth comes from `SEED_STACK_SIZE`, not
+/// from the smaller stack a spawned fiber gets. The call is non-tail by construction (`+ 1`
+/// after it), so the loop lowering above cannot rescue it. The depth overruns a spawned
+/// fiber's 512 KiB and stays well inside the 8 MiB seed.
+#[test]
+fn deep_non_tail_recursion_has_a_process_sized_stack() {
+    assert_exit(
+        "depth = (n :: Num) -> Num => n == 0 ? 0 : depth(n - 1) + 1\n\
+         ^ = () -> Num => depth(20000) == 20000 ? 7 : 1",
+        7,
+    );
+}
+
 /// Mutual / cross-function tail calls are explicitly OUT of scope for this milestone
 /// (only SELF-tail-calls are optimized). A call to ANOTHER function in tail position
 /// must remain a normal call and still compute the right value.

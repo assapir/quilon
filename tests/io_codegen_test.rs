@@ -119,6 +119,37 @@ fn main_wrapper_initializes_gc() {
 }
 
 #[test]
+fn main_wrapper_runs_a_pure_entry_on_a_fiber_too() {
+    // Every program's entry runs on the scheduler: `main` hands a `__ql_entry` thunk to
+    // `__run_fiber_main` and returns its result. This program is as pure as one gets — no
+    // import, no call, no allocation, nothing that could park — so it holds the routing
+    // independent of whether a program reaches an `@` primitive.
+    let ir = gen_ir(r#"^ = () -> Num => 0"#);
+    assert!(
+        ir.contains("define i32 @__ql_entry("),
+        "the entry dispatch belongs in a `__ql_entry` thunk:\n{ir}"
+    );
+    assert!(
+        ir.contains("@__run_fiber_main("),
+        "`main` must run the thunk on a scheduler fiber:\n{ir}"
+    );
+    assert!(
+        ir.contains("@__ql_entry,") || ir.contains("@__ql_entry)"),
+        "`__run_fiber_main` must be handed the thunk:\n{ir}"
+    );
+    // The dispatch lives in the thunk, so `main` itself never calls `^`.
+    let main_body = ir
+        .split("define i32 @main(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_else(|| panic!("no `main` in:\n{ir}"));
+    assert!(
+        !main_body.contains(r#"@"^""#),
+        "`main` must reach `^` only through the fiber thunk, got:\n{main_body}"
+    );
+}
+
+#[test]
 fn color_enabled_lowers_to_the_color_intrinsic() {
     // `__color_enabled(fd)` is an INTERNAL compiler-lowered primitive (like `__exit`, and
     // exported by no module): it becomes a `__color_enabled` call, so `core.test` does not

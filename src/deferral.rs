@@ -1,15 +1,13 @@
 //! Deferral analysis — the compiler's view of Quilon's `@` leaf-IO-primitive tier, and the
 //! deferred-value taint that makes force-on-use real.
 //!
-//! Two products, both read no types and add none — so the type checker is untouched and a
-//! deferred `Text` keeps the ordinary type `Text` (the load-bearing guardrail of the model):
+//! The pass produces one thing: the **taint**. That is which expressions may evaluate to a
+//! *deferred* value (a promise, from a value-returning `@` primitive like `@readStdin`), plus
+//! the **force-set** (`force_sites`) — the exact spans where the code generator must force
+//! such a value, because a strict primitive is about to read its bytes or it would escape.
 //!
-//!  * `uses_deferral` — whether the program reaches ANY `@` primitive. Gates running the
-//!    entry on a scheduler fiber; a program that uses none is compiled byte-identically.
-//!  * the **taint** — which expressions may evaluate to a *deferred* value (a promise, from a
-//!    value-returning `@` primitive like `@readStdin`), and the **force-set** (`force_sites`): the
-//!    exact expression spans where the code generator must force such a value because a strict
-//!    primitive is about to read its bytes, or it would otherwise escape.
+//! It reads no types and adds none. So the type checker is untouched, and a deferred `Text`
+//! keeps the ordinary type `Text` — the load-bearing guardrail of the model.
 //!
 //! Taint is a forward dataflow. A value is deferred iff it flows from `@readStdin` through only
 //! *lazy carriers* — a `=` binding, and the arms/result of `?`/ternary/blocks — without
@@ -21,7 +19,6 @@
 //! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 
-use crate::ast::walk::for_each_subexpression;
 use crate::ast::{Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement};
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
@@ -40,9 +37,6 @@ const TCP_REQUEST_ARITY: usize = 2;
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
 pub struct DeferInfo {
-    /// Whether any `@` leaf IO primitive is reachable. Gates running the entry on a
-    /// scheduler fiber: a program that uses no `@` primitive is byte-identical to before.
-    pub uses_deferral: bool,
     /// The force-set: spans of expressions whose generated value codegen must force in
     /// place, because a deferred value sits where a strict primitive reads its bytes or
     /// would escape. Empty for pure programs — the whole codegen-visible surface of the
@@ -57,44 +51,17 @@ impl DeferInfo {
     }
 }
 
-/// Analyze `program`: whether it reaches an `@` primitive, plus the deferred-value taint and
-/// force-set — the whole codegen-visible surface of the analysis.
+/// Analyze `program`: the deferred-value taint and force-set — the whole codegen-visible
+/// surface of the analysis.
 pub fn analyze(program: &Program) -> DeferInfo {
-    let uses_deferral = program.items.iter().any(|item| match item {
-        Item::FunctionDeclaration(f) => references_at_primitive(&f.body),
-        Item::VariableDeclaration(v) => references_at_primitive(&v.value),
-        // A method body reaches `@` primitives like any other body, so scan them too.
-        Item::TypeDeclaration(t) => t
-            .type_definition
-            .methods()
-            .iter()
-            .any(|method| references_at_primitive(&method.body)),
-    });
-
     let mut taint = Taint::default();
     for item in &program.items {
         taint.analyze_item(item);
     }
 
     DeferInfo {
-        uses_deferral,
         force_sites: taint.force_sites,
     }
-}
-
-/// Whether any `@`-primitive reference appears anywhere in `expression`. An `@` name can only ever
-/// name a leaf IO primitive (the parser reserves the `@`), so any `@`-prefixed identifier —
-/// called directly, piped into, or otherwise — counts.
-fn references_at_primitive(expression: &Expression) -> bool {
-    let mut found = false;
-    for_each_subexpression(expression, &mut |e| {
-        if let Expression::Identifier { name, .. } = e
-            && name.starts_with('@')
-        {
-            found = true;
-        }
-    });
-    found
 }
 
 /// The deferred-value taint accumulator.
@@ -345,37 +312,15 @@ mod tests {
         analyze(&program)
     }
 
-    fn uses_deferral(src: &str) -> bool {
-        info(src).uses_deferral
-    }
-
     /// The number of force sites in the program — the size of the force-set.
     fn force_count(src: &str) -> usize {
         info(src).force_sites.len()
     }
 
     #[test]
-    fn pure_program_uses_no_deferral() {
+    fn pure_program_has_no_force_sites() {
         let i = info("^ = () -> Num => 1 + 2 * 3");
-        assert!(!i.uses_deferral);
         assert_eq!(i.force_sites.len(), 0);
-    }
-
-    #[test]
-    fn a_sleep_call_marks_deferral() {
-        assert!(uses_deferral("^ = () -> $ => <\n  @sleep(1)\n  $\n>"));
-    }
-
-    #[test]
-    fn sleep_reached_through_a_helper_marks_deferral() {
-        assert!(uses_deferral(
-            "nap = () -> $ => @sleep(1)\n^ = () -> $ => nap()"
-        ));
-    }
-
-    #[test]
-    fn sleep_piped_in_still_marks_deferral() {
-        assert!(uses_deferral("^ = () -> $ => 1 |> @sleep"));
     }
 
     #[test]
@@ -389,8 +334,6 @@ mod tests {
     fn bound_read_is_deferred_and_forced_at_a_strict_use() {
         // `x = @readStdin()` binds a deferred Text (lazy); the comparison forces it once.
         let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  x == \"hi\" ? 0 : 1\n>";
-        let i = info(src);
-        assert!(i.uses_deferral);
         // Exactly one force: the `x` read inside the comparison. The binding stays lazy.
         assert_eq!(force_count(src), 1);
     }
@@ -413,8 +356,6 @@ mod tests {
     fn a_bound_but_unused_read_is_not_forced() {
         // Launched (eager) but never read strictly: no force site. The launch still runs.
         let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  0\n>";
-        let i = info(src);
-        assert!(i.uses_deferral);
         assert_eq!(force_count(src), 0);
     }
 
@@ -427,19 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn tcp_request_marks_deferral() {
-        assert!(uses_deferral(
-            "<< core.net\n^ = () -> Num => <\n  @tcpRequest(\"a:1\", \"b\")\n  0\n>"
-        ));
-    }
-
-    #[test]
     fn bound_tcp_request_is_deferred_and_forced_at_a_strict_use() {
         // `r = @tcpRequest(...)` binds a deferred Result (lazy); the match forces it once — the
         // same shape as a bound `@readStdin`, proving the taint tracks both producers.
         let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\", \"b\")\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
-        let i = info(src);
-        assert!(i.uses_deferral);
         assert_eq!(force_count(src), 1);
     }
 

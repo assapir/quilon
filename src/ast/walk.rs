@@ -14,8 +14,8 @@ use std::ops::ControlFlow;
 /// Descends into a nested function declaration's body, since that body is still code the
 /// enclosing expression runs; it does not descend into item SIGNATURES or type declarations.
 ///
-/// Use [`for_each_subexpression`] when the walk always visits everything; a search wants
-/// this form, so it does not keep traversing after it has its answer.
+/// To visit everything, return `ControlFlow::Continue(())` throughout. To search, break —
+/// the walk then stops instead of traversing the rest.
 pub fn try_for_each_subexpression<B>(
     expression: &Expression,
     f: &mut impl FnMut(&Expression) -> ControlFlow<B>,
@@ -121,15 +121,6 @@ pub fn try_for_each_subexpression<B>(
     ControlFlow::Continue(())
 }
 
-/// Apply `f` to `expression` and every sub-expression (pre-order), visiting all of them.
-/// The always-visit form of [`try_for_each_subexpression`].
-pub fn for_each_subexpression(expression: &Expression, f: &mut impl FnMut(&Expression)) {
-    let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
-        f(e);
-        ControlFlow::Continue(())
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,10 +168,11 @@ mod tests {
             "^ = () -> Num => <\n  helper = () -> Num => 7\n  a = [1].map(x => x + 1)\n  helper()\n>",
         );
         let mut numbers = Vec::new();
-        for_each_subexpression(&body, &mut |e| {
+        let _: ControlFlow<()> = try_for_each_subexpression(&body, &mut |e| {
             if let Expression::Number { value, .. } = e {
                 numbers.push(*value);
             }
+            ControlFlow::Continue(())
         });
         numbers.sort_by(f64::total_cmp);
         assert_eq!(
