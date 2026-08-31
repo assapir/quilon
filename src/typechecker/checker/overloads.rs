@@ -263,20 +263,6 @@ impl TypeChecker {
                 }
             }
         }
-        // An output built-in claims its whole arity — it accepts every renderable value
-        // there, so there is no argument type left for a member to claim. The arity a caller
-        // sees is what counts: a trailing `Site` the compiler fills in would otherwise hide a
-        // member behind the built-in, reachable from no call. A definition at another arity
-        // is an ordinary set beside it.
-        if let Some(builtin) = crate::ast::renderable_builtin(&declaration.name)
-            && crate::ast::visible_parameters(&parameters).len() == builtin.arity()
-        {
-            return Err(TypeError::RenderableBuiltinRedefined {
-                name: declaration.name.clone(),
-                span: declaration.span.clone(),
-            });
-        }
-
         let ret = declaration
             .declared_return_type()
             .map(|t| self.resolve_type(t));

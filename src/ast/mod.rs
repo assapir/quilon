@@ -2,6 +2,7 @@
 
 pub mod captures;
 pub mod nodes;
+pub mod qualify;
 pub mod reachability;
 pub mod types;
 pub mod walk;

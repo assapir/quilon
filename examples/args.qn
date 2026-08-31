@@ -16,6 +16,6 @@
   ~ shown (printed) rather than asserted on.
   first :: Text = args[0]
   varCount = env.size
-  print(first)
-  print(varCount)
+  io.print(first)
+  io.print(varCount)
 >

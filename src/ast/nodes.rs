@@ -14,20 +14,28 @@ pub struct Program {
     pub test_blocks: Vec<Expression>,
 }
 
-/// The name whose top-level call marks test code: `describe`. There is no attribute or
-/// `cfg` syntax — the symbol IS the marker, so a file's tests are recognizable by the
-/// parser (see `Parser::parse_program`) with no annotation to keep in sync.
-pub const TEST_BLOCK_MARKER: &str = "describe";
+/// The resolved name whose top-level call marks test code: `core.test`'s `describe`,
+/// written `test.describe(…)` (or fully qualified) under an `<< core.test` import. There
+/// is no attribute or `cfg` syntax — the call IS the marker, so a file's tests are
+/// recognizable by the parser (see `Parser::parse_program`) with no annotation to keep in
+/// sync; this constant is the POST-LINK spelling the checker compares against.
+pub const TEST_BLOCK_MARKER: &str = "core.test.describe";
 
-/// The name of a test CASE, written `it("…", () => …)`. A recorded assertion belongs
-/// inside one: `it` is what closes a case and tallies it, so an `expect` anywhere else in
-/// a suite would set a failure mark nothing ever reports.
-pub const TEST_CASE_MARKER: &str = "it";
+/// The resolved name of a test CASE, written `test.it("…", () => …)`. A recorded
+/// assertion belongs inside one: `it` is what closes a case and tallies it, so an
+/// `expect` anywhere else in a suite would set a failure mark nothing ever reports.
+pub const TEST_CASE_MARKER: &str = "core.test.it";
 
 /// The implicit receiver of a method or operator member — its subject, and an operator
-/// member's left operand. Unrelated to [`TEST_CASE_MARKER`], which happens to be spelled the
-/// same.
+/// member's left operand.
 pub const RECEIVER: &str = "it";
+
+/// The user-facing spelling of a qualified name: its last segment (`print` for
+/// `core.io.print`, `Get` for `core.http.Get`). What rendered output and diagnostics that
+/// speak the user's vocabulary show; the full name stays the identity everywhere else.
+pub fn display_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
 
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 #[derive(Debug, Clone, PartialEq)]
@@ -173,8 +181,19 @@ impl FunctionDeclaration {
     /// the ordinary diagnostics — a name the compiler claims outright, a duplicate
     /// signature, or a member missing an annotation.
     /// Shared by the type checker and codegen so the two never disagree on what to skip.
+    ///
+    /// Matched by LAST SEGMENT under the `from_corelib` gate: linked in as a module the
+    /// declaration is named `core.io.print`, while a corelib file checked directly
+    /// (`quilon check corelib/io.qn`) still carries the bare `print` — both are the same
+    /// placeholder. A user's bare `print` is not `from_corelib` and stays a real function.
     pub fn is_inert_corelib_placeholder(&self) -> bool {
-        self.from_corelib && is_compiler_provided_name(&self.name)
+        self.from_corelib
+            && (BUILTIN_OVERLOADS
+                .iter()
+                .any(|member| display_name(member.name) == display_name(&self.name))
+                || RENDERABLE_BUILTINS
+                    .iter()
+                    .any(|builtin| display_name(builtin.name) == display_name(&self.name)))
     }
 
     /// The parameter slots of a function type on the binding (`f :: (Num) -> Num = …`),
@@ -243,21 +262,23 @@ impl RenderableBuiltin {
 /// are.
 ///
 /// They have no signature per type, so the compiler claims these names at their own arity
-/// and nothing extends them: a type becomes printable by defining its own `` ` ``. A
-/// definition at a DIFFERENT arity is an ordinary overload set beside them.
+/// and nothing extends them: a type becomes printable by defining its own `` ` ``. They
+/// are `core.io`'s exports, reached as `io.print(...)` under an `<< core.io` import —
+/// these are the post-link names — so a user's own bare `print` is simply a different,
+/// unrelated function.
 pub const RENDERABLE_BUILTINS: &[RenderableBuiltin] = &[
     RenderableBuiltin {
-        name: "print",
+        name: "core.io.print",
         rest: &[],
         ret: Type::Unit,
     },
     RenderableBuiltin {
-        name: "eprint",
+        name: "core.io.eprint",
         rest: &[],
         ret: Type::Unit,
     },
     RenderableBuiltin {
-        name: "write",
+        name: "core.io.write",
         rest: &[Type::Num],
         ret: Type::Num,
     },
@@ -276,11 +297,11 @@ pub fn is_renderable(ty: &Type) -> bool {
 }
 
 /// The corelib functions the compiler provides itself, as the members they occupy in their
-/// overload sets — `core.time`'s `now` and the internal primitives, all lowered to runtime
-/// intrinsics. A user definition of one of these names ADDS a member to its set rather than
-/// shadowing the built-in, and dispatch picks by exact argument types like any other set.
-/// The output family (`print`/`eprint`/`write`) takes no signature per type and lives in
-/// [`RENDERABLE_BUILTINS`] instead.
+/// overload sets — `core.time`'s `now` (post-link name, reached as `time.now()` under an
+/// `<< core.time` import) and the internal primitives, all lowered to runtime intrinsics.
+/// A module's overload sets are closed: a user's own bare `now` is an unrelated function,
+/// not a member beside the built-in. The output family (`print`/`eprint`/`write`) takes no
+/// signature per type and lives in [`RENDERABLE_BUILTINS`] instead.
 ///
 /// The `__`-prefixed entries are internal primitives (`core.test`'s harness and report
 /// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
@@ -292,7 +313,7 @@ pub fn is_renderable(ty: &Type) -> bool {
 /// which is exactly the class of bug the table exists to prevent.
 pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     BuiltinOverload {
-        name: "now",
+        name: "core.time.now",
         parameters: &[],
         ret: Type::Num,
     },

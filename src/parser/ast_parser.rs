@@ -42,6 +42,17 @@ pub struct Parser<'a> {
     /// is a hashable value and is never a function, so lambda detection is suppressed for
     /// the whole key expression while this is set (see `parse_fence_key`).
     suppress_lambda: bool,
+    /// Every module-path spelling the `<<` lines above the cursor have bound: the short
+    /// binding (`http`, a file's stem) and the full dotted path (`core.http`). A same-line
+    /// `Ident (. Ident)* . Ident` chain whose longest prefix is one of these is a QUALIFIED
+    /// reference (`http.send`, `core.test.describe`) and parses as a single dotted name —
+    /// see `try_parse_module_member`. Populated as imports are parsed, so (like every other
+    /// name — the language has no hoisting) an import qualifies only the code below it.
+    module_paths: std::collections::HashSet<String>,
+    /// The spellings that mean `core.test` specifically (`test`, `core.test`, when it is
+    /// imported) — what makes a top-level `test.describe(...)` recognizable as a test
+    /// block to hoist (see `at_test_block`).
+    test_module_spellings: std::collections::HashSet<String>,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -87,6 +98,8 @@ impl<'a> Parser<'a> {
             file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
             span_base: 0,
             suppress_lambda: false,
+            module_paths: std::collections::HashSet::new(),
+            test_module_spellings: std::collections::HashSet::new(),
         }
     }
 
@@ -205,6 +218,79 @@ impl<'a> Parser<'a> {
             self.tokens[self.pos - 1].span.clone()
         } else {
             self.span(0, 0)
+        }
+    }
+
+    /// The maximal same-line `Ident (. Ident)* ` chain at the cursor, as its segment
+    /// texts. Empty when the cursor is not on an identifier. Same-line only: a `.` that
+    /// begins a source line continues an expression as a method chain, never a module
+    /// path. Segment `i` sits at token offset `2*i` (its `.` at `2*i - 1`).
+    fn dotted_chain_at_cursor(&self) -> Vec<String> {
+        let mut segments = Vec::new();
+        if !self.check(&TokenKind::Ident) {
+            return segments;
+        }
+        segments.push(self.peek().text.clone());
+        loop {
+            let next = segments.len();
+            if self.check_same_line_at(2 * next - 1, &TokenKind::Dot)
+                && self.check_same_line_at(2 * next, &TokenKind::Ident)
+            {
+                segments.push(self.tokens[self.pos + 2 * next].text.clone());
+            } else {
+                return segments;
+            }
+        }
+    }
+
+    /// If the cursor begins a qualified reference — a dotted chain whose longest proper
+    /// prefix is a module path bound by an import above (`http.send`,
+    /// `core.test.describe`) — consume the path and ONE member segment, returning the
+    /// joined dotted name and its span. Any further `.` continuation is the ordinary
+    /// postfix grammar's (a field or method of the referenced value). `None` leaves the
+    /// cursor untouched: the identifier is an ordinary name.
+    fn try_parse_module_member(&mut self) -> Option<(String, Span)> {
+        let segments = self.dotted_chain_at_cursor();
+        for prefix_len in (1..segments.len()).rev() {
+            let prefix = segments[..prefix_len].join(".");
+            if self.module_paths.contains(&prefix) {
+                let start = self.current_span().start;
+                // The prefix's segments and dots, plus the member: 2 * prefix_len + 1.
+                for _ in 0..(2 * prefix_len + 1) {
+                    self.advance();
+                }
+                let span = self.span(start, self.previous_span().end);
+                return Some((format!("{prefix}.{}", segments[prefix_len]), span));
+            }
+        }
+        None
+    }
+
+    /// Record what an `<<` line binds, so the code below it can spell qualified names.
+    fn register_import(&mut self, path: &ModulePath) {
+        match path {
+            ModulePath::BuiltinDotted(parts) => {
+                let canonical = parts.join(".");
+                if let Some(alias) = parts.last() {
+                    self.module_paths.insert(alias.clone());
+                }
+                if canonical == "core.test" {
+                    self.test_module_spellings.insert(canonical.clone());
+                    if let Some(alias) = parts.last() {
+                        self.test_module_spellings.insert(alias.clone());
+                    }
+                }
+                self.module_paths.insert(canonical);
+            }
+            ModulePath::FilePath(raw) => {
+                let normalized = raw.replace('\\', "/");
+                if let Some(stem) = std::path::Path::new(&normalized)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                {
+                    self.module_paths.insert(stem.to_string());
+                }
+            }
         }
     }
 }

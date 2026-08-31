@@ -105,7 +105,7 @@ pub enum TestBlocks {
 /// The function the synthesized test entry point ends with: it renders the run's summary and
 /// yields the run's status. Bound by NAME in the linked program's scope, where `core.test`'s
 /// definition answers.
-const SUMMARY_FUNCTION: &str = "reportSummary";
+const SUMMARY_FUNCTION: &str = "core.test.reportSummary";
 
 /// The module carrying the harness, named in the diagnostic a suite gets when the summary
 /// function is not in scope at all.
@@ -167,8 +167,18 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
     let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
 
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
-    let (mut program, mut sources) =
-        modules::link(program, base_dir).map_err(FrontEndError::plain)?;
+    let (mut program, mut sources) = match modules::link(program, base_dir) {
+        Ok(linked) => linked,
+        // A link failure's span may point into an imported module; the error carries the
+        // sources loaded so far, so the diagnostic renders against the right file.
+        Err(mut error) => {
+            error.sources.set_root(path.clone(), source.clone());
+            return Err(match &error.span {
+                Some(span) => FrontEndError::at_span(&error.sources, span, &error.message),
+                None => FrontEndError::plain(error.message),
+            });
+        }
+    };
     sources.set_root(path.clone(), source.clone());
 
     if tests == TestBlocks::Run {

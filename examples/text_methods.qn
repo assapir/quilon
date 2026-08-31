@@ -1,6 +1,6 @@
 ~ Built-in `Text` methods, verified with `core.test` assertions: every assertion below
 ~ holds, so the program runs to completion and exits 0 (a failing assertion prints to
-~ stderr and exits 101). Methods (grapheme-based where an index/length is user-visible):
+~ io.stderr and exits 101). Methods (grapheme-based where an index/length is user-visible):
 ~   split(sep)                        -> []Text  (empty sep -> graphemes; empties preserved)
 ~   trim() / trimStart() / trimEnd()  -> Text    (strip both / leading / trailing whitespace)
 ~   replaceAll(from, to)              -> Text    (replace every occurrence)

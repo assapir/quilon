@@ -477,6 +477,10 @@ impl<'a> Parser<'a> {
         }
         let mut parser = Parser::new(&tokens);
         parser.span_base = abs;
+        // A hole may spell qualified names, so it sees the same import bindings the
+        // enclosing file has accumulated so far.
+        parser.module_paths = self.module_paths.clone();
+        parser.test_module_spellings = self.test_module_spellings.clone();
         let expression = parser.parse_expression()?;
         if !parser.is_at_end() {
             return Err(ParseError {
@@ -550,9 +554,19 @@ impl<'a> Parser<'a> {
                     return self.parse_lambda_expression();
                 }
 
-                let span = token.span.clone();
-                let name = token.text.clone();
-                self.advance();
+                // A qualified reference through an imported module binding — `http.send`,
+                // `http.Request { … }`, `core.test.describe` — reads as ONE dotted name;
+                // the postfix loop then applies `(args)` / `{ fields }` / further `.`s to
+                // it like any other reference.
+                let bare_span = token.span.clone();
+                let bare_name = token.text.clone();
+                let (name, span) = match self.try_parse_module_member() {
+                    Some(qualified) => qualified,
+                    None => {
+                        self.advance();
+                        (bare_name, bare_span)
+                    }
+                };
 
                 // A same-line `{` makes this a record constructor: Ident { ... }. A
                 // line-first `{` leaves the identifier a plain reference and the

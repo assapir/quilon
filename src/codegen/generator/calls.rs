@@ -50,9 +50,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         arguments: &[Expression],
     ) -> Option<IntrinsicLowering> {
         let lowering = match name {
-            "print" | "eprint" => IntrinsicLowering::Print,
-            "write" => IntrinsicLowering::Write,
-            "now" => IntrinsicLowering::Now,
+            "core.io.print" | "core.io.eprint" => IntrinsicLowering::Print,
+            "core.io.write" => IntrinsicLowering::Write,
+            "core.time.now" => IntrinsicLowering::Now,
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,

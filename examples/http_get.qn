@@ -5,11 +5,11 @@
 << core.http
 
 ^ = () -> $ => <
-  result = Request { method = Get, url = "http://example.com/" }.send()
+  result = http.Request { method = http.Get, url = "http://example.com/" }.send()
   assert(result, isOk())
   response = result ?
     | Ok(page) => page
-    | NotOk(_) => Response { raw = "" }
+    | NotOk(_) => http.Response { raw = "" }
   assert(response.status(), equals(200))
 
   ~ The page's text changes, so assert it arrived rather than what it says.
@@ -19,5 +19,5 @@
   assert(response.header("Content-Type"), isOk())
 
   ~ A transport failure comes back as NotOk, not a crash.
-  assert(Request { method = Get, url = "http://127.0.0.1:1/" }.send(), isNotOk())
+  assert(http.Request { method = http.Get, url = "http://127.0.0.1:1/" }.send(), isNotOk())
 >

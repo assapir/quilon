@@ -1,11 +1,11 @@
 ~ The classic first program: build a greeting, print it, and verify the result
 ~ in-language. `<< core.test` provides the assertions — on success the program runs
-~ to completion and exits 0; a failing assertion prints to stderr and exits 101.
+~ to completion and exits 0; a failing assertion prints to io.stderr and exits 101.
 << core.io
 << core.test
 
 ^ = () -> $ => <
   greeting :: Text = "Hello, " + "Quilon" + "!"
-  print(greeting)                       ~ stdout: Hello, Quilon!
+  io.print(greeting)                       ~ io.stdout: Hello, Quilon!
   assert(greeting, equals("Hello, Quilon!"))
 >

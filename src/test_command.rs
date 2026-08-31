@@ -40,9 +40,10 @@ pub fn run(root: &Path) -> usize {
     match suites.as_slice() {
         [] => {
             println!(
-                "no tests found in {} — a test file has top-level `{}` blocks",
+                "no tests found in {} — a test file imports `core.test` and has top-level \
+                 `test.{}` blocks",
                 root.display(),
-                crate::ast::TEST_BLOCK_MARKER
+                crate::ast::display_name(crate::ast::TEST_BLOCK_MARKER)
             );
             0
         }

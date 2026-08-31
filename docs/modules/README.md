@@ -5,14 +5,79 @@ title: "Modules"
 # Modules
 
 ```quilon ignore
-<< core.io                 ~ import the built-in IO module
-<< "lib/math.qn"           ~ import a user module by path (/ or \)
+<< core.io                 ~ import the built-in IO module; binds `io`
+<< "lib/math.qn"           ~ import a user module by path (/ or \); binds its file stem, `math`
 
 >> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
+
+^ = () -> Num => <
+  io.print(math.add(2, 3))  ~ exports are reached THROUGH the module's binding
+  0
+>
 ```
+
+## Qualified access
+
+An import does not merge names into the file — it binds the module's **last path
+segment** (`<< core.http` binds `http`; a file import binds its file stem), and every
+export is reached through that binding: `http.send(...)`, `io.print(...)`,
+`http.Request { … }`. Types, their variants, constants, and functions all qualify the
+same way, in every position:
+
+```quilon ignore
+<< core.http
+
+classify = (m :: http.Method) -> Num =>   ~ a qualified type in an annotation
+  m ?
+    | http.Get     => 1                   ~ qualified variants in patterns
+    | http.Post(_) => 2
+    | _            => 0
+
+request = http.Request { method = http.Get, url = "http://example.com/" }
+```
+
+The **full path always works too**: `core.http.send(...)`. It is the escape hatch, not
+the everyday form — when two imported modules share a last segment (`core.test` and a
+user's `foo.test`), the short name is ambiguous and the compiler asks for the full path.
+A module imported by file path has only its stem, so two file imports with the same stem
+are rejected at the import — rename the file.
+
+An import **claims its short name** for the whole file: after `<< core.http`, a binding
+named `http` (top-level, local, or a parameter) is an error. And an import binds only the
+code **below it** — like every other name, since the language has no hoisting.
+
+Two spellings stay bare:
+
+- `@` leaf IO primitives (`@sleep`, `@readStdin`, `@tcpRequest`): importing their module
+  is still required, but the `@` name is global — the sigil already marks it.
+- The compiler's own surface — `assert`/`expect` and the matchers — which belongs to no
+  module and needs no import.
+
+## Privacy
+
+A module exposes only its `>>`-exported items, but its private items **travel with it**:
+an exported function may call a private sibling, and the importer still cannot reach it —
+`math.helper` answers ``​`helper` is not exported by `math`​`` whether `helper` is private
+or does not exist at all.
+
+There is **no selective import, no re-export, and no aliasing**. A module that wants to
+build on another holds it and delegates (composition):
+
+```quilon ignore
+<< core.http
+>> fetch = (url :: Text) -> Result => http.Request { method = http.Get, url = url }.send()
+```
+
+## Closed overload sets
+
+Qualified access closes a module's overload sets: a program cannot add a member to an
+imported module's function from outside. `core.io.print` already takes **any renderable
+value** — a type becomes printable by defining its own `` ` `` render member, never by
+extending `print`. A program's own bare `print` (or `now`, or `write`) is simply an
+unrelated function.
+
 - The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, `core.net`, and `core.http`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
-- A module exposes only its `>>`-exported items.
-- An import a file's [`describe` blocks](../corelib/test/README.md) are the only user of needs no marker: with the blocks erased nothing references what it brought in, so none of it reaches the build.
+- A file's [`test.describe` blocks](../corelib/test/README.md) need `<< core.test`; every command but `quilon test` erases the blocks, and with nothing left referencing it the harness is tree-shaken out of the build.
 
 (See `examples/use_module.qn`, which imports `examples/mathlib.qn`.)

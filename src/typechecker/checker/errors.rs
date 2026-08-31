@@ -44,8 +44,7 @@ impl TypeError {
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
             | TypeError::UnknownMember { span, .. }
-            | TypeError::NotRenderable { span, .. }
-            | TypeError::RenderableBuiltinRedefined { span, .. } => span,
+            | TypeError::NotRenderable { span, .. } => span,
         }
     }
 }
@@ -74,8 +73,8 @@ impl std::fmt::Display for TypeError {
                     "`{}` marks the running test case failed, so it only works inside an `{}` \
                      case in a `{}` block. Use `{}`, which reports and exits, everywhere else",
                     crate::ast::EXPECT,
-                    crate::ast::TEST_CASE_MARKER,
-                    crate::ast::TEST_BLOCK_MARKER,
+                    crate::ast::display_name(crate::ast::TEST_CASE_MARKER),
+                    crate::ast::display_name(crate::ast::TEST_BLOCK_MARKER),
                     crate::ast::ASSERT
                 )
             }
@@ -366,12 +365,6 @@ impl std::fmt::Display for TypeError {
                     f,
                     "'{name}' renders its argument through the type's '`' member, and {} has none",
                     crate::ast::type_label(got),
-                )
-            }
-            TypeError::RenderableBuiltinRedefined { name, .. } => {
-                write!(
-                    f,
-                    "'{name}' is provided by the compiler and already takes any renderable value — give the type its own '`' render member rather than defining '{name}'",
                 )
             }
             TypeError::OperatorMemberArity { operator, got, .. } => {

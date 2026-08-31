@@ -30,7 +30,7 @@ Vec = {
   ~ --- Array spread ([]Text) — repr-correct, not just Num ---
   hello :: []Text = ["h", "e"]
   word  :: []Text = [<-hello, "l", "l", "o"]   ~ ["h","e","l","l","o"]
-  word.each(c => print(c))                     ~ prints h e l l o, one per line
+  word.each(c => io.print(c))                     ~ prints h e l l o, one per line
   assert(word.size, equals(5))
   assert(word[4], equals("o"))
 

@@ -26,7 +26,7 @@ throughAWrapper = (site :: Site) -> Num => callerLine(site)
 
 ~ An assertion of your own, reporting its caller's location through `core.test`'s `failAt`.
 assertEven = (n :: Num, site :: Site) -> $ =>
-  n % 2 == 0 ? $ : failAt("assertion failed: `n` is odd", site)
+  n % 2 == 0 ? $ : test.failAt("assertion failed: `n` is odd", site)
 
 ^ = () -> $ => <
   ~ Three calls on consecutive lines report consecutive line numbers — and the third
