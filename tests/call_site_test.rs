@@ -8,7 +8,7 @@
 //! nothing could fill in is rejected rather than quietly demanding an argument.
 
 mod common;
-use common::{TEST_FILE, assert_exit, assert_exit_linked, assert_type_error, type_error_message};
+use common::{TEST_FILE, assert_exit, assert_type_error, type_error_message};
 use inkwell::context::Context;
 use quilon::codegen::CodeGenerator;
 use quilon::lexer::Lexer;
@@ -50,8 +50,7 @@ here = (site :: Site) -> Bool => site.file == \"{TEST_FILE}\" && site.excerpt.co
   here() ? 9 : 0
 "
     );
-    // Linked: `.contains` is implemented in `core.text`, which only the link merges in.
-    assert_exit_linked(&src, 9);
+    assert_exit(&src, 9);
 }
 
 /// Track-caller: a wrapper that FORWARDS its own `site` reports where IT was called, not

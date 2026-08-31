@@ -52,8 +52,9 @@ pub fn assert_exit(src: &str, expected: i32) {
     assert_eq!(code, expected, "unexpected exit code for source:\n{src}");
 }
 
-/// Like [`assert_exit`], but resolves `<<` imports first, so a program that uses the
-/// core library (`<< core.io`, `<< core.test`, …) runs end to end.
+/// [`assert_exit`] under its older name: every program is linked now (see [`front_end`]),
+/// so the two are the same behavior. Kept because a test naming it documents that its
+/// program leans on the corelib (`<< core.io`, `<< core.test`, an implicit `core.text`).
 pub fn assert_exit_linked(src: &str, expected: i32) {
     assert_exit_linked_from(src, Path::new("."), expected);
 }

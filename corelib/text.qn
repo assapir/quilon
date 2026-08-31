@@ -16,10 +16,11 @@
 ~ keep the merge out of every program's own namespace. Every item is exported (`>>`):
 ~ only exports survive the merge, and the helpers are called by the ones that do.
 ~
-~ The walks here are accumulator-shaped self-tail-calls, which the compiler lowers to
-~ loops — recursion depth never grows with the text. Each step still re-walks the tail's
-~ graphemes (`.length`, `indexOf`), so a split/replace is quadratic in graphemes where the
-~ old intrinsic was linear in bytes; measured hot paths may return to native (issue #57).
+~ The split/replace walks are accumulator-shaped self-tail-calls, which the compiler
+~ lowers to loops — their depth never grows with the text (`repeat` instead recurses at
+~ log(count) depth, the cost of doubling). Each step still re-walks the tail's graphemes
+~ (`indexOf`), so a split/replace is quadratic in graphemes where the old intrinsic was
+~ linear in bytes; measured hot paths may return to native (issue #57).
 ~
 ~ The module's own suite lives at the bottom (`quilon test corelib/text.qn`), which is
 ~ what `<< core.test` is for — like core.http, at the accepted cost that a program in
@@ -62,20 +63,12 @@
     | Ok(i)    => __qn_text_split_go(acc + [rest.slice(0, i)], rest.slice(i + sepLen, rest.size), sep, sepLen)
     | NotOk(_) => acc + [rest]
 
-~ Split on a NON-empty `sep`: the first match seeds the accumulator (an empty array
-~ literal has no element type to take), the walk above collects the rest.
->> __qn_text_split_first = (t :: Text, sep :: Text) -> []Text => <
-  sepLen = sep.length
-  t.indexOf(sep) ?
-    | Ok(i)    => __qn_text_split_go([t.slice(0, i)], t.slice(i + sepLen, t.size), sep, sepLen)
-    | NotOk(_) => [t]
->
-
 ~ Split `t` on `sep`. Consecutive separators keep empty pieces, an empty `t` yields
 ~ `[""]`, and an EMPTY separator splits into graphemes (where an empty `t` yields `[]` —
-~ the graphemes of nothing).
+~ the graphemes of nothing). `"".graphemes()` is how this file writes an empty `[]Text`:
+~ a bare `[]` literal has no element type to take.
 >> __qn_text_split = (t :: Text, sep :: Text) -> []Text =>
-  sep.size == 0 ? t.graphemes() : __qn_text_split_first(t, sep)
+  sep.size == 0 ? t.graphemes() : __qn_text_split_go("".graphemes(), t, sep, sep.length)
 
 ~ The end of a replace walk: the text is exhausted with `remaining` replacements still
 ~ owed — a `count` beyond the occurrences present, which fails loudly (the whole text
@@ -101,6 +94,7 @@
 ~ request and fails loudly (exit 101) — never a silent no-op.
 >> __qn_text_replace_all = (t :: Text, from :: Text, to :: Text, site :: Site) -> Text => <
   from.size == 0 ? failAt("replace: ``from`` must not be empty", site) : $
+  ~ the -1s: never-owed `remaining`, and a `count` no failure can ever read
   __qn_text_replace_go("", t, from, from.length, to, 0 - 1, 0 - 1, site)
 >
 
