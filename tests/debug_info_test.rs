@@ -637,8 +637,11 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
     )
     .expect("write imported module");
     let ql = dir.join("main.qn");
-    std::fs::write(&ql, "<< \"lib/util.qn\"\n\n^ = () -> Num => util.triple(4)\n")
-        .expect("write root source");
+    std::fs::write(
+        &ql,
+        "<< \"lib/util.qn\"\n\n^ = () -> Num => util.triple(4)\n",
+    )
+    .expect("write root source");
     let bin = dir.join("main");
 
     let build = Command::new(quilon)
