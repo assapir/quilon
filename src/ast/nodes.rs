@@ -296,6 +296,34 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Num,
     },
+    // `core.info`'s primitives, each a constant fixed when the program is compiled. The
+    // module's public members are ordinary Quilon over these — a sum type cannot be a `ret`
+    // here, since `Type::Named` owns a `String`.
+    BuiltinOverload {
+        name: "__platform",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__os",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__quilon_version",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__pointer_bits",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__is_big_endian",
+        parameters: &[],
+        ret: Type::Bool,
+    },
     // Terminates the process with an exit code — what `core.test`'s failing `assert`
     // calls. `__`-prefixed to mark it internal: there is no user-facing `exit`.
     BuiltinOverload {
@@ -657,13 +685,6 @@ pub enum Expression {
         span: Span,
     },
 
-    // Pipeline
-    Pipeline {
-        left: Box<Expression>,
-        right: Box<Expression>,
-        span: Span,
-    },
-
     // Block
     Block {
         statements: Vec<Statement>,
@@ -778,7 +799,6 @@ impl Expression {
             Expression::UnaryOperator { span, .. } => span,
             Expression::Call { span, .. } => span,
             Expression::Lambda { span, .. } => span,
-            Expression::Pipeline { span, .. } => span,
             Expression::Block { span, .. } => span,
             Expression::If { span, .. } => span,
             Expression::Match { span, .. } => span,
@@ -792,31 +812,6 @@ impl Expression {
             Expression::Constructor { span, .. } => span,
             Expression::Range { span, .. } => span,
             Expression::Spread { span, .. } => span,
-        }
-    }
-
-    /// Desugar a pipeline `left |> right` into the equivalent call, injecting
-    /// `left` as the FIRST argument of the right-hand call:
-    ///   `x |> f`      => `f(x)`
-    ///   `x |> f(a, b)` => `f(x, a, b)`
-    /// Used by both the type checker and codegen so the two never diverge.
-    pub fn desugar_pipeline(left: &Expression, right: &Expression, span: &Span) -> Expression {
-        let (function, mut arguments) = match right {
-            Expression::Call {
-                function,
-                arguments,
-                ..
-            } => ((**function).clone(), arguments.clone()),
-            other => (other.clone(), Vec::new()),
-        };
-        arguments.insert(0, left.clone());
-        Expression::Call {
-            function: Box::new(function),
-            arguments,
-            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: in the top-level
-            // namespace alone, where the `x.f(a)` form asks `x`'s type alone.
-            member_call: false,
-            span: span.clone(),
         }
     }
 }

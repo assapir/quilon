@@ -15,7 +15,7 @@ count = (n :: Num, acc :: Num) -> Num =>
   n == 0 ? acc : count(n - 1, acc + n)   ~ the self-call IS the `:` branch → tail position
 ```
 Tail position flows through the constructs that yield a value directly: `?`/`|` match
-arms, `if`/ternary branches, the tail of a `< >` block, and a `|>` pipeline. A self-call
+arms, `if`/ternary branches, and the tail of a `< >` block. A self-call
 **not** in tail position stays ordinary recursion (e.g. `n * fact(n - 1)`, whose result
 is multiplied first). So does a tail call to a *different* function — general/mutual tail
 calls are a later follow-up. There is no surface syntax for it: nothing is written to ask

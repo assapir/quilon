@@ -16,6 +16,28 @@ pub(super) enum IntrinsicLowering {
     Exit,
     /// One of the test registry's primitives, lowered by name (they share a signature).
     TestRegistry,
+    /// A member of `core.info`, lowered per member by [`CodeGenerator::generate_info_member`].
+    InfoMember(InfoMember),
+}
+
+/// A member of `core.info` — what a program can ask about itself.
+///
+/// Every member today answers from something the compiler knows while emitting, so each lowers
+/// to a `Text` constant and no call survives. That is a property of these members, not of the
+/// module: one whose answer is only knowable at run time (the size of the GC heap, say) would
+/// join this enum and lower to an intrinsic call instead.
+#[derive(Clone, Copy)]
+pub(super) enum InfoMember {
+    /// Target CPU architecture: `"aarch64"`, `"x86_64"`.
+    Platform,
+    /// Target operating system, spelled the way people say it: `"linux"`, `"macOS"`.
+    Os,
+    /// The compiler's own version, e.g. `"0.9.3"`.
+    QuilonVersion,
+    /// Pointer width in bits, as a `Num`.
+    PointerBits,
+    /// Whether the target is big-endian, as a `Bool`.
+    IsBigEndian,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -53,6 +75,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "print" | "eprint" => IntrinsicLowering::Print,
             "write" => IntrinsicLowering::Write,
             "now" => IntrinsicLowering::Now,
+            "__platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
+            "__os" => IntrinsicLowering::InfoMember(InfoMember::Os),
+            "__quilon_version" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
+            "__pointer_bits" => IntrinsicLowering::InfoMember(InfoMember::PointerBits),
+            "__is_big_endian" => IntrinsicLowering::InfoMember(InfoMember::IsBigEndian),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
@@ -156,6 +183,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 IntrinsicLowering::TestRegistry => {
                     self.generate_test_registry(function_name, arguments)
                 }
+                IntrinsicLowering::InfoMember(member) => self.generate_info_member(member),
             };
         }
 

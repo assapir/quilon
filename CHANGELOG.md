@@ -60,10 +60,9 @@ All notable changes to Quilon are documented here.
   split(s, ",")  ~ error: no function 'split' in scope — 'split' is a member of Text
   ```
 
-  What breaks: any call reaching a method through the plain form `name(recv, args)` or the
-  pipe `recv |> name(args)`, which is that same call — including the methods reserved on
-  `Text`, arrays, `Map` and `Set`. Migration: write it as `recv.name(args)`. The error names
-  the type the member lives on and spells that call out.
+  What breaks: any call reaching a method through the plain form `name(recv, args)` —
+  including the methods reserved on `Text`, arrays, `Map` and `Set`. Migration: write it as
+  `recv.name(args)`. The error names the type the member lives on and spells that call out.
 
 - **BREAKING: a range endpoint must be a whole number a `Num` holds exactly** ([#215](https://github.com/assapir/quilon/issues/215)).
   `lo <- hi` counts from one end to the other, so an end must be a whole number — and a

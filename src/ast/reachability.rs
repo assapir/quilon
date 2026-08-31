@@ -129,11 +129,6 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
             }
             mentions(expression, out);
         }
-        Expression::Pipeline { left, right, .. } => {
-            // `x |> f` desugars to a call of `f`, so the right side is a CALLEE.
-            mentions(left, out);
-            mentions_callee(right, out);
-        }
         Expression::Range {
             start: left,
             end: right,

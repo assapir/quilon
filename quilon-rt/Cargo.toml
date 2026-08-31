@@ -25,6 +25,9 @@ corosensei = "0.3"
 mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
 libc = "0.2"
 
+[lints]
+workspace = true
+
 [build-dependencies]
 # Compiles the Boehm collector from the `vendor/bdwgc` submodule into the static
 # `libgc` this crate links; see `build.rs`.

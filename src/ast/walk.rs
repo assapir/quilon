@@ -44,8 +44,7 @@ pub fn try_for_each_subexpression<B>(
                 try_for_each_subexpression(arg, f)?;
             }
         }
-        Expression::BinaryOperator { left, right, .. }
-        | Expression::Pipeline { left, right, .. } => {
+        Expression::BinaryOperator { left, right, .. } => {
             try_for_each_subexpression(left, f)?;
             try_for_each_subexpression(right, f)?;
         }

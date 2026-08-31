@@ -41,8 +41,8 @@ definition](../functions/overloading.md)), and call sites are held to that defau
 
 A method is reached through `recv.name(...)` and nowhere else, and a top-level function
 through `name(args)` and nowhere else — neither answers for the other. `recv.name(...)`
-looks for `name` on `recv`'s type alone; `name(recv, args)` — and `recv |> name(args)`,
-which [is](../expressions/pipe.md) that call — looks in the top-level namespace alone.
+looks for `name` on `recv`'s type alone; `name(recv, args)` looks in the top-level
+namespace alone.
 ```quilon ignore
 Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
 double = (x :: Num) -> Num => x * 2

@@ -62,11 +62,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expression::Match { arms, .. } => arms
                 .iter()
                 .any(|arm| self.expression_has_self_tail_call(&arm.body, self_symbol, arity)),
-            // A pipeline desugars to a call; check the call it becomes.
-            Expression::Pipeline { left, right, span } => {
-                let call = Expression::desugar_pipeline(left, right, span);
-                self.is_self_tail_call(&call, self_symbol, arity)
-            }
             _ => false,
         }
     }
@@ -156,12 +151,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .len();
 
         match expression {
-            // A pipeline in tail position is its desugared call; lower that.
-            Expression::Pipeline { left, right, span } => {
-                let call = Expression::desugar_pipeline(left, right, span);
-                self.generate_tail_expression(&call)
-            }
-
             // A call in tail position: if it resolves to THIS function, lower it to the
             // loop back-edge; otherwise it is an ordinary value. Clone `self_symbol` only
             // here (a call leaf), not on every tail node. A `Some` from

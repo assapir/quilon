@@ -26,7 +26,7 @@ Money = {
   price = Money { amount = 12, currency = "EUR" }
   print(price)
   print("costs `price`")
-  price |> write(stdout)
+  write(price, stdout)
   eprint(price)
   0
 >
@@ -71,7 +71,7 @@ Shape = Circle(Num) / Square(Num)
 fn a_function_value_has_no_rendering() {
     for source in [
         "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  print(double)\n  0\n>",
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  double |> write(stdout)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  write(double, stdout)\n  0\n>",
     ] {
         assert_type_error(source);
     }

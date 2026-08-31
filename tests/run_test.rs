@@ -133,33 +133,12 @@ fn run_record_size_field_not_shadowed() {
     );
 }
 
-// --- Pipeline `|>` (first-arg injection) ---
-
-#[test]
-fn run_pipeline_chain() {
-    // 10 |> double |> addFive  ==  addFive(double(10)) = 25
-    assert_exit(
-        "double = (x :: Num) -> Num => x * 2\naddFive = (x :: Num) -> Num => x + 5\n^ = () -> Num => 10 |> double |> addFive",
-        25,
-    );
-}
-
-#[test]
-fn run_pipeline_injects_left_as_first_arg() {
-    // 10 |> sub(3)  desugars to  sub(10, 3) = 7  (NOT sub(3, 10) = -7),
-    // proving the left operand is injected as the FIRST argument.
-    assert_exit(
-        "sub = (a :: Num, b :: Num) -> Num => a - b\n^ = () -> Num => 10 |> sub(3)",
-        7,
-    );
-}
-
 // --- IO: write / print over `<< core.io` ---
 
 #[test]
 fn run_write_to_stdout_returns_byte_count() {
-    // `"hi" |> write(stdout)` == `write("hi", stdout)`; write returns bytes written = 2.
-    assert_exit_linked("<< core.io\n^ = () -> Num => \"hi\" |> write(stdout)", 2);
+    // write returns bytes written = 2.
+    assert_exit_linked("<< core.io\n^ = () -> Num => write(\"hi\", stdout)", 2);
 }
 
 #[test]
@@ -541,9 +520,9 @@ fn a_member_call_on_a_built_in_type_never_reaches_a_top_level_function() {
 #[test]
 fn a_free_call_still_reaches_a_top_level_function_over_a_same_named_method() {
     // Only the `recv.name(...)` form is receiver-scoped. `bump(3)` names the top-level
-    // function, and the pipe is that same free call (3 * 100 + 3 * 100 = 600).
+    // function (3 * 100 + 3 * 100 = 600).
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + (3 |> bump())",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + bump(3)",
         600,
     );
 }
@@ -563,18 +542,6 @@ fn the_free_form_of_a_method_call_does_not_reach_the_method() {
     assert!(
         message.contains("Call it as 'c.bump(...)'"),
         "the advice must spell out the member call, got: {message}"
-    );
-}
-
-#[test]
-fn the_pipe_form_does_not_reach_a_method_either() {
-    // `c |> bump(3)` IS `bump(c, 3)`, so it resolves in the top-level namespace too.
-    let message = common::type_error_message(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c |> bump(3)\n>",
-    );
-    assert!(
-        message.contains("no function 'bump' in scope"),
-        "the pipe form is the free form, got: {message}"
     );
 }
 
@@ -1527,19 +1494,17 @@ fn run_method_returning_array_is_usable() {
 #[test]
 fn run_line_first_paren_is_new_statement() {
     // Statement-boundary rule end-to-end: without it, `x = f()` followed by the line
-    // `(1 + 2) |> print` fused into the call `f()(1 + 2)` ("Not a function" on the
-    // wrong line). Now they are two statements: the pipeline prints 3, and the entry
-    // point exits with x = 7.
+    // `(1 + 2)` fused into the call `f()(1 + 2)` ("Not a function" on the wrong
+    // line). Now they are two statements, and the entry point exits with x = 7.
     let src = r#"
-        << core.io
         f = () -> Num => 7
         ^ = () -> Num => <
           x = f()
-          (1 + 2) |> print
+          (1 + 2)
           x
         >
     "#;
-    assert_exit_linked(src, 7);
+    assert_exit(src, 7);
 }
 
 #[test]

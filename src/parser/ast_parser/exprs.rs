@@ -143,34 +143,17 @@ impl<'a> Parser<'a> {
     /// Infix range `lo <- hi` → inclusive `[]Num` (see the `Expression::Range` node).
     /// Non-associative: consumes at most one `<-`, so `a <- b <- c` is rejected.
     pub(super) fn parse_range(&mut self) -> Result<Expression, ParseError> {
-        let left = self.parse_pipeline()?;
+        let left = self.parse_additive()?;
 
         if self.check(&TokenKind::LeftArrow) {
             self.advance(); // consume `<-`
-            let right = self.parse_pipeline()?;
+            let right = self.parse_additive()?;
             let span = self.span(left.span().start, right.span().end);
             return Ok(Expression::Range {
                 start: Box::new(left),
                 end: Box::new(right),
                 span,
             });
-        }
-
-        Ok(left)
-    }
-
-    pub(super) fn parse_pipeline(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_additive()?;
-
-        while self.check(&TokenKind::Pipeline) {
-            self.advance();
-            let right = self.parse_additive()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::Pipeline {
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-            };
         }
 
         Ok(left)

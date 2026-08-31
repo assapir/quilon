@@ -79,7 +79,7 @@ const EVERY_INTRINSIC: &str = r#"
 
   ~ __print_text_fd and __write_bytes.
   print("linked")
-  written = "bytes" |> write(stdout)
+  written = write("bytes", stdout)
   assert(written, equals(5))
 
   ~ The test registry, which `core.test`'s describe/it record through. Called directly,

@@ -197,7 +197,7 @@ fn the_builtins_work_with_no_user_definition() {
 << core.time
 
 ^ = () -> Num => <
-  written = "hi" |> write(stdout)
+  written = write("hi", stdout)
   now() >= 0 ? written : 0
 >
 "#,

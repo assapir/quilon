@@ -180,9 +180,6 @@ pub enum TokenKind {
     #[token("::")]
     TypeAnnotation,
 
-    #[token("|>")]
-    Pipeline,
-
     // Marks a leaf IO primitive in the corelib (`@sleep`, a future `@get`): the only
     // marker in the colorless implicit-futures model. Lexed as its own token; the parser
     // fuses `@` + the following identifier into the primitive's name (`@sleep`), both at
