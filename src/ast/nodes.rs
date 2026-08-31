@@ -685,13 +685,6 @@ pub enum Expression {
         span: Span,
     },
 
-    // Pipeline
-    Pipeline {
-        left: Box<Expression>,
-        right: Box<Expression>,
-        span: Span,
-    },
-
     // Block
     Block {
         statements: Vec<Statement>,
@@ -806,7 +799,6 @@ impl Expression {
             Expression::UnaryOperator { span, .. } => span,
             Expression::Call { span, .. } => span,
             Expression::Lambda { span, .. } => span,
-            Expression::Pipeline { span, .. } => span,
             Expression::Block { span, .. } => span,
             Expression::If { span, .. } => span,
             Expression::Match { span, .. } => span,
@@ -820,32 +812,6 @@ impl Expression {
             Expression::Constructor { span, .. } => span,
             Expression::Range { span, .. } => span,
             Expression::Spread { span, .. } => span,
-        }
-    }
-
-    /// Desugar a pipeline `left |> right` into the equivalent call, injecting
-    /// `left` as the FIRST argument of the right-hand call:
-    ///   `x |> f`      => `f(x)`
-    ///   `x |> f(a, b)` => `f(x, a, b)`
-    /// Used by both the type checker and codegen so the two never diverge.
-    pub fn desugar_pipeline(left: &Expression, right: &Expression, span: &Span) -> Expression {
-        let (function, mut arguments) = match right {
-            Expression::Call {
-                function,
-                arguments,
-                ..
-            } => ((**function).clone(), arguments.clone()),
-            other => (other.clone(), Vec::new()),
-        };
-        arguments.insert(0, left.clone());
-        Expression::Call {
-            function: Box::new(function),
-            arguments,
-            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: a name that the
-            // receiver's type can claim but that also falls back to the top-level
-            // namespace, unlike the `x.f(a)` form.
-            member_call: false,
-            span: span.clone(),
         }
     }
 }

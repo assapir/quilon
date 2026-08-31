@@ -6,7 +6,7 @@
 ~      the previous expression — it begins a NEW statement.
 ~ So call arguments, index brackets, and constructor braces must open on the
 ~ same line as the expression they apply to, while a continuation line may still
-~ start with `.`, `|>`, or an operator. Every assertion below holds, so the
+~ start with `.` or an operator. Every assertion below holds, so the
 ~ program exits 0.
 << core.test
 
@@ -28,7 +28,7 @@ Point = { x :: Num, y :: Num }
   ~ `b` is the call's result: the next line's `(` begins a NEW statement.
   ~ (Without the rule the two lines would fuse into the call `double(4)(1 + 2)`.)
   b = double(4)
-  (1 + 2) |> assert(equals(3))
+  (1 + 2)
   assert(b, equals(8))
 
   ~ `e` is the record: the next line's `{` begins a NEW statement.

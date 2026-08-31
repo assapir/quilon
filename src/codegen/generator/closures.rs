@@ -138,7 +138,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expression::BinaryOperator { left, right, .. }
-            | Expression::Pipeline { left, right, .. }
             | Expression::Range {
                 start: left,
                 end: right,
@@ -273,7 +272,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         f(expression);
         match expression {
             Expression::BinaryOperator { left, right, .. }
-            | Expression::Pipeline { left, right, .. }
             | Expression::Range {
                 start: left,
                 end: right,

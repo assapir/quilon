@@ -32,7 +32,7 @@ the built-in.
 << core.io
 ^ = () -> Num => <
   print("hello")            ~ stdout: hello\n
-  "raw" |> write(stdout)    ~ stdout: raw   (no newline)
+  write("raw", stdout)      ~ stdout: raw   (no newline)
   eprint("oops")            ~ stderr: oops\n
   0
 >

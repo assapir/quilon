@@ -69,7 +69,6 @@ fn collect(
             }
         }
         Expression::BinaryOperator { left, right, .. }
-        | Expression::Pipeline { left, right, .. }
         | Expression::Range {
             start: left,
             end: right,

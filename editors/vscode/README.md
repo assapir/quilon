@@ -9,10 +9,10 @@ compiles to native code via LLVM. Files use the `.qn` extension.
 - **Syntax highlighting** for the full symbol set:
   - Comments (`~ to end of line`), strings (`"…"` with escapes), numbers, `true`/`false`, wildcard `_`.
   - The entry point `^`, module import `<<` (with the imported path), and export marker `>>`.
-  - Operators: `|>` (pipe), `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
+  - Operators: `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
     `=>` (function body / match arm), `->` (return type), `<-` (inclusive range),
     `?` / `|` (pattern matching), arithmetic `+ - * / %`, comparison `== != < <= > >=`,
-    logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`, `|>`,
+    logical `&& || !`. Each **multi-character** operator (`=>`, `->`, `:=`,
     `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`) is highlighted as a **single**
     token — never split into its first character colored separately from the rest.
   - **`< >` block delimiters** — a line-final `<` (opens a block) and a `>` with no
@@ -97,7 +97,7 @@ import so they run under plain Node:
   `src/entryPoints.test.ts`);
 - **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
   `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
-  (`=>`, `->`, `:=`, `|>`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
+  (`=>`, `->`, `:=`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
   tokenizes to a **single** scope, plus regression guards for `<` / `>`, `=`,
   `$`, comments, strings, and numbers. `src/grammar.ts` is a tiny dependency-free
   re-implementation of TextMate's ordered first-match-wins rule (the behaviour

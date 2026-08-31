@@ -39,7 +39,6 @@ Quilon's identity, and the rules that guide its design:
 | `$` | Unit type **and** its sole value | `f = () -> $ => $` |
 | `<<` | Import a module | `<< core.io` |
 | `>>` | Export an item from a module | `>> add = (a :: Num, b :: Num) => a + b` |
-| `\|>` | Pipe (first-argument injection) | `x \|> f(a)` ≡ `f(x, a)` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |
 | `<-` (prefix) | Spread inside a `[ ]` / `{ }` literal ([rule](expressions/ranges-and-spread.md#spread-in-literals)) | `[<-xs, 4]` · `{<-p, x = 9}` · `Vec {<-p, x = 9}` |
 | `?` `\|` `_` | Pattern match | `v ? \| 0 => "zero" \| _ => "other"` |
@@ -62,7 +61,7 @@ No word is reserved either, so `if = 5` or a function named `while` is perfectly
 - [Collections](collections/README.md): [arrays](collections/arrays.md), maps, and sets
 - [Variables](variables.md) · [Mutation](mutation.md)
 - Functions: [basics](functions/README.md) · [closures and tail recursion](functions/closures.md) · [overloading](functions/overloading.md) · [call-site locations](functions/site.md)
-- Expressions: [operators and blocks](expressions/README.md) · [pipe](expressions/pipe.md) · [iteration](expressions/iteration.md) · [ranges and spread](expressions/ranges-and-spread.md) · [pattern matching](expressions/pattern-matching.md)
+- Expressions: [operators and blocks](expressions/README.md) · [iteration](expressions/iteration.md) · [ranges and spread](expressions/ranges-and-spread.md) · [pattern matching](expressions/pattern-matching.md)
 - Modules: [imports and exports](modules/README.md) · [entry point](modules/entry-point.md)
 - [Corelib](corelib/README.md): the standard library, module by module
 - [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md)

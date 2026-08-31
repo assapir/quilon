@@ -41,25 +41,6 @@ factorial = n :: Num => n ?
 }
 
 #[test]
-fn test_pipeline_expression() {
-    let source = r#"
-result = data
-  |> filter .active
-  |> map transform
-  |> collect
-"#;
-
-    let tokens = Lexer::tokenize(source).unwrap();
-
-    // Should have 3 pipelines
-    let pipeline_count = tokens
-        .iter()
-        .filter(|t| t.kind == TokenKind::Pipeline)
-        .count();
-    assert_eq!(pipeline_count, 3);
-}
-
-#[test]
 fn test_mutable_variable() {
     // `:=` is the mutable bind/reassign operator (replaces the old `mut` keyword).
     let source = "counter := 0";
