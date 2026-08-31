@@ -5,7 +5,7 @@
 ~ `<< core.test` verifies each result; on success the program exits 0.
 << core.test
 
-~ Value-first so `x |> apply(f)` reads naturally: the piped subject is the first arg.
+~ Value-first: the subject is the first arg, the function value follows it.
 apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
 
 ~ Calls `f` on its own result: f(f(x)).
@@ -26,7 +26,6 @@ run = (action :: () -> $) -> $ => <
 ^ = () -> $ => <
   ~ `apply`'s `(Num) -> Num` parameter is what types `n`.
   assert(apply(10, (n) => n + 1), equals(11))
-  assert(10 |> apply((n) => n + 1), equals(11))
   assert(twice((n) => n * 3, 2), equals(18))
 
   ~ Writing the annotation stays legal, and wins where written.

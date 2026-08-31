@@ -39,12 +39,11 @@ An unannotated method parameter defaults to `Num` (as in any [ordinary
 definition](../functions/overloading.md)), and call sites are held to that default:
 `t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
 
-A method answers the plain form `name(recv, args)` too — and `recv |> name(args)`, which
-[is](../expressions/pipe.md) that call. The `.` form is the strict one: `recv.name(...)`
-looks for `name` on `recv`'s type and nowhere else, so a top-level function of the same
-name does not answer it. Written plainly, `name(recv, ...)` finds that function as usual.
+A method answers the plain form `name(recv, args)` too. The `.` form is the strict one:
+`recv.name(...)` looks for `name` on `recv`'s type and nowhere else, so a top-level
+function of the same name does not answer it. Written plainly, `name(recv, ...)` finds
+that function as usual.
 ```quilon ignore
 (5).double()   ~ error: 'Num' has no member 'double'
 double(5)      ~ 10
-5 |> double()  ~ 10
 ```

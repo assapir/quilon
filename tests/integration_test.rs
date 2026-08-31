@@ -129,8 +129,7 @@ fn test_inline_result_matching() {
 fn deeply_nested_calls_check_in_linear_time() {
     // Argument re-inference at call sites was once exponential in nesting depth
     // (each level inferred its first argument twice -> 2^depth); 26 levels took
-    // minutes. 60 levels must check instantly. `|>` pipelines desugar to exactly
-    // this first-arg-nested shape, so this also covers long pipelines.
+    // minutes. 60 levels must check instantly.
     let n = 60;
     let src = format!(
         "g = (n :: Num) -> Num => n + 1\n^ = () -> Num => {}1{}",

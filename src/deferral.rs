@@ -129,11 +129,6 @@ impl Taint {
                 self.strict(right, env);
                 false
             }
-            Expression::Pipeline { left, right, .. } => {
-                self.strict(left, env);
-                self.strict(right, env);
-                false
-            }
             Expression::UnaryOperator { expression, .. }
             | Expression::Spread { expression, .. } => {
                 self.strict(expression, env);

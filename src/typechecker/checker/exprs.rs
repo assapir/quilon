@@ -102,14 +102,6 @@ impl TypeChecker {
                 ..
             } => self.check_lambda(parameters, return_type.as_ref(), body),
 
-            Expression::Pipeline { left, right, span } => {
-                // `left |> right` injects `left` as the first argument of the
-                // right-hand call: `x |> f` => `f(x)`, `x |> f(a)` => `f(x, a)`.
-                // Desugar and type-check the resulting call (shared with codegen).
-                let call = Expression::desugar_pipeline(left, right, span);
-                self.infer_expression(&call)
-            }
-
             Expression::Block {
                 statements,
                 span: _,

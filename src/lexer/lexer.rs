@@ -233,14 +233,13 @@ mod tests {
 
     #[test]
     fn test_operators() {
-        let tokens = Lexer::tokenize("= => -> :: |> ? |").unwrap();
+        let tokens = Lexer::tokenize("= => -> :: ? |").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Assign);
         assert_eq!(tokens[1].kind, TokenKind::Arrow);
         assert_eq!(tokens[2].kind, TokenKind::ReturnArrow);
         assert_eq!(tokens[3].kind, TokenKind::TypeAnnotation);
-        assert_eq!(tokens[4].kind, TokenKind::Pipeline);
-        assert_eq!(tokens[5].kind, TokenKind::Question);
-        assert_eq!(tokens[6].kind, TokenKind::Pipe);
+        assert_eq!(tokens[4].kind, TokenKind::Question);
+        assert_eq!(tokens[5].kind, TokenKind::Pipe);
     }
 
     #[test]
@@ -420,23 +419,8 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline() {
-        let source = "data |> filter .active |> collect";
-        let tokens = Lexer::tokenize(source).unwrap();
-
-        assert!(tokens.iter().any(|t| t.kind == TokenKind::Pipeline));
-        assert_eq!(
-            tokens
-                .iter()
-                .filter(|t| t.kind == TokenKind::Pipeline)
-                .count(),
-            2
-        );
-    }
-
-    #[test]
     fn test_block() {
-        let source = "process = data => <\n  data |> map transform\n>";
+        let source = "process = data => <\n  map(data, transform)\n>";
         let tokens = Lexer::tokenize(source).unwrap();
 
         assert!(tokens.iter().any(|t| t.kind == TokenKind::BlockOpen));

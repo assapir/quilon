@@ -194,9 +194,9 @@ fn core_cli_resolves_and_type_checks() {
     let src = r#"
         << core.cli
         ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
-          hit :: Num = env |> getEnv("HOME") ? | Ok(_) => 1 | NotOk(_) => 0
-          flag :: Num = args |> hasFlag("-v") ? 1 : 0
-          opt :: Num = args |> getOpt("--out") ? | Ok(_) => 1 | NotOk(_) => 0
+          hit :: Num = getEnv(env, "HOME") ? | Ok(_) => 1 | NotOk(_) => 0
+          flag :: Num = hasFlag(args, "-v") ? 1 : 0
+          opt :: Num = getOpt(args, "--out") ? | Ok(_) => 1 | NotOk(_) => 0
           hit + flag + opt
         >
     "#;

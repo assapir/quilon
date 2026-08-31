@@ -144,9 +144,9 @@ impl<'a> Parser<'a> {
     /// begins a NEW statement. Call arguments, index brackets, and constructor braces
     /// must open on the same line as the expression they apply to. Without this,
     /// adjacent statements would fuse across the newline — `x = f()` followed by a line
-    /// `(1 + 2) |> print` would parse as the call `f()(1 + 2)`, `b = a` followed by
+    /// `(1 + 2)` would parse as the call `f()(1 + 2)`, `b = a` followed by
     /// `[3, 4].each(...)` as the index `a[3, 4]`, and `b = a` followed by `{ x = 1 }`
-    /// as the constructor `a { x = 1 }`. A `.`, `|>`, or operator at the start of a
+    /// as the constructor `a { x = 1 }`. A `.` or operator at the start of a
     /// line still continues the expression, and an argument list opened on the callee's
     /// line may still span lines. Every postfix consumption of `(` / `[` / `{` must go
     /// through this guard.

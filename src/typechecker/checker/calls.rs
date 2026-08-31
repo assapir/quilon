@@ -121,8 +121,7 @@ impl TypeChecker {
         // and branch below. The receiver probes (array/Text/method dispatch) and the
         // overload/fallback argument loops all need `arguments[0]`'s type; inferring it in
         // each place made every nesting level infer its subtree twice — 2^depth work,
-        // which visibly hung the checker on ~25-deep call chains (and `|>` pipelines,
-        // which desugar to exactly that shape).
+        // which visibly hung the checker on ~25-deep call chains.
         // A LAMBDA first argument is left out: its type may depend on the signature this
         // call resolves to, which is only known further down. It is no loss — a lambda is
         // never a receiver, so none of the probes below can want it.

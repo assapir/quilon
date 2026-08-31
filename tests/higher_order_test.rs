@@ -188,16 +188,6 @@ fn inferred_lambda_parameter_is_not_num_by_default() {
 }
 
 #[test]
-fn inferred_lambda_parameter_through_a_pipe() {
-    // `x |> f(a)` is `f(x, a)`, so the piped call states the same target type.
-    assert_exit(
-        "apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)\n\
-         ^ = () -> Num => 20 |> apply((n) => n * 2)",
-        40,
-    );
-}
-
-#[test]
 fn inferred_lambda_parameter_for_a_method() {
     // A method's function-typed parameter types the lambda its call is given.
     assert_exit(
