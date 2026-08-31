@@ -382,20 +382,32 @@ impl std::fmt::Display for TypeError {
                 ..
             } => {
                 write!(f, "'{type_name}' has no member '{member}'")?;
+                let shown = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
+                };
+                // An output built-in is the likely intent behind `c.print()`; it lives in
+                // `core.io` and is reached through the module's binding.
+                if crate::ast::RENDERABLE_BUILTINS
+                    .iter()
+                    .any(|builtin| crate::ast::display_name(builtin.name) == member)
+                {
+                    return write!(
+                        f,
+                        ". A value prints through `core.io`'s '{member}' — call it as \
+                         'io.{member}({shown}{rest})' (under `<< core.io`)"
+                    );
+                }
                 if !in_scope {
                     return Ok(());
                 }
                 // There IS a function of that name, so say why it did not answer the call —
                 // in terms of what was written, and with the call that would reach it.
-                let receiver = receiver.as_deref().unwrap_or("receiver");
-                let rest = match more_arguments {
-                    true => ", ...",
-                    false => "",
-                };
                 write!(
                     f,
-                    ". There is a '{member}' in scope, but '{receiver}.{member}(...)' only \
-                     looks on {type_name} — call it as '{member}({receiver}{rest})'"
+                    ". There is a '{member}' in scope, but '{shown}.{member}(...)' only \
+                     looks on {type_name} — call it as '{member}({shown}{rest})'"
                 )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {

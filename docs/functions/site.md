@@ -10,10 +10,12 @@ A function whose **last** parameter is a `Site` receives the location of the cal
 call that leaves that argument off has it **filled in by the compiler**:
 
 ```quilon
+<< core.io
+
 whereAmI = (site :: Site) -> Text => "`site.file`:`site.line`:`site.column`"
 
 ^ = () -> $ => <
-  print(whereAmI())        ~ prints e.g. demo.qn:4:9 — the location of THIS call
+  io.print(whereAmI())        ~ prints e.g. demo.qn:4:9 — the location of THIS call
 >
 ```
 

@@ -222,7 +222,7 @@ fn record_update_preserves_named_type_and_methods() {
 #[test]
 fn record_update_preserves_text_field() {
     assert_exit(
-        "<< core.io\n^ = () -> Num => <\n  p = { name = \"Alice\", age = 30 }\n  q = { <-p, age = 31 }\n  print(q.name)\n  q.age\n>",
+        "<< core.io\n^ = () -> Num => <\n  p = { name = \"Alice\", age = 30 }\n  q = { <-p, age = 31 }\n  io.print(q.name)\n  q.age\n>",
         31,
     );
 }

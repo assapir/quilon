@@ -12,7 +12,7 @@ replacement for a side-effecting loop), and `.map`/`.filter`/`.reduce` transform
 without any mutable accumulator. Each takes a lambda, applied per element:
 ```quilon
 nums = [1, 2, 3]
-nums.each(n => print(n))              ~ side effects; returns the receiver (chainable)
+nums.each(n => io.print(n))              ~ side effects; returns the receiver (chainable)
 
 sum = nums
   .map(n => n * 2)                    ~ [2, 4, 6]

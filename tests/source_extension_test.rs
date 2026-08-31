@@ -15,7 +15,7 @@ const PROGRAM: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  "out" |> write(stdout)
+  "out" |> io.write(io.stdout)
   7
 >
 "#;

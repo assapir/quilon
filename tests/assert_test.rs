@@ -435,7 +435,7 @@ fn an_assert_inside_a_helper_reports_that_helper_line() {
 /// trailing `site :: Site` and forward it, and the report blames ITS caller.
 #[test]
 fn fail_at_reports_its_caller() {
-    let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ =>\n  n % 2 == 0 ? $ : failAt(\"assertion failed: `n` is odd\", site)\n\n^ = () -> $ => <\n  assertEven(3)\n>\n";
+    let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ =>\n  n % 2 == 0 ? $ : test.failAt(\"assertion failed: `n` is odd\", site)\n\n^ = () -> $ => <\n  assertEven(3)\n>\n";
     let (code, stderr) = run_jit("site_fail_at", src);
     assert_eq!(code, FAIL_CODE);
 
@@ -463,7 +463,7 @@ fn a_failure_in_an_imported_module_reports_that_module() {
     );
     let main = write_program(
         "site_importer",
-        "<< \"site_helper.qn\"\n\n^ = () -> $ => <\n  checkDouble(2)\n>\n",
+        "<< \"site_helper.qn\"\n\n^ = () -> $ => <\n  site_helper.checkDouble(2)\n>\n",
     );
     let out = Command::new(quilon())
         .args(["run", main.to_str().unwrap()])
@@ -500,7 +500,7 @@ fn the_value_under_test_is_evaluated_once() {
     let src = concat!(
         "<< core.io\n",
         "^ = () -> $ => <\n",
-        "  assert([1, 2].each((n :: Num) => print(n)), contains(1))\n",
+        "  assert([1, 2].each((n :: Num) => io.print(n)), contains(1))\n",
         ">\n"
     );
     let path = write_program("evaluated_once", src);

@@ -162,7 +162,7 @@ fn native_env_map_split_on_first_equals() {
     let src = "<< core.io\n\
                ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <\n\
                \x20 value = env.get(\"KEY\") ? | Ok(v) => v | NotOk(_) => \"?\"\n\
-               \x20 print(value)\n\
+               \x20 io.print(value)\n\
                \x20 env.size\n\
                >";
     if !build_native(quilon, src, &bin) {

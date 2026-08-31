@@ -21,8 +21,8 @@ greet = name :: Text => "Hello, " + name
 
 ~ the pipe |> injects the left value as the first argument
 ^ = () -> Num => <
-  print(greet("Quilon"))      ~ stdout: Hello, Quilon
-  [1, 2, 3].each(n => print(n))   ~ iterate with array methods (no `for` loop)
+  io.print(greet("Quilon"))   ~ stdout: Hello, Quilon
+  [1, 2, 3].each(n => io.print(n))   ~ iterate with array methods (no `for` loop)
   10 |> double                ~ ≡ double(10)
 >
 ```

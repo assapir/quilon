@@ -34,7 +34,7 @@ const ECHO_READ: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  print(@readStdin())
+  io.print(@readStdin())
   0
 >
 "#;
@@ -63,8 +63,8 @@ const WRITE_THEN_PRINT: &str = r#"
 
 ^ = () -> Num => <
   line = @readStdin()
-  write(line, stdout)
-  print(line)
+  io.write(line, io.stdout)
+  io.print(line)
   0
 >
 "#;

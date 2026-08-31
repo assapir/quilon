@@ -46,6 +46,6 @@ lexical scopes. Each Quilon type gets a distinct debug type — `Num`, `Bool`, `
 arrays (`[]T`), records, and sum types — so a debugger tells them apart.
 Line info is multi-file: a function from an imported module (`<<`) — corelib included — is
 attributed to its OWN source, so a debugger steps into it. The entry frame reads `^`. A
-debugger steps over the leaf `@` primitives and the built-ins (`print`/`now`/…).
+debugger steps over the leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)

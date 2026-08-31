@@ -129,6 +129,21 @@ impl<'a> Parser<'a> {
             self.expect_ident()?
         };
 
+        // The top level takes only declarations, so an `Ident.` here can only be a
+        // qualified reference through an import this file does not have (had it, the
+        // chain would have been consumed as one name before ever reaching parse_item).
+        // The common case is a test suite missing its harness: name the fix.
+        if self.check_same_line(&TokenKind::Dot) {
+            return Err(ParseError {
+                message: format!(
+                    "`{name}` is not an imported module here — a qualified name like \
+                     `{name}.<member>(...)` needs its `<<` import above this line \
+                     (a `test.describe` suite imports `<< core.test`)"
+                ),
+                span: self.current_span(),
+            });
+        }
+
         // Check for type annotation
         let type_annotation = if self.check(&TokenKind::TypeAnnotation) {
             self.advance();

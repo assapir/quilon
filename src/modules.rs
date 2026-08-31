@@ -87,9 +87,7 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), L
     let mut program = program;
     let linked = loader
         .root_scope(&program.imports, base_dir)
-        .and_then(|scope| {
-            qualify::resolve_program(&mut program, &scope).map_err(Fail::from)
-        });
+        .and_then(|scope| qualify::resolve_program(&mut program, &scope).map_err(Fail::from));
     match linked {
         Ok(()) => {
             let mut items = loader.out;
@@ -157,11 +155,7 @@ impl Loader {
     /// Add one resolved import to `scope` under its short binding.
     fn bind(&self, scope: &mut ModuleScope, canonical: &str, import: &Import) -> Result<(), Fail> {
         let alias = canonical.rsplit('.').next().unwrap_or(canonical);
-        let exports = self
-            .exports
-            .get(canonical)
-            .cloned()
-            .unwrap_or_default();
+        let exports = self.exports.get(canonical).cloned().unwrap_or_default();
         scope
             .add_import(alias, canonical, exports, &import.span)
             .map_err(Fail::from)

@@ -47,7 +47,7 @@ sidebar:
 > x = f()
 > (1 + 2) |> print                      ~ not the call `f()(1 + 2)`
 > b = a
-> [3, 4].each(n => print(n))            ~ not the index `a[3, 4]`
+> [3, 4].each(n => io.print(n))            ~ not the index `a[3, 4]`
 > e = origin
 > { x = 9, y = 9 }                      ~ not the constructor `origin { x = 9, y = 9 }`
 >

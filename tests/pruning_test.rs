@@ -196,11 +196,11 @@ fn imported_corelib_still_provides_what_the_program_uses() {
     // program does use has to keep working. (The AOT side of this — every example through
     // the real linker, all of which now prune — is `examples_test`'s JIT/AOT comparison.)
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(1 + 1, equals(2))\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  io.print(\"hi\")\n  assert(1 + 1, equals(2))\n>",
         0,
     );
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(\"a\", equals(\"a\"))\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  io.print(\"hi\")\n  assert(\"a\", equals(\"a\"))\n>",
         0,
     );
 }

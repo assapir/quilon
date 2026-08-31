@@ -25,8 +25,8 @@ fn get_env_found_and_missing() {
         << core.cli
         ^ = () -> Num => <
           env = [|"A" => "xyz", "B" => "12"|]
-          hit :: Num = getEnv(env, "A") ? | Ok(v) => v.size | NotOk(_) => 99
-          miss :: Num = getEnv(env, "Z") ? | Ok(_) => 99 | NotOk(_) => 1
+          hit :: Num = cli.getEnv(env, "A") ? | Ok(v) => v.size | NotOk(_) => 99
+          miss :: Num = cli.getEnv(env, "Z") ? | Ok(_) => 99 | NotOk(_) => 1
           hit * 10 + miss
         >
     "#;
@@ -40,8 +40,8 @@ fn get_env_matches_key_not_value() {
         << core.cli
         ^ = () -> Num => <
           env = [|"KEY" => "VAL"|]
-          byKey :: Num = getEnv(env, "KEY") ? | Ok(v) => v.size | NotOk(_) => 99
-          byVal :: Num = getEnv(env, "VAL") ? | Ok(_) => 99 | NotOk(_) => 1
+          byKey :: Num = cli.getEnv(env, "KEY") ? | Ok(v) => v.size | NotOk(_) => 99
+          byVal :: Num = cli.getEnv(env, "VAL") ? | Ok(_) => 99 | NotOk(_) => 1
           byKey * 10 + byVal
         >
     "#;
@@ -56,8 +56,8 @@ fn get_env_empty_value_is_present() {
         << core.cli
         ^ = () -> Num => <
           env = [|"E" => ""|]
-          present :: Num = getEnv(env, "E") ? | Ok(_) => 1 | NotOk(_) => 0
-          v :: Text = getEnv(env, "E") ? | Ok(x) => x | NotOk(_) => "?"
+          present :: Num = cli.getEnv(env, "E") ? | Ok(_) => 1 | NotOk(_) => 0
+          v :: Text = cli.getEnv(env, "E") ? | Ok(x) => x | NotOk(_) => "?"
           present * 10 + v.size
         >
     "#;
@@ -75,11 +75,11 @@ fn has_flag_with_and_without_dashes() {
         << core.cli
         ^ = () -> Num => <
           args :: []Text = ["prog", "--verbose", "-x"]
-          a :: Num = hasFlag(args, "verbose") ? 1 : 0
-          b :: Num = hasFlag(args, "--verbose") ? 1 : 0
-          c :: Num = hasFlag(args, "-x") ? 1 : 0
-          d :: Num = hasFlag(args, "missing") ? 1 : 0
-          e :: Num = hasFlag(args, "v") ? 1 : 0
+          a :: Num = cli.hasFlag(args, "verbose") ? 1 : 0
+          b :: Num = cli.hasFlag(args, "--verbose") ? 1 : 0
+          c :: Num = cli.hasFlag(args, "-x") ? 1 : 0
+          d :: Num = cli.hasFlag(args, "missing") ? 1 : 0
+          e :: Num = cli.hasFlag(args, "v") ? 1 : 0
           a * 16 + b * 8 + c * 4 + d * 2 + e
         >
     "#;
@@ -97,7 +97,7 @@ fn get_opt_collects_space_and_equals_forms() {
         ^ = () -> Num => <
           args :: []Text = ["prog", "--out", "a", "--out=bb", "-x"]
           none :: []Text = args.filter(x => false)
-          vs :: []Text = getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
+          vs :: []Text = cli.getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
           vs.size * 100 + vs[0].size * 10 + vs[1].size
         >
     "#;
@@ -113,8 +113,8 @@ fn get_opt_name_with_or_without_dashes() {
         ^ = () -> Num => <
           args :: []Text = ["p", "--out", "zz"]
           none :: []Text = args.filter(x => false)
-          va :: []Text = getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
-          vb :: []Text = getOpt(args, "--out") ? | Ok(v) => v | NotOk(_) => none
+          va :: []Text = cli.getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
+          vb :: []Text = cli.getOpt(args, "--out") ? | Ok(v) => v | NotOk(_) => none
           sameSize :: Num = va.size == vb.size ? 1 : 0
           sameVal :: Num = va.size == 1 ? (va[0] == vb[0] ? 1 : 0) : 0
           sameSize * 100 + sameVal * 10 + va.size
@@ -132,7 +132,7 @@ fn get_opt_equals_form_empty_value() {
         ^ = () -> Num => <
           args :: []Text = ["p", "--k="]
           none :: []Text = args.filter(x => false)
-          vs :: []Text = getOpt(args, "k") ? | Ok(v) => v | NotOk(_) => none
+          vs :: []Text = cli.getOpt(args, "k") ? | Ok(v) => v | NotOk(_) => none
           vs.size * 10 + vs[0].size
         >
     "#;
@@ -147,7 +147,7 @@ fn get_opt_absent_is_not_ok_with_name() {
         << core.cli
         ^ = () -> Num => <
           args :: []Text = ["p", "--a", "1"]
-          name :: Text = getOpt(args, "zzz") ? | Ok(_) => "" | NotOk(n) => n
+          name :: Text = cli.getOpt(args, "zzz") ? | Ok(_) => "" | NotOk(n) => n
           name.size
         >
     "#;
@@ -163,7 +163,7 @@ fn get_opt_skips_argv0() {
         ^ = () -> Num => <
           args :: []Text = ["--out", "fromArgv0", "--out", "real"]
           none :: []Text = args.filter(x => false)
-          vs :: []Text = getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
+          vs :: []Text = cli.getOpt(args, "out") ? | Ok(v) => v | NotOk(_) => none
           vs.size * 10 + vs[0].size
         >
     "#;
@@ -178,7 +178,7 @@ fn get_opt_trailing_flag_with_no_value_is_not_ok() {
         << core.cli
         ^ = () -> Num => <
           args :: []Text = ["p", "--out"]
-          name :: Text = getOpt(args, "out") ? | Ok(_) => "" | NotOk(n) => n
+          name :: Text = cli.getOpt(args, "out") ? | Ok(_) => "" | NotOk(n) => n
           name.size
         >
     "#;
@@ -194,9 +194,9 @@ fn core_cli_resolves_and_type_checks() {
     let src = r#"
         << core.cli
         ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
-          hit :: Num = env |> getEnv("HOME") ? | Ok(_) => 1 | NotOk(_) => 0
-          flag :: Num = args |> hasFlag("-v") ? 1 : 0
-          opt :: Num = args |> getOpt("--out") ? | Ok(_) => 1 | NotOk(_) => 0
+          hit :: Num = env |> cli.getEnv("HOME") ? | Ok(_) => 1 | NotOk(_) => 0
+          flag :: Num = args |> cli.hasFlag("-v") ? 1 : 0
+          opt :: Num = args |> cli.getOpt("--out") ? | Ok(_) => 1 | NotOk(_) => 0
           hit + flag + opt
         >
     "#;

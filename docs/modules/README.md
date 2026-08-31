@@ -80,4 +80,5 @@ unrelated function.
 - `Text` and the operators are built-ins and need **no** import.
 - A file's [`test.describe` blocks](../corelib/test/README.md) need `<< core.test`; every command but `quilon test` erases the blocks, and with nothing left referencing it the harness is tree-shaken out of the build.
 
-(See `examples/use_module.qn`, which imports `examples/mathlib.qn`.)
+(See `examples/qualified_modules.qn` for the access model end to end, and
+`examples/use_module.qn`, which imports `examples/mathlib.qn` by file path.)

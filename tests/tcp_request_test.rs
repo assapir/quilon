@@ -34,7 +34,7 @@ fn program(address: &str, expected: &str) -> String {
 ^ = () -> Num => <
   @tcpRequest("{address}", "PING\n") ?
     | Ok(response) => assert(response, equals("{expected}"))
-    | NotOk(error) => failAt(error)
+    | NotOk(error) => test.failAt(error)
   0
 >
 "#
@@ -53,7 +53,7 @@ fn failure_program(address: &str) -> String {
 
 ^ = () -> Num => <
   @tcpRequest("{address}", "PING\n") ?
-    | Ok(_)      => failAt("expected a connection failure, got Ok")
+    | Ok(_)      => test.failAt("expected a connection failure, got Ok")
     | NotOk(_)   => $
   0
 >
@@ -243,7 +243,7 @@ Caller = {{
   caller = Caller {{ address = "{address}" }}
   caller.fetch() ?
     | Ok(response) => assert(response, equals("{expected}"))
-    | NotOk(error) => failAt(error)
+    | NotOk(error) => test.failAt(error)
   0
 >
 "#

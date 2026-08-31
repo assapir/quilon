@@ -1,0 +1,33 @@
+~ Qualified module access: an import binds its module's last path segment, and every
+~ export is reached through that binding — `io.print`, `http.Request { }`, `http.Get` —
+~ with the full path (`core.io.print`) always available as well. A program's own `print`
+~ is an unrelated function, since a module's names never merge into the file.
+~ `<< core.test` provides the harness; on success the program exits 0.
+<< core.io
+<< core.http
+<< core.test
+
+~ The program's own `print` — a plain function, not an extension of `core.io`'s.
+print = (n :: Num) -> Num => n + 1
+
+^ = () -> $ => <
+  ~ A function export through the short binding, and through the full path.
+  io.print("qualified")
+  core.io.print("fully qualified")
+
+  ~ An exported constant qualifies the same way.
+  written :: Num = "hi" |> io.write(io.stdout)
+  assert(written, equals(2))
+
+  ~ Exported types and their variants qualify in every position: construction,
+  ~ annotations, and patterns.
+  request :: http.Request = http.Request { method = http.Get, url = "http://example.com/" }
+  kind :: Num = request.method ?
+    | http.Get     => 1
+    | http.Post(_) => 2
+    | _            => 3
+  assert(kind, equals(1))
+
+  ~ The file's own `print` is just a function beside the module's.
+  assert(print(41), equals(42))
+>

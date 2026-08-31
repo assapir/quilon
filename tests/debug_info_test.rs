@@ -541,8 +541,8 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
 
 ^ = () -> Num => <
   @sleep(0)
-  now()
-  hasFlag([\"-v\"], \"-v\") ? 1 : 0
+  time.now()
+  cli.hasFlag([\"-v\"], \"-v\") ? 1 : 0
 >
 ";
     let dir = std::env::temp_dir().join(format!("quilon_dbgentry_{}", std::process::id()));
@@ -593,8 +593,8 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
     // Step INTO corelib: `hasFlag` has its own subprogram, attributed to `corelib/cli.qn`.
     assert!(
         subs.iter()
-            .any(|(name, file, _)| name == "hasFlag" && file.ends_with("cli.qn")),
-        "expected a `hasFlag` subprogram attributed to corelib/cli.qn, got:\n{subs:#?}"
+            .any(|(name, file, _)| name == "core.cli.hasFlag" && file.ends_with("cli.qn")),
+        "expected a `core.cli.hasFlag` subprogram attributed to corelib/cli.qn, got:\n{subs:#?}"
     );
 
     // Step OVER the primitives: `@sleep`/`now` are never emitted, so no subprogram — and their
@@ -637,7 +637,7 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
     )
     .expect("write imported module");
     let ql = dir.join("main.qn");
-    std::fs::write(&ql, "<< \"lib/util.qn\"\n\n^ = () -> Num => triple(4)\n")
+    std::fs::write(&ql, "<< \"lib/util.qn\"\n\n^ = () -> Num => util.triple(4)\n")
         .expect("write root source");
     let bin = dir.join("main");
 
@@ -665,8 +665,8 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
 
     let triple = subs
         .iter()
-        .find(|(name, _, _)| name == "triple")
-        .unwrap_or_else(|| panic!("expected a `triple` subprogram, got:\n{subs:#?}"));
+        .find(|(name, _, _)| name == "util.triple")
+        .unwrap_or_else(|| panic!("expected a `util.triple` subprogram, got:\n{subs:#?}"));
     assert!(
         triple.1.ends_with("lib/util.qn") && !triple.1.contains("file:"),
         "the imported function must be attributed to its real path, got {:?}",

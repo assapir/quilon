@@ -61,7 +61,7 @@ whole, so a bigger seed would cost every collection taken while it is parked.
 
 `core.time` — **`@sleep(seconds)`** takes a fractional `Num` and is effect-only (`-> $`): it
 waits right there on the current fiber, then execution continues in program order. It carries
-no value, so nothing defers or forces. **`now()`** reads a **monotonic** clock in seconds;
+no value, so nothing defers or forces. **`time.now()`** reads a **monotonic** clock in seconds;
 only *differences* between readings are meaningful. It is a plain (non-`@`) primitive —
 reading the clock is instant and never parks. (See `examples/sleep.qn`.)
 
@@ -69,9 +69,9 @@ reading the clock is instant and never parks. (See `examples/sleep.qn`.)
 << core.time
 
 ^ = () -> Num => <
-  start = now()
+  start = time.now()
   @sleep(0.05)            ~ pause ~50ms, then continue
-  now() - start >= 0.05 ? 6 * 7 : 0   ~ the sleep really waited → 42
+  time.now() - start >= 0.05 ? 6 * 7 : 0   ~ the sleep really waited → 42
 >
 ```
 

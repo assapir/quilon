@@ -21,8 +21,8 @@
 //! - the built-ins that belong to no module (`Result`/`Ok`/`NotOk`, `assert`, matchers).
 
 use crate::ast::nodes::{
-    Expression, InterpolationPart, Item, MethodDeclaration, Parameter, Pattern, Program,
-    Statement, Type, TypeDefinition, RECEIVER,
+    Expression, InterpolationPart, Item, MethodDeclaration, Parameter, Pattern, Program, RECEIVER,
+    Statement, Type, TypeDefinition,
 };
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
@@ -90,9 +90,7 @@ impl ModuleScope {
             self.aliases
                 .insert(alias.to_string(), vec![canonical.to_string()]);
         }
-        self.exports
-            .entry(canonical.to_string())
-            .or_insert(exports);
+        self.exports.entry(canonical.to_string()).or_insert(exports);
         self.claimed
             .entry(alias.to_string())
             .or_insert_with(|| canonical.to_string());
@@ -117,10 +115,8 @@ impl ModuleScope {
             match canonicals.as_slice() {
                 [only] => only.as_str(),
                 many => {
-                    let options: Vec<String> = many
-                        .iter()
-                        .map(|c| format!("`{c}.{member}`"))
-                        .collect();
+                    let options: Vec<String> =
+                        many.iter().map(|c| format!("`{c}.{member}`")).collect();
                     return err(
                         span,
                         format!(
@@ -141,10 +137,7 @@ impl ModuleScope {
             .get(canonical)
             .is_some_and(|names| names.contains(member));
         if !exported {
-            return err(
-                span,
-                format!("`{member}` is not exported by `{canonical}`"),
-            );
+            return err(span, format!("`{member}` is not exported by `{canonical}`"));
         }
         Ok(format!("{canonical}.{member}"))
     }
@@ -189,10 +182,7 @@ pub fn qualify_module(
             Item::TypeDeclaration(d) => (&mut d.name, &d.span),
         };
         if let Some(spelling) = scope.claimed_by(name) {
-            return err(
-                span,
-                claim_message(name, spelling),
-            );
+            return err(span, claim_message(name, spelling));
         }
         if let Some(renamed) = renames.get(name.as_str()) {
             *name = renamed.clone();
@@ -610,5 +600,194 @@ impl Walker<'_> {
                     .try_for_each(|field| self.type_(field, span))
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser;
+
+    fn parse(source: &str) -> Program {
+        let tokens = Lexer::tokenize(source).expect("lexing failed");
+        parser::parse(&tokens).expect("parsing failed")
+    }
+
+    /// A scope with one import: `<< core.io`, exporting `print` and `stdout`.
+    fn io_scope() -> ModuleScope {
+        let mut scope = ModuleScope::default();
+        scope
+            .add_import(
+                "io",
+                "core.io",
+                ["print", "stdout"].map(String::from).into(),
+                &Span::in_file(0, 0, crate::lexer::ROOT_FILE),
+            )
+            .expect("adding the import");
+        scope
+    }
+
+    /// The (post-rename) body of the function item called `name`, for inspection.
+    fn body_of<'a>(program: &'a Program, name: &str) -> &'a Expression {
+        program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::FunctionDeclaration(f) if f.name == name => Some(&f.body),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no function item named `{name}`"))
+    }
+
+    /// Every identifier name mentioned in `expression`, in traversal order.
+    fn names(expression: &Expression) -> Vec<String> {
+        let mut out = Vec::new();
+        let _: std::ops::ControlFlow<()> =
+            crate::ast::walk::try_for_each_subexpression(expression, &mut |e| {
+                if let Expression::Identifier { name, .. } = e {
+                    out.push(name.clone());
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+        out
+    }
+
+    #[test]
+    fn a_modules_own_names_rename_and_locals_shadow_them() {
+        // `helper` renames at the top level and in the exported body — but the lambda's
+        // own `helper` parameter shadows the rename inside its body.
+        let mut module = parse(
+            "helper = (x :: Num) -> Num => x\n\
+             >> use = (n :: Num) -> Num => <\n  \
+               inner = (helper :: Num) => helper + 1\n  \
+               helper(inner(n))\n\
+             >\n",
+        );
+        qualify_module(&mut module, "m", &ModuleScope::default()).expect("qualifying");
+        assert_eq!(module.items[0].name(), "m.helper");
+        let mentioned = names(body_of(&module, "m.use"));
+        assert!(
+            mentioned.contains(&"m.helper".to_string()),
+            "the sibling call must take the qualified name: {mentioned:?}"
+        );
+        assert!(
+            mentioned.contains(&"helper".to_string()),
+            "the shadowing parameter's use must stay bare: {mentioned:?}"
+        );
+    }
+
+    #[test]
+    fn a_binding_rhs_resolves_before_the_name_binds() {
+        // `x = x + 1` reads the OUTER `x` (the module's own top-level), so the RHS is
+        // rewritten; from the next statement on, the local shadows.
+        let mut module = parse(
+            "x = 1\n\
+             >> f = () -> Num => <\n  \
+               x = x + 1\n  \
+               x\n\
+             >\n",
+        );
+        qualify_module(&mut module, "m", &ModuleScope::default()).expect("qualifying");
+        let mentioned = names(body_of(&module, "m.f"));
+        assert_eq!(
+            mentioned,
+            vec!["m.x".to_string(), "x".to_string()],
+            "the RHS reads the top-level; the tail reads the local"
+        );
+    }
+
+    #[test]
+    fn the_method_receiver_shadows_a_top_level_it() {
+        // A module may define a top-level `it` (core.test does); a method body's `it`
+        // is still the receiver, never that item.
+        let mut module = parse(
+            ">> it = (n :: Num) -> Num => n\n\
+             >> Point = { x :: Num\n  double = () -> Num => it.x * 2\n}\n",
+        );
+        qualify_module(&mut module, "m", &ModuleScope::default()).expect("qualifying");
+        let Item::TypeDeclaration(declaration) = &module.items[1] else {
+            panic!("expected the type declaration");
+        };
+        let body = &declaration.type_definition.methods()[0].body;
+        assert!(
+            names(body).contains(&"it".to_string()),
+            "the receiver must stay bare: {:?}",
+            names(body)
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_short_name_asks_for_the_full_path() {
+        // Two dotted modules sharing a last segment: both import fine, and the short
+        // name errors at a use site, naming both full spellings.
+        let mut scope = ModuleScope::default();
+        let span = Span::in_file(0, 0, crate::lexer::ROOT_FILE);
+        scope
+            .add_import("test", "core.test", HashSet::new(), &span)
+            .expect("first import");
+        scope
+            .add_import("test", "foo.test", HashSet::new(), &span)
+            .expect("second import — both have full paths to fall back on");
+        let error = scope
+            .resolve_dotted("test.describe", &span)
+            .expect_err("the short name is ambiguous");
+        assert!(
+            error.message.contains("core.test.describe")
+                && error.message.contains("foo.test.describe"),
+            "the error must offer both full paths: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_file_module_colliding_with_a_dotted_alias_has_no_escape() {
+        // A file module's canonical name IS its short name, so this collision is
+        // rejected at the import rather than deferred to a use site.
+        let mut scope = ModuleScope::default();
+        let span = Span::in_file(0, 0, crate::lexer::ROOT_FILE);
+        scope
+            .add_import("test", "core.test", HashSet::new(), &span)
+            .expect("the builtin import");
+        let error = scope
+            .add_import("test", "test", HashSet::new(), &span)
+            .expect_err("a stem colliding with a bound alias has no fallback");
+        assert!(
+            error.message.contains("rename the file"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn resolution_rewrites_types_patterns_and_constructors() {
+        let mut program = parse(
+            "<< core.io\n\
+             f = (fd :: io.stdout) -> Num => 0\n",
+        );
+        // A type annotation spelled through the module resolves like a value would.
+        // (Semantically nonsense — `stdout` is a value — but the checker owns that
+        // question; this pass only rewrites the spelling.)
+        resolve_program(&mut program, &io_scope()).expect("resolving");
+        let Item::FunctionDeclaration(f) = &program.items[0] else {
+            panic!("expected the function");
+        };
+        let Some(Type::Named { name, .. }) = &f.parameters[0].type_annotation else {
+            panic!("expected a named annotation");
+        };
+        assert_eq!(name, "core.io.stdout");
+    }
+
+    #[test]
+    fn a_private_member_reads_as_not_exported() {
+        let scope = io_scope();
+        let error = scope
+            .resolve_dotted("io.helper", &Span::in_file(0, 0, crate::lexer::ROOT_FILE))
+            .expect_err("an unexported member must not resolve");
+        assert!(
+            error.message.contains("not exported by `core.io`"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 }

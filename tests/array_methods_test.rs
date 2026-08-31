@@ -180,5 +180,5 @@ fn at_index_must_be_num() {
 /// higher-order arguments elsewhere (here `print` has no function-typed overload).
 #[test]
 fn bare_lambda_is_not_a_value() {
-    assert_type_error("<< core.io\n^ = () -> Num => <\n  print(x => x)\n  0\n>");
+    assert_type_error("<< core.io\n^ = () -> Num => <\n  io.print(x => x)\n  0\n>");
 }
