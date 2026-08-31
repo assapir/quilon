@@ -209,6 +209,7 @@ impl TypeChecker {
             && let Expression::Identifier { name, .. } = function
             && let Some(receiver_type) = &first_ty
             && !self.names_a_callable(name)
+            && !self.overloaded_names.contains(name)
             && self.type_has_member(receiver_type, name)
         {
             return Err(TypeError::MethodCalledAsFunction {

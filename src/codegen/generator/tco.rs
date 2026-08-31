@@ -119,6 +119,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // its name is a call to that method, not a self-call.
         let symbol = match self.method_symbol_for(name, arguments, *member_call) {
             Some(method) => method,
+            // A `.` call the receiver's type answers with a BUILT-IN declares no method
+            // symbol, and it is still not this function: `t.contains(s)` inside a
+            // top-level `contains` is `Text`'s, so taking it for recursion compiled the
+            // call into this function's own loop back-edge.
+            None if *member_call => return false,
             None if self.overloads.contains_key(name.as_str()) => {
                 let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
                 match self.resolve_overload_symbol(name, &arg_types) {

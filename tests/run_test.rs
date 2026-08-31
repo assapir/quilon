@@ -602,6 +602,30 @@ fn a_method_and_a_top_level_function_of_one_name_each_answer_their_own_form() {
 }
 
 #[test]
+fn a_tail_call_to_a_built_in_method_of_the_same_name_is_not_recursion() {
+    // The tail `t.contains(s)` inside a top-level `contains` is `Text`'s built-in, which
+    // declares no method symbol of its own — taking that miss for a self-call compiled it
+    // into this function's loop back-edge and the program hung.
+    assert_exit(
+        "contains = (t :: Text, s :: Text) -> Bool => t.contains(s)\n^ = () -> Num => contains(\"hello\", \"ell\") ? 7 : 3",
+        7,
+    );
+}
+
+#[test]
+fn an_overload_set_below_the_call_is_reported_as_such() {
+    // `contains` is a member of `Text`, but this program also defines a `contains` overload
+    // set — below the call. The report has to name that, not send the reader to `Text`'s.
+    let message = common::type_error_message(
+        "^ = () -> Num => <\n  b :: Bool = contains(\"hi\", \"h\")\n  b ? 1 : 0\n>\ncontains = (t :: Text, s :: Text) -> Bool => true\ncontains = (t :: Text, n :: Num) -> Bool => false",
+    );
+    assert!(
+        message.contains("before its definition"),
+        "the diagnostic must say the definitions sit below the call, got: {message}"
+    );
+}
+
+#[test]
 fn a_name_rebound_in_an_inner_scope_is_not_still_the_outer_record() {
     // The receiver's type comes from the checker, which knows which binding a name refers
     // to. Reading it off a flat per-function map instead let the lambda's own `x` still

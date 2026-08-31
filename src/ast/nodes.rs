@@ -813,9 +813,8 @@ impl Expression {
         Expression::Call {
             function: Box::new(function),
             arguments,
-            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: a name that the
-            // receiver's type can claim but that also falls back to the top-level
-            // namespace, unlike the `x.f(a)` form.
+            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: in the top-level
+            // namespace alone, where the `x.f(a)` form asks `x`'s type alone.
             member_call: false,
             span: span.clone(),
         }
