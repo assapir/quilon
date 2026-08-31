@@ -52,6 +52,7 @@ fn emit_object(
     let mut generator = CodeGenerator::new(&context, "main");
     generator.set_type_table(types);
     generator.set_defer_info(defer);
+    generator.set_aot();
     generator.set_source_map(Rc::clone(&sources));
     // Turn on DWARF line-number emission before codegen so every function/expression is
     // attributed to its `.qn` source location.

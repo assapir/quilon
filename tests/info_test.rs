@@ -57,7 +57,18 @@ fn a_match_missing_a_variant_is_a_compile_error() {
 fn a_variant_that_does_not_exist_is_a_compile_error() {
     // A triple spells Apple's OS `darwin`; there is deliberately no such variant, and naming
     // one is caught at compile time rather than reading back an unexpected string.
-    assert_rejected("<< core.info\n^ = () -> Num => os() ? | Darwin => 1 | _ => 0");
+    assert_rejected("<< core.info\n^ = () -> Num => os() ? | Darwin(_) => 1 | _ => 0");
+}
+
+#[test]
+fn an_unknown_says_what_it_saw() {
+    // The payload is the point: a target with no variant of its own still reports which one
+    // it was, rather than collapsing to the word "unknown".
+    assert_exit_linked(
+        "<< core.info\n\
+         ^ = () -> Num => WtfPlatform(\"sparc64\").name() == \"sparc64\" ? 7 : 1",
+        7,
+    );
 }
 
 #[test]
@@ -92,6 +103,16 @@ fn two_reads_agree() {
          ^ = () -> Num => (platform().name() == platform().name() ? 1 : 0) \
            + (os().name() == os().name() ? 2 : 0) \
            + (quilonVersion() == quilonVersion() ? 4 : 0)",
+        7,
+    );
+}
+
+#[test]
+fn run_mode_is_jit_under_the_jit() {
+    // `assert_exit_linked` runs through the in-process JIT, which is the half of `runMode`
+    // reachable from a test; `examples/info.qn` covers the other half when built.
+    assert_exit_linked(
+        "<< core.info\n^ = () -> Num => runMode() ? | Jit => 7 | Aot => 1",
         7,
     );
 }
