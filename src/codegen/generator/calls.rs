@@ -38,6 +38,8 @@ pub(super) enum InfoMember {
     PointerBits,
     /// Whether the target is big-endian, as a `Bool`.
     IsBigEndian,
+    /// Whether this is an ahead-of-time build rather than the JIT, as a `Bool`.
+    IsAot,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -80,6 +82,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__quilon_version" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
             "__pointer_bits" => IntrinsicLowering::InfoMember(InfoMember::PointerBits),
             "__is_big_endian" => IntrinsicLowering::InfoMember(InfoMember::IsBigEndian),
+            "__is_aot" => IntrinsicLowering::InfoMember(InfoMember::IsAot),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,

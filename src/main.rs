@@ -144,6 +144,8 @@ fn main() {
             let mut generator = codegen::CodeGenerator::new(&context, "main");
             generator.set_type_table(checked.types);
             generator.set_defer_info(checked.defer);
+            // `quilon compile` emits the IR an ahead-of-time build would.
+            generator.set_aot();
             generator.set_source_map(checked.sources);
 
             let ir = match generator.generate(&program) {
