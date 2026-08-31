@@ -45,14 +45,22 @@ fn test_text_ops_need_no_import() {
 }
 
 #[test]
-fn test_core_text_is_not_a_module() {
-    // There is no `core.text` module — Text is intrinsic — so importing it errors.
-    let source = r#"
+fn test_core_text_needs_no_import() {
+    // `core.text` exists (it implements the composable Text methods) but no program has
+    // to name it: the link merges it in wherever a composable method is used. Both an
+    // explicit import and none at all check clean.
+    let bare = r#"
+        ^ = () -> Num => "  x  ".trim().size
+    "#;
+    let result = check_with_base(bare, Path::new("."));
+    assert!(result.is_ok(), "expected ok without import, got: {:?}", result);
+
+    let explicit = r#"
         << core.text
         ^ = () -> Num => 0
     "#;
-    let result = check_with_base(source, Path::new("."));
-    assert!(result.is_err(), "expected unknown-module error, got ok");
+    let result = check_with_base(explicit, Path::new("."));
+    assert!(result.is_ok(), "expected ok with import, got: {:?}", result);
 }
 
 #[test]

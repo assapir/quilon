@@ -1,0 +1,217 @@
+~ core.text — the self-hosted half of the built-in `Text` methods (issue #57): the
+~ composable methods, written in Quilon over the native grapheme primitives. Reference:
+~ docs/types/text.md.
+~
+~ `Text` is conceptually a sequence of graphemes (`Text = []Grapheme`, a grapheme being a
+~ length-1 `Text`), and the native surface is exactly the operations that need the byte
+~ representation: segmentation (`length`/`graphemes`/`at`), substring search (`indexOf`),
+~ grapheme-boundary `slice`, the whitespace walks (`trimStart`/`trimEnd`), case mapping
+~ (`toUpper`/`toLower`), comparison, and `+`. Everything else composes from those, here.
+~
+~ Nothing imports this module by name: the compiler merges it implicitly into any program
+~ whose source calls one of the methods it implements, so `text.split(",")` keeps working
+~ with no import — and a program that uses none of them never carries it. Each function
+~ takes the receiver as its first parameter, which is how the compiler lowers the
+~ member-call syntax (`t.split(sep)` becomes `__qn_text_split(t, sep)`); the `__qn_` names
+~ keep the merge out of every program's own namespace. Every item is exported (`>>`):
+~ only exports survive the merge, and the helpers are called by the ones that do.
+~
+~ The walks here are accumulator-shaped self-tail-calls, which the compiler lowers to
+~ loops — recursion depth never grows with the text. Each step still re-walks the tail's
+~ graphemes (`.length`, `indexOf`), so a split/replace is quadratic in graphemes where the
+~ old intrinsic was linear in bytes; measured hot paths may return to native (issue #57).
+~
+~ The module's own suite lives at the bottom (`quilon test corelib/text.qn`), which is
+~ what `<< core.test` is for — like core.http, at the accepted cost that a program in
+~ whose merge this module lands cannot also define a `describe` or `failAt` of its own.
+
+<< core.io
+<< core.test
+
+~ `half + half` — what squares the doubling walk below without a value position for a
+~ block.
+>> __qn_text_double = (half :: Text) -> Text => half + half
+
+~ `count` (a whole number, 0 or more) copies of `t`, by binary doubling: log(count)
+~ concatenations rather than count. The walk behind `repeat`; validation lives in the
+~ entry point below. (`failAt` pads its frame with `.repeat` — those counts are always
+~ valid, so a failing `repeat` reports once rather than recursing.)
+>> __qn_text_repeat_go = (t :: Text, count :: Num) -> Text =>
+  count == 0
+    ? ""
+    : count % 2 == 1
+      ? t + __qn_text_repeat_go(t, count - 1)
+      : __qn_text_double(__qn_text_repeat_go(t, count / 2))
+
+~ Strip leading and trailing whitespace: the two one-sided walks, composed.
+>> __qn_text_trim = (t :: Text) -> Text => t.trimStart().trimEnd()
+
+~ Whether `sub` occurs in `t`: where `indexOf` finds an index, `contains` is true.
+>> __qn_text_contains = (t :: Text, sub :: Text) -> Bool =>
+  t.indexOf(sub) ?
+    | Ok(_)    => true
+    | NotOk(_) => false
+
+~ The pieces of `rest` split on `sep` (never empty here), appended to `acc`. `sepLen` is
+~ `sep.length`, passed along so it is walked once, not once per piece. `.size` (bytes,
+~ O(1)) is the "to the end" slice bound throughout this file: `slice` clamps its end to
+~ the grapheme count, which the byte length always reaches, so it spares the full
+~ grapheme walk `.length` would cost every iteration.
+>> __qn_text_split_go = (acc :: []Text, rest :: Text, sep :: Text, sepLen :: Num) -> []Text =>
+  rest.indexOf(sep) ?
+    | Ok(i)    => __qn_text_split_go(acc + [rest.slice(0, i)], rest.slice(i + sepLen, rest.size), sep, sepLen)
+    | NotOk(_) => acc + [rest]
+
+~ Split on a NON-empty `sep`: the first match seeds the accumulator (an empty array
+~ literal has no element type to take), the walk above collects the rest.
+>> __qn_text_split_first = (t :: Text, sep :: Text) -> []Text => <
+  sepLen = sep.length
+  t.indexOf(sep) ?
+    | Ok(i)    => __qn_text_split_go([t.slice(0, i)], t.slice(i + sepLen, t.size), sep, sepLen)
+    | NotOk(_) => [t]
+>
+
+~ Split `t` on `sep`. Consecutive separators keep empty pieces, an empty `t` yields
+~ `[""]`, and an EMPTY separator splits into graphemes (where an empty `t` yields `[]` —
+~ the graphemes of nothing).
+>> __qn_text_split = (t :: Text, sep :: Text) -> []Text =>
+  sep.size == 0 ? t.graphemes() : __qn_text_split_first(t, sep)
+
+~ The end of a replace walk: the text is exhausted with `remaining` replacements still
+~ owed — a `count` beyond the occurrences present, which fails loudly (the whole text
+~ held `count - remaining` of them). `replaceAll`'s negative `remaining` never owes.
+>> __qn_text_replace_end = (acc :: Text, rest :: Text, count :: Num, remaining :: Num, site :: Site) -> Text => <
+  remaining > 0
+    ? failAt("replace: count `count` exceeds `count - remaining` occurrences", site)
+    : $
+  acc + rest
+>
+
+~ `rest` with its first `remaining` occurrences of `from` replaced by `to`, appended to
+~ `acc` — one pass, validating the count as it goes. A negative `remaining` never
+~ reaches 0, which is how `replaceAll` replaces every occurrence.
+>> __qn_text_replace_go = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Text, remaining :: Num, count :: Num, site :: Site) -> Text =>
+  rest.indexOf(from) ?
+    | Ok(i)    => remaining == 0
+      ? acc + rest
+      : __qn_text_replace_go(acc + rest.slice(0, i) + to, rest.slice(i + fromLen, rest.size), from, fromLen, to, remaining - 1, count, site)
+    | NotOk(_) => __qn_text_replace_end(acc, rest, count, remaining, site)
+
+~ Replace EVERY occurrence of `from` with `to`. An empty `from` is an ill-defined
+~ request and fails loudly (exit 101) — never a silent no-op.
+>> __qn_text_replace_all = (t :: Text, from :: Text, to :: Text, site :: Site) -> Text => <
+  from.size == 0 ? failAt("replace: ``from`` must not be empty", site) : $
+  __qn_text_replace_go("", t, from, from.length, to, 0 - 1, 0 - 1, site)
+>
+
+~ Replace EXACTLY the first `count` occurrences of `from` with `to`, left to right;
+~ `count` truncates toward zero. Fails loudly (exit 101) on an empty `from`, a
+~ non-positive `count`, or a `count` beyond the occurrences present — no clamp, no no-op.
+>> __qn_text_replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> Text => <
+  from.size == 0 ? failAt("replace: ``from`` must not be empty", site) : $
+  n = count - count % 1
+  n >= 1 ? $ : failAt("replace: count must be positive, got `n`", site)
+  __qn_text_replace_go("", t, from, from.length, to, n, n, site)
+>
+
+~ `count` copies of `t`, back to back; 0 yields `""`. Fails loudly (exit 101) on a
+~ negative, fractional, or non-finite `count` — the checker rejects a literal one at
+~ compile time, this is the backstop for a computed one.
+>> __qn_text_repeat = (t :: Text, count :: Num, site :: Site) -> Text => <
+  count >= 0 && count % 1 == 0
+    ? $
+    : failAt("repeat: ``count`` must be a whole number of 0 or more", site)
+  __qn_text_repeat_go(t, count)
+>
+
+~ ── The module's own suite ─────────────────────────────────────────────────────────
+~ The fail-loud paths (an invalid `replace`/`repeat` request) exit the process, so they
+~ are covered by the compiler's subprocess tests (tests/text_methods_test.rs), not here.
+
+describe("split", () => <
+  it("splits on the separator", () => <
+    pieces = "a,b,c".split(",")
+    expect(pieces.size, equals(3))
+    expect(pieces[0], equals("a"))
+    expect(pieces[2], equals("c"))
+  >)
+
+  it("keeps the empty pieces between consecutive separators", () => <
+    pieces = "a,,b".split(",")
+    expect(pieces.size, equals(3))
+    expect(pieces[1], equals(""))
+  >)
+
+  it("yields a single empty piece for an empty text", () => <
+    pieces = "".split(",")
+    expect(pieces.size, equals(1))
+    expect(pieces[0], equals(""))
+  >)
+
+  it("splits on a multi-grapheme separator", () => <
+    pieces = "Hello, World".split(", ")
+    expect(pieces.size, equals(2))
+    expect(pieces[1], equals("World"))
+  >)
+
+  it("splits an empty separator into graphemes", () => <
+    graphemes = "héllo".split("")
+    expect(graphemes.size, equals(5))
+    expect(graphemes[1], equals("é"))
+  >)
+
+  it("has no graphemes to split an empty text into", () =>
+    expect("".split("").size, equals(0)))
+>)
+
+describe("trim", () => <
+  it("strips both ends, Unicode whitespace included", () =>
+    expect(" héllo  ".trim(), equals("héllo")))
+
+  it("leaves the middle alone", () =>
+    expect("  a b  ".trim(), equals("a b")))
+>)
+
+describe("contains", () => <
+  it("finds a substring", () => expect("haystack".contains("stack"), equals(true)))
+
+  it("misses an absent one", () => expect("haystack".contains("carrot"), equals(false)))
+
+  it("contains the empty text", () => expect("x".contains(""), equals(true)))
+>)
+
+describe("replace", () => <
+  it("replaceAll rewrites every occurrence", () =>
+    expect("a-a-a".replaceAll("a", "xx"), equals("xx-xx-xx")))
+
+  it("replace rewrites exactly the first count", () =>
+    expect("a-a-a".replace("a", "xx", 2), equals("xx-xx-a")))
+
+  it("replaces a multibyte from with a multibyte to", () =>
+    expect("a🌍b🌍c".replaceAll("🌍", "é"), equals("aébéc")))
+>)
+
+describe("repeat", () => <
+  it("concatenates count copies", () => expect("^".repeat(3), equals("^^^")))
+
+  it("yields the empty text for 0", () => expect("ab".repeat(0), equals("")))
+
+  it("keeps grapheme clusters whole", () => expect("é😀".repeat(3).length, equals(6)))
+>)
+
+describe("grapheme access", () => <
+  it("at reads the grapheme, multibyte kept whole", () => <
+    grapheme = "a🌍b".at(1) ?
+      | Ok(g)    => g
+      | NotOk(_) => ""
+    expect(grapheme, equals("🌍"))
+  >)
+
+  it("at is NotOk out of bounds", () => expect("abc".at(3), isNotOk()))
+
+  it("graphemes yields the cluster sequence", () => <
+    graphemes = "héllo".graphemes()
+    expect(graphemes.size, equals(5))
+    expect(graphemes[1], equals("é"))
+  >)
+>)

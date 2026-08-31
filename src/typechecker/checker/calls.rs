@@ -559,8 +559,12 @@ impl TypeChecker {
     }
 
     /// Type-check a built-in `Text` method call. `arguments[0]` is the receiver (already
-    /// known to be `Text`); the remaining arguments are the method's own arguments. Signatures
-    /// (see docs/types/text.md):
+    /// known to be `Text`); the remaining arguments are the method's own arguments.
+    ///
+    /// The composable methods' bodies live in `corelib/text.qn` (each as `__qn_text_*`,
+    /// receiver first, fail-loud ones with a trailing `Site`), but their TYPE surface is
+    /// this table — a signature change there needs a matching edit here, and nothing
+    /// checks the pair beyond the end-to-end tests. Signatures (see docs/types/text.md):
     ///   - `split(sep :: Text)`                 -> `[]Text`
     ///   - `trim()` / `trimStart()` / `trimEnd()` / `toUpper()` / `toLower()` -> `Text`
     ///   - `replaceAll(from :: Text, to :: Text)` -> `Text`
@@ -569,6 +573,8 @@ impl TypeChecker {
     ///   - `indexOf(sub :: Text)`               -> `Result` (`Ok(Num)` / `NotOk`)
     ///   - `slice(start :: Num, end :: Num)`    -> `Text`
     ///   - `repeat(count :: Num)`               -> `Text` (`count` copies, joined)
+    ///   - `at(index :: Num)`                   -> `Result` (`Ok(Text)` / `NotOk`)
+    ///   - `graphemes()`                        -> `[]Text` (one length-1 Text each)
     pub(super) fn check_text_method(
         &mut self,
         method: &str,
@@ -585,8 +591,10 @@ impl TypeChecker {
         let (parameters, result): (Vec<Type>, Type) = match method {
             "trim" | "trimStart" | "trimEnd" | "toUpper" | "toLower" => (vec![], Text),
             "split" => (vec![Text], Type::Array(Box::new(Text))),
+            "graphemes" => (vec![], Type::Array(Box::new(Text))),
             "contains" => (vec![Text], Bool),
             "indexOf" => (vec![Text], result_of(Num)),
+            "at" => (vec![Num], result_of(Text)),
             "slice" => (vec![Num, Num], Text),
             "repeat" => (vec![Num], Text),
             "replaceAll" => (vec![Text, Text], Text),
@@ -629,8 +637,8 @@ impl TypeChecker {
     }
 
     /// Compile-time validation of `replace`/`replaceAll` arguments that are literals — the
-    /// static half of the fail-loud contract (the runtime `__text_replace*` intrinsics
-    /// abort on the same conditions when they aren't literal-determinable):
+    /// static half of the fail-loud contract (`core.text`'s implementations abort on the
+    /// same conditions when they aren't literal-determinable):
     ///   - an empty `from` (`""`) is ill-defined → error (both methods);
     ///   - `replace`'s `count` literal `<= 0` → error (use `replaceAll` for "all");
     ///   - when the receiver, `from`, and `count` are ALL literals, a `count` greater than

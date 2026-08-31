@@ -74,9 +74,9 @@ pub use test_registry::{
     __test_suite_enter, __test_suite_leave,
 };
 pub use text::{
-    __bool_to_text, __num_to_text, __text_cmp, __text_contains, __text_index_of, __text_length,
-    __text_repeat, __text_replace_all, __text_replace_n, __text_slice, __text_split,
-    __text_to_lower, __text_to_upper, __text_trim_end, __text_trim_start,
+    __bool_to_text, __num_to_text, __text_at, __text_cmp, __text_contains, __text_graphemes,
+    __text_index_of, __text_length, __text_slice, __text_to_lower, __text_to_upper,
+    __text_trim_end, __text_trim_start,
 };
 pub use time::{__now, __sleep};
 
@@ -154,27 +154,15 @@ intrinsic_registry! {
     __color_enabled: extern "C" fn(i64) -> i64,
     __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
     __envp_to_map: extern "C" fn(*const *const c_char) -> *mut c_void,
-    __text_repeat: extern "C" fn(*const u8, i64, f64, *const QlSite) -> QlSlice,
     __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_to_upper: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_to_lower: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_contains: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
     __text_index_of: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
-    __text_replace_all:
-        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, *const QlSite) -> QlSlice,
-    __text_replace_n: extern "C" fn(
-        *const u8,
-        i64,
-        *const u8,
-        i64,
-        *const u8,
-        i64,
-        i64,
-        *const QlSite,
-    ) -> QlSlice,
     __text_slice: extern "C" fn(*const u8, i64, i64, i64) -> QlSlice,
-    __text_split: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
+    __text_graphemes: extern "C" fn(*const u8, i64) -> QlSlice,
+    __text_at: extern "C" fn(*const u8, i64, i64) -> QlSlice,
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,

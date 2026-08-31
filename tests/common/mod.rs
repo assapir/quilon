@@ -213,10 +213,12 @@ pub fn front_end(
 ) -> (quilon::ast::Program, TypeTable, DeferInfo, Rc<SourceMap>) {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let (program, mut sources) = match base_dir {
-        Some(dir) => quilon::modules::link(program, dir).expect("import linking failed"),
-        None => (program, SourceMap::default()),
-    };
+    // `None` still links (against the current directory): a program with no `<<` resolves
+    // no imports, but the link is also where `core.text` is merged in for a program using
+    // a composable Text method — which needs no import in real pipelines either.
+    let dir = base_dir.unwrap_or_else(|| Path::new("."));
+    let (program, mut sources) =
+        quilon::modules::link(program, dir).expect("import linking failed");
     sources.set_root(TEST_FILE, src);
     let types = TypeChecker::new()
         .check_program(&program)

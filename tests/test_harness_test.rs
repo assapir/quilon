@@ -1053,6 +1053,40 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
     );
 }
 
+/// The same gate for `corelib/text.qn` — the self-hosted Text methods' own suite, the one
+/// compilation of those blocks.
+#[test]
+fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("corelib")
+        .join("text.qn");
+    let out = quilon(&["test", module.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "corelib/text.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    for group in [
+        "split",
+        "trim",
+        "contains",
+        "replace",
+        "repeat",
+        "grapheme access",
+    ] {
+        assert!(
+            out.stdout.contains(group),
+            "the `{group}` group is missing from the report:\n{}",
+            out.stdout
+        );
+    }
+    assert!(
+        out.stdout.contains("20 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+}
+
 // ── The shipped example: tests beside the code, and what each command does with them ─────
 
 /// The shipped demonstration, built and run: `examples/tests_alongside_code.qn` holds its `>>`

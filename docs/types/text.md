@@ -6,6 +6,14 @@ sidebar:
 
 # `Text`
 UTF-8 text. A **built-in** type (like `Num`/`Bool`/arrays) — **no import needed**.
+
+A `Text` is conceptually a **sequence of graphemes** (`Text = []Grapheme`): every
+user-visible index and length counts grapheme clusters — user-perceived characters — and a
+single grapheme is itself a length-1 `Text` (there is no separate `Grapheme` type).
+`.at(i)` reads one grapheme, `.graphemes()` yields them all as a `[]Text`, and `+` builds
+a `Text` back up. Under the hood the representation stays UTF-8 bytes (`.size` is the byte
+length); the grapheme sequence is how the language addresses it, not how it is stored.
+
 ```quilon
 greeting = "héllo" + " 🌍"   ~ + concatenates (GC-allocated)
 b = greeting.size            ~ byte length      → 11
@@ -35,6 +43,8 @@ freely chainable. User-visible indices and lengths are **grapheme-based** (match
 | `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
 | `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` if absent — **no `-1` sentinel** |
 | `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds (never an error), and `end ≤ start` yields `""` |
+| `at(index :: Num)` | `Ok(Text)` / `NotOk` | the grapheme at `index` (a length-1 `Text`, multi-codepoint clusters kept whole), `NotOk` out of bounds — mirroring array [`.at`](../collections/arrays.md#array-methods) |
+| `graphemes()` | `[]Text` | every grapheme cluster in order, one length-1 `Text` each (`""` → `[]`); composes with the array methods |
 | `toUpper()` / `toLower()` | `Text` | Unicode-aware case mapping |
 | `repeat(count :: Num)` | `Text` | `count` copies back to back (`"^".repeat(3)` → `"^^^"`); `0` yields `""` |
 
@@ -56,9 +66,18 @@ freely chainable. User-visible indices and lengths are **grapheme-based** (match
 
 These methods are **reserved on `Text`**, like the [array methods](../collections/arrays.md#array-methods)
 are on arrays. A same-named user overload on another type is fine, but on a `Text` receiver
-the built-in wins. `split` yields a plain `[]Text`, so it composes with `.size`, `[i]`, the
+the built-in wins. `split`/`graphemes` yield a plain `[]Text`, so they compose with `.size`, `[i]`, the
 [array methods](../collections/arrays.md#array-methods), and array `+`. There is **no `join`** — collapse a `[]Text`
 with `reduce` + `+`.
+
+Only the true primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
+`slice`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison, and `+`. The composable
+methods — `split`, `trim`, `contains`, `replace`, `replaceAll`, `repeat` — are ordinary
+Quilon over those (`corelib/text.qn`), merged in by the compiler when a program uses one;
+no import is ever needed. That merge carries `core.text`'s own dependencies (`core.io`,
+`core.test`) with it, so a program calling a composable method cannot also define a
+top-level name those modules export (`describe`, `failAt`, `stdout`, …) — the same
+already-accepted tradeoff `<< core.http` makes, reached here through a method call.
 
 `replace`/`replaceAll`/`repeat` **fail loudly**. They never silently no-op or clamp. Three
 inputs are rejected: an empty `from`; a `replace` `count` that is `<= 0` or exceeds the

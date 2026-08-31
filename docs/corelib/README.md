@@ -20,4 +20,8 @@ signatures, behavior, and a small example per function.
 | [`core.net`](net.md) | `<< core.net` | Networking: the deferred `@tcpRequest` raw TCP request exchange the HTTP client sits on. |
 | [`core.http`](http.md) | `<< core.http` | An HTTP client written in Quilon over `core.net`: the `Body` / `Method` types and the `Request` / `Response` records. HTTP only, no TLS. |
 
-`Text` and the operators are built-ins and need **no** import. The [concurrency model](../concurrency/README.md) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.
+`Text` and the operators are built-ins and need **no** import. (Behind the scenes the
+composable `Text` methods — `split`/`trim`/`contains`/`replace`/`replaceAll`/`repeat` —
+are Quilon themselves, in the compiler-internal `core.text` module it merges in
+automatically wherever one is used; only the grapheme primitives are native. See
+[`Text`](../types/text.md).) The [concurrency model](../concurrency/README.md) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.

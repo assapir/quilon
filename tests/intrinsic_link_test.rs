@@ -101,17 +101,18 @@ const EVERY_INTRINSIC: &str = r#"
   assert("abc" < "abd", equals(true))
   assert("héllo".length, equals(5))
 
-  ~ The Text methods, one call each.
+  ~ The native Text primitives, one call each. (`split`/`trim`/`contains`/`replace`/
+  ~ `replaceAll`/`repeat` are Quilon — `core.text` — so they reach only these.)
   assert("  pad  ".trimStart(), equals("pad  "))
   assert("  pad  ".trimEnd(), equals("  pad"))
   assert("up".toUpper(), equals("UP"))
   assert("DOWN".toLower(), equals("down"))
-  assert("haystack".contains("stack"), equals(true))
   assert("haystack".indexOf("stack"), isOk())
-  assert("a-a".replaceAll("a", "b"), equals("b-b"))
-  assert("a-a".replace("a", "b", 1), equals("b-a"))
   assert("slice".slice(1, 3), equals("li"))
-  assert("x,y".split(",").size, equals(2))
+  assert("xy".graphemes().size, equals(2))
+  assert("xy".at(0), isOk())
+  ~ The `contains` MATCHER (not the method) is what reaches __text_contains.
+  assert("haystack", contains("stack"))
 
   ~ Map intrinsics: new/set/get/has/len, and keys/values/each iteration.
   counts :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
