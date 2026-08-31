@@ -133,34 +133,13 @@ fn run_record_size_field_not_shadowed() {
     );
 }
 
-// --- Pipeline `|>` (first-arg injection) ---
-
-#[test]
-fn run_pipeline_chain() {
-    // 10 |> double |> addFive  ==  addFive(double(10)) = 25
-    assert_exit(
-        "double = (x :: Num) -> Num => x * 2\naddFive = (x :: Num) -> Num => x + 5\n^ = () -> Num => 10 |> double |> addFive",
-        25,
-    );
-}
-
-#[test]
-fn run_pipeline_injects_left_as_first_arg() {
-    // 10 |> sub(3)  desugars to  sub(10, 3) = 7  (NOT sub(3, 10) = -7),
-    // proving the left operand is injected as the FIRST argument.
-    assert_exit(
-        "sub = (a :: Num, b :: Num) -> Num => a - b\n^ = () -> Num => 10 |> sub(3)",
-        7,
-    );
-}
-
 // --- IO: write / print over `<< core.io` ---
 
 #[test]
 fn run_write_to_stdout_returns_byte_count() {
-    // `"hi" |> io.write(io.stdout)` == `write("hi", io.stdout)`; write returns bytes written = 2.
+    // write returns bytes written = 2.
     assert_exit_linked(
-        "<< core.io\n^ = () -> Num => \"hi\" |> io.write(io.stdout)",
+        "<< core.io\n^ = () -> Num => io.write(\"hi\", io.stdout)",
         2,
     );
 }
@@ -544,21 +523,75 @@ fn a_member_call_on_a_built_in_type_never_reaches_a_top_level_function() {
 #[test]
 fn a_free_call_still_reaches_a_top_level_function_over_a_same_named_method() {
     // Only the `recv.name(...)` form is receiver-scoped. `bump(3)` names the top-level
-    // function, and the pipe is that same free call (3 * 100 + 3 * 100 = 600).
+    // function (3 * 100 + 3 * 100 = 600).
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + (3 |> bump())",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + bump(3)",
         600,
     );
 }
 
 #[test]
-fn the_free_form_of_a_method_call_still_reaches_the_method() {
-    // What the `.` form adds is refusing the top-level fallback, not receiver dispatch
-    // itself: `bump(c, 3)` and `c |> bump(3)` are the same call and both reach `Counter`'s
-    // method over the top-level `bump` (8 + 8 = 16).
+fn the_free_form_of_a_method_call_does_not_reach_the_method() {
+    // A method is reached through its receiver and nowhere else: `bump(c, 3)` names the
+    // top-level namespace, where this program has no `bump` at all.
+    let message = common::type_error_message(
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+    );
+    assert!(
+        message.contains("no function 'bump' in scope"),
+        "the diagnostic must name the function that is missing, got: {message}"
+    );
+    // And it spells out the call that DOES reach the method, with the receiver written.
+    assert!(
+        message.contains("Call it as 'c.bump(...)'"),
+        "the advice must spell out the member call, got: {message}"
+    );
+}
+
+#[test]
+fn a_built_in_method_does_not_answer_the_free_form() {
+    // The rule is the same for the methods reserved on a built-in type: `split` belongs
+    // to `Text`, so only `"a,b".split(",")` reaches it.
+    let message = common::type_error_message(
+        "^ = () -> Num => <\n  parts :: []Text = split(\"a,b\", \",\")\n  parts.size\n>",
+    );
+    assert!(
+        message.contains("no function 'split' in scope"),
+        "the diagnostic must name the function that is missing, got: {message}"
+    );
+}
+
+#[test]
+fn a_method_and_a_top_level_function_of_one_name_each_answer_their_own_form() {
+    // Both exist, and neither answers for the other: `c.bump(3)` is the method (5 + 3),
+    // `bump(c, 3)` the top-level function (900 + 3). 8 + 903 = 911.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3) + (c |> bump(3))\n>",
-        16,
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (c :: Counter, n :: Num) -> Num => 900 + n\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3) + bump(c, 3)\n>",
+        911,
+    );
+}
+
+#[test]
+fn a_tail_call_to_a_built_in_method_of_the_same_name_is_not_recursion() {
+    // The tail `t.contains(s)` inside a top-level `contains` is `Text`'s built-in, which
+    // declares no method symbol of its own — taking that miss for a self-call compiled it
+    // into this function's loop back-edge and the program hung.
+    assert_exit(
+        "contains = (t :: Text, s :: Text) -> Bool => t.contains(s)\n^ = () -> Num => contains(\"hello\", \"ell\") ? 7 : 3",
+        7,
+    );
+}
+
+#[test]
+fn an_overload_set_below_the_call_is_reported_as_such() {
+    // `contains` is a member of `Text`, but this program also defines a `contains` overload
+    // set — below the call. The report has to name that, not send the reader to `Text`'s.
+    let message = common::type_error_message(
+        "^ = () -> Num => <\n  b :: Bool = contains(\"hi\", \"h\")\n  b ? 1 : 0\n>\ncontains = (t :: Text, s :: Text) -> Bool => true\ncontains = (t :: Text, n :: Num) -> Bool => false",
+    );
+    assert!(
+        message.contains("before its definition"),
+        "the diagnostic must say the definitions sit below the call, got: {message}"
     );
 }
 
@@ -1464,19 +1497,17 @@ fn run_method_returning_array_is_usable() {
 #[test]
 fn run_line_first_paren_is_new_statement() {
     // Statement-boundary rule end-to-end: without it, `x = f()` followed by the line
-    // `(1 + 2) |> io.print` fused into the call `f()(1 + 2)` ("Not a function" on the
-    // wrong line). Now they are two statements: the pipeline prints 3, and the entry
-    // point exits with x = 7.
+    // `(1 + 2)` fused into the call `f()(1 + 2)` ("Not a function" on the wrong
+    // line). Now they are two statements, and the entry point exits with x = 7.
     let src = r#"
-        << core.io
         f = () -> Num => 7
         ^ = () -> Num => <
           x = f()
-          (1 + 2) |> io.print
+          (1 + 2)
           x
         >
     "#;
-    assert_exit_linked(src, 7);
+    assert_exit(src, 7);
 }
 
 #[test]

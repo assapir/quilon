@@ -154,7 +154,7 @@ fn the_builtins_work_with_no_user_definition() {
 << core.time
 
 ^ = () -> Num => <
-  written = "hi" |> io.write(io.stdout)
+  written = io.write("hi", io.stdout)
   time.now() >= 0 ? written : 0
 >
 "#,

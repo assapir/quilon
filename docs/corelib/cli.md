@@ -9,9 +9,8 @@ sidebar:
 
 Import with `<< core.cli`. See the [corelib index](README.md) and `examples/cli.qn`.
 
-Thin, pipe-friendly helpers over the [entry point](../modules/entry-point.md)'s
-`args :: []Text` and `env :: [|Text => Text|]`. The data is always the **first** parameter, so
-`env |> cli.getEnv("PATH")` and `args |> cli.hasFlag("-v")` read naturally.
+Thin helpers over the [entry point](../modules/entry-point.md)'s
+`args :: []Text` and `env :: [|Text => Text|]`. The data is always the **first** parameter.
 
 | Function | Result |
 |----------|--------|
@@ -22,9 +21,9 @@ Thin, pipe-friendly helpers over the [entry point](../modules/entry-point.md)'s
 ```quilon
 << core.cli
 ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
-  home :: Text = env |> cli.getEnv("HOME") ? | Ok(v) => v | NotOk(_) => "?"
-  verbose :: Bool = args |> cli.hasFlag("-v")
-  outputs :: []Text = args |> cli.getOpt("--out") ? | Ok(vs) => vs | NotOk(_) => args.filter(x => false)
+  home :: Text = cli.getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
+  verbose :: Bool = cli.hasFlag(args, "-v")
+  outputs :: []Text = cli.getOpt(args, "--out") ? | Ok(vs) => vs | NotOk(_) => args.filter(x => false)
   verbose ? 0 : outputs.size
 >
 ```

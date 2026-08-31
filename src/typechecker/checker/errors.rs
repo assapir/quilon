@@ -44,6 +44,7 @@ impl TypeError {
             | TypeError::MatcherArity { span, .. }
             | TypeError::MatcherTypeUnsupported { span, .. }
             | TypeError::UnknownMember { span, .. }
+            | TypeError::MethodCalledAsFunction { span, .. }
             | TypeError::NotRenderable { span, .. } => span,
         }
     }
@@ -387,16 +388,18 @@ impl std::fmt::Display for TypeError {
                     true => ", ...",
                     false => "",
                 };
-                // An output built-in is the likely intent behind `c.print()`; it lives in
-                // `core.io` and is reached through the module's binding.
-                if crate::ast::RENDERABLE_BUILTINS
+                // An output built-in is the likely intent behind `c.print()`; say where it
+                // lives and how to reach it, both read off the builtin's own full name.
+                if let Some((module, _)) = crate::ast::RENDERABLE_BUILTINS
                     .iter()
-                    .any(|builtin| crate::ast::display_name(builtin.name) == member)
+                    .find(|builtin| crate::ast::display_name(builtin.name) == member)
+                    .and_then(|builtin| builtin.name.rsplit_once('.'))
                 {
+                    let binding = crate::ast::display_name(module);
                     return write!(
                         f,
-                        ". A value prints through `core.io`'s '{member}' — call it as \
-                         'io.{member}({shown}{rest})' (under `<< core.io`)"
+                        ". A value prints through `{module}`'s '{member}' — call it as \
+                         '{binding}.{member}({shown}{rest})' (under `<< {module}`)"
                     );
                 }
                 if !in_scope {
@@ -408,6 +411,25 @@ impl std::fmt::Display for TypeError {
                     f,
                     ". There is a '{member}' in scope, but '{shown}.{member}(...)' only \
                      looks on {type_name} — call it as '{member}({shown}{rest})'"
+                )
+            }
+            TypeError::MethodCalledAsFunction {
+                type_name,
+                member,
+                receiver,
+                more_arguments,
+                ..
+            } => {
+                let receiver = receiver.as_deref().unwrap_or("receiver");
+                let (rest, rest_only) = match more_arguments {
+                    true => (", ...", "..."),
+                    false => ("", ""),
+                };
+                write!(
+                    f,
+                    "no function '{member}' in scope — '{member}' is a member of \
+                     {type_name}, which '{member}({receiver}{rest})' does not look on. \
+                     Call it as '{receiver}.{member}({rest_only})'",
                 )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {

@@ -26,7 +26,7 @@ Money = {
   price = Money { amount = 12, currency = "EUR" }
   io.print(price)
   io.print("costs `price`")
-  price |> io.write(io.stdout)
+  io.write(price, io.stdout)
   io.eprint(price)
   0
 >
@@ -71,7 +71,7 @@ Shape = Circle(Num) / Square(Num)
 fn a_function_value_has_no_rendering() {
     for source in [
         "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.print(double)\n  0\n>",
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  double |> io.write(io.stdout)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.write(double, io.stdout)\n  0\n>",
     ] {
         assert_type_error(source);
     }

@@ -457,9 +457,15 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
 fn importing_core_http_contributes_exactly_this_surface() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
-    let (items, _sources) =
-        quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
-    let mut contributed: Vec<&str> = items.iter().map(Item::name).collect();
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new(".")).expect("import linking failed");
+    // Everything but the program's own `^` was contributed by the import.
+    let mut contributed: Vec<&str> = linked
+        .items
+        .iter()
+        .map(Item::name)
+        .filter(|name| *name != "^")
+        .collect();
     contributed.sort_unstable();
 
     let mut expected = vec![

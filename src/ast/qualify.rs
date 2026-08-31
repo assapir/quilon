@@ -176,14 +176,12 @@ pub fn qualify_module(
     }
 
     for item in &mut program.items {
-        let (name, span) = match item {
-            Item::VariableDeclaration(d) => (&mut d.name, &d.span),
-            Item::FunctionDeclaration(d) => (&mut d.name, &d.span),
-            Item::TypeDeclaration(d) => (&mut d.name, &d.span),
+        check_claim(item, scope)?;
+        let name = match item {
+            Item::VariableDeclaration(d) => &mut d.name,
+            Item::FunctionDeclaration(d) => &mut d.name,
+            Item::TypeDeclaration(d) => &mut d.name,
         };
-        if let Some(spelling) = scope.claimed_by(name) {
-            return err(span, claim_message(name, spelling));
-        }
         if let Some(renamed) = renames.get(name.as_str()) {
             *name = renamed.clone();
         }
@@ -220,20 +218,21 @@ pub fn resolve_program(program: &mut Program, scope: &ModuleScope) -> Result<(),
         locals: Vec::new(),
     };
     for item in &mut program.items {
-        let (name, span) = match item {
-            Item::VariableDeclaration(d) => (&d.name, &d.span),
-            Item::FunctionDeclaration(d) => (&d.name, &d.span),
-            Item::TypeDeclaration(d) => (&d.name, &d.span),
-        };
-        if let Some(spelling) = scope.claimed_by(name) {
-            return err(span, claim_message(name, spelling));
-        }
+        check_claim(item, scope)?;
         walker.item(item)?;
     }
     for block in &mut program.test_blocks {
         walker.expression(block)?;
     }
     Ok(())
+}
+
+/// Reject a top-level item whose name an import claims.
+fn check_claim(item: &Item, scope: &ModuleScope) -> Result<(), QualifyError> {
+    match scope.claimed_by(item.name()) {
+        Some(spelling) => err(item.span(), claim_message(item.name(), spelling)),
+        None => Ok(()),
+    }
 }
 
 fn claim_message(name: &str, spelling: &str) -> String {
@@ -471,10 +470,6 @@ impl Walker<'_> {
                 let result = self.expression(body);
                 self.locals.pop();
                 result
-            }
-            Expression::Pipeline { left, right, .. } => {
-                self.expression(left)?;
-                self.expression(right)
             }
             Expression::Block { statements, .. } => {
                 self.locals.push(HashSet::new());

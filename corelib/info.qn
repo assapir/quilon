@@ -1,44 +1,51 @@
 ~ core.info — what a program can ask about itself. Import with `<< core.info`.
 ~ The `__`-prefixed primitives below are compiler-provided constants, fixed when the program
 ~ is compiled; the types and functions here are ordinary Quilon over them.
+~
+~ Every type carries the same two members: `name()` for what it is called, and `` ` `` so it
+~ interpolates as that name.
 
-~ The CPU architecture the program was built for.
->> Platform = Aarch64 / X86_64 / X86 / Arm / Riscv64 / Wasm32 / UnknownPlatform {
+~ The CPU architecture the program was built for. One with no variant of its own carries its
+~ name, so it still says which.
+>> Platform = Aarch64 / X86_64 / X86 / Arm / Riscv64 / Wasm32 / WtfPlatform(Text) {
   name = () -> Text => it ?
-    | Aarch64         => "aarch64"
-    | X86_64          => "x86_64"
-    | X86             => "x86"
-    | Arm             => "arm"
-    | Riscv64         => "riscv64"
-    | Wasm32          => "wasm32"
-    | UnknownPlatform => "unknown"
+    | Aarch64        => "aarch64"
+    | X86_64         => "x86_64"
+    | X86            => "x86"
+    | Arm            => "arm"
+    | Riscv64        => "riscv64"
+    | Wasm32         => "wasm32"
+    | WtfPlatform(a) => a
 
   ` = () -> Text => it.name()
 }
 
-~ The operating system the program was built for.
->> Os = Linux / MacOS / Windows / FreeBSD / OpenBSD / NetBSD / UnknownOs {
+~ The operating system the program was built for. An unrecognised one carries the target
+~ triple, which is what the compiler saw.
+>> Os = Linux / MacOS / Windows / FreeBSD / OpenBSD / NetBSD / WtfOs(Text) {
   name = () -> Text => it ?
-    | Linux     => "linux"
-    | MacOS     => "macOS"
-    | Windows   => "windows"
-    | FreeBSD   => "FreeBSD"
-    | OpenBSD   => "OpenBSD"
-    | NetBSD    => "NetBSD"
-    | UnknownOs => "unknown"
+    | Linux    => "linux"
+    | MacOS    => "macOS"
+    | Windows  => "windows"
+    | FreeBSD  => "FreeBSD"
+    | OpenBSD  => "OpenBSD"
+    | NetBSD   => "NetBSD"
+    | WtfOs(t) => t
 
   ` = () -> Text => it.name()
 }
 
 ~ How wide a pointer is on the target.
 >> PointerWidth = Width64 / Width32 {
+  name = () -> Text => it ?
+    | Width64 => "64-bit"
+    | Width32 => "32-bit"
+
   bits = () -> Num => it ?
     | Width64 => 64
     | Width32 => 32
 
-  ` = () -> Text => it ?
-    | Width64 => "64-bit"
-    | Width32 => "32-bit"
+  ` = () -> Text => it.name()
 }
 
 ~ The order bytes are stored in on the target.
@@ -46,6 +53,15 @@
   name = () -> Text => it ?
     | Little => "little"
     | Big    => "big"
+
+  ` = () -> Text => it.name()
+}
+
+~ How this program is running: compiled ahead of time, or through the in-process JIT.
+>> RunMode = Aot / Jit {
+  name = () -> Text => it ?
+    | Aot => "aot"
+    | Jit => "jit"
 
   ` = () -> Text => it.name()
 }
@@ -58,7 +74,7 @@
     : arch == "arm" ? Arm
     : arch == "riscv64" ? Riscv64
     : arch == "wasm32" ? Wasm32
-    : UnknownPlatform
+    : WtfPlatform(arch)
 >
 
 >> os = () -> Os => <
@@ -69,12 +85,16 @@
     : name == "FreeBSD" ? FreeBSD
     : name == "OpenBSD" ? OpenBSD
     : name == "NetBSD" ? NetBSD
-    : UnknownOs
+    : WtfOs(name)
 >
 
 >> pointerWidth = () -> PointerWidth => __pointer_bits() == 64 ? Width64 : Width32
 
 >> endianness = () -> Endianness => __is_big_endian() ? Big : Little
 
+>> runMode = () -> RunMode => __is_aot() ? Aot : Jit
+
 ~ The version of the Quilon compiler that built this program, e.g. "0.9.3".
 >> quilonVersion = () -> Text => __quilon_version()
+
+>> answerToTheUltimateQuestionOfLifeTheUniverseAndEverything = () -> Num => 42

@@ -173,10 +173,11 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
         // sources loaded so far, so the diagnostic renders against the right file.
         Err(mut error) => {
             error.sources.set_root(path.clone(), source.clone());
-            return Err(match &error.span {
-                Some(span) => FrontEndError::at_span(&error.sources, span, &error.message),
-                None => FrontEndError::plain(error.message),
-            });
+            return Err(FrontEndError::at_span(
+                &error.sources,
+                &error.span,
+                &error.message,
+            ));
         }
     };
     sources.set_root(path.clone(), source.clone());

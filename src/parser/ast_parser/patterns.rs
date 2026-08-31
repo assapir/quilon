@@ -61,15 +61,7 @@ impl<'a> Parser<'a> {
                 // constructor pattern: dotted names reach an imported module's exports
                 // and never bind. (A bare lowercase name still binds; a bare Capitalized
                 // one is still a nullary constructor.)
-                let bare_name = token.text.clone();
-                let bare_span = token.span.clone();
-                let (name, span, qualified) = match self.try_parse_module_member() {
-                    Some((name, span)) => (name, span, true),
-                    None => {
-                        self.advance();
-                        (bare_name, bare_span, false)
-                    }
-                };
+                let (name, span, qualified) = self.parse_name_or_qualified();
 
                 // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {

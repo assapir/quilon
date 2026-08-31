@@ -15,11 +15,17 @@ use quilon::parser;
 fn core_http_contributes_no_bare_names() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
-    let (items, _sources) =
-        quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new(".")).expect("import linking failed");
     // `core.http` imports `core.net` and `core.test`, whose items arrive with it. Every
-    // contributed item is either qualified under its module's canonical name or an `@`
-    // leaf primitive (which keeps its bare, sigil-marked name by design).
+    // contributed item — everything but the program's own `^` — is either qualified under
+    // its module's canonical name or an `@` leaf primitive (which keeps its bare,
+    // sigil-marked name by design).
+    let items: Vec<_> = linked
+        .items
+        .iter()
+        .filter(|item| item.name() != "^")
+        .collect();
     for item in &items {
         let name = item.name();
         assert!(

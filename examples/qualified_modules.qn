@@ -16,7 +16,7 @@ print = (n :: Num) -> Num => n + 1
   core.io.print("fully qualified")
 
   ~ An exported constant qualifies the same way.
-  written :: Num = "hi" |> io.write(io.stdout)
+  written :: Num = io.write("hi", io.stdout)
   assert(written, equals(2))
 
   ~ Exported types and their variants qualify in every position: construction,

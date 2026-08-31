@@ -23,59 +23,15 @@ use crate::source_map::SourceMap;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// A failure anywhere in import resolution or qualified-name resolution. `span` locates
-/// it when it belongs to a source position (the span may point into an imported module —
-/// `sources` in [`link`]'s error carries every file loaded up to the failure so the caller
-/// can render it against the right text); `None` for failures with no location (an
-/// unreadable file).
+/// A failure anywhere in import resolution or qualified-name resolution: what went wrong,
+/// where (the span may point into an imported module), and every module source loaded
+/// before the failure — so the caller renders the diagnostic against the file it is
+/// actually in. The root file is the caller's to record.
 #[derive(Debug)]
 pub struct LinkError {
-    pub span: Option<Span>,
+    pub span: Span,
     pub message: String,
-    /// Every module source loaded before the failure, so a located error renders against
-    /// the file it is actually in. The root file is the caller's to record.
     pub sources: SourceMap,
-}
-
-/// The pre-`sources` form errors are raised in internally; [`link`] and
-/// [`resolve_imports`] attach the loader's `SourceMap` on the way out.
-struct Fail {
-    span: Option<Span>,
-    message: String,
-}
-
-impl Fail {
-    fn at(span: &Span, message: String) -> Self {
-        Self {
-            span: Some(span.clone()),
-            message,
-        }
-    }
-}
-
-impl From<QualifyError> for Fail {
-    fn from(error: QualifyError) -> Self {
-        Fail::at(&error.span, error.message)
-    }
-}
-
-/// Resolve all imports of `program`, returning the qualified items to merge into the
-/// importing program, and a [`SourceMap`] naming every module those items came from (the
-/// root file is the caller's to record). `base_dir` is the directory of the importing file
-/// (used to resolve relative file-path imports).
-pub fn resolve_imports(
-    program: &Program,
-    base_dir: &Path,
-) -> Result<(Vec<Item>, SourceMap), LinkError> {
-    let mut loader = Loader::new();
-    match loader.root_scope(&program.imports, base_dir) {
-        Ok(_) => Ok((loader.out, loader.sources)),
-        Err(fail) => Err(LinkError {
-            span: fail.span,
-            message: fail.message,
-            sources: loader.sources,
-        }),
-    }
 }
 
 /// Resolve `program`'s imports and return a new program with the imported modules'
@@ -87,7 +43,7 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), L
     let mut program = program;
     let linked = loader
         .root_scope(&program.imports, base_dir)
-        .and_then(|scope| qualify::resolve_program(&mut program, &scope).map_err(Fail::from));
+        .and_then(|scope| qualify::resolve_program(&mut program, &scope));
     match linked {
         Ok(()) => {
             let mut items = loader.out;
@@ -103,9 +59,9 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), L
                 loader.sources,
             ))
         }
-        Err(fail) => Err(LinkError {
-            span: fail.span,
-            message: fail.message,
+        Err(error) => Err(LinkError {
+            span: error.span,
+            message: error.message,
             sources: loader.sources,
         }),
     }
@@ -143,7 +99,11 @@ impl Loader {
 
     /// Resolve `imports` (the root program's), returning the scope the root resolves its
     /// qualified names against.
-    fn root_scope(&mut self, imports: &[Import], base_dir: &Path) -> Result<ModuleScope, Fail> {
+    fn root_scope(
+        &mut self,
+        imports: &[Import],
+        base_dir: &Path,
+    ) -> Result<ModuleScope, QualifyError> {
         let mut scope = ModuleScope::default();
         for import in imports {
             let canonical = self.resolve_one(import, base_dir)?;
@@ -153,23 +113,26 @@ impl Loader {
     }
 
     /// Add one resolved import to `scope` under its short binding.
-    fn bind(&self, scope: &mut ModuleScope, canonical: &str, import: &Import) -> Result<(), Fail> {
-        let alias = canonical.rsplit('.').next().unwrap_or(canonical);
+    fn bind(
+        &self,
+        scope: &mut ModuleScope,
+        canonical: &str,
+        import: &Import,
+    ) -> Result<(), QualifyError> {
+        let alias = crate::ast::display_name(canonical);
         let exports = self.exports.get(canonical).cloned().unwrap_or_default();
-        scope
-            .add_import(alias, canonical, exports, &import.span)
-            .map_err(Fail::from)
+        scope.add_import(alias, canonical, exports, &import.span)
     }
 
     /// Load one module (and, transitively, its own imports), qualify its items under its
     /// canonical name, and append them to `out`. Returns the canonical name.
-    fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, Fail> {
+    fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, QualifyError> {
         let from_corelib = matches!(import.path, ModulePath::BuiltinDotted(_));
         let (key, canonical, display, source, next_base) = match &import.path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
                 let src = builtin_source(&name).ok_or_else(|| {
-                    Fail::at(&import.span, format!("unknown built-in module `{}`", name))
+                    fail(&import.span, format!("unknown built-in module `{}`", name))
                 })?;
                 (
                     format!("builtin:{}", name),
@@ -190,10 +153,10 @@ impl Loader {
                 // An imported module never reaches the CLI front end, so the source-name
                 // rule is applied here too.
                 crate::source_extension::require_source(&full.to_string_lossy())
-                    .map_err(|message| Fail::at(&import.span, message))?;
-                let stem = module_binding_name(&full, &import.span)?;
+                    .map_err(|message| fail(&import.span, message))?;
+                let stem = module_binding_name(&import.path, &import.span)?;
                 let source = std::fs::read_to_string(&full).map_err(|e| {
-                    Fail::at(
+                    fail(
                         &import.span,
                         format!("cannot read module `{}`: {}", full.display(), e),
                     )
@@ -219,7 +182,7 @@ impl Loader {
             if *existing_key == key {
                 return Ok(canonical);
             }
-            return Err(Fail::at(
+            return Err(fail(
                 &import.span,
                 format!(
                     "two different modules are both named `{canonical}` — every imported \
@@ -233,9 +196,9 @@ impl Loader {
         self.next_file += 1;
         self.sources.insert(file, display, source.clone());
         let tokens = Lexer::tokenize_in_file(&source, file)
-            .map_err(|e| Fail::at(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
+            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
         let mut sub = parser::parse(&tokens)
-            .map_err(|e| Fail::at(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
+            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
 
         // Resolve the module's own imports first (transitive), building the scope ITS
         // qualified references resolve against — a module reaches only what it imported.
@@ -284,18 +247,24 @@ fn exported_names(items: &[Item]) -> HashSet<String> {
     names
 }
 
-/// The short name a file-path import binds: the file's stem, which must be usable as an
-/// identifier since call sites spell it (`math.add(...)`).
-fn module_binding_name(full: &Path, span: &Span) -> Result<String, Fail> {
-    let stem = full
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
+/// A located link failure — the shape [`qualify`]'s own errors already have.
+fn fail(span: &Span, message: String) -> QualifyError {
+    QualifyError {
+        span: span.clone(),
+        message,
+    }
+}
+
+/// The short name a file-path import binds — [`ModulePath::binding_name`]'s answer, which
+/// must additionally be usable as an identifier since call sites spell it
+/// (`math.add(...)`).
+fn module_binding_name(path: &ModulePath, span: &Span) -> Result<String, QualifyError> {
+    let stem = path.binding_name().unwrap_or_default();
     let valid = !stem.is_empty()
         && !stem.starts_with(|c: char| c.is_ascii_digit())
         && stem.chars().all(|c| c.is_alphanumeric() || c == '_');
     if !valid {
-        return Err(Fail::at(
+        return Err(fail(
             span,
             format!(
                 "the module file name `{stem}` is not usable as a binding — call sites \
@@ -304,7 +273,7 @@ fn module_binding_name(full: &Path, span: &Span) -> Result<String, Fail> {
             ),
         ));
     }
-    Ok(stem.to_string())
+    Ok(stem)
 }
 
 // The bundled corelib module sources, embedded at compile time. Named once here so both the

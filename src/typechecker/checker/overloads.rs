@@ -81,11 +81,11 @@ impl TypeChecker {
             );
         }
 
-        // The functions the compiler provides itself — `now` and the internal `__`
-        // primitives — as members of their own sets, from the one table codegen also
-        // dispatches and mangles by. A user definition of one of these names adds a member
-        // beside them; the built-in signature itself stays taken, so redefining it is the
-        // usual duplicate-definition error. (The output built-ins take no signature per
+        // The functions the compiler provides itself — `core.time.now` and the internal
+        // `__` primitives — as members of their own sets, from the one table codegen also
+        // dispatches and mangles by. Only the bare `__` names can meet a user definition
+        // (which then adds a member beside the intrinsic); the module-qualified ones are
+        // names no user file can declare. (The output built-ins take no signature per
         // type; see `check_renderable_builtin_call`.)
         for member in crate::ast::BUILTIN_OVERLOADS {
             self.add_overload(

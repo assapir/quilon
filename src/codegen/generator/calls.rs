@@ -38,6 +38,8 @@ pub(super) enum InfoMember {
     PointerBits,
     /// Whether the target is big-endian, as a `Bool`.
     IsBigEndian,
+    /// Whether this is an ahead-of-time build rather than the JIT, as a `Bool`.
+    IsAot,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -80,6 +82,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__quilon_version" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),
             "__pointer_bits" => IntrinsicLowering::InfoMember(InfoMember::PointerBits),
             "__is_big_endian" => IntrinsicLowering::InfoMember(InfoMember::IsBigEndian),
+            "__is_aot" => IntrinsicLowering::InfoMember(InfoMember::IsAot),
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
@@ -105,14 +108,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// The method a call resolves to on its receiver's type, as the symbol it was emitted
-    /// under. The parser desugars `recv.name(a)` to `name(recv, a)`, and the type checker
-    /// resolves that against the receiver's type ahead of every top-level name — so call
-    /// lowering, call-site filling and the tail-call analysis all ask this one question and
-    /// cannot disagree with the checker about which function a call names.
-    ///
-    /// Only a record/sum receiver can carry a method, so the built-ins reserved on
-    /// `Array`/`Text`/`Map`/`Set` receivers are never diverted by one.
-    pub(super) fn method_symbol_for(&self, name: &str, arguments: &[Expression]) -> Option<String> {
+    /// under. Call lowering, call-site filling and the tail-call analysis all ask this one
+    /// question, so none of them can disagree with the checker about which function a call
+    /// names — including that only the `.` form (`member_call`) reaches a method at all.
+    pub(super) fn method_symbol_for(
+        &self,
+        name: &str,
+        arguments: &[Expression],
+        member_call: bool,
+    ) -> Option<String> {
+        if !member_call {
+            return None;
+        }
         let declaring = self.declared_methods.get(name)?;
         let type_name = self.receiver_type_name(arguments.first()?)?;
         declaring
@@ -152,10 +159,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
-        // A method declared on the receiver's type takes the name, ahead of everything the
+        // The `.` form resolves against the receiver's type alone, ahead of everything the
         // top-level namespace holds — the order the checker resolved the call in.
         let method_callee = self
-            .method_symbol_for(function_name, arguments)
+            .method_symbol_for(function_name, arguments, member_call)
             .and_then(|symbol| self.module.get_function(&symbol));
 
         // Only the calls a built-in itself claims are lowered to its runtime intrinsic
@@ -189,7 +196,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // overload on a non-array receiver. Method names are lowercase and so can never
         // collide with a (Capitalized) sum-constructor name — the relative order of this
         // check and the sum-constructor block below is therefore immaterial.
-        if crate::ast::is_array_method(function_name)
+        if member_call
+            && crate::ast::is_array_method(function_name)
             && !arguments.is_empty()
             && matches!(
                 self.oracle.expression_type(&arguments[0]),
@@ -203,7 +211,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // dispatch only when the receiver (`arguments[0]`) is a `Text` (per the oracle), so a
         // same-named user overload on another type is never diverted. Lowercase/camelCase
         // names never collide with (Capitalized) sum constructors.
-        if crate::ast::is_text_method(function_name)
+        if member_call
+            && crate::ast::is_text_method(function_name)
             && !arguments.is_empty()
             && matches!(self.oracle.expression_type(&arguments[0]), Some(Type::Text))
         {
@@ -212,7 +221,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Built-in Map methods — RESERVED on a `Map` receiver, mirroring the array/Text
         // blocks above.
-        if crate::ast::is_map_method(function_name)
+        if member_call
+            && crate::ast::is_map_method(function_name)
             && !arguments.is_empty()
             && matches!(
                 self.oracle.expression_type(&arguments[0]),
@@ -223,7 +233,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Built-in Set methods — RESERVED on a `Set` receiver.
-        if crate::ast::is_set_method(function_name)
+        if member_call
+            && crate::ast::is_set_method(function_name)
             && !arguments.is_empty()
             && matches!(
                 self.oracle.expression_type(&arguments[0]),
@@ -286,7 +297,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Does this call leave off a trailing `Site` for the compiler to fill in? Asked
         // before the argument values are generated, so the answer is one immutable lookup.
-        let fills_call_site = self.fills_call_site(function_name, arguments);
+        let fills_call_site = self.fills_call_site(function_name, arguments, member_call);
 
         // The resolved callee: the overload member chosen by argument types, else the
         // plain top-level function of that name.
@@ -327,10 +338,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// never disagree about it. The rule itself is [`ast::fills_call_site`]; here it is
     /// applied to whichever signature the name resolves to — a member of an overload set,
     /// or a plain top-level function.
-    pub(super) fn fills_call_site(&self, name: &str, arguments: &[Expression]) -> bool {
+    pub(super) fn fills_call_site(
+        &self,
+        name: &str,
+        arguments: &[Expression],
+        member_call: bool,
+    ) -> bool {
         // A method is not called by name, so it can declare no `Site` parameter (the
-        // checker rejects one) — and it claims the call ahead of any top-level signature.
-        if self.method_symbol_for(name, arguments).is_some() {
+        // checker rejects one).
+        if self
+            .method_symbol_for(name, arguments, member_call)
+            .is_some()
+        {
             return false;
         }
         match self.overloads.contains_key(name) {

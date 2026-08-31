@@ -269,9 +269,15 @@ fn test_each_module_gets_its_own_file_identity() {
     "#;
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
-    let (items, _sources) = modules::resolve_imports(&program, &fixtures_dir()).unwrap();
+    let (linked, _sources) = modules::link(program, &fixtures_dir()).unwrap();
 
-    let files: HashSet<FileId> = items.iter().map(|item| item_span(item).file).collect();
+    // Everything but the program's own `^` came from a module.
+    let files: HashSet<FileId> = linked
+        .items
+        .iter()
+        .filter(|item| item.name() != "^")
+        .map(|item| item_span(item).file)
+        .collect();
     assert_eq!(files.len(), 2, "one id per module, got {:?}", files);
     assert!(
         !files.contains(&ROOT_FILE),

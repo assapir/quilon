@@ -32,7 +32,7 @@ The module's names are reached only through its binding, and its
 << core.io
 ^ = () -> Num => <
   io.print("hello")            ~ stdout: hello\n
-  "raw" |> io.write(io.stdout)    ~ stdout: raw   (no newline)
+  io.write("raw", io.stdout)   ~ stdout: raw   (no newline)
   io.eprint("oops")            ~ stderr: oops\n
   0
 >

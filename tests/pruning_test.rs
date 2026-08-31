@@ -168,20 +168,6 @@ fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
 }
 
 #[test]
-fn a_pipeline_into_a_top_level_function_named_it_reaches_it() {
-    // `x |> f` desugars to a call of `f`, so a bare name on the right of a pipe is a callee
-    // too — the second position where a bare `it` names a top-level function.
-    assert_exit(
-        concat!(
-            "it = (n :: Num) -> Num => n + 1\n",
-            "Box = { size :: Num, doubled = => it.size * 2 }\n",
-            "^ = () -> Num => Box { size = 20 }.doubled() + 1 |> it"
-        ),
-        42,
-    );
-}
-
-#[test]
 fn a_module_with_no_entry_point_keeps_everything() {
     // Nothing is reachable from an entry point that does not exist, so a module compiled on
     // its own must not be emptied out — a later program may call any of it.

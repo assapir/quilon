@@ -38,21 +38,23 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Whether the cursor is on a top-level test block: a CALL of `core.test`'s
-    /// `describe` — `test.describe("…", () => < … >)`, or the full
+    /// Whether the cursor is on a top-level test block: a CALL of the harness's
+    /// [`crate::ast::TEST_BLOCK_MARKER`] — `test.describe("…", () => < … >)`, or the full
     /// `core.test.describe(...)` — with `core.test` imported above. A qualified name
     /// followed by anything but an argument list is an ordinary reference, and a BARE
     /// `describe(` is an ordinary call of whatever `describe` is in scope: only the
     /// harness's own, reached through its module, marks test code.
     fn at_test_block(&self) -> bool {
+        if !self.at_possible_module_chain() {
+            return false;
+        }
         let segments = self.dotted_chain_at_cursor();
-        (1..segments.len()).rev().any(|prefix_len| {
-            self.test_module_spellings
-                .contains(&segments[..prefix_len].join("."))
-                && segments[prefix_len] == "describe"
-                && segments.len() == prefix_len + 1
-                && self.check_same_line_at(2 * prefix_len + 1, &TokenKind::ParenOpen)
-        })
+        let Some((canonical, member, prefix_len)) = self.resolve_chain(&segments) else {
+            return false;
+        };
+        format!("{canonical}.{member}") == crate::ast::TEST_BLOCK_MARKER
+            && segments.len() == prefix_len + 1
+            && self.check_same_line_at(2 * prefix_len + 1, &TokenKind::ParenOpen)
     }
 
     /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file

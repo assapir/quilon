@@ -37,7 +37,7 @@ Reading = { at :: Num }
 
   ~ `write` renders too: no newline, and the rendered bytes as they are. "21°C" is
   ~ 5 bytes — the degree sign takes two.
-  written :: Num = here |> io.write(io.stdout)
+  written :: Num = io.write(here, io.stdout)
   assert(written, equals(5))
 
   ~ The built-in types take the same path.

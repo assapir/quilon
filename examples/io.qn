@@ -2,7 +2,7 @@
 ~   io.print(x)   writes x + a newline to io.stdout (any renderable value)
 ~   io.eprint(x)  same, to io.stderr
 ~   io.write(content, fd)  the rendered bytes to a file descriptor; returns the byte count
-~ `io.print(x)` is the ergonomic form of `x |> io.write(io.stdout)` plus the newline. On output,
+~ `io.print(x)` is the ergonomic form of `io.write(x, io.stdout)` plus the newline. On output,
 ~ `print` shows its value for a reader; `write` is byte-exact. Both measure a Text in bytes.
 ~ `<< core.test` verifies the byte count `write` returns; on success the program exits 0.
 << core.io
@@ -14,8 +14,8 @@
 write = (content :: Text) -> Num => io.write(content, io.stdout)
 
 ^ = () -> $ => <
-  io.print("hello")            ~ io.stdout: hello\n
-  written :: Num = "raw" |> io.write(io.stdout)   ~ io.stdout: raw   (no newline)
+  io.print("hello")            ~ stdout: hello\n
+  written :: Num = io.write("raw", io.stdout)   ~ stdout: raw   (no newline)
   assert(written, equals(3))      ~ "raw" is 3 bytes
   assert(write("!"), equals(1))   ~ the program's own wrapper, a plain call
 
