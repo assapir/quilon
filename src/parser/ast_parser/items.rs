@@ -38,14 +38,23 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Whether the cursor is on a top-level test block: a CALL to
-    /// [`crate::ast::TEST_BLOCK_MARKER`] (`describe("…", () => < … >)`). A `describe`
-    /// followed by anything but an argument list — `describe = …`, which is how
-    /// `core.test` defines it — is an ordinary item.
+    /// Whether the cursor is on a top-level test block: a CALL of the harness's
+    /// [`crate::ast::TEST_BLOCK_MARKER`] — `test.describe("…", () => < … >)`, or the full
+    /// `core.test.describe(...)` — with `core.test` imported above. A qualified name
+    /// followed by anything but an argument list is an ordinary reference, and a BARE
+    /// `describe(` is an ordinary call of whatever `describe` is in scope: only the
+    /// harness's own, reached through its module, marks test code.
     fn at_test_block(&self) -> bool {
-        self.check(&TokenKind::Ident)
-            && self.peek().text == crate::ast::TEST_BLOCK_MARKER
-            && self.check_same_line_at(1, &TokenKind::ParenOpen)
+        if !self.at_possible_module_chain() {
+            return false;
+        }
+        let segments = self.dotted_chain_at_cursor();
+        let Some((canonical, member, prefix_len)) = self.resolve_chain(&segments) else {
+            return false;
+        };
+        format!("{canonical}.{member}") == crate::ast::TEST_BLOCK_MARKER
+            && segments.len() == prefix_len + 1
+            && self.check_same_line_at(2 * prefix_len + 1, &TokenKind::ParenOpen)
     }
 
     /// Parse an import line: `<< core.io` (built-in dotted name) or `<< "path/to/mod.qn"` (file
@@ -78,6 +87,7 @@ impl<'a> Parser<'a> {
             ModulePath::BuiltinDotted(parts)
         };
 
+        self.register_import(&path);
         let end = self.previous_span();
         Ok(Import {
             path,
@@ -120,6 +130,21 @@ impl<'a> Parser<'a> {
         } else {
             self.expect_ident()?
         };
+
+        // The top level takes only declarations, so an `Ident.` here can only be a
+        // qualified reference through an import this file does not have (had it, the
+        // chain would have been consumed as one name before ever reaching parse_item).
+        // The common case is a test suite missing its harness: name the fix.
+        if self.check_same_line(&TokenKind::Dot) {
+            return Err(ParseError {
+                message: format!(
+                    "`{name}` is not an imported module here — a qualified name like \
+                     `{name}.<member>(...)` needs its `<<` import above this line \
+                     (a `test.describe` suite imports `<< core.test`)"
+                ),
+                span: self.current_span(),
+            });
+        }
 
         // Check for type annotation
         let type_annotation = if self.check(&TokenKind::TypeAnnotation) {

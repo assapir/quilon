@@ -311,7 +311,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args.len()
             ));
         }
-        let fd = if name == "eprint" { 2 } else { 1 };
+        let fd = if name == "core.io.eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
         let (data, len) = self.render_text_parts(&args[0], "print")?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;

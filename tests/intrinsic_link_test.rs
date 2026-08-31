@@ -46,7 +46,7 @@ const EVERY_INTRINSIC: &str = r#"
   ~ __sleep (the @sleep leaf primitive) and __run_fiber_main (the entry runs on a
   ~ scheduler fiber because an @ primitive is used), and __now (the plain clock read).
   @sleep(0)
-  assert(now() >= 0, equals(true))
+  assert(time.now() >= 0, equals(true))
 
   ~ __read_launch (the @readStdin leaf primitive) and __force_text (the `.length` reads the
   ~ deferred Text's bytes, forcing it). Run with empty stdin here, so @readStdin yields "".
@@ -78,8 +78,8 @@ const EVERY_INTRINSIC: &str = r#"
   assert(rendered.size > 0, equals(true))
 
   ~ __print_text_fd and __write_bytes.
-  print("linked")
-  written = write("bytes", stdout)
+  io.print("linked")
+  written = io.write("bytes", io.stdout)
   assert(written, equals(5))
 
   ~ The test registry, which `core.test`'s describe/it record through. Called directly,
@@ -91,7 +91,7 @@ const EVERY_INTRINSIC: &str = r#"
   assert(__test_case_finish(), equals(1))
   ~ `core.test`'s `failAt`, on a branch that never runs — it is what reaches the exit
   ~ primitive, the terminal-color check, and `Text.repeat`.
-  1 == 1 ? $ : failAt("unreachable")
+  1 == 1 ? $ : test.failAt("unreachable")
 
   assert(__test_passed() >= 1, equals(true))
   assert(__test_failed(), equals(0))
@@ -332,7 +332,7 @@ mod forced_undefined_symbols {
 << core.io
 
 ^ = () -> $ => <
-  print("linked")
+  io.print("linked")
 >
 "#;
 

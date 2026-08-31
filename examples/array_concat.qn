@@ -27,7 +27,7 @@
 
   ~ --- concat / append / prepend ([]Text) — repr-correct, not just Num ---
   hi :: []Text = ["h", "e"] + ["l", "l", "o"]   ~ ["h", "e", "l", "l", "o"]
-  hi.each(w => print(w))               ~ prints h e l l o, one per line
+  hi.each(w => io.print(w))               ~ prints h e l l o, one per line
   named :: []Text = ["Ada"] + "Lovelace"        ~ append -> ["Ada", "Lovelace"]
   greet :: []Text = "Hi" + ["there"]            ~ prepend -> ["Hi", "there"]
   assert(hi.size, equals(5))

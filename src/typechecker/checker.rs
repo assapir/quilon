@@ -302,11 +302,6 @@ pub enum TypeError {
         got: Box<Type>,
         span: Span,
     },
-    /// A top-level definition took over an output built-in's own arity.
-    RenderableBuiltinRedefined {
-        name: String,
-        span: Span,
-    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual

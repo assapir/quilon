@@ -42,8 +42,9 @@ sidebar:
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function **and method** boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` parameter or return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
 | Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.info`, `<< core.net`, `<< core.http`, file-path imports, `>>` exports | ✅ |
+| [Qualified access](../modules/README.md): an import binds its last segment (`io.print`, `http.Request { }`, `\| http.Get =>`); the full path is the ambiguity escape; privates travel with their module but resolve for no importer; imports claim their short names; module overload sets are closed | ✅ |
 | [HTTP client](../corelib/http.md): `<< core.http` — the `Method` sum and the `Request` / `Response` records with their methods (`request.send()`, `response.status()` / `.header(name)` / `.body()`), written in Quilon over `core.net`; HTTP only, no TLS | ✅ |
-| I/O: `print` / `eprint` / `write` — one rule, over any value the [render `` ` ``](../types/text.md#string-interpolation-and-the-render-operator-) member covers | ✅ |
+| I/O: `io.print` / `io.eprint` / `io.write` — one rule, over any value the [render `` ` ``](../types/text.md#string-interpolation-and-the-render-operator-) member covers | ✅ |
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
 | Test harness: [`quilon test`](../corelib/test/README.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |

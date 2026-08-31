@@ -97,10 +97,10 @@ User = {
   age  :: Num,
   ` = () -> Text => "User(`it.name`, `it.age`)"   ~ override: `it` is the instance
 }
-~ Now both `print(u)` and `"`u`"` render as  User(Ada, 36)
+~ Now both `io.print(u)` and `"`u`"` render as  User(Ada, 36)
 ```
 
-So `print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
+So `io.print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
 present, the built-in default otherwise. (A `` ` `` that renders `it` *wholesale* falls
 back to the default rather than recursing forever.)
 

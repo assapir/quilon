@@ -1,0 +1,4 @@
+~ Test fixture whose STEM collides with `core.test`'s short binding. A file module has
+~ only its stem, so importing both is rejected at the import.
+
+>> shout = (t :: Text) -> Text => t + "!"

@@ -213,10 +213,11 @@ pub fn front_end(
 ) -> (quilon::ast::Program, TypeTable, DeferInfo, Rc<SourceMap>) {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let (program, mut sources) = match base_dir {
-        Some(dir) => quilon::modules::link(program, dir).expect("import linking failed"),
-        None => (program, SourceMap::default()),
-    };
+    // Linking is not optional: it is also what resolves qualified references
+    // (`io.print` -> `core.io.print`), even in a program importing nothing.
+    let dir = base_dir.unwrap_or_else(|| Path::new("."));
+    let (program, mut sources) =
+        quilon::modules::link(program, dir).expect("import linking failed");
     sources.set_root(TEST_FILE, src);
     let types = TypeChecker::new()
         .check_program(&program)

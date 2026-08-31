@@ -2,9 +2,10 @@
 ~ built from. Import with `<< core.test`. Reference: docs/corelib/test/README.md.
 ~
 ~ ── Writing a suite ────────────────────────────────────────────────────────────────
+~ The module's exports are reached through its binding: `test.describe`, `test.it`, …
 ~
-~   describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
-~   it(name, body)        one case, reported once it has run.
+~   test.describe(name, body)  group of cases (nestable). `body` is a `() -> $` closure.
+~   test.it(name, body)        one case, reported once it has run.
 ~
 ~ ── Assertions ─────────────────────────────────────────────────────────────────────
 ~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
@@ -16,18 +17,19 @@
 ~ The matchers are `equals`, `contains`, `not`, `isOk`, `isNotOk` — see
 ~ docs/corelib/test/README.md.
 ~
-~   failAt(message)       fail outright at the CALLER's location, the way `assert` does —
+~   test.failAt(message)  fail outright at the CALLER's location, the way `assert` does —
 ~                         what a check of your own is built from. Take a trailing
 ~                         `site :: Site` and forward it to report ITS caller:
 ~                           assertEven = (n :: Num, site :: Site) -> $ =>
-~                             n % 2 == 0 ? $ : failAt("`n` is odd", site)
+~                             n % 2 == 0 ? $ : test.failAt("`n` is odd", site)
 ~
 ~ ── The run's state, and the case lifecycle ────────────────────────────────────────
-~ `quilon test` runs a file's top-level `describe` blocks and ends by calling
+~ `quilon test` runs a file's top-level `test.describe` blocks and ends by calling
 ~ `reportSummary()`, whose result is the run's status — 0 passes the suite, anything else
 ~ fails it.
 ~
-~ Everything the run records is reachable through these, and a suite may ask about it too:
+~ Everything the run records is reachable through these (each called `test.<name>()`),
+~ and a suite may ask about it too:
 ~
 ~   casesPassed()  casesFailed()  nestingDepth()      what the run has recorded
 ~   enterSuite()   leaveSuite()                       open and close a group
@@ -37,7 +39,7 @@
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
 ~ in the compiler's diagnostic frame, then exit 101.
 >> failAt = (message :: Text, site :: Site) -> $ => <
-  color = __color_enabled(stderr)
+  color = __color_enabled(io.stderr)
   position = color ? "\e[36m" : ""
   problem = color ? "\e[1;31m" : ""
   frame = color ? "\e[2m" : ""
@@ -54,11 +56,11 @@
     ? "…" + site.file.slice(site.file.length - room + 1, site.file.length)
     : site.file
 
-  eprint("`position``file`:`site.line`:`site.column`:`plain`")
-  eprint("`problem``message``plain`")
-  eprint("`frame``gutter` |`plain`")
-  eprint("`frame``number` |`plain` `site.excerpt`")
-  eprint("`frame``gutter` |`plain` `lead``problem``carets``plain`")
+  io.eprint("`position``file`:`site.line`:`site.column`:`plain`")
+  io.eprint("`problem``message``plain`")
+  io.eprint("`frame``gutter` |`plain`")
+  io.eprint("`frame``number` |`plain` `site.excerpt`")
+  io.eprint("`frame``gutter` |`plain` `lead``problem``carets``plain`")
   __exit(101)
 >
 
@@ -96,15 +98,14 @@
 
 ~ ── The harness ────────────────────────────────────────────────────────────────────
 ~ The output is fixed, and written out at each site below rather than shared through
-~ helpers: `<< core.test` merges every exported name into the importer's scope, and one no
-~ program calls is a word taken for nothing.
+~ helpers no suite has a reason to call.
 
 ~ A group of cases, nestable. `body` runs immediately; the group is only there to name and
 ~ indent what it contains.
 >> describe = (name :: Text, body :: () -> $) -> $ => <
   depth = enterSuite()
   lead = "  ".repeat(depth - 1)
-  print("`lead``name`")
+  io.print("`lead``name`")
   body()
   leaveSuite()
   $
@@ -120,8 +121,8 @@
   lead = "  ".repeat(depth)
   glyph = failed ? "✗" : "✓"
   color = failed ? "31" : "32"
-  mark = __color_enabled(stdout) ? "\e[`color`m`glyph`\e[0m" : glyph
-  print("`lead``mark` `name`")
+  mark = __color_enabled(io.stdout) ? "\e[`color`m`glyph`\e[0m" : glyph
+  io.print("`lead``mark` `name`")
 >
 
 ~ The run's total, and its status — non-zero when any case failed. The synthesized entry
@@ -131,7 +132,7 @@
   failed = casesFailed()
   tally = "`casesPassed()` passed, `failed` failed"
   color = failed == 0 ? "32" : "31"
-  print("")
-  print(__color_enabled(stdout) ? "\e[`color`m`tally`\e[0m" : tally)
+  io.print("")
+  io.print(__color_enabled(io.stdout) ? "\e[`color`m`tally`\e[0m" : tally)
   failed == 0 ? 0 : 1
 >

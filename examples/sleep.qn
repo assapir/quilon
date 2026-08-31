@@ -2,23 +2,22 @@
 ~ `@sleep(seconds)` is an effect-only pause: used as a statement it waits right there on
 ~ the current fiber, then execution continues in program order. It carries no value yet —
 ~ the deferred-value / overlap story arrives with a value-returning primitive (`@readStdin`).
-~ `now()` reads a monotonic clock, so this example VERIFIES the pause actually waited: the
+~ `time.now()` reads a monotonic clock, so this example VERIFIES the pause actually waited: the
 ~ elapsed time across the sleep is at least the requested duration. Self-asserting via
 ~ core.test; exit 0 = pass.
 
 << core.test
 << core.time
 
-~ `now` is an overload set like any other name — the compiler's clock read is one member,
-~ and this adds a second that scales it (seconds to milliseconds, say). The built-in
-~ `now()` inside the body still resolves to the clock.
-now = (scale :: Num) -> Num => now() * scale
+~ The clock is reached only as `time.now()`, so a program's own bare `now` is an
+~ unrelated function — here one that scales the clock (seconds to milliseconds, say).
+now = (scale :: Num) -> Num => time.now() * scale
 
 ^ = () -> Num => <
-  start = now()
+  start = time.now()
   @sleep(0.05)                    ~ pause ~50ms
   ~ A sleep waits AT LEAST its duration, so this bound is deterministic (never flaky).
-  assert(now() - start >= 0.05, equals(true))
+  assert(time.now() - start >= 0.05, equals(true))
   assert(now(1000) - start * 1000 >= 50, equals(true))   ~ the same bound in milliseconds
 
   ~ Ordinary code runs after the pause, computing a ready value.

@@ -138,14 +138,17 @@ fn run_record_size_field_not_shadowed() {
 #[test]
 fn run_write_to_stdout_returns_byte_count() {
     // write returns bytes written = 2.
-    assert_exit_linked("<< core.io\n^ = () -> Num => write(\"hi\", stdout)", 2);
+    assert_exit_linked(
+        "<< core.io\n^ = () -> Num => io.write(\"hi\", io.stdout)",
+        2,
+    );
 }
 
 #[test]
 fn run_print_text_then_exit() {
     // print writes "hello\n" to stdout and yields Num 0.
     assert_exit_linked(
-        "<< core.io\n^ = () -> Num => <\n  print(\"hello\")\n  0\n>",
+        "<< core.io\n^ = () -> Num => <\n  io.print(\"hello\")\n  0\n>",
         0,
     );
 }
@@ -192,7 +195,7 @@ fn run_entry_num_body_still_is_exit_code() {
 #[test]
 fn run_entry_side_effecting_main_no_trailing_zero() {
     // `<< core.io` + a print as the last expression, with NO trailing 0 -> exit 0.
-    assert_exit_linked("<< core.io\n^ = () => print(\"hi\")", 0);
+    assert_exit_linked("<< core.io\n^ = () => io.print(\"hi\")", 0);
 }
 
 // --- Mutability: `:=` declares a mutable binding and reassigns it; `=` is immutable. ---
@@ -644,7 +647,7 @@ fn a_member_call_never_reaches_an_output_built_in() {
     );
     assert!(
         message.contains("'Counter' has no member 'print'")
-            && message.contains("call it as 'print(c)'"),
+            && message.contains("call it as 'io.print(c)'"),
         "expected the diagnostic to name the member and point at the built-in, got: {message}"
     );
 }
@@ -686,7 +689,7 @@ fn run_function_returning_unit() {
 fn run_print_yields_unit_usable_where_unit_expected() {
     // `print(...)` returns `$`, so it type-checks as the body of a `-> $` function.
     assert_exit_linked(
-        "<< core.io\nlog = (m :: Text) -> $ => print(m)\n^ = () -> Num => <\n  log(\"hi\")\n  0\n>",
+        "<< core.io\nlog = (m :: Text) -> $ => io.print(m)\n^ = () -> Num => <\n  log(\"hi\")\n  0\n>",
         0,
     );
 }
@@ -695,18 +698,18 @@ fn run_print_yields_unit_usable_where_unit_expected() {
 fn run_eprint_returns_unit_as_last_expression() {
     // `eprint` returns `$`; as the entry point's last expression (no trailing 0)
     // the non-Num body coerces to exit 0.
-    assert_exit_linked("<< core.io\n^ = () => eprint(\"oops\")", 0);
+    assert_exit_linked("<< core.io\n^ = () => io.eprint(\"oops\")", 0);
 }
 
 #[test]
 fn run_unannotated_print_wrapper_compiles_and_runs() {
-    // Regression: `log = (m :: Num) => print(m)` has no return annotation; its body is a
+    // Regression: `log = (m :: Num) => io.print(m)` has no return annotation; its body is a
     // `print` call, which returns `$` (Unit). Codegen must infer the `$` return
     // type (i8) rather than defaulting to Num (f64), or the generated function
     // would `ret i8` into an f64 signature and fail LLVM module verification.
     assert_exit_linked(
         "<< core.io
-log = (m :: Num) => print(m)
+log = (m :: Num) => io.print(m)
 ^ = () -> Num => <
   log(5)
   0
@@ -1075,17 +1078,17 @@ fn print_takes_every_builtin_type() {
     // One printing rule, not a member per type: each built-in renders through its own
     // `` ` `` and `print` yields `$`.
     assert_exit_linked(
-        "<< core.io\n^ = () -> Num => <\n  print(1)\n  print(\"two\")\n  print(true)\n  0\n>",
+        "<< core.io\n^ = () -> Num => <\n  io.print(1)\n  io.print(\"two\")\n  io.print(true)\n  0\n>",
         0,
     );
 }
 
 #[test]
-fn user_print_overload_at_another_arity_is_added_not_shadowed() {
-    // The built-in claims one argument (any renderable value); a definition at another
-    // arity forms an overload set beside it, and both calls dispatch.
+fn a_user_print_is_unrelated_to_the_modules() {
+    // The module's set is closed: the program's own `print` is an ordinary function
+    // beside `io.print`, and each call reaches its own.
     assert_exit_linked(
-        "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  print(\"hi\")\n  print(40, 2)\n>",
+        "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  io.print(\"hi\")\n  print(40, 2)\n>",
         42,
     );
 }
@@ -1517,7 +1520,7 @@ fn run_line_first_bracket_is_new_statement() {
         ^ = () -> Num => <
           a = [1, 2]
           b = a
-          [3, 4].each(x => print(x))
+          [3, 4].each(x => io.print(x))
           b[1]
         >
     "#;
@@ -1603,7 +1606,7 @@ fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
     prefix.push_str(&"p".repeat(pad));
     prefix.push_str(assign);
 
-    let src = format!("{prefix}n\n  classify(\"hi\") + q - 7\n>\n");
+    let src = format!("{prefix}n\n  span_twin.classify(\"hi\") + q - 7\n>\n");
     // Without this holding, the test would pass without ever provoking a collision.
     assert!(
         src[target..].starts_with("n\n"),
@@ -1715,9 +1718,9 @@ fn run_now_measures_that_sleep_actually_waited() {
 << core.test
 << core.time
 ^ = () -> Num => <
-  start = now()
+  start = time.now()
   @sleep(0.05)
-  assert(now() - start >= 0.05, equals(true))
+  assert(time.now() - start >= 0.05, equals(true))
   0
 >
 "#,

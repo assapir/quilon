@@ -19,7 +19,7 @@ It is pure **array sugar**: there is no distinct `Range` type. The result *is* a
 r = 2 <- 5      ~ [2, 3, 4, 5]
 n = r.size      ~ 4   (inclusive count = |hi - lo| + 1)
 first = r[0]    ~ 2
-r.each(x => print(x))   ~ a range iterates with `.each` like any array
+r.each(x => io.print(x))   ~ a range iterates with `.each` like any array
 ```
 Both ends are full `Num` expressions — they may be dynamic, not just literals. The
 direction (ascending vs descending) is decided at runtime. (See `examples/ranges.qn`.)

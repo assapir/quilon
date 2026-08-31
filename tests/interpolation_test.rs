@@ -224,7 +224,7 @@ fn override_rendering_it_wholesale_terminates() {
 fn print_renders_any_type() {
     // `print` accepts any single value now (routed through `` ` ``); a record prints fine.
     assert_exit_linked(
-        "<< core.io\nP = { x :: Num }\n^ = () -> Num => <\n  print(P { x = 1 })\n  0\n>",
+        "<< core.io\nP = { x :: Num }\n^ = () -> Num => <\n  io.print(P { x = 1 })\n  0\n>",
         0,
     );
 }

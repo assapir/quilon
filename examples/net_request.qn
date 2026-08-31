@@ -13,5 +13,5 @@
   request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
   @tcpRequest("example.com:80", request) ?
     | Ok(response) => assert(response, contains("HTTP/1.1"))   ~ forced by the match
-    | NotOk(error) => failAt(error)
+    | NotOk(error) => test.failAt(error)
 >

@@ -4,5 +4,5 @@
 << core.test
 
 ^ = () -> $ => <
-  assert(add(2, 3), equals(5))
+  assert(mathlib.add(2, 3), equals(5))
 >

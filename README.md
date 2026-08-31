@@ -20,8 +20,8 @@ double = (x :: Num) => x * 2
 greet = name :: Text => "Hello, " + name
 
 ^ = () -> Num => <
-  print(greet("Quilon"))      ~ stdout: Hello, Quilon
-  [1, 2, 3].each(n => print(n))   ~ iterate with array methods (no `for` loop)
+  io.print(greet("Quilon"))   ~ stdout: Hello, Quilon
+  [1, 2, 3].each(n => io.print(n))   ~ iterate with array methods (no `for` loop)
   double(10)
 >
 ```

@@ -1,6 +1,6 @@
 ~ Arrays are `{ptr, size}`. `.size` is the element count; `[i]` indexes (0-based).
 ~ Indexing is CHECKED: an out-of-bounds, negative, or NaN index is a runtime
-~ error (stderr + exit 1), never a raw read. `at(i)` is the non-aborting form.
+~ error (io.stderr + exit 1), never a raw read. `at(i)` is the non-aborting form.
 ~ `<< core.test` verifies the results; on success the program exits 0.
 << core.test
 

@@ -81,11 +81,11 @@ impl TypeChecker {
             );
         }
 
-        // The functions the compiler provides itself — `now` and the internal `__`
-        // primitives — as members of their own sets, from the one table codegen also
-        // dispatches and mangles by. A user definition of one of these names adds a member
-        // beside them; the built-in signature itself stays taken, so redefining it is the
-        // usual duplicate-definition error. (The output built-ins take no signature per
+        // The functions the compiler provides itself — `core.time.now` and the internal
+        // `__` primitives — as members of their own sets, from the one table codegen also
+        // dispatches and mangles by. Only the bare `__` names can meet a user definition
+        // (which then adds a member beside the intrinsic); the module-qualified ones are
+        // names no user file can declare. (The output built-ins take no signature per
         // type; see `check_renderable_builtin_call`.)
         for member in crate::ast::BUILTIN_OVERLOADS {
             self.add_overload(
@@ -263,20 +263,6 @@ impl TypeChecker {
                 }
             }
         }
-        // An output built-in claims its whole arity — it accepts every renderable value
-        // there, so there is no argument type left for a member to claim. The arity a caller
-        // sees is what counts: a trailing `Site` the compiler fills in would otherwise hide a
-        // member behind the built-in, reachable from no call. A definition at another arity
-        // is an ordinary set beside it.
-        if let Some(builtin) = crate::ast::renderable_builtin(&declaration.name)
-            && crate::ast::visible_parameters(&parameters).len() == builtin.arity()
-        {
-            return Err(TypeError::RenderableBuiltinRedefined {
-                name: declaration.name.clone(),
-                span: declaration.span.clone(),
-            });
-        }
-
         let ret = declaration
             .declared_return_type()
             .map(|t| self.resolve_type(t));

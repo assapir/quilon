@@ -74,9 +74,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         arguments: &[Expression],
     ) -> Option<IntrinsicLowering> {
         let lowering = match name {
-            "print" | "eprint" => IntrinsicLowering::Print,
-            "write" => IntrinsicLowering::Write,
-            "now" => IntrinsicLowering::Now,
+            "core.io.print" | "core.io.eprint" => IntrinsicLowering::Print,
+            "core.io.write" => IntrinsicLowering::Write,
+            "core.time.now" => IntrinsicLowering::Now,
             "__platform" => IntrinsicLowering::InfoMember(InfoMember::Platform),
             "__os" => IntrinsicLowering::InfoMember(InfoMember::Os),
             "__quilon_version" => IntrinsicLowering::InfoMember(InfoMember::QuilonVersion),

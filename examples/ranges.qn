@@ -25,7 +25,7 @@
   assert(desc[3], equals(1))
 
   ~ A range iterates with `.each`, since it's just a `[]Num`.
-  asc.each(n => print(n))               ~ prints 1, 2, 3, 4
+  asc.each(n => io.print(n))               ~ prints 1, 2, 3, 4
   assert(asc[1], equals(2))
 
   ~ Endpoints may be negative, and may be computed — so long as what they compute is

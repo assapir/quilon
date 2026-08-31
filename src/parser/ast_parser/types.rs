@@ -14,6 +14,13 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_type_inner(&mut self) -> Result<crate::ast::Type, ParseError> {
+        // A qualified type — `http.Request` in an annotation — reads as one dotted name;
+        // the checker resolves it like any other named reference. Tried first: the chain
+        // only matches through an import binding, so no built-in type name is shadowed.
+        if let Some((name, _span)) = self.try_parse_module_member() {
+            return Ok(crate::ast::Type::named_ref(name));
+        }
+
         let token = self.peek();
 
         // `$` in type position is the Unit type (e.g. `-> $`). Matched on the token

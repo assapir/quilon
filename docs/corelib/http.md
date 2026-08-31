@@ -16,9 +16,9 @@ opens one connection, sends `Connection: close`, and reads the close-delimited r
 << core.http
 
 ^ = () -> $ => <
-  page = Request { method = Get, url = "http://example.com/" }.send() ?
+  page = http.Request { method = http.Get, url = "http://example.com/" }.send() ?
     | Ok(response) => response
-    | NotOk(_)     => Response { raw = "" }
+    | NotOk(_)     => http.Response { raw = "" }
   assert(page.status(), equals(200))
   assert(page.body(), contains("Example Domain"))
   assert(page.header("Content-Type"), isOk())
@@ -62,7 +62,7 @@ sends it even for empty content — that is a body of length zero, not the absen
 
 ## `Response`
 
-Wrapped and checked in one step: `Response { raw = text }.validate()`.
+Wrapped and checked in one step: `http.Response { raw = text }.validate()`.
 
 | Method | Result |
 |--------|--------|

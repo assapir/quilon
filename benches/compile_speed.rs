@@ -458,7 +458,8 @@ fn many_modules_program(count: usize) -> Vec<(String, String)> {
     let _ = writeln!(root, "\n^ = () -> Num => <");
     for i in 0..count {
         for operation in OPERATIONS {
-            let _ = writeln!(root, "  {}_{operation}(1)", subject_of(i));
+            let subject = subject_of(i);
+            let _ = writeln!(root, "  {subject}.{subject}_{operation}(1)");
         }
     }
     let _ = writeln!(root, "  0\n>");

@@ -45,8 +45,7 @@ impl TypeError {
             | TypeError::MatcherTypeUnsupported { span, .. }
             | TypeError::UnknownMember { span, .. }
             | TypeError::MethodCalledAsFunction { span, .. }
-            | TypeError::NotRenderable { span, .. }
-            | TypeError::RenderableBuiltinRedefined { span, .. } => span,
+            | TypeError::NotRenderable { span, .. } => span,
         }
     }
 }
@@ -75,8 +74,8 @@ impl std::fmt::Display for TypeError {
                     "`{}` marks the running test case failed, so it only works inside an `{}` \
                      case in a `{}` block. Use `{}`, which reports and exits, everywhere else",
                     crate::ast::EXPECT,
-                    crate::ast::TEST_CASE_MARKER,
-                    crate::ast::TEST_BLOCK_MARKER,
+                    crate::ast::display_name(crate::ast::TEST_CASE_MARKER),
+                    crate::ast::display_name(crate::ast::TEST_BLOCK_MARKER),
                     crate::ast::ASSERT
                 )
             }
@@ -369,12 +368,6 @@ impl std::fmt::Display for TypeError {
                     crate::ast::type_label(got),
                 )
             }
-            TypeError::RenderableBuiltinRedefined { name, .. } => {
-                write!(
-                    f,
-                    "'{name}' is provided by the compiler and already takes any renderable value — give the type its own '`' render member rather than defining '{name}'",
-                )
-            }
             TypeError::OperatorMemberArity { operator, got, .. } => {
                 write!(
                     f,
@@ -390,20 +383,34 @@ impl std::fmt::Display for TypeError {
                 ..
             } => {
                 write!(f, "'{type_name}' has no member '{member}'")?;
+                let shown = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
+                };
+                // An output built-in is the likely intent behind `c.print()`; say where it
+                // lives and how to reach it, both read off the builtin's own full name.
+                if let Some((module, _)) = crate::ast::RENDERABLE_BUILTINS
+                    .iter()
+                    .find(|builtin| crate::ast::display_name(builtin.name) == member)
+                    .and_then(|builtin| builtin.name.rsplit_once('.'))
+                {
+                    let binding = crate::ast::display_name(module);
+                    return write!(
+                        f,
+                        ". A value prints through `{module}`'s '{member}' — call it as \
+                         '{binding}.{member}({shown}{rest})' (under `<< {module}`)"
+                    );
+                }
                 if !in_scope {
                     return Ok(());
                 }
                 // There IS a function of that name, so say why it did not answer the call —
                 // in terms of what was written, and with the call that would reach it.
-                let receiver = receiver.as_deref().unwrap_or("receiver");
-                let rest = match more_arguments {
-                    true => ", ...",
-                    false => "",
-                };
                 write!(
                     f,
-                    ". There is a '{member}' in scope, but '{receiver}.{member}(...)' only \
-                     looks on {type_name} — call it as '{member}({receiver}{rest})'"
+                    ". There is a '{member}' in scope, but '{shown}.{member}(...)' only \
+                     looks on {type_name} — call it as '{member}({shown}{rest})'"
                 )
             }
             TypeError::MethodCalledAsFunction {

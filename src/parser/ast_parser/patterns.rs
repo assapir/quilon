@@ -57,9 +57,11 @@ impl<'a> Parser<'a> {
 
         match &token.kind {
             TokenKind::Ident => {
-                let name = token.text.clone();
-                let span = token.span.clone();
-                self.advance();
+                // A qualified variant — `http.Get`, `http.Post(b)` — is always a
+                // constructor pattern: dotted names reach an imported module's exports
+                // and never bind. (A bare lowercase name still binds; a bare Capitalized
+                // one is still a nullary constructor.)
+                let (name, span, qualified) = self.parse_name_or_qualified();
 
                 // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {
@@ -84,9 +86,10 @@ impl<'a> Parser<'a> {
                         arguments,
                         span: self.span(span.start, end),
                     })
-                } else if is_capitalized(&name) {
+                } else if qualified || is_capitalized(&name) {
                     // A bare Capitalized name in pattern position is a nullary constructor
-                    // (e.g. `| Red =>`), not a binding. Lowercase names bind a value.
+                    // (e.g. `| Red =>`), not a binding; a qualified name always is one.
+                    // Lowercase bare names bind a value.
                     Ok(Pattern::Constructor {
                         name,
                         arguments: vec![],

@@ -28,8 +28,11 @@ impl TypeChecker {
             }
         }
         // A name forms an overload set if it is operator-named, has 2+ definitions, OR the
-        // compiler provides it (e.g. `now` — a user definition of one ADDS an overload, it
-        // does not shadow the built-in). Codegen asks the same question, so the two passes
+        // compiler provides it. Post-link only the bare internal primitives (`__exit`,
+        // `__color_enabled`, `__test_*`) can match a user definition — a user definition
+        // of one of THOSE adds an overload beside the intrinsic; the module-qualified
+        // built-ins (`core.io.print`, `core.time.now`) are names no user file can declare,
+        // so their sets stay closed. Codegen asks the same question, so the two passes
         // agree on what a single definition of such a name is.
         // `^` (entry point) is never an overload set, even if (erroneously) repeated.
         self.overloaded_names = fn_counts

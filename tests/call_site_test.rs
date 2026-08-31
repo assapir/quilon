@@ -194,7 +194,7 @@ countdown = (n :: Num, acc :: Num, site :: Site) -> Num =>
 /// reports its parameters as `(Text)`, not `(Text, Site)`.
 #[test]
 fn a_diagnostic_never_asks_for_the_filled_in_argument() {
-    let error = type_error_message("<< core.test\n^ = () -> $ => failAt()\n");
+    let error = type_error_message("<< core.test\n^ = () -> $ => test.failAt()\n");
     assert!(
         error.contains("expected 1") && !error.contains("Site"),
         "the arity must be counted without the filled-in Site, got: {error}"

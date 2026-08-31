@@ -15,12 +15,12 @@ match over one is exhaustive and a typo is a compile error.
 
 | Function | Result |
 |----------|--------|
-| `platform() -> Platform` | `Aarch64` / `X86_64` / `X86` / `Arm` / `Riscv64` / `Wasm32` / `WtfPlatform(Text)` |
-| `os() -> Os` | `Linux` / `MacOS` / `Windows` / `FreeBSD` / `OpenBSD` / `NetBSD` / `WtfOs(Text)` |
-| `pointerWidth() -> PointerWidth` | `Width64` / `Width32` |
-| `endianness() -> Endianness` | `Little` / `Big` |
-| `runMode() -> RunMode` | `Aot` / `Jit` — whether this program was built ahead of time or is running through `quilon run` |
-| `quilonVersion() -> Text` | the compiler that built it, e.g. `"0.9.3"` — an open set, so a `Text` |
+| `info.platform() -> Platform` | `Aarch64` / `X86_64` / `X86` / `Arm` / `Riscv64` / `Wasm32` / `WtfPlatform(Text)` |
+| `info.os() -> Os` | `Linux` / `MacOS` / `Windows` / `FreeBSD` / `OpenBSD` / `NetBSD` / `WtfOs(Text)` |
+| `info.pointerWidth() -> PointerWidth` | `Width64` / `Width32` |
+| `info.endianness() -> Endianness` | `Little` / `Big` |
+| `info.runMode() -> RunMode` | `Aot` / `Jit` — whether this program was built ahead of time or is running through `quilon run` |
+| `info.quilonVersion() -> Text` | the compiler that built it, e.g. `"0.9.3"` — an open set, so a `Text` |
 
 Every type renders, so it interpolates with no conversion:
 
@@ -29,7 +29,7 @@ Every type renders, so it interpolates with no conversion:
 << core.info
 
 ^ = () -> Num => <
-  print("`platform()`-`os()` `pointerWidth()` `endianness()`-endian, quilon `quilonVersion()`")
+  io.print("`info.platform()`-`info.os()` `info.pointerWidth()` `info.endianness()`-endian, quilon `info.quilonVersion()`")
   0
 >
 ```
@@ -39,10 +39,10 @@ And every type is matchable, which is the point of the sums:
 ```quilon
 << core.info
 
-^ = () -> Num => os() ?
-  | Linux   => 0
-  | MacOS   => 0
-  | Windows => 1
+^ = () -> Num => info.os() ?
+  | info.Linux   => 0
+  | info.MacOS   => 0
+  | info.Windows => 1
   | _       => 2
 ```
 

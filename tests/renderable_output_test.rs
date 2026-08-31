@@ -24,10 +24,10 @@ Money = {
 
 ^ = () -> Num => <
   price = Money { amount = 12, currency = "EUR" }
-  print(price)
-  print("costs `price`")
-  write(price, stdout)
-  eprint(price)
+  io.print(price)
+  io.print("costs `price`")
+  io.write(price, io.stdout)
+  io.eprint(price)
   0
 >
 "#,
@@ -54,10 +54,10 @@ Point = {
 Shape = Circle(Num) / Square(Num)
 
 ^ = () -> Num => <
-  print(Point { x = 1, y = 2 })
-  print(Circle(3))
-  print([1, 2, 3])
-  print($)
+  io.print(Point { x = 1, y = 2 })
+  io.print(Circle(3))
+  io.print([1, 2, 3])
+  io.print($)
   0
 >
 "#,
@@ -70,8 +70,8 @@ Shape = Circle(Num) / Square(Num)
 #[test]
 fn a_function_value_has_no_rendering() {
     for source in [
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  print(double)\n  0\n>",
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  write(double, stdout)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.print(double)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.write(double, io.stdout)\n  0\n>",
     ] {
         assert_type_error(source);
     }
@@ -82,16 +82,20 @@ fn a_function_value_has_no_rendering() {
 /// would answer went to the built-in — a definition reachable from nowhere.)
 #[test]
 fn a_trailing_site_does_not_hide_a_member_behind_the_builtin() {
-    let message = type_error_message(
+    // A user `print` whose trailing `Site` makes its visible arity match the built-in's
+    // used to be rejected; with the module's set closed it is an ordinary function, and
+    // the compiler still fills the site in.
+    let run = run_program_named(
+        "print_with_site.qn",
         r#"
-<< core.io
-print = (label :: Text, at :: Site) -> Num => 7
-^ = () -> Num => 0
+print = (label :: Text, at :: Site) -> Num => label.size + at.line
+^ = () -> Num => print("abc")
 "#,
     );
-    assert!(
-        message.contains("render member"),
-        "expected the render-member guidance, got: {message}"
+    assert_eq!(
+        run.code, 6,
+        "3 for the label, 3 for the call's line:\n{}{}",
+        run.stdout, run.stderr
     );
 }
 
@@ -99,11 +103,13 @@ print = (label :: Text, at :: Site) -> Num => 7
 /// not as a wrong argument count against the built-in.
 #[test]
 fn a_call_above_a_user_set_reports_the_definition_order() {
+    // A user's own `print` overload set follows the ordinary no-hoisting rule; the
+    // module's `io.print` has nothing to do with it.
     let message = type_error_message(
         r#"
-<< core.io
-^ = () -> Num => print(40, 2)
-print = (a :: Num, b :: Num) -> Num => a + b
+^ = () -> Num => print(40)
+print = (a :: Num) -> Num => a
+print = (t :: Text) -> Num => t.size
 "#,
     );
     assert!(
@@ -117,8 +123,8 @@ print = (a :: Num, b :: Num) -> Num => a + b
 #[test]
 fn a_call_at_another_arity_reports_the_builtins_arity() {
     for source in [
-        "<< core.io\n^ = () -> Num => <\n  print()\n  0\n>",
-        "<< core.io\n^ = () -> Num => <\n  write(\"raw\")\n  0\n>",
+        "<< core.io\n^ = () -> Num => <\n  io.print()\n  0\n>",
+        "<< core.io\n^ = () -> Num => <\n  io.write(\"raw\")\n  0\n>",
     ] {
         let message = type_error_message(source);
         assert!(
@@ -138,8 +144,8 @@ fn write_renders_a_non_text_value() {
 << core.io
 
 ^ = () -> Num => <
-  written = write(42, stdout)
-  write(true, stdout)
+  written = io.write(42, io.stdout)
+  io.write(true, io.stdout)
   written
 >
 "#,
@@ -166,8 +172,8 @@ Tag = {
 }
 
 ^ = () -> Num => <
-  print(Tag { label = "ok" })
-  write(7, stdout)
+  io.print(Tag { label = "ok" })
+  io.write(7, io.stdout)
 >
 "#,
     );

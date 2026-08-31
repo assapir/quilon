@@ -8,10 +8,11 @@ sidebar:
 # `core.test` — the test harness, assertions and checks
 
 **Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every
-example in `examples/` does. They are **compiler-provided**, like `print`: no import,
-`core.test` included. The **harness** that groups checks into named cases (`describe` / `it`)
-and the report it prints come from the module, along with `failAt`,
-[the run's recorded state, and the case lifecycle](#what-the-run-records).
+example in `examples/` does. They are **compiler-provided**: no import needed,
+`core.test` included. The **harness** that groups checks into named cases
+(`test.describe` / `test.it`) and the report it prints come from the module — reached
+through its `test` binding, like every [qualified import](../../modules/README.md) — along
+with `test.failAt`, [the run's recorded state, and the case lifecycle](#what-the-run-records).
 
 See the [corelib index](../README.md), `examples/assert_demo.qn` and
 `examples/test_suite.qn`.
@@ -77,18 +78,18 @@ compose the provided ones; a genuinely new matcher kind waits for generics. Unti
 
 | Function | Effect |
 |----------|--------|
-| `failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `101` — the same frame `assert` uses. Take a trailing [`site :: Site`](../../functions/site.md) and forward it, and the report blames ITS caller. |
+| `test.failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `101` — the same frame `assert` uses. Take a trailing [`site :: Site`](../../functions/site.md) and forward it, and the report blames ITS caller. |
 
 ```quilon
 << core.test
 
 assertEven = (n :: Num, site :: Site) -> $ =>
-  n % 2 == 0 ? $ : failAt("`n` is odd", site)
+  n % 2 == 0 ? $ : test.failAt("`n` is odd", site)
 ```
 
 ## Suites, groups and cases
 
-A **suite** is any `.qn` file with top-level `describe(…)` blocks — a file of nothing but
+A **suite** is any `.qn` file with top-level `test.describe(…)` blocks — a file of nothing but
 tests, or the module or program they test ([below](#tests-beside-the-code-costing-a-release-build-nothing)),
 with whatever fixtures the cases need. `quilon test` synthesizes the entry point that runs
 each block in order; every other command leaves the blocks out of the program. A case checks
@@ -97,12 +98,12 @@ itself with `expect`.
 ```quilon
 << core.test
 
-describe("Text", () => <
-  it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
-  it("finds a part", () => expect("haystack", contains("stack")))
+test.describe("Text", () => <
+  test.it("trims both ends", () => expect("  padded  ".trim(), equals("padded")))
+  test.it("finds a part", () => expect("haystack", contains("stack")))
 
-  describe("splitting", () => <
-    it("splits on a separator", () => expect("a,b,c".split(",").size, equals(3)))
+  test.describe("splitting", () => <
+    test.it("splits on a separator", () => expect("a,b,c".split(",").size, equals(3)))
   >)
 >)
 ```
@@ -126,10 +127,10 @@ Text
 
 | Function | Effect |
 |----------|--------|
-| `describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
-| `it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
+| `test.describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
+| `test.it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
 
-The compiler recognizes a top-level `describe(…)` call **by name** — there is no attribute
+The compiler recognizes a top-level `test.describe(…)` call **by name** — there is no attribute
 or `cfg`. What the report looks like is currently fixed.
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
@@ -140,7 +141,7 @@ The case tree and the summary go to **stdout**; a failing assertion's
 diagnostic, so each stream reads on its own when they are captured separately.
 
 Suites run one process each, so a failure in one does not stop the others. A suite that
-imports no harness at all is a compile error at its first `describe`, naming the import that
+imports no harness at all is a compile error at its first `test.describe`, naming the import that
 fixes it — never a silent run with no output.
 
 ## A failing case does not stop the run
@@ -163,13 +164,13 @@ precondition a case cannot meaningfully continue past.
 
 ## `expect` is for cases
 
-`expect` marks the running **case** failed, and `it` is what closes a case and tallies it — so
-an `expect` belongs inside an `it`, inside a `describe`. Anywhere else it is a **compile
-error** pointing at `assert`:
+`expect` marks the running **case** failed, and `test.it` is what closes a case and tallies
+it — so an `expect` belongs inside a `test.it`, inside a `test.describe`. Anywhere else it
+is a **compile error** pointing at `assert`:
 
-- outside a `describe` block there is no run to record with, the blocks being stripped from
-  `run`, `compile`, and `build`;
-- inside a `describe` but outside an `it` there is no case to mark, so the failure would be
+- outside a `test.describe` block there is no run to record with, the blocks being stripped
+  from `run`, `compile`, and `build`;
+- inside a `test.describe` but outside a `test.it` there is no case to mark, so the failure would be
   printed and never counted.
 
 The rule is lexical, so a top-level helper a case calls uses `assert`, not `expect`.
@@ -180,7 +181,7 @@ Tests may sit in the same file as the code they test — beside its `>>` exports
 or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker; there is no `cfg`
 or attribute:
 
-- `check`, `compile`, `build`, `run`: every top-level `describe(…)` is **erased** before the
+- `check`, `compile`, `build`, `run`: every top-level `test.describe(…)` is **erased** before the
   checker sees it, so no test code of yours is checked or emitted. A file whose blocks are all
   it has is no program at all — `compile`, `build`, and `run` pass over it in silence rather
   than reporting a missing entry point.
@@ -206,21 +207,21 @@ never a runtime primitive:
 
 | Function | Yields |
 |----------|--------|
-| `casesPassed() -> Num` | Cases that ran with no failing `expect`. |
-| `casesFailed() -> Num` | Cases that ran with at least one. |
-| `nestingDepth() -> Num` | How many `describe` groups are open — 0 outside any. |
+| `test.casesPassed() -> Num` | Cases that ran with no failing `expect`. |
+| `test.casesFailed() -> Num` | Cases that ran with at least one. |
+| `test.nestingDepth() -> Num` | How many `describe` groups are open — 0 outside any. |
 
 and the case lifecycle `describe` and `it` drive:
 
 | Function | Effect |
 |----------|--------|
-| `enterSuite() -> Num` | Open a group; yields the depth it sits at. |
-| `leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
-| `caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
-| `finishCase() -> Num` | Close the case, tallying it passed or failed; yields the depth to report it at. |
+| `test.enterSuite() -> Num` | Open a group; yields the depth it sits at. |
+| `test.leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
+| `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
+| `test.finishCase() -> Num` | Close the case, tallying it passed or failed; yields the depth to report it at. |
 
-`reportSummary() -> Num` ends the run: the entry point `quilon test` synthesizes calls it
+`test.reportSummary() -> Num` ends the run: the entry point `quilon test` synthesizes calls it
 last, and its result is the run's status — 0 passes the suite, anything else fails it.
 
-A suite that imports no harness at all is a compile error at its first `describe`, naming the
+A suite that imports no harness at all is a compile error at its first `test.describe`, naming the
 import that fixes it — never a silent run with no output.
