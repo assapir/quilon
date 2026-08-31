@@ -14,6 +14,12 @@ autobenches = false
 [workspace]
 members = ["quilon-rt"]
 
+[workspace.lints.rust]
+warnings = "deny"
+
+[lints]
+workspace = true
+
 [dependencies]
 # LLVM code generation - latest Inkwell targeting LLVM 22
 inkwell = { version = "0.10", features = ["llvm22-1"] }

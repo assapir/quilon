@@ -1,0 +1,34 @@
+~ core.info — what a program can ask about itself (see docs/corelib/info.md).
+~ Each closed set of answers is a sum type, so a match over one is exhaustive.
+~ Self-asserting via core.test; exit 0 = pass.
+
+<< core.io
+<< core.test
+<< core.info
+
+^ = () -> Num => <
+  io.print("`info.platform()`-`info.os()` `info.pointerWidth()` `info.endianness()`-endian, quilon `info.quilonVersion()`")
+
+  ~ Matching is the point of the sums: every variant is named, and a typo would not compile.
+  supported = info.os() ?
+    | info.Linux     => true
+    | info.MacOS     => true
+    | info.Windows   => false
+    | info.FreeBSD   => false
+    | info.OpenBSD   => false
+    | info.NetBSD    => false
+    | info.UnknownOs => false
+  assert(supported, equals(true))
+
+  ~ Every target Quilon builds for is one of these two widths.
+  width = info.pointerWidth().bits()
+  assert(width == 64 || width == 32, equals(true))
+
+  ~ The version is an open set, so it stays a Text — but never an empty one.
+  assert(info.quilonVersion().size > 0, equals(true))
+
+  ~ Constants, so two reads always agree.
+  assert(info.endianness().name(), equals(info.endianness().name()))
+
+  0
+>

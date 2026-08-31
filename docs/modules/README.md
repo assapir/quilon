@@ -76,7 +76,7 @@ value** — a type becomes printable by defining its own `` ` `` render member, 
 extending `print`. A program's own bare `print` (or `now`, or `write`) is simply an
 unrelated function.
 
-- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, `core.net`, and `core.http`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
+- The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, `core.info`, `core.net`, and `core.http`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
 - `Text` and the operators are built-ins and need **no** import.
 - A file's [`test.describe` blocks](../corelib/test/README.md) need `<< core.test`; every command but `quilon test` erases the blocks, and with nothing left referencing it the harness is tree-shaken out of the build.
 

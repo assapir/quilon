@@ -317,6 +317,34 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[],
         ret: Type::Num,
     },
+    // `core.info`'s primitives, each a constant fixed when the program is compiled. The
+    // module's public members are ordinary Quilon over these — a sum type cannot be a `ret`
+    // here, since `Type::Named` owns a `String`.
+    BuiltinOverload {
+        name: "__platform",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__os",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__quilon_version",
+        parameters: &[],
+        ret: Type::Text,
+    },
+    BuiltinOverload {
+        name: "__pointer_bits",
+        parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__is_big_endian",
+        parameters: &[],
+        ret: Type::Bool,
+    },
     // Terminates the process with an exit code — what `core.test`'s failing `assert`
     // calls. `__`-prefixed to mark it internal: there is no user-facing `exit`.
     BuiltinOverload {
