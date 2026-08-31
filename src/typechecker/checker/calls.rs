@@ -18,6 +18,26 @@ impl TypeChecker {
             || crate::ast::is_assertion(name)
     }
 
+    /// Whether `ty` answers `name` through the `.` form — a method the record or sum
+    /// declares, or a built-in reserved on `Text`/an array/a `Map`/a `Set`.
+    fn type_has_member(&self, ty: &Type, name: &str) -> bool {
+        match ty {
+            Type::Named {
+                name: type_name, ..
+            }
+            | Type::Sum {
+                name: type_name, ..
+            } => self
+                .methods
+                .contains_key(&(type_name.clone(), name.to_string())),
+            Type::Array(_) => crate::ast::is_array_method(name),
+            Type::Text => crate::ast::is_text_method(name),
+            Type::Map(_, _) => crate::ast::is_map_method(name),
+            Type::Set(_) => crate::ast::is_set_method(name),
+            _ => false,
+        }
+    }
+
     /// Check a call to an output built-in (`print`/`eprint`/`write`): the first argument is
     /// rendered through its `` ` `` member, so any type but a function is accepted there,
     /// and the rest are checked against the built-in's fixed parameter types. Reached only
@@ -85,10 +105,11 @@ impl TypeChecker {
     }
 
     /// Type-check a call. `member_call` marks the `recv.name(args)` form (see
-    /// [`Expression::Call`]): the name is looked for on the receiver's type and nowhere
-    /// else, so every namespace-level dispatch below is skipped for one, and a name that
-    /// type does not have is [`TypeError::UnknownMember`] — which spells out the plain
-    /// call where a function of that name exists — rather than a fall-through to it.
+    /// [`Expression::Call`]), and the two forms name two namespaces that never answer for
+    /// each other: a member call is looked for on the receiver's type alone (a name it
+    /// does not have is [`TypeError::UnknownMember`], never a fall-through to a function),
+    /// and the plain form `name(recv, args)` is looked for in the top-level namespace
+    /// alone — every receiver dispatch below is skipped for one, method or built-in.
     pub(super) fn check_call(
         &mut self,
         function: &Expression,
@@ -139,7 +160,8 @@ impl TypeChecker {
         // (`arguments[0]`) is an array, the method is RESERVED and resolved here, before
         // overload dispatch. (A user can still define e.g. `map` on a non-array type;
         // dispatch only diverts to the built-in when the receiver is an array.)
-        if let Expression::Identifier { name, .. } = function
+        if member_call
+            && let Expression::Identifier { name, .. } = function
             && crate::ast::is_array_method(name)
             && let Some(Type::Array(elem_type)) = first_ty.clone()
         {
@@ -151,7 +173,8 @@ impl TypeChecker {
         // methods above: when the receiver (`arguments[0]`) is a `Text`, the built-in is
         // resolved here ahead of any same-named user overload. (A user may still define
         // e.g. `trim` on a non-Text type; dispatch only diverts on a Text receiver.)
-        if let Expression::Identifier { name, .. } = function
+        if member_call
+            && let Expression::Identifier { name, .. } = function
             && crate::ast::is_text_method(name)
             && matches!(first_ty, Some(Type::Text))
         {
@@ -160,7 +183,8 @@ impl TypeChecker {
 
         // Built-in `Map` methods (`get`/`has`/`set`/`keys`/`values`/`each`) — RESERVED on
         // a `Map` receiver, exactly like the array/Text methods above.
-        if let Expression::Identifier { name, .. } = function
+        if member_call
+            && let Expression::Identifier { name, .. } = function
             && crate::ast::is_map_method(name)
             && let Some(Type::Map(key_type, value_type)) = first_ty.clone()
         {
@@ -169,16 +193,40 @@ impl TypeChecker {
 
         // Built-in `Set` methods (`has`/`add`/`items`/`each`) — RESERVED on a `Set`
         // receiver.
-        if let Expression::Identifier { name, .. } = function
+        if member_call
+            && let Expression::Identifier { name, .. } = function
             && crate::ast::is_set_method(name)
             && let Some(Type::Set(elem_type)) = first_ty.clone()
         {
             return self.check_set_method(name, *elem_type, arguments, span);
         }
 
-        // Check if this is a method call: function is Ident and the first argument is a
-        // user type (record or sum) that declares this method.
-        if let Expression::Identifier { name, .. } = function
+        // `name(recv, …)` naming a member of the receiver's type with no function of that
+        // name in scope: the plain form looks only in the top-level namespace, so point at
+        // the `.` call rather than reporting the name as merely undefined.
+        if !member_call
+            && let Expression::Identifier { name, .. } = function
+            && let Some(receiver_type) = &first_ty
+            && !self.names_a_callable(name)
+            && !self.overloaded_names.contains(name)
+            && self.type_has_member(receiver_type, name)
+        {
+            return Err(TypeError::MethodCalledAsFunction {
+                type_name: crate::ast::type_label(receiver_type),
+                member: name.clone(),
+                receiver: match &arguments[0] {
+                    Expression::Identifier { name, .. } => Some(name.clone()),
+                    _ => None,
+                },
+                more_arguments: arguments.len() > 1,
+                span: span.clone(),
+            });
+        }
+
+        // A method the receiver's type declares. Only the `.` form asks: `name(recv, …)`
+        // names the top-level namespace, and a method is not in it.
+        if member_call
+            && let Expression::Identifier { name, .. } = function
             && let Some(first_arg_type) = &first_ty
         {
             // A record or a sum both carry methods, identified by their type name.
