@@ -323,7 +323,7 @@ enum ArrayPart<'v> {
 /// array's backing store, or — for a `lo <- hi` receiver lowered lazily — the range's own
 /// bounds, each element computed as `(f64)(lo + i * step)` with nothing allocated.
 #[derive(Clone, Copy)]
-enum ElemSource<'v> {
+enum ElementSource<'v> {
     Memory(PointerValue<'v>),
     Range {
         lo: inkwell::values::IntValue<'v>,

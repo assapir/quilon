@@ -298,14 +298,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // in a tail-recursive function body, and a raw `alloca` here would land inside the
         // TCO-lowered loop and re-allocate every iteration, overflowing the stack.
         self.array_loop(count, |this, i| {
-            let val = this.range_element(lo, step, i)?;
-            let elem_ptr = unsafe {
+            let value = this.range_element(lo, step, i)?;
+            let element_ptr = unsafe {
                 this.builder
                     .build_gep(f64_type, data_ptr, &[i], "range_elem")
                     .map_err(ctx("Failed to index range data"))?
             };
             this.builder
-                .build_store(elem_ptr, val)
+                .build_store(element_ptr, value)
                 .map_err(ctx("Failed to store range element"))?;
             Ok(())
         })?;
@@ -387,13 +387,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .builder
             .build_int_mul(i, step, "range_i_step")
             .map_err(ctx("Failed to scale range index"))?;
-        let val_i = self
+        let value_int = self
             .builder
             .build_int_add(lo, i_step, "range_val_i")
             .map_err(ctx("Failed to compute range element"))?;
         Ok(self
             .builder
-            .build_signed_int_to_float(val_i, self.context.f64_type(), "range_val")
+            .build_signed_int_to_float(value_int, self.context.f64_type(), "range_val")
             .map_err(ctx("Failed to convert range element"))?
             .into())
     }
@@ -449,7 +449,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             && matches!(method, "map" | "filter" | "reduce")
         {
             let (lo, step, count) = self.range_bounds(start, end, span)?;
-            let source = ElemSource::Range { lo, step };
+            let source = ElementSource::Range { lo, step };
             let f64_llvm: BasicTypeEnum<'ctx> = self.context.f64_type().into();
             return match method {
                 "map" => self.array_map(&args[1], &Type::Num, f64_llvm, source, count),
@@ -468,7 +468,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let elem_llvm = self.value_repr_type(&elem_qty)?;
         let (array_val, data_ptr, size) = self.extract_array(recv)?;
-        let source = ElemSource::Memory(data_ptr);
+        let source = ElementSource::Memory(data_ptr);
 
         match method {
             "map" => self.array_map(&args[1], &elem_qty, elem_llvm, source, size),
@@ -528,7 +528,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             &arguments[1],
             &Type::Num,
             f64_llvm,
-            ElemSource::Range { lo, step },
+            ElementSource::Range { lo, step },
             count,
         )?;
         Ok(true)
@@ -634,13 +634,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// backing store, or computed from a lazily-lowered range's bounds.
     fn source_element(
         &mut self,
-        source: ElemSource<'ctx>,
+        source: ElementSource<'ctx>,
         elem_llvm: BasicTypeEnum<'ctx>,
         i: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match source {
-            ElemSource::Memory(data_ptr) => self.load_element(data_ptr, elem_llvm, i),
-            ElemSource::Range { lo, step } => self.range_element(lo, step, i),
+            ElementSource::Memory(data_ptr) => self.load_element(data_ptr, elem_llvm, i),
+            ElementSource::Range { lo, step } => self.range_element(lo, step, i),
         }
     }
 
@@ -732,7 +732,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        source: ElemSource<'ctx>,
+        source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let result_llvm = match self.lambda_body_repr(lambda) {
@@ -764,7 +764,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        source: ElemSource<'ctx>,
+        source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64t = self.context.i64_type();
@@ -826,7 +826,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        source: ElemSource<'ctx>,
+        source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let init_val = self.generate_expression(init)?;
@@ -861,7 +861,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        source: ElemSource<'ctx>,
+        source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<(), String> {
         self.array_loop(size, |this, i| {
