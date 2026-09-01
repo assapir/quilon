@@ -414,13 +414,15 @@ impl TypeChecker {
 }
 
 /// Which argument slots (0 = the receiver) a built-in collection method's result may
-/// alias. `each` returns its receiver; `filter` shares the kept elements; `at`/`find`
-/// wrap an element; `reduce` may return its initial value; a map/set update shares the
-/// receiver's entries and the added one. Consulted only for reference-typed results, so
-/// the scalar-returning methods never reach it.
+/// alias. `each` returns its receiver; `filter` shares the kept elements, and `map`'s
+/// lambda may hand elements through (`xs.map(x => x)`); `at`/`find` wrap an element;
+/// `reduce` may return its initial value; a map/set update shares the receiver's entries
+/// and the added one. Consulted only for reference-typed results, so the
+/// scalar-returning methods — and every `map` producing scalars — never reach it.
 fn builtin_collection_method_slots(name: &str) -> &'static [usize] {
     match name {
-        "each" | "filter" | "at" | "find" | "remove" | "keys" | "values" | "items" | "get" => &[0],
+        "each" | "filter" | "map" | "at" | "find" | "remove" | "keys" | "values" | "items"
+        | "get" => &[0],
         "reduce" => &[1],
         "set" => &[0, 2],
         "add" => &[0, 1],
