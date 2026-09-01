@@ -735,6 +735,35 @@ fn unit_is_incompatible_with_num() {
 // --- No silent `Num` default: an uninferable type is a compile error. ---
 
 #[test]
+fn unannotated_recursive_function_needs_a_return_type() {
+    // A self-recursive call needs to already know what the function returns; an
+    // unannotated function's return type isn't known until its body — which the
+    // recursive call sits inside — is fully checked. This used to silently assume
+    // `Num` for the recursive call, wrongly rejecting a valid non-`Num`-returning
+    // recursive function with a confusing `Type mismatch` instead of naming the real
+    // problem.
+    let message = common::type_error_message(
+        "f = (n :: Num) => n <= 0 ? \"done\" : f(n - 1)\n^ = () -> Num => 0",
+    );
+    assert!(
+        message.contains("recursive function 'f'") && message.contains("annotated return type"),
+        "expected a clear recursive-return-type diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn annotated_recursive_function_with_a_non_num_return_type_works() {
+    // The exact shape the old `Num` placeholder used to wrongly reject: a recursive
+    // function returning `Text`, not `Num`. Annotating it resolves the recursive call's
+    // type correctly and the program runs.
+    assert_exit(
+        "f = (n :: Num) -> Text => n <= 0 ? \"done\" : f(n - 1)\n\
+         ^ = () -> Num => f(3).size",
+        4,
+    );
+}
+
+#[test]
 fn empty_block_is_a_compile_error() {
     // A `< >` block with no statements at all has nothing that ran and nothing to
     // evaluate to — a compile error, not a silent `Num` (or `$`).

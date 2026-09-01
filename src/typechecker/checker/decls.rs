@@ -786,29 +786,41 @@ impl TypeChecker {
             .declared_return_type()
             .map(|t| self.resolve_type(t));
 
-        // For recursion support, we need to add the function to the environment
-        // BEFORE checking its body. We'll use the annotated return type if available,
-        // or default to Num (which we'll verify later)
-        let preliminary_return_type = annotated_return.clone().unwrap_or(Type::Num);
-
         // An overloaded member (operator-named, or one of 2+ same-named defs) is NOT
         // a single `env` binding — its signature already lives in the overload set
         // (registered in the pre-pass). We only type-check its body here, then refine
         // that member's return type from the inferred body when it wasn't annotated.
         let is_overloaded = self.overloaded_names.contains(&declaration.name);
 
+        // For recursion support, the function needs to be callable from its own body —
+        // but only when its return type is already KNOWN (annotated): a self-recursive
+        // call needs to know what the call it's sitting inside of returns, and an
+        // unannotated function's return type isn't known until that body is fully
+        // checked. So an ANNOTATED function is defined in `env` before its body is
+        // checked (enabling recursion), while an UNANNOTATED one is left undefined for
+        // that window and marked `pending_return_type` instead — `check_call` reports a
+        // clear error for a recursive call that resolves to it, rather than either
+        // `UndefinedVariable` or (the historical bug) silently assuming `Num`.
+        let previous_pending = self.pending_return_type.take();
         if !is_overloaded {
-            let func_type = Type::Function {
-                parameters: parameter_types.clone(),
-                return_type: Box::new(preliminary_return_type.clone()),
-            };
-            // Define the function in current scope BEFORE checking body (enables recursion)
-            self.env.define(
-                declaration.name.clone(),
-                func_type,
-                false,
-                declaration.span.clone(),
-            )?;
+            match &annotated_return {
+                Some(ret) => {
+                    let func_type = Type::Function {
+                        parameters: parameter_types.clone(),
+                        return_type: Box::new(ret.clone()),
+                    };
+                    self.env.define(
+                        declaration.name.clone(),
+                        func_type,
+                        false,
+                        declaration.span.clone(),
+                    )?;
+                }
+                None => {
+                    self.pending_return_type =
+                        Some((declaration.name.clone(), declaration.span.clone()));
+                }
+            }
         }
 
         // Push scope for body type checking
@@ -830,6 +842,10 @@ impl TypeChecker {
         // (`f = () -> []Text => []`) can take its element type from it.
         let body_type =
             self.infer_expression_expecting(&declaration.body, annotated_return.as_ref())?;
+
+        // Restore whatever the ENCLOSING declaration's pending state was — this function
+        // may itself be nested inside another unannotated one still being checked.
+        self.pending_return_type = previous_pending;
 
         self.env.pop_scope();
 
@@ -874,13 +890,21 @@ impl TypeChecker {
             // one type and a call below it another — which is precisely the order
             // dependence the annotation requirement removes. The omission is reported
             // instead, at the call or at the definition.
-        } else if body_type != preliminary_return_type {
-            // Update the function type with the inferred return type
-            let correct_func_type = Type::Function {
+        } else {
+            // Not annotated, not overloaded: `declaration.name` was left undefined for the
+            // body-check window (see above), so define it now, for real, with the type its
+            // body just proved — nothing before this point could have called it without
+            // hitting `RecursiveFunctionNeedsReturnType`.
+            let func_type = Type::Function {
                 parameters: parameter_types,
                 return_type: Box::new(body_type.clone()),
             };
-            let _ = self.env.update_type(&declaration.name, correct_func_type);
+            self.env.define(
+                declaration.name.clone(),
+                func_type,
+                false,
+                declaration.span.clone(),
+            )?;
         }
 
         Ok(())

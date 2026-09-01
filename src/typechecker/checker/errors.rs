@@ -24,6 +24,7 @@ impl TypeError {
             | TypeError::SignatureArity { span, .. }
             | TypeError::UninferableLambdaParameter { span, .. }
             | TypeError::UnsupportedFunctionReturn { span, .. }
+            | TypeError::RecursiveFunctionNeedsReturnType { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
@@ -234,6 +235,14 @@ impl std::fmt::Display for TypeError {
                     f,
                     "'{}' returns a function, which is not supported yet — a function may take a function as a parameter, but not return one",
                     function
+                )
+            }
+            TypeError::RecursiveFunctionNeedsReturnType { function, .. } => {
+                write!(
+                    f,
+                    "recursive function '{function}' needs an annotated return type (`-> T`) \
+                     — a call to itself needs to already know what it returns, and that isn't \
+                     known until its body (which the call sits inside) is fully checked"
                 )
             }
             TypeError::SiteIsImmutable { field, .. } => {

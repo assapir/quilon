@@ -25,11 +25,16 @@ compute = (x :: Num) => <
   doubled * doubled
 >
 ```
-Functions may recurse; a recursive function needs a `-> Type` annotation:
+Functions may recurse; a **self-recursive function must annotate its return type**
+(`-> Type`) — a recursive call needs to already know what the function returns, which
+isn't known until its body (the call sits inside it) is fully checked, so an unannotated
+self-recursive call is a compile error naming the function:
 ```quilon
 factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
 ```
-(See `examples/factorial.qn`, `examples/fibonacci.qn`.)
+(See `examples/factorial.qn`, `examples/fibonacci.qn`.) A non-recursive function keeps
+inferring its return type from its body as usual — only a function that calls itself needs
+the annotation.
 
 ## At most ten parameters
 

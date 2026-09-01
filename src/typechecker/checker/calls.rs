@@ -119,6 +119,22 @@ impl TypeChecker {
         member_call: bool,
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // A self-recursive call to the unannotated function currently having its body
+        // checked: its own name was left undefined in `env` for this reason (see
+        // `check_function_declaration`), so report the real problem — no annotated return
+        // type to resolve the call against — rather than let it fall through and resolve
+        // as `UndefinedVariable`. Checked first, ahead of every other dispatch: whatever
+        // `function` names, a plain call to this exact pending name is never valid yet.
+        if let Expression::Identifier { name, .. } = function
+            && let Some((pending, def_span)) = &self.pending_return_type
+            && name == pending
+        {
+            return Err(TypeError::RecursiveFunctionNeedsReturnType {
+                function: name.clone(),
+                span: def_span.clone(),
+            });
+        }
+
         // The provided assertions, which take a matcher rather than ordinary arguments —
         // resolved here, ahead of every other dispatch, since they are the compiler's own.
         if let Expression::Identifier { name, .. } = function
