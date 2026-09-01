@@ -32,6 +32,16 @@ a = u.olderBy(5)       ~ 35
 (See `examples/methods.qn`.) Members may appear in any order — a method may come before
 the fields it uses, including as the very first member (see `examples/type_method_first.qn`).
 
+### Type declaration vs. record literal
+`name = { … }` is either of these, and the block's CONTENT decides which — never the
+name's capitalization (there is no Go-style rule tying that to case). A `::` field
+anywhere in the block makes it a type declaration; a block of nothing but `name =
+value` pairs makes it a record literal, same as today. A block of nothing but
+method-shaped members (`name = => …`, `name = (params) -> R => …`) and no `::` field
+anywhere is neither reading unambiguously, so it is a **compile error**: add a `::`
+field to declare a type, or replace the method bodies with plain values to write a
+record literal.
+
 A method declared with `:=` instead of `=` is a **setter** — it may mutate its
 receiver — and calling one requires a mutable (`:=`) receiver
 (see [Mutation](../mutation.md)).
