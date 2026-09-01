@@ -135,15 +135,23 @@ impl<'a> Parser<'a> {
 
     /// With the cursor on `(`, does a parenthesized parameter list followed by `=>` or
     /// `->` start here — the shape shared by a lambda and a function declaration?
+    pub(super) fn parameter_list_ahead(&self) -> bool {
+        self.parameter_list_ahead_from(0)
+    }
+
+    /// Same question as [`Self::parameter_list_ahead`], but starting from the `(` at
+    /// `peek_ahead(offset)` rather than the current token — lets a caller that has
+    /// already looked past other tokens (e.g. a member name and `=`) reuse the scan.
     ///
     /// Scans to the matching `)` and checks for a following `=>` or `->` (return type),
     /// ending at `Eof` on a stream that never closes the paren. Deliberately unbounded
     /// otherwise: a token-distance limit here would make a definition's MEANING depend on
     /// how long it is, silently re-reading a wide function as a variable holding a lambda
     /// instead of letting `parse_parameter_list` report what is actually wrong with it.
-    pub(super) fn parameter_list_ahead(&self) -> bool {
+    pub(super) fn parameter_list_ahead_from(&self, offset: usize) -> bool {
+        debug_assert!(self.peek_ahead(offset).kind == TokenKind::ParenOpen);
         let mut depth = 1usize;
-        let mut idx = 1;
+        let mut idx = offset + 1;
         loop {
             match self.peek_ahead(idx).kind {
                 TokenKind::ParenOpen => depth += 1,

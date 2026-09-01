@@ -183,14 +183,24 @@ impl<'a> Parser<'a> {
         // AND they must have field declarations (name :: Type) or methods (name = => ...)
         if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
             // What opens the brace says which one this is: a type declaration starts with a
-            // field (`{ name :: Type … }`) or a method (`{ name = => … }`), a record literal
-            // with a value (`{ name = value … }`).
-            let is_type_declaration = self.peek_ahead(1).kind == TokenKind::Ident
-                && match self.peek_ahead(2).kind {
-                    TokenKind::TypeAnnotation => true,
-                    TokenKind::Assign => self.peek_ahead(3).kind == TokenKind::Arrow,
+            // field (`{ name :: Type … }`) or a method — parameterless (`{ name = => … }`)
+            // or with parameters (`{ name = (p :: T) -> R => … }`) — named by an ordinary
+            // identifier or the render operator `` ` ``; a record literal starts with a
+            // value (`{ name = value … }`). `name = (` alone is genuinely ambiguous with a
+            // parenthesized literal expression (`x = (1 + 2)`), so that shape needs the same
+            // real scan to the matching `)` that a lambda's parameter list uses.
+            let is_type_declaration = matches!(
+                self.peek_ahead(1).kind,
+                TokenKind::Ident | TokenKind::Backtick
+            ) && match self.peek_ahead(2).kind {
+                TokenKind::TypeAnnotation => true,
+                TokenKind::Assign => match self.peek_ahead(3).kind {
+                    TokenKind::Arrow => true,
+                    TokenKind::ParenOpen => self.parameter_list_ahead_from(3),
                     _ => false,
-                };
+                },
+                _ => false,
+            };
 
             if is_type_declaration {
                 return self.parse_type_declaration(name, start, exported);
