@@ -48,8 +48,8 @@ analogous to `()` in Rust/ML. Use it for side-effecting expressions and function
 result is meaningless. `print` and `eprint` return `$`. `$` is compatible only with `$`.
 ```quilon
 << core.io
-log = (m :: Text) -> $ => io.print(m)   ~ a function whose result is meaningless
-^ = () -> $ => log("started")        ~ a `$` body exits 0 (it is not a Num)
+log = (m :: Text) -> $ => < io.print(m) > ~ a function whose result is meaningless
+^ = () -> $ => < log("started") >    ~ a `$` body exits 0 (it is not a Num)
 ```
 
 Arrays (`[]T`) live with the other built-in parametric collections — see

@@ -6,16 +6,16 @@
 << core.test
 
 ~ Value-first: the subject is the first arg, the function value follows it.
-apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)
+apply = (x :: Num, f :: (Num) -> Num) -> Num => < f(x) >
 
 ~ Calls `f` on its own result: f(f(x)).
-twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+twice = (f :: (Num) -> Num, x :: Num) -> Num => < f(f(x)) >
 
 ~ A predicate parameter `(Num) -> Bool`: keep `x` when it holds, else 0.
-keepIf = (p :: (Num) -> Bool, x :: Num) -> Num => p(x) ? x : 0
+keepIf = (p :: (Num) -> Bool, x :: Num) -> Num => < p(x) ? x : 0 >
 
 ~ A `Text` function parameter: the lambda's `s` is a Text because `f` says it is.
-around = (t :: Text, f :: (Text) -> Text) -> Text => f(t)
+around = (t :: Text, f :: (Text) -> Text) -> Text => < f(t) >
 
 ~ A `() -> $` parameter, called purely for effect: `run` invokes `action` twice.
 run = (action :: () -> $) -> $ => <
@@ -36,7 +36,7 @@ run = (action :: () -> $) -> $ => <
   assert(around("hi", (s) => s + "!"), equals("hi!"))
 
   ~ A binding that declares its own function type states its parameter types too.
-  scale :: (Num) -> Num = (n) => n * 4
+  scale :: (Num) -> Num = (n) => < n * 4 >
   assert(scale(5), equals(20))
 
   ~ A named closure captures `total` by reference, so its writes escape and accumulate

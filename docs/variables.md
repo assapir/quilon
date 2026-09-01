@@ -23,7 +23,7 @@ follow the same rule, and a `:=` global is writable from inside a function like 
 ```quilon
 limit = 10              ~ fine
 enabled = true          ~ fine
-scale = (n :: Num) => n * 3   ~ fine — a function value
+scale = (n :: Num) => < n * 3 > ~ fine — a function value
 counter := 4            ~ fine — and writable from a function
 
 doubled = limit * 2     ~ error: has to be computed

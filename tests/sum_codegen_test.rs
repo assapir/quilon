@@ -88,7 +88,7 @@ fn test_function_returning_result() {
     // A function may declare `-> Result` and return a constructor; codegen uses the single
     // canonical `{ i8, {ptr,i64} }` Result representation for the return slot.
     let source = r#"
-        make_ok = () -> Result => Ok(42)
+        make_ok = () -> Result => < Ok(42) >
         ^ = () -> Num => <
             r = make_ok()
             0

@@ -164,7 +164,7 @@ mod tests {
         // nested in a lambda body and in a locally declared function's body, which are
         // the forms a hand-rolled walk is most likely to miss.
         let body = entry_body(
-            "^ = () -> Num => <\n  helper = () -> Num => 7\n  a = [1].map(x => x + 1)\n  helper()\n>",
+            "^ = () -> Num => <\n  helper = () -> Num => < 7 >\n  a = [1].map(x => x + 1)\n  helper()\n>",
         );
         let mut numbers = Vec::new();
         let _: ControlFlow<()> = try_for_each_subexpression(&body, &mut |e| {

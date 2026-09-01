@@ -1,10 +1,10 @@
->> navigation_offset = (x :: Num) -> Num => x + 0
->> navigation_scale = (x :: Num) -> Num => x + 1
->> navigation_clamp = (x :: Num) -> Num => x + 2
->> navigation_round = (x :: Num) -> Num => x + 3
->> navigation_wrap = (x :: Num) -> Num => x + 4
->> navigation_snap = (x :: Num) -> Num => x + 5
->> navigation_bias = (x :: Num) -> Num => x + 6
->> navigation_damp = (x :: Num) -> Num => x + 7
->> navigation_boost = (x :: Num) -> Num => x + 8
->> navigation_trim = (x :: Num) -> Num => x + 9
+>> navigation_offset = (x :: Num) -> Num => < x + 0 >
+>> navigation_scale = (x :: Num) -> Num => < x + 1 >
+>> navigation_clamp = (x :: Num) -> Num => < x + 2 >
+>> navigation_round = (x :: Num) -> Num => < x + 3 >
+>> navigation_wrap = (x :: Num) -> Num => < x + 4 >
+>> navigation_snap = (x :: Num) -> Num => < x + 5 >
+>> navigation_bias = (x :: Num) -> Num => < x + 6 >
+>> navigation_damp = (x :: Num) -> Num => < x + 7 >
+>> navigation_boost = (x :: Num) -> Num => < x + 8 >
+>> navigation_trim = (x :: Num) -> Num => < x + 9 >

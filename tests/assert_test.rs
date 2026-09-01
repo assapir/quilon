@@ -56,7 +56,7 @@ fn run_jit(tag: &str, src: &str) -> (i32, String) {
 
 /// `quilon run` on an entry point whose body is `body` — the shape most cases here need.
 fn run_entry(tag: &str, body: &str) -> (i32, String) {
-    run_jit(tag, &format!("^ = () -> $ => {body}\n"))
+    run_jit(tag, &format!("^ = () -> $ => < {body} >\n"))
 }
 
 /// Is a linker available on PATH? (Mirrors the examples gate's graceful skip.)
@@ -161,14 +161,14 @@ fn equals_uses_a_user_records_own_equality_and_rendering() {
         "Version = {\n",
         "  major :: Num,\n",
         "  minor :: Num,\n",
-        "  == = (other :: Version) -> Bool => it.major == other.major && it.minor == other.minor,\n",
-        "  ` = => \"v`it.major`.`it.minor`\"\n",
+        "  == = (other :: Version) -> Bool => < it.major == other.major && it.minor == other.minor >,\n",
+        "  ` = => < \"v`it.major`.`it.minor`\" >\n",
         "}\n"
     );
     let (code, stderr) = run_jit(
         "eq_record_pass",
         &format!(
-            "{record}^ = () -> $ => assert(Version {{ major = 0, minor = 9 }}, equals(Version {{ major = 0, minor = 9 }}))\n"
+            "{record}^ = () -> $ => < assert(Version {{ major = 0, minor = 9 }}, equals(Version {{ major = 0, minor = 9 }})) >\n"
         ),
     );
     assert_eq!(code, 0, "equal records must hold, got: {stderr:?}");
@@ -176,7 +176,7 @@ fn equals_uses_a_user_records_own_equality_and_rendering() {
     let (code, stderr) = run_jit(
         "eq_record_fail",
         &format!(
-            "{record}^ = () -> $ => assert(Version {{ major = 0, minor = 9 }}, equals(Version {{ major = 1, minor = 0 }}))\n"
+            "{record}^ = () -> $ => < assert(Version {{ major = 0, minor = 9 }}, equals(Version {{ major = 1, minor = 0 }})) >\n"
         ),
     );
     assert_eq!(code, FAIL_CODE);
@@ -191,19 +191,19 @@ fn equals_uses_a_user_records_own_equality_and_rendering() {
 fn equals_uses_a_user_sums_own_equality_and_rendering() {
     let sum = concat!(
         "Light = Red / Green {\n",
-        "  ` = => it ? | Red => \"Red\" | Green => \"Green\",\n",
-        "  == = (other :: Light) -> Bool => \"`it`\" == \"`other`\"\n",
+        "  ` = => < it ? | Red => \"Red\" | Green => \"Green\" >,\n",
+        "  == = (other :: Light) -> Bool => < \"`it`\" == \"`other`\" >\n",
         "}\n"
     );
     let (code, stderr) = run_jit(
         "eq_sum_pass",
-        &format!("{sum}^ = () -> $ => assert(Red, equals(Red))\n"),
+        &format!("{sum}^ = () -> $ => < assert(Red, equals(Red)) >\n"),
     );
     assert_eq!(code, 0, "equal sum values must hold, got: {stderr:?}");
 
     let (code, stderr) = run_jit(
         "eq_sum_fail",
-        &format!("{sum}^ = () -> $ => assert(Red, equals(Green))\n"),
+        &format!("{sum}^ = () -> $ => < assert(Red, equals(Green)) >\n"),
     );
     assert_eq!(code, FAIL_CODE);
     assert!(
@@ -218,7 +218,7 @@ fn equals_uses_a_user_sums_own_equality_and_rendering() {
 fn equals_on_a_type_without_equality_is_refused() {
     let (code, stderr) = run_jit(
         "eq_no_member",
-        "P = { x :: Num }\n^ = () -> $ => assert(P { x = 1 }, equals(P { x = 1 }))\n",
+        "P = { x :: Num }\n^ = () -> $ => < assert(P { x = 1 }, equals(P { x = 1 })) >\n",
     );
     assert_ne!(code, 0);
     assert!(
@@ -232,8 +232,8 @@ fn equals_on_a_type_without_equality_is_refused() {
 /// refused here, or codegen would be handed two different representations to compare.
 #[test]
 fn a_generic_payload_is_only_compared_against_a_num() {
-    let program = "f = (n :: Num) -> Result => n > 0 ? Ok(n) : NotOk($)\n\
-                   ^ = () -> $ => f(1) ? | Ok(v) => assert(v, MATCHER) | NotOk(_) => $\n";
+    let program = "f = (n :: Num) -> Result => < n > 0 ? Ok(n) : NotOk($) >\n\
+                   ^ = () -> $ => < f(1) ? | Ok(v) => assert(v, MATCHER) | NotOk(_) => $ >\n";
     for (tag, matcher) in [
         ("generic_text", "equals(\"x\")"),
         ("generic_bool", "equals(true)"),
@@ -289,14 +289,14 @@ fn contains_scans_an_array_of_records_with_their_equality() {
     let record = concat!(
         "Tag = {\n",
         "  name :: Text,\n",
-        "  == = (other :: Tag) -> Bool => it.name == other.name,\n",
-        "  ` = => it.name\n",
+        "  == = (other :: Tag) -> Bool => < it.name == other.name >,\n",
+        "  ` = => < it.name >\n",
         "}\n"
     );
     let (code, stderr) = run_jit(
         "has_record",
         &format!(
-            "{record}^ = () -> $ => assert([Tag {{ name = \"a\" }}, Tag {{ name = \"b\" }}], contains(Tag {{ name = \"b\" }}))\n"
+            "{record}^ = () -> $ => < assert([Tag {{ name = \"a\" }}, Tag {{ name = \"b\" }}], contains(Tag {{ name = \"b\" }})) >\n"
         ),
     );
     assert_eq!(code, 0, "unexpected failure: {stderr:?}");
@@ -368,7 +368,7 @@ fn is_ok_and_is_not_ok_read_a_result() {
 fn is_ok_on_a_sum_without_that_variant_is_refused() {
     let (code, stderr) = run_jit(
         "isok_wrong_sum",
-        "Light = Red / Green\n^ = () -> $ => assert(Red, isOk())\n",
+        "Light = Red / Green\n^ = () -> $ => < assert(Red, isOk()) >\n",
     );
     assert_ne!(code, 0);
     assert!(
@@ -435,7 +435,7 @@ fn an_assert_inside_a_helper_reports_that_helper_line() {
 /// trailing `site :: Site` and forward it, and the report blames ITS caller.
 #[test]
 fn fail_at_reports_its_caller() {
-    let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ =>\n  n % 2 == 0 ? $ : test.failAt(\"assertion failed: `n` is odd\", site)\n\n^ = () -> $ => <\n  assertEven(3)\n>\n";
+    let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ => <\n  n % 2 == 0 ? $ : test.failAt(\"assertion failed: `n` is odd\", site)\n>\n^ = () -> $ => <\n  assertEven(3)\n>\n";
     let (code, stderr) = run_jit("site_fail_at", src);
     assert_eq!(code, FAIL_CODE);
 
@@ -542,14 +542,14 @@ fn native_aot_assert_exit_codes() {
     for linker in &linkers {
         let (code, _) = run_aot(
             &format!("aot_pass_{linker}"),
-            "^ = () -> $ => assert(2 + 2, equals(4))\n",
+            "^ = () -> $ => < assert(2 + 2, equals(4)) >\n",
             linker,
         );
         assert_eq!(code, 0, "native AOT ({linker}): a holding assert exits 0");
 
         let (code, stderr) = run_aot(
             &format!("aot_fail_{linker}"),
-            "^ = () -> $ => assert(2 + 2, equals(5))\n",
+            "^ = () -> $ => < assert(2 + 2, equals(5)) >\n",
             linker,
         );
         assert_eq!(
@@ -565,7 +565,7 @@ fn native_aot_assert_exit_codes() {
         assert!(
             stderr.starts_with(&format!(
                 "{}\n",
-                position(&tmp_dir().join(format!("aot_fail_{linker}.qn")), 1, 16)
+                position(&tmp_dir().join(format!("aot_fail_{linker}.qn")), 1, 18)
             )),
             "native AOT ({linker}): the report must name its call site, got: {stderr:?}"
         );

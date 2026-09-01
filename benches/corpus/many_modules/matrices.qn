@@ -1,10 +1,10 @@
->> matrices_offset = (x :: Num) -> Num => x + 0
->> matrices_scale = (x :: Num) -> Num => x + 1
->> matrices_clamp = (x :: Num) -> Num => x + 2
->> matrices_round = (x :: Num) -> Num => x + 3
->> matrices_wrap = (x :: Num) -> Num => x + 4
->> matrices_snap = (x :: Num) -> Num => x + 5
->> matrices_bias = (x :: Num) -> Num => x + 6
->> matrices_damp = (x :: Num) -> Num => x + 7
->> matrices_boost = (x :: Num) -> Num => x + 8
->> matrices_trim = (x :: Num) -> Num => x + 9
+>> matrices_offset = (x :: Num) -> Num => < x + 0 >
+>> matrices_scale = (x :: Num) -> Num => < x + 1 >
+>> matrices_clamp = (x :: Num) -> Num => < x + 2 >
+>> matrices_round = (x :: Num) -> Num => < x + 3 >
+>> matrices_wrap = (x :: Num) -> Num => < x + 4 >
+>> matrices_snap = (x :: Num) -> Num => < x + 5 >
+>> matrices_bias = (x :: Num) -> Num => < x + 6 >
+>> matrices_damp = (x :: Num) -> Num => < x + 7 >
+>> matrices_boost = (x :: Num) -> Num => < x + 8 >
+>> matrices_trim = (x :: Num) -> Num => < x + 9 >

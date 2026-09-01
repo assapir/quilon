@@ -212,7 +212,7 @@ fn record_update_adds_field() {
 #[test]
 fn record_update_preserves_named_type_and_methods() {
     assert_exit(
-        "Vec = {\n  x :: Num,\n  y :: Num,\n  sum = => it.x + it.y\n}\n^ = () -> Num => <\n  a = Vec { x = 10, y = 20 }\n  b = { <-a, x = 5 }\n  b.sum()\n>",
+        "Vec = {\n  x :: Num,\n  y :: Num,\n  sum = => < it.x + it.y >\n}\n^ = () -> Num => <\n  a = Vec { x = 10, y = 20 }\n  b = { <-a, x = 5 }\n  b.sum()\n>",
         // 5 + 20 = 25
         25,
     );

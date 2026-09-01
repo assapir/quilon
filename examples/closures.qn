@@ -13,16 +13,16 @@
 << core.test
 
 ~ The canonical returned closure: it captures the parameter `n` by value.
-adder = (n :: Num) -> (Num) -> Num => (x :: Num) => x + n
+adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >
 
 ~ The declared return `(Num) -> Num` types `x`, so the lambda may write no annotation.
-scaler = (factor :: Num) -> (Num) -> Num => (x) => x * factor
+scaler = (factor :: Num) -> (Num) -> Num => < (x) => x * factor >
 
 ~ A function value received as a parameter may be handed back out unchanged.
-pick = (f :: (Num) -> Num) -> (Num) -> Num => f
+pick = (f :: (Num) -> Num) -> (Num) -> Num => < f >
 
 ~ A returned closure crosses further call boundaries like any other function value.
-apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
+apply = (f :: (Num) -> Num, x :: Num) -> Num => < f(x) >
 
 ~ A `:=` capture is a shared heap cell, so the state survives the maker's frame:
 ~ each call through the returned closure keeps counting.
@@ -49,7 +49,7 @@ mkCounter = () -> () -> Num => <
   ~ `base` is `=` -> captured by value. `addBase` sees a frozen copy; rebinding
   ~ `base` afterwards does NOT change what the closure already captured.
   base = 7
-  addBase = (x :: Num) => x + base
+  addBase = (x :: Num) => < x + base >
   assert(addBase(5), equals(12))   ~ 5 + the =-captured 7
 
   ~ The :=-captured cell still holds its accumulated value.

@@ -3,7 +3,7 @@
 ~ checker on chains half this long.
 << core.test
 
-g = (n :: Num) -> Num => n + 1
+g = (n :: Num) -> Num => < n + 1 >
 
 ^ = () -> Num => <
   nested = g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(g(1))))))))))))))))))))))))))))))))))))))))

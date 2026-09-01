@@ -1,10 +1,10 @@
->> ranking_offset = (x :: Num) -> Num => x + 0
->> ranking_scale = (x :: Num) -> Num => x + 1
->> ranking_clamp = (x :: Num) -> Num => x + 2
->> ranking_round = (x :: Num) -> Num => x + 3
->> ranking_wrap = (x :: Num) -> Num => x + 4
->> ranking_snap = (x :: Num) -> Num => x + 5
->> ranking_bias = (x :: Num) -> Num => x + 6
->> ranking_damp = (x :: Num) -> Num => x + 7
->> ranking_boost = (x :: Num) -> Num => x + 8
->> ranking_trim = (x :: Num) -> Num => x + 9
+>> ranking_offset = (x :: Num) -> Num => < x + 0 >
+>> ranking_scale = (x :: Num) -> Num => < x + 1 >
+>> ranking_clamp = (x :: Num) -> Num => < x + 2 >
+>> ranking_round = (x :: Num) -> Num => < x + 3 >
+>> ranking_wrap = (x :: Num) -> Num => < x + 4 >
+>> ranking_snap = (x :: Num) -> Num => < x + 5 >
+>> ranking_bias = (x :: Num) -> Num => < x + 6 >
+>> ranking_damp = (x :: Num) -> Num => < x + 7 >
+>> ranking_boost = (x :: Num) -> Num => < x + 8 >
+>> ranking_trim = (x :: Num) -> Num => < x + 9 >

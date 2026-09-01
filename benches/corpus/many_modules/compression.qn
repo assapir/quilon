@@ -1,10 +1,10 @@
->> compression_offset = (x :: Num) -> Num => x + 0
->> compression_scale = (x :: Num) -> Num => x + 1
->> compression_clamp = (x :: Num) -> Num => x + 2
->> compression_round = (x :: Num) -> Num => x + 3
->> compression_wrap = (x :: Num) -> Num => x + 4
->> compression_snap = (x :: Num) -> Num => x + 5
->> compression_bias = (x :: Num) -> Num => x + 6
->> compression_damp = (x :: Num) -> Num => x + 7
->> compression_boost = (x :: Num) -> Num => x + 8
->> compression_trim = (x :: Num) -> Num => x + 9
+>> compression_offset = (x :: Num) -> Num => < x + 0 >
+>> compression_scale = (x :: Num) -> Num => < x + 1 >
+>> compression_clamp = (x :: Num) -> Num => < x + 2 >
+>> compression_round = (x :: Num) -> Num => < x + 3 >
+>> compression_wrap = (x :: Num) -> Num => < x + 4 >
+>> compression_snap = (x :: Num) -> Num => < x + 5 >
+>> compression_bias = (x :: Num) -> Num => < x + 6 >
+>> compression_damp = (x :: Num) -> Num => < x + 7 >
+>> compression_boost = (x :: Num) -> Num => < x + 8 >
+>> compression_trim = (x :: Num) -> Num => < x + 9 >

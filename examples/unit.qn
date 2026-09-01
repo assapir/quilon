@@ -7,7 +7,7 @@
 
 ~ A function whose result is meaningless: it returns `$` after logging. Callers use
 ~ it for its effect, not for a value.
-log = (m :: Text) -> $ => io.print(m)
+log = (m :: Text) -> $ => < io.print(m) >
 
 ^ = () -> $ => <
   log("started")              ~ called for effect; its result is `$`

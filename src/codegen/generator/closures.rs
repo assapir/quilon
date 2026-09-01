@@ -364,6 +364,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// The expression a body evaluates to: a block's is its tail statement, so that is the
+    /// one carrying the body's type.
+    fn body_value(body: &Expression) -> &Expression {
+        match body {
+            Expression::Block { statements, .. } => match statements.last() {
+                Some(crate::ast::Statement::Expression(tail)) => Self::body_value(tail),
+                _ => body,
+            },
+            _ => body,
+        }
+    }
+
     /// The default return TYPE codegen assigns a function with the given (possibly
     /// missing) return annotation and body: the annotation if present, else `$` (Unit)
     /// for a Unit-tailed body, else `Num`. Codegen lacks the checker's full inference, so
@@ -374,6 +386,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         return_type: Option<&Type>,
         body: &Expression,
     ) -> Type {
+        // The oracle records types by span, and a block has none of its own — so ask about
+        // the expression the body evaluates to. Every function body is a block, so without
+        // this an unannotated `make = () => < Ok("hello") >` lowers its return to the `Num`
+        // fallback and the payload a downstream match binds is the wrong shape.
+        let body = Self::body_value(body);
         match return_type {
             // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
             // slots are type variables the language can't otherwise name — is refined to

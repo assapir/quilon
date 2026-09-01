@@ -1,10 +1,10 @@
->> checksums_offset = (x :: Num) -> Num => x + 0
->> checksums_scale = (x :: Num) -> Num => x + 1
->> checksums_clamp = (x :: Num) -> Num => x + 2
->> checksums_round = (x :: Num) -> Num => x + 3
->> checksums_wrap = (x :: Num) -> Num => x + 4
->> checksums_snap = (x :: Num) -> Num => x + 5
->> checksums_bias = (x :: Num) -> Num => x + 6
->> checksums_damp = (x :: Num) -> Num => x + 7
->> checksums_boost = (x :: Num) -> Num => x + 8
->> checksums_trim = (x :: Num) -> Num => x + 9
+>> checksums_offset = (x :: Num) -> Num => < x + 0 >
+>> checksums_scale = (x :: Num) -> Num => < x + 1 >
+>> checksums_clamp = (x :: Num) -> Num => < x + 2 >
+>> checksums_round = (x :: Num) -> Num => < x + 3 >
+>> checksums_wrap = (x :: Num) -> Num => < x + 4 >
+>> checksums_snap = (x :: Num) -> Num => < x + 5 >
+>> checksums_bias = (x :: Num) -> Num => < x + 6 >
+>> checksums_damp = (x :: Num) -> Num => < x + 7 >
+>> checksums_boost = (x :: Num) -> Num => < x + 8 >
+>> checksums_trim = (x :: Num) -> Num => < x + 9 >

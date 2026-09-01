@@ -156,7 +156,7 @@ fn a_top_level_describe_call_parses_as_a_test_block() {
 fn a_describe_definition_is_still_an_ordinary_item() {
     // `core.test` DEFINES `describe`, and a program may define its own — only a CALL is the
     // marker, so the two are told apart by what follows the name.
-    let tokens = Lexer::tokenize("describe = (n :: Num) -> Num => n\n").expect("lexing");
+    let tokens = Lexer::tokenize("describe = (n :: Num) -> Num => < n >\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert!(program.test_blocks.is_empty());
     assert!(matches!(
@@ -213,16 +213,16 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
         concat!(
             "<< core.test\n",
             "<< core.io\n",
-            "double = (n :: Num) -> Num => n * 2\n",
+            "double = (n :: Num) -> Num => < n * 2 >\n",
             "Counter = {\n",
             "  total :: Num,\n",
-            "  bumped = => it.total + 1,\n",
-            "  ` = => \"counter\"\n",
+            "  bumped = => < it.total + 1 >,\n",
+            "  ` = => < \"counter\" >\n",
             "}\n",
             "test.describe(\"double\", () => <\n",
             "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n",
-            "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
+            "^ = () -> Num => < double(0) + Counter { total = 0 }.bumped() - 1 >\n"
         ),
     );
 
@@ -296,12 +296,12 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
 /// kept the harness's own `it` — and everything behind it — reachable in a build.
 const TESTS_BESIDE_CODE_SUITE: &str = concat!(
     "<< core.test\n",
-    "double = (n :: Num) -> Num => n * 2\n",
-    "Counter = { total :: Num, bumped = => it.total + 1 }\n",
+    "double = (n :: Num) -> Num => < n * 2 >\n",
+    "Counter = { total :: Num, bumped = => < it.total + 1 >}\n",
     "test.describe(\"double\", () => <\n",
     "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
     ">)\n",
-    "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
+    "^ = () -> Num => < double(0) + Counter { total = 0 }.bumped() - 1 >\n"
 );
 
 /// The import needs no marker of its own. `quilon test` compiles the blocks, so their calls
@@ -356,8 +356,8 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
         "referenced.qn",
         concat!(
             "<< core.test\n",
-            "double = (n :: Num) -> Num => n * 2\n",
-            "Counter = { total :: Num, bumped = => it.total + 1 }\n",
+            "double = (n :: Num) -> Num => < n * 2 >\n",
+            "Counter = { total :: Num, bumped = => < it.total + 1 >}\n",
             "^ = () -> Num => <\n",
             "  test.describe(\"double\", () => <\n",
             "    test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
@@ -418,12 +418,13 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
             "<< core.io\n",
             "<< core.http\n",
             "<< core.test\n",
-            "indent = (depth :: Num) -> Text => \"..\".repeat(depth)\n",
-            "green = (text :: Text) -> Text => \"[green]\" + text\n",
-            "red = (text :: Text) -> Text => \"[red]\" + text\n",
-            "reportSuite = (name :: Text, depth :: Num) -> Text => indent(depth) + name\n",
-            "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> Text =>\n",
+            "indent = (depth :: Num) -> Text => < \"..\".repeat(depth) >\n",
+            "green = (text :: Text) -> Text => < \"[green]\" + text >\n",
+            "red = (text :: Text) -> Text => < \"[red]\" + text >\n",
+            "reportSuite = (name :: Text, depth :: Num) -> Text => < indent(depth) + name >\n",
+            "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> Text => <\n",
             "  indent(depth) + (failed ? red(name) : green(name))\n",
+            ">\n",
             "^ = () -> Num => <\n",
             "  io.print(reportSuite(\"group\", 1))\n",
             "  io.print(reportCase(\"case\", 2, false))\n",
@@ -455,7 +456,7 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
 /// private test fixtures travel with it — carried, qualified, and unreachable from outside.
 #[test]
 fn importing_core_http_contributes_exactly_this_surface() {
-    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
+    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => < 0 >\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     let (linked, _sources) =
         quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
@@ -540,9 +541,9 @@ fn quilon_test_ignores_the_entry_point_beside_the_blocks_it_runs() {
 << core.io
 << core.test
 
-^ = () -> $ => io.print("{PROGRAM_MARKER}")
+^ = () -> $ => < io.print("{PROGRAM_MARKER}") >
 
-helper = (n :: Num) -> Num => n * 2
+helper = (n :: Num) -> Num => < n * 2 >
 
 test.describe("helper", () => <
   test.it("doubles", () => <
@@ -863,11 +864,11 @@ fn a_directory_runs_every_suite_it_holds() {
         concat!(
             "<< core.test\n",
             "test.describe(\"mixed\", () => test.it(\"runs\", () => expect(true, equals(true))))\n",
-            "^ = () -> Num => 7\n"
+            "^ = () -> Num => < 7 >\n"
         ),
     );
     // Not a suite: a program with no test blocks is passed over, not run.
-    write(&dir, "program.qn", "^ = () -> Num => 7\n");
+    write(&dir, "program.qn", "^ = () -> Num => < 7 >\n");
 
     let out = quilon(&["test", dir.to_str().unwrap()]);
     assert_ne!(out.code, 0, "one suite failed, so the run failed");
@@ -902,7 +903,7 @@ fn a_directory_runs_every_suite_it_holds() {
 #[test]
 fn a_path_with_no_suites_succeeds_and_says_so() {
     let dir = work_dir("empty");
-    write(&dir, "program.qn", "^ = () -> Num => 0\n");
+    write(&dir, "program.qn", "^ = () -> Num => < 0 >\n");
     let out = quilon(&["test", dir.to_str().unwrap()]);
     assert_eq!(out.code, 0, "nothing failed, so nothing is wrong");
     assert!(
@@ -991,7 +992,7 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         "suite.qn",
         concat!(
             "<< core.test\n",
-            ">> double = (n :: Num) -> Num => n * 2\n",
+            ">> double = (n :: Num) -> Num => < n * 2 >\n",
             "test.describe(\"double\", () => <\n",
             "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n"

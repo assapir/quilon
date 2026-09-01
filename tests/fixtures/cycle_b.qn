@@ -2,4 +2,4 @@
 
 << "cycle_a.qn"
 
->> pong = (x :: Num) -> Num => cycle_a.ping(x)
+>> pong = (x :: Num) -> Num => < cycle_a.ping(x) >

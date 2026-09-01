@@ -13,8 +13,8 @@ fn a_users_output_name_is_an_ordinary_function() {
     // the built-in's arity) is just a function, dispatched like any other.
     assert_exit_linked(
         r#"
-print = (x :: Num) -> Num => x + 1
-^ = () -> Num => print(41)
+print = (x :: Num) -> Num => < x + 1 >
+^ = () -> Num => < print(41) >
 "#,
         42,
     );
@@ -27,7 +27,7 @@ fn a_user_wrapper_reaches_the_builtin_through_the_module() {
         r#"
 << core.io
 
-write = (content :: Text) -> Num => io.write(content, io.stdout)
+write = (content :: Text) -> Num => < io.write(content, io.stdout) >
 
 ^ = () -> Num => <
   write("raw")
@@ -43,7 +43,7 @@ fn the_builtin_now_reads_the_clock_beside_an_unrelated_user_now() {
         r#"
 << core.time
 
-now = (scale :: Num) -> Num => time.now() * scale
+now = (scale :: Num) -> Num => < time.now() * scale >
 
 ^ = () -> Num => <
   ~ The clock is monotonic and never negative, so both functions ran.
@@ -61,8 +61,8 @@ fn a_user_now_at_the_builtins_signature_is_legal() {
     assert_exit_linked(
         r#"
 << core.time
-now = () -> Num => 7
-^ = () -> Num => time.now() >= 0 ? now() : 0
+now = () -> Num => < 7 >
+^ = () -> Num => < time.now() >= 0 ? now() : 0 >
 "#,
         7,
     );
@@ -74,8 +74,8 @@ fn an_under_annotated_overload_of_an_internal_primitive_is_reported() {
     // that cannot be dispatched — no parameter annotations — is rejected as before.
     let message = type_error_message(
         r#"
-__color_enabled = (x) => 5
-^ = () -> Num => 0
+__color_enabled = (x) => < 5 >
+^ = () -> Num => < 0 >
 "#,
     );
     assert!(
@@ -90,7 +90,7 @@ fn the_internal_primitives_are_still_overload_members() {
     // rule: a user definition at another signature joins the set and is dispatched to.
     assert_exit_linked(
         r#"
-__color_enabled = (label :: Text) -> Num => 7
+__color_enabled = (label :: Text) -> Num => < 7 >
 
 ^ = () -> Num => <
   __color_enabled("x")
@@ -106,7 +106,7 @@ fn a_user_write_recurses_as_a_loop() {
     // to a loop. A million frames would overflow.
     assert_exit_linked(
         r#"
-write = (n :: Num) -> Num => n == 0 ? 1000000 : write(n - 1)
+write = (n :: Num) -> Num => < n == 0 ? 1000000 : write(n - 1) >
 
 ^ = () -> Num => <
   write(1000000) == 1000000 ? 9 : 0
@@ -127,7 +127,7 @@ fn dispatch_holds_in_a_native_executable() {
         r#"
 << core.io
 
-write = (label :: Text) -> Num => io.write(label + "!", io.stdout)
+write = (label :: Text) -> Num => < io.write(label + "!", io.stdout) >
 
 ^ = () -> Num => <
   ~ Both forms write: the built-in takes a file descriptor, the user's own `write`

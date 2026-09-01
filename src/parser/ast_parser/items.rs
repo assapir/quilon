@@ -307,12 +307,7 @@ impl<'a> Parser<'a> {
         // Expect =>
         self.expect(&TokenKind::Arrow)?;
 
-        // Parse body (can be a block or single expression)
-        let body = if self.check(&TokenKind::BlockOpen) {
-            self.parse_block()?
-        } else {
-            self.parse_expression()?
-        };
+        let body = self.parse_body("function")?;
 
         let end = self.previous_span();
 
@@ -423,12 +418,7 @@ impl<'a> Parser<'a> {
                 // Expect =>
                 self.expect(&TokenKind::Arrow)?;
 
-                // Parse method body
-                let body = if self.check(&TokenKind::BlockOpen) {
-                    self.parse_block()?
-                } else {
-                    self.parse_expression()?
-                };
+                let body = self.parse_body("method")?;
 
                 let method_end = self.previous_span();
 
@@ -550,6 +540,17 @@ impl<'a> Parser<'a> {
             exported,
             span: self.span(start.start, end.end),
         }))
+    }
+
+    /// A definition's body is always a `< >` block; only a lambda's may be a bare expression.
+    fn parse_body(&mut self, what: &str) -> Result<Expression, ParseError> {
+        if !self.check(&TokenKind::BlockOpen) {
+            return Err(ParseError {
+                message: format!("a {what} body must be a `< >` block — write `=> < … >`"),
+                span: self.peek().span.clone(),
+            });
+        }
+        self.parse_block()
     }
 
     /// Depth-guarded entry point for `< … >` blocks. A block may hold nested named

@@ -32,7 +32,7 @@ fn test_builtin_import_resolves_and_exports_usable() {
     // `core.io` exports `print`, reached through the import's binding: `io.print`.
     let source = r#"
         << core.io
-        ^ = () -> $ => io.print(5)
+        ^ = () -> $ => < io.print(5) >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -43,7 +43,7 @@ fn test_full_path_reaches_an_export_too() {
     // The fully-qualified spelling always works beside the short binding.
     let source = r#"
         << core.io
-        ^ = () -> $ => core.io.print(5)
+        ^ = () -> $ => < core.io.print(5) >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -55,7 +55,7 @@ fn test_bare_export_name_is_not_in_scope() {
     // into the file's namespace.
     let source = r#"
         << core.io
-        ^ = () -> $ => print(5)
+        ^ = () -> $ => < print(5) >
     "#;
     let result = check_with_base(source, Path::new("."));
     let err = result.expect_err("a bare `print` must not resolve under `<< core.io`");
@@ -66,7 +66,7 @@ fn test_bare_export_name_is_not_in_scope() {
 fn test_text_ops_need_no_import() {
     // Text is a built-in primitive (like Num/arrays): its ops (`+`, `.size`,
     // `.length`) work with NO import.
-    let source = r#"^ = () -> Num => ("a" + "b").length"#;
+    let source = r#"^ = () -> Num => < ("a" + "b").length >"#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
 }
@@ -77,7 +77,7 @@ fn test_core_text_cannot_be_imported_and_needs_no_import() {
     // module: the link merges it in wherever a composable method is used, and no program
     // may name it — member syntax is the only surface.
     let bare = r#"
-        ^ = () -> Num => "  x  ".trim().size
+        ^ = () -> Num => < "  x  ".trim().size >
     "#;
     let result = check_with_base(bare, Path::new("."));
     assert!(
@@ -88,7 +88,7 @@ fn test_core_text_cannot_be_imported_and_needs_no_import() {
 
     let explicit = r#"
         << core.text
-        ^ = () -> Num => 0
+        ^ = () -> Num => < 0 >
     "#;
     let err = check_with_base(explicit, Path::new("."))
         .expect_err("`<< core.text` must be rejected as the compiler's own module");
@@ -101,7 +101,7 @@ fn test_print_accepts_text() {
     // `print` returns `$` (Unit), so the entry point is annotated `-> $`.
     let source = r#"
         << core.io
-        ^ = () -> $ => io.print("hello, " + "world")
+        ^ = () -> $ => < io.print("hello, " + "world") >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -112,8 +112,8 @@ fn test_user_print_is_an_ordinary_function() {
     // A module's overload sets are closed: a program's own `print` is simply an
     // unrelated function — defined and called bare, at any signature.
     let source = r#"
-        print = (a :: Num, b :: Num) -> Num => a + b
-        ^ = () -> Num => print(2, 3)
+        print = (a :: Num, b :: Num) -> Num => < a + b >
+        ^ = () -> Num => < print(2, 3) >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -144,7 +144,7 @@ fn test_file_path_import_exported_item_usable() {
     // A file import binds its stem: `"mathlib.qn"` is reached as `mathlib.<name>`.
     let source = r#"
         << "mathlib.qn"
-        ^ = () -> Num => mathlib.add(2, 3)
+        ^ = () -> Num => < mathlib.add(2, 3) >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -156,7 +156,7 @@ fn test_non_exported_name_is_not_visible() {
     // error must not distinguish "private" from "nonexistent".
     let source = r#"
         << "mathlib.qn"
-        ^ = () -> Num => mathlib.secret(3)
+        ^ = () -> Num => < mathlib.secret(3) >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     let err = result.expect_err("the private `secret` must not resolve for an importer");
@@ -169,7 +169,7 @@ fn test_private_sibling_travels_with_its_module() {
     // through the link (under its qualified name), even though no importer can name it.
     let source = r#"
         << "with_helper.qn"
-        ^ = () -> Num => with_helper.quad(4)
+        ^ = () -> Num => < with_helper.quad(4) >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -195,7 +195,7 @@ fn test_module_binding_is_not_a_value() {
     // The binding reaches the module's exports; it is not itself a value.
     let source = r#"
         << core.io
-        ^ = () -> $ => io.print(io)
+        ^ = () -> $ => < io.print(io) >
     "#;
     let err = check_with_base(source, Path::new("."))
         .expect_err("a module binding must not pass as a value");
@@ -207,9 +207,9 @@ fn test_import_binds_only_the_code_below_it() {
     // Like every name — the language has no hoisting — an import qualifies only what
     // is written below it.
     let source = r#"
-        early = () -> $ => io.print(5)
+        early = () -> $ => < io.print(5) >
         << core.io
-        ^ = () -> $ => early()
+        ^ = () -> $ => < early() >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(
@@ -225,7 +225,7 @@ fn test_a_stem_colliding_with_a_builtin_binding_is_rejected() {
     let source = r#"
         << core.test
         << "test.qn"
-        ^ = () -> Num => 0
+        ^ = () -> Num => < 0 >
     "#;
     let err = check_with_base(source, &fixtures_dir())
         .expect_err("a file stem colliding with a bound short name must be rejected");
@@ -236,7 +236,7 @@ fn test_a_stem_colliding_with_a_builtin_binding_is_rejected() {
 fn test_unknown_builtin_module_errors() {
     let source = r#"
         << core.nope
-        ^ = () -> Num => 0
+        ^ = () -> Num => < 0 >
     "#;
     let result = check_with_base(source, Path::new("."));
     let err = result.expect_err("expected an import error for an unknown module");
@@ -251,7 +251,7 @@ fn test_unknown_builtin_module_errors() {
 fn test_missing_file_module_errors() {
     let source = r#"
         << "does_not_exist.qn"
-        ^ = () -> Num => 0
+        ^ = () -> Num => < 0 >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     let err = result.expect_err("expected an import error for a missing file");
@@ -265,7 +265,7 @@ fn test_missing_file_module_errors() {
 #[test]
 fn test_program_without_imports_still_works() {
     let source = r#"
-        ^ = () -> Num => 42
+        ^ = () -> Num => < 42 >
     "#;
     let result = check_with_base(source, Path::new("."));
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -279,7 +279,7 @@ fn test_each_module_gets_its_own_file_identity() {
     let source = r#"
         << "mathlib.qn"
         << "span_twin.qn"
-        ^ = () -> Num => mathlib.add(2, 3)
+        ^ = () -> Num => < mathlib.add(2, 3) >
     "#;
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
@@ -306,7 +306,7 @@ fn test_module_imports_module_chain_resolves() {
     // itself imports `chain_b` — not just a single-level import.
     let source = r#"
         << "chain_a.qn"
-        ^ = () -> Num => chain_a.incTwice(5)
+        ^ = () -> Num => < chain_a.incTwice(5) >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     assert!(result.is_ok(), "expected ok, got: {:?}", result);
@@ -317,7 +317,7 @@ fn test_import_cycle_between_two_modules_is_an_error() {
     // `cycle_a.qn` and `cycle_b.qn` import each other — a cycle with no root involved.
     let source = r#"
         << "cycle_a.qn"
-        ^ = () -> Num => 0
+        ^ = () -> Num => < 0 >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     let err = result.expect_err("an a<->b import cycle must be rejected");
@@ -349,7 +349,7 @@ fn test_duplicate_import_via_different_spellings_resolves_once() {
     let source = r#"
         << "sub/mod.qn"
         << "sub/../sub/mod.qn"
-        ^ = () -> Num => mod.add(2, 3)
+        ^ = () -> Num => < mod.add(2, 3) >
     "#;
     let result = check_with_base(source, &fixtures_dir());
     assert!(result.is_ok(), "expected ok, got: {:?}", result);

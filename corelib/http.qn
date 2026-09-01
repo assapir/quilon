@@ -10,29 +10,35 @@
 ~ RFC 10008's safe, idempotent method with a body.
 >> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head {
   ~ The token this method writes in a request line.
-  token = () -> Text => it ?
-    | Get      => "GET"
-    | Post(_)  => "POST"
-    | Put(_)   => "PUT"
-    | Query(_) => "QUERY"
-    | Delete   => "DELETE"
-    | Head     => "HEAD"
+  token = () -> Text => <
+    it ?
+      | Get      => "GET"
+      | Post(_)  => "POST"
+      | Put(_)   => "PUT"
+      | Query(_) => "QUERY"
+      | Delete   => "DELETE"
+      | Head     => "HEAD"
+  >
 
   ~ The body this method carries — an empty one for the methods that carry none.
-  payload = () -> Body => it ?
-    | Post(carried)  => carried
-    | Put(carried)   => carried
-    | Query(carried) => carried
-    | _              => Body { content = "", contentType = "" }
+  payload = () -> Body => <
+    it ?
+      | Post(carried)  => carried
+      | Put(carried)   => carried
+      | Query(carried) => carried
+      | _              => Body { content = "", contentType = "" }
+  >
 
   ~ Whether this method defines a meaning for an enclosed body. Such a method sends
   ~ `Content-Length` even when its content is empty — servers answer a POST without one with
   ~ 411 — while the nullary methods send neither body header.
-  carriesBody = () -> Bool => it ?
-    | Post(_)  => true
-    | Put(_)   => true
-    | Query(_) => true
-    | _        => false
+  carriesBody = () -> Bool => <
+    it ?
+      | Post(_)  => true
+      | Put(_)   => true
+      | Query(_) => true
+      | _        => false
+  >
 }
 
 ~ A reply: the raw response text, read through the methods below.
@@ -41,10 +47,11 @@
 
   ~ Reject a reply that does not open with an HTTP status line: `Ok(it)` for a reply worth
   ~ reading, `NotOk(errorText)` for one that is not HTTP at all.
-  validate = () -> Result =>
+  validate = () -> Result => <
     it.raw.slice(0, 4) == "HTTP" && it.raw.contains("\n")
       ? Ok(it)
       : NotOk("malformed HTTP response")
+  >
 
   ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
   ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
@@ -65,10 +72,10 @@
   ~ Everything before the blank line — the status line and the header lines — with CRLF endings
   ~ rewritten to LF, so the methods below split on `\n` whichever convention the server used. A
   ~ reply with no blank line at all is all head and no body.
-  head = () -> Text => it.raw.slice(0, it.blankLine()).replaceAll("\r\n", "\n")
+  head = () -> Text => < it.raw.slice(0, it.blankLine()).replaceAll("\r\n", "\n") >
 
   ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
-  statusLine = () -> Text => it.head().split("\n")[0].trim()
+  statusLine = () -> Text => < it.head().split("\n")[0].trim() >
 
   ~ The header lines, trimmed and without the status line. A line carrying no colon is
   ~ not a header and is left out, so a garbled reply yields the headers it does have.
@@ -83,10 +90,12 @@
   ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
   ~ no code that is digits throughout — a garbled reply reads as 0 rather than guessing.
   status = () -> Num => <
-    digitOf = (grapheme :: Text) -> Result => "0123456789".indexOf(grapheme)
-    isDigit = (grapheme :: Text) -> Bool => digitOf(grapheme) ?
-      | Ok(_)    => true
-      | NotOk(_) => false
+    digitOf = (grapheme :: Text) -> Result => < "0123456789".indexOf(grapheme) >
+    isDigit = (grapheme :: Text) -> Bool => <
+      digitOf(grapheme) ?
+        | Ok(_)    => true
+        | NotOk(_) => false
+    >
     fields = it.statusLine().split(" ")
     code = fields.size > 1 ? fields[1] : ""
     graphemes = code.split("")
@@ -104,10 +113,12 @@
   header = (name :: Text) -> Result => <
     wanted = name.trim().toLower()
     ~ Every line `headers()` yields carries a colon, so splitting on it always has a name.
-    nameOf = (line :: Text) -> Text => line.split(":")[0].trim().toLower()
-    valueOf = (line :: Text) -> Text => line.indexOf(":") ?
-      | Ok(colon) => line.slice(colon + 1, line.length).trim()
-      | NotOk(_)  => ""
+    nameOf = (line :: Text) -> Text => < line.split(":")[0].trim().toLower() >
+    valueOf = (line :: Text) -> Text => <
+      line.indexOf(":") ?
+        | Ok(colon) => line.slice(colon + 1, line.length).trim()
+        | NotOk(_)  => ""
+    >
     it.headers().find(line => nameOf(line) == wanted) ?
       | Ok(line) => Ok(valueOf(line))
       | NotOk(_) => NotOk(name)
@@ -128,9 +139,11 @@
   url :: Text,
 
   ~ The URL with any `scheme://` prefix removed: `host[:port]/path`.
-  withoutScheme = () -> Text => it.url.indexOf("://") ?
-    | Ok(mark) => it.url.slice(mark + 3, it.url.length)
-    | NotOk(_) => it.url
+  withoutScheme = () -> Text => <
+    it.url.indexOf("://") ?
+      | Ok(mark) => it.url.slice(mark + 3, it.url.length)
+      | NotOk(_) => it.url
+  >
 
   ~ Where the authority ends: the first `/`, `?` or `#`, or the whole string for a bare host.
   ~ Cutting at all three keeps a query string out of the host — `example.com?a=b` is the host
@@ -195,18 +208,21 @@
 << core.test
 
 ~ A well-formed CRLF reply with two headers and a five-character body.
-crlfReply = () -> Text =>
+crlfReply = () -> Text => <
   "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+>
 
 ~ The same reply with bare LF endings, as a sloppy server writes it.
-lineFeedReply = () -> Text =>
+lineFeedReply = () -> Text => <
   "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5\n\nhello"
+>
 
 ~ Read a header, or a marker when it is absent, so a case can assert on plain `Text`.
-headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text =>
+headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text => <
   response.header(name) ?
     | Ok(value) => value
     | NotOk(_)  => fallback
+>
 
 ~ Parse a reply the case knows is well-formed. `assert`, not `expect`: an unparseable fixture
 ~ is a broken test rather than a failed case.

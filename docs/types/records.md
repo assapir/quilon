@@ -21,8 +21,8 @@ Methods take an implicit `it` (the receiver):
 User = {
   name :: Text,
   age  :: Num,
-  greet   = => "Hello, " + it.name,
-  olderBy = (years :: Num) => it.age + years
+  greet   = => < "Hello, " + it.name >,
+  olderBy = (years :: Num) => < it.age + years >
 }
 
 u = User { name = "Alice", age = 30 }
@@ -53,8 +53,8 @@ through `name(args)` and nowhere else — neither answers for the other. `recv.n
 looks for `name` on `recv`'s type alone; `name(recv, args)` looks in the top-level
 namespace alone.
 ```quilon ignore
-Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
-double = (x :: Num) -> Num => x * 2
+Counter = { value :: Num, bump = (by :: Num) -> Num => < it.value + by >}
+double = (x :: Num) -> Num => < x * 2 >
 
 c.bump(5)      ~ 35
 bump(c, 5)     ~ error: no function 'bump' in scope

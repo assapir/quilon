@@ -34,9 +34,9 @@ Quilon's identity, and the rules that guide its design:
 | `+` `-` `*` `/` `%` | [Arithmetic](expressions/README.md) (`-x` negates) | `a + b` · `x % 2` |
 | `==` `!=` `<` `<=` `>` `>=` | [Comparison](expressions/README.md) → `Bool` · `==`/`!=` over `Num`/`Text`/`Bool`, ordering over `Num`/`Text` | `a == b` · `x <= 3` |
 | `&&` `\|\|` `!` | Logical and / or / not (short-circuit) | `a && !b` |
-| `< >` | Block delimiters · also `<`/`>` comparison ([rule](expressions/README.md)) | `< a b a + b >` · `a < b` · `a > b` |
-| `^` | Entry point (main) | `^ = () -> Num => 0` |
-| `$` | Unit type **and** its sole value | `f = () -> $ => $` |
+| `< >` | Block delimiters · every function and method body is one · also `<`/`>` comparison ([rule](expressions/README.md)) | `< a b a + b >` · `a < b` · `a > b` |
+| `^` | Entry point (main) | `^ = () -> Num => < 0 >` |
+| `$` | Unit type **and** its sole value | `f = () -> $ => < $ >` |
 | `<<` | Import a module | `<< core.io` |
 | `>>` | Export an item from a module | `>> add = (a :: Num, b :: Num) => a + b` |
 | `<-` (infix) | Inclusive range → `[]Num` | `1 <- 4` ≡ `[1,2,3,4]` · `4 <- 1` ≡ `[4,3,2,1]` |

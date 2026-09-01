@@ -39,7 +39,7 @@ fn check(name: &str, source: &str) -> (bool, String) {
 
 #[test]
 fn check_writes_status_to_stderr_not_stdout() {
-    let out = check_output("status", "^ = () -> Num => 0\n");
+    let out = check_output("status", "^ = () -> Num => < 0 >\n");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
@@ -65,13 +65,13 @@ fn check_writes_status_to_stderr_not_stdout() {
 #[test]
 fn type_error_reports_line_col_and_caret() {
     // `a + true` has no `+` overload for (Num, Bool) — a clear no-match error on line 2.
-    let src = "~ comment\nadd = (a :: Num) -> Num => a + true\n^ = () -> Num => add(1)\n";
+    let src = "~ comment\nadd = (a :: Num) -> Num => < a + true >\n^ = () -> Num => < add(1) >\n";
     let (ok, stderr) = check("type", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     // The position line, with the message on the line under it.
     assert!(
-        stderr.contains(":2:28:\nerror:"),
+        stderr.contains(":2:30:\nerror:"),
         "no line:col position line: {stderr}"
     );
     // `+` is now a visible overload set; a Num/Bool mix matches no member.
@@ -81,7 +81,7 @@ fn type_error_reports_line_col_and_caret() {
     );
     // The offending source line is echoed...
     assert!(
-        stderr.contains("add = (a :: Num) -> Num => a + true"),
+        stderr.contains("add = (a :: Num) -> Num => < a + true >"),
         "source line missing: {stderr}"
     );
     // ...with a caret underline beneath it.
@@ -92,12 +92,12 @@ fn type_error_reports_line_col_and_caret() {
 fn lexer_error_reports_line_col_and_caret() {
     // `#` is not a valid token. (`@` used to be invalid, but now marks a deferring
     // primitive like `@sleep`, so it is a real token.)
-    let src = "^ = () -> Num => #\n";
+    let src = "^ = () -> Num => < # >\n";
     let (ok, stderr) = check("lex", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains(":1:18:\nerror:"),
+        stderr.contains(":1:20:\nerror:"),
         "no line:col position line: {stderr}"
     );
     assert!(stderr.contains("Invalid token"), "no message: {stderr}");
@@ -146,11 +146,11 @@ fn a_type_error_in_an_imported_module_names_that_module() {
     let module = dir.join("broken_lib.qn");
     std::fs::write(
         &module,
-        "~ a module with a type error\n>> broken = (n :: Num) -> Text => n\n",
+        "~ a module with a type error\n>> broken = (n :: Num) -> Text => < n >\n",
     )
     .expect("write module");
     let main = dir.join("importer.qn");
-    std::fs::write(&main, "<< \"broken_lib.qn\"\n^ = () -> Num => 0\n").expect("write main");
+    std::fs::write(&main, "<< \"broken_lib.qn\"\n^ = () -> Num => < 0 >\n").expect("write main");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")
@@ -165,8 +165,51 @@ fn a_type_error_in_an_imported_module_names_that_module() {
         "the error must be reported against the imported module, got: {stderr:?}"
     );
     assert!(
-        stderr.contains(">> broken = (n :: Num) -> Text => n"),
+        stderr.contains(">> broken = (n :: Num) -> Text => < n >"),
         "the error must show the imported module's own source line, got: {stderr:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A function's body is a `< >` block, always. A bare expression after `=>` is a parse
+/// error that says what to write instead — the one thing the reader needs.
+#[test]
+fn a_function_body_that_is_not_a_block_is_rejected() {
+    let (ok, stderr) = check("bare_function_body", "^ = () -> Num => 42\n");
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains("a function body must be a `< >` block — write `=> < … >`"),
+        "the error must name the rule and the fix, got: {stderr:?}"
+    );
+}
+
+/// The same for a method inside a record or sum type.
+#[test]
+fn a_method_body_that_is_not_a_block_is_rejected() {
+    let (ok, stderr) = check(
+        "bare_method_body",
+        "C = { v :: Num, get = () -> Num => it.v }\n^ = () -> Num => < 0 >\n",
+    );
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains("a method body must be a `< >` block — write `=> < … >`"),
+        "the error must name the rule and the fix, got: {stderr:?}"
+    );
+}
+
+/// A LAMBDA is the exception: its body may still be a bare expression, which is what keeps
+/// a callback on one line.
+#[test]
+fn a_lambda_body_may_still_be_a_bare_expression() {
+    let (ok, stderr) = check(
+        "bare_lambda_body",
+        "^ = () -> Num => <\n  [1, 2, 3].map(x => x * 2).reduce(0, (acc, x) => acc + x)\n>\n",
+    );
+
+    assert!(
+        ok,
+        "a lambda's bare body must still check, stderr was: {stderr}"
+    );
 }

@@ -61,8 +61,11 @@ fn a_ql_module_import_is_rejected_under_its_own_name() {
     )
     .path;
     let directory = root.parent().expect("the program's directory");
-    std::fs::write(directory.join("helper.ql"), ">> answer = () -> Num => 7\n")
-        .expect("writing the imported module");
+    std::fs::write(
+        directory.join("helper.ql"),
+        ">> answer = () -> Num => < 7 >\n",
+    )
+    .expect("writing the imported module");
 
     let run = run_file(&root);
     assert_ne!(run.code, 7, "the import is not resolved");

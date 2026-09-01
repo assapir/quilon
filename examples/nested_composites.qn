@@ -7,20 +7,24 @@
 << core.test
 
 ~ A record with a Text field and a method — the payload the sum will carry.
-Body = { payload :: Text, contentLength = () -> Num => it.payload.size }
+Body = { payload :: Text, contentLength = () -> Num => < it.payload.size >}
 
 ~ An HTTP-method-shaped sum: a nullary `Get` alongside `Post`, whose payload is a `Body`.
 Method = Get / Post(Body)
 
 ~ Match on the method; the `Post(b)` arm binds `b` as a `Body`, so `b.payload` reads the
 ~ Text field and `b.contentLength()` dispatches the record's method.
-describe = (m :: Method) -> Text => m ?
-  | Get     => "GET"
-  | Post(b) => b.payload
+describe = (m :: Method) -> Text => <
+  m ?
+    | Get     => "GET"
+    | Post(b) => b.payload
+>
 
-sizeOf = (m :: Method) -> Num => m ?
-  | Get     => 0
-  | Post(b) => b.contentLength()
+sizeOf = (m :: Method) -> Num => <
+  m ?
+    | Get     => 0
+    | Post(b) => b.contentLength()
+>
 
 ^ = () -> $ => <
   post = Post(Body { payload = "hello" })

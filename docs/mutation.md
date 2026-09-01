@@ -24,8 +24,8 @@ signature.
 ```quilon
 Counter = {
   value :: Num,
-  bump := (by :: Num) => it.value := it.value + by  ~ may mutate `it`
-  peek = => it.value                                ~ promises not to
+  bump := (by :: Num) => < it.value := it.value + by > ~ may mutate `it`
+  peek = => < it.value >                            ~ promises not to
 }
 
 c := Counter { value = 30 }   ~ `:=` -> mutable
@@ -41,7 +41,7 @@ launder a mutation:
 
 ```quilon ignore
 ~ error: Method 'Counter.bumpAll' mutates 'it' but is declared with '='
-bumpAll = (steps :: []Num) => steps.each(s => it.value := s)
+bumpAll = (steps :: []Num) => < steps.each(s => it.value := s) >
 ```
 
 A setter call requires a `:=` receiver:
@@ -60,12 +60,12 @@ an operator or render member yields a value.
 
 ```quilon ignore
 Shape = Circle(Num) / Rect(Num, Num) {
-  area := () -> Num => 0      ~ error: a sum cannot have a mutating method
+  area := () -> Num => < 0 >  ~ error: a sum cannot have a mutating method
 }
 
 Counter = {
   value :: Num,
-  + := (other :: Counter) -> Num => it.value   ~ error: an operator member is never `:=`
+  + := (other :: Counter) -> Num => < it.value > ~ error: an operator member is never `:=`
 }
 ```
 

@@ -130,7 +130,7 @@ fn the_no_match_edge_aborts_instead_of_loading_an_unwritten_slot() {
 #[test]
 fn a_tail_position_match_aborts_on_its_no_match_edge_too() {
     let ir = emit_ir(
-        "Color = Red / Green\ncount = (c :: Color, n :: Num) -> Num => c ? | Red => n | Green => count(Red, n + 1)\n^ = () -> Num => count(Green, 0)",
+        "Color = Red / Green\ncount = (c :: Color, n :: Num) -> Num => < c ? | Red => n | Green => count(Red, n + 1) >\n^ = () -> Num => < count(Green, 0) >",
     );
     assert!(
         ir.contains("call void @__match_fail("),

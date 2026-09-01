@@ -9,13 +9,15 @@
 ~ A `getEnv`-shaped helper: annotated `-> Result`, carrying a `Text` payload in BOTH
 ~ arms (`Ok(Text)` on success, `NotOk(Text)` on failure). The annotation is generic,
 ~ but the concrete payload the body pins flows through to the caller's match.
-lookup = (key :: Text) -> Result => key == "home"
-  ? Ok("/usr/home")
-  : NotOk("unset")
+lookup = (key :: Text) -> Result => <
+  key == "home"
+    ? Ok("/usr/home")
+    : NotOk("unset")
+>
 
 ~ An overload set: the member is chosen by the payload's concrete static type.
-describe = (s :: Text) -> Num => s.size
-describe = (n :: Num)  -> Num => n
+describe = (s :: Text) -> Num => < s.size >
+describe = (n :: Num)  -> Num => < n >
 
 ^ = () -> $ => <
   ~ Ok(Text): the match binds `p : Text` and yields it — a usable `Text` value.

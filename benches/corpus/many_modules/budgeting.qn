@@ -1,10 +1,10 @@
->> budgeting_offset = (x :: Num) -> Num => x + 0
->> budgeting_scale = (x :: Num) -> Num => x + 1
->> budgeting_clamp = (x :: Num) -> Num => x + 2
->> budgeting_round = (x :: Num) -> Num => x + 3
->> budgeting_wrap = (x :: Num) -> Num => x + 4
->> budgeting_snap = (x :: Num) -> Num => x + 5
->> budgeting_bias = (x :: Num) -> Num => x + 6
->> budgeting_damp = (x :: Num) -> Num => x + 7
->> budgeting_boost = (x :: Num) -> Num => x + 8
->> budgeting_trim = (x :: Num) -> Num => x + 9
+>> budgeting_offset = (x :: Num) -> Num => < x + 0 >
+>> budgeting_scale = (x :: Num) -> Num => < x + 1 >
+>> budgeting_clamp = (x :: Num) -> Num => < x + 2 >
+>> budgeting_round = (x :: Num) -> Num => < x + 3 >
+>> budgeting_wrap = (x :: Num) -> Num => < x + 4 >
+>> budgeting_snap = (x :: Num) -> Num => < x + 5 >
+>> budgeting_bias = (x :: Num) -> Num => < x + 6 >
+>> budgeting_damp = (x :: Num) -> Num => < x + 7 >
+>> budgeting_boost = (x :: Num) -> Num => < x + 8 >
+>> budgeting_trim = (x :: Num) -> Num => < x + 9 >

@@ -653,9 +653,9 @@ mod tests {
         // `helper` renames at the top level and in the exported body — but the lambda's
         // own `helper` parameter shadows the rename inside its body.
         let mut module = parse(
-            "helper = (x :: Num) -> Num => x\n\
+            "helper = (x :: Num) -> Num => < x >\n\
              >> use = (n :: Num) -> Num => <\n  \
-               inner = (helper :: Num) => helper + 1\n  \
+               inner = (helper :: Num) => < helper + 1 >\n  \
                helper(inner(n))\n\
              >\n",
         );
@@ -697,8 +697,8 @@ mod tests {
         // A module may define a top-level `it` (core.test does); a method body's `it`
         // is still the receiver, never that item.
         let mut module = parse(
-            ">> it = (n :: Num) -> Num => n\n\
-             >> Point = { x :: Num\n  double = () -> Num => it.x * 2\n}\n",
+            ">> it = (n :: Num) -> Num => < n >\n\
+             >> Point = { x :: Num\n  double = () -> Num => < it.x * 2 >\n}\n",
         );
         qualify_module(&mut module, "m", &ModuleScope::default()).expect("qualifying");
         let Item::TypeDeclaration(declaration) = &module.items[1] else {
@@ -758,7 +758,7 @@ mod tests {
     fn resolution_rewrites_types_patterns_and_constructors() {
         let mut program = parse(
             "<< core.io\n\
-             f = (fd :: io.stdout) -> Num => 0\n",
+             f = (fd :: io.stdout) -> Num => < 0 >\n",
         );
         // A type annotation spelled through the module resolves like a value would.
         // (Semantically nonsense — `stdout` is a value — but the checker owns that

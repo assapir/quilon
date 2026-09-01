@@ -1,10 +1,10 @@
->> routing_offset = (x :: Num) -> Num => x + 0
->> routing_scale = (x :: Num) -> Num => x + 1
->> routing_clamp = (x :: Num) -> Num => x + 2
->> routing_round = (x :: Num) -> Num => x + 3
->> routing_wrap = (x :: Num) -> Num => x + 4
->> routing_snap = (x :: Num) -> Num => x + 5
->> routing_bias = (x :: Num) -> Num => x + 6
->> routing_damp = (x :: Num) -> Num => x + 7
->> routing_boost = (x :: Num) -> Num => x + 8
->> routing_trim = (x :: Num) -> Num => x + 9
+>> routing_offset = (x :: Num) -> Num => < x + 0 >
+>> routing_scale = (x :: Num) -> Num => < x + 1 >
+>> routing_clamp = (x :: Num) -> Num => < x + 2 >
+>> routing_round = (x :: Num) -> Num => < x + 3 >
+>> routing_wrap = (x :: Num) -> Num => < x + 4 >
+>> routing_snap = (x :: Num) -> Num => < x + 5 >
+>> routing_bias = (x :: Num) -> Num => < x + 6 >
+>> routing_damp = (x :: Num) -> Num => < x + 7 >
+>> routing_boost = (x :: Num) -> Num => < x + 8 >
+>> routing_trim = (x :: Num) -> Num => < x + 9 >

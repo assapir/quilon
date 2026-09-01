@@ -25,7 +25,7 @@ fn recursive_program(parameters: usize) -> String {
     let zeros: Vec<&str> = vec!["0"; parameters];
     let ones: Vec<&str> = vec!["1"; parameters];
     format!(
-        "wide = ({}) -> Num => p1 == 0 ? 7 : wide({})\n\n^ = () -> Num => wide({})\n",
+        "wide = ({}) -> Num => < p1 == 0 ? 7 : wide({}) >\n\n^ = () -> Num => < wide({}) >\n",
         typed.join(", "),
         zeros.join(", "),
         ones.join(", ")
@@ -66,7 +66,7 @@ fn a_thirty_parameter_function_reports_the_limit_not_a_misparse() {
 fn a_lambda_is_held_to_the_limit_too() {
     let parameters: Vec<String> = (1..=11).map(|i| format!("p{i} :: Num")).collect();
     let source = format!(
-        "^ = () -> Num => <\n  f = ({}) -> Num => p1\n  f(1)\n>\n",
+        "^ = () -> Num => <\n  f = ({}) -> Num => < p1 >\n  f(1)\n>\n",
         parameters.join(", ")
     );
     assert_eq!(limit_error_at(&source), "p11");
@@ -76,7 +76,7 @@ fn a_lambda_is_held_to_the_limit_too() {
 fn a_method_is_held_to_the_limit_too() {
     let parameters: Vec<String> = (1..=11).map(|i| format!("p{i} :: Num")).collect();
     let source = format!(
-        "Box = {{\n  size :: Num\n  fill = ({}) -> Num => p1\n}}\n\n^ = () -> Num => 0\n",
+        "Box = {{\n  size :: Num\n  fill = ({}) -> Num => < p1 >\n}}\n\n^ = () -> Num => < 0 >\n",
         parameters.join(", ")
     );
     assert_eq!(limit_error_at(&source), "p11");
@@ -93,8 +93,8 @@ fn a_record_type_carries_no_field_limit() {
         .map(|(i, n)| format!("{n} = {}", i + 1))
         .collect();
     let source = format!(
-        "Wide = {{\n{}\n}}\n\ntotalOf = (w :: Wide) -> Num => w.f13\n\n\
-         ^ = () -> Num => totalOf(Wide {{ {} }})\n",
+        "Wide = {{\n{}\n}}\n\ntotalOf = (w :: Wide) -> Num => < w.f13 >\n\n\
+         ^ = () -> Num => < totalOf(Wide {{ {} }}) >\n",
         fields.join("\n"),
         values.join(", ")
     );
@@ -106,14 +106,17 @@ fn a_record_type_carries_no_field_limit() {
 #[test]
 fn a_long_parenthesized_expression_is_unaffected() {
     let terms: Vec<&str> = vec!["1"; 50];
-    assert_exit(&format!("^ = () -> Num => ({})\n", terms.join(" + ")), 50);
+    assert_exit(
+        &format!("^ = () -> Num => < ({}) >\n", terms.join(" + ")),
+        50,
+    );
 }
 
 /// A parameter list that is never closed must still end — at the end of the token stream —
 /// and report on the offending line rather than running off into whatever follows.
 #[test]
 fn an_unclosed_parameter_list_is_a_positioned_parse_error() {
-    let source = "wide = (a :: Num, b :: Num -> Num => a + b\n\n^ = () -> Num => 0\n";
+    let source = "wide = (a :: Num, b :: Num -> Num => a + b\n\n^ = () -> Num => < 0 >\n";
     let tokens = Lexer::tokenize(source).expect("lexing failed");
     let error = parser::parse(&tokens).expect_err("an unclosed `(` must be rejected");
     let first_line_end = source.find('\n').expect("source has a newline") as u32;
@@ -128,7 +131,7 @@ fn an_unclosed_parameter_list_is_a_positioned_parse_error() {
 /// A stray token inside a parameter list is still reported at that token.
 #[test]
 fn a_stray_token_in_a_parameter_list_is_reported_where_it_is() {
-    let source = "add = (a :: Num, b :: 2) -> Num => a + b\n";
+    let source = "add = (a :: Num, b :: 2) -> Num => < a + b >\n";
     let tokens = Lexer::tokenize(source).expect("lexing failed");
     let error = parser::parse(&tokens).expect_err("expected a parse error");
     assert!(

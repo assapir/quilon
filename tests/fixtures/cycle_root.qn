@@ -3,4 +3,4 @@
 
 << "cycle_via_root.qn"
 
-^ = () -> Num => 0
+^ = () -> Num => < 0 >

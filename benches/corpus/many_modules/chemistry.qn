@@ -1,10 +1,10 @@
->> chemistry_offset = (x :: Num) -> Num => x + 0
->> chemistry_scale = (x :: Num) -> Num => x + 1
->> chemistry_clamp = (x :: Num) -> Num => x + 2
->> chemistry_round = (x :: Num) -> Num => x + 3
->> chemistry_wrap = (x :: Num) -> Num => x + 4
->> chemistry_snap = (x :: Num) -> Num => x + 5
->> chemistry_bias = (x :: Num) -> Num => x + 6
->> chemistry_damp = (x :: Num) -> Num => x + 7
->> chemistry_boost = (x :: Num) -> Num => x + 8
->> chemistry_trim = (x :: Num) -> Num => x + 9
+>> chemistry_offset = (x :: Num) -> Num => < x + 0 >
+>> chemistry_scale = (x :: Num) -> Num => < x + 1 >
+>> chemistry_clamp = (x :: Num) -> Num => < x + 2 >
+>> chemistry_round = (x :: Num) -> Num => < x + 3 >
+>> chemistry_wrap = (x :: Num) -> Num => < x + 4 >
+>> chemistry_snap = (x :: Num) -> Num => < x + 5 >
+>> chemistry_bias = (x :: Num) -> Num => < x + 6 >
+>> chemistry_damp = (x :: Num) -> Num => < x + 7 >
+>> chemistry_boost = (x :: Num) -> Num => < x + 8 >
+>> chemistry_trim = (x :: Num) -> Num => < x + 9 >

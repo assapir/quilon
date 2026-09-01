@@ -11,7 +11,7 @@
 
 ~ The clock is reached only as `time.now()`, so a program's own bare `now` is an
 ~ unrelated function — here one that scales the clock (seconds to milliseconds, say).
-now = (scale :: Num) -> Num => time.now() * scale
+now = (scale :: Num) -> Num => < time.now() * scale >
 
 ^ = () -> Num => <
   start = time.now()

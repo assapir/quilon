@@ -64,10 +64,12 @@ fn function_over_sum_type_param_and_match() {
     // a constructed value as an argument. area(Rect(6, 7)) = 42.
     assert_exit(
         "Shape = Circle(Num) / Rect(Num, Num)\n\
-         area = (s :: Shape) -> Num => s ?\n\
-           | Circle(r)  => 3 * r * r\n\
-           | Rect(w, h) => w * h\n\
-         ^ = () -> Num => area(Rect(6, 7))",
+           area = (s :: Shape) -> Num => <\n\
+             s ?\n\
+             | Circle(r)  => 3 * r * r\n\
+             | Rect(w, h) => w * h\n\
+           >\n\
+           ^ = () -> Num => < area(Rect(6, 7)) >",
         42,
     );
 }
@@ -94,10 +96,12 @@ fn result_with_unit_payload_ok_dollar() {
     // failure; matching `Ok(_)` (ignoring the unit payload) yields 0, `NotOk(c)`
     // yields the code. Here the success branch is taken -> exit 0.
     assert_exit(
-        "validate = (n :: Num) -> Result => n <= 10 ? Ok($) : NotOk(n)\n\
-         ^ = () -> Num => validate(5) ?\n\
-           | Ok(_)     => 0\n\
-           | NotOk(c)  => c",
+        "validate = (n :: Num) -> Result => < n <= 10 ? Ok($) : NotOk(n) >\n\
+           ^ = () -> Num => <\n\
+             validate(5) ?\n\
+             | Ok(_)     => 0\n\
+             | NotOk(c)  => c\n\
+           >",
         0,
     );
 }
@@ -106,10 +110,12 @@ fn result_with_unit_payload_ok_dollar() {
 fn result_with_unit_payload_notok_path() {
     // Same shape, failure branch: validate(20) -> NotOk(20) -> exit 20.
     assert_exit(
-        "validate = (n :: Num) -> Result => n <= 10 ? Ok($) : NotOk(n)\n\
-         ^ = () -> Num => validate(20) ?\n\
-           | Ok(_)     => 0\n\
-           | NotOk(c)  => c",
+        "validate = (n :: Num) -> Result => < n <= 10 ? Ok($) : NotOk(n) >\n\
+           ^ = () -> Num => <\n\
+             validate(20) ?\n\
+             | Ok(_)     => 0\n\
+             | NotOk(c)  => c\n\
+           >",
         20,
     );
 }
@@ -135,9 +141,11 @@ fn non_exhaustive_match_is_rejected() {
     // Missing the `Blue` arm (and no wildcard) over a user sum type must not compile.
     assert_type_error(
         "Color = Red / Green / Blue\n\
-         classify = (c :: Color) -> Num => c ?\n\
-           | Red => 0\n\
-           | Green => 1",
+           classify = (c :: Color) -> Num => <\n\
+             c ?\n\
+             | Red => 0\n\
+             | Green => 1\n\
+           >",
     );
 }
 
@@ -206,7 +214,7 @@ fn record_field_typed_as_user_sum() {
     assert_exit(
         "Method = Get / Post\n\
          Request = { method :: Method, tag :: Num }\n\
-         verb = (method :: Method) -> Num => method ? | Get => 1 | Post => 2\n\
+         verb = (method :: Method) -> Num => < method ? | Get => 1 | Post => 2 >\n\
          ^ = () -> Num => <\n\
            request = Request { method = Post, tag = 9 }\n\
            verb(request.method)\n\
@@ -223,7 +231,7 @@ fn bound_result_with_record_payload_matched() {
     // Point { x = 3, y = 4 } -> x + y = 7.
     assert_exit(
         "Point = { x :: Num, y :: Num }\n\
-         wrap = (point :: Point) -> Result => Ok(point)\n\
+         wrap = (point :: Point) -> Result => < Ok(point) >\n\
          ^ = () -> Num => <\n\
            boxed :: Result = wrap(Point { x = 3, y = 4 })\n\
            got :: Point = boxed ?\n\
@@ -244,7 +252,7 @@ fn method_returning_result_keeps_a_text_payload() {
     assert_exit(
         "Box = {\n\
            tag :: Num,\n\
-           pick = () -> Result => Ok(\"hello\")\n\
+           pick = () -> Result => < Ok(\"hello\") >\n\
          }\n\
          ^ = () -> Num => <\n\
            box = Box { tag = 1 }\n\
@@ -265,7 +273,7 @@ fn method_returning_result_keeps_a_record_payload() {
         "Point = { x :: Num, y :: Num }\n\
          Maker = {\n\
            seed :: Num,\n\
-           build = () -> Result => Ok(Point { x = 3, y = 4 })\n\
+           build = () -> Result => < Ok(Point { x = 3, y = 4 }) >\n\
          }\n\
          ^ = () -> Num => <\n\
            maker = Maker { seed = 0 }\n\

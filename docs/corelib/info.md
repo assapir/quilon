@@ -39,11 +39,13 @@ And every type is matchable, which is the point of the sums:
 ```quilon
 << core.info
 
-^ = () -> Num => info.os() ?
-  | info.Linux   => 0
-  | info.MacOS   => 0
-  | info.Windows => 1
-  | _       => 2
+^ = () -> Num => <
+  info.os() ?
+    | info.Linux   => 0
+    | info.MacOS   => 0
+    | info.Windows => 1
+    | _       => 2
+>
 ```
 
 ## Methods

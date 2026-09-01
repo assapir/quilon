@@ -24,7 +24,7 @@ fn test_simple_function() {
     let context = Context::create();
     let mut codegen = CodeGenerator::new(&context, "test");
 
-    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
+    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => < a + b >").unwrap();
     let program = parse(&tokens).unwrap();
 
     let result = codegen.generate(&program);
@@ -84,8 +84,8 @@ fn test_function_call() {
 
     // Test calling a function
     let code = "
-        add = (a :: Num, b :: Num) => a + b
-        main = => add(3, 4)
+        add = (a :: Num, b :: Num) => < a + b >
+        main = => < add(3, 4) >
     ";
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
@@ -157,7 +157,7 @@ fn test_method_codegen_and_dispatch() {
     let code = "Point = {
   x :: Num,
   y :: Num,
-  sum = => it.x + it.y
+  sum = => < it.x + it.y >
 }
 
 ^ = () -> Num => <
@@ -191,8 +191,8 @@ fn test_method_calls_sibling_method() {
     let code = "Point = {
   x :: Num,
   y :: Num,
-  sum = => it.x + it.y,
-  doubled = => it.sum() + it.sum()
+  sum = => < it.x + it.y >,
+  doubled = => < it.sum() + it.sum() >
 }
 
 ^ = () -> Num => <

@@ -13,8 +13,8 @@
 Version = {
   major :: Num,
   minor :: Num,
-  == = (other :: Version) -> Bool => it.major == other.major && it.minor == other.minor,
-  ` = => "v`it.major`.`it.minor`"
+  == = (other :: Version) -> Bool => < it.major == other.major && it.minor == other.minor >,
+  ` = => < "v`it.major`.`it.minor`" >
 }
 
 ^ = () -> $ => <

@@ -155,7 +155,7 @@ fn find_over_text_array() {
 #[test]
 fn array_method_reserved_over_user_definition() {
     assert_exit(
-        "map = (n :: Num) -> Num => n + 100\n^ = () -> Num => <\n  a = [1, 2, 3]\n  s = a.map(x => x * 2).reduce(0, (acc, x) => acc + x)\n  s + map(5)\n>",
+        "map = (n :: Num) -> Num => < n + 100 >\n^ = () -> Num => <\n  a = [1, 2, 3]\n  s = a.map(x => x * 2).reduce(0, (acc, x) => acc + x)\n  s + map(5)\n>",
         // [2,4,6] -> 12 ; map(5) -> 105 ; total 117
         117,
     );

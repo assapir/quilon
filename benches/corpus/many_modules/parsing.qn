@@ -1,10 +1,10 @@
->> parsing_offset = (x :: Num) -> Num => x + 0
->> parsing_scale = (x :: Num) -> Num => x + 1
->> parsing_clamp = (x :: Num) -> Num => x + 2
->> parsing_round = (x :: Num) -> Num => x + 3
->> parsing_wrap = (x :: Num) -> Num => x + 4
->> parsing_snap = (x :: Num) -> Num => x + 5
->> parsing_bias = (x :: Num) -> Num => x + 6
->> parsing_damp = (x :: Num) -> Num => x + 7
->> parsing_boost = (x :: Num) -> Num => x + 8
->> parsing_trim = (x :: Num) -> Num => x + 9
+>> parsing_offset = (x :: Num) -> Num => < x + 0 >
+>> parsing_scale = (x :: Num) -> Num => < x + 1 >
+>> parsing_clamp = (x :: Num) -> Num => < x + 2 >
+>> parsing_round = (x :: Num) -> Num => < x + 3 >
+>> parsing_wrap = (x :: Num) -> Num => < x + 4 >
+>> parsing_snap = (x :: Num) -> Num => < x + 5 >
+>> parsing_bias = (x :: Num) -> Num => < x + 6 >
+>> parsing_damp = (x :: Num) -> Num => < x + 7 >
+>> parsing_boost = (x :: Num) -> Num => < x + 8 >
+>> parsing_trim = (x :: Num) -> Num => < x + 9 >

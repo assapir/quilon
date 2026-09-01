@@ -5,6 +5,7 @@
 //! run against.
 
 use super::*;
+use crate::ast::Statement;
 
 impl TypeChecker {
     /// Whether `name` names something callable here — a binding in scope, an overload set,
@@ -92,6 +93,24 @@ impl TypeChecker {
         argument: &Expression,
         target: LambdaTarget<'_>,
     ) -> Result<Type, TypeError> {
+        // A block's value is its tail expression, so a type stated FOR the block is stated
+        // for that tail. This is what carries a function's declared return through its body
+        // — every body is a block, so without it a returned lambda
+        // (`adder = (n :: Num) -> (Num) -> Num => < (x) => x + n >`) would have nothing to
+        // take `x` from.
+        if let Expression::Block { statements, .. } = argument
+            && let Some((Statement::Expression(tail), leading)) = statements.split_last()
+        {
+            for statement in leading {
+                match statement {
+                    Statement::Item(item) => self.check_item(item, Nesting::Nested)?,
+                    Statement::Expression(expression) => {
+                        self.infer_expression(expression)?;
+                    }
+                }
+            }
+            return self.infer_argument(tail, target);
+        }
         let Expression::Lambda {
             parameters,
             return_type,

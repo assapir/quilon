@@ -1,10 +1,10 @@
->> payments_offset = (x :: Num) -> Num => x + 0
->> payments_scale = (x :: Num) -> Num => x + 1
->> payments_clamp = (x :: Num) -> Num => x + 2
->> payments_round = (x :: Num) -> Num => x + 3
->> payments_wrap = (x :: Num) -> Num => x + 4
->> payments_snap = (x :: Num) -> Num => x + 5
->> payments_bias = (x :: Num) -> Num => x + 6
->> payments_damp = (x :: Num) -> Num => x + 7
->> payments_boost = (x :: Num) -> Num => x + 8
->> payments_trim = (x :: Num) -> Num => x + 9
+>> payments_offset = (x :: Num) -> Num => < x + 0 >
+>> payments_scale = (x :: Num) -> Num => < x + 1 >
+>> payments_clamp = (x :: Num) -> Num => < x + 2 >
+>> payments_round = (x :: Num) -> Num => < x + 3 >
+>> payments_wrap = (x :: Num) -> Num => < x + 4 >
+>> payments_snap = (x :: Num) -> Num => < x + 5 >
+>> payments_bias = (x :: Num) -> Num => < x + 6 >
+>> payments_damp = (x :: Num) -> Num => < x + 7 >
+>> payments_boost = (x :: Num) -> Num => < x + 8 >
+>> payments_trim = (x :: Num) -> Num => < x + 9 >

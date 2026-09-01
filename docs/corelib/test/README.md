@@ -83,8 +83,9 @@ compose the provided ones; a genuinely new matcher kind waits for generics. Unti
 ```quilon
 << core.test
 
-assertEven = (n :: Num, site :: Site) -> $ =>
+assertEven = (n :: Num, site :: Site) -> $ => <
   n % 2 == 0 ? $ : test.failAt("`n` is odd", site)
+>
 ```
 
 ## Suites, groups and cases

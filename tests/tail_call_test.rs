@@ -71,9 +71,9 @@ fn assert_compiles_clean(src: &str) {
 #[test]
 fn deep_ternary_tail_recursion_does_not_overflow() {
     assert_exit(
-        "count = (n :: Num, acc :: Num) -> Num => \
-           n == 0 ? acc : count(n - 1, acc == 250 ? 0 : acc + 1)\n\
-         ^ = () -> Num => count(1000000, 0)",
+        "count = (n :: Num, acc :: Num) -> Num => < \
+           n == 0 ? acc : count(n - 1, acc == 250 ? 0 : acc + 1) >\n\
+         ^ = () -> Num => < count(1000000, 0) >",
         16,
     );
 }
@@ -83,10 +83,10 @@ fn deep_ternary_tail_recursion_does_not_overflow() {
 #[test]
 fn deep_match_arm_tail_recursion_does_not_overflow() {
     assert_exit(
-        "count = (n :: Num, acc :: Num) -> Num => n ? \
+        "count = (n :: Num, acc :: Num) -> Num => < n ? \
            | 0 => acc \
-           | _ => count(n - 1, acc == 250 ? 0 : acc + 1)\n\
-         ^ = () -> Num => count(1000000, 0)",
+           | _ => count(n - 1, acc == 250 ? 0 : acc + 1) >\n\
+         ^ = () -> Num => < count(1000000, 0) >",
         16,
     );
 }
@@ -102,7 +102,7 @@ fn deep_block_tail_recursion_does_not_overflow() {
            next = acc == 250 ? 0 : acc + 1\n\
            n == 0 ? acc : count(n - 1, next)\n\
          >\n\
-         ^ = () -> Num => count(1000000, 0)",
+         ^ = () -> Num => < count(1000000, 0) >",
         16,
     );
 }
@@ -111,8 +111,8 @@ fn deep_block_tail_recursion_does_not_overflow() {
 /// value (10 steps, +3 each) AND that codegen actually emitted the loop (no self-call).
 #[test]
 fn tail_recursion_computes_correct_value_and_loops() {
-    let src = "sum = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : sum(n - 1, acc + 3)\n\
-               ^ = () -> Num => sum(10, 0)";
+    let src = "sum = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : sum(n - 1, acc + 3) >\n\
+               ^ = () -> Num => < sum(10, 0) >";
     assert_exit(src, 30);
     assert_no_self_call(src, "sum");
 }
@@ -122,8 +122,8 @@ fn tail_recursion_computes_correct_value_and_loops() {
 #[test]
 fn non_tail_recursion_still_works() {
     assert_exit(
-        "fact = (n :: Num) -> Num => n <= 1 ? 1 : n * fact(n - 1)\n\
-         ^ = () -> Num => fact(5)",
+        "fact = (n :: Num) -> Num => < n <= 1 ? 1 : n * fact(n - 1) >\n\
+         ^ = () -> Num => < fact(5) >",
         120,
     );
 }
@@ -136,8 +136,8 @@ fn non_tail_recursion_still_works() {
 #[test]
 fn deep_non_tail_recursion_has_a_process_sized_stack() {
     assert_exit(
-        "depth = (n :: Num) -> Num => n == 0 ? 0 : depth(n - 1) + 1\n\
-         ^ = () -> Num => depth(20000) == 20000 ? 7 : 1",
+        "depth = (n :: Num) -> Num => < n == 0 ? 0 : depth(n - 1) + 1 >\n\
+         ^ = () -> Num => < depth(20000) == 20000 ? 7 : 1 >",
         7,
     );
 }
@@ -148,9 +148,9 @@ fn deep_non_tail_recursion_has_a_process_sized_stack() {
 #[test]
 fn tail_call_to_other_function_is_normal_call() {
     assert_exit(
-        "twice = (n :: Num) -> Num => n + n\n\
-         go = (n :: Num) -> Num => twice(n)\n\
-         ^ = () -> Num => go(21)",
+        "twice = (n :: Num) -> Num => < n + n >\n\
+         go = (n :: Num) -> Num => < twice(n) >\n\
+         ^ = () -> Num => < go(21) >",
         42,
     );
 }
@@ -161,7 +161,7 @@ fn tail_call_to_other_function_is_normal_call() {
 /// we only check it compiles + verifies.) Guards a real double-terminator bug.
 #[test]
 fn unconditional_tail_self_call_verifies() {
-    assert_compiles_clean("loop = (n :: Num) -> Num => loop(n)\n^ = () -> Num => loop(5)");
+    assert_compiles_clean("loop = (n :: Num) -> Num => < loop(n) >\n^ = () -> Num => < loop(5) >");
 }
 
 /// Codegen-only: a match all of whose arms tail-recurse leaves no value-producing path,
@@ -169,8 +169,8 @@ fn unconditional_tail_self_call_verifies() {
 #[test]
 fn all_match_arms_recurse_verifies() {
     assert_compiles_clean(
-        "spin = (n :: Num) -> Num => n ? | 0 => spin(0) | _ => spin(n - 1)\n\
-         ^ = () -> Num => spin(3)",
+        "spin = (n :: Num) -> Num => < n ? | 0 => spin(0) | _ => spin(n - 1) >\n\
+         ^ = () -> Num => < spin(3) >",
     );
 }
 
@@ -179,8 +179,8 @@ fn all_match_arms_recurse_verifies() {
 #[test]
 fn all_if_arms_recurse_verifies() {
     assert_compiles_clean(
-        "spin = (n :: Num) -> Num => n == 0 ? spin(1) : spin(n - 1)\n\
-         ^ = () -> Num => spin(3)",
+        "spin = (n :: Num) -> Num => < n == 0 ? spin(1) : spin(n - 1) >\n\
+         ^ = () -> Num => < spin(3) >",
     );
 }
 
@@ -194,10 +194,10 @@ fn all_if_arms_recurse_verifies() {
 fn nested_tail_recursive_function_does_not_clobber_outer_tco() {
     assert_exit(
         "outer = (n :: Num, acc :: Num) -> Num => <\n\
-           inner = (m :: Num, s :: Num) -> Num => m == 0 ? s : inner(m - 1, s + 1)\n\
+           inner = (m :: Num, s :: Num) -> Num => < m == 0 ? s : inner(m - 1, s + 1) >\n\
            n == 0 ? acc + inner(3, 0) : outer(n - 1, acc + 1)\n\
          >\n\
-         ^ = () -> Num => outer(5, 0)",
+         ^ = () -> Num => < outer(5, 0) >",
         8,
     );
 }
@@ -209,8 +209,8 @@ fn nested_tail_recursive_function_does_not_clobber_outer_tco() {
 #[test]
 fn tail_call_args_use_pre_update_parameter_values() {
     assert_exit(
-        "count = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : count(n - 1, acc + n)\n\
-         ^ = () -> Num => count(5, 0)",
+        "count = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : count(n - 1, acc + n) >\n\
+         ^ = () -> Num => < count(5, 0) >",
         15,
     );
 }
@@ -230,7 +230,7 @@ fn deep_tail_recursion_with_array_literal_does_not_overflow() {
            a = [1, 2, 3]\n\
            n <= 0 ? acc : f(n - 1, acc + a[0])\n\
          >\n\
-         ^ = () -> Num => f(1000000, 0)",
+         ^ = () -> Num => < f(1000000, 0) >",
         1000000,
     );
 }
@@ -248,7 +248,7 @@ fn deep_tail_recursion_with_range_literal_does_not_overflow() {
            r = 1 <- 3\n\
            n <= 0 ? acc : f(n - 1, acc + r[0])\n\
          >\n\
-         ^ = () -> Num => f(1000000, 0)",
+         ^ = () -> Num => < f(1000000, 0) >",
         1000000,
     );
 }

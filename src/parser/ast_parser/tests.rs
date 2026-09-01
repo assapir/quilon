@@ -21,7 +21,7 @@ fn test_parse_string() {
 
 #[test]
 fn test_parse_builtin_import() {
-    let tokens = Lexer::tokenize("<< core.io\n^ = () -> Num => 0").unwrap();
+    let tokens = Lexer::tokenize("<< core.io\n^ = () -> Num => < 0 >").unwrap();
     let program = parse(&tokens).unwrap();
     assert_eq!(program.imports.len(), 1);
     match &program.imports[0].path {
@@ -33,7 +33,7 @@ fn test_parse_builtin_import() {
 
 #[test]
 fn test_parse_file_path_import() {
-    let tokens = Lexer::tokenize("<< \"lib/math.qn\"\n^ = () -> Num => 0").unwrap();
+    let tokens = Lexer::tokenize("<< \"lib/math.qn\"\n^ = () -> Num => < 0 >").unwrap();
     let program = parse(&tokens).unwrap();
     assert_eq!(program.imports.len(), 1);
     match &program.imports[0].path {
@@ -44,7 +44,7 @@ fn test_parse_file_path_import() {
 
 #[test]
 fn test_parse_export_marker() {
-    let tokens = Lexer::tokenize(">> add = (a, b) => a + b\nhelper = x => x").unwrap();
+    let tokens = Lexer::tokenize(">> add = (a, b) => < a + b >\nhelper = x => < x >").unwrap();
     let program = parse(&tokens).unwrap();
     assert_eq!(program.items.len(), 2);
     // First item is exported, second is private.
@@ -161,7 +161,8 @@ fn test_parse_bare_less_and_greater_than() {
 fn test_parse_operator_definition() {
     // An operator symbol can name a top-level definition (an operator overload).
     let tokens =
-        Lexer::tokenize("P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => a.x == b.x").unwrap();
+        Lexer::tokenize("P = { x :: Num }\n== = (a :: P, b :: P) -> Bool => < a.x == b.x >")
+            .unwrap();
     let program = parse(&tokens).unwrap();
     // Items: the type declaration and the `==` operator function.
     let operator = program.items.iter().find_map(|i| match i {
@@ -332,7 +333,7 @@ fn test_precedence() {
 
 #[test]
 fn test_parse_simple_function() {
-    let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
+    let tokens = Lexer::tokenize("add = (a, b) => < a + b >").unwrap();
     let result = parse(&tokens);
     assert!(result.is_ok());
 
@@ -349,7 +350,7 @@ fn test_parse_simple_function() {
 
 #[test]
 fn test_parse_function_with_types() {
-    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
+    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => < a + b >").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
         eprintln!("Error: {:?}", e);
@@ -368,7 +369,7 @@ fn test_parse_function_with_types() {
 
 #[test]
 fn test_parse_no_parameter_function() {
-    let tokens = Lexer::tokenize("main = => 42").unwrap();
+    let tokens = Lexer::tokenize("main = => < 42 >").unwrap();
     let result = parse(&tokens);
     assert!(result.is_ok());
 }
@@ -398,7 +399,7 @@ fn test_parse_function_with_block() {
 
 #[test]
 fn test_parse_no_parameter_function_with_return_type() {
-    let tokens = Lexer::tokenize("greet = () -> Text => \"Hello\"").unwrap();
+    let tokens = Lexer::tokenize("greet = () -> Text => < \"Hello\" >").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
         eprintln!("Error: {:?}", e);
@@ -548,7 +549,7 @@ fn test_parse_type_declaration_with_methods() {
     let tokens = Lexer::tokenize(
         "User = {
   name :: Text,
-  getName = => it.name
+  getName = => < it.name >
 }",
     )
     .unwrap();
@@ -579,7 +580,7 @@ fn test_parse_type_declaration_method_with_parameters() {
     let tokens = Lexer::tokenize(
         "User = { 
   age :: Num,
-  incrementAge = amount => it.age + amount
+  incrementAge = amount => < it.age + amount >
 }",
     )
     .unwrap();
@@ -606,7 +607,7 @@ fn test_parse_type_declaration_method_with_parameters_as_first_member() {
     // `=`, which used to fall through to the record-literal reading.
     let tokens = Lexer::tokenize(
         "Greeter = {
-  label = (p :: Text) -> Text => p
+  label = (p :: Text) -> Text => < p >
   name :: Text
 }",
     )
@@ -634,7 +635,7 @@ fn test_parse_type_declaration_method_with_parameters_as_first_member() {
 fn test_parse_type_declaration_render_member_as_first_member() {
     // The render operator `` ` `` as the first member failed even earlier — the old scan
     // only recognized an Ident there.
-    let tokens = Lexer::tokenize("Point = { ` = () -> Text => \"pt\", x :: Num }").unwrap();
+    let tokens = Lexer::tokenize("Point = { ` = () -> Text => < \"pt\" >, x :: Num }").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
         eprintln!("Error: {:?}", e);
@@ -743,7 +744,7 @@ fn test_record_literal_of_plain_values_stays_a_literal_binding() {
 fn test_method_first_block_with_a_later_field_is_a_type_declaration() {
     // A method may legitimately come before the field(s) it uses (see
     // `examples/methods.qn`); the `::` field anywhere in the block settles it.
-    let tokens = Lexer::tokenize("x = { f = => it.v, v :: Num }").unwrap();
+    let tokens = Lexer::tokenize("x = { f = => < it.v >, v :: Num }").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {
         eprintln!("Error: {:?}", e);

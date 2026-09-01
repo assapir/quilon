@@ -1,10 +1,10 @@
->> statistics_offset = (x :: Num) -> Num => x + 0
->> statistics_scale = (x :: Num) -> Num => x + 1
->> statistics_clamp = (x :: Num) -> Num => x + 2
->> statistics_round = (x :: Num) -> Num => x + 3
->> statistics_wrap = (x :: Num) -> Num => x + 4
->> statistics_snap = (x :: Num) -> Num => x + 5
->> statistics_bias = (x :: Num) -> Num => x + 6
->> statistics_damp = (x :: Num) -> Num => x + 7
->> statistics_boost = (x :: Num) -> Num => x + 8
->> statistics_trim = (x :: Num) -> Num => x + 9
+>> statistics_offset = (x :: Num) -> Num => < x + 0 >
+>> statistics_scale = (x :: Num) -> Num => < x + 1 >
+>> statistics_clamp = (x :: Num) -> Num => < x + 2 >
+>> statistics_round = (x :: Num) -> Num => < x + 3 >
+>> statistics_wrap = (x :: Num) -> Num => < x + 4 >
+>> statistics_snap = (x :: Num) -> Num => < x + 5 >
+>> statistics_bias = (x :: Num) -> Num => < x + 6 >
+>> statistics_damp = (x :: Num) -> Num => < x + 7 >
+>> statistics_boost = (x :: Num) -> Num => < x + 8 >
+>> statistics_trim = (x :: Num) -> Num => < x + 9 >
