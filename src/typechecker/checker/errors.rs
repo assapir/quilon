@@ -14,6 +14,8 @@ impl TypeError {
             | TypeError::WrongNumberOfArguments { span, .. }
             | TypeError::ImmutableAssignment { span, .. }
             | TypeError::ImmutableFieldWrite { span, .. }
+            | TypeError::MutableAliasOfImmutable { span, .. }
+            | TypeError::ImmutableAliasOfMutable { span, .. }
             | TypeError::MutatingMethodOnImmutable { span, .. }
             | TypeError::MutatingMethodDeclaredImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
@@ -126,6 +128,42 @@ impl std::fmt::Display for TypeError {
                     f,
                     "Cannot write to a field of immutable '{}'; bind it with ':=' to allow in-place mutation",
                     name
+                )
+            }
+            TypeError::MutableAliasOfImmutable {
+                name,
+                aliased,
+                parameter,
+                ..
+            } => match parameter {
+                false => write!(
+                    f,
+                    "cannot bind '{name}' with ':=': its value is '{aliased}''s, and \
+                     '{aliased}' is immutable — a value bound with '=' stays immutable \
+                     through every alias. Bind '{name}' with '=', or build a fresh value",
+                ),
+                true if aliased == crate::ast::RECEIVER => write!(
+                    f,
+                    "cannot bind '{name}' with ':=': its value is the receiver 'it''s, \
+                     whose mutability belongs to the call site — a '='-declared method \
+                     cannot make its receiver's value mutable. Bind '{name}' with '=', \
+                     or build a fresh value",
+                ),
+                true => write!(
+                    f,
+                    "cannot bind '{name}' with ':=': its value is parameter '{aliased}''s, \
+                     whose argument belongs to the caller and may be '='-bound — a \
+                     parameter's value cannot be made mutable. Bind '{name}' with '=', or \
+                     build a fresh value",
+                ),
+            },
+            TypeError::ImmutableAliasOfMutable { name, aliased, .. } => {
+                write!(
+                    f,
+                    "cannot bind '{name}' with '=': its value is '{aliased}''s, and \
+                     '{aliased}' is mutable (':=') — writes through '{aliased}' would \
+                     change '{name}' underneath. Bind '{name}' with ':=', or build a \
+                     fresh value",
                 )
             }
             TypeError::MutatingMethodDeclaredImmutable {

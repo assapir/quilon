@@ -269,14 +269,14 @@ impl TypeChecker {
                         (parameters.clone(), return_type.clone())
                     })
                 {
-                    // A mutating (setter) method requires a mutable (`:=`) receiver.
-                    // The receiver is arguments[0]; `it` (a method calling a sibling
-                    // setter on its own receiver) is allowed — its mutability is
-                    // already enforced at the *outer* call site.
+                    // A mutating (setter) method requires a receiver that aliases no `=`
+                    // binding and no parameter — a `:=` binding, a fresh value, or a
+                    // setter's own `it` (mutable at every call site) all pass, however
+                    // the receiver expression reaches them.
                     if self
                         .setter_methods
                         .contains(&(type_name.clone(), name.clone()))
-                        && let Some(recv_name) = self.immutable_mutation_root(&arguments[0])
+                        && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
                     {
                         return Err(TypeError::MutatingMethodOnImmutable {
                             method: name.clone(),
@@ -795,19 +795,22 @@ impl TypeChecker {
         }
         self.record_parameter_types(parameters, parameter_types);
         self.env.push_scope();
-        for (parameter, ty) in parameters.iter().zip(parameter_types) {
+        let enclosing_declaration = self.enter_declaration();
+        for (slot, (parameter, ty)) in parameters.iter().zip(parameter_types).enumerate() {
             if let Some(ann) = &parameter.type_annotation {
                 self.check_type_compatibility(ann, ty, &parameter.span)?;
             }
-            self.env.define(
+            self.env.define_parameter(
                 parameter.name.clone(),
                 ty.clone(),
-                false,
+                self.current_declaration,
+                slot,
                 parameter.span.clone(),
             )?;
         }
         let body_type = self.infer_expression(body);
         self.env.pop_scope();
+        self.leave_declaration(enclosing_declaration);
         let body_type = body_type?;
         // Record the lambda node's own type as its body type, for completeness.
         self.type_table

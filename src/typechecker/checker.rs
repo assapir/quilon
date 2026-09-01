@@ -12,6 +12,7 @@ use crate::lexer::Span;
 // `impl TypeChecker` blocks. Children of this file rather than siblings under
 // `typechecker`, so the state declared below stays private to the checker: a child can
 // reach its ancestor's private items, a sibling could not.
+mod aliasing;
 mod assertions;
 mod calls;
 mod decls;
@@ -24,6 +25,7 @@ mod sums;
 #[cfg(test)]
 mod tests;
 
+use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
 use sums::result_of;
 
@@ -56,6 +58,22 @@ pub enum TypeError {
     /// `obj.field := v` where `obj`'s root binding is immutable (`=`-bound).
     ImmutableFieldWrite {
         name: String,
+        span: Span,
+    },
+    /// A `:=` binding whose value aliases an `=` binding or a parameter — the value would
+    /// become writable while an `=` binding still reaches it. `aliased` names the binding
+    /// (or parameter) whose guarantee the alias would break.
+    MutableAliasOfImmutable {
+        name: String,
+        aliased: String,
+        parameter: bool,
+        span: Span,
+    },
+    /// An `=` binding whose value aliases a `:=` binding — writes through the mutable
+    /// binding would change the `=`-bound value underneath.
+    ImmutableAliasOfMutable {
+        name: String,
+        aliased: String,
         span: Span,
     },
     /// Calling a mutating (setter) method on an immutable (`=`-bound) receiver.
@@ -404,6 +422,24 @@ pub(crate) fn types_match(parameter: &Type, arg: &Type) -> bool {
 pub struct Symbol {
     type_: Type,
     mutable: bool,
+    /// The declaration (function/method/lambda) whose body this binding belongs to — the
+    /// id `TypeChecker::current_declaration` held when it was defined. Bindings owned by
+    /// a declaration die when it returns, which is what lets its result classify as fresh.
+    owner: u64,
+    /// The bindings this binding's VALUE may alias beyond the binding itself: for a
+    /// parameter, its own argument slot; for an `=` binding, whatever its initializer
+    /// aliased. Empty for a fresh value.
+    value_aliasing: ValueAliasing,
+    /// For a binding holding a classified named function: which bindings/arguments a
+    /// call's result may alias. `None` means unknown — a call is then assumed to alias
+    /// every argument.
+    result_aliasing: Option<ResultAliasing>,
+    /// The receiver `it` of a `:=`-declared (setter) method, which is mutable at every
+    /// call site.
+    setter_receiver: bool,
+    /// A payload-less constant (a nullary sum variant value): shared, but with no
+    /// writable interior, so every use counts as fresh.
+    constant: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -442,6 +478,11 @@ pub type TypeTable = std::collections::HashMap<Span, Type>;
 pub struct Overload {
     pub parameters: Vec<Type>,
     pub ret: Option<Type>,
+    /// Which bindings/arguments this member's result may alias (see [`ResultAliasing`]).
+    /// Built-in members return fresh values (`Some(default)`); a user member starts as
+    /// `None` (assumed to alias every argument) and is classified when its body is
+    /// checked.
+    pub(crate) result_aliasing: Option<ResultAliasing>,
 }
 
 /// Whether a declaration sits at the top level of a module or inside some body (a
@@ -485,6 +526,16 @@ pub struct TypeChecker {
     // is only legal inside an `it` — which in turn is only compiled inside a `describe`.
     test_depth: usize,
     case_depth: usize,
+    // Result aliasing per declared method, keyed like `methods`. Slot 0 is the receiver,
+    // slot i+1 the i-th explicit parameter — matching a member call's argument list. A
+    // method absent here (a scalar-returning one) returns a fresh value.
+    method_result_aliasing: std::collections::HashMap<(String, String), ResultAliasing>,
+    // Aliasing bookkeeping: each function/method/lambda body gets a fresh declaration id
+    // (`declaration_counter` is the source; ids grow inward, so a nested declaration's id
+    // is always greater than its encloser's). `current_declaration` is the body being
+    // checked — 0 at the top level.
+    declaration_counter: u64,
+    current_declaration: u64,
     // `(name, definition span)` of the non-overloaded, unannotated function currently
     // having its body checked, when it has no `-> T` return type — its own name is left
     // UNDEFINED in `env` for that window (see `check_function_declaration`), so a
@@ -513,6 +564,9 @@ impl TypeChecker {
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
+            method_result_aliasing: std::collections::HashMap::new(),
+            declaration_counter: 0,
+            current_declaration: 0,
             test_depth: 0,
             case_depth: 0,
             pending_return_type: None,

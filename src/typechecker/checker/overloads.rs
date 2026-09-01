@@ -25,6 +25,7 @@ impl TypeChecker {
                 Overload {
                     parameters: vec![Type::Num, Type::Num],
                     ret: Some(Type::Num),
+                    result_aliasing: Some(ResultAliasing::default()),
                 },
             );
         }
@@ -34,6 +35,7 @@ impl TypeChecker {
             Overload {
                 parameters: vec![Type::Text, Type::Text],
                 ret: Some(Type::Text),
+                result_aliasing: Some(ResultAliasing::default()),
             },
         );
 
@@ -54,6 +56,7 @@ impl TypeChecker {
                     Overload {
                         parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
+                        result_aliasing: Some(ResultAliasing::default()),
                     },
                 );
             }
@@ -65,6 +68,7 @@ impl TypeChecker {
                     Overload {
                         parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
+                        result_aliasing: Some(ResultAliasing::default()),
                     },
                 );
             }
@@ -77,6 +81,7 @@ impl TypeChecker {
                 Overload {
                     parameters: vec![Type::Bool, Type::Bool],
                     ret: Some(Type::Bool),
+                    result_aliasing: Some(ResultAliasing::default()),
                 },
             );
         }
@@ -93,6 +98,7 @@ impl TypeChecker {
                 Overload {
                     parameters: member.parameters.to_vec(),
                     ret: Some(member.ret.clone()),
+                    result_aliasing: Some(ResultAliasing::default()),
                 },
             );
         }
@@ -317,8 +323,39 @@ impl TypeChecker {
                 Some((name.to_string(), parameters.clone(), span.clone()));
         }
 
-        self.add_overload(name, Overload { parameters, ret });
+        self.add_overload(
+            name,
+            Overload {
+                parameters,
+                ret,
+                // A user member's classification is filled in when its body is checked;
+                // until then a call to it is assumed to alias every argument.
+                result_aliasing: None,
+            },
+        );
         Ok(())
+    }
+
+    /// Record a user overload member's classified result aliasing on the member whose
+    /// parameter types these are, once its body has been checked.
+    pub(super) fn set_overload_result_aliasing(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+        result_aliasing: ResultAliasing,
+    ) {
+        if let Some(set) = self.overloads.get_mut(name)
+            && let Some(member) = set.iter_mut().find(|overload| {
+                overload.parameters.len() == parameter_types.len()
+                    && overload
+                        .parameters
+                        .iter()
+                        .zip(parameter_types)
+                        .all(|(a, b)| types_match(a, b))
+            })
+        {
+            member.result_aliasing = Some(result_aliasing);
+        }
     }
 
     /// Register an operator MEMBER of a record or sum type as a member of that operator's

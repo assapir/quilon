@@ -230,6 +230,23 @@ fn writing_a_site_field_is_rejected() {
     let error = type_error_message(
         "\
 tamper = (site :: Site) -> Num => <
+  site.line := 99
+  site.line
+>
+^ = () -> Num => tamper()
+",
+    );
+    assert!(
+        error.contains("a `Site` is read-only"),
+        "a Site field write must be refused as read-only, got: {error}"
+    );
+
+    // The aliasing route to the same write — rebinding the parameter `:=` first — is
+    // stopped one step earlier, at the rebinding: a parameter's value cannot be made
+    // mutable.
+    let error = type_error_message(
+        "\
+tamper = (site :: Site) -> Num => <
   s := site
   s.line := 99
   s.line
@@ -238,8 +255,8 @@ tamper = (site :: Site) -> Num => <
 ",
     );
     assert!(
-        error.contains("a `Site` is read-only"),
-        "a Site field write must be refused as read-only, got: {error}"
+        error.contains("parameter 'site'"),
+        "rebinding a Site parameter `:=` must be refused as a mutable alias, got: {error}"
     );
 }
 
