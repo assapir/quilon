@@ -284,16 +284,22 @@ pub enum TypeError {
         more_arguments: bool,
         span: Span,
     },
+    /// `name(recv, ...)` where the receiver's type has a member `name` and the top level
+    /// has no such function. The plain form names the top-level namespace alone, so the
+    /// advice spells out the `.` call that reaches the member; `receiver` is what the
+    /// caller wrote, where that is a plain name.
+    MethodCalledAsFunction {
+        type_name: String,
+        member: String,
+        receiver: Option<String>,
+        more_arguments: bool,
+        span: Span,
+    },
     /// An output built-in (`print`/`eprint`/`write`) was handed a value with no rendering —
     /// a function.
     NotRenderable {
         name: String,
         got: Box<Type>,
-        span: Span,
-    },
-    /// A top-level definition took over an output built-in's own arity.
-    RenderableBuiltinRedefined {
-        name: String,
         span: Span,
     },
 }

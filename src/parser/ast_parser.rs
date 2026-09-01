@@ -42,6 +42,16 @@ pub struct Parser<'a> {
     /// is a hashable value and is never a function, so lambda detection is suppressed for
     /// the whole key expression while this is set (see `parse_fence_key`).
     suppress_lambda: bool,
+    /// Every module-path spelling the `<<` lines above the cursor have bound — the short
+    /// binding (`http`, a file's stem) and the full dotted path (`core.http`) — mapped to
+    /// the module's canonical name. A same-line `Ident (. Ident)* . Ident` chain whose
+    /// longest prefix is one of these is a QUALIFIED reference (`http.send`,
+    /// `core.test.describe`) and parses as a single dotted name — see
+    /// `try_parse_module_member`; the canonical value is what lets `at_test_block`
+    /// recognize the harness's `describe` whatever spelling reaches it. Populated as
+    /// imports are parsed, so (like every other name — the language has no hoisting) an
+    /// import qualifies only the code below it.
+    module_paths: std::collections::HashMap<String, String>,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -87,6 +97,7 @@ impl<'a> Parser<'a> {
             file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
             span_base: 0,
             suppress_lambda: false,
+            module_paths: std::collections::HashMap::new(),
         }
     }
 
@@ -144,9 +155,9 @@ impl<'a> Parser<'a> {
     /// begins a NEW statement. Call arguments, index brackets, and constructor braces
     /// must open on the same line as the expression they apply to. Without this,
     /// adjacent statements would fuse across the newline — `x = f()` followed by a line
-    /// `(1 + 2) |> print` would parse as the call `f()(1 + 2)`, `b = a` followed by
+    /// `(1 + 2)` would parse as the call `f()(1 + 2)`, `b = a` followed by
     /// `[3, 4].each(...)` as the index `a[3, 4]`, and `b = a` followed by `{ x = 1 }`
-    /// as the constructor `a { x = 1 }`. A `.`, `|>`, or operator at the start of a
+    /// as the constructor `a { x = 1 }`. A `.` or operator at the start of a
     /// line still continues the expression, and an argument list opened on the callee's
     /// line may still span lines. Every postfix consumption of `(` / `[` / `{` must go
     /// through this guard.
@@ -206,6 +217,99 @@ impl<'a> Parser<'a> {
         } else {
             self.span(0, 0)
         }
+    }
+
+    /// Whether the cursor could begin a qualified reference at all: an identifier with a
+    /// same-line `.` right behind it, and at least one import above. The cheap gate every
+    /// identifier passes before any chain is materialized.
+    fn at_possible_module_chain(&self) -> bool {
+        !self.module_paths.is_empty()
+            && self.check(&TokenKind::Ident)
+            && self.check_same_line_at(1, &TokenKind::Dot)
+    }
+
+    /// The maximal same-line `Ident (. Ident)* ` chain at the cursor, as its segment
+    /// texts. Empty when the cursor is not on an identifier. Same-line only: a `.` that
+    /// begins a source line continues an expression as a method chain, never a module
+    /// path. Segment `i` sits at token offset `2*i` (its `.` at `2*i - 1`).
+    fn dotted_chain_at_cursor(&self) -> Vec<String> {
+        let mut segments = Vec::new();
+        if !self.check(&TokenKind::Ident) {
+            return segments;
+        }
+        segments.push(self.peek().text.clone());
+        loop {
+            let next = segments.len();
+            if self.check_same_line_at(2 * next - 1, &TokenKind::Dot)
+                && self.check_same_line_at(2 * next, &TokenKind::Ident)
+            {
+                segments.push(self.peek_ahead(2 * next).text.clone());
+            } else {
+                return segments;
+            }
+        }
+    }
+
+    /// The canonical module name and member of the longest proper chain prefix an import
+    /// above has bound, with the member's segment index — or `None` when no prefix is a
+    /// module path.
+    fn resolve_chain<'s>(&self, segments: &'s [String]) -> Option<(&str, &'s str, usize)> {
+        for prefix_len in (1..segments.len()).rev() {
+            if let Some(canonical) = self.module_paths.get(&segments[..prefix_len].join(".")) {
+                return Some((canonical, &segments[prefix_len], prefix_len));
+            }
+        }
+        None
+    }
+
+    /// If the cursor begins a qualified reference — a dotted chain whose longest proper
+    /// prefix is a module path bound by an import above (`http.send`,
+    /// `core.test.describe`) — consume the path and ONE member segment, returning the
+    /// joined dotted name and its span. Any further `.` continuation is the ordinary
+    /// postfix grammar's (a field or method of the referenced value). `None` leaves the
+    /// cursor untouched: the identifier is an ordinary name.
+    fn try_parse_module_member(&mut self) -> Option<(String, Span)> {
+        if !self.at_possible_module_chain() {
+            return None;
+        }
+        let segments = self.dotted_chain_at_cursor();
+        let (_, member, prefix_len) = self.resolve_chain(&segments)?;
+        let name = format!("{}.{member}", segments[..prefix_len].join("."));
+        let start = self.current_span().start;
+        // The prefix's segments and dots, plus the member: 2 * prefix_len + 1.
+        for _ in 0..(2 * prefix_len + 1) {
+            self.advance();
+        }
+        let span = self.span(start, self.previous_span().end);
+        Some((name, span))
+    }
+
+    /// Consume the identifier at the cursor as a reference: a qualified chain when an
+    /// import above binds its prefix (`http.send`), the bare name otherwise. The flag
+    /// says which — pattern position treats a qualified name as a constructor outright.
+    fn parse_name_or_qualified(&mut self) -> (String, Span, bool) {
+        if let Some((name, span)) = self.try_parse_module_member() {
+            return (name, span, true);
+        }
+        let span = self.current_span();
+        let name = self.peek().text.clone();
+        self.advance();
+        (name, span, false)
+    }
+
+    /// Record what an `<<` line binds, so the code below it can spell qualified names:
+    /// the short binding and (for a dotted module) the full path, each mapped to the
+    /// module's canonical name.
+    fn register_import(&mut self, path: &ModulePath) {
+        let Some(binding) = path.binding_name() else {
+            return;
+        };
+        let canonical = match path {
+            ModulePath::BuiltinDotted(parts) => parts.join("."),
+            ModulePath::FilePath(_) => binding.clone(),
+        };
+        self.module_paths.insert(binding, canonical.clone());
+        self.module_paths.insert(canonical.clone(), canonical);
     }
 }
 

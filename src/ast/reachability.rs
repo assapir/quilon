@@ -98,7 +98,7 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
         Expression::Identifier { name, .. } => {
             out.push(name);
             // A Text-method mention reaches the `core.text` function that implements it:
-            // `t.split(sep)` lowers to a call of `__qn_text_split`, whose name appears
+            // `t.split(sep)` lowers to a call of `core.text.split`, whose name appears
             // nowhere in the source. Over-approximate like everything here — any mention
             // of `split` keeps the implementation, Text receiver or not.
             if let Some(implementation) = crate::ast::qn_text_impl(name) {
@@ -137,11 +137,6 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
                 out.push(BinaryOperator::Sub.symbol());
             }
             mentions(expression, out);
-        }
-        Expression::Pipeline { left, right, .. } => {
-            // `x |> f` desugars to a call of `f`, so the right side is a CALLEE.
-            mentions(left, out);
-            mentions_callee(right, out);
         }
         Expression::Range {
             start: left,

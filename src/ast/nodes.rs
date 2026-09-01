@@ -14,20 +14,28 @@ pub struct Program {
     pub test_blocks: Vec<Expression>,
 }
 
-/// The name whose top-level call marks test code: `describe`. There is no attribute or
-/// `cfg` syntax — the symbol IS the marker, so a file's tests are recognizable by the
-/// parser (see `Parser::parse_program`) with no annotation to keep in sync.
-pub const TEST_BLOCK_MARKER: &str = "describe";
+/// The resolved name whose top-level call marks test code: `core.test`'s `describe`,
+/// written `test.describe(…)` (or fully qualified) under an `<< core.test` import. There
+/// is no attribute or `cfg` syntax — the call IS the marker, so a file's tests are
+/// recognizable by the parser (see `Parser::parse_program`) with no annotation to keep in
+/// sync; this constant is the POST-LINK spelling the checker compares against.
+pub const TEST_BLOCK_MARKER: &str = "core.test.describe";
 
-/// The name of a test CASE, written `it("…", () => …)`. A recorded assertion belongs
-/// inside one: `it` is what closes a case and tallies it, so an `expect` anywhere else in
-/// a suite would set a failure mark nothing ever reports.
-pub const TEST_CASE_MARKER: &str = "it";
+/// The resolved name of a test CASE, written `test.it("…", () => …)`. A recorded
+/// assertion belongs inside one: `it` is what closes a case and tallies it, so an
+/// `expect` anywhere else in a suite would set a failure mark nothing ever reports.
+pub const TEST_CASE_MARKER: &str = "core.test.it";
 
 /// The implicit receiver of a method or operator member — its subject, and an operator
-/// member's left operand. Unrelated to [`TEST_CASE_MARKER`], which happens to be spelled the
-/// same.
+/// member's left operand.
 pub const RECEIVER: &str = "it";
+
+/// The user-facing spelling of a qualified name: its last segment (`print` for
+/// `core.io.print`, `Get` for `core.http.Get`). What rendered output and diagnostics that
+/// speak the user's vocabulary show; the full name stays the identity everywhere else.
+pub fn display_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
 
 /// A module import: `<< core.io` (built-in dotted) or `<< "path/to/mod.qn"` (file path).
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +50,26 @@ pub enum ModulePath {
     BuiltinDotted(Vec<String>),
     /// User module referenced by a (relative or absolute) file path.
     FilePath(String),
+}
+
+impl ModulePath {
+    /// The short name this import binds — the last dotted segment (`core.http` binds
+    /// `http`), or a file import's stem (`"lib/math.qn"` binds `math`). The ONE statement
+    /// of the binding rule, shared by the parser (which recognizes qualified chains as it
+    /// reads) and the module loader (which builds the scope those chains resolve in).
+    /// `None` when a file path has no usable stem.
+    pub fn binding_name(&self) -> Option<String> {
+        match self {
+            ModulePath::BuiltinDotted(parts) => parts.last().cloned(),
+            ModulePath::FilePath(raw) => {
+                let normalized = raw.replace('\\', "/");
+                std::path::Path::new(&normalized)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string)
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for ModulePath {
@@ -69,6 +97,15 @@ impl Item {
             Item::VariableDeclaration(declaration) => &declaration.name,
             Item::FunctionDeclaration(declaration) => &declaration.name,
             Item::TypeDeclaration(declaration) => &declaration.name,
+        }
+    }
+
+    /// The declaration's source span, whichever kind of declaration it is.
+    pub fn span(&self) -> &Span {
+        match self {
+            Item::VariableDeclaration(declaration) => &declaration.span,
+            Item::FunctionDeclaration(declaration) => &declaration.span,
+            Item::TypeDeclaration(declaration) => &declaration.span,
         }
     }
 }
@@ -184,8 +221,18 @@ impl FunctionDeclaration {
     /// the ordinary diagnostics — a name the compiler claims outright, a duplicate
     /// signature, or a member missing an annotation.
     /// Shared by the type checker and codegen so the two never disagree on what to skip.
+    ///
+    /// Two spellings are the same placeholder: linked in as a module the declaration is
+    /// named in full (`core.io.print`), while a corelib file checked directly
+    /// (`quilon check corelib/io.qn`) still carries the bare `print` — so a BARE name
+    /// matches by last segment under the `from_corelib` gate. A qualified name matches
+    /// only exactly, so a corelib module's own private helper that happens to share a
+    /// builtin's short name (`core.cli.now`, say) stays a real function.
     pub fn is_inert_corelib_placeholder(&self) -> bool {
-        self.from_corelib && is_compiler_provided_name(&self.name)
+        self.from_corelib
+            && (is_compiler_provided_name(&self.name)
+                || (!self.name.contains('.')
+                    && builtin_names().any(|builtin| display_name(builtin) == self.name)))
     }
 
     /// The parameter slots of a function type on the binding (`f :: (Num) -> Num = …`),
@@ -254,21 +301,23 @@ impl RenderableBuiltin {
 /// are.
 ///
 /// They have no signature per type, so the compiler claims these names at their own arity
-/// and nothing extends them: a type becomes printable by defining its own `` ` ``. A
-/// definition at a DIFFERENT arity is an ordinary overload set beside them.
+/// and nothing extends them: a type becomes printable by defining its own `` ` ``. They
+/// are `core.io`'s exports, reached as `io.print(...)` under an `<< core.io` import —
+/// these are the post-link names — so a user's own bare `print` is simply a different,
+/// unrelated function.
 pub const RENDERABLE_BUILTINS: &[RenderableBuiltin] = &[
     RenderableBuiltin {
-        name: "print",
+        name: "core.io.print",
         rest: &[],
         ret: Type::Unit,
     },
     RenderableBuiltin {
-        name: "eprint",
+        name: "core.io.eprint",
         rest: &[],
         ret: Type::Unit,
     },
     RenderableBuiltin {
-        name: "write",
+        name: "core.io.write",
         rest: &[Type::Num],
         ret: Type::Num,
     },
@@ -287,11 +336,11 @@ pub fn is_renderable(ty: &Type) -> bool {
 }
 
 /// The corelib functions the compiler provides itself, as the members they occupy in their
-/// overload sets — `core.time`'s `now` and the internal primitives, all lowered to runtime
-/// intrinsics. A user definition of one of these names ADDS a member to its set rather than
-/// shadowing the built-in, and dispatch picks by exact argument types like any other set.
-/// The output family (`print`/`eprint`/`write`) takes no signature per type and lives in
-/// [`RENDERABLE_BUILTINS`] instead.
+/// overload sets — `core.time`'s `now` (post-link name, reached as `time.now()` under an
+/// `<< core.time` import) and the internal primitives, all lowered to runtime intrinsics.
+/// A module's overload sets are closed: a user's own bare `now` is an unrelated function,
+/// not a member beside the built-in. The output family (`print`/`eprint`/`write`) takes no
+/// signature per type and lives in [`RENDERABLE_BUILTINS`] instead.
 ///
 /// The `__`-prefixed entries are internal primitives (`core.test`'s harness and report
 /// are built on them) that no module exports and no `.qn` declares. They are members on the same terms
@@ -303,7 +352,7 @@ pub fn is_renderable(ty: &Type) -> bool {
 /// which is exactly the class of bug the table exists to prevent.
 pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     BuiltinOverload {
-        name: "now",
+        name: "core.time.now",
         parameters: &[],
         ret: Type::Num,
     },
@@ -332,6 +381,11 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     },
     BuiltinOverload {
         name: "__is_big_endian",
+        parameters: &[],
+        ret: Type::Bool,
+    },
+    BuiltinOverload {
+        name: "__is_aot",
         parameters: &[],
         ret: Type::Bool,
     },
@@ -447,10 +501,21 @@ pub fn is_test_registry_intrinsic(name: &str) -> bool {
     name.starts_with(TEST_REGISTRY_PREFIX)
 }
 
-/// Whether the compiler provides `name` itself, so a single user definition of it already
-/// forms an overload set (rather than being an ordinary function).
+/// Every name the compiler provides itself, across both builtin tables — the one scan the
+/// name predicates below share, so a new table never means a new hand-rolled loop.
+fn builtin_names() -> impl Iterator<Item = &'static str> {
+    BUILTIN_OVERLOADS
+        .iter()
+        .map(|member| member.name)
+        .chain(RENDERABLE_BUILTINS.iter().map(|builtin| builtin.name))
+}
+
+/// Whether the compiler provides `name` itself (by its exact, post-link spelling). For the
+/// bare-named internal primitives (`__exit`, `__test_*`) a single user definition of the
+/// name already forms an overload set; the module-qualified names cannot be declared by a
+/// user at all.
 pub fn is_compiler_provided_name(name: &str) -> bool {
-    BUILTIN_OVERLOADS.iter().any(|member| member.name == name) || renderable_builtin(name).is_some()
+    builtin_names().any(|builtin| builtin == name)
 }
 
 /// The arity the built-in `name` claims, or `None` if the compiler provides no `name`. What
@@ -502,21 +567,21 @@ pub fn is_text_method(name: &str) -> bool {
         )
 }
 
-/// The `core.text` function implementing the Text method `name`, or `None` for a method
-/// that is a native primitive (or no Text method at all). The composable methods are
-/// written in Quilon (`corelib/text.qn`) over the primitives; a member call to one lowers
-/// to a plain call of the named function with the receiver as the first argument. Shared
-/// by codegen (the lowering), reachability (a mention of the method reaches the
-/// implementation), and the module loader (a program mentioning one gets `core.text`
-/// merged in).
+/// The `core.text` function implementing the Text method `name` — its QUALIFIED name, as
+/// the link's rename leaves it — or `None` for a method that is a native primitive (or no
+/// Text method at all). The composable methods are written in Quilon (`corelib/text.qn`)
+/// over the primitives; a member call to one lowers to a plain call of the named function
+/// with the receiver as the first argument. Shared by codegen (the lowering),
+/// reachability (a mention of the method reaches the implementation), and the module
+/// loader (a program mentioning one gets `core.text` merged in).
 pub fn qn_text_impl(name: &str) -> Option<&'static str> {
     Some(match name {
-        "split" => "__qn_text_split",
-        "trim" => "__qn_text_trim",
-        "contains" => "__qn_text_contains",
-        "replace" => "__qn_text_replace",
-        "replaceAll" => "__qn_text_replace_all",
-        "repeat" => "__qn_text_repeat",
+        "split" => "core.text.split",
+        "trim" => "core.text.trim",
+        "contains" => "core.text.contains",
+        "replace" => "core.text.replace",
+        "replaceAll" => "core.text.replaceAll",
+        "repeat" => "core.text.repeat",
         _ => return None,
     })
 }
@@ -712,13 +777,6 @@ pub enum Expression {
         span: Span,
     },
 
-    // Pipeline
-    Pipeline {
-        left: Box<Expression>,
-        right: Box<Expression>,
-        span: Span,
-    },
-
     // Block
     Block {
         statements: Vec<Statement>,
@@ -833,7 +891,6 @@ impl Expression {
             Expression::UnaryOperator { span, .. } => span,
             Expression::Call { span, .. } => span,
             Expression::Lambda { span, .. } => span,
-            Expression::Pipeline { span, .. } => span,
             Expression::Block { span, .. } => span,
             Expression::If { span, .. } => span,
             Expression::Match { span, .. } => span,
@@ -847,32 +904,6 @@ impl Expression {
             Expression::Constructor { span, .. } => span,
             Expression::Range { span, .. } => span,
             Expression::Spread { span, .. } => span,
-        }
-    }
-
-    /// Desugar a pipeline `left |> right` into the equivalent call, injecting
-    /// `left` as the FIRST argument of the right-hand call:
-    ///   `x |> f`      => `f(x)`
-    ///   `x |> f(a, b)` => `f(x, a, b)`
-    /// Used by both the type checker and codegen so the two never diverge.
-    pub fn desugar_pipeline(left: &Expression, right: &Expression, span: &Span) -> Expression {
-        let (function, mut arguments) = match right {
-            Expression::Call {
-                function,
-                arguments,
-                ..
-            } => ((**function).clone(), arguments.clone()),
-            other => (other.clone(), Vec::new()),
-        };
-        arguments.insert(0, left.clone());
-        Expression::Call {
-            function: Box::new(function),
-            arguments,
-            // `x |> f(a)` IS `f(x, a)`, down to how `f` resolves: a name that the
-            // receiver's type can claim but that also falls back to the top-level
-            // namespace, unlike the `x.f(a)` form.
-            member_call: false,
-            span: span.clone(),
         }
     }
 }

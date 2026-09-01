@@ -169,6 +169,9 @@ pub struct CodeGenerator<'ctx> {
     // `force` where a force-set primitive reads it. Empty for pure programs and IR-only
     // tests, which therefore carry no force sites.
     defer: crate::deferral::DeferInfo,
+    // Whether this module is being emitted for an ahead-of-time build rather than the JIT.
+    // Backs `core.info`'s `runMode`; only the caller knows which it is.
+    aot: bool,
     // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
     // Each entry is the list of that name's overload parameter-type signatures. A name
     // is present here iff it is an overload set (operator-named, or 2+ same-named
@@ -343,6 +346,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             closure_sigs: HashMap::new(),
             oracle: TypeOracle::default(),
             defer: crate::deferral::DeferInfo::default(),
+            aot: false,
             overloads: HashMap::new(),
             predeclared_functions: HashMap::new(),
             var_types: HashMap::new(),
@@ -447,6 +451,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// deferred) for the IR-only codegen tests, which then compile exactly as before.
     pub fn set_defer_info(&mut self, defer: crate::deferral::DeferInfo) {
         self.defer = defer;
+    }
+
+    /// Mark this module as an ahead-of-time build, which `core.info`'s `runMode` reports.
+    pub fn set_aot(&mut self) {
+        self.aot = true;
     }
 
     /// Install the compilation's [`SourceMap`](crate::source_map::SourceMap) — the path and

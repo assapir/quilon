@@ -24,7 +24,7 @@ scheduler (a numeric `host:port` skips it); non-blocking DNS is a later refineme
 << core.io
 
 reportFailure = (message :: Text) -> Num => <
-  eprint(message)   ~ error to stderr…
+  io.eprint(message)   ~ error to stderr…
   1                 ~ …and a non-zero exit
 >
 

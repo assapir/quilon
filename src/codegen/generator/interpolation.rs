@@ -266,7 +266,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         for (_, vname, bb) in &case_blocks {
             self.builder.position_at_end(*bb);
-            let lit = self.text_literal(vname)?;
+            // A qualified variant (`core.http.Get`) renders as the name the user writes
+            // and matches on: its last segment.
+            let lit = self.text_literal(crate::ast::display_name(vname))?;
             self.builder
                 .build_store(name_slot, lit)
                 .map_err(ctx("Failed to store variant name"))?;

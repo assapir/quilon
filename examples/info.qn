@@ -7,28 +7,32 @@
 << core.info
 
 ^ = () -> Num => <
-  print("`platform()`-`os()` `pointerWidth()` `endianness()`-endian, quilon `quilonVersion()`")
+  io.print("`info.platform()`-`info.os()` `info.pointerWidth()` `info.endianness()`-endian, quilon `info.quilonVersion()` (`info.runMode()`)")
 
   ~ Matching is the point of the sums: every variant is named, and a typo would not compile.
-  supported = os() ?
-    | Linux     => true
-    | MacOS     => true
-    | Windows   => false
-    | FreeBSD   => false
-    | OpenBSD   => false
-    | NetBSD    => false
-    | UnknownOs => false
+  supported = info.os() ?
+    | info.Linux     => true
+    | info.MacOS     => true
+    | info.Windows   => false
+    | info.FreeBSD   => false
+    | info.OpenBSD   => false
+    | info.NetBSD    => false
+    | info.WtfOs(_)  => false
   assert(supported, equals(true))
 
   ~ Every target Quilon builds for is one of these two widths.
-  width = pointerWidth().bits()
+  width = info.pointerWidth().bits()
   assert(width == 64 || width == 32, equals(true))
 
   ~ The version is an open set, so it stays a Text — but never an empty one.
-  assert(quilonVersion().size > 0, equals(true))
+  assert(info.quilonVersion().size > 0, equals(true))
+
+  ~ Whichever way this ran, it is one of the two.
+  ran = info.runMode() ? | info.Aot => true | info.Jit => true
+  assert(ran, equals(true))
 
   ~ Constants, so two reads always agree.
-  assert(endianness().name(), equals(endianness().name()))
+  assert(info.endianness().name(), equals(info.endianness().name()))
 
   0
 >

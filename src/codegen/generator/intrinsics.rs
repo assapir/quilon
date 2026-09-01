@@ -279,7 +279,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args.len()
             ));
         }
-        let fd = if name == "eprint" { 2 } else { 1 };
+        let fd = if name == "core.io.eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
         let (data, len) = self.render_text_parts(&args[0], "print")?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;
@@ -419,6 +419,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 };
                 Ok(self.context.bool_type().const_int(big.into(), false).into())
             }
+            InfoMember::IsAot => Ok(self
+                .context
+                .bool_type()
+                .const_int(self.aot.into(), false)
+                .into()),
         }
     }
 
@@ -494,11 +499,13 @@ const OS_NAMES: &[(&str, &str)] = &[
     ("netbsd", "NetBSD"),
 ];
 
-fn os_name(triple: &str) -> &'static str {
+/// An unrecognised OS answers with the whole triple, so `WtfOs` carries what was actually seen
+/// rather than the word "unknown".
+fn os_name(triple: &str) -> &str {
     OS_NAMES
         .iter()
         .find(|(needle, _)| triple.contains(needle))
-        .map_or("unknown", |(_, name)| *name)
+        .map_or(triple, |(_, name)| *name)
 }
 
 /// `None` when the target is not registered — the IR-only codegen tests never initialize one,

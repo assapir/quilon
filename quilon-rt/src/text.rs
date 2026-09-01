@@ -381,5 +381,4 @@ mod tests {
         let trimmed = __text_trim_end(started.data as *const u8, started.len);
         assert_eq!(unsafe { slice_str(trimmed) }, "héllo");
     }
-
 }

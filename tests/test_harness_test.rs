@@ -22,17 +22,17 @@ use common::{ensure_runtime_lib, tool_available};
 const PASSING_SUITE: &str = r#"
 << core.test
 
-describe("numbers", () => <
-  it("adds", () => expect(1 + 1, equals(2)))
-  it("orders", () => expect(2 > 1, equals(true)))
+test.describe("numbers", () => <
+  test.it("adds", () => expect(1 + 1, equals(2)))
+  test.it("orders", () => expect(2 > 1, equals(true)))
 
-  describe("nested", () => <
-    it("still runs", () => expect(true, equals(true)))
+  test.describe("nested", () => <
+    test.it("still runs", () => expect(true, equals(true)))
   >)
 >)
 
-describe("text", () => <
-  it("contains", () => expect("haystack", contains("stack")))
+test.describe("text", () => <
+  test.it("contains", () => expect("haystack", contains("stack")))
 >)
 "#;
 
@@ -41,10 +41,10 @@ describe("text", () => <
 const FAILING_SUITE: &str = r#"
 << core.test
 
-describe("arithmetic", () => <
-  it("holds", () => expect(2 + 2, equals(4)))
-  it("does not hold", () => expect(2 + 2, equals(5)))
-  it("runs after the failure", () => expect("after", equals("after")))
+test.describe("arithmetic", () => <
+  test.it("holds", () => expect(2 + 2, equals(4)))
+  test.it("does not hold", () => expect(2 + 2, equals(5)))
+  test.it("runs after the failure", () => expect("after", equals("after")))
 >)
 "#;
 
@@ -142,7 +142,7 @@ fn build_and_execute(source: &Path, directory: &Path, linker: &str) -> Output {
 
 #[test]
 fn a_top_level_describe_call_parses_as_a_test_block() {
-    let tokens = Lexer::tokenize("<< core.test\ndescribe(\"g\", () => 0)\n").expect("lexing");
+    let tokens = Lexer::tokenize("<< core.test\ntest.describe(\"g\", () => 0)\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     assert_eq!(program.test_blocks.len(), 1);
     assert!(
@@ -171,7 +171,7 @@ fn a_describe_definition_is_still_an_ordinary_item() {
 /// ends with, and the state and lifecycle behind them.
 const HARNESS_SYMBOLS: [&str; 11] = [
     "describe",
-    "@it(",
+    "core.test.it",
     "report",
     "failAt",
     "enterSuite",
@@ -219,8 +219,8 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
             "  bumped = => it.total + 1,\n",
             "  ` = => \"counter\"\n",
             "}\n",
-            "describe(\"double\", () => <\n",
-            "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
+            "test.describe(\"double\", () => <\n",
+            "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n",
             "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
         ),
@@ -298,8 +298,8 @@ const TESTS_BESIDE_CODE_SUITE: &str = concat!(
     "<< core.test\n",
     "double = (n :: Num) -> Num => n * 2\n",
     "Counter = { total :: Num, bumped = => it.total + 1 }\n",
-    "describe(\"double\", () => <\n",
-    "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
+    "test.describe(\"double\", () => <\n",
+    "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
     ">)\n",
     "^ = () -> Num => double(0) + Counter { total = 0 }.bumped() - 1\n"
 );
@@ -359,10 +359,10 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
             "double = (n :: Num) -> Num => n * 2\n",
             "Counter = { total :: Num, bumped = => it.total + 1 }\n",
             "^ = () -> Num => <\n",
-            "  describe(\"double\", () => <\n",
-            "    it(\"doubles\", () => expect(double(21), equals(42)))\n",
+            "  test.describe(\"double\", () => <\n",
+            "    test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
             "  >)\n",
-            "  reportSummary() + Counter { total = 0 }.bumped() - 1\n",
+            "  test.reportSummary() + Counter { total = 0 }.bumped() - 1\n",
             ">\n"
         ),
     );
@@ -378,7 +378,7 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
     // no build may leak them, but nothing in the harness itself reaches them.)
     for present in [
         "describe",
-        "@it(",
+        "core.test.it",
         "reportSummary",
         "enterSuite",
         "finishCase",
@@ -425,8 +425,8 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
             "reportCase = (name :: Text, depth :: Num, failed :: Bool) -> Text =>\n",
             "  indent(depth) + (failed ? red(name) : green(name))\n",
             "^ = () -> Num => <\n",
-            "  print(reportSuite(\"group\", 1))\n",
-            "  print(reportCase(\"case\", 2, false))\n",
+            "  io.print(reportSuite(\"group\", 1))\n",
+            "  io.print(reportCase(\"case\", 2, false))\n",
             "  0\n",
             ">\n"
         ),
@@ -446,58 +446,80 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The names `<< core.http` puts in a program's scope, pinned EXACTLY rather than as a list of
-/// absences — the five the harness stopped exporting no longer exist anywhere, so asserting
-/// they are absent could never fail.
+/// The names `<< core.http` puts in a program, pinned EXACTLY. Every one arrives under its
+/// module's qualified name — nothing bare but the `@` primitives — so none can collide with
+/// anything the importer writes, and only the `>>`-exported ones resolve for it.
 ///
-/// `corelib/http.qn` needs the harness for its own cases and imports it with a plain `<<`, so
-/// the resolver walks into `core.test` (and `core.io` behind it) and merges what they export.
-/// That is the accepted cost of dropping the test-only marker: a program importing the client
-/// cannot also define a `describe` or a `failAt` of its own. What it CAN define is everything
-/// the report was inlined out of, which is the shrink this asserts the other half of.
+/// `corelib/http.qn` needs the harness for its own cases and imports it with a plain `<<`,
+/// so the resolver walks into `core.test` (and `core.io` behind it), and the client's own
+/// private test fixtures travel with it — carried, qualified, and unreachable from outside.
 #[test]
 fn importing_core_http_contributes_exactly_this_surface() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
-    let (items, _sources) =
-        quilon::modules::resolve_imports(&program, Path::new(".")).expect("import resolution");
-    let mut contributed: Vec<&str> = items.iter().map(Item::name).collect();
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new(".")).expect("import linking failed");
+    // Everything but the program's own `^` was contributed by the import.
+    let mut contributed: Vec<&str> = linked
+        .items
+        .iter()
+        .map(Item::name)
+        .filter(|name| *name != "^")
+        .collect();
     contributed.sort_unstable();
 
     let mut expected = vec![
         // core.io, behind the harness.
-        "stdout",
-        "stderr",
-        "print",
-        "eprint",
-        "write",
+        "core.io.stdout",
+        "core.io.stderr",
+        "core.io.print",
+        "core.io.eprint",
+        "core.io.write",
         "@readStdin",
-        // core.test: the harness, the summary, the state and the lifecycle. NOT `indent`,
-        // `green`, `red`, `reportSuite` or `reportCase` — those are inlined into the three
-        // functions above them and export no name.
-        "failAt",
-        "casesPassed",
-        "casesFailed",
-        "nestingDepth",
-        "enterSuite",
-        "leaveSuite",
-        "caseFailing",
-        "finishCase",
-        "describe",
-        "it",
-        "reportSummary",
+        // core.test: the harness, the summary, the state and the lifecycle.
+        "core.test.failAt",
+        "core.test.casesPassed",
+        "core.test.casesFailed",
+        "core.test.nestingDepth",
+        "core.test.enterSuite",
+        "core.test.leaveSuite",
+        "core.test.caseFailing",
+        "core.test.finishCase",
+        "core.test.describe",
+        "core.test.it",
+        "core.test.reportSummary",
         // core.net, and the client itself.
         "@tcpRequest",
-        "Body",
-        "Method",
-        "Response",
-        "Request",
+        "core.http.Body",
+        "core.http.Method",
+        "core.http.Response",
+        "core.http.Request",
+        // The client's own PRIVATE test fixtures: carried with the module (an exported
+        // item may lean on them), exported to no importer.
+        "core.http.crlfReply",
+        "core.http.lineFeedReply",
+        "core.http.headerOr",
+        "core.http.parsed",
+        // core.text, merged implicitly because the client calls composable Text methods
+        // (`.split`/`.trim`/`.contains`) — the implementations those calls lower to,
+        // qualified so they claim no name an importer could write.
+        "core.text.split",
+        "core.text.splitOnto",
+        "core.text.trim",
+        "core.text.contains",
+        "core.text.replace",
+        "core.text.replaceAll",
+        "core.text.replaceOnto",
+        "core.text.replaceRemainder",
+        "core.text.repeat",
+        "core.text.copies",
+        "core.text.double",
     ];
     expected.sort_unstable();
 
     assert_eq!(
         contributed, expected,
-        "`<< core.http` merges a different set of names than this pins"
+        "`<< core.http` contributes a different set of names than this pins"
     );
 }
 
@@ -518,13 +540,13 @@ fn quilon_test_ignores_the_entry_point_beside_the_blocks_it_runs() {
 << core.io
 << core.test
 
-^ = () -> $ => print("{PROGRAM_MARKER}")
+^ = () -> $ => io.print("{PROGRAM_MARKER}")
 
 helper = (n :: Num) -> Num => n * 2
 
-describe("helper", () => <
-  it("doubles", () => <
-    print("{ERASED_BLOCK_MARKER}")
+test.describe("helper", () => <
+  test.it("doubles", () => <
+    io.print("{ERASED_BLOCK_MARKER}")
     expect(helper(21), equals(42))
   >)
 >)
@@ -629,12 +651,12 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
         "suite.qn",
         concat!(
             "<< core.test\n",
-            "describe(\"skipping\", () => <\n",
-            "  it(\"stops at the first failure\", () => <\n",
+            "test.describe(\"skipping\", () => <\n",
+            "  test.it(\"stops at the first failure\", () => <\n",
             "    expect(1, equals(2))\n",
             "    expect(3, equals(4))\n",
             "  >)\n",
-            "  it(\"starts clean\", () => expect(5, equals(5)))\n",
+            "  test.it(\"starts clean\", () => expect(5, equals(5)))\n",
             ">)\n"
         ),
     );
@@ -699,9 +721,9 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         "suite.qn",
         concat!(
             "<< core.test\n",
-            "describe(\"g\", () => <\n",
+            "test.describe(\"g\", () => <\n",
             "  expect(1, equals(2))\n",
-            "  it(\"unaffected\", () => expect(1, equals(1)))\n",
+            "  test.it(\"unaffected\", () => expect(1, equals(1)))\n",
             ">)\n"
         ),
     );
@@ -733,13 +755,13 @@ fn the_run_state_is_readable_through_named_functions() {
         concat!(
             "<< core.io\n",
             "<< core.test\n",
-            "describe(\"outer\", () => <\n",
-            "  it(\"sits at depth 1\", () => expect(nestingDepth(), equals(1)))\n",
-            "  describe(\"inner\", () => <\n",
-            "    it(\"sits one deeper\", () => expect(nestingDepth(), equals(2)))\n",
-            "    it(\"counts the cases behind it\", () => <\n",
-            "      expect(casesPassed(), equals(2))\n",
-            "      expect(casesFailed(), equals(0))\n",
+            "test.describe(\"outer\", () => <\n",
+            "  test.it(\"sits at depth 1\", () => expect(test.nestingDepth(), equals(1)))\n",
+            "  test.describe(\"inner\", () => <\n",
+            "    test.it(\"sits one deeper\", () => expect(test.nestingDepth(), equals(2)))\n",
+            "    test.it(\"counts the cases behind it\", () => <\n",
+            "      expect(test.casesPassed(), equals(2))\n",
+            "      expect(test.casesFailed(), equals(0))\n",
             "    >)\n",
             "  >)\n",
             ">)\n"
@@ -811,9 +833,9 @@ fn an_assert_in_a_case_is_still_fatal() {
         "suite.qn",
         concat!(
             "<< core.test\n",
-            "describe(\"fatal\", () => <\n",
-            "  it(\"asserts\", () => assert(1, equals(2)))\n",
-            "  it(\"never reached\", () => expect(1, equals(1)))\n",
+            "test.describe(\"fatal\", () => <\n",
+            "  test.it(\"asserts\", () => assert(1, equals(2)))\n",
+            "  test.it(\"never reached\", () => expect(1, equals(1)))\n",
             ">)\n"
         ),
     );
@@ -840,7 +862,7 @@ fn a_directory_runs_every_suite_it_holds() {
         "mixed.qn",
         concat!(
             "<< core.test\n",
-            "describe(\"mixed\", () => it(\"runs\", () => expect(true, equals(true))))\n",
+            "test.describe(\"mixed\", () => test.it(\"runs\", () => expect(true, equals(true))))\n",
             "^ = () -> Num => 7\n"
         ),
     );
@@ -904,18 +926,18 @@ fn a_suite_that_does_not_compile_fails_the_run() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A suite that imports no harness at all is told so at its own `describe` — rather than at
-/// the entry point the compiler synthesized, which has no location — with the import that
-/// fixes it named.
+/// A suite that imports no harness at all is told so at its own `test.describe` — rather
+/// than at the entry point the compiler synthesized, which has no location — with the
+/// import that fixes it named.
 #[test]
 fn a_suite_without_a_harness_is_reported_at_its_own_describe() {
     let dir = work_dir("noimport");
-    let source = write(&dir, "suite.qn", "\ndescribe(\"g\", () => 0)\n");
+    let source = write(&dir, "suite.qn", "\ntest.describe(\"g\", () => 0)\n");
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0);
     assert!(
-        out.stderr.contains("suite.qn:2:") && out.stderr.contains("no test harness"),
-        "the diagnostic must point at the `describe` call:\n{}",
+        out.stderr.contains("suite.qn:2:") && out.stderr.contains("not an imported module"),
+        "the diagnostic must point at the `test.describe` call:\n{}",
         out.stderr
     );
     assert!(
@@ -970,8 +992,8 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         concat!(
             "<< core.test\n",
             ">> double = (n :: Num) -> Num => n * 2\n",
-            "describe(\"double\", () => <\n",
-            "  it(\"doubles\", () => expect(double(21), equals(42)))\n",
+            "test.describe(\"double\", () => <\n",
+            "  test.it(\"doubles\", () => expect(double(21), equals(42)))\n",
             ">)\n"
         ),
     );

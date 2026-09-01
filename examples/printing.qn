@@ -26,23 +26,23 @@ Reading = { at :: Num }
   here :: Temperature = Temperature { degrees = 21, scale = "C" }
 
   ~ `print` writes the rendering, and interpolation splices the same Text.
-  print(here)                                ~ stdout: 21°C\n
+  io.print(here)                                ~ io.stdout: 21°C\n
   assert("`here`", equals("21°C"))
 
   ~ A sum's member, and a record that defines none.
   level :: Level = High
-  print(level)                               ~ stdout: high\n
+  io.print(level)                               ~ io.stdout: high\n
   assert("`level`", equals("high"))
   assert("`Reading { at = 3 }`", equals("Reading"))
 
   ~ `write` renders too: no newline, and the rendered bytes as they are. "21°C" is
   ~ 5 bytes — the degree sign takes two.
-  written :: Num = here |> write(stdout)
+  written :: Num = io.write(here, io.stdout)
   assert(written, equals(5))
 
   ~ The built-in types take the same path.
-  print(42)                                  ~ stdout: 42\n
-  print(true)                                ~ stdout: True\n
-  print([1, 2, 3])                           ~ stdout: [1, 2, 3]\n
-  eprint(here)                               ~ stderr: 21°C\n
+  io.print(42)                                  ~ io.stdout: 42\n
+  io.print(true)                                ~ io.stdout: True\n
+  io.print([1, 2, 3])                           ~ io.stdout: [1, 2, 3]\n
+  io.eprint(here)                               ~ io.stderr: 21°C\n
 >

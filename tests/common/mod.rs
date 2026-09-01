@@ -214,9 +214,9 @@ pub fn front_end(
 ) -> (quilon::ast::Program, TypeTable, DeferInfo, Rc<SourceMap>) {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    // `None` still links (against the current directory): a program with no `<<` resolves
-    // no imports, but the link is also where `core.text` is merged in for a program using
-    // a composable Text method — which needs no import in real pipelines either.
+    // Linking is not optional: it is also what resolves qualified references
+    // (`io.print` -> `core.io.print`) and merges `core.text` behind a composable Text
+    // method call, even in a program importing nothing.
     let dir = base_dir.unwrap_or_else(|| Path::new("."));
     let (program, mut sources) =
         quilon::modules::link(program, dir).expect("import linking failed");

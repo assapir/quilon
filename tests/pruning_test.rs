@@ -31,8 +31,8 @@ fn emit_linked(src: &str) -> String {
     let context = inkwell::context::Context::create();
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let (program, _sources) = quilon::modules::link(program, std::path::Path::new("."))
-        .expect("import linking failed");
+    let (program, _sources) =
+        quilon::modules::link(program, std::path::Path::new(".")).expect("import linking failed");
     let types = quilon::typechecker::TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
@@ -184,20 +184,6 @@ fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
 }
 
 #[test]
-fn a_pipeline_into_a_top_level_function_named_it_reaches_it() {
-    // `x |> f` desugars to a call of `f`, so a bare name on the right of a pipe is a callee
-    // too — the second position where a bare `it` names a top-level function.
-    assert_exit(
-        concat!(
-            "it = (n :: Num) -> Num => n + 1\n",
-            "Box = { size :: Num, doubled = => it.size * 2 }\n",
-            "^ = () -> Num => Box { size = 20 }.doubled() + 1 |> it"
-        ),
-        42,
-    );
-}
-
-#[test]
 fn a_module_with_no_entry_point_keeps_everything() {
     // Nothing is reachable from an entry point that does not exist, so a module compiled on
     // its own must not be emptied out — a later program may call any of it.
@@ -211,7 +197,7 @@ fn a_program_without_text_methods_carries_no_core_text() {
     // The implicit `core.text` merge happens only when a composable Text method appears.
     let ir = emit_linked("^ = () -> Num => 40 + 2\n");
     assert!(
-        !ir.contains("__qn_text_"),
+        !ir.contains("core.text."),
         "a program using no Text method must not carry core.text"
     );
 }
@@ -222,15 +208,15 @@ fn only_the_used_text_composables_survive_the_merge() {
     // the unmentioned composables (split, replace, …) are pruned back out.
     let ir = emit_linked("^ = () -> Num => \"  x  \".trim().size\n");
     assert!(
-        defines(&ir, "__qn_text_trim"),
+        defines(&ir, "core.text.trim"),
         "the used composable must be emitted"
     );
     assert!(
-        !defines(&ir, "__qn_text_split"),
+        !defines(&ir, "core.text.split"),
         "`split` is used by nothing here"
     );
     assert!(
-        !defines(&ir, "__qn_text_replace"),
+        !defines(&ir, "core.text.replace"),
         "`replace` is used by nothing here"
     );
 }
@@ -241,11 +227,11 @@ fn imported_corelib_still_provides_what_the_program_uses() {
     // program does use has to keep working. (The AOT side of this — every example through
     // the real linker, all of which now prune — is `examples_test`'s JIT/AOT comparison.)
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(1 + 1, equals(2))\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  io.print(\"hi\")\n  assert(1 + 1, equals(2))\n>",
         0,
     );
     assert_exit_linked(
-        "<< core.io\n<< core.test\n^ = () -> $ => <\n  print(\"hi\")\n  assert(\"a\", equals(\"a\"))\n>",
+        "<< core.io\n<< core.test\n^ = () -> $ => <\n  io.print(\"hi\")\n  assert(\"a\", equals(\"a\"))\n>",
         0,
     );
 }

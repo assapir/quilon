@@ -14,25 +14,25 @@
 
 >> wordCount = (line :: Text) -> Num => line.trim().split(" ").size
 
-describe("slugify", () => <
-  it("lowercases and hyphenates", () =>
+test.describe("slugify", () => <
+  test.it("lowercases and hyphenates", () =>
     expect(slugify("  Hello World  "), equals("hello-world")))
-  it("leaves one lowercase word alone", () => expect(slugify("quilon"), equals("quilon")))
+  test.it("leaves one lowercase word alone", () => expect(slugify("quilon"), equals("quilon")))
 >)
 
-describe("wordCount", () => <
-  it("counts the words of a line", () => expect(wordCount(" one two three "), equals(3)))
+test.describe("wordCount", () => <
+  test.it("counts the words of a line", () => expect(wordCount(" one two three "), equals(3)))
 >)
 
-describe("the erased block", () => <
-  it("runs under quilon test and nowhere else", () => <
-    print("ERASED-TEST-BLOCK-RAN")
+test.describe("the erased block", () => <
+  test.it("runs under quilon test and nowhere else", () => <
+    io.print("ERASED-TEST-BLOCK-RAN")
     expect(slugify("Both Halves"), equals("both-halves"))
   >)
 >)
 
 ^ = () -> $ => <
-  print("PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS")
+  io.print("PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS")
   assert(slugify("  Hello World  "), equals("hello-world"))
   assert(wordCount("one two three"), equals(3))
 >

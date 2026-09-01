@@ -205,13 +205,6 @@ fn test_parse_field_access() {
 }
 
 #[test]
-fn test_parse_pipeline() {
-    let tokens = Lexer::tokenize("result = data |> filter |> collect").unwrap();
-    let result = parse(&tokens);
-    assert!(result.is_ok());
-}
-
-#[test]
 fn test_parse_ternary() {
     let tokens = Lexer::tokenize("abs = x >= 0 ? x : -x").unwrap();
     let result = parse(&tokens);

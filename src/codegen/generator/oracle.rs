@@ -38,7 +38,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // An in-place field write `obj.field := v` is an effect; it yields `$`.
             Expression::FieldAssign { .. } => true,
             Expression::Call { function, .. } => {
-                matches!(function.as_ref(), Expression::Identifier { name, .. } if name == "print" || name == "eprint")
+                matches!(function.as_ref(), Expression::Identifier { name, .. } if name == "core.io.print" || name == "core.io.eprint")
             }
             Expression::Block { statements, .. } => match statements.last() {
                 Some(crate::ast::Statement::Expression(tail)) => self.expression_is_unit(tail),

@@ -188,16 +188,6 @@ fn inferred_lambda_parameter_is_not_num_by_default() {
 }
 
 #[test]
-fn inferred_lambda_parameter_through_a_pipe() {
-    // `x |> f(a)` is `f(x, a)`, so the piped call states the same target type.
-    assert_exit(
-        "apply = (x :: Num, f :: (Num) -> Num) -> Num => f(x)\n\
-         ^ = () -> Num => 20 |> apply((n) => n * 2)",
-        40,
-    );
-}
-
-#[test]
 fn inferred_lambda_parameter_for_a_method() {
     // A method's function-typed parameter types the lambda its call is given.
     assert_exit(
@@ -325,7 +315,7 @@ fn a_lambda_handed_to_print_is_refused_as_unrenderable() {
     // `print` claims every one-argument call, and a lambda argument is left untyped by the
     // dispatcher — so the rendering rule has to type it before it can say what is wrong,
     // rather than mistaking the untyped argument for a miscounted one.
-    let message = type_error_message("^ = () -> $ => print((n :: Num) => n + 1)");
+    let message = type_error_message("<< core.io\n^ = () -> $ => io.print((n :: Num) => n + 1)");
     assert!(
         message.contains("renders its argument") && message.contains("(Num) -> Num has none"),
         "unexpected message: {message}"

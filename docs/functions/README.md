@@ -89,7 +89,6 @@ and the lambda need not repeat them:
 ```quilon ignore
 apply(10, (n) => n + 1)          ~ `apply`'s `(Num) -> Num` parameter types `n`
 c.applyTo((n) => n * 2)          ~ so does a method's function-typed parameter
-10 |> apply((n) => n + 1)        ~ the pipe injects the first argument; same signature
 scale :: (Num) -> Num = (n) => n * 4   ~ a binding that declares its function type
 ```
 

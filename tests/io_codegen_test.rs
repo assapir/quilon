@@ -11,8 +11,14 @@ use quilon::lexer::Lexer;
 use quilon::parser::parse;
 
 fn gen_ir(source: &str) -> String {
-    let tokens = Lexer::tokenize(source).unwrap();
+    // The sources reach the output built-ins the only way a program can — through
+    // `<< core.io` — so the link that resolves the qualified names runs here too.
+    let source = format!("<< core.io\n{source}");
+    let tokens = Lexer::tokenize(&source).unwrap();
     let program = parse(&tokens).unwrap();
+    let program = quilon::modules::link(program, std::path::Path::new("."))
+        .expect("import linking failed")
+        .0;
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
     generator
@@ -27,7 +33,7 @@ fn print_number_renders_via_num_to_text() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
-            print(42)
+            io.print(42)
             0
         >
     "#,
@@ -50,7 +56,7 @@ fn print_text_lowers_to_print_text_fd_intrinsic() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
-            print("hello")
+            io.print("hello")
             0
         >
     "#,
@@ -74,7 +80,7 @@ fn write_lowers_to_write_bytes_intrinsic() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
-            write("hello", 1)
+            io.write("hello", 1)
             0
         >
     "#,
@@ -92,7 +98,7 @@ fn print_bool_renders_via_bool_to_text() {
     let ir = gen_ir(
         r#"
         ^ = () -> Num => <
-            print(true)
+            io.print(true)
             0
         >
     "#,

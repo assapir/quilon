@@ -1,19 +1,20 @@
 ~ core.io — output to file descriptors.
-~ Import with `<< core.io`. Exposes:
-~   write(content, fd)   ~ write content's rendered bytes to a file descriptor (no
-~                          newline); returns the number of bytes written (Num)
-~   print(x)             ~ write x to stdout, with a trailing newline (any renderable value)
-~   eprint(x)            ~ same, to stderr
-~   @readStdin()         ~ read one line from stdin (Text, without the trailing newline)
-~   stdout, stderr       ~ the standard file descriptors (Num: 1 and 2)
+~ Import with `<< core.io`; the exports are reached through the `io` binding:
+~   io.write(content, fd) ~ write content's rendered bytes to a file descriptor (no
+~                           newline); returns the number of bytes written (Num)
+~   io.print(x)           ~ write x to stdout, with a trailing newline (any renderable value)
+~   io.eprint(x)          ~ same, to stderr
+~   @readStdin()          ~ read one line from stdin (Text, without the trailing newline);
+~                           an `@` primitive keeps its bare name once the module is imported
+~   io.stdout, io.stderr  ~ the standard file descriptors (Num: 1 and 2)
 ~
 ~ Examples:
 ~   << core.io
 ~   ^ = () -> Num => <
-~     print("hello")              ~ prints: hello\n
-~     print(42)                   ~ prints: 42\n
-~     "raw" |> write(stdout)      ~ prints: raw   (no newline); == write("raw", stdout)
-~     eprint("oops")              ~ to stderr, with a newline
+~     io.print("hello")              ~ prints: hello\n
+~     io.print(42)                   ~ prints: 42\n
+~     io.write("raw", io.stdout)     ~ prints: raw   (no newline)
+~     io.eprint("oops")              ~ to stderr, with a newline
 ~     0
 ~   >
 ~
@@ -27,7 +28,7 @@
 
 ~ Write a value to stdout followed by a newline. Takes anything renderable: the value is
 ~ rendered through its type's `` ` `` member. `print(x)` is the ergonomic form of
-~ `x |> write(stdout)` (plus the newline).
+~ `write(x, stdout)` (plus the newline).
 ~ Returns Unit (`$`) — the printed value's "result" is meaningless.
 >> print = x -> $ => $
 
@@ -36,7 +37,7 @@
 >> eprint = x -> $ => $
 
 ~ Write a value's rendered bytes to a file descriptor (no trailing newline).
-~ Returns the number of bytes written. e.g. `"hi" |> write(stdout)`.
+~ Returns the number of bytes written. e.g. `write("hi", stdout)`.
 >> write = (content, fd :: Num) -> Num => 0
 
 ~ Read one line from stdin, returning it as a Text WITHOUT the trailing newline.

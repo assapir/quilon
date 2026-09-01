@@ -33,7 +33,8 @@ both the type (in type position, e.g. `-> $`) and its sole value (in value posit
 analogous to `()` in Rust/ML. Use it for side-effecting expressions and functions whose
 result is meaningless. `print` and `eprint` return `$`. `$` is compatible only with `$`.
 ```quilon
-log = (m :: Text) -> $ => print(m)   ~ a function whose result is meaningless
+<< core.io
+log = (m :: Text) -> $ => io.print(m)   ~ a function whose result is meaningless
 ^ = () -> $ => log("started")        ~ a `$` body exits 0 (it is not a Num)
 ```
 

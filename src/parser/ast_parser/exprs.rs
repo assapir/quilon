@@ -143,34 +143,17 @@ impl<'a> Parser<'a> {
     /// Infix range `lo <- hi` → inclusive `[]Num` (see the `Expression::Range` node).
     /// Non-associative: consumes at most one `<-`, so `a <- b <- c` is rejected.
     pub(super) fn parse_range(&mut self) -> Result<Expression, ParseError> {
-        let left = self.parse_pipeline()?;
+        let left = self.parse_additive()?;
 
         if self.check(&TokenKind::LeftArrow) {
             self.advance(); // consume `<-`
-            let right = self.parse_pipeline()?;
+            let right = self.parse_additive()?;
             let span = self.span(left.span().start, right.span().end);
             return Ok(Expression::Range {
                 start: Box::new(left),
                 end: Box::new(right),
                 span,
             });
-        }
-
-        Ok(left)
-    }
-
-    pub(super) fn parse_pipeline(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_additive()?;
-
-        while self.check(&TokenKind::Pipeline) {
-            self.advance();
-            let right = self.parse_additive()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::Pipeline {
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-            };
         }
 
         Ok(left)
@@ -477,6 +460,9 @@ impl<'a> Parser<'a> {
         }
         let mut parser = Parser::new(&tokens);
         parser.span_base = abs;
+        // A hole may spell qualified names, so it sees the same import bindings the
+        // enclosing file has accumulated so far.
+        parser.module_paths = self.module_paths.clone();
         let expression = parser.parse_expression()?;
         if !parser.is_at_end() {
             return Err(ParseError {
@@ -550,9 +536,11 @@ impl<'a> Parser<'a> {
                     return self.parse_lambda_expression();
                 }
 
-                let span = token.span.clone();
-                let name = token.text.clone();
-                self.advance();
+                // A qualified reference through an imported module binding — `http.send`,
+                // `http.Request { … }`, `core.test.describe` — reads as ONE dotted name;
+                // the postfix loop then applies `(args)` / `{ fields }` / further `.`s to
+                // it like any other reference.
+                let (name, span, _) = self.parse_name_or_qualified();
 
                 // A same-line `{` makes this a record constructor: Ident { ... }. A
                 // line-first `{` leaves the identifier a plain reference and the

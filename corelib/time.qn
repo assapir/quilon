@@ -5,6 +5,6 @@
 ~ Pause the current fiber for `seconds` seconds (a fractional Num), then continue.
 >> @sleep = (seconds :: Num) -> $ => $
 
-~ Seconds on a monotonic clock (a fractional Num). Only DIFFERENCES between two `now()`
-~ readings are meaningful, which is what measures elapsed time.
+~ Seconds on a monotonic clock (a fractional Num), called `time.now()`. Only DIFFERENCES
+~ between two readings are meaningful, which is what measures elapsed time.
 >> now = () -> Num => 0

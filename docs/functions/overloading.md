@@ -38,20 +38,20 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   inferred return type — no return annotation needed. Its parameters are still annotated;
   only an unannotated **method** parameter defaults to `Num` (see
   [named record types](../types/records.md#named-record-types-with-methods)).
-- **The compiler's own definitions are members, not reserved names.** The built-in
-  operators, and `core.time`'s `now`, are members of their sets like any other. Defining one
-  of those names with a different signature ADDS a member that wins for its argument types;
-  the built-in stays reachable for the types it claims. Defining the built-in's own signature
-  is the usual duplicate-definition error.
-- **The output built-ins claim their arity.** [`print`/`eprint`/`write`](../corelib/io.md)
-  already take any renderable value, so there is no argument type left for a member to
-  claim: a definition at their own arity is rejected and points at the type's
-  [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-)
-  instead. Another arity is an ordinary set beside them:
+- **The built-in operators are members, not reserved names.** `+` on `Num` and `+` on
+  `Text` are two members of the `+` set, and a type's own operator member joins it on the
+  same terms.
+- **A module's overload sets are [closed](../modules/README.md#closed-overload-sets).**
+  `io.print` / `io.write` / `time.now` are reached only through their module's binding, so
+  a program's own bare `print` or `write` — at any signature — is an unrelated function,
+  never a member beside the built-in. The output built-ins already take any renderable
+  value; a type becomes printable by defining its
+  [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-),
+  and a program builds on a module by wrapping it:
   ```quilon ignore
-  write = (content :: Text) -> Num => write(content, stdout)  ~ adds a member…
-  write("raw")           ~ …which this call picks
-  write("raw", stdout)   ~ while this one still reaches the built-in
+  write = (content :: Text) -> Num => io.write(content, io.stdout)  ~ the program's own
+  write("raw")                 ~ a plain call of the wrapper
+  io.write("raw", io.stdout)   ~ the module's, through its binding
   ```
 - A member joins its set where it is written, so a call resolves only against the members
   above it ([names resolve top to bottom](README.md#names-resolve-top-to-bottom)).

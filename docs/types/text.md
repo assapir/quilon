@@ -73,11 +73,10 @@ with `reduce` + `+`.
 Only the true primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
 `slice`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison, and `+`. The composable
 methods — `split`, `trim`, `contains`, `replace`, `replaceAll`, `repeat` — are ordinary
-Quilon over those (`corelib/text.qn`), merged in by the compiler when a program uses one;
-no import is ever needed. That merge carries `core.text`'s own dependencies (`core.io`,
-`core.test`) with it, so a program calling a composable method cannot also define a
-top-level name those modules export (`describe`, `failAt`, `stdout`, …) — the same
-already-accepted tradeoff `<< core.http` makes, reached here through a method call.
+Quilon over those (`corelib/text.qn`), merged in by the compiler — under its qualified
+names, binding nothing in the program's own scope — when a program uses one; no import is
+ever needed. (`<< core.text` works too, and adds the `text.split(t, sep)` function forms
+to your scope; it changes nothing else.)
 
 `replace`/`replaceAll`/`repeat` **fail loudly**. They never silently no-op or clamp. Three
 inputs are rejected: an empty `from`; a `replace` `count` that is `<= 0` or exceeds the
@@ -116,10 +115,10 @@ User = {
   age  :: Num,
   ` = () -> Text => "User(`it.name`, `it.age`)"   ~ override: `it` is the instance
 }
-~ Now both `print(u)` and `"`u`"` render as  User(Ada, 36)
+~ Now both `io.print(u)` and `"`u`"` render as  User(Ada, 36)
 ```
 
-So `print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
+So `io.print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
 present, the built-in default otherwise. (A `` ` `` that renders `it` *wholesale* falls
 back to the default rather than recursing forever.)
 

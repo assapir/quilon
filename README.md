@@ -4,7 +4,7 @@
 
 **[quilon.run](https://quilon.run/)**
 
-Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `|>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
+Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
 > **Status: 0.9.2 — "stable basics."** The core language compiles, runs, and is tested end-to-end, but it is **not** feature-complete. For what is and isn't implemented, see the **[feature matrix](./docs/status/feature-matrix.md)**.
 
@@ -19,11 +19,10 @@ double = (x :: Num) => x * 2
 ~ Text is a built-in type: + concatenates, .length counts graphemes
 greet = name :: Text => "Hello, " + name
 
-~ the pipe |> injects the left value as the first argument
 ^ = () -> Num => <
-  print(greet("Quilon"))      ~ stdout: Hello, Quilon
-  [1, 2, 3].each(n => print(n))   ~ iterate with array methods (no `for` loop)
-  10 |> double                ~ ≡ double(10)
+  io.print(greet("Quilon"))   ~ stdout: Hello, Quilon
+  [1, 2, 3].each(n => io.print(n))   ~ iterate with array methods (no `for` loop)
+  double(10)
 >
 ```
 

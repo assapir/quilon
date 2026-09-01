@@ -64,7 +64,7 @@ fn runnable_examples() -> Vec<PathBuf> {
 
 /// A file is a test suite iff some line opens a `describe(` block.
 fn defines_test_blocks(path: &Path) -> bool {
-    any_line_starts_with(path, "describe(")
+    any_line_starts_with(path, "test.describe(")
 }
 
 /// Every example carrying top-level `describe` blocks must PASS under `quilon test`. Compiling

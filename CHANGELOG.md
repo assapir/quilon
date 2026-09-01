@@ -6,6 +6,32 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.info` — what a program can ask about itself.** `<< core.info` brings in
+  `platform()`, `os()`, `pointerWidth()`, `endianness()` and `runMode()`, each a sum type
+  so a match over one is exhaustive and a typo is a compile error, plus `quilonVersion()`
+  as a `Text` (a version is an open set):
+
+  ```quilon ignore
+  << core.info
+
+  ^ = () -> Num => <
+    print("`platform()`-`os()` `pointerWidth()`, quilon `quilonVersion()` (`runMode()`)")
+    os() ? | Linux => 0 | MacOS => 0 | WtfOs(name) => name.size | _ => 1
+  >
+  ```
+
+  The answers describe the machine the program will **run** on, so a cross-compiled binary
+  reports its target. A target with no variant of its own is `WtfPlatform(Text)` /
+  `WtfOs(Text)`, carrying the architecture and the whole triple rather than collapsing to a
+  shrug. `pointerWidth()` and `endianness()` come from LLVM's data layout, not from the
+  architecture's name — `powerpc64le` is little-endian despite its spelling. `runMode()` is
+  the one that is not about the target: `Jit` under `quilon run`, `Aot` for a built binary.
+
+  Each is a compile-time constant, lowered to the same global byte constant a `Text`
+  literal becomes: no call in the emitted IR, no syscall, and two reads always agree. The
+  types are ordinary Quilon in `corelib/info.qn` over `__`-prefixed primitives, the way
+  `core.http` sits on `core.net`, so the import is required. See `docs/corelib/info.md`.
+
 - **A lambda takes its parameter types from the signature that receives it.** Where a
   lambda lands on a known function type, that type says what its parameters are:
 
@@ -45,6 +71,24 @@ All notable changes to Quilon are documented here.
   delimits the body. See `docs/corelib/http.md`.
 
 ### Changed
+
+- **BREAKING: a method does not answer the plain call form**
+  ([#285](https://github.com/assapir/quilon/issues/285)). A method is reached through
+  `recv.name(...)` and nowhere else; `name(recv, args)` resolves in the top-level
+  namespace alone. The two halves now match: a member call never falls through to a
+  function, and a plain call never redirects into an argument's type.
+
+  ```quilon ignore
+  Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
+
+  c.bump(5)      ~ 35
+  bump(c, 5)     ~ error: no function 'bump' in scope — 'bump' is a member of Counter
+  split(s, ",")  ~ error: no function 'split' in scope — 'split' is a member of Text
+  ```
+
+  What breaks: any call reaching a method through the plain form `name(recv, args)` —
+  including the methods reserved on `Text`, arrays, `Map` and `Set`. Migration: write it as
+  `recv.name(args)`. The error names the type the member lives on and spells that call out.
 
 - **BREAKING: a range endpoint must be a whole number a `Num` holds exactly** ([#215](https://github.com/assapir/quilon/issues/215)).
   `lo <- hi` counts from one end to the other, so an end must be a whole number — and a

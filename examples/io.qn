@@ -1,28 +1,28 @@
 ~ Console output lives in the core.io module (imported explicitly).
-~   print(x)   writes x + a newline to stdout (any renderable value)
-~   eprint(x)  same, to stderr
-~   write(content, fd)  the rendered bytes to a file descriptor; returns the byte count
-~ `print(x)` is the ergonomic form of `x |> write(stdout)` plus the newline. On output,
+~   io.print(x)   writes x + a newline to io.stdout (any renderable value)
+~   io.eprint(x)  same, to io.stderr
+~   io.write(content, fd)  the rendered bytes to a file descriptor; returns the byte count
+~ `io.print(x)` is the ergonomic form of `io.write(x, io.stdout)` plus the newline. On output,
 ~ `print` shows its value for a reader; `write` is byte-exact. Both measure a Text in bytes.
 ~ `<< core.test` verifies the byte count `write` returns; on success the program exits 0.
 << core.io
 << core.test
 
-~ The built-in claims `write` at two arguments, leaving every other arity free: this ADDS a
-~ one-argument `write` member, and the built-in it calls still reaches the runtime. Every
-~ call picks the member its argument types match.
-write = (content :: Text) -> Num => write(content, stdout)
+~ `io.write` is reached only through the module binding, so a program's own bare `write`
+~ is a different, unrelated function — here a wrapper that fixes the descriptor. Building
+~ on a module means holding it and delegating, never extending its names.
+write = (content :: Text) -> Num => io.write(content, io.stdout)
 
 ^ = () -> $ => <
-  print("hello")            ~ stdout: hello\n
-  written :: Num = "raw" |> write(stdout)   ~ stdout: raw   (no newline)
+  io.print("hello")            ~ stdout: hello\n
+  written :: Num = io.write("raw", io.stdout)   ~ stdout: raw   (no newline)
   assert(written, equals(3))      ~ "raw" is 3 bytes
-  assert(write("!"), equals(1))   ~ the one-argument member, picked by its type
+  assert(write("!"), equals(1))   ~ the program's own wrapper, a plain call
 
   ~ What reaches the descriptor is bytes, not characters: "héllo" is five characters and
   ~ six bytes, and `print` writes the same six plus a newline.
   assert(write("héllo"), equals(6))
-  print("héllo")            ~ stdout: héllo\n
+  io.print("héllo")            ~ io.stdout: héllo\n
 
-  eprint("done")            ~ stderr: done\n
+  io.eprint("done")            ~ io.stderr: done\n
 >

@@ -1,42 +1,81 @@
-//! Module loader for Quilon's `<<` import system (Workstream B1).
+//! Module loader for Quilon's `<<` import system.
 //!
-//! Resolves a program's `<< ...` imports and returns the **exported** items of every
-//! imported module (transitively), to be merged into the importing program's global scope
-//! before type checking and code generation.
+//! Resolves a program's `<< ...` imports and returns every imported module's items —
+//! qualified under the module's name (see [`crate::ast::qualify`]) — to be merged into
+//! the program before type checking and code generation.
 //!
 //! Resolution:
 //! - `<< core.io` resolves to bundled built-in module source (embedded via `include_str!`).
 //! - `<< "path/to.qn"` reads a user module from disk (relative to the importing file, or
 //!   absolute); `\` is normalised to `/` for cross-platform paths.
 //!
-//! Visibility: only items marked exported (`>>` prefix) are merged. Non-exported items are
-//! module-private, so referencing them from an importer surfaces as a normal "undefined"
-//! error. NOTE (minimal release): an exported item that depends on a *private* sibling item
-//! is therefore not yet supported across the merge — core-lib exports instead bottom out in
-//! compiler intrinsics (`__print`, …), not private `.qn` helpers.
+//! An import binds the module under its last path segment (`<< core.http` binds `http`;
+//! a file import binds its file stem), and the importer reaches the module's
+//! `>>`-exported items through that binding: `http.send(...)`. Non-exported items travel
+//! with their module — an exported function's private helpers work — but resolve for no
+//! importer: referencing one surfaces as "not exported".
 
-use crate::ast::{Expression, Import, Item, ModulePath, Program};
-use crate::lexer::{FileId, Lexer, ROOT_FILE};
+use crate::ast::qualify::{self, ModuleScope, QualifyError};
+use crate::ast::{Expression, Import, Item, ModulePath, Program, TypeDefinition};
+use crate::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use crate::parser;
 use crate::source_map::SourceMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Resolve all imports of `program`, returning the exported items to merge into the
-/// importing program, and a [`SourceMap`] naming every module those items came from (the
-/// root file is the caller's to record). `base_dir` is the directory of the importing file
-/// (used to resolve relative file-path imports).
-pub fn resolve_imports(
-    program: &Program,
-    base_dir: &Path,
-) -> Result<(Vec<Item>, SourceMap), String> {
+/// A failure anywhere in import resolution or qualified-name resolution: what went wrong,
+/// where (the span may point into an imported module), and every module source loaded
+/// before the failure — so the caller renders the diagnostic against the file it is
+/// actually in. The root file is the caller's to record.
+#[derive(Debug)]
+pub struct LinkError {
+    pub span: Span,
+    pub message: String,
+    pub sources: SourceMap,
+}
+
+/// Resolve `program`'s imports and return a new program with the imported modules'
+/// qualified items prepended to its own (imports cleared, since they are resolved), the
+/// program's own qualified references (`http.send`) resolved against what it imported,
+/// plus the [`SourceMap`] of the modules everything came from.
+pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), LinkError> {
     let mut loader = Loader::new();
-    loader.resolve_list(&program.imports, base_dir)?;
-    Ok((loader.out, loader.sources))
+    let mut program = program;
+    let linked = loader
+        .root_scope(&program.imports, base_dir)
+        .and_then(|scope| qualify::resolve_program(&mut program, &scope))
+        .and_then(|()| loader.inject_core_text(&program, base_dir));
+    match linked {
+        Ok(()) => {
+            let mut items = loader.out;
+            items.extend(program.items);
+            Ok((
+                Program {
+                    imports: Vec::new(),
+                    items,
+                    // An imported module's own test blocks are that module's to run, so
+                    // only the root program's survive the link.
+                    test_blocks: program.test_blocks,
+                },
+                loader.sources,
+            ))
+        }
+        Err(error) => Err(LinkError {
+            span: error.span,
+            message: error.message,
+            sources: loader.sources,
+        }),
+    }
 }
 
 struct Loader {
-    visited: HashSet<String>,
+    /// Canonical module name -> the resolution key it was first loaded under
+    /// (`builtin:core.io` / `file:/abs/path.qn`). Detects two DIFFERENT modules claiming
+    /// one canonical name (two file imports both named `util.qn`), which the whole-program
+    /// rename cannot allow.
+    loaded: HashMap<String, String>,
+    /// Canonical module name -> its exported bare names, for building importer scopes.
+    exports: HashMap<String, HashSet<String>>,
     out: Vec<Item>,
     /// Each loaded module's display path and text, keyed by the `FileId` its spans carry —
     /// what a `file:line:column` for a span in an imported module is resolved through.
@@ -51,29 +90,75 @@ struct Loader {
 impl Loader {
     fn new() -> Self {
         Self {
-            visited: HashSet::new(),
+            loaded: HashMap::new(),
+            exports: HashMap::new(),
             out: Vec::new(),
             sources: SourceMap::default(),
             next_file: ROOT_FILE + 1,
         }
     }
 
-    fn resolve_list(&mut self, imports: &[Import], base_dir: &Path) -> Result<(), String> {
+    /// Resolve `imports` (the root program's), returning the scope the root resolves its
+    /// qualified names against.
+    fn root_scope(
+        &mut self,
+        imports: &[Import],
+        base_dir: &Path,
+    ) -> Result<ModuleScope, QualifyError> {
+        let mut scope = ModuleScope::default();
         for import in imports {
-            self.resolve_one(&import.path, base_dir)?;
+            let canonical = self.resolve_one(import, base_dir)?;
+            self.bind(&mut scope, &canonical, import)?;
         }
-        Ok(())
+        Ok(scope)
     }
 
-    fn resolve_one(&mut self, path: &ModulePath, base_dir: &Path) -> Result<(), String> {
-        let from_corelib = matches!(path, ModulePath::BuiltinDotted(_));
-        let (canonical, display, source, next_base) = match path {
+    /// Add one resolved import to `scope` under its short binding.
+    fn bind(
+        &self,
+        scope: &mut ModuleScope,
+        canonical: &str,
+        import: &Import,
+    ) -> Result<(), QualifyError> {
+        let alias = crate::ast::display_name(canonical);
+        let exports = self.exports.get(canonical).cloned().unwrap_or_default();
+        scope.add_import(alias, canonical, exports, &import.span)
+    }
+
+    /// Load one module (and, transitively, its own imports), qualify its items under its
+    /// canonical name, and append them to `out`. Returns the canonical name.
+    /// Merge `core.text` when the program (or anything merged into it) calls a composable
+    /// Text method — that is where those methods are implemented, and `Text` being a
+    /// built-in type, no `<<` names it. The module is loaded WITHOUT binding a name in
+    /// the root's scope: codegen reaches its items by their qualified names, and user
+    /// code does not reach them at all unless it writes `<< core.text` itself.
+    /// Reachability prunes it all back out of a program whose mention turns out not to
+    /// be a Text's.
+    fn inject_core_text(&mut self, program: &Program, base_dir: &Path) -> Result<(), QualifyError> {
+        let uses = uses_text_composable_items(&program.items)
+            || program.test_blocks.iter().any(mentions_text_composable)
+            || uses_text_composable_items(&self.out);
+        if !uses {
+            return Ok(());
+        }
+        let import = Import {
+            path: ModulePath::BuiltinDotted(vec!["core".to_string(), "text".to_string()]),
+            span: Span::in_root(0, 0),
+        };
+        self.resolve_one(&import, base_dir).map(|_| ())
+    }
+
+    fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, QualifyError> {
+        let from_corelib = matches!(import.path, ModulePath::BuiltinDotted(_));
+        let (key, canonical, display, source, next_base) = match &import.path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
-                let src = builtin_source(&name)
-                    .ok_or_else(|| format!("unknown built-in module `{}`", name))?;
+                let src = builtin_source(&name).ok_or_else(|| {
+                    fail(&import.span, format!("unknown built-in module `{}`", name))
+                })?;
                 (
                     format!("builtin:{}", name),
+                    name.clone(),
                     name,
                     src.to_string(),
                     base_dir.to_path_buf(),
@@ -89,15 +174,22 @@ impl Loader {
                 };
                 // An imported module never reaches the CLI front end, so the source-name
                 // rule is applied here too.
-                crate::source_extension::require_source(&full.to_string_lossy())?;
-                let source = std::fs::read_to_string(&full)
-                    .map_err(|e| format!("cannot read module `{}`: {}", full.display(), e))?;
+                crate::source_extension::require_source(&full.to_string_lossy())
+                    .map_err(|message| fail(&import.span, message))?;
+                let stem = module_binding_name(&import.path, &import.span)?;
+                let source = std::fs::read_to_string(&full).map_err(|e| {
+                    fail(
+                        &import.span,
+                        format!("cannot read module `{}`: {}", full.display(), e),
+                    )
+                })?;
                 let next_base = full
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| base_dir.to_path_buf());
                 (
                     format!("file:{}", full.to_string_lossy()),
+                    stem,
                     full.to_string_lossy().into_owned(),
                     source,
                     next_base,
@@ -105,36 +197,105 @@ impl Loader {
             }
         };
 
-        // Cycle / duplicate guard: skip modules already loaded on this resolution.
-        if !self.visited.insert(canonical.clone()) {
-            return Ok(());
+        // Cycle / duplicate guard: a module already loaded on this resolution is not
+        // loaded again — but one canonical name may only ever mean one module, since the
+        // whole linked program shares a single qualified namespace.
+        if let Some(existing_key) = self.loaded.get(&canonical) {
+            if *existing_key == key {
+                return Ok(canonical);
+            }
+            return Err(fail(
+                &import.span,
+                format!(
+                    "two different modules are both named `{canonical}` — every imported \
+                     module needs a distinct name; rename one of the files"
+                ),
+            ));
         }
+        self.loaded.insert(canonical.clone(), key.clone());
 
         let file = self.next_file;
         self.next_file += 1;
         self.sources.insert(file, display, source.clone());
         let tokens = Lexer::tokenize_in_file(&source, file)
-            .map_err(|e| format!("lexer error in module `{}`: {}", canonical, e))?;
-        let sub = parser::parse(&tokens)
-            .map_err(|e| format!("parse error in module `{}`: {}", canonical, e))?;
+            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
+        let mut sub = parser::parse(&tokens)
+            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
 
-        // Resolve the module's own imports first (transitive), then collect its exports.
-        for import in &sub.imports {
-            self.resolve_one(&import.path, &next_base)?;
+        // Resolve the module's own imports first (transitive), building the scope ITS
+        // qualified references resolve against — a module reaches only what it imported.
+        let mut scope = ModuleScope::default();
+        for sub_import in &sub.imports {
+            let child = self.resolve_one(sub_import, &next_base)?;
+            self.bind(&mut scope, &child, sub_import)?;
         }
+
+        self.exports
+            .insert(canonical.clone(), exported_names(&sub.items));
+        qualify::qualify_module(&mut sub, &canonical, &scope)?;
+
         for mut item in sub.items {
-            if item_is_exported(&item) {
-                // A bundled module's functions carry their origin: it is what marks the
-                // corelib's inert declaration of a compiler-provided name (`print`,
-                // `write`, `now`) as the placeholder it is, rather than a definition.
-                if let Item::FunctionDeclaration(declaration) = &mut item {
-                    declaration.from_corelib = from_corelib;
-                }
-                self.out.push(item);
+            // A bundled module's functions carry their origin: it is what marks the
+            // corelib's inert declaration of a compiler-provided name (`print`, `write`,
+            // `now`) as the placeholder it is, rather than a definition.
+            if let Item::FunctionDeclaration(declaration) = &mut item {
+                declaration.from_corelib = from_corelib;
+            }
+            self.out.push(item);
+        }
+        Ok(canonical)
+    }
+}
+
+/// The bare names a module's items export: `>>`-marked functions, constants, and types —
+/// plus the variants of an exported sum, which an importer reaches the same qualified way
+/// (`http.Get`). `@` primitives are global once their module is imported, so they are not
+/// part of the qualified surface.
+fn exported_names(items: &[Item]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for item in items {
+        if !item_is_exported(item) || item.name().starts_with('@') {
+            continue;
+        }
+        names.insert(item.name().to_string());
+        if let Item::TypeDeclaration(declaration) = item
+            && let TypeDefinition::Sum { variants, .. } = &declaration.type_definition
+        {
+            for variant in variants {
+                names.insert(variant.name.clone());
             }
         }
-        Ok(())
     }
+    names
+}
+
+/// A located link failure — the shape [`qualify`]'s own errors already have.
+fn fail(span: &Span, message: String) -> QualifyError {
+    QualifyError {
+        span: span.clone(),
+        message,
+    }
+}
+
+/// The short name a file-path import binds — [`ModulePath::binding_name`]'s answer, which
+/// must additionally be usable as an identifier since call sites spell it
+/// (`math.add(...)`).
+fn module_binding_name(path: &ModulePath, span: &Span) -> Result<String, QualifyError> {
+    let stem = path.binding_name().unwrap_or_default();
+    let valid = !stem.is_empty()
+        && !stem.starts_with(|c: char| c.is_ascii_digit())
+        && stem.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if !valid {
+        return Err(fail(
+            span,
+            format!(
+                "the module file name `{stem}` is not usable as a binding — call sites \
+                 reach the module as `{stem}.<name>`, so the stem must be a valid \
+                 identifier; rename the file"
+            ),
+        ));
+    }
+    Ok(stem)
 }
 
 // The bundled corelib module sources, embedded at compile time. Named once here so both the
@@ -166,15 +327,13 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         "core.text" => Some(CORE_TEXT),
         // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
         // a check of your own, the run's recorded state, and the case lifecycle. Depends
-        // transitively on core.io (it prints, and `failAt` renders its frame via `eprint`).
+        // transitively on core.io (it prints, and `failAt` renders its frame via `io.eprint`).
         "core.test" => Some(CORE_TEST),
         // core.cli — thin, pure-Quilon helpers over the `^` entry point's
         // `args :: []Text` and `env :: [|Text => Text|]`.
         "core.cli" => Some(CORE_CLI),
-        // core.time — time-related leaf IO primitives (`@sleep`). Documentation-only:
-        // `@sleep` is a compiler-provided built-in (lowered to the runtime scheduler),
-        // like `print`/`write`, so importing the module makes intent explicit but merges
-        // no items. It is the documented home of the deferring `@sleep` primitive.
+        // core.time — time-related built-ins: the deferring `@sleep` leaf primitive and
+        // `time.now`, both compiler-lowered (their bodies are inert placeholders).
         "core.time" => Some(CORE_TIME),
         // core.net — the request-exchange socket primitive (`@tcpRequest`), the foundation the
         // HTTP client sits on. Like `@sleep`/`@readStdin` it is compiler-lowered (its body is
@@ -208,56 +367,6 @@ fn item_is_exported(item: &Item) -> bool {
         Item::FunctionDeclaration(d) => d.exported,
         Item::TypeDeclaration(d) => d.exported,
     }
-}
-
-/// Convenience used by the CLI: resolve `program`'s imports and return a new program with the
-/// imported exported items prepended to its own items (imports cleared, since they are resolved),
-/// plus the [`SourceMap`] of the modules they came from.
-///
-/// A program that calls a composable Text method (`t.split(sep)`, `t.trim()`, …)
-/// additionally gets `core.text` merged in — that is where those methods are implemented,
-/// and `Text` being a built-in type, no `<<` names it. Reachability prunes it all back out
-/// of a program whose mention turns out not to be a Text's. The merge is skipped when the
-/// implementations are already present — the root IS `core.text` (checked or tested
-/// directly), or it was reached by file path — since merging then would define every
-/// `__qn_text_*` twice.
-pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), String> {
-    let mut loader = Loader::new();
-    loader.resolve_list(&program.imports, base_dir)?;
-
-    let already_implemented = declares_qn_text(&program.items) || declares_qn_text(&loader.out);
-    if !already_implemented
-        && (uses_text_composable_items(&program.items)
-            || program.test_blocks.iter().any(mentions_text_composable)
-            || uses_text_composable_items(&loader.out))
-    {
-        loader.resolve_one(
-            &ModulePath::BuiltinDotted(vec!["core".to_string(), "text".to_string()]),
-            base_dir,
-        )?;
-    }
-
-    let mut items = loader.out;
-    items.extend(program.items);
-    Ok((
-        Program {
-            imports: Vec::new(),
-            items,
-            // An imported module's own test blocks are that module's to run, so only the
-            // root program's survive the link.
-            test_blocks: program.test_blocks,
-        },
-        loader.sources,
-    ))
-}
-
-/// Whether `items` already declares a `core.text` implementation function — the sign the
-/// module is (or is merged into) this very program, making injection a double definition.
-fn declares_qn_text(items: &[Item]) -> bool {
-    items.iter().any(|item| {
-        matches!(item, Item::FunctionDeclaration(declaration)
-            if declaration.name.starts_with("__qn_text_"))
-    })
 }
 
 /// Whether any of `items`' bodies contains a member call to a composable Text method
@@ -295,7 +404,6 @@ fn mentions_text_composable(expression: &Expression) -> bool {
     })
     .is_break()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

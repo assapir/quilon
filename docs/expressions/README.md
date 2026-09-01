@@ -31,7 +31,7 @@ sidebar:
 > one — a `(`, `[`, or `{` that is the **first token on its line** begins a new statement
 > rather than continuing the previous expression as a call, index, or constructor.
 > A call, index, or constructor must open on the **same line** as the expression it applies
-> to; once opened it may span lines. A continuation line may still start with `.`, `|>`, or
+> to; once opened it may span lines. A continuation line may still start with `.` or
 > an operator.
 > ```quilon ignore
 > ~ (statements inside a `< >` block / `^` body)
@@ -45,9 +45,9 @@ sidebar:
 >
 > ~ OK — a line-first `(`, `[`, or `{` is a NEW statement:
 > x = f()
-> (1 + 2) |> print                      ~ not the call `f()(1 + 2)`
+> (1 + 2)                               ~ not the call `f()(1 + 2)`
 > b = a
-> [3, 4].each(n => print(n))            ~ not the index `a[3, 4]`
+> [3, 4].each(n => io.print(n))            ~ not the index `a[3, 4]`
 > e = origin
 > { x = 9, y = 9 }                      ~ not the constructor `origin { x = 9, y = 9 }`
 >
@@ -81,13 +81,12 @@ non-associative (`1 <- 2 <- 3` is a parse error).
 | | `==` `!=` |
 | | `<` `<=` `>` `>=` |
 | | `<-` (range) |
-| | `\|>` (pipe) |
 | | `+` `-` |
 | | `*` `/` `%` `+-` |
 | | `-x` `!x` (prefix) |
 | more priority | `.field` · `.method(…)` · `f(…)` · `xs[i]` |
 
-So `2 + 3 |> double` is `double(5)`, `1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is
+So `1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is
 `(1 < 2) == true`. Parenthesize anything else. `>` appears in the table in its operator
 reading; whether a given `>` gets that reading at all is settled first, in the lexer — see
 the [`>` rule](#expressions).

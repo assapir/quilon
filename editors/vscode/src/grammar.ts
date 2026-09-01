@@ -6,7 +6,7 @@
 // position TextMate scans the *ordered* list of patterns and applies the FIRST
 // one that matches there — ties at the same start position are decided by list
 // order, NOT by match length. That is exactly why every multi-character operator
-// (`=>`, `->`, `:=`, `|>`, `<-`, `==`, `!=`, `<=`, `>=`, `&&`, `||`, `::`) must
+// (`=>`, `->`, `:=`, `<-`, `==`, `!=`, `<=`, `>=`, `&&`, `||`, `::`) must
 // be listed before the single-character operator rules: otherwise a rule for the
 // first character would win and split the operator into two tokens.
 //

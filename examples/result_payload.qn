@@ -22,7 +22,7 @@ describe = (n :: Num)  -> Num => n
   path :: Text = lookup("home") ?
     | Ok(p)     => p
     | NotOk(_)  => "?"
-  print(path)                        ~ prints: /usr/home
+  io.print(path)                        ~ prints: /usr/home
   assert(path, equals("/usr/home"))
   assert(path.size, equals(9))             ~ "/usr/home".size = 9
 
