@@ -1,0 +1,371 @@
+//! The language server's per-capability analysis, driven directly: diagnostics, hover,
+//! go-to-definition (including across an import), semantic tokens, and test lenses.
+
+use std::path::{Path, PathBuf};
+
+use quilon::lexer::ROOT_FILE;
+use quilon::lsp::analysis::{
+    self, SemanticTokenKind, TestLensKind, check_text, definition_at, hover_at, semantic_tokens,
+    test_lenses,
+};
+
+/// A unique temporary directory for a test that needs real files (import resolution).
+fn temporary_directory(tag: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!(
+        "quilon_lsp_{tag}_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).expect("create temp dir");
+    directory
+}
+
+/// The byte offset of `needle`'s first occurrence in `text`, plus `into` bytes.
+fn offset_of(text: &str, needle: &str, into: u32) -> u32 {
+    text.find(needle).expect("needle present in text") as u32 + into
+}
+
+/// The front-end error `check_text` reports for `text`, which must not check clean.
+fn check_error(path: &Path, text: &str) -> quilon::driver::FrontEndError {
+    match check_text(path, text) {
+        Err(error) => error,
+        Ok(_) => panic!("the text must not check clean"),
+    }
+}
+
+// --- Diagnostics ------------------------------------------------------------
+
+#[test]
+fn a_type_error_carries_its_span_and_message() {
+    let text = "^ = () -> Num => < 1 + true >\n";
+    let error = check_error(Path::new("buffer.qn"), text);
+    let span = error.span().expect("a located error");
+    assert_eq!(span.file, ROOT_FILE);
+    assert_eq!(span.start, offset_of(text, "1 + true", 0));
+    assert!(
+        error.message().contains("+"),
+        "unexpected message: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn a_clean_program_produces_no_diagnostic() {
+    let text = "^ = () -> Num => < 0 >\n";
+    assert!(check_text(Path::new("buffer.qn"), text).is_ok());
+}
+
+#[test]
+fn a_test_suite_is_checked_with_its_blocks_compiled() {
+    // Inside an `it` body, a type error must surface — a suite runs its blocks, so the
+    // server checks them, where `quilon check` would erase them.
+    let text = "<< core.test\n\ntest.describe(\"math\", () => <\n  test.it(\"adds\", () => <\n    expect(1 + true, equals(2))\n  >)\n>)\n";
+    let error = check_error(Path::new("suite.qn"), text);
+    let span = error.span().expect("a located error");
+    assert_eq!(span.start, offset_of(text, "1 + true", 0));
+
+    // The same suite with the operands fixed checks clean.
+    let clean = text.replace("1 + true", "1 + 1");
+    assert!(check_text(Path::new("suite.qn"), &clean).is_ok());
+}
+
+// --- Hover ------------------------------------------------------------------
+
+#[test]
+fn hover_reports_the_smallest_covering_expressions_type() {
+    let text = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < double(21) >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    // On the parameter reference `x` in the body: its own type, not the product's.
+    let (label, span) = hover_at(&checked.types, offset_of(text, "x * 2", 0)).expect("a hover");
+    assert_eq!(label, "Num");
+    assert_eq!((span.start, span.end), (offset_of(text, "x * 2", 0), offset_of(text, "x * 2", 1)));
+
+    // On a `Text` literal.
+    let text = "^ = () -> Num => < s = \"hi\"\n0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, _) = hover_at(&checked.types, offset_of(text, "\"hi\"", 1)).expect("a hover");
+    assert_eq!(label, "Text");
+}
+
+// --- Go-to-definition -------------------------------------------------------
+
+#[test]
+fn definition_resolves_parameters_locals_and_top_level_functions() {
+    let text = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < y = 3\ndouble(y) >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    // `x` in the body resolves to the parameter. A parameter's declaration span is the
+    // parser's: it points at the parameter's final token — here the `Num` annotation —
+    // which still lands inside the declaring parameter list.
+    let definition =
+        definition_at(&checked.program, offset_of(text, "x * 2", 0)).expect("x resolves");
+    assert_eq!(definition.start, offset_of(text, "Num) -> Num", 0));
+
+    // `y` in the call resolves to the block-local binding.
+    let definition =
+        definition_at(&checked.program, offset_of(text, "double(y)", 7)).expect("y resolves");
+    assert_eq!(definition.start, offset_of(text, "y = 3", 0));
+
+    // `double` in the call resolves to the top-level function.
+    let definition =
+        definition_at(&checked.program, offset_of(text, "double(y)", 0)).expect("double resolves");
+    assert_eq!(definition.start, 0);
+
+    // A position on nothing resolvable answers nothing.
+    assert!(definition_at(&checked.program, offset_of(text, "* 2", 0)).is_none());
+}
+
+#[test]
+fn definition_resolves_across_a_file_import() {
+    let directory = temporary_directory("import_definition");
+    let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
+    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+
+    let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
+    let root = directory.join("buffer.qn");
+    let checked = check_text(&root, text).expect("checks clean");
+
+    let definition = definition_at(&checked.program, offset_of(text, "lib.add", 4))
+        .expect("the imported function resolves");
+    assert_ne!(definition.file, ROOT_FILE, "the definition is in the module's own file");
+
+    let location = checked.sources.locate(&definition).expect("a locatable definition");
+    assert!(
+        location.path.ends_with("lib.qn"),
+        "unexpected path: {}",
+        location.path
+    );
+    assert_eq!(definition.start, offset_of(module_text, ">> add", 0));
+
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+// --- Semantic tokens --------------------------------------------------------
+
+/// The classified kind of the token spanning `needle` (plus `into` bytes) in `text`.
+fn kind_at(text: &str, needle: &str, into: u32) -> SemanticTokenKind {
+    let offset = offset_of(text, needle, into);
+    semantic_tokens(text)
+        .into_iter()
+        .find(|token| token.span.start <= offset && offset < token.span.end)
+        .unwrap_or_else(|| panic!("no classified token at byte {offset}"))
+        .kind
+}
+
+#[test]
+fn block_delimiters_and_comparisons_are_told_apart() {
+    let text = "max = (a :: Num, b :: Num) -> Num => < a > b ? a : b >\n";
+
+    // The `<` opening the body and the `>` closing it are block delimiters.
+    assert_eq!(kind_at(text, "< a", 0), SemanticTokenKind::BlockDelimiter);
+    assert_eq!(kind_at(text, "b >\n", 2), SemanticTokenKind::BlockDelimiter);
+    // The `>` between two operands is the comparison.
+    assert_eq!(kind_at(text, "a > b", 2), SemanticTokenKind::ComparisonOperator);
+
+    // A `<` after a completed operand is less-than, not a block opener.
+    let text = "below = (a :: Num, b :: Num) -> Bool => < a < b >\n";
+    assert_eq!(kind_at(text, "< a", 0), SemanticTokenKind::BlockDelimiter);
+    assert_eq!(kind_at(text, "a < b", 2), SemanticTokenKind::ComparisonOperator);
+}
+
+#[test]
+fn declared_names_classify_as_types_functions_and_parameters() {
+    let text = "Point = { x :: Num }\nshift = (amount :: Num) -> Num => < amount + 1 >\n^ = () -> Num => < shift(2) >\n";
+    assert_eq!(kind_at(text, "Point", 0), SemanticTokenKind::TypeName);
+    assert_eq!(kind_at(text, "shift(2)", 0), SemanticTokenKind::FunctionName);
+    assert_eq!(kind_at(text, "amount + 1", 0), SemanticTokenKind::ParameterName);
+}
+
+#[test]
+fn unparseable_text_still_classifies_delimiters() {
+    // A parse error leaves the name sets empty, but the token-level `<`/`>`
+    // classification still answers.
+    let text = "f = () -> Num => < 1 +\n";
+    assert_eq!(kind_at(text, "<", 0), SemanticTokenKind::BlockDelimiter);
+}
+
+// --- Test lenses ------------------------------------------------------------
+
+#[test]
+fn test_lenses_locate_every_suite_and_case() {
+    let text = "<< core.test\n\ntest.describe(\"outer\", () => <\n  test.it(\"first\", () => <\n    expect(1, equals(1))\n  >)\n  test.describe(\"inner\", () => <\n    test.it(\"second\", () => <\n      expect(2, equals(2))\n    >)\n  >)\n>)\n";
+    let lenses = test_lenses(text);
+    let summary: Vec<(TestLensKind, &str)> = lenses
+        .iter()
+        .map(|lens| (lens.kind, lens.name.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (TestLensKind::Suite, "outer"),
+            (TestLensKind::Case, "first"),
+            (TestLensKind::Suite, "inner"),
+            (TestLensKind::Case, "second"),
+        ]
+    );
+    assert_eq!(lenses[0].span.start, offset_of(text, "test.describe(\"outer\"", 0));
+    assert_eq!(lenses[1].span.start, offset_of(text, "test.it(\"first\"", 0));
+}
+
+#[test]
+fn a_program_without_test_blocks_has_no_lenses() {
+    assert!(test_lenses("^ = () -> Num => < 0 >\n").is_empty());
+    assert!(test_lenses("not even quilon (((").is_empty());
+}
+
+// --- The protocol loop, end to end ------------------------------------------
+
+/// One full session over an in-memory connection: initialize, open a document with a type
+/// error, read the published diagnostic, fix the document, read the all-clear, ask for
+/// hover, semantic tokens and code lenses, and shut down.
+#[test]
+fn a_protocol_session_answers_over_an_in_memory_connection() {
+    use lsp_server::{Connection, Message, Notification, Request};
+    use serde_json::{Value, json};
+    use std::time::Duration;
+
+    let (client, server) = Connection::memory();
+    let served = std::thread::spawn(move || quilon::lsp::serve(server));
+
+    let request = |id: i32, method: &str, params: Value| {
+        Message::Request(Request {
+            id: id.into(),
+            method: method.to_string(),
+            params,
+        })
+    };
+    let notification = |method: &str, params: Value| {
+        Message::Notification(Notification {
+            method: method.to_string(),
+            params,
+        })
+    };
+    let receive = || {
+        client
+            .receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the server answers within the timeout")
+    };
+    let response_of = |message: Message| match message {
+        Message::Response(response) => response
+            .response_result
+            .unwrap_or_else(|error| panic!("error response: {error:?}")),
+        other => panic!("expected a response, got {other:?}"),
+    };
+    let diagnostics_of = |message: Message| match message {
+        Message::Notification(published) => {
+            assert_eq!(published.method, "textDocument/publishDiagnostics");
+            published.params["diagnostics"].as_array().expect("an array").clone()
+        }
+        other => panic!("expected publishDiagnostics, got {other:?}"),
+    };
+
+    client
+        .sender
+        .send(request(1, "initialize", json!({ "capabilities": {} })))
+        .unwrap();
+    let initialized = response_of(receive());
+    assert!(initialized["capabilities"]["hoverProvider"].as_bool().unwrap_or(false));
+    client.sender.send(notification("initialized", json!({}))).unwrap();
+
+    // Open a document with a type error: one diagnostic, on the offending line.
+    let uri = "file:///buffer.qn";
+    let broken = "^ = () -> Num => < 1 + true >\n";
+    client
+        .sender
+        .send(notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": broken } }),
+        ))
+        .unwrap();
+    let diagnostics = diagnostics_of(receive());
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    assert_eq!(
+        diagnostics[0]["range"]["start"]["character"],
+        broken.find("1 + true").unwrap()
+    );
+
+    // Fix it: the diagnostics clear.
+    let fixed = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < double(4) >\n";
+    client
+        .sender
+        .send(notification(
+            "textDocument/didChange",
+            json!({ "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [ { "text": fixed } ] }),
+        ))
+        .unwrap();
+    assert!(diagnostics_of(receive()).is_empty());
+
+    // Hover over the `x` in the body: its inferred type.
+    client
+        .sender
+        .send(request(
+            2,
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": fixed.find("x * 2").unwrap() } }),
+        ))
+        .unwrap();
+    let hover = response_of(receive());
+    assert_eq!(hover["contents"]["value"], "Num");
+
+    // Semantic tokens exist (the delimiter/operator classification at least).
+    client
+        .sender
+        .send(request(
+            3,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": uri } }),
+        ))
+        .unwrap();
+    let tokens = response_of(receive());
+    assert!(!tokens["data"].as_array().expect("token data").is_empty());
+
+    // A test suite document gets a code lens per suite and case, carrying the
+    // client-side run command.
+    let suite_uri = "file:///suite.qn";
+    let suite = "<< core.test\n\ntest.describe(\"s\", () => <\n  test.it(\"c\", () => <\n    expect(1, equals(1))\n  >)\n>)\n";
+    client
+        .sender
+        .send(notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": suite_uri, "languageId": "quilon", "version": 1, "text": suite } }),
+        ))
+        .unwrap();
+    diagnostics_of(receive());
+    client
+        .sender
+        .send(request(
+            4,
+            "textDocument/codeLens",
+            json!({ "textDocument": { "uri": suite_uri } }),
+        ))
+        .unwrap();
+    let lenses = response_of(receive());
+    let lenses = lenses.as_array().expect("a lens array");
+    assert_eq!(lenses.len(), 2);
+    assert_eq!(lenses[0]["command"]["command"], "quilon.runTests");
+    assert_eq!(lenses[0]["command"]["title"], "▶ Run suite");
+    assert_eq!(lenses[1]["command"]["title"], "▶ Run case");
+
+    client.sender.send(request(5, "shutdown", Value::Null)).unwrap();
+    response_of(receive());
+    client.sender.send(notification("exit", Value::Null)).unwrap();
+    served.join().expect("the server thread joins").expect("the server exits cleanly");
+}
+
+// --- The parse helper -------------------------------------------------------
+
+#[test]
+fn parse_text_answers_none_for_broken_text() {
+    assert!(analysis::parse_text("^ = () -> Num => < 0 >\n").is_some());
+    assert!(analysis::parse_text("((((").is_none());
+}

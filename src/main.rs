@@ -59,6 +59,8 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// Serve the Language Server Protocol over stdio (for editors)
+    Lsp,
 }
 
 /// Run the shared front-end (read → lex → parse → resolve imports → type-check),
@@ -227,6 +229,12 @@ fn main() {
         Commands::Test { path } => {
             let failed = test_command::run(&path);
             std::process::exit(i32::from(failed > 0));
+        }
+        Commands::Lsp => {
+            if let Err(e) = quilon::lsp::run() {
+                eprintln!("❌ Language server error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }

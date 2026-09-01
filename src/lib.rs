@@ -8,6 +8,7 @@ pub mod diagnostic;
 pub mod driver;
 pub mod jit;
 pub mod lexer;
+pub mod lsp;
 pub mod modules;
 pub mod parser;
 pub mod runtime;

@@ -18,9 +18,15 @@ use std::rc::Rc;
 /// source location (`lex`, `parse`, `type`) it is a rustc-style
 /// `path:line:col: error: …` report with the offending source line and a caret;
 /// for location-less failures (`read`, `import`) it is a one-line message.
+#[derive(Debug)]
 pub struct FrontEndError {
     /// The diagnostic, fully rendered against the source at construction time.
     rendered: String,
+    /// The byte span the diagnostic points at, when the failing stage knew one. Tooling
+    /// (the language server) reads it to place the diagnostic; the CLI prints `rendered`.
+    span: Option<Span>,
+    /// The bare message, without the rendered position line and source frame.
+    message: String,
 }
 
 impl std::fmt::Display for FrontEndError {
@@ -34,6 +40,8 @@ impl FrontEndError {
     fn at(path: &str, source: &str, span: &Span, message: &str) -> Self {
         Self {
             rendered: diagnostic::render(path, source, span, Severity::Error, message),
+            span: Some(span.clone()),
+            message: message.to_string(),
         }
     }
 
@@ -57,7 +65,21 @@ impl FrontEndError {
 
     /// An error with no source location (file read failure, import resolution).
     fn plain(message: String) -> Self {
-        Self { rendered: message }
+        Self {
+            rendered: message.clone(),
+            span: None,
+            message,
+        }
+    }
+
+    /// The byte span the diagnostic points at, when the failing stage knew one.
+    pub fn span(&self) -> Option<&Span> {
+        self.span.as_ref()
+    }
+
+    /// The bare message, without the rendered position line and source frame.
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -125,6 +147,19 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
     let source = std::fs::read_to_string(file)
         .map_err(|e| FrontEndError::plain(format!("error reading {}: {}", path, e)))?;
 
+    front_end_source(file, source, tests)
+}
+
+/// [`front_end_with`] over source text supplied by the caller instead of read from disk —
+/// what the language server runs against an editor buffer that is ahead of the file.
+/// `file` still names the buffer: imports resolve relative to its directory, and
+/// diagnostics report its path.
+pub fn front_end_source(
+    file: &Path,
+    source: String,
+    tests: TestBlocks,
+) -> Result<Checked, FrontEndError> {
+    let path = file.display().to_string();
     let tokens = lexer::Lexer::tokenize(&source)
         .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
 
