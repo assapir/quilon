@@ -59,7 +59,7 @@ A closure may also be **passed to a function** whose parameter has the matching
 
 Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing
 a polymorphic value and generic closures are deferred — see
-[Known limitations](../status/limitations.md). (See `examples/closures.qn`.)
+[Known limitations](../status/limitations.md).
 
 ## Returning a closure
 
@@ -97,4 +97,4 @@ function, or return it from another closure.
 
 What is handed back must be a closure value — a lambda literal, a named closure binding,
 or a function-typed parameter. A bare **top-level function name** is not a value yet (see
-[Known limitations](../status/limitations.md)). (See `examples/closure_returns.qn`.)
+[Known limitations](../status/limitations.md)). (See `examples/closures.qn`.)
