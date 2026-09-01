@@ -167,13 +167,25 @@ impl std::fmt::Display for TypeError {
                 )
             }
             TypeError::MutatingMethodDeclaredImmutable {
-                type_name, method, ..
+                type_name,
+                method,
+                lambda_parameter_shadows_receiver,
+                ..
             } => {
                 write!(
                     f,
                     "Method '{}.{}' mutates 'it' but is declared with '='; declare it with ':=' to allow in-place mutation",
                     type_name, method
-                )
+                )?;
+                if *lambda_parameter_shadows_receiver {
+                    write!(
+                        f,
+                        ". A lambda in this body names a parameter 'it', which shadows \
+                         the receiver — if the write targets the lambda's own value, \
+                         rename that parameter"
+                    )?;
+                }
+                Ok(())
             }
             TypeError::MutatingMethodOnImmutable {
                 method, receiver, ..

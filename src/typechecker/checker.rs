@@ -106,10 +106,13 @@ pub enum TypeError {
         span: Span,
     },
     /// An `=`-declared method whose body mutates `it`, breaking the promise its binding
-    /// operator makes.
+    /// operator makes. `lambda_parameter_shadows_receiver` marks a body that contains a
+    /// lambda parameter named `it` — the write may target the lambda's own value, and
+    /// the diagnostic names the shadowing.
     MutatingMethodDeclaredImmutable {
         type_name: String,
         method: String,
+        lambda_parameter_shadows_receiver: bool,
         span: Span,
     },
     DuplicateDefinition {

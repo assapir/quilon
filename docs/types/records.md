@@ -41,8 +41,11 @@ assignments is a record literal. A block containing only method definitions
 add a `::` field to declare a type, or use plain values to write a record literal.
 
 A method declared with `:=` instead of `=` is a **setter** — it may mutate its
-receiver — and calling one requires a mutable (`:=`) receiver
-(see [Mutation](../mutation.md)).
+receiver — and calling one requires a mutable (`:=`) receiver. Records have reference
+semantics, and the binding operator governs the value itself: an `=`-bound record is
+immutable through every alias
+(see [Mutation](../mutation.md), including [deep
+immutability](../mutation.md#deep-immutability)).
 
 A method parameter must be annotated too, exactly like an [ordinary
 definition](../functions/overloading.md)'s — there is no `Num` default: `add = (x) => it.v + x`

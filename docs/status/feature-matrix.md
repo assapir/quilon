@@ -29,6 +29,7 @@ sidebar:
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
+| Deep immutability: `=` freezes the value — aliasing across the `=`/`:=` line (bindings, containers, escaping method/function results, parameter laundering) is a compile error | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
 | Guaranteed self-tail-call optimization (tail self-recursion runs in constant stack) | ✅ |
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |

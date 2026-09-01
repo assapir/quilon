@@ -541,6 +541,9 @@ impl TypeChecker {
                 return Err(TypeError::MutatingMethodDeclaredImmutable {
                     type_name: type_name.to_string(),
                     method: method.name.clone(),
+                    lambda_parameter_shadows_receiver: body_has_lambda_parameter_named_receiver(
+                        &method.body,
+                    ),
                     span,
                 });
             }
@@ -1108,4 +1111,20 @@ impl TypeChecker {
             return_type: Box::new(ret),
         })
     }
+}
+
+/// Whether `body` contains a lambda with a parameter named `it`. `it` is an ordinary
+/// identifier, so such a parameter shadows the method receiver inside the lambda — and a
+/// write through it is then reported as a receiver mutation. The flag lets the diagnostic
+/// name the shadowing as the likely cause.
+fn body_has_lambda_parameter_named_receiver(body: &Expression) -> bool {
+    try_for_each_subexpression(body, &mut |e| match e {
+        Expression::Lambda { parameters, .. }
+            if parameters.iter().any(|p| p.name == crate::ast::RECEIVER) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
 }

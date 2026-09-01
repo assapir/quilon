@@ -1,0 +1,64 @@
+~ Deep immutability: `=` freezes the VALUE, not just the binding. A value reached
+~ through an `=` binding is never reachable through a `:=` binding — in either
+~ direction — so no alias can write a frozen record. This file shows the legal side:
+~ immutable aliases, scalar copies, escaping results inheriting the receiver's or
+~ argument's mutability, and fresh results binding either way.
+~ `<< core.test` verifies each claim; on success the program exits 0.
+<< core.test
+
+Cell = {
+  value :: Num,
+
+  ~ A getter whose result IS the receiver. It stays callable on any binding; the
+  ~ result inherits the receiver's mutability at each call site.
+  self = () -> Cell => it
+}
+
+~ A function returning its parameter: each call's result inherits the argument's
+~ mutability at that call site.
+same = (cell :: Cell) -> Cell => cell
+
+~ A function building its result in a local: the local dies at the return, so the
+~ result is fresh and binds either way at the call site — `:=` locals included.
+build = (start :: Num) -> Cell => <
+  draft := Cell { value = start }
+  draft.value := draft.value + 1
+  draft
+>
+
+~ A parameter is a read-only view: a function reads a frozen record freely.
+read = (cell :: Cell) -> Num => cell.value
+
+^ = () -> $ => <
+  frozen = Cell { value = 40 }     ~ `=` -> the value itself is frozen
+
+  alias = frozen                    ~ an `=` alias of a frozen value is legal
+  assert(alias.value, equals(40))
+
+  copy := frozen.value              ~ a scalar read COPIES; the copy is writable
+  copy := copy + 2
+  assert(copy, equals(42))
+  assert(frozen.value, equals(40))  ~ ...and the record is untouched
+
+  viewed = frozen.self()            ~ escaping getter on `=`: the result is immutable
+  assert(viewed.value, equals(40))
+
+  assert(read(frozen), equals(40))  ~ argument passing is not a binding
+
+  open := Cell { value = 1 }        ~ `:=` -> mutable value
+  handle := open.self()             ~ escaping getter on `:=`: the result stays mutable
+  handle.value := 5                 ~ ...so a write through it is what `:=` declared
+  assert(open.value, equals(5))
+
+  through := same(open)             ~ returned parameter, mutable argument: mutable result
+  through.value := 7
+  assert(open.value, equals(7))
+
+  kept = build(20)                  ~ a fresh result binds `=`...
+  changing := build(20)             ~ ...or `:=`, at each call site's choice
+  changing.value := changing.value + 21
+  assert(kept.value, equals(21))
+  assert(changing.value, equals(42))
+
+  assert(frozen.value, equals(40))  ~ the frozen value never moved
+>
