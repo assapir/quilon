@@ -261,6 +261,14 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Remember the binding's Quilon type for overloaded-call argument mangling.
         let inferred_qty = self.infer_type(&declaration.value);
+        // Any OTHER function-typed value — a returned closure (`add5 = adder(5)`), an
+        // alias of a closure binding — is a `{ ptr fn, ptr env }` pair too; record its
+        // signature the same way a function-typed parameter's is, so `add5(2)` dispatches
+        // through the indirect closure-call path. (A lambda value took the more precise
+        // lambda route above.)
+        if !matches!(declaration.value, Expression::Lambda { .. }) {
+            self.register_function_typed_parameter(&declaration.name, &inferred_qty)?;
+        }
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
         self.track_named_record_binding(&declaration.name, &inferred_qty);
