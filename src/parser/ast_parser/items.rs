@@ -211,7 +211,7 @@ impl<'a> Parser<'a> {
             // the name's capitalization, decides — `x = { f = => 1 }` and `X = { f = => 1 }`
             // read the same way). A `::` field anywhere else in the block settles it as a
             // type declaration (a method may legitimately come before the fields it uses,
-            // see `examples/type_method_first.qn`); with no field at all, a block of nothing
+            // see `examples/methods.qn`); with no field at all, a block of nothing
             // but methods is neither reading unambiguously and is a compile error rather
             // than a silent guess.
             if first_member_is_method {

@@ -742,7 +742,7 @@ fn test_record_literal_of_plain_values_stays_a_literal_binding() {
 #[test]
 fn test_method_first_block_with_a_later_field_is_a_type_declaration() {
     // A method may legitimately come before the field(s) it uses (see
-    // `examples/type_method_first.qn`); the `::` field anywhere in the block settles it.
+    // `examples/methods.qn`); the `::` field anywhere in the block settles it.
     let tokens = Lexer::tokenize("x = { f = => it.v, v :: Num }").unwrap();
     let result = parse(&tokens);
     if let Err(e) = result.as_ref() {

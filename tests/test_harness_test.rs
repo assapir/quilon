@@ -458,7 +458,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     let (linked, _sources) =
-        quilon::modules::link(program, Path::new(".")).expect("import linking failed");
+        quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
     // Everything but the program's own `^` was contributed by the import.
     let mut contributed: Vec<&str> = linked
         .items

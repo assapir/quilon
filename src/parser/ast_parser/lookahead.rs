@@ -173,7 +173,7 @@ impl<'a> Parser<'a> {
     /// method-shaped, does the block contain a `::` field ANYWHERE among its own members?
     /// (LOCKED disambiguation: content decides a type declaration from a record literal —
     /// never the name's capitalization — and a field can arrive after a leading method, as
-    /// `examples/type_method_first.qn` already relies on.)
+    /// `examples/methods.qn` already relies on.)
     ///
     /// `::` never appears bare in an expression — only in a field, a parameter type, or a
     /// block-local annotated binding (`x :: Num = …`) — so it is enough to scan to the
