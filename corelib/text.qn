@@ -8,12 +8,13 @@
 ~ grapheme-boundary `slice`, the whitespace walks (`trimStart`/`trimEnd`), case mapping
 ~ (`toUpper`/`toLower`), comparison, and `+`. Everything else composes from those, here.
 ~
-~ No program has to import this module: the compiler merges it — under its qualified
-~ names, binding nothing in the program's own scope — into any program that calls one of
-~ the methods it implements, so `text.split(",")` keeps working with no import. Each
-~ function takes the receiver as its first parameter, which is how the compiler lowers
-~ the member-call syntax (`t.split(sep)` becomes a call of `core.text.split(t, sep)`).
-~ An explicit `<< core.text` works too and adds nothing but the name.
+~ This module is the compiler's own, and pure implementation: no program imports it (a
+~ written `<< core.text` is rejected), it exports nothing, and it binds no name. The
+~ compiler merges it — under its qualified names — into any program that calls one of
+~ the methods it implements, so `text.split(",")` keeps working with no import, and
+~ member syntax is the ONLY way these are reached. Each function takes the receiver as
+~ its first parameter because that is a method's shape once compiled (`it` is the first
+~ argument); the compiler lowers `t.split(sep)` to a call of `core.text.split(t, sep)`.
 ~
 ~ The split/replace walks are accumulator-shaped self-tail-calls, which the compiler
 ~ lowers to loops — their depth never grows with the text (`repeat` instead recurses at
@@ -42,10 +43,10 @@ copies = (t :: Text, count :: Num) -> Text =>
       : double(copies(t, count / 2))
 
 ~ Strip leading and trailing whitespace: the two one-sided walks, composed.
->> trim = (t :: Text) -> Text => t.trimStart().trimEnd()
+trim = (t :: Text) -> Text => t.trimStart().trimEnd()
 
 ~ Whether `sub` occurs in `t`: where `indexOf` finds an index, `contains` is true.
->> contains = (t :: Text, sub :: Text) -> Bool =>
+contains = (t :: Text, sub :: Text) -> Bool =>
   t.indexOf(sub) ?
     | Ok(_)    => true
     | NotOk(_) => false
@@ -64,7 +65,7 @@ splitOnto = (acc :: []Text, rest :: Text, sep :: Text, sepLen :: Num) -> []Text 
 ~ `[""]`, and an EMPTY separator splits into graphemes (where an empty `t` yields `[]` —
 ~ the graphemes of nothing). `"".graphemes()` is how this file writes an empty `[]Text`:
 ~ a bare `[]` literal has no element type to take.
->> split = (t :: Text, sep :: Text) -> []Text =>
+split = (t :: Text, sep :: Text) -> []Text =>
   sep.size == 0 ? t.graphemes() : splitOnto("".graphemes(), t, sep, sep.length)
 
 ~ The end of a replace walk: the text is exhausted with `remaining` replacements still
@@ -89,7 +90,7 @@ replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Te
 
 ~ Replace EVERY occurrence of `from` with `to`. An empty `from` is an ill-defined
 ~ request and fails loudly (exit 101) — never a silent no-op.
->> replaceAll = (t :: Text, from :: Text, to :: Text, site :: Site) -> Text => <
+replaceAll = (t :: Text, from :: Text, to :: Text, site :: Site) -> Text => <
   from.size == 0 ? test.failAt("replace: ``from`` must not be empty", site) : $
   ~ the -1s: never-owed `remaining`, and a `count` no failure can ever read
   replaceOnto("", t, from, from.length, to, 0 - 1, 0 - 1, site)
@@ -98,7 +99,7 @@ replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Te
 ~ Replace EXACTLY the first `count` occurrences of `from` with `to`, left to right;
 ~ `count` truncates toward zero. Fails loudly (exit 101) on an empty `from`, a
 ~ non-positive `count`, or a `count` beyond the occurrences present — no clamp, no no-op.
->> replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> Text => <
+replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> Text => <
   from.size == 0 ? test.failAt("replace: ``from`` must not be empty", site) : $
   n = count - count % 1
   n >= 1 ? $ : test.failAt("replace: count must be positive, got `n`", site)
@@ -108,7 +109,7 @@ replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Te
 ~ `count` copies of `t`, back to back; 0 yields `""`. Fails loudly (exit 101) on a
 ~ negative, fractional, or non-finite `count` — the checker rejects a literal one at
 ~ compile time, this is the backstop for a computed one.
->> repeat = (t :: Text, count :: Num, site :: Site) -> Text => <
+repeat = (t :: Text, count :: Num, site :: Site) -> Text => <
   count >= 0 && count % 1 == 0
     ? $
     : test.failAt("repeat: ``count`` must be a whole number of 0 or more", site)

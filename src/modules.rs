@@ -111,6 +111,9 @@ struct Loader {
     /// identity: the type oracle is keyed by span, and a collision there hands codegen
     /// one module's inferred type for another module's expression.
     next_file: FileId,
+    /// The load in progress is [`Loader::inject_core_text`]'s own — the one caller
+    /// allowed to resolve `core.text`, which a written import of is rejected.
+    injecting_core_text: bool,
 }
 
 impl Loader {
@@ -123,6 +126,7 @@ impl Loader {
             out: Vec::new(),
             sources: SourceMap::default(),
             next_file: ROOT_FILE + 1,
+            injecting_core_text: false,
         }
     }
 
@@ -155,11 +159,11 @@ impl Loader {
 
     /// Merge `core.text` when the program (or anything merged into it) calls a composable
     /// Text method — that is where those methods are implemented, and `Text` being a
-    /// built-in type, no `<<` names it. The module is loaded WITHOUT binding a name in
-    /// the root's scope: codegen reaches its items by their qualified names, and user
-    /// code does not reach them at all unless it writes `<< core.text` itself.
-    /// Reachability prunes it all back out of a program whose mention turns out not to
-    /// be a Text's.
+    /// built-in type, no `<<` names it. The module is pure implementation: it is loaded
+    /// WITHOUT binding a name in the root's scope, it exports nothing, and a written
+    /// `<< core.text` is rejected (see [`Loader::resolve_one`]) — member syntax is the
+    /// only way user code reaches these functions. Reachability prunes it all back out
+    /// of a program whose mention turns out not to be a Text's.
     fn inject_core_text(&mut self, program: &Program, base_dir: &Path) -> Result<(), QualifyError> {
         let uses = uses_text_composable_items(&program.items)
             || program.test_blocks.iter().any(mentions_text_composable)
@@ -171,7 +175,10 @@ impl Loader {
             path: ModulePath::BuiltinDotted(vec!["core".to_string(), "text".to_string()]),
             span: Span::in_root(0, 0),
         };
-        self.resolve_one(&import, base_dir).map(|_| ())
+        self.injecting_core_text = true;
+        let resolved = self.resolve_one(&import, base_dir).map(|_| ());
+        self.injecting_core_text = false;
+        resolved
     }
 
     /// Load one module (and, transitively, its own imports), qualify its items under its
@@ -181,6 +188,18 @@ impl Loader {
         let (key, canonical, display, source, next_base) = match &import.path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
+                // `core.text` is the compiler's own — the built-in Text methods' bodies,
+                // merged by [`Loader::inject_core_text`] wherever one is called. It is
+                // not surface a program can name: it exports nothing, so an import could
+                // only ever mislead.
+                if name == "core.text" && !self.injecting_core_text {
+                    return Err(fail(
+                        &import.span,
+                        "`core.text` is the compiler's own and cannot be imported — the \
+                         Text methods it implements need no import at all"
+                            .to_string(),
+                    ));
+                }
                 let src = builtin_source(&name).ok_or_else(|| {
                     fail(&import.span, format!("unknown built-in module `{}`", name))
                 })?;

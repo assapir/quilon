@@ -74,9 +74,9 @@ Only the true primitives are native: segmentation (`length`/`graphemes`/`at`), `
 `slice`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison, and `+`. The composable
 methods — `split`, `trim`, `contains`, `replace`, `replaceAll`, `repeat` — are ordinary
 Quilon over those (`corelib/text.qn`), merged in by the compiler — under its qualified
-names, binding nothing in the program's own scope — when a program uses one; no import is
-ever needed. (`<< core.text` works too, and adds the `text.split(t, sep)` function forms
-to your scope; it changes nothing else.)
+names, binding nothing in the program's own scope — when a program uses one. That module
+is the compiler's own: it exports nothing, `<< core.text` is rejected, and member syntax
+is the only way these methods are reached. No import is ever needed, or possible.
 
 `replace`/`replaceAll`/`repeat` **fail loudly**. They never silently no-op or clamp. Three
 inputs are rejected: an empty `from`; a `replace` `count` that is `<= 0` or exceeds the

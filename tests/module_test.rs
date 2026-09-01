@@ -72,10 +72,10 @@ fn test_text_ops_need_no_import() {
 }
 
 #[test]
-fn test_core_text_needs_no_import() {
-    // `core.text` exists (it implements the composable Text methods) but no program has
-    // to name it: the link merges it in wherever a composable method is used. Both an
-    // explicit import and none at all check clean.
+fn test_core_text_cannot_be_imported_and_needs_no_import() {
+    // `core.text` implements the composable Text methods, but it is the COMPILER'S
+    // module: the link merges it in wherever a composable method is used, and no program
+    // may name it — member syntax is the only surface.
     let bare = r#"
         ^ = () -> Num => "  x  ".trim().size
     "#;
@@ -90,8 +90,9 @@ fn test_core_text_needs_no_import() {
         << core.text
         ^ = () -> Num => 0
     "#;
-    let result = check_with_base(explicit, Path::new("."));
-    assert!(result.is_ok(), "expected ok with import, got: {:?}", result);
+    let err = check_with_base(explicit, Path::new("."))
+        .expect_err("`<< core.text` must be rejected as the compiler's own module");
+    assert!(err.contains("compiler's own"), "unexpected error: {}", err);
 }
 
 #[test]
