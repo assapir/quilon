@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn test_backtick_operator_token_outside_string() {
         // A bare backtick (defining the render operator) lexes as `Backtick`, never a hole.
-        let tokens = Lexer::tokenize("` = () -> Text => \"x\"").unwrap();
+        let tokens = Lexer::tokenize("` = () -> Text => < \"x\" >").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Backtick);
     }
 
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let source = "add = (a :: Num, b :: Num) => a + b";
+        let source = "add = (a :: Num, b :: Num) => < a + b >";
         let tokens = Lexer::tokenize(source).unwrap();
 
         assert_eq!(tokens[0].text, "add");

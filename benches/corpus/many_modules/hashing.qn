@@ -1,10 +1,10 @@
->> hashing_offset = (x :: Num) -> Num => x + 0
->> hashing_scale = (x :: Num) -> Num => x + 1
->> hashing_clamp = (x :: Num) -> Num => x + 2
->> hashing_round = (x :: Num) -> Num => x + 3
->> hashing_wrap = (x :: Num) -> Num => x + 4
->> hashing_snap = (x :: Num) -> Num => x + 5
->> hashing_bias = (x :: Num) -> Num => x + 6
->> hashing_damp = (x :: Num) -> Num => x + 7
->> hashing_boost = (x :: Num) -> Num => x + 8
->> hashing_trim = (x :: Num) -> Num => x + 9
+>> hashing_offset = (x :: Num) -> Num => < x + 0 >
+>> hashing_scale = (x :: Num) -> Num => < x + 1 >
+>> hashing_clamp = (x :: Num) -> Num => < x + 2 >
+>> hashing_round = (x :: Num) -> Num => < x + 3 >
+>> hashing_wrap = (x :: Num) -> Num => < x + 4 >
+>> hashing_snap = (x :: Num) -> Num => < x + 5 >
+>> hashing_bias = (x :: Num) -> Num => < x + 6 >
+>> hashing_damp = (x :: Num) -> Num => < x + 7 >
+>> hashing_boost = (x :: Num) -> Num => < x + 8 >
+>> hashing_trim = (x :: Num) -> Num => < x + 9 >

@@ -10,9 +10,9 @@
 << core.io
 << core.test
 
->> slugify = (title :: Text) -> Text => title.trim().toLower().replaceAll(" ", "-")
+>> slugify = (title :: Text) -> Text => < title.trim().toLower().replaceAll(" ", "-") >
 
->> wordCount = (line :: Text) -> Num => line.trim().split(" ").size
+>> wordCount = (line :: Text) -> Num => < line.trim().split(" ").size >
 
 test.describe("slugify", () => <
   test.it("lowercases and hyphenates", () =>

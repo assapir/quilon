@@ -1,10 +1,10 @@
->> inventory_offset = (x :: Num) -> Num => x + 0
->> inventory_scale = (x :: Num) -> Num => x + 1
->> inventory_clamp = (x :: Num) -> Num => x + 2
->> inventory_round = (x :: Num) -> Num => x + 3
->> inventory_wrap = (x :: Num) -> Num => x + 4
->> inventory_snap = (x :: Num) -> Num => x + 5
->> inventory_bias = (x :: Num) -> Num => x + 6
->> inventory_damp = (x :: Num) -> Num => x + 7
->> inventory_boost = (x :: Num) -> Num => x + 8
->> inventory_trim = (x :: Num) -> Num => x + 9
+>> inventory_offset = (x :: Num) -> Num => < x + 0 >
+>> inventory_scale = (x :: Num) -> Num => < x + 1 >
+>> inventory_clamp = (x :: Num) -> Num => < x + 2 >
+>> inventory_round = (x :: Num) -> Num => < x + 3 >
+>> inventory_wrap = (x :: Num) -> Num => < x + 4 >
+>> inventory_snap = (x :: Num) -> Num => < x + 5 >
+>> inventory_bias = (x :: Num) -> Num => < x + 6 >
+>> inventory_damp = (x :: Num) -> Num => < x + 7 >
+>> inventory_boost = (x :: Num) -> Num => < x + 8 >
+>> inventory_trim = (x :: Num) -> Num => < x + 9 >

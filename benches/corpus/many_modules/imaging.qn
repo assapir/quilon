@@ -1,10 +1,10 @@
->> imaging_offset = (x :: Num) -> Num => x + 0
->> imaging_scale = (x :: Num) -> Num => x + 1
->> imaging_clamp = (x :: Num) -> Num => x + 2
->> imaging_round = (x :: Num) -> Num => x + 3
->> imaging_wrap = (x :: Num) -> Num => x + 4
->> imaging_snap = (x :: Num) -> Num => x + 5
->> imaging_bias = (x :: Num) -> Num => x + 6
->> imaging_damp = (x :: Num) -> Num => x + 7
->> imaging_boost = (x :: Num) -> Num => x + 8
->> imaging_trim = (x :: Num) -> Num => x + 9
+>> imaging_offset = (x :: Num) -> Num => < x + 0 >
+>> imaging_scale = (x :: Num) -> Num => < x + 1 >
+>> imaging_clamp = (x :: Num) -> Num => < x + 2 >
+>> imaging_round = (x :: Num) -> Num => < x + 3 >
+>> imaging_wrap = (x :: Num) -> Num => < x + 4 >
+>> imaging_snap = (x :: Num) -> Num => < x + 5 >
+>> imaging_bias = (x :: Num) -> Num => < x + 6 >
+>> imaging_damp = (x :: Num) -> Num => < x + 7 >
+>> imaging_boost = (x :: Num) -> Num => < x + 8 >
+>> imaging_trim = (x :: Num) -> Num => < x + 9 >

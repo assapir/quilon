@@ -19,7 +19,7 @@ Shipment = {
   origin :: Text
 }
 
-volumeCm3 = (s :: Shipment) -> Num => s.lengthCm * s.widthCm * s.heightCm
+volumeCm3 = (s :: Shipment) -> Num => < s.lengthCm * s.widthCm * s.heightCm >
 
 ~ One record parameter, plus the two rates that are not properties of the shipment.
 cost = (s :: Shipment, ratePerKg :: Num, ratePerKm :: Num) -> Num => <

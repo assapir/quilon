@@ -12,7 +12,7 @@ call that leaves that argument off has it **filled in by the compiler**:
 ```quilon
 << core.io
 
-whereAmI = (site :: Site) -> Text => "`site.file`:`site.line`:`site.column`"
+whereAmI = (site :: Site) -> Text => < "`site.file`:`site.line`:`site.column`" >
 
 ^ = () -> $ => <
   io.print(whereAmI())        ~ prints e.g. demo.qn:4:9 — the location of THIS call
@@ -43,9 +43,9 @@ chain of wrappers report the *user's* call rather than the innermost hop — Rus
 `#[track_caller]`, as an ordinary argument:
 
 ```quilon
-inner = (site :: Site) -> Num => site.line
-outer = (site :: Site) -> Num => inner(site)   ~ forwards: reports where `outer` was called
-plain = (site :: Site) -> Num => inner()       ~ does not: reports THIS line
+inner = (site :: Site) -> Num => < site.line >
+outer = (site :: Site) -> Num => < inner(site) > ~ forwards: reports where `outer` was called
+plain = (site :: Site) -> Num => < inner() >   ~ does not: reports THIS line
 ```
 
 Only a **top-level function's last** parameter can be filled in. A `Site` anywhere else is a

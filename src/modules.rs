@@ -355,7 +355,7 @@ mod tests {
         assert!(is_corelib_source(CORE_IO));
         // Ordinary user code — even code that declares an `@` primitive — is not corelib.
         assert!(!is_corelib_source(
-            "@bad = () -> Num => 0\n^ = () -> Num => 0\n"
+            "@bad = () -> Num => < 0 >\n^ = () -> Num => < 0 >\n"
         ));
         assert!(!is_corelib_source(""));
     }

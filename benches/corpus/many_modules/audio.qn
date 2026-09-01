@@ -1,10 +1,10 @@
->> audio_offset = (x :: Num) -> Num => x + 0
->> audio_scale = (x :: Num) -> Num => x + 1
->> audio_clamp = (x :: Num) -> Num => x + 2
->> audio_round = (x :: Num) -> Num => x + 3
->> audio_wrap = (x :: Num) -> Num => x + 4
->> audio_snap = (x :: Num) -> Num => x + 5
->> audio_bias = (x :: Num) -> Num => x + 6
->> audio_damp = (x :: Num) -> Num => x + 7
->> audio_boost = (x :: Num) -> Num => x + 8
->> audio_trim = (x :: Num) -> Num => x + 9
+>> audio_offset = (x :: Num) -> Num => < x + 0 >
+>> audio_scale = (x :: Num) -> Num => < x + 1 >
+>> audio_clamp = (x :: Num) -> Num => < x + 2 >
+>> audio_round = (x :: Num) -> Num => < x + 3 >
+>> audio_wrap = (x :: Num) -> Num => < x + 4 >
+>> audio_snap = (x :: Num) -> Num => < x + 5 >
+>> audio_bias = (x :: Num) -> Num => < x + 6 >
+>> audio_damp = (x :: Num) -> Num => < x + 7 >
+>> audio_boost = (x :: Num) -> Num => < x + 8 >
+>> audio_trim = (x :: Num) -> Num => < x + 9 >

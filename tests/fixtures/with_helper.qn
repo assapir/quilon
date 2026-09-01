@@ -1,6 +1,6 @@
 ~ Test fixture: an exported function leaning on a PRIVATE sibling. The private helper
 ~ travels with the module through the link, while no importer can name it.
 
-helper = (x :: Num) -> Num => x * x
+helper = (x :: Num) -> Num => < x * x >
 
->> quad = (x :: Num) -> Num => helper(x) + helper(x)
+>> quad = (x :: Num) -> Num => < helper(x) + helper(x) >

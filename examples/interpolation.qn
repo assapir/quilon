@@ -8,7 +8,7 @@
 User = {
   name :: Text,
   age :: Num,
-  ` = () -> Text => "User(`it.name`, `it.age`)"
+  ` = () -> Text => < "User(`it.name`, `it.age`)" >
 }
 
 ~ A record with no override renders as just its type name.

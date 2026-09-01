@@ -1,10 +1,10 @@
->> throttling_offset = (x :: Num) -> Num => x + 0
->> throttling_scale = (x :: Num) -> Num => x + 1
->> throttling_clamp = (x :: Num) -> Num => x + 2
->> throttling_round = (x :: Num) -> Num => x + 3
->> throttling_wrap = (x :: Num) -> Num => x + 4
->> throttling_snap = (x :: Num) -> Num => x + 5
->> throttling_bias = (x :: Num) -> Num => x + 6
->> throttling_damp = (x :: Num) -> Num => x + 7
->> throttling_boost = (x :: Num) -> Num => x + 8
->> throttling_trim = (x :: Num) -> Num => x + 9
+>> throttling_offset = (x :: Num) -> Num => < x + 0 >
+>> throttling_scale = (x :: Num) -> Num => < x + 1 >
+>> throttling_clamp = (x :: Num) -> Num => < x + 2 >
+>> throttling_round = (x :: Num) -> Num => < x + 3 >
+>> throttling_wrap = (x :: Num) -> Num => < x + 4 >
+>> throttling_snap = (x :: Num) -> Num => < x + 5 >
+>> throttling_bias = (x :: Num) -> Num => < x + 6 >
+>> throttling_damp = (x :: Num) -> Num => < x + 7 >
+>> throttling_boost = (x :: Num) -> Num => < x + 8 >
+>> throttling_trim = (x :: Num) -> Num => < x + 9 >

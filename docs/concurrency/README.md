@@ -109,7 +109,7 @@ implicit futures matter:
 ```quilon ignore
 ~ `@get` is a leaf IO primitive (corelib/runtime) — the ONLY marked thing here.
 ~ `fetchJson` is ordinary, unmarked user code, yet concurrency-capable for free:
-fetchJson = (url :: Text) -> Text => @get(url)   ~ launches IO, returns a deferred Text
+fetchJson = (url :: Text) -> Text => < @get(url) > ~ launches IO, returns a deferred Text
 
 loadDashboard = (user :: Text) -> Text => <
   profile = fetchJson("/users/" + user)     ~ launches the first fetch, returns immediately

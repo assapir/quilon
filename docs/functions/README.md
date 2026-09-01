@@ -5,10 +5,10 @@ title: "Functions"
 # Functions
 
 ```quilon
-greet  = => "Hello!"                       ~ no params
-double = (x :: Num) => x * 2               ~ one param
-add    = (a :: Num, b :: Num) => a + b     ~ multiple params
-typed  = (a :: Num, b :: Num) -> Num => a + b
+greet  = => < "Hello!" >                   ~ no params
+double = (x :: Num) => < x * 2 >           ~ one param
+add    = (a :: Num, b :: Num) => < a + b > ~ multiple params
+typed  = (a :: Num, b :: Num) -> Num => < a + b >
 ```
 Every function parameter must be annotated — there is no default type; an
 unannotated parameter is a compile error that names it. The exception is a **lambda**,
@@ -18,7 +18,10 @@ method (`.map` / `.filter` / `.reduce` / `.each`) states the element type, and a
 function-typed parameter or binding states its own. An unannotated **method** parameter
 still defaults to `Num` (see
 [named record types](../types/records.md#named-record-types-with-methods)).
-Multi-statement bodies use `< >` blocks (the last expression is the value):
+
+A function's body is **always a `< >` block**, whether it holds one expression or many; the
+block's last expression is the function's value. A **lambda** is the exception — its body
+may be a bare expression (`xs.map(x => x * 2)`), which is what keeps a callback on one line.
 ```quilon
 compute = (x :: Num) => <
   doubled = x * 2
@@ -27,7 +30,7 @@ compute = (x :: Num) => <
 ```
 Functions may recurse; a recursive function needs a `-> Type` annotation:
 ```quilon
-factorial = (n :: Num) -> Num => n == 0 ? 1 : n * factorial(n - 1)
+factorial = (n :: Num) -> Num => < n == 0 ? 1 : n * factorial(n - 1) >
 ```
 (See `examples/factorial.qn`, `examples/fibonacci.qn`.)
 
@@ -50,7 +53,7 @@ site, and carries **no field limit** of its own:
 ```quilon
 Parcel = { lengthCm :: Num, widthCm :: Num, heightCm :: Num }
 
-volume = (p :: Parcel) -> Num => p.lengthCm * p.widthCm * p.heightCm
+volume = (p :: Parcel) -> Num => < p.lengthCm * p.widthCm * p.heightCm >
 ```
 
 (See `examples/record_parameter.qn`.)
@@ -70,10 +73,10 @@ A function type may be a **parameter type**, which is what makes a function *hig
 — it takes another function as an argument and calls it:
 
 ```quilon
-apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)
-twice = (f :: (Num) -> Num, x :: Num) -> Num => f(f(x))
+apply = (f :: (Num) -> Num, x :: Num) -> Num => < f(x) >
+twice = (f :: (Num) -> Num, x :: Num) -> Num => < f(f(x)) >
 
-^ = () -> Num => twice((n) => n * 2, 3)   ~ ((3*2)*2) = 12
+^ = () -> Num => < twice((n) => n * 2, 3) > ~ ((3*2)*2) = 12
 ```
 
 The value passed in is a closure — a lambda literal (as above) or a named closure passed
@@ -89,7 +92,7 @@ and the lambda need not repeat them:
 ```quilon ignore
 apply(10, (n) => n + 1)          ~ `apply`'s `(Num) -> Num` parameter types `n`
 c.applyTo((n) => n * 2)          ~ so does a method's function-typed parameter
-scale :: (Num) -> Num = (n) => n * 4   ~ a binding that declares its function type
+scale :: (Num) -> Num = (n) => < n * 4 > ~ a binding that declares its function type
 ```
 
 An annotation is always legal and wins where written (`(n :: Num) => n + 1`). Where the
@@ -111,14 +114,14 @@ A call may only name something **already defined above it** — there is no hois
 definition is in scope for its own body (so a function may recurse) and for everything
 that follows it, but not for anything before it:
 ```quilon ignore
-^ = () -> Num => later()   ~ error: Undefined variable 'later'
-later = () -> Num => 7
+^ = () -> Num => < later() > ~ error: Undefined variable 'later'
+later = () -> Num => < 7 >
 ```
 This holds for overload-set members too, which report the situation by name:
 ```quilon ignore
-h = () -> Text => g(1)     ~ error: cannot call 'g' before its definition
-g = (n :: Num) -> Text => "a"
-g = (t :: Text) -> Text => "b"
+h = () -> Text => < g(1) > ~ error: cannot call 'g' before its definition
+g = (n :: Num) -> Text => < "a" >
+g = (t :: Text) -> Text => < "b" >
 ```
 So **mutual recursion between top-level functions is not expressible**: whichever of the
 pair comes first would have to call the other before it exists. Self-recursion is

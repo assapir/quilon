@@ -1,10 +1,10 @@
->> billing_offset = (x :: Num) -> Num => x + 0
->> billing_scale = (x :: Num) -> Num => x + 1
->> billing_clamp = (x :: Num) -> Num => x + 2
->> billing_round = (x :: Num) -> Num => x + 3
->> billing_wrap = (x :: Num) -> Num => x + 4
->> billing_snap = (x :: Num) -> Num => x + 5
->> billing_bias = (x :: Num) -> Num => x + 6
->> billing_damp = (x :: Num) -> Num => x + 7
->> billing_boost = (x :: Num) -> Num => x + 8
->> billing_trim = (x :: Num) -> Num => x + 9
+>> billing_offset = (x :: Num) -> Num => < x + 0 >
+>> billing_scale = (x :: Num) -> Num => < x + 1 >
+>> billing_clamp = (x :: Num) -> Num => < x + 2 >
+>> billing_round = (x :: Num) -> Num => < x + 3 >
+>> billing_wrap = (x :: Num) -> Num => < x + 4 >
+>> billing_snap = (x :: Num) -> Num => < x + 5 >
+>> billing_bias = (x :: Num) -> Num => < x + 6 >
+>> billing_damp = (x :: Num) -> Num => < x + 7 >
+>> billing_boost = (x :: Num) -> Num => < x + 8 >
+>> billing_trim = (x :: Num) -> Num => < x + 9 >

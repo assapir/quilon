@@ -1,10 +1,10 @@
->> scheduling_offset = (x :: Num) -> Num => x + 0
->> scheduling_scale = (x :: Num) -> Num => x + 1
->> scheduling_clamp = (x :: Num) -> Num => x + 2
->> scheduling_round = (x :: Num) -> Num => x + 3
->> scheduling_wrap = (x :: Num) -> Num => x + 4
->> scheduling_snap = (x :: Num) -> Num => x + 5
->> scheduling_bias = (x :: Num) -> Num => x + 6
->> scheduling_damp = (x :: Num) -> Num => x + 7
->> scheduling_boost = (x :: Num) -> Num => x + 8
->> scheduling_trim = (x :: Num) -> Num => x + 9
+>> scheduling_offset = (x :: Num) -> Num => < x + 0 >
+>> scheduling_scale = (x :: Num) -> Num => < x + 1 >
+>> scheduling_clamp = (x :: Num) -> Num => < x + 2 >
+>> scheduling_round = (x :: Num) -> Num => < x + 3 >
+>> scheduling_wrap = (x :: Num) -> Num => < x + 4 >
+>> scheduling_snap = (x :: Num) -> Num => < x + 5 >
+>> scheduling_bias = (x :: Num) -> Num => < x + 6 >
+>> scheduling_damp = (x :: Num) -> Num => < x + 7 >
+>> scheduling_boost = (x :: Num) -> Num => < x + 8 >
+>> scheduling_trim = (x :: Num) -> Num => < x + 9 >

@@ -1,10 +1,10 @@
->> scoring_offset = (x :: Num) -> Num => x + 0
->> scoring_scale = (x :: Num) -> Num => x + 1
->> scoring_clamp = (x :: Num) -> Num => x + 2
->> scoring_round = (x :: Num) -> Num => x + 3
->> scoring_wrap = (x :: Num) -> Num => x + 4
->> scoring_snap = (x :: Num) -> Num => x + 5
->> scoring_bias = (x :: Num) -> Num => x + 6
->> scoring_damp = (x :: Num) -> Num => x + 7
->> scoring_boost = (x :: Num) -> Num => x + 8
->> scoring_trim = (x :: Num) -> Num => x + 9
+>> scoring_offset = (x :: Num) -> Num => < x + 0 >
+>> scoring_scale = (x :: Num) -> Num => < x + 1 >
+>> scoring_clamp = (x :: Num) -> Num => < x + 2 >
+>> scoring_round = (x :: Num) -> Num => < x + 3 >
+>> scoring_wrap = (x :: Num) -> Num => < x + 4 >
+>> scoring_snap = (x :: Num) -> Num => < x + 5 >
+>> scoring_bias = (x :: Num) -> Num => < x + 6 >
+>> scoring_damp = (x :: Num) -> Num => < x + 7 >
+>> scoring_boost = (x :: Num) -> Num => < x + 8 >
+>> scoring_trim = (x :: Num) -> Num => < x + 9 >

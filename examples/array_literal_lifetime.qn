@@ -13,7 +13,7 @@
 Pair = { xs :: []Num }
 
 ~ Returns a record holding a fresh array literal — the buffer must outlive this frame.
-makePair = () -> Pair => Pair { xs = [10, 20, 30] }
+makePair = () -> Pair => < Pair { xs = [10, 20, 30] } >
 
 ~ Reuses the stack with its own array literal; used to try to clobber `makePair`'s.
 clobber = (x :: Num) -> Num => <

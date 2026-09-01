@@ -1,10 +1,10 @@
->> matching_offset = (x :: Num) -> Num => x + 0
->> matching_scale = (x :: Num) -> Num => x + 1
->> matching_clamp = (x :: Num) -> Num => x + 2
->> matching_round = (x :: Num) -> Num => x + 3
->> matching_wrap = (x :: Num) -> Num => x + 4
->> matching_snap = (x :: Num) -> Num => x + 5
->> matching_bias = (x :: Num) -> Num => x + 6
->> matching_damp = (x :: Num) -> Num => x + 7
->> matching_boost = (x :: Num) -> Num => x + 8
->> matching_trim = (x :: Num) -> Num => x + 9
+>> matching_offset = (x :: Num) -> Num => < x + 0 >
+>> matching_scale = (x :: Num) -> Num => < x + 1 >
+>> matching_clamp = (x :: Num) -> Num => < x + 2 >
+>> matching_round = (x :: Num) -> Num => < x + 3 >
+>> matching_wrap = (x :: Num) -> Num => < x + 4 >
+>> matching_snap = (x :: Num) -> Num => < x + 5 >
+>> matching_bias = (x :: Num) -> Num => < x + 6 >
+>> matching_damp = (x :: Num) -> Num => < x + 7 >
+>> matching_boost = (x :: Num) -> Num => < x + 8 >
+>> matching_trim = (x :: Num) -> Num => < x + 9 >

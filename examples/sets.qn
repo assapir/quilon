@@ -9,8 +9,8 @@
 
 Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = () -> Num => it.x * 31 + it.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = () -> Num => < it.x * 31 + it.y >
 }
 
 ^ = () -> $ => <

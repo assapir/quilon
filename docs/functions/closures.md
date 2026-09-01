@@ -11,8 +11,9 @@ left to do to it. When a function returns such a call, the compiler **guarantees
 call does not grow the stack. So a tail-recursive function runs in **constant stack** and
 will not overflow, however deep the recursion:
 ```quilon
-count = (n :: Num, acc :: Num) -> Num =>
+count = (n :: Num, acc :: Num) -> Num => <
   n == 0 ? acc : count(n - 1, acc + n)   ~ the self-call IS the `:` branch → tail position
+>
 ```
 Tail position flows through the constructs that yield a value directly: `?`/`|` match
 arms, `if`/ternary branches, and the tail of a `< >` block. A self-call
@@ -45,13 +46,13 @@ bound it** — no capture list, no marker, mirroring the mutability rule for
   bump(20)                   ~ total -> 30  (same cell)
 
   base = 7                   ~ `=`  -> captured BY VALUE (a frozen copy)
-  addBase = (x :: Num) => x + base
+  addBase = (x :: Num) => < x + base >
 
   total + addBase(5)         ~ 30 + 12 = 42
 >
 ```
 
-A non-capturing nested function may **recurse** (`fact = (n :: Num) => … fact(n-1) …`).
+A non-capturing nested function may **recurse** (`fact = (n :: Num) => < … fact(n-1) … >`).
 Nested closures may capture from any enclosing frame — the shared `:=` cell is threaded
 through every level. A closure value may itself be captured by another closure and called.
 A closure may also be **passed to a function** whose parameter has the matching

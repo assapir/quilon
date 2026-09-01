@@ -1,10 +1,10 @@
->> geometry_offset = (x :: Num) -> Num => x + 0
->> geometry_scale = (x :: Num) -> Num => x + 1
->> geometry_clamp = (x :: Num) -> Num => x + 2
->> geometry_round = (x :: Num) -> Num => x + 3
->> geometry_wrap = (x :: Num) -> Num => x + 4
->> geometry_snap = (x :: Num) -> Num => x + 5
->> geometry_bias = (x :: Num) -> Num => x + 6
->> geometry_damp = (x :: Num) -> Num => x + 7
->> geometry_boost = (x :: Num) -> Num => x + 8
->> geometry_trim = (x :: Num) -> Num => x + 9
+>> geometry_offset = (x :: Num) -> Num => < x + 0 >
+>> geometry_scale = (x :: Num) -> Num => < x + 1 >
+>> geometry_clamp = (x :: Num) -> Num => < x + 2 >
+>> geometry_round = (x :: Num) -> Num => < x + 3 >
+>> geometry_wrap = (x :: Num) -> Num => < x + 4 >
+>> geometry_snap = (x :: Num) -> Num => < x + 5 >
+>> geometry_bias = (x :: Num) -> Num => < x + 6 >
+>> geometry_damp = (x :: Num) -> Num => < x + 7 >
+>> geometry_boost = (x :: Num) -> Num => < x + 8 >
+>> geometry_trim = (x :: Num) -> Num => < x + 9 >

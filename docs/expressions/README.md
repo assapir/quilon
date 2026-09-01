@@ -59,7 +59,10 @@ sidebar:
 - **Ternary:** `cond ? then : else`.
 - **Blocks:** `< stmt… last >` evaluate to their last expression. A block goes in **body**
   position — a function's, a lambda's, or a method's — not in operand position, so a block
-  is never the left or right side of an operator:
+  is never the left or right side of an operator. A function's and a method's body is
+  **always** a block, even for a single expression (`double = (x :: Num) => < x * 2 >`);
+  only a **lambda** may write a bare expression instead, so a callback still fits on one
+  line (`xs.map(x => x * 2)`):
 ```quilon
 total = () -> Num => <
   x = 10

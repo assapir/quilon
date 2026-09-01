@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn pure_program_has_no_force_sites() {
-        let i = info("^ = () -> Num => 1 + 2 * 3");
+        let i = info("^ = () -> Num => < 1 + 2 * 3 >");
         assert_eq!(i.force_sites.len(), 0);
     }
 
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn read_directly_in_a_strict_slot_forces_at_the_call() {
         // No binding: the `@readStdin()` value is consumed strictly (compared) right away.
-        let src = "<< core.io\n^ = () -> Num => @readStdin() == \"hi\" ? 0 : 1";
+        let src = "<< core.io\n^ = () -> Num => < @readStdin() == \"hi\" ? 0 : 1 >";
         assert_eq!(force_count(src), 1);
     }
 

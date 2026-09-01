@@ -1,10 +1,10 @@
->> validation_offset = (x :: Num) -> Num => x + 0
->> validation_scale = (x :: Num) -> Num => x + 1
->> validation_clamp = (x :: Num) -> Num => x + 2
->> validation_round = (x :: Num) -> Num => x + 3
->> validation_wrap = (x :: Num) -> Num => x + 4
->> validation_snap = (x :: Num) -> Num => x + 5
->> validation_bias = (x :: Num) -> Num => x + 6
->> validation_damp = (x :: Num) -> Num => x + 7
->> validation_boost = (x :: Num) -> Num => x + 8
->> validation_trim = (x :: Num) -> Num => x + 9
+>> validation_offset = (x :: Num) -> Num => < x + 0 >
+>> validation_scale = (x :: Num) -> Num => < x + 1 >
+>> validation_clamp = (x :: Num) -> Num => < x + 2 >
+>> validation_round = (x :: Num) -> Num => < x + 3 >
+>> validation_wrap = (x :: Num) -> Num => < x + 4 >
+>> validation_snap = (x :: Num) -> Num => < x + 5 >
+>> validation_bias = (x :: Num) -> Num => < x + 6 >
+>> validation_damp = (x :: Num) -> Num => < x + 7 >
+>> validation_boost = (x :: Num) -> Num => < x + 8 >
+>> validation_trim = (x :: Num) -> Num => < x + 9 >

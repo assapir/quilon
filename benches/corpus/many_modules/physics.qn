@@ -1,10 +1,10 @@
->> physics_offset = (x :: Num) -> Num => x + 0
->> physics_scale = (x :: Num) -> Num => x + 1
->> physics_clamp = (x :: Num) -> Num => x + 2
->> physics_round = (x :: Num) -> Num => x + 3
->> physics_wrap = (x :: Num) -> Num => x + 4
->> physics_snap = (x :: Num) -> Num => x + 5
->> physics_bias = (x :: Num) -> Num => x + 6
->> physics_damp = (x :: Num) -> Num => x + 7
->> physics_boost = (x :: Num) -> Num => x + 8
->> physics_trim = (x :: Num) -> Num => x + 9
+>> physics_offset = (x :: Num) -> Num => < x + 0 >
+>> physics_scale = (x :: Num) -> Num => < x + 1 >
+>> physics_clamp = (x :: Num) -> Num => < x + 2 >
+>> physics_round = (x :: Num) -> Num => < x + 3 >
+>> physics_wrap = (x :: Num) -> Num => < x + 4 >
+>> physics_snap = (x :: Num) -> Num => < x + 5 >
+>> physics_bias = (x :: Num) -> Num => < x + 6 >
+>> physics_damp = (x :: Num) -> Num => < x + 7 >
+>> physics_boost = (x :: Num) -> Num => < x + 8 >
+>> physics_trim = (x :: Num) -> Num => < x + 9 >

@@ -31,9 +31,11 @@ Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 **Construct** a value by naming the variant (with payload arguments if it has any), and
 **consume** it with `?`/`|` pattern matching, which binds the payload:
 ```quilon ignore
-area = (s :: Shape) -> Num => s ?
-  | Circle(r)  => 3 * r * r
-  | Rect(w, h) => w * h          ~ binds both payload fields
+area = (s :: Shape) -> Num => <
+  s ?
+    | Circle(r)  => 3 * r * r
+    | Rect(w, h) => w * h          ~ binds both payload fields
+>
 ```
 A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
 (or a lowercase binding) wildcard. Each pattern must also name a variant the scrutinee's
@@ -48,9 +50,9 @@ typically matches on it. A member is a named method, an
 always `=` (see [Mutation](../mutation.md)).
 ```quilon
 Shape = Circle(Num) / Rect(Num, Num) {
-  area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
-  == = (other :: Shape) -> Bool => it.area() == other.area()      ~ operator member
-  ` = () -> Text => it ? | Circle(r) => "Circle(`r`)" | Rect(w, h) => "Rect(`w`x`h`)"
+  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h >
+  == = (other :: Shape) -> Bool => < it.area() == other.area() >  ~ operator member
+  ` = () -> Text => < it ? | Circle(r) => "Circle(`r`)" | Rect(w, h) => "Rect(`w`x`h`)" >
 }
 Rect(6, 7).area()                ~ 42
 ```
@@ -63,9 +65,11 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
 Use it exactly like any other sum type:
 ```quilon
-classify = (v :: Result) => v ?
-  | Ok(x)    => x * 2
-  | NotOk(e) => 0
+classify = (v :: Result) => <
+  v ?
+    | Ok(x)    => x * 2
+    | NotOk(e) => 0
+>
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is

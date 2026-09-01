@@ -7,16 +7,16 @@
 
 ~ --- A user function overload set: same name, different parameter types. ---
 ~ The call site picks the member whose parameter type matches exactly.
-score = (n :: Num) -> Num => n + 1        ~ Num overload
-score = (s :: Text) -> Num => s.size      ~ Text overload (byte length)
+score = (n :: Num) -> Num => < n + 1 >    ~ Num overload
+score = (s :: Text) -> Num => < s.size >  ~ Text overload (byte length)
 
 ~ --- Operator members on a record type. ---
 ~ `==` compares the two components; `it` is the left operand, the one parameter the right.
 ~ `` ` `` is a UNARY operator member (no parameter) — the type's Text rendering.
 Color = {
   r :: Num, g :: Num,
-  == = (other :: Color) -> Bool => it.r == other.r && it.g == other.g,
-  `  = () -> Text => "Color(`it.r`, `it.g`)"
+  == = (other :: Color) -> Bool => < it.r == other.r && it.g == other.g >,
+  `  = () -> Text => < "Color(`it.r`, `it.g`)" >
 }
 
 ^ = () -> $ => <

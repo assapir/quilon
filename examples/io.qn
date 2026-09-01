@@ -11,7 +11,7 @@
 ~ `io.write` is reached only through the module binding, so a program's own bare `write`
 ~ is a different, unrelated function — here a wrapper that fixes the descriptor. Building
 ~ on a module means holding it and delegating, never extending its names.
-write = (content :: Text) -> Num => io.write(content, io.stdout)
+write = (content :: Text) -> Num => < io.write(content, io.stdout) >
 
 ^ = () -> $ => <
   io.print("hello")            ~ stdout: hello\n

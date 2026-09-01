@@ -20,7 +20,7 @@ none   :: [|Num|] = [||]                                  ~ empty set
 
 **Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or
 a **user type that opts in** — a record or sum defining both a `%` hash hook
-(`% = () -> Num => …`, `it` the value) and an `==` member; both are required, and `%`/`==`
+(`% = () -> Num => < … >`, `it` the value) and an `==` member; both are required, and `%`/`==`
 must agree (see [Map](map.md#user-defined-key-types)). Duplicates collapse. A set is
 **immutable / persistent**: every mutator (`add`, the set operators) returns a **new** set
 and never touches the receiver.

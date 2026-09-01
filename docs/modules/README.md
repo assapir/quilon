@@ -8,7 +8,7 @@ title: "Modules"
 << core.io                 ~ import the built-in IO module; binds `io`
 << "lib/math.qn"           ~ import a user module by path (/ or \); binds its file stem, `math`
 
->> add = (a :: Num, b :: Num) => a + b   ~ `>>` exports an item; unmarked items are file-private
+>> add = (a :: Num, b :: Num) => < a + b > ~ `>>` exports an item; unmarked items are file-private
 
 ^ = () -> Num => <
   io.print(math.add(2, 3))  ~ exports are reached THROUGH the module's binding
@@ -27,11 +27,12 @@ same way, in every position:
 ```quilon ignore
 << core.http
 
-classify = (m :: http.Method) -> Num =>   ~ a qualified type in an annotation
+classify = (m :: http.Method) -> Num => < ~ a qualified type in an annotation
   m ?
     | http.Get     => 1                   ~ qualified variants in patterns
     | http.Post(_) => 2
     | _            => 0
+>
 
 request = http.Request { method = http.Get, url = "http://example.com/" }
 ```
@@ -65,7 +66,7 @@ build on another holds it and delegates (composition):
 
 ```quilon ignore
 << core.http
->> fetch = (url :: Text) -> Result => http.Request { method = http.Get, url = url }.send()
+>> fetch = (url :: Text) -> Result => < http.Request { method = http.Get, url = url }.send() >
 ```
 
 ## Closed overload sets

@@ -1,10 +1,10 @@
->> strings_offset = (x :: Num) -> Num => x + 0
->> strings_scale = (x :: Num) -> Num => x + 1
->> strings_clamp = (x :: Num) -> Num => x + 2
->> strings_round = (x :: Num) -> Num => x + 3
->> strings_wrap = (x :: Num) -> Num => x + 4
->> strings_snap = (x :: Num) -> Num => x + 5
->> strings_bias = (x :: Num) -> Num => x + 6
->> strings_damp = (x :: Num) -> Num => x + 7
->> strings_boost = (x :: Num) -> Num => x + 8
->> strings_trim = (x :: Num) -> Num => x + 9
+>> strings_offset = (x :: Num) -> Num => < x + 0 >
+>> strings_scale = (x :: Num) -> Num => < x + 1 >
+>> strings_clamp = (x :: Num) -> Num => < x + 2 >
+>> strings_round = (x :: Num) -> Num => < x + 3 >
+>> strings_wrap = (x :: Num) -> Num => < x + 4 >
+>> strings_snap = (x :: Num) -> Num => < x + 5 >
+>> strings_bias = (x :: Num) -> Num => < x + 6 >
+>> strings_damp = (x :: Num) -> Num => < x + 7 >
+>> strings_boost = (x :: Num) -> Num => < x + 8 >
+>> strings_trim = (x :: Num) -> Num => < x + 9 >

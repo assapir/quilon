@@ -1,10 +1,10 @@
->> colour_offset = (x :: Num) -> Num => x + 0
->> colour_scale = (x :: Num) -> Num => x + 1
->> colour_clamp = (x :: Num) -> Num => x + 2
->> colour_round = (x :: Num) -> Num => x + 3
->> colour_wrap = (x :: Num) -> Num => x + 4
->> colour_snap = (x :: Num) -> Num => x + 5
->> colour_bias = (x :: Num) -> Num => x + 6
->> colour_damp = (x :: Num) -> Num => x + 7
->> colour_boost = (x :: Num) -> Num => x + 8
->> colour_trim = (x :: Num) -> Num => x + 9
+>> colour_offset = (x :: Num) -> Num => < x + 0 >
+>> colour_scale = (x :: Num) -> Num => < x + 1 >
+>> colour_clamp = (x :: Num) -> Num => < x + 2 >
+>> colour_round = (x :: Num) -> Num => < x + 3 >
+>> colour_wrap = (x :: Num) -> Num => < x + 4 >
+>> colour_snap = (x :: Num) -> Num => < x + 5 >
+>> colour_bias = (x :: Num) -> Num => < x + 6 >
+>> colour_damp = (x :: Num) -> Num => < x + 7 >
+>> colour_boost = (x :: Num) -> Num => < x + 8 >
+>> colour_trim = (x :: Num) -> Num => < x + 9 >

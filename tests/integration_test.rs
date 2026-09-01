@@ -132,7 +132,7 @@ fn deeply_nested_calls_check_in_linear_time() {
     // minutes. 60 levels must check instantly.
     let n = 60;
     let src = format!(
-        "g = (n :: Num) -> Num => n + 1\n^ = () -> Num => {}1{}",
+        "g = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => < {}1{} >",
         "g(".repeat(n),
         ")".repeat(n)
     );

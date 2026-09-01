@@ -19,7 +19,7 @@ fn a_render_member_is_what_makes_a_type_printable() {
 Money = {
   amount :: Num,
   currency :: Text,
-  ` = () -> Text => "`it.amount` `it.currency`"
+  ` = () -> Text => < "`it.amount` `it.currency`" >
 }
 
 ^ = () -> Num => <
@@ -70,8 +70,8 @@ Shape = Circle(Num) / Square(Num)
 #[test]
 fn a_function_value_has_no_rendering() {
     for source in [
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.print(double)\n  0\n>",
-        "<< core.io\ndouble = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  io.write(double, io.stdout)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => <\n  io.print(double)\n  0\n>",
+        "<< core.io\ndouble = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => <\n  io.write(double, io.stdout)\n  0\n>",
     ] {
         assert_type_error(source);
     }
@@ -88,8 +88,8 @@ fn a_trailing_site_does_not_hide_a_member_behind_the_builtin() {
     let run = run_program_named(
         "print_with_site.qn",
         r#"
-print = (label :: Text, at :: Site) -> Num => label.size + at.line
-^ = () -> Num => print("abc")
+print = (label :: Text, at :: Site) -> Num => < label.size + at.line >
+^ = () -> Num => < print("abc") >
 "#,
     );
     assert_eq!(
@@ -107,9 +107,9 @@ fn a_call_above_a_user_set_reports_the_definition_order() {
     // module's `io.print` has nothing to do with it.
     let message = type_error_message(
         r#"
-^ = () -> Num => print(40)
-print = (a :: Num) -> Num => a
-print = (t :: Text) -> Num => t.size
+^ = () -> Num => < print(40) >
+print = (a :: Num) -> Num => < a >
+print = (t :: Text) -> Num => < t.size >
 "#,
     );
     assert!(
@@ -168,7 +168,7 @@ fn rendering_holds_in_a_native_executable() {
 
 Tag = {
   label :: Text,
-  ` = () -> Text => "[`it.label`]"
+  ` = () -> Text => < "[`it.label`]" >
 }
 
 ^ = () -> Num => <

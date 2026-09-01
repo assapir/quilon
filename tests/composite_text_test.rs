@@ -221,8 +221,8 @@ fn ok_text_payload_dispatches_overload_by_concrete_type() {
     // miscompiled). "quilon".size = 6, via the Text member.
     assert_exit(
         r#"
-        describe = (s :: Text) -> Num => s.size
-        describe = (n :: Num)  -> Num => n + 100
+        describe = (s :: Text) -> Num => < s.size >
+        describe = (n :: Num)  -> Num => < n + 100 >
         ^ = () -> Num => <
           r = Ok("quilon")
           r ? | Ok(s) => describe(s) | NotOk(_) => 0
@@ -237,8 +237,8 @@ fn ok_num_payload_dispatches_overload_by_concrete_type() {
     // The numeric payload picks the Num member: 5 + 100 = 105.
     assert_exit(
         r#"
-        describe = (s :: Text) -> Num => s.size
-        describe = (n :: Num)  -> Num => n + 100
+        describe = (s :: Text) -> Num => < s.size >
+        describe = (n :: Num)  -> Num => < n + 100 >
         ^ = () -> Num => <
           r = Ok(5)
           r ? | Ok(n) => describe(n) | NotOk(_) => 0
@@ -281,8 +281,8 @@ fn notok_text_payload_dispatches_overload() {
     // The error payload is Text too and dispatches by its concrete type. "oops".size = 4.
     assert_exit(
         r#"
-        len = (s :: Text) -> Num => s.size
-        len = (n :: Num)  -> Num => n
+        len = (s :: Text) -> Num => < s.size >
+        len = (n :: Num)  -> Num => < n >
         ^ = () -> Num => <
           r = NotOk("oops")
           r ? | Ok(_) => 0 | NotOk(e) => len(e)
@@ -299,7 +299,7 @@ fn inferred_return_result_payload_is_usable() {
     // downstream match binds the Text payload usably. "hello".size = 5.
     assert_exit(
         r#"
-        make = () => Ok("hello")
+        make = () => < Ok("hello") >
         ^ = () -> Num => <
           r = make()
           r ? | Ok(s) => s.size | NotOk(_) => 0
@@ -316,7 +316,7 @@ fn annotated_result_return_carries_concrete_payload() {
     // `s : Text`. "world".size = 5.
     assert_exit(
         r#"
-        make = () -> Result => Ok("world")
+        make = () -> Result => < Ok("world") >
         ^ = () -> Num => <
           r = make()
           r ? | Ok(s) => s.size | NotOk(_) => 0
@@ -333,12 +333,16 @@ fn getenv_shaped_result_both_arms_text() {
     // EITHER arm can use its Text. Looking up a missing key -> NotOk("unset").size = 5.
     assert_exit(
         r#"
-        lookup = (key :: Text) -> Result => key == "home"
-          ? Ok("/usr/home")
-          : NotOk("unset")
-        ^ = () -> Num => lookup("nope") ?
-          | Ok(path)   => path.size
-          | NotOk(err) => err.size
+        lookup = (key :: Text) -> Result => <
+          key == "home"
+            ? Ok("/usr/home")
+            : NotOk("unset")
+        >
+        ^ = () -> Num => <
+          lookup("nope") ?
+            | Ok(path)   => path.size
+            | NotOk(err) => err.size
+        >
         "#,
         5,
     );
@@ -349,12 +353,16 @@ fn getenv_shaped_result_ok_branch_uses_text() {
     // Same helper, the Ok branch: "/usr/home".size = 9.
     assert_exit(
         r#"
-        lookup = (key :: Text) -> Result => key == "home"
-          ? Ok("/usr/home")
-          : NotOk("unset")
-        ^ = () -> Num => lookup("home") ?
-          | Ok(path)   => path.size
-          | NotOk(err) => err.size
+        lookup = (key :: Text) -> Result => <
+          key == "home"
+            ? Ok("/usr/home")
+            : NotOk("unset")
+        >
+        ^ = () -> Num => <
+          lookup("home") ?
+            | Ok(path)   => path.size
+            | NotOk(err) => err.size
+        >
         "#,
         9,
     );
@@ -367,8 +375,8 @@ fn heterogeneous_result_payload_across_branches_still_compiles() {
     // branches keep one struct shape. check(142) -> NotOk(142) -> 142.
     assert_exit(
         r#"
-        check = (n :: Num) -> Result => n <= 100 ? Ok($) : NotOk(n)
-        ^ = () -> Num => check(142) ? | Ok(_) => 0 | NotOk(c) => c
+        check = (n :: Num) -> Result => < n <= 100 ? Ok($) : NotOk(n) >
+        ^ = () -> Num => < check(142) ? | Ok(_) => 0 | NotOk(c) => c >
         "#,
         142,
     );
@@ -381,8 +389,8 @@ fn overload_with_no_matching_member_for_payload_is_rejected() {
     // silent fallback to the Num member (the old generic-Result behavior).
     assert_type_error(
         r#"
-        only = (n :: Num)  -> Num => n
-        only = (b :: Bool) -> Num => 1
+        only = (n :: Num)  -> Num => < n >
+        only = (b :: Bool) -> Num => < 1 >
         ^ = () -> Num => <
           r = Ok("x")
           r ? | Ok(s) => only(s) | NotOk(_) => 0

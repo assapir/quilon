@@ -1,10 +1,10 @@
->> dates_offset = (x :: Num) -> Num => x + 0
->> dates_scale = (x :: Num) -> Num => x + 1
->> dates_clamp = (x :: Num) -> Num => x + 2
->> dates_round = (x :: Num) -> Num => x + 3
->> dates_wrap = (x :: Num) -> Num => x + 4
->> dates_snap = (x :: Num) -> Num => x + 5
->> dates_bias = (x :: Num) -> Num => x + 6
->> dates_damp = (x :: Num) -> Num => x + 7
->> dates_boost = (x :: Num) -> Num => x + 8
->> dates_trim = (x :: Num) -> Num => x + 9
+>> dates_offset = (x :: Num) -> Num => < x + 0 >
+>> dates_scale = (x :: Num) -> Num => < x + 1 >
+>> dates_clamp = (x :: Num) -> Num => < x + 2 >
+>> dates_round = (x :: Num) -> Num => < x + 3 >
+>> dates_wrap = (x :: Num) -> Num => < x + 4 >
+>> dates_snap = (x :: Num) -> Num => < x + 5 >
+>> dates_bias = (x :: Num) -> Num => < x + 6 >
+>> dates_damp = (x :: Num) -> Num => < x + 7 >
+>> dates_boost = (x :: Num) -> Num => < x + 8 >
+>> dates_trim = (x :: Num) -> Num => < x + 9 >

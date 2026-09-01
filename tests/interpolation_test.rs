@@ -45,24 +45,36 @@ fn hole_may_contain_a_nested_string() {
 
 #[test]
 fn bare_backtick_is_the_render_operator_token() {
-    let tokens = Lexer::tokenize("` = () -> Text => \"x\"").unwrap();
+    let tokens = Lexer::tokenize("` = () -> Text => < \"x\" >").unwrap();
     assert_eq!(tokens[0].kind, TokenKind::Backtick);
 }
 
 // ---- parser ------------------------------------------------------------------------
 
-#[test]
-fn parses_interpolation_node_with_hole_expression() {
-    let program = parse(&Lexer::tokenize("^ = () -> Text => \"n `1 + 2`\"").unwrap()).unwrap();
-    // Dig out the entry-point body expression.
+/// The entry point's body expression: `^`'s body is a block, and these tests are about
+/// the one expression inside it.
+fn entry_tail(src: &str) -> Expression {
+    let program = parse(&Lexer::tokenize(src).unwrap()).unwrap();
     let body = program
         .items
-        .iter()
+        .into_iter()
         .find_map(|item| match item {
-            quilon::ast::Item::FunctionDeclaration(f) if f.name == "^" => Some(&f.body),
+            quilon::ast::Item::FunctionDeclaration(f) if f.name == "^" => Some(f.body),
             _ => None,
         })
         .expect("entry point");
+    let Expression::Block { mut statements, .. } = body else {
+        panic!("expected a block body, got {body:?}");
+    };
+    match statements.pop().expect("a block with a tail expression") {
+        quilon::ast::Statement::Expression(e) => e,
+        other => panic!("expected a tail expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_interpolation_node_with_hole_expression() {
+    let body = entry_tail("^ = () -> Text => < \"n `1 + 2`\" >");
     let Expression::Interpolation { parts, .. } = body else {
         panic!("expected an interpolation node, got {body:?}");
     };
@@ -76,15 +88,7 @@ fn parses_interpolation_node_with_hole_expression() {
 
 #[test]
 fn plain_string_stays_a_string_node() {
-    let program = parse(&Lexer::tokenize("^ = () -> Text => \"plain\"").unwrap()).unwrap();
-    let body = program
-        .items
-        .iter()
-        .find_map(|item| match item {
-            quilon::ast::Item::FunctionDeclaration(f) if f.name == "^" => Some(&f.body),
-            _ => None,
-        })
-        .unwrap();
+    let body = entry_tail("^ = () -> Text => < \"plain\" >");
     assert!(matches!(body, Expression::String { .. }));
 }
 
@@ -102,14 +106,15 @@ fn type_checks(src: &str) -> Result<(), String> {
 #[test]
 fn interpolation_type_checks_with_any_hole_type() {
     // Num, Bool, and Text holes are all renderable.
-    type_checks("^ = () -> Text => \"n `1` b `true` t `\"x\"`\"").expect("should type check");
+    type_checks("^ = () -> Text => < \"n `1` b `true` t `\"x\"`\" >").expect("should type check");
 }
 
 #[test]
 fn backtick_override_must_return_text() {
     // A `` ` `` override returning Num is rejected.
-    let err = type_checks("T = {\n  v :: Num,\n  ` = () -> Num => it.v\n}\n^ = () -> Num => 0")
-        .expect_err("a non-Text render override must be rejected");
+    let err =
+        type_checks("T = {\n  v :: Num,\n  ` = () -> Num => < it.v >\n}\n^ = () -> Num => < 0 >")
+            .expect_err("a non-Text render override must be rejected");
     assert!(err.contains("render operator"), "unexpected error: {err}");
 }
 
@@ -117,7 +122,7 @@ fn backtick_override_must_return_text() {
 
 #[test]
 fn codegen_emits_render_intrinsics_for_holes() {
-    let tokens = Lexer::tokenize("^ = () -> Text => \"n `1` b `true`\"").unwrap();
+    let tokens = Lexer::tokenize("^ = () -> Text => < \"n `1` b `true`\" >").unwrap();
     let program = parse(&tokens).unwrap();
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
@@ -137,7 +142,7 @@ fn codegen_emits_render_intrinsics_for_holes() {
 /// A program that exits 1 iff the interpolation `interpolation` renders exactly to `expected`.
 fn assert_renders(interpolation: &str, expected: &str) {
     assert_exit(
-        &format!("^ = () -> Num => ({interpolation} == \"{expected}\" ? 1 : 0)"),
+        &format!("^ = () -> Num => < ({interpolation} == \"{expected}\" ? 1 : 0) >"),
         1,
     );
 }
@@ -152,7 +157,7 @@ fn renders_num_expression_and_bool() {
 #[test]
 fn doubled_backtick_is_one_literal_backtick() {
     // "a`b" is 3 bytes.
-    assert_exit("^ = () -> Num => \"a``b\".size", 3);
+    assert_exit("^ = () -> Num => < \"a``b\".size >", 3);
 }
 
 #[test]
@@ -163,7 +168,7 @@ fn renders_record_default_and_override() {
         1,
     );
     assert_exit(
-        "U = {\n  name :: Text,\n  ` = () -> Text => \"U:`it.name`\"\n}\n^ = () -> Num => <\n  u :: U = U { name = \"Ada\" }\n  \"`u`\" == \"U:Ada\" ? 1 : 0\n>",
+        "U = {\n  name :: Text,\n  ` = () -> Text => < \"U:`it.name`\" >\n}\n^ = () -> Num => <\n  u :: U = U { name = \"Ada\" }\n  \"`u`\" == \"U:Ada\" ? 1 : 0\n>",
         1,
     );
 }
@@ -215,7 +220,7 @@ fn override_rendering_it_wholesale_terminates() {
     // A `` ` `` override that renders `it` wholesale must NOT recurse forever: the wholesale
     // `it` falls back to the built-in default (the type name). So U's `"U=`it`"` yields "U=U".
     assert_exit(
-        "U = {\n  v :: Num,\n  ` = () -> Text => \"U=`it`\"\n}\n^ = () -> Num => <\n  u :: U = U { v = 1 }\n  \"`u`\" == \"U=U\" ? 1 : 0\n>",
+        "U = {\n  v :: Num,\n  ` = () -> Text => < \"U=`it`\" >\n}\n^ = () -> Num => <\n  u :: U = U { v = 1 }\n  \"`u`\" == \"U=U\" ? 1 : 0\n>",
         1,
     );
 }

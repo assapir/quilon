@@ -1,10 +1,10 @@
->> mapping_offset = (x :: Num) -> Num => x + 0
->> mapping_scale = (x :: Num) -> Num => x + 1
->> mapping_clamp = (x :: Num) -> Num => x + 2
->> mapping_round = (x :: Num) -> Num => x + 3
->> mapping_wrap = (x :: Num) -> Num => x + 4
->> mapping_snap = (x :: Num) -> Num => x + 5
->> mapping_bias = (x :: Num) -> Num => x + 6
->> mapping_damp = (x :: Num) -> Num => x + 7
->> mapping_boost = (x :: Num) -> Num => x + 8
->> mapping_trim = (x :: Num) -> Num => x + 9
+>> mapping_offset = (x :: Num) -> Num => < x + 0 >
+>> mapping_scale = (x :: Num) -> Num => < x + 1 >
+>> mapping_clamp = (x :: Num) -> Num => < x + 2 >
+>> mapping_round = (x :: Num) -> Num => < x + 3 >
+>> mapping_wrap = (x :: Num) -> Num => < x + 4 >
+>> mapping_snap = (x :: Num) -> Num => < x + 5 >
+>> mapping_bias = (x :: Num) -> Num => < x + 6 >
+>> mapping_damp = (x :: Num) -> Num => < x + 7 >
+>> mapping_boost = (x :: Num) -> Num => < x + 8 >
+>> mapping_trim = (x :: Num) -> Num => < x + 9 >

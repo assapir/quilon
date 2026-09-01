@@ -1,10 +1,10 @@
->> accounting_offset = (x :: Num) -> Num => x + 0
->> accounting_scale = (x :: Num) -> Num => x + 1
->> accounting_clamp = (x :: Num) -> Num => x + 2
->> accounting_round = (x :: Num) -> Num => x + 3
->> accounting_wrap = (x :: Num) -> Num => x + 4
->> accounting_snap = (x :: Num) -> Num => x + 5
->> accounting_bias = (x :: Num) -> Num => x + 6
->> accounting_damp = (x :: Num) -> Num => x + 7
->> accounting_boost = (x :: Num) -> Num => x + 8
->> accounting_trim = (x :: Num) -> Num => x + 9
+>> accounting_offset = (x :: Num) -> Num => < x + 0 >
+>> accounting_scale = (x :: Num) -> Num => < x + 1 >
+>> accounting_clamp = (x :: Num) -> Num => < x + 2 >
+>> accounting_round = (x :: Num) -> Num => < x + 3 >
+>> accounting_wrap = (x :: Num) -> Num => < x + 4 >
+>> accounting_snap = (x :: Num) -> Num => < x + 5 >
+>> accounting_bias = (x :: Num) -> Num => < x + 6 >
+>> accounting_damp = (x :: Num) -> Num => < x + 7 >
+>> accounting_boost = (x :: Num) -> Num => < x + 8 >
+>> accounting_trim = (x :: Num) -> Num => < x + 9 >

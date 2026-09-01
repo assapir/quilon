@@ -1,10 +1,10 @@
->> encoding_offset = (x :: Num) -> Num => x + 0
->> encoding_scale = (x :: Num) -> Num => x + 1
->> encoding_clamp = (x :: Num) -> Num => x + 2
->> encoding_round = (x :: Num) -> Num => x + 3
->> encoding_wrap = (x :: Num) -> Num => x + 4
->> encoding_snap = (x :: Num) -> Num => x + 5
->> encoding_bias = (x :: Num) -> Num => x + 6
->> encoding_damp = (x :: Num) -> Num => x + 7
->> encoding_boost = (x :: Num) -> Num => x + 8
->> encoding_trim = (x :: Num) -> Num => x + 9
+>> encoding_offset = (x :: Num) -> Num => < x + 0 >
+>> encoding_scale = (x :: Num) -> Num => < x + 1 >
+>> encoding_clamp = (x :: Num) -> Num => < x + 2 >
+>> encoding_round = (x :: Num) -> Num => < x + 3 >
+>> encoding_wrap = (x :: Num) -> Num => < x + 4 >
+>> encoding_snap = (x :: Num) -> Num => < x + 5 >
+>> encoding_bias = (x :: Num) -> Num => < x + 6 >
+>> encoding_damp = (x :: Num) -> Num => < x + 7 >
+>> encoding_boost = (x :: Num) -> Num => < x + 8 >
+>> encoding_trim = (x :: Num) -> Num => < x + 9 >

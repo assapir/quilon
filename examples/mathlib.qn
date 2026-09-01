@@ -1,7 +1,7 @@
 ~ A library module. Items prefixed with `>>` are exported; everything else is
 ~ private to the module. Imported elsewhere with `<< "mathlib.qn"`.
 
->> add = (a :: Num, b :: Num) -> Num => a + b
+>> add = (a :: Num, b :: Num) -> Num => < a + b >
 
 ~ Not exported -> invisible to importers.
-helper = (x :: Num) -> Num => x * x
+helper = (x :: Num) -> Num => < x * x >

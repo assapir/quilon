@@ -1,10 +1,10 @@
->> geometry3d_offset = (x :: Num) -> Num => x + 0
->> geometry3d_scale = (x :: Num) -> Num => x + 1
->> geometry3d_clamp = (x :: Num) -> Num => x + 2
->> geometry3d_round = (x :: Num) -> Num => x + 3
->> geometry3d_wrap = (x :: Num) -> Num => x + 4
->> geometry3d_snap = (x :: Num) -> Num => x + 5
->> geometry3d_bias = (x :: Num) -> Num => x + 6
->> geometry3d_damp = (x :: Num) -> Num => x + 7
->> geometry3d_boost = (x :: Num) -> Num => x + 8
->> geometry3d_trim = (x :: Num) -> Num => x + 9
+>> geometry3d_offset = (x :: Num) -> Num => < x + 0 >
+>> geometry3d_scale = (x :: Num) -> Num => < x + 1 >
+>> geometry3d_clamp = (x :: Num) -> Num => < x + 2 >
+>> geometry3d_round = (x :: Num) -> Num => < x + 3 >
+>> geometry3d_wrap = (x :: Num) -> Num => < x + 4 >
+>> geometry3d_snap = (x :: Num) -> Num => < x + 5 >
+>> geometry3d_bias = (x :: Num) -> Num => < x + 6 >
+>> geometry3d_damp = (x :: Num) -> Num => < x + 7 >
+>> geometry3d_boost = (x :: Num) -> Num => < x + 8 >
+>> geometry3d_trim = (x :: Num) -> Num => < x + 9 >

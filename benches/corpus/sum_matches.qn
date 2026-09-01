@@ -1,6 +1,7 @@
 Wide = V0(Num) / V1(Num) / V2(Num) / V3(Num) / V4(Num) / V5(Num) / V6(Num) / V7(Num) / V8(Num) / V9(Num) / V10(Num) / V11(Num) / V12(Num) / V13(Num) / V14(Num) / V15(Num) / V16(Num) / V17(Num) / V18(Num) / V19(Num) / V20(Num) / V21(Num) / V22(Num) / V23(Num) / V24(Num) / V25(Num) / V26(Num) / V27(Num) / V28(Num) / V29(Num) / V30(Num) / V31(Num) / V32(Num) / V33(Num) / V34(Num) / V35(Num) / V36(Num) / V37(Num) / V38(Num) / V39(Num)
 
-pick0 = (w :: Wide) -> Num => w ?
+pick0 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -41,8 +42,10 @@ pick0 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick1 = (w :: Wide) -> Num => w ?
+pick1 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -83,8 +86,10 @@ pick1 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick2 = (w :: Wide) -> Num => w ?
+pick2 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -125,8 +130,10 @@ pick2 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick3 = (w :: Wide) -> Num => w ?
+pick3 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -167,8 +174,10 @@ pick3 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick4 = (w :: Wide) -> Num => w ?
+pick4 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -209,8 +218,10 @@ pick4 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick5 = (w :: Wide) -> Num => w ?
+pick5 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -251,8 +262,10 @@ pick5 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick6 = (w :: Wide) -> Num => w ?
+pick6 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -293,8 +306,10 @@ pick6 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick7 = (w :: Wide) -> Num => w ?
+pick7 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -335,8 +350,10 @@ pick7 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick8 = (w :: Wide) -> Num => w ?
+pick8 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -377,8 +394,10 @@ pick8 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick9 = (w :: Wide) -> Num => w ?
+pick9 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -419,8 +438,10 @@ pick9 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick10 = (w :: Wide) -> Num => w ?
+pick10 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -461,8 +482,10 @@ pick10 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick11 = (w :: Wide) -> Num => w ?
+pick11 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -503,8 +526,10 @@ pick11 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick12 = (w :: Wide) -> Num => w ?
+pick12 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -545,8 +570,10 @@ pick12 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick13 = (w :: Wide) -> Num => w ?
+pick13 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -587,8 +614,10 @@ pick13 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick14 = (w :: Wide) -> Num => w ?
+pick14 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -629,8 +658,10 @@ pick14 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick15 = (w :: Wide) -> Num => w ?
+pick15 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -671,8 +702,10 @@ pick15 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick16 = (w :: Wide) -> Num => w ?
+pick16 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -713,8 +746,10 @@ pick16 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick17 = (w :: Wide) -> Num => w ?
+pick17 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -755,8 +790,10 @@ pick17 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick18 = (w :: Wide) -> Num => w ?
+pick18 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -797,8 +834,10 @@ pick18 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick19 = (w :: Wide) -> Num => w ?
+pick19 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -839,8 +878,10 @@ pick19 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick20 = (w :: Wide) -> Num => w ?
+pick20 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -881,8 +922,10 @@ pick20 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick21 = (w :: Wide) -> Num => w ?
+pick21 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -923,8 +966,10 @@ pick21 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick22 = (w :: Wide) -> Num => w ?
+pick22 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -965,8 +1010,10 @@ pick22 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick23 = (w :: Wide) -> Num => w ?
+pick23 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1007,8 +1054,10 @@ pick23 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick24 = (w :: Wide) -> Num => w ?
+pick24 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1049,8 +1098,10 @@ pick24 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick25 = (w :: Wide) -> Num => w ?
+pick25 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1091,8 +1142,10 @@ pick25 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick26 = (w :: Wide) -> Num => w ?
+pick26 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1133,8 +1186,10 @@ pick26 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick27 = (w :: Wide) -> Num => w ?
+pick27 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1175,8 +1230,10 @@ pick27 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick28 = (w :: Wide) -> Num => w ?
+pick28 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1217,8 +1274,10 @@ pick28 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick29 = (w :: Wide) -> Num => w ?
+pick29 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1259,8 +1318,10 @@ pick29 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick30 = (w :: Wide) -> Num => w ?
+pick30 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1301,8 +1362,10 @@ pick30 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick31 = (w :: Wide) -> Num => w ?
+pick31 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1343,8 +1406,10 @@ pick31 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick32 = (w :: Wide) -> Num => w ?
+pick32 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1385,8 +1450,10 @@ pick32 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick33 = (w :: Wide) -> Num => w ?
+pick33 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1427,8 +1494,10 @@ pick33 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick34 = (w :: Wide) -> Num => w ?
+pick34 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1469,8 +1538,10 @@ pick34 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick35 = (w :: Wide) -> Num => w ?
+pick35 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1511,8 +1582,10 @@ pick35 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick36 = (w :: Wide) -> Num => w ?
+pick36 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1553,8 +1626,10 @@ pick36 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick37 = (w :: Wide) -> Num => w ?
+pick37 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1595,8 +1670,10 @@ pick37 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick38 = (w :: Wide) -> Num => w ?
+pick38 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1637,8 +1714,10 @@ pick38 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick39 = (w :: Wide) -> Num => w ?
+pick39 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1679,8 +1758,10 @@ pick39 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick40 = (w :: Wide) -> Num => w ?
+pick40 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1721,8 +1802,10 @@ pick40 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick41 = (w :: Wide) -> Num => w ?
+pick41 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1763,8 +1846,10 @@ pick41 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick42 = (w :: Wide) -> Num => w ?
+pick42 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1805,8 +1890,10 @@ pick42 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick43 = (w :: Wide) -> Num => w ?
+pick43 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1847,8 +1934,10 @@ pick43 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick44 = (w :: Wide) -> Num => w ?
+pick44 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1889,8 +1978,10 @@ pick44 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick45 = (w :: Wide) -> Num => w ?
+pick45 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1931,8 +2022,10 @@ pick45 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick46 = (w :: Wide) -> Num => w ?
+pick46 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -1973,8 +2066,10 @@ pick46 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick47 = (w :: Wide) -> Num => w ?
+pick47 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2015,8 +2110,10 @@ pick47 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick48 = (w :: Wide) -> Num => w ?
+pick48 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2057,8 +2154,10 @@ pick48 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick49 = (w :: Wide) -> Num => w ?
+pick49 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2099,8 +2198,10 @@ pick49 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick50 = (w :: Wide) -> Num => w ?
+pick50 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2141,8 +2242,10 @@ pick50 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick51 = (w :: Wide) -> Num => w ?
+pick51 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2183,8 +2286,10 @@ pick51 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick52 = (w :: Wide) -> Num => w ?
+pick52 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2225,8 +2330,10 @@ pick52 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick53 = (w :: Wide) -> Num => w ?
+pick53 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2267,8 +2374,10 @@ pick53 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick54 = (w :: Wide) -> Num => w ?
+pick54 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2309,8 +2418,10 @@ pick54 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick55 = (w :: Wide) -> Num => w ?
+pick55 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2351,8 +2462,10 @@ pick55 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick56 = (w :: Wide) -> Num => w ?
+pick56 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2393,8 +2506,10 @@ pick56 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick57 = (w :: Wide) -> Num => w ?
+pick57 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2435,8 +2550,10 @@ pick57 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick58 = (w :: Wide) -> Num => w ?
+pick58 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2477,8 +2594,10 @@ pick58 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick59 = (w :: Wide) -> Num => w ?
+pick59 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2519,8 +2638,10 @@ pick59 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick60 = (w :: Wide) -> Num => w ?
+pick60 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2561,8 +2682,10 @@ pick60 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick61 = (w :: Wide) -> Num => w ?
+pick61 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2603,8 +2726,10 @@ pick61 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick62 = (w :: Wide) -> Num => w ?
+pick62 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2645,8 +2770,10 @@ pick62 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick63 = (w :: Wide) -> Num => w ?
+pick63 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2687,8 +2814,10 @@ pick63 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick64 = (w :: Wide) -> Num => w ?
+pick64 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2729,8 +2858,10 @@ pick64 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick65 = (w :: Wide) -> Num => w ?
+pick65 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2771,8 +2902,10 @@ pick65 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick66 = (w :: Wide) -> Num => w ?
+pick66 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2813,8 +2946,10 @@ pick66 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick67 = (w :: Wide) -> Num => w ?
+pick67 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2855,8 +2990,10 @@ pick67 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick68 = (w :: Wide) -> Num => w ?
+pick68 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2897,8 +3034,10 @@ pick68 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick69 = (w :: Wide) -> Num => w ?
+pick69 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2939,8 +3078,10 @@ pick69 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick70 = (w :: Wide) -> Num => w ?
+pick70 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -2981,8 +3122,10 @@ pick70 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick71 = (w :: Wide) -> Num => w ?
+pick71 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3023,8 +3166,10 @@ pick71 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick72 = (w :: Wide) -> Num => w ?
+pick72 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3065,8 +3210,10 @@ pick72 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick73 = (w :: Wide) -> Num => w ?
+pick73 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3107,8 +3254,10 @@ pick73 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick74 = (w :: Wide) -> Num => w ?
+pick74 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3149,8 +3298,10 @@ pick74 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick75 = (w :: Wide) -> Num => w ?
+pick75 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3191,8 +3342,10 @@ pick75 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick76 = (w :: Wide) -> Num => w ?
+pick76 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3233,8 +3386,10 @@ pick76 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick77 = (w :: Wide) -> Num => w ?
+pick77 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3275,8 +3430,10 @@ pick77 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick78 = (w :: Wide) -> Num => w ?
+pick78 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3317,8 +3474,10 @@ pick78 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick79 = (w :: Wide) -> Num => w ?
+pick79 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3359,8 +3518,10 @@ pick79 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick80 = (w :: Wide) -> Num => w ?
+pick80 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3401,8 +3562,10 @@ pick80 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick81 = (w :: Wide) -> Num => w ?
+pick81 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3443,8 +3606,10 @@ pick81 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick82 = (w :: Wide) -> Num => w ?
+pick82 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3485,8 +3650,10 @@ pick82 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick83 = (w :: Wide) -> Num => w ?
+pick83 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3527,8 +3694,10 @@ pick83 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick84 = (w :: Wide) -> Num => w ?
+pick84 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3569,8 +3738,10 @@ pick84 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick85 = (w :: Wide) -> Num => w ?
+pick85 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3611,8 +3782,10 @@ pick85 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick86 = (w :: Wide) -> Num => w ?
+pick86 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3653,8 +3826,10 @@ pick86 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick87 = (w :: Wide) -> Num => w ?
+pick87 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3695,8 +3870,10 @@ pick87 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick88 = (w :: Wide) -> Num => w ?
+pick88 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3737,8 +3914,10 @@ pick88 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick89 = (w :: Wide) -> Num => w ?
+pick89 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3779,8 +3958,10 @@ pick89 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick90 = (w :: Wide) -> Num => w ?
+pick90 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3821,8 +4002,10 @@ pick90 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick91 = (w :: Wide) -> Num => w ?
+pick91 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3863,8 +4046,10 @@ pick91 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick92 = (w :: Wide) -> Num => w ?
+pick92 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3905,8 +4090,10 @@ pick92 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick93 = (w :: Wide) -> Num => w ?
+pick93 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3947,8 +4134,10 @@ pick93 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick94 = (w :: Wide) -> Num => w ?
+pick94 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -3989,8 +4178,10 @@ pick94 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick95 = (w :: Wide) -> Num => w ?
+pick95 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4031,8 +4222,10 @@ pick95 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick96 = (w :: Wide) -> Num => w ?
+pick96 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4073,8 +4266,10 @@ pick96 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick97 = (w :: Wide) -> Num => w ?
+pick97 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4115,8 +4310,10 @@ pick97 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick98 = (w :: Wide) -> Num => w ?
+pick98 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4157,8 +4354,10 @@ pick98 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick99 = (w :: Wide) -> Num => w ?
+pick99 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4199,8 +4398,10 @@ pick99 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick100 = (w :: Wide) -> Num => w ?
+pick100 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4241,8 +4442,10 @@ pick100 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick101 = (w :: Wide) -> Num => w ?
+pick101 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4283,8 +4486,10 @@ pick101 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick102 = (w :: Wide) -> Num => w ?
+pick102 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4325,8 +4530,10 @@ pick102 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick103 = (w :: Wide) -> Num => w ?
+pick103 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4367,8 +4574,10 @@ pick103 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick104 = (w :: Wide) -> Num => w ?
+pick104 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4409,8 +4618,10 @@ pick104 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick105 = (w :: Wide) -> Num => w ?
+pick105 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4451,8 +4662,10 @@ pick105 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick106 = (w :: Wide) -> Num => w ?
+pick106 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4493,8 +4706,10 @@ pick106 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick107 = (w :: Wide) -> Num => w ?
+pick107 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4535,8 +4750,10 @@ pick107 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick108 = (w :: Wide) -> Num => w ?
+pick108 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4577,8 +4794,10 @@ pick108 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick109 = (w :: Wide) -> Num => w ?
+pick109 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4619,8 +4838,10 @@ pick109 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick110 = (w :: Wide) -> Num => w ?
+pick110 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4661,8 +4882,10 @@ pick110 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick111 = (w :: Wide) -> Num => w ?
+pick111 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4703,8 +4926,10 @@ pick111 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick112 = (w :: Wide) -> Num => w ?
+pick112 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4745,8 +4970,10 @@ pick112 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick113 = (w :: Wide) -> Num => w ?
+pick113 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4787,8 +5014,10 @@ pick113 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick114 = (w :: Wide) -> Num => w ?
+pick114 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4829,8 +5058,10 @@ pick114 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick115 = (w :: Wide) -> Num => w ?
+pick115 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4871,8 +5102,10 @@ pick115 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick116 = (w :: Wide) -> Num => w ?
+pick116 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4913,8 +5146,10 @@ pick116 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick117 = (w :: Wide) -> Num => w ?
+pick117 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4955,8 +5190,10 @@ pick117 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick118 = (w :: Wide) -> Num => w ?
+pick118 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -4997,8 +5234,10 @@ pick118 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
-pick119 = (w :: Wide) -> Num => w ?
+pick119 = (w :: Wide) -> Num => <
+  w ?
   | V0(n) => n + 0
   | V1(n) => n + 1
   | V2(n) => n + 2
@@ -5039,6 +5278,7 @@ pick119 = (w :: Wide) -> Num => w ?
   | V37(n) => n + 37
   | V38(n) => n + 38
   | V39(n) => n + 39
+>
 
 ^ = () -> Num => <
   n0 = pick0(V0(1))

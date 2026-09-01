@@ -30,19 +30,19 @@
 ~ rendered through its type's `` ` `` member. `print(x)` is the ergonomic form of
 ~ `write(x, stdout)` (plus the newline).
 ~ Returns Unit (`$`) — the printed value's "result" is meaningless.
->> print = x -> $ => $
+>> print = x -> $ => < $ >
 
 ~ Write a value to stderr followed by a newline. Takes anything renderable.
 ~ Returns Unit (`$`).
->> eprint = x -> $ => $
+>> eprint = x -> $ => < $ >
 
 ~ Write a value's rendered bytes to a file descriptor (no trailing newline).
 ~ Returns the number of bytes written. e.g. `write("hi", stdout)`.
->> write = (content, fd :: Num) -> Num => 0
+>> write = (content, fd :: Num) -> Num => < 0 >
 
 ~ Read one line from stdin, returning it as a Text WITHOUT the trailing newline.
 ~ `@readStdin` is a leaf IO primitive (the `@` marker): calling it launches the read in the
 ~ background and hands back a DEFERRED Text immediately — the fiber only waits (forces) once
 ~ a strict operation reads the bytes (a comparison, `print`, a native call, ...). At
 ~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder.
->> @readStdin = () -> Text => ""
+>> @readStdin = () -> Text => < "" >

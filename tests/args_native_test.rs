@@ -41,7 +41,7 @@ fn build_native(quilon: &str, src: &str, out: &Path) -> bool {
 fn native_args_size_reflects_passed_argv() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     let bin = std::env::temp_dir().join(format!("quilon_args_size_{}", std::process::id()));
-    if !build_native(quilon, "^ = (args :: []Text) -> Num => args.size", &bin) {
+    if !build_native(quilon, "^ = (args :: []Text) -> Num => < args.size >", &bin) {
         return;
     }
 
@@ -76,7 +76,7 @@ fn jit_and_aot_argv_agree() {
     // must pass THROUGH to the program, not be parsed by quilon).
     let quilon = env!("CARGO_BIN_EXE_quilon");
     let bin = std::env::temp_dir().join(format!("quilon_argv_parity_{}", std::process::id()));
-    let src = "^ = (args :: []Text) -> Num => args.size";
+    let src = "^ = (args :: []Text) -> Num => < args.size >";
     if !build_native(quilon, src, &bin) {
         return;
     }
@@ -134,7 +134,7 @@ fn neither_path_passes_an_argument_containing_a_nul() {
         "spawning with a NUL in argv must fail before the program starts"
     );
 
-    let src = "^ = (args :: []Text) -> Num => args.size";
+    let src = "^ = (args :: []Text) -> Num => < args.size >";
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (program, types, defer, sources) = front_end(src, None);
     let refused = jit::run_program(

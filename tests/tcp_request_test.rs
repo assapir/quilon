@@ -236,7 +236,7 @@ fn method_program(address: &str, expected: &str) -> String {
 Caller = {{
   address :: Text,
 
-  fetch = () -> Result => @tcpRequest(it.address, "PING\n")
+  fetch = () -> Result => < @tcpRequest(it.address, "PING\n") >
 }}
 
 ^ = () -> Num => <

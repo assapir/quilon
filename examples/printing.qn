@@ -9,14 +9,16 @@
 Temperature = {
   degrees :: Num,
   scale :: Text,
-  ` = () -> Text => "`it.degrees`°`it.scale`"
+  ` = () -> Text => < "`it.degrees`°`it.scale`" >
 }
 
 ~ A sum renders through the `` ` `` member in its methods block.
 Level = Low / High {
-  ` = () -> Text => it ?
-    | Low  => "low"
-    | High => "high"
+  ` = () -> Text => <
+    it ?
+      | Low  => "low"
+      | High => "high"
+  >
 }
 
 ~ A record with no render member: the default for its shape is the type name.

@@ -13,7 +13,7 @@ use quilon::parser;
 
 #[test]
 fn core_http_contributes_no_bare_names() {
-    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => 0\n").expect("lexing");
+    let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => < 0 >\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     let (linked, _sources) =
         quilon::modules::link(program, Path::new(".")).expect("import linking failed");
@@ -50,13 +50,13 @@ fn core_http_contributes_no_bare_names() {
 fn an_importer_may_define_every_name_the_client_uses() {
     let source = concat!(
         "<< core.http\n",
-        "get = (url :: Text) -> Text => url\n",
-        "parseResponse = (raw :: Text) -> Text => raw\n",
-        "wire = (text :: Text) -> Text => text\n",
-        "head = (text :: Text) -> Text => text\n",
-        "blankLine = (text :: Text) -> Num => text.length\n",
-        "authorityEnd = (text :: Text) -> Num => text.length\n",
-        "withoutScheme = (text :: Text) -> Text => text\n",
+        "get = (url :: Text) -> Text => < url >\n",
+        "parseResponse = (raw :: Text) -> Text => < raw >\n",
+        "wire = (text :: Text) -> Text => < text >\n",
+        "head = (text :: Text) -> Text => < text >\n",
+        "blankLine = (text :: Text) -> Num => < text.length >\n",
+        "authorityEnd = (text :: Text) -> Num => < text.length >\n",
+        "withoutScheme = (text :: Text) -> Text => < text >\n",
         "Response = { note :: Text }\n",
         "^ = () -> $ => <\n",
         "  reply = http.Response { raw = \"HTTP/1.1 200 OK\\r\\nX-A: b\\r\\n\\r\\nhi\" }\n",

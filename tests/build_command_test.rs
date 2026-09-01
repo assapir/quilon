@@ -148,7 +148,7 @@ fn failed_build_preserves_adjacent_object_and_removes_its_staged_object() {
     let adjacent_object = out.with_extension("o");
     let sentinel = b"do not overwrite this object";
     std::fs::create_dir_all(out.parent().unwrap()).expect("create output directory");
-    std::fs::write(&source, "^ = () -> Num => 0\n").expect("write source");
+    std::fs::write(&source, "^ = () -> Num => < 0 >\n").expect("write source");
     std::fs::write(&adjacent_object, sentinel).expect("write adjacent object");
 
     let missing_linker = format!("quilon-missing-linker-{}", std::process::id());
