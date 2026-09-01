@@ -23,7 +23,7 @@ fn run_simple_arithmetic() {
 fn run_subtraction_and_multiplication() {
     // Explicit end-to-end coverage for the `-` and `*` codegen arms. 1 + 2 = 3.
     assert_exit(
-        "^ = () -> Num => (50 - 8 == 42 ? 1 : 0) + (6 * 7 == 42 ? 2 : 0)",
+        "^ = () -> Num => < (50 - 8 == 42 ? 1 : 0) + (6 * 7 == 42 ? 2 : 0) >",
         3,
     );
 }
@@ -42,7 +42,7 @@ fn run_division_and_mixed_fractional_arithmetic() {
     // `/` produces fractions that keep working in further arithmetic, and
     // integer/fractional literals mix freely. 1 + 2 + 4 + 8 = 15.
     assert_exit(
-        "^ = () -> Num => (7 / 2 == 3.5 ? 1 : 0) + (7 / 2 + 7 / 2 == 7 ? 2 : 0) + (42 + 3.14 == 45.14 ? 4 : 0) + (2.5 * 4 == 10 ? 8 : 0)",
+        "^ = () -> Num => < (7 / 2 == 3.5 ? 1 : 0) + (7 / 2 + 7 / 2 == 7 ? 2 : 0) + (42 + 3.14 == 45.14 ? 4 : 0) + (2.5 * 4 == 10 ? 8 : 0) >",
         15,
     );
 }
@@ -51,7 +51,7 @@ fn run_division_and_mixed_fractional_arithmetic() {
 fn run_arithmetic_precedence_and_parentheses() {
     // `*` / `/` / `%` bind tighter than `+` / `-`; parentheses override. 1 + 2 + 4 + 8 = 15.
     assert_exit(
-        "^ = () -> Num => (2 + 3 * 4 == 14 ? 1 : 0) + ((2 + 3) * 4 == 20 ? 2 : 0) + (10 - 6 / 2 == 7 ? 4 : 0) + (20 % 7 - 2 * 3 == 0 ? 8 : 0)",
+        "^ = () -> Num => < (2 + 3 * 4 == 14 ? 1 : 0) + ((2 + 3) * 4 == 20 ? 2 : 0) + (10 - 6 / 2 == 7 ? 4 : 0) + (20 % 7 - 2 * 3 == 0 ? 8 : 0) >",
         15,
     );
 }
@@ -60,7 +60,7 @@ fn run_arithmetic_precedence_and_parentheses() {
 fn run_factorial() {
     // examples/factorial.qn -> factorial(5) = 120
     assert_exit(
-        "factorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)\n\n^ = () -> Num => factorial(5)",
+        "factorial = (n :: Num) -> Num => < n <= 1 ? 1 : n * factorial(n - 1) >\n\n^ = () -> Num => < factorial(5) >",
         120,
     );
 }
@@ -69,7 +69,7 @@ fn run_factorial() {
 fn run_fibonacci() {
     // examples/fibonacci.qn -> fib(10) = 55
     assert_exit(
-        "fib = (n :: Num) -> Num => n <= 1 ? n : fib(n - 1) + fib(n - 2)\n\n^ = () -> Num => fib(10)",
+        "fib = (n :: Num) -> Num => < n <= 1 ? n : fib(n - 1) + fib(n - 2) >\n\n^ = () -> Num => < fib(10) >",
         55,
     );
 }
@@ -108,12 +108,12 @@ fn run_pattern_match_wildcard() {
 
 #[test]
 fn run_text_concat_byte_size() {
-    assert_exit("^ = () -> Num => (\"héllo\" + \" 🌍\").size", 11);
+    assert_exit("^ = () -> Num => < (\"héllo\" + \" 🌍\").size >", 11);
 }
 
 #[test]
 fn run_text_grapheme_length() {
-    assert_exit("^ = () -> Num => (\"héllo\" + \" 🌍\").length", 7);
+    assert_exit("^ = () -> Num => < (\"héllo\" + \" 🌍\").length >", 7);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn run_record_size_field_not_shadowed() {
 fn run_write_to_stdout_returns_byte_count() {
     // write returns bytes written = 2.
     assert_exit_linked(
-        "<< core.io\n^ = () -> Num => io.write(\"hi\", io.stdout)",
+        "<< core.io\n^ = () -> Num => < io.write(\"hi\", io.stdout) >",
         2,
     );
 }
@@ -183,19 +183,19 @@ fn run_each_with_block_body() {
 #[test]
 fn run_entry_non_num_body_exits_zero() {
     // Body is a Text value, not a Num -> implicit exit 0.
-    assert_exit("^ = () => \"done\"", 0);
+    assert_exit("^ = () => < \"done\" >", 0);
 }
 
 #[test]
 fn run_entry_num_body_still_is_exit_code() {
     // A Num body is unchanged: it becomes the exit code.
-    assert_exit("^ = () -> Num => 42", 42);
+    assert_exit("^ = () -> Num => < 42 >", 42);
 }
 
 #[test]
 fn run_entry_side_effecting_main_no_trailing_zero() {
     // `<< core.io` + a print as the last expression, with NO trailing 0 -> exit 0.
-    assert_exit_linked("<< core.io\n^ = () => io.print(\"hi\")", 0);
+    assert_exit_linked("<< core.io\n^ = () => < io.print(\"hi\") >", 0);
 }
 
 // --- Mutability: `:=` declares a mutable binding and reassigns it; `=` is immutable. ---
@@ -229,7 +229,7 @@ fn run_mutable_record_field_write_mutates_in_place() {
     // A `:=`-bound record allows a direct in-place field write `c.value := …`.
     // The mutation is observable on the same binding afterwards.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => < it.value := it.value + by >\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.value := c.value + 12\n  c.value\n>",
         42,
     );
 }
@@ -239,7 +239,7 @@ fn run_setter_method_mutates_mutable_instance() {
     // A setter method (declared `:=`) mutates a `:=` instance in place; the change is
     // visible through the same binding after the call.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
+        "Counter = {\n  value :: Num,\n  bump := (by :: Num) => < it.value := it.value + by >\n}\n^ = () -> Num => <\n  c := Counter { value = 30 }\n  c.bump(5)\n  c.bump(7)\n  c.value\n>",
         42,
     );
 }
@@ -272,7 +272,7 @@ fn field_write_on_immutable_instance_is_a_type_error() {
 fn setter_call_on_immutable_instance_is_a_type_error() {
     // Calling a mutating (setter) method on an `=`-bound instance must fail type
     // checking; only a `:=` receiver may be mutated.
-    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => < it.value := it.value + by >\n}\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  c.bump(5)\n  c.value\n>";
     assert_type_error(src);
 }
 
@@ -292,7 +292,7 @@ fn an_immutable_method_writing_through_a_declared_function_is_rejected() {
     // code the method runs against the same receiver, so it breaks the same promise —
     // the traversal must descend into a block's item declarations, not just its
     // expression statements.
-    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    helper = () -> $ => it.v := 99\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
+    let src = "T = {\n  v :: Num,\n  bump = () -> Num => <\n    helper = () -> $ => < it.v := 99 >\n    helper()\n    it.v\n  >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.bump()\n>";
     assert_type_error(src);
 }
 
@@ -301,7 +301,7 @@ fn an_immutable_method_calling_a_mutating_sibling_is_rejected() {
     // The transitive half: `viaBump` writes nothing itself, but calls a `:=` sibling on
     // `it`, so it mutates by proxy and cannot be declared `=`. Every sibling's contract is known from its
     // declaration, so this is a lookup rather than an inference.
-    let src = "T = {\n  v :: Num,\n  bump := () -> $ => it.v := 99,\n  viaBump = () -> Num => it.bump()\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.viaBump()\n>";
+    let src = "T = {\n  v :: Num,\n  bump := () -> $ => < it.v := 99 >,\n  viaBump = () -> Num => < it.bump() >\n}\n^ = () -> Num => <\n  t := T { v = 0 }\n  t.viaBump()\n>";
     assert_type_error(src);
 }
 
@@ -319,7 +319,7 @@ fn a_method_is_a_setter_because_it_is_declared_one_not_because_it_writes() {
     // The contract is the declaration, not the body: `bump` writes nothing at all, yet
     // being declared `:=` still makes it require a `:=` receiver. Nothing else in the
     // suite would fail if registration quietly went back to inspecting bodies.
-    let src = "T = {\n  v :: Num,\n  bump := () -> Num => it.v\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
+    let src = "T = {\n  v :: Num,\n  bump := () -> Num => < it.v >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
     assert_type_error(src);
 }
 
@@ -328,7 +328,7 @@ fn an_operator_member_cannot_be_declared_mutating() {
     // An operator yields a value, and its dispatch never consults the setter set, so a
     // `:=` operator would promise a mutation no call site checks. Rejected at parse time,
     // with the rule rather than a stray-symbol complaint.
-    let src = "Counter = {\n  value :: Num,\n  + := (other :: Counter) -> Num => it.value\n}\n^ = () -> Num => 0";
+    let src = "Counter = {\n  value :: Num,\n  + := (other :: Counter) -> Num => < it.value >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let err = parser::parse(&tokens).expect_err("`:=` on an operator member must be rejected");
     assert!(
@@ -342,7 +342,8 @@ fn an_operator_member_cannot_be_declared_mutating() {
 fn the_render_member_cannot_be_declared_mutating() {
     // Same rule for the render member: it renders a value, and `print`/interpolation
     // never reach the receiver-mutability gate.
-    let src = "Counter = {\n  value :: Num,\n  ` := () -> Text => \"c\"\n}\n^ = () -> Num => 0";
+    let src =
+        "Counter = {\n  value :: Num,\n  ` := () -> Text => < \"c\" >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let err = parser::parse(&tokens).expect_err("`:=` on the render member must be rejected");
     assert!(
@@ -357,7 +358,7 @@ fn a_sum_method_cannot_be_declared_mutating() {
     // A sum's data lives in variant payloads, reached by matching, and a match binding is
     // immutable — so there is no field to write and `:=` would declare a mutation nothing
     // can perform. Rejected at parse time, like an operator member.
-    let src = "S = A(Num) / B {\n  poke := () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
+    let src = "S = A(Num) / B {\n  poke := () -> $ => < it.x := 99 >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let err = parser::parse(&tokens).expect_err("`:=` on a sum method must be rejected");
     assert!(
@@ -373,7 +374,7 @@ fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
     // if it did, `it.x := 99` on a sum would be answered with "declare it with ':='",
     // advice that leads nowhere — following it hits the type error below anyway. The
     // truthful complaint is that a sum has no such field.
-    let src = "S = A(Num) / B {\n  poke = () -> $ => it.x := 99\n}\n^ = () -> Num => 0";
+    let src = "S = A(Num) / B {\n  poke = () -> $ => < it.x := 99 >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -395,7 +396,7 @@ fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
 fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
     // The message is the whole remedy — it has to say which method and what to do — and
     // `docs/mutation.md` quotes it, so pin the wording rather than merely "some error".
-    let src = "T = {\n  v :: Num,\n  bump = () -> $ => it.v := 99\n}\n^ = () -> Num => 0";
+    let src = "T = {\n  v :: Num,\n  bump = () -> $ => < it.v := 99 >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -433,7 +434,7 @@ fn unannotated_method_parameter_is_rejected() {
     // No `Num` default any more: a method parameter must be annotated, exactly like an
     // ordinary function's — even when every call site happens to pass a `Num` (the case
     // the old default silently accepted).
-    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => it.v + x\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(41)\n>";
+    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => < it.v + x >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(41)\n>";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -453,7 +454,7 @@ fn setter_call_result_is_unit_not_num() {
     // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
     // fail type checking, keeping the checker in agreement with codegen (a setter
     // call emits an i8/Unit, not an f64). Regression for a check/compile divergence.
-    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => it.value := it.value + by\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
+    let src = "Counter = {\n  value :: Num,\n  bump := (by :: Num) => < it.value := it.value + by >\n}\n^ = () -> Num => <\n  c := Counter { value = 1 }\n  c.bump(5) + 1\n>";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -468,7 +469,7 @@ fn run_non_setter_method_on_immutable_instance_is_allowed() {
     // An `=`-declared method may be called on an `=`-bound (frozen) instance — only
     // `:=` methods need a `:=` receiver.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  peek = => it.value\n}\n^ = () -> Num => <\n  c = Counter { value = 42 }\n  c.peek()\n>",
+        "Counter = {\n  value :: Num,\n  peek = => < it.value >\n}\n^ = () -> Num => <\n  c = Counter { value = 42 }\n  c.peek()\n>",
         42,
     );
 }
@@ -481,7 +482,7 @@ fn run_method_wins_over_a_top_level_function_of_the_same_name() {
     // top-level `bump` shares only the name; letting it claim the call passed the
     // receiver to a function that never expected it.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\nbump = (n :: Num) -> Num => < n * 100 >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
         8,
     );
 }
@@ -491,7 +492,7 @@ fn run_method_wins_over_a_same_named_overload_set() {
     // Same rule against an overload SET: two top-level `scale` members, neither of
     // which may answer `v.scale(3)` — `Vec`'s own method does (7 * 3 = 21).
     assert_exit(
-        "Vec = {\n  x :: Num,\n  scale = (k :: Num) -> Num => it.x * k\n}\nscale = (n :: Num) -> Num => 0\nscale = (t :: Text) -> Num => 0\n^ = () -> Num => <\n  v :: Vec = Vec { x = 7 }\n  v.scale(3)\n>",
+        "Vec = {\n  x :: Num,\n  scale = (k :: Num) -> Num => < it.x * k >\n}\nscale = (n :: Num) -> Num => < 0 >\nscale = (t :: Text) -> Num => < 0 >\n^ = () -> Num => <\n  v :: Vec = Vec { x = 7 }\n  v.scale(3)\n>",
         21,
     );
 }
@@ -502,7 +503,7 @@ fn run_a_function_calling_a_same_named_method_is_not_a_self_call() {
     // tail-call analysis must resolve the callee the same way call lowering does or it
     // rewrites the call into this function's own loop back-edge. 5 + 3 = 8.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(n)\n>\n^ = () -> Num => bump(3)",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\nbump = (n :: Num) -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(n)\n>\n^ = () -> Num => < bump(3) >",
         8,
     );
 }
@@ -512,7 +513,7 @@ fn a_member_call_never_falls_back_to_a_top_level_function() {
     // `Counter` declares no `bump`, so `c.bump(3)` is an error naming the type and the
     // member — never the top-level `bump`, which is a different function.
     let message = common::type_error_message(
-        "Counter = {\n  value :: Num\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
+        "Counter = {\n  value :: Num\n}\nbump = (n :: Num) -> Num => < n * 100 >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
     );
     assert!(
         message.contains("'Counter' has no member 'bump'"),
@@ -531,7 +532,7 @@ fn a_member_call_on_a_built_in_type_never_reaches_a_top_level_function() {
     // The rule is the receiver's TYPE, not just records: `Num` has no `double`, so the
     // top-level one does not answer `(5).double()`.
     let message = common::type_error_message(
-        "double = (x :: Num) -> Num => x * 2\n^ = () -> Num => (5).double()",
+        "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < (5).double() >",
     );
     assert!(
         message.contains("'Num' has no member 'double'"),
@@ -544,7 +545,7 @@ fn a_free_call_still_reaches_a_top_level_function_over_a_same_named_method() {
     // Only the `recv.name(...)` form is receiver-scoped. `bump(3)` names the top-level
     // function (3 * 100 + 3 * 100 = 600).
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (n :: Num) -> Num => n * 100\n^ = () -> Num => bump(3) + bump(3)",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\nbump = (n :: Num) -> Num => < n * 100 >\n^ = () -> Num => < bump(3) + bump(3) >",
         600,
     );
 }
@@ -554,7 +555,7 @@ fn the_free_form_of_a_method_call_does_not_reach_the_method() {
     // A method is reached through its receiver and nowhere else: `bump(c, 3)` names the
     // top-level namespace, where this program has no `bump` at all.
     let message = common::type_error_message(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
     );
     assert!(
         message.contains("no function 'bump' in scope"),
@@ -585,7 +586,7 @@ fn a_method_and_a_top_level_function_of_one_name_each_answer_their_own_form() {
     // Both exist, and neither answers for the other: `c.bump(3)` is the method (5 + 3),
     // `bump(c, 3)` the top-level function (900 + 3). 8 + 903 = 911.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => it.value + n\n}\nbump = (c :: Counter, n :: Num) -> Num => 900 + n\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3) + bump(c, 3)\n>",
+        "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\nbump = (c :: Counter, n :: Num) -> Num => < 900 + n >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3) + bump(c, 3)\n>",
         911,
     );
 }
@@ -596,7 +597,7 @@ fn a_tail_call_to_a_built_in_method_of_the_same_name_is_not_recursion() {
     // declares no method symbol of its own — taking that miss for a self-call compiled it
     // into this function's loop back-edge and the program hung.
     assert_exit(
-        "contains = (t :: Text, s :: Text) -> Bool => t.contains(s)\n^ = () -> Num => contains(\"hello\", \"ell\") ? 7 : 3",
+        "contains = (t :: Text, s :: Text) -> Bool => < t.contains(s) >\n^ = () -> Num => < contains(\"hello\", \"ell\") ? 7 : 3 >",
         7,
     );
 }
@@ -606,7 +607,7 @@ fn an_overload_set_below_the_call_is_reported_as_such() {
     // `contains` is a member of `Text`, but this program also defines a `contains` overload
     // set — below the call. The report has to name that, not send the reader to `Text`'s.
     let message = common::type_error_message(
-        "^ = () -> Num => <\n  b :: Bool = contains(\"hi\", \"h\")\n  b ? 1 : 0\n>\ncontains = (t :: Text, s :: Text) -> Bool => true\ncontains = (t :: Text, n :: Num) -> Bool => false",
+        "^ = () -> Num => <\n  b :: Bool = contains(\"hi\", \"h\")\n  b ? 1 : 0\n>\ncontains = (t :: Text, s :: Text) -> Bool => < true >\ncontains = (t :: Text, n :: Num) -> Bool => < false >",
     );
     assert!(
         message.contains("before its definition"),
@@ -620,7 +621,7 @@ fn a_name_rebound_in_an_inner_scope_is_not_still_the_outer_record() {
     // to. Reading it off a flat per-function map instead let the lambda's own `x` still
     // count as the `Foo` bound outside, sending `twice(x)` to `Foo`'s method. 10 + 7 = 17.
     assert_exit(
-        "Foo = {\n  v :: Num,\n  twice = (n :: Num) -> Num => 999\n}\ntwice = (n :: Num) -> Num => n * 2\n^ = () -> Num => <\n  x :: Foo = Foo { v = 7 }\n  doubled = [5].map(x => twice(x))\n  doubled[0] + x.v\n>",
+        "Foo = {\n  v :: Num,\n  twice = (n :: Num) -> Num => < 999 >\n}\ntwice = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => <\n  x :: Foo = Foo { v = 7 }\n  doubled = [5].map(x => twice(x))\n  doubled[0] + x.v\n>",
         17,
     );
 }
@@ -630,7 +631,7 @@ fn a_top_level_function_named_like_a_mangled_method_is_not_that_method() {
     // Method dispatch asks what the type declares, not whether a symbol of the mangled
     // shape exists — otherwise a top-level `Counter_bump` answers `bump(c, 3)`. 5 + 3 = 8.
     assert_exit(
-        "Counter = {\n  value :: Num\n}\nCounter_bump = (c :: Counter, n :: Num) -> Num => 900 + n\nbump = (c :: Counter, n :: Num) -> Num => c.value + n\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+        "Counter = {\n  value :: Num\n}\nCounter_bump = (c :: Counter, n :: Num) -> Num => < 900 + n >\nbump = (c :: Counter, n :: Num) -> Num => < c.value + n >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
         8,
     );
 }
@@ -640,7 +641,7 @@ fn a_method_may_be_named_like_a_compiler_provided_form() {
     // `assert` and the sum constructors are top-level names, so a member call reaches
     // neither: `c.assert(3)` is `Counter`'s own method. 5 + 3 = 8.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  assert = (n :: Num) -> Num => it.value + n\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.assert(3)\n>",
+        "Counter = {\n  value :: Num,\n  assert = (n :: Num) -> Num => < it.value + n >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.assert(3)\n>",
         8,
     );
 }
@@ -651,7 +652,7 @@ fn a_method_answers_a_member_call_at_an_output_built_ins_own_arity() {
     // call, so `Counter`'s own `print` answers it in both passes. Letting the built-in claim
     // it in codegen alone is how the checker and codegen come apart. 5 + 1 = 6.
     assert_exit(
-        "Counter = {\n  value :: Num,\n  print = () -> Num => it.value + 1\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n>",
+        "Counter = {\n  value :: Num,\n  print = () -> Num => < it.value + 1 >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n>",
         6,
     );
 }
@@ -662,7 +663,7 @@ fn a_member_call_never_reaches_an_output_built_in() {
     // `c.print()` asks `Counter` for a `print` it does not have, and the advice names the
     // compiler-provided one rather than pretending nothing of that name exists.
     let message = common::type_error_message(
-        "<< core.io\nCounter = {\n  value :: Num,\n  ` = () -> Text => \"Counter(`it.value`)\"\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n  0\n>",
+        "<< core.io\nCounter = {\n  value :: Num,\n  ` = () -> Text => < \"Counter(`it.value`)\" >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n  0\n>",
     );
     assert!(
         message.contains("'Counter' has no member 'print'")
@@ -677,7 +678,7 @@ fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
     // gets the plain error — pointing at a top-level function that does not exist would
     // be advice that fails too.
     let message = common::type_error_message(
-        "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => n <= 0 ? it.value : it.down(n - 1)\n}\n^ = () -> Num => 0",
+        "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => < n <= 0 ? it.value : it.down(n - 1) >\n}\n^ = () -> Num => < 0 >",
     );
     assert!(
         message.contains("'Counter' has no member 'down'") && !message.contains("call it as"),
@@ -691,7 +692,7 @@ fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
 fn run_entry_returns_unit_exits_zero() {
     // `^` typed `-> $` with the unit value `$` as its body: a non-Num body, so
     // the entry-point wrapper coerces it to exit code 0.
-    assert_exit("^ = () -> $ => $", 0);
+    assert_exit("^ = () -> $ => < $ >", 0);
 }
 
 #[test]
@@ -699,7 +700,7 @@ fn run_function_returning_unit() {
     // A non-entry function may be typed `-> $`; calling it then exiting with a
     // Num keeps the program's exit code under control.
     assert_exit(
-        "noop = () -> $ => $\n^ = () -> Num => <\n  noop()\n  7\n>",
+        "noop = () -> $ => < $ >\n^ = () -> Num => <\n  noop()\n  7\n>",
         7,
     );
 }
@@ -708,7 +709,7 @@ fn run_function_returning_unit() {
 fn run_print_yields_unit_usable_where_unit_expected() {
     // `print(...)` returns `$`, so it type-checks as the body of a `-> $` function.
     assert_exit_linked(
-        "<< core.io\nlog = (m :: Text) -> $ => io.print(m)\n^ = () -> Num => <\n  log(\"hi\")\n  0\n>",
+        "<< core.io\nlog = (m :: Text) -> $ => < io.print(m) >\n^ = () -> Num => <\n  log(\"hi\")\n  0\n>",
         0,
     );
 }
@@ -717,7 +718,7 @@ fn run_print_yields_unit_usable_where_unit_expected() {
 fn run_eprint_returns_unit_as_last_expression() {
     // `eprint` returns `$`; as the entry point's last expression (no trailing 0)
     // the non-Num body coerces to exit 0.
-    assert_exit_linked("<< core.io\n^ = () => io.eprint(\"oops\")", 0);
+    assert_exit_linked("<< core.io\n^ = () => < io.eprint(\"oops\") >", 0);
 }
 
 #[test]
@@ -728,7 +729,7 @@ fn run_unannotated_print_wrapper_compiles_and_runs() {
     // would `ret i8` into an f64 signature and fail LLVM module verification.
     assert_exit_linked(
         "<< core.io
-log = (m :: Num) => io.print(m)
+log = (m :: Num) => < io.print(m) >
 ^ = () -> Num => <
   log(5)
   0
@@ -741,7 +742,7 @@ log = (m :: Num) => io.print(m)
 fn unit_is_incompatible_with_num() {
     // `$` has type Unit, which is not Num — annotating a Num return with a `$`
     // body must fail type checking.
-    let src = "^ = () -> Num => $";
+    let src = "^ = () -> Num => < $ >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -762,7 +763,7 @@ fn unannotated_recursive_function_needs_a_return_type() {
     // recursive function with a confusing `Type mismatch` instead of naming the real
     // problem.
     let message = common::type_error_message(
-        "f = (n :: Num) => n <= 0 ? \"done\" : f(n - 1)\n^ = () -> Num => 0",
+        "f = (n :: Num) => < n <= 0 ? \"done\" : f(n - 1) >\n^ = () -> Num => < 0 >",
     );
     assert!(
         message.contains("recursive function 'f'") && message.contains("annotated return type"),
@@ -776,8 +777,8 @@ fn annotated_recursive_function_with_a_non_num_return_type_works() {
     // function returning `Text`, not `Num`. Annotating it resolves the recursive call's
     // type correctly and the program runs.
     assert_exit(
-        "f = (n :: Num) -> Text => n <= 0 ? \"done\" : f(n - 1)\n\
-         ^ = () -> Num => f(3).size",
+        "f = (n :: Num) -> Text => < n <= 0 ? \"done\" : f(n - 1) >\n\
+         ^ = () -> Num => < f(3).size >",
         4,
     );
 }
@@ -834,7 +835,7 @@ fn empty_array_literal_infers_from_binding_annotation() {
 fn empty_array_literal_infers_from_call_argument_parameter_type() {
     // `count`'s declared `[]Text` parameter type seeds the empty literal argument.
     assert_exit(
-        "count = (xs :: []Text) -> Num => xs.size\n^ = () -> Num => count([])",
+        "count = (xs :: []Text) -> Num => < xs.size >\n^ = () -> Num => < count([]) >",
         0,
     );
 }
@@ -843,7 +844,7 @@ fn empty_array_literal_infers_from_call_argument_parameter_type() {
 fn empty_array_literal_infers_from_declared_return_type() {
     // The function's own `-> []Text` annotation seeds its empty-literal body.
     assert_exit(
-        "empty = () -> []Text => []\n^ = () -> Num => empty().size",
+        "empty = () -> []Text => < [] >\n^ = () -> Num => < empty().size >",
         0,
     );
 }
@@ -907,7 +908,7 @@ fn run_overload_set_resolves_by_argument_type() {
     // whose parameter type matches exactly. The Num and Text members do different
     // things, so the exit code proves the right one ran for each call.
     assert_exit(
-        "pick = (n :: Num) -> Num => n + 1\npick = (s :: Text) -> Num => s.size\n^ = () -> Num => pick(40) + pick(\"ab\")",
+        "pick = (n :: Num) -> Num => < n + 1 >\npick = (s :: Text) -> Num => < s.size >\n^ = () -> Num => < pick(40) + pick(\"ab\") >",
         43,
     );
 }
@@ -918,7 +919,7 @@ fn run_operator_overload_on_user_type() {
     // right); resolved like any operator overload and lowered to a direct call. Returns
     // Bool, used in a ternary.
     assert_exit(
-        "P = { x :: Num, y :: Num, == = (other :: P) -> Bool => it.x == other.x && it.y == other.y }\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? 42 : 0",
+        "P = { x :: Num, y :: Num, == = (other :: P) -> Bool => < it.x == other.x && it.y == other.y >}\n^ = () -> Num => < P { x = 1, y = 2 } == P { x = 1, y = 2 } ? 42 : 0 >",
         42,
     );
 }
@@ -927,7 +928,7 @@ fn run_operator_overload_on_user_type() {
 fn comparison_operator_overload_must_return_bool() {
     // A comparison/equality operator member is a predicate — a non-Bool return type
     // is a compile error. (Arithmetic operators have no such constraint.)
-    assert_type_error("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0");
+    assert_type_error("V = { x :: Num, == = (other :: V) -> V => < it >}\n^ = () -> Num => < 0 >");
 }
 
 #[test]
@@ -936,7 +937,7 @@ fn run_operator_overload_returning_record_survives_frame() {
     // fields are still readable after the operator call returns (would dangle if it
     // were a stack alloca). Subsequent expressions must not corrupt it.
     assert_exit(
-        "V = { x :: Num, y :: Num, + = (other :: V) -> V => V { x = it.x + other.x, y = it.y + other.y } }\n^ = () -> Num => <\n  v = V { x = 1, y = 2 } + V { x = 30, y = 9 }\n  pad = 5 > 1 ? 0 : 99\n  v.x + v.y + pad\n>",
+        "V = { x :: Num, y :: Num, + = (other :: V) -> V => < V { x = it.x + other.x, y = it.y + other.y } >}\n^ = () -> Num => <\n  v = V { x = 1, y = 2 } + V { x = 30, y = 9 }\n  pad = 5 > 1 ? 0 : 99\n  v.x + v.y + pad\n>",
         42,
     );
 }
@@ -947,7 +948,7 @@ fn run_overloaded_operator_dispatch_uses_callee_return_type() {
     // declared return type, not default to Num — so `mkv(..) + mkv(..)` resolves the
     // user `(V, V)` `+` overload (it would otherwise fall to the numeric `+` and fail).
     assert_exit(
-        "V = { x :: Num, y :: Num, + = (other :: V) -> V => V { x = it.x + other.x, y = it.y + other.y } }\nmkv = (n :: Num) -> V => V { x = n, y = n }\n^ = () -> Num => <\n  w = mkv(1) + mkv(20)\n  w.x + w.y\n>",
+        "V = { x :: Num, y :: Num, + = (other :: V) -> V => < V { x = it.x + other.x, y = it.y + other.y } >}\nmkv = (n :: Num) -> V => < V { x = n, y = n } >\n^ = () -> Num => <\n  w = mkv(1) + mkv(20)\n  w.x + w.y\n>",
         42,
     );
 }
@@ -958,7 +959,7 @@ fn run_operator_member_after_expression_bodied_member_parses() {
     // expression, must NOT be absorbed as a binary operator continuing that body — the
     // parser stops the member's body at the trailing `== =` / `+ =`.
     assert_exit(
-        "P = { x :: Num, y :: Num,\n  sum = () -> Num => it.x + it.y\n  == = (other :: P) -> Bool => it.x == other.x && it.y == other.y\n}\n^ = () -> Num => P { x = 1, y = 2 } == P { x = 1, y = 2 } ? P { x = 40, y = 2 }.sum() : 0",
+        "P = { x :: Num, y :: Num,\n  sum = () -> Num => < it.x + it.y >\n  == = (other :: P) -> Bool => < it.x == other.x && it.y == other.y >\n}\n^ = () -> Num => < P { x = 1, y = 2 } == P { x = 1, y = 2 } ? P { x = 40, y = 2 }.sum() : 0 >",
         42,
     );
 }
@@ -970,7 +971,7 @@ fn run_overloaded_call_on_each_element_dispatches_by_element_type() {
     // The Text member would mis-handle a Num; resolving to the Num member yields
     // inc(11) = 12 for the final element. `last` is captured by reference (`:=`).
     assert_exit(
-        "inc = (n :: Num) -> Num => n + 1\ninc = (t :: Text) -> Num => t.size\n^ = () -> Num => <\n  last := 0\n  xs = [10, 20, 11]\n  xs.each(n => <\n    last := inc(n)\n  >\n  )\n  last\n>",
+        "inc = (n :: Num) -> Num => < n + 1 >\ninc = (t :: Text) -> Num => < t.size >\n^ = () -> Num => <\n  last := 0\n  xs = [10, 20, 11]\n  xs.each(n => <\n    last := inc(n)\n  >\n  )\n  last\n>",
         12,
     );
 }
@@ -991,7 +992,7 @@ fn run_user_sum_payload_dispatches_overload_by_concrete_type() {
     // A user sum type's payloads carry CONCRETE types (unlike Result's generic ones), so
     // a match arm's payload binding dispatches an overloaded call by that concrete type.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\narea = (n :: Num) -> Num => n * 3\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(w, h) => w * h\n>",
+        "Shape = Circle(Num) / Rect(Num, Num)\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(w, h) => w * h\n>",
         42,
     );
 }
@@ -1002,7 +1003,7 @@ fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
     // `(Bool)` overload member — codegen tracks the binding's concrete type — not the
     // `(Num)` member (which previously produced an LLVM i1-into-f64 type mismatch).
     assert_exit(
-        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => n + 1\nclassify = (b :: Bool) -> Num => b ? 100 : 7\n^ = () -> Num => <\n  s = On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
+        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => < n + 1 >\nclassify = (b :: Bool) -> Num => < b ? 100 : 7 >\n^ = () -> Num => <\n  s = On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
         100,
     );
 }
@@ -1015,11 +1016,13 @@ fn run_named_record_sum_payload_reads_field() {
 Point = { x :: Num, y :: Num }
 Boxed = Box(Point) / Empty
 
-unwrap = (b :: Boxed) -> Num => b ?
-  | Box(p) => p.x + p.y
-  | Empty  => 0
+unwrap = (b :: Boxed) -> Num => <
+  b ?
+    | Box(p) => p.x + p.y
+    | Empty  => 0
+>
 
-^ = () -> Num => unwrap(Box(Point { x = 3, y = 4 }))
+^ = () -> Num => < unwrap(Box(Point { x = 3, y = 4 })) >
 "#;
     assert_exit(src, 7);
 }
@@ -1030,14 +1033,16 @@ fn run_sum_record_payload_reads_text_field_and_calls_method() {
     // The bound payload keeps its record type, so a `Text` field round-trips (its grapheme
     // count) and a method call on the binding resolves. "hello".size = 5.
     let src = r#"
-Body = { payload :: Text, len = () -> Num => it.payload.size }
+Body = { payload :: Text, len = () -> Num => < it.payload.size >}
 Method = Get / Post(Body)
 
-sizeOf = (m :: Method) -> Num => m ?
-  | Get     => 0
-  | Post(b) => b.len()
+sizeOf = (m :: Method) -> Num => <
+  m ?
+    | Get     => 0
+    | Post(b) => b.len()
+>
 
-^ = () -> Num => sizeOf(Post(Body { payload = "hello" }))
+^ = () -> Num => < sizeOf(Post(Body { payload = "hello" })) >
 "#;
     assert_exit(src, 5);
 }
@@ -1049,11 +1054,13 @@ fn run_sum_record_payload_empty_variant_is_selected_by_tag() {
 Point = { x :: Num, y :: Num }
 Boxed = Box(Point) / Empty
 
-unwrap = (b :: Boxed) -> Num => b ?
-  | Box(p) => p.x + p.y
-  | Empty  => 99
+unwrap = (b :: Boxed) -> Num => <
+  b ?
+    | Box(p) => p.x + p.y
+    | Empty  => 99
+>
 
-^ = () -> Num => unwrap(Empty)
+^ = () -> Num => < unwrap(Empty) >
 "#;
     assert_exit(src, 99);
 }
@@ -1065,7 +1072,7 @@ fn reject_heterogeneous_record_and_num_payload_at_same_position() {
     let src = r#"
 Point = { x :: Num, y :: Num }
 Bad = Wrap(Point) / Plain(Num)
-^ = () -> Num => 0
+^ = () -> Num => < 0 >
 "#;
     assert_type_error(src);
 }
@@ -1077,7 +1084,7 @@ fn reject_nested_sum_as_sum_payload() {
     let src = r#"
 Inner = A / B
 Outer = Wrap(Inner) / Bare
-^ = () -> Num => 0
+^ = () -> Num => < 0 >
 "#;
     assert_type_error(src);
 }
@@ -1088,7 +1095,7 @@ fn reject_unknown_named_sum_payload() {
     // silently accepted as an empty record.
     let src = r#"
 Bad = Wrap(Nope) / Bare
-^ = () -> Num => 0
+^ = () -> Num => < 0 >
 "#;
     assert_type_error(src);
 }
@@ -1105,15 +1112,15 @@ fn run_text_equality_and_ordering_overloads() {
 #[test]
 fn run_text_inequality_is_false_when_equal() {
     // `!=` on Text is the negation of `==`.
-    assert_exit("^ = () -> Num => \"x\" != \"x\" ? 1 : 42", 42);
+    assert_exit("^ = () -> Num => < \"x\" != \"x\" ? 1 : 42 >", 42);
 }
 
 #[test]
 fn run_bool_equality_compares_values() {
     // `Bool == Bool` (i1 operands) is a built-in `==` overload; it must codegen to an
     // integer compare, not error or miscompile.
-    assert_exit("^ = () -> Num => true == true ? 42 : 0", 42);
-    assert_exit("^ = () -> Num => true != false ? 42 : 0", 42);
+    assert_exit("^ = () -> Num => < true == true ? 42 : 0 >", 42);
+    assert_exit("^ = () -> Num => < true != false ? 42 : 0 >", 42);
 }
 
 #[test]
@@ -1144,7 +1151,7 @@ fn result_any_payload_crosses_a_generic_parameter() {
     // parameter that only matches by TAG. `isOk` returns 1 for Ok, 0 for NotOk; summing the
     // four calls yields 3 (three Ok, one NotOk).
     assert_exit(
-        "isOk = (r :: Result) -> Num => r ? | Ok(_) => 1 | NotOk(_) => 0\n\
+        "isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
          \x20 a = isOk(Ok(42))\n\
          \x20 b = isOk(Ok(\"hi\"))\n\
@@ -1162,8 +1169,8 @@ fn result_composite_payload_round_trips_and_extracts() {
     // type the checker propagates), and the caller matches + EXTRACTS the payload at its real
     // type: the `[]Text` payload's `.size` is read back as the exit code.
     assert_exit(
-        "mk = () -> Result => Ok([\"a\", \"b\", \"c\"])\n\
-         ^ = () -> Num => mk() ? | Ok(v) => v.size | NotOk(_) => 0",
+        "mk = () -> Result => < Ok([\"a\", \"b\", \"c\"]) >\n\
+         ^ = () -> Num => < mk() ? | Ok(v) => v.size | NotOk(_) => 0 >",
         3,
     );
 }
@@ -1173,8 +1180,8 @@ fn result_notok_text_payload_extracts_through_boundary() {
     // A `NotOk(Text)` produced behind a `-> Result` boundary: the caller extracts the Text
     // payload and reads its length — proving a packed Text slot unpacks to a usable Text.
     assert_exit(
-        "mk = () -> Result => NotOk(\"boom\")\n\
-         ^ = () -> Num => mk() ? | Ok(_) => 0 | NotOk(e) => e.size",
+        "mk = () -> Result => < NotOk(\"boom\") >\n\
+         ^ = () -> Num => < mk() ? | Ok(_) => 0 | NotOk(e) => e.size >",
         4,
     );
 }
@@ -1184,8 +1191,8 @@ fn result_bool_payload_round_trips() {
     // A `Bool` payload packs (zero-extended) into the slot and unpacks (truncated) back to a
     // usable `Bool`: `Ok(true)`'s payload gates the exit code.
     assert_exit(
-        "mk = () -> Result => Ok(true)\n\
-         ^ = () -> Num => mk() ? | Ok(f) => (f ? 42 : 0) | NotOk(_) => 0",
+        "mk = () -> Result => < Ok(true) >\n\
+         ^ = () -> Num => < mk() ? | Ok(f) => (f ? 42 : 0) | NotOk(_) => 0 >",
         42,
     );
 }
@@ -1197,7 +1204,7 @@ fn result_user_sum_payload_boxes_crosses_and_extracts() {
     // (isOk), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
     assert_exit(
         "Shape = Circle(Num) / Rect(Num, Num)\n\
-         isOk = (r :: Result) -> Num => r ? | Ok(_) => 1 | NotOk(_) => 0\n\
+         isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
          \x20 a = isOk(Ok(Circle(5)))\n\
          \x20 area = Ok(Rect(3, 4)) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(w, h) => w * h) | NotOk(_) => 0\n\
@@ -1212,7 +1219,7 @@ fn result_nested_result_payload_boxes_and_extracts() {
     // A nested `Result` payload (also wider than the slot) boxes and unboxes: `Ok(Ok(7))`
     // crosses a generic parameter and the inner Num is extracted through both layers.
     assert_exit(
-        "isOk = (r :: Result) -> Num => r ? | Ok(_) => 1 | NotOk(_) => 0\n\
+        "isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
          \x20 a = isOk(Ok(Ok(7)))\n\
          \x20 inner = Ok(Ok(7)) ? | Ok(ir) => (ir ? | Ok(x) => x | NotOk(_) => 0) | NotOk(_) => 0\n\
@@ -1237,7 +1244,7 @@ fn a_user_print_is_unrelated_to_the_modules() {
     // The module's set is closed: the program's own `print` is an ordinary function
     // beside `io.print`, and each call reaches its own.
     assert_exit_linked(
-        "<< core.io\nprint = (a :: Num, b :: Num) -> Num => a + b\n^ = () -> Num => <\n  io.print(\"hi\")\n  print(40, 2)\n>",
+        "<< core.io\nprint = (a :: Num, b :: Num) -> Num => < a + b >\n^ = () -> Num => <\n  io.print(\"hi\")\n  print(40, 2)\n>",
         42,
     );
 }
@@ -1248,7 +1255,7 @@ fn a_user_print_is_unrelated_to_the_modules() {
 fn no_matching_overload_is_a_compile_error() {
     // No `pick` overload accepts a Bool (exact-match, no coercion).
     assert_type_error(
-        "pick = (n :: Num) -> Num => n\npick = (s :: Text) -> Num => s.size\n^ = () -> Num => pick(true)",
+        "pick = (n :: Num) -> Num => < n >\npick = (s :: Text) -> Num => < s.size >\n^ = () -> Num => < pick(true) >",
     );
 }
 
@@ -1256,14 +1263,14 @@ fn no_matching_overload_is_a_compile_error() {
 fn duplicate_overload_signature_is_a_compile_error() {
     // Two definitions with the SAME parameter types make every call ambiguous.
     assert_type_error(
-        "pick = (n :: Num) -> Num => n\npick = (m :: Num) -> Num => m + 1\n^ = () -> Num => pick(1)",
+        "pick = (n :: Num) -> Num => < n >\npick = (m :: Num) -> Num => < m + 1 >\n^ = () -> Num => < pick(1) >",
     );
 }
 
 #[test]
 fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
     // `+` has Num/Num and Text/Text overloads but none for Num + Bool.
-    assert_type_error("^ = () -> Num => 1 + true");
+    assert_type_error("^ = () -> Num => < 1 + true >");
 }
 
 // --- Entry-point `^` receiving `args :: []Text` and `env :: [|Text => Text|]`. ---
@@ -1279,7 +1286,10 @@ fn operator_with_no_overload_for_operand_types_is_a_compile_error() {
 fn run_entry_with_args_parameter_typechecks_and_runs() {
     // `^(args :: []Text)` — `args.size` is always >= 1 (argv[0] is the program name),
     // so this is deterministic regardless of how the test harness was invoked.
-    assert_exit("^ = (args :: []Text) -> Num => args.size >= 1 ? 7 : 0", 7);
+    assert_exit(
+        "^ = (args :: []Text) -> Num => < args.size >= 1 ? 7 : 0 >",
+        7,
+    );
 }
 
 #[test]
@@ -1310,7 +1320,7 @@ fn jit_uses_caller_supplied_argv() {
     // is the JIT-side anchor for JIT/AOT argv parity: `run_program(&p, &[file, a, b, c])`
     // must equal a native `./file a b c` (which sees `args.size == 4`).
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let src = "^ = (args :: []Text) -> Num => args.size";
+    let src = "^ = (args :: []Text) -> Num => < args.size >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -1356,7 +1366,7 @@ fn a_numeric_two_parameter_entry_is_rejected() {
     // `^(argc :: Num, argv :: Num)` is not an entry signature: an entry takes its
     // arguments as `args :: []Text`. It is rejected by the ordinary rule, with the
     // ordinary diagnostic — no special case of its own.
-    let src = "^ = (argc :: Num, argv :: Num) -> Num => argc >= 1 ? 3 : 0";
+    let src = "^ = (argc :: Num, argv :: Num) -> Num => < argc >= 1 ? 3 : 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -1381,7 +1391,7 @@ fn entry_with_non_text_array_param_is_rejected() {
     // argv arm — that would hand it mis-sized elements. The type checker rejects it up
     // front (so `quilon check` and `quilon run`/`build` all report the same clear
     // diagnostic) rather than silently miscompiling.
-    let src = "^ = (args :: []Num) -> Num => args.size";
+    let src = "^ = (args :: []Num) -> Num => < args.size >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
@@ -1399,7 +1409,7 @@ fn entry_with_non_text_array_param_is_rejected() {
 #[test]
 fn run_bare_greater_than_works_on_one_line() {
     // `a > b` on a single line is the greater-than operator everywhere (no parens).
-    assert_exit("^ = () -> Num => 5 > 3 ? 42 : 0", 42);
+    assert_exit("^ = () -> Num => < 5 > 3 ? 42 : 0 >", 42);
 }
 
 #[test]
@@ -1478,14 +1488,14 @@ fn modulo_works_end_to_end() {
     // `%` was once documented and type-checked but had NO codegen arm — it passed
     // `check` and died at run/build with an internal error. It lowers to the f64
     // remainder (LLVM frem == C fmod).
-    assert_exit("^ = () -> Num => 7 % 3", 1);
+    assert_exit("^ = () -> Num => < 7 % 3 >", 1);
 }
 
 #[test]
 fn modulo_sign_follows_dividend() {
     // fmod semantics: the result takes the DIVIDEND's sign.
     assert_exit(
-        "^ = () -> Num => ((0 - 7) % 3 == 0 - 1 ? 1 : 0) + (7 % (0 - 3) == 1 ? 2 : 0)",
+        "^ = () -> Num => < ((0 - 7) % 3 == 0 - 1 ? 1 : 0) + (7 % (0 - 3) == 1 ? 2 : 0) >",
         3,
     );
 }
@@ -1494,7 +1504,7 @@ fn modulo_sign_follows_dividend() {
 fn modulo_handles_fractional_operands() {
     // One unified f64 Num: `%` must work on fractional operands too.
     assert_exit(
-        "^ = () -> Num => (7.5 % 2 == 1.5 ? 1 : 0) + (10 % 2.5 == 0 ? 2 : 0)",
+        "^ = () -> Num => < (7.5 % 2 == 1.5 ? 1 : 0) + (10 % 2.5 == 0 ? 2 : 0) >",
         3,
     );
 }
@@ -1538,7 +1548,7 @@ fn record_binding_name_reused_by_later_function_is_not_misrouted() {
     // GEP read the array's first element -> 1). Each function must start from an
     // empty per-function frame.
     assert_exit(
-        "first = () -> Num => <\n  p = { size = 5, other = 6 }\n  p.other\n>\nsecond = (p :: []Num) -> Num => p.size\n^ = () -> Num => <\n  x = first()\n  second([1, 2, 3])\n>",
+        "first = () -> Num => <\n  p = { size = 5, other = 6 }\n  p.other\n>\nsecond = (p :: []Num) -> Num => < p.size >\n^ = () -> Num => <\n  x = first()\n  second([1, 2, 3])\n>",
         3,
     );
 }
@@ -1549,7 +1559,7 @@ fn closure_capturing_record_reads_its_field() {
     // WITH the capture (this once worked only because the enclosing frame's maps
     // leaked into the closure body's emission).
     assert_exit(
-        "^ = () -> Num => <\n  r = { v = 7 }\n  f = () => r.v\n  f()\n>",
+        "^ = () -> Num => <\n  r = { v = 7 }\n  f = () => < r.v >\n  f()\n>",
         7,
     );
 }
@@ -1559,7 +1569,7 @@ fn closure_capturing_named_record_calls_its_method() {
     // Method dispatch on a captured named-record value resolves through
     // `var_named_types`, which must be carried into the closure's frame.
     assert_exit(
-        "Counter = { v :: Num, get = () -> Num => it.v }\n^ = () -> Num => <\n  c = Counter { v = 4 }\n  f = () => c.get()\n  f()\n>",
+        "Counter = { v :: Num, get = () -> Num => < it.v >}\n^ = () -> Num => <\n  c = Counter { v = 4 }\n  f = () => < c.get() >\n  f()\n>",
         4,
     );
 }
@@ -1571,8 +1581,8 @@ fn run_function_returning_array_is_usable() {
     // concatenate the result (`+`), take `.size`, and index it. Previously the return
     // was lowered to a bare `ptr`, so feeding it to `+`/`.size` panicked codegen.
     let src = r#"
-        pair = (a :: Text, b :: Text) -> []Text => [a, b]
-        nums = (n :: Num) -> []Num => [n, n + 1, n + 2]
+        pair = (a :: Text, b :: Text) -> []Text => < [a, b] >
+        nums = (n :: Num) -> []Num => < [n, n + 1, n + 2] >
         ^ = () -> Num => <
           xs :: []Text = pair("a", "bb") + pair("ccc", "d")
           ys :: []Num = nums(10)
@@ -1591,7 +1601,7 @@ fn run_closure_returning_array_is_usable() {
     // rule as top-level functions (both funnel through `boundary_type`).
     let src = r#"
         ^ = () -> Num => <
-          mk := (n :: Num) -> []Num => [n, n + 1]
+          mk := (n :: Num) -> []Num => < [n, n + 1] >
           xs :: []Num = mk(10) + mk(20)
           xs.size + xs[3]
         >
@@ -1609,7 +1619,7 @@ fn run_array_literal_survives_escaping_its_frame() {
     // read `clobber`'s locals (observed exit 77); heap allocation makes it read 10.
     let src = r#"
         Pair = { xs :: []Num }
-        make = () -> Pair => Pair { xs = [10, 20, 30] }
+        make = () -> Pair => < Pair { xs = [10, 20, 30] } >
         clobber = (x :: Num) -> Num => <
           c = [x, x, x]
           c[0]
@@ -1631,7 +1641,7 @@ fn run_method_returning_array_is_usable() {
     let src = r#"
         Bag = {
           tag :: Text,
-          pair = () -> []Text => [it.tag, it.tag]
+          pair = () -> []Text => < [it.tag, it.tag] >
         }
         ^ = () -> Num => <
           b = Bag { tag = "hi" }
@@ -1649,7 +1659,7 @@ fn run_line_first_paren_is_new_statement() {
     // `(1 + 2)` fused into the call `f()(1 + 2)` ("Not a function" on the wrong
     // line). Now they are two statements, and the entry point exits with x = 7.
     let src = r#"
-        f = () -> Num => 7
+        f = () -> Num => < 7 >
         ^ = () -> Num => <
           x = f()
           (1 + 2)
@@ -1716,7 +1726,7 @@ fn run_multiline_arguments_and_dot_chains_still_work() {
     // callee's line may span lines, and a continuation line starting with `.` still
     // chains. add(40, 2) = 42; [1,2,3,4] doubled -> filtered >4 -> 6+8 = 14; 42+14=56.
     let src = r#"
-        add = (a :: Num, b :: Num) -> Num => a + b
+        add = (a :: Num, b :: Num) -> Num => < a + b >
         ^ = () -> Num => <
           sum = add(40,
             2)
@@ -1771,7 +1781,7 @@ fn importer_expression_on_a_modules_byte_range_does_not_retype_it() {
 #[test]
 fn run_recursive_overload_member_with_annotated_return() {
     assert_exit(
-        "p = (n :: Num) -> Text => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => p(3).size",
+        "p = (n :: Num) -> Text => < n == 0 ? \"done\" : p(n - 1) >\np = (t :: Text) -> Num => < 0 >\n^ = () -> Num => < p(3).size >",
         4,
     );
 }
@@ -1781,7 +1791,7 @@ fn run_recursive_overload_member_with_annotated_return() {
 #[test]
 fn run_overload_call_uses_the_member_defined_above_it() {
     assert_exit(
-        "pick = (n :: Num) -> Num => 11\nfromNum = () -> Num => pick(1)\npick = (t :: Text) -> Num => 22\n^ = () -> Num => fromNum() + pick(\"x\")",
+        "pick = (n :: Num) -> Num => < 11 >\nfromNum = () -> Num => < pick(1) >\npick = (t :: Text) -> Num => < 22 >\n^ = () -> Num => < fromNum() + pick(\"x\") >",
         33,
     );
 }
@@ -1832,7 +1842,7 @@ fn run_sleep_through_a_helper_function() {
     assert_exit_linked(
         r#"
 << core.time
-nap = () -> $ => @sleep(0.01)
+nap = () -> $ => < @sleep(0.01) >
 ^ = () -> Num => <
   nap()
   3

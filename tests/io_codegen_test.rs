@@ -115,7 +115,7 @@ fn print_bool_renders_via_bool_to_text() {
 
 #[test]
 fn main_wrapper_initializes_gc() {
-    let ir = gen_ir(r#"^ = () -> Num => 0"#);
+    let ir = gen_ir(r#"^ = () -> Num => < 0 >"#);
     assert!(
         ir.contains("__gc_init"),
         "expected GC init in main wrapper:\n{ir}"
@@ -130,7 +130,7 @@ fn main_wrapper_runs_a_pure_entry_on_a_fiber_too() {
     // `__run_fiber_main` and returns its result. This program is as pure as one gets — no
     // import, no call, no allocation, nothing that could park — so it holds the routing
     // independent of whether a program reaches an `@` primitive.
-    let ir = gen_ir(r#"^ = () -> Num => 0"#);
+    let ir = gen_ir(r#"^ = () -> Num => < 0 >"#);
     assert!(
         ir.contains("define i32 @__ql_entry("),
         "the entry dispatch belongs in a `__ql_entry` thunk:\n{ir}"
@@ -160,7 +160,7 @@ fn color_enabled_lowers_to_the_color_intrinsic() {
     // `__color_enabled(fd)` is an INTERNAL compiler-lowered primitive (like `__exit`, and
     // exported by no module): it becomes a `__color_enabled` call, so `core.test` does not
     // have to guess at terminal detection in `.qn`.
-    let ir = gen_ir("^ = () -> Num => __color_enabled(2) ? 1 : 0");
+    let ir = gen_ir("^ = () -> Num => < __color_enabled(2) ? 1 : 0 >");
     assert!(
         ir.contains("declare i64 @__color_enabled(i64)"),
         "__color_enabled must lower to the runtime intrinsic, got:\n{ir}"

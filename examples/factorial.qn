@@ -2,7 +2,7 @@
 ~ `<< core.test` verifies the result; on success the program exits 0.
 << core.test
 
-factorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)
+factorial = (n :: Num) -> Num => < n <= 1 ? 1 : n * factorial(n - 1) >
 
 ^ = () -> $ => <
   assert(factorial(5), equals(120))   ~ 5! = 120

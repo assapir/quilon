@@ -8,62 +8,74 @@
 ~ The CPU architecture the program was built for. One with no variant of its own carries its
 ~ name, so it still says which.
 >> Platform = Aarch64 / X86_64 / X86 / Arm / Riscv64 / Wasm32 / WtfPlatform(Text) {
-  name = () -> Text => it ?
-    | Aarch64        => "aarch64"
-    | X86_64         => "x86_64"
-    | X86            => "x86"
-    | Arm            => "arm"
-    | Riscv64        => "riscv64"
-    | Wasm32         => "wasm32"
-    | WtfPlatform(a) => a
+  name = () -> Text => <
+    it ?
+      | Aarch64        => "aarch64"
+      | X86_64         => "x86_64"
+      | X86            => "x86"
+      | Arm            => "arm"
+      | Riscv64        => "riscv64"
+      | Wasm32         => "wasm32"
+      | WtfPlatform(a) => a
+  >
 
-  ` = () -> Text => it.name()
+  ` = () -> Text => < it.name() >
 }
 
 ~ The operating system the program was built for. An unrecognised one carries the target
 ~ triple, which is what the compiler saw.
 >> Os = Linux / MacOS / Windows / FreeBSD / OpenBSD / NetBSD / WtfOs(Text) {
-  name = () -> Text => it ?
-    | Linux    => "linux"
-    | MacOS    => "macOS"
-    | Windows  => "windows"
-    | FreeBSD  => "FreeBSD"
-    | OpenBSD  => "OpenBSD"
-    | NetBSD   => "NetBSD"
-    | WtfOs(t) => t
+  name = () -> Text => <
+    it ?
+      | Linux    => "linux"
+      | MacOS    => "macOS"
+      | Windows  => "windows"
+      | FreeBSD  => "FreeBSD"
+      | OpenBSD  => "OpenBSD"
+      | NetBSD   => "NetBSD"
+      | WtfOs(t) => t
+  >
 
-  ` = () -> Text => it.name()
+  ` = () -> Text => < it.name() >
 }
 
 ~ How wide a pointer is on the target.
 >> PointerWidth = Width64 / Width32 {
-  name = () -> Text => it ?
-    | Width64 => "64-bit"
-    | Width32 => "32-bit"
+  name = () -> Text => <
+    it ?
+      | Width64 => "64-bit"
+      | Width32 => "32-bit"
+  >
 
-  bits = () -> Num => it ?
-    | Width64 => 64
-    | Width32 => 32
+  bits = () -> Num => <
+    it ?
+      | Width64 => 64
+      | Width32 => 32
+  >
 
-  ` = () -> Text => it.name()
+  ` = () -> Text => < it.name() >
 }
 
 ~ The order bytes are stored in on the target.
 >> Endianness = Little / Big {
-  name = () -> Text => it ?
-    | Little => "little"
-    | Big    => "big"
+  name = () -> Text => <
+    it ?
+      | Little => "little"
+      | Big    => "big"
+  >
 
-  ` = () -> Text => it.name()
+  ` = () -> Text => < it.name() >
 }
 
 ~ How this program is running: compiled ahead of time, or through the in-process JIT.
 >> RunMode = Aot / Jit {
-  name = () -> Text => it ?
-    | Aot => "aot"
-    | Jit => "jit"
+  name = () -> Text => <
+    it ?
+      | Aot => "aot"
+      | Jit => "jit"
+  >
 
-  ` = () -> Text => it.name()
+  ` = () -> Text => < it.name() >
 }
 
 >> platform = () -> Platform => <
@@ -88,13 +100,13 @@
     : WtfOs(name)
 >
 
->> pointerWidth = () -> PointerWidth => __pointer_bits() == 64 ? Width64 : Width32
+>> pointerWidth = () -> PointerWidth => < __pointer_bits() == 64 ? Width64 : Width32 >
 
->> endianness = () -> Endianness => __is_big_endian() ? Big : Little
+>> endianness = () -> Endianness => < __is_big_endian() ? Big : Little >
 
->> runMode = () -> RunMode => __is_aot() ? Aot : Jit
+>> runMode = () -> RunMode => < __is_aot() ? Aot : Jit >
 
 ~ The version of the Quilon compiler that built this program, e.g. "0.9.3".
->> quilonVersion = () -> Text => __quilon_version()
+>> quilonVersion = () -> Text => < __quilon_version() >
 
->> answerToTheUltimateQuestionOfLifeTheUniverseAndEverything = () -> Num => 42
+>> answerToTheUltimateQuestionOfLifeTheUniverseAndEverything = () -> Num => < 42 >

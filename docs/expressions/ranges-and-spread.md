@@ -78,7 +78,7 @@ xs = [1, 2, 3]
 ys = [<-xs, 4, 5]        ~ [1, 2, 3, 4, 5]
 zs = [0, <-xs, <-ys]     ~ [0, 1,2,3, 1,2,3,4,5]
 
-Vec = { x :: Num, y :: Num, sum = => it.x + it.y }
+Vec = { x :: Num, y :: Num, sum = => < it.x + it.y >}
 a = Vec { x = 10, y = 20 }
 b = { <-a, x = 5 }       ~ still a Vec: b.sum() → 25
 c = Vec { <-a, x = 5 }   ~ the same update, naming the type being built

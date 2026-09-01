@@ -325,8 +325,8 @@ fn map_user_record_key() {
     assert_exit(
         r#"Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = () -> Num => it.x * 31 + it.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
   m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 10, Point { x = 3, y = 4 } => 20|]
@@ -343,8 +343,8 @@ fn map_user_record_key_set_and_remove() {
     assert_exit(
         r#"Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = () -> Num => it.x * 31 + it.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
   m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 10|]
@@ -362,8 +362,8 @@ fn set_user_record_key_dedup_and_remove() {
     assert_exit(
         r#"Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = () -> Num => it.x * 31 + it.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
   s :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
@@ -379,9 +379,9 @@ fn set_user_record_key_dedup_and_remove() {
 fn map_user_sum_key() {
     assert_exit(
         r#"Shape = Circle(Num) / Rect(Num, Num) {
-  area = () -> Num => it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h
-  == = (other :: Shape) -> Bool => it.area() == other.area()
-  % = () -> Num => it.area()
+  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h >
+  == = (other :: Shape) -> Bool => < it.area() == other.area() >
+  % = () -> Num => < it.area() >
 }
 ^ = () -> Num => <
   m :: [|Shape => Num|] = [|Circle(4) => 10, Rect(6, 7) => 20|]
@@ -398,7 +398,7 @@ fn map_key_type_missing_equality_rejected() {
     assert_type_error(
         r#"Point = {
   x :: Num, y :: Num,
-  % = () -> Num => it.x * 31 + it.y
+  % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
   m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 1|]
@@ -413,7 +413,7 @@ fn set_key_type_missing_hash_rejected() {
     assert_type_error(
         r#"Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >
 }
 ^ = () -> Num => <
   s :: [|Point|] = [|Point { x = 1, y = 2 }|]
@@ -428,8 +428,8 @@ fn hash_hook_non_num_return_rejected() {
     assert_type_error(
         r#"Point = {
   x :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x,
-  % = () -> Text => "nope"
+  == = (other :: Point) -> Bool => < it.x == other.x >,
+  % = () -> Text => < "nope" >
 }
 ^ = () -> Num => <
   [|Point { x = 1 }|].size
@@ -444,8 +444,8 @@ fn binary_mod_is_not_a_hash_hook_rejected() {
     assert_type_error(
         r#"Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = (other :: Point) -> Point => Point { x = it.x, y = it.y }
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = (other :: Point) -> Point => < Point { x = it.x, y = it.y } >
 }
 ^ = () -> Num => <
   [|Point { x = 1, y = 2 } => 1|].size

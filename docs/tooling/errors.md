@@ -11,17 +11,17 @@ column are **1-based** and count characters, not bytes. A path too long for the 
 is shown from its END behind a `…`, so the file name stays visible. For example, the program
 
 ```
-add = (a :: Num) -> Num => a + true
+add = (a :: Num) -> Num => < a + true >
 ```
 
 reports (since `+` is an [overload set](../functions/overloading.md), a `Num + Bool` matches no member):
 
 ```
-program.qn:1:28:
+program.qn:1:30:
 error: No overload of '+' matches argument types (Num, Bool). Candidates: (Num, Num), (Text, Text)
   |
-1 | add = (a :: Num) -> Num => a + true
-  |                            ^^^^^^^^
+1 | add = (a :: Num) -> Num => < a + true >
+  |                              ^^^^^^^^
 ```
 
 A multi-line span underlines its first line. A failure with no source location (a missing

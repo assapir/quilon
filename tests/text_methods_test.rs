@@ -94,14 +94,14 @@ fn split_empty_separator_is_graphemes() {
 
 #[test]
 fn trim_strips_surrounding_whitespace() {
-    assert_exit("^ = () -> Num => \"  héllo  \".trim().size", 6); // 6 bytes ("é" is 2)
+    assert_exit("^ = () -> Num => < \"  héllo  \".trim().size >", 6); // 6 bytes ("é" is 2)
 }
 
 #[test]
 fn trim_chains() {
     // trim then toUpper, verified by content equality.
     assert_exit(
-        "^ = () -> Num => \"  hi  \".trim().toUpper() == \"HI\" ? 1 : 0",
+        "^ = () -> Num => < \"  hi  \".trim().toUpper() == \"HI\" ? 1 : 0 >",
         1,
     );
 }
@@ -112,7 +112,7 @@ fn trim_chains() {
 fn replace_all_replaces_every_occurrence() {
     // "a-a-a".replaceAll("a","xx") -> "xx-xx-xx" (size 8).
     assert_exit(
-        "^ = () -> Num => \"a-a-a\".replaceAll(\"a\", \"xx\").size",
+        "^ = () -> Num => < \"a-a-a\".replaceAll(\"a\", \"xx\").size >",
         8,
     );
 }
@@ -130,7 +130,7 @@ fn replace_exact_count_left_to_right() {
 fn replace_count_truncates_toward_zero() {
     // 2.9 truncates to 2 -> "xx-xx-a" (size 7).
     assert_exit(
-        "^ = () -> Num => \"a-a-a\".replace(\"a\", \"xx\", 2.9).size",
+        "^ = () -> Num => < \"a-a-a\".replace(\"a\", \"xx\", 2.9).size >",
         7,
     );
 }
@@ -138,24 +138,24 @@ fn replace_count_truncates_toward_zero() {
 // Compile-time rejections (literal-determinable).
 #[test]
 fn replace_literal_count_zero_or_negative_is_a_compile_error() {
-    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", 0).size");
-    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", -2).size");
+    assert_type_error("^ = () -> Num => < \"a-a-a\".replace(\"a\", \"b\", 0).size >");
+    assert_type_error("^ = () -> Num => < \"a-a-a\".replace(\"a\", \"b\", -2).size >");
 }
 
 #[test]
 fn replace_literal_empty_from_is_a_compile_error() {
-    assert_type_error("^ = () -> Num => \"abc\".replace(\"\", \"x\", 1).size");
+    assert_type_error("^ = () -> Num => < \"abc\".replace(\"\", \"x\", 1).size >");
 }
 
 #[test]
 fn replace_all_literal_empty_from_is_a_compile_error() {
-    assert_type_error("^ = () -> Num => \"abc\".replaceAll(\"\", \"x\").size");
+    assert_type_error("^ = () -> Num => < \"abc\".replaceAll(\"\", \"x\").size >");
 }
 
 #[test]
 fn replace_literal_count_over_occurrences_is_a_compile_error() {
     // "a-a-a" has 3 "a"; asking for 5 is a compile error (all operands literal).
-    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", 5).size");
+    assert_type_error("^ = () -> Num => < \"a-a-a\".replace(\"a\", \"b\", 5).size >");
 }
 
 // Runtime fail-loud (non-literal, so not caught at compile time) — abort, no silent no-op.
@@ -204,19 +204,19 @@ fn repeat_concatenates_count_copies() {
 
 #[test]
 fn repeat_zero_is_the_empty_text() {
-    assert_exit("^ = () -> Num => \"ab\".repeat(0).size", 0);
+    assert_exit("^ = () -> Num => < \"ab\".repeat(0).size >", 0);
 }
 
 #[test]
 fn repeat_is_grapheme_safe() {
     // A 2-grapheme, multi-byte text repeated 3 times: 6 graphemes, bytes intact.
-    assert_exit("^ = () -> Num => \"é😀\".repeat(3).length", 6);
+    assert_exit("^ = () -> Num => < \"é😀\".repeat(3).length >", 6);
 }
 
 #[test]
 fn repeat_composes_with_other_text_methods() {
     assert_exit(
-        "^ = () -> Num => \"-\".repeat(4).contains(\"----\") ? 1 : 0",
+        "^ = () -> Num => < \"-\".repeat(4).contains(\"----\") ? 1 : 0 >",
         1,
     );
 }
@@ -224,8 +224,8 @@ fn repeat_composes_with_other_text_methods() {
 // Compile-time rejections (literal-determinable), mirroring `replace`'s contract.
 #[test]
 fn repeat_literal_negative_or_fractional_count_is_a_compile_error() {
-    assert_type_error("^ = () -> Num => \"ab\".repeat(-1).size");
-    assert_type_error("^ = () -> Num => \"ab\".repeat(2.5).size");
+    assert_type_error("^ = () -> Num => < \"ab\".repeat(-1).size >");
+    assert_type_error("^ = () -> Num => < \"ab\".repeat(2.5).size >");
 }
 
 // Runtime fail-loud for a computed count — abort, never a silent clamp.
@@ -305,7 +305,7 @@ fn contains_hit_and_miss() {
 fn index_of_ok_is_grapheme_index() {
     // "héllo".indexOf("llo") -> Ok(2) (grapheme index, not byte offset 3).
     assert_exit(
-        "^ = () -> Num => \"héllo\".indexOf(\"llo\") ? | Ok(i) => i | NotOk(_) => 99",
+        "^ = () -> Num => < \"héllo\".indexOf(\"llo\") ? | Ok(i) => i | NotOk(_) => 99 >",
         2,
     );
 }
@@ -313,7 +313,7 @@ fn index_of_ok_is_grapheme_index() {
 #[test]
 fn index_of_notok_when_absent() {
     assert_exit(
-        "^ = () -> Num => \"Hello\".indexOf(\"z\") ? | Ok(_) => 50 | NotOk(_) => 7",
+        "^ = () -> Num => < \"Hello\".indexOf(\"z\") ? | Ok(_) => 50 | NotOk(_) => 7 >",
         7,
     );
 }
@@ -332,7 +332,7 @@ fn slice_basic_and_clamp() {
 #[test]
 fn slice_is_grapheme_based() {
     // "héllo".slice(0, 2) -> "hé" = 3 bytes (grapheme indices, not byte indices).
-    assert_exit("^ = () -> Num => \"héllo\".slice(0, 2).size", 3);
+    assert_exit("^ = () -> Num => < \"héllo\".slice(0, 2).size >", 3);
 }
 
 // ---- case mapping ---------------------------------------------------------
@@ -424,7 +424,7 @@ fn split_results_concatenate_via_array_plus() {
 fn text_method_wins_over_user_overload_on_text_receiver() {
     // A user `contains` on Num coexists; the Text receiver still resolves the built-in.
     assert_exit(
-        "contains = (n :: Num) -> Bool => n > 0\n^ = () -> Num => <\n  a = \"Hello\".contains(\"ell\") ? 1 : 0\n  b = contains(5) ? 1 : 0\n  a * 10 + b\n>",
+        "contains = (n :: Num) -> Bool => < n > 0 >\n^ = () -> Num => <\n  a = \"Hello\".contains(\"ell\") ? 1 : 0\n  b = contains(5) ? 1 : 0\n  a * 10 + b\n>",
         11,
     );
 }
@@ -434,20 +434,20 @@ fn text_method_wins_over_user_overload_on_text_receiver() {
 #[test]
 fn split_on_multibyte_separator() {
     // "a🌍b🌍c".split("🌍") -> ["a","b","c"], size 3 (4-byte emoji separator).
-    assert_exit("^ = () -> Num => \"a🌍b🌍c\".split(\"🌍\").size", 3);
+    assert_exit("^ = () -> Num => < \"a🌍b🌍c\".split(\"🌍\").size >", 3);
 }
 
 #[test]
 fn split_empty_separator_keeps_multi_codepoint_cluster_whole() {
     // A ZWJ family emoji is ONE grapheme -> empty-sep split yields a single element.
-    assert_exit("^ = () -> Num => \"👨‍👩‍👧\".split(\"\").size", 1);
+    assert_exit("^ = () -> Num => < \"👨‍👩‍👧\".split(\"\").size >", 1);
 }
 
 #[test]
 fn index_of_is_grapheme_index_across_emoji() {
     // "a🌍b": 🌍 is 4 bytes / 1 grapheme, so "b" is at grapheme index 2 (not byte 5).
     assert_exit(
-        "^ = () -> Num => \"a🌍b\".indexOf(\"b\") ? | Ok(i) => i | NotOk(_) => 99",
+        "^ = () -> Num => < \"a🌍b\".indexOf(\"b\") ? | Ok(i) => i | NotOk(_) => 99 >",
         2,
     );
 }
@@ -465,11 +465,11 @@ fn contains_matches_multibyte_and_rejects_byte_overlap() {
 fn slice_does_not_split_a_multibyte_codepoint() {
     // "héllo".slice(1, 3) -> "él" (graphemes 1..3), never a half-encoded "é".
     assert_exit(
-        "^ = () -> Num => \"héllo\".slice(1, 3) == \"él\" ? 1 : 0",
+        "^ = () -> Num => < \"héllo\".slice(1, 3) == \"él\" ? 1 : 0 >",
         1,
     );
     // The sliced text is valid: "él" is 3 bytes (é=2, l=1).
-    assert_exit("^ = () -> Num => \"héllo\".slice(1, 3).size", 3);
+    assert_exit("^ = () -> Num => < \"héllo\".slice(1, 3).size >", 3);
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn case_mapping_is_unicode_aware() {
 fn trim_strips_unicode_whitespace() {
     // Leading/trailing NBSP (U+00A0) is Unicode whitespace and must be trimmed.
     assert_exit(
-        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trim() == \"héllo\" ? 1 : 0",
+        "^ = () -> Num => < \"\u{00A0}héllo\u{00A0}\".trim() == \"héllo\" ? 1 : 0 >",
         1,
     );
 }
@@ -501,11 +501,11 @@ fn trim_start_and_end_strip_one_side_only() {
     );
     // Content check: only the intended side is stripped.
     assert_exit(
-        "^ = () -> Num => \"  hi  \".trimStart() == \"hi  \" ? 1 : 0",
+        "^ = () -> Num => < \"  hi  \".trimStart() == \"hi  \" ? 1 : 0 >",
         1,
     );
     assert_exit(
-        "^ = () -> Num => \"  hi  \".trimEnd() == \"  hi\" ? 1 : 0",
+        "^ = () -> Num => < \"  hi  \".trimEnd() == \"  hi\" ? 1 : 0 >",
         1,
     );
 }
@@ -515,11 +515,11 @@ fn trim_start_and_end_are_unicode_whitespace_aware() {
     // NBSP (U+00A0) on both ends; trimStart removes the leading one only, trimEnd the
     // trailing one only.
     assert_exit(
-        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trimStart() == \"héllo\u{00A0}\" ? 1 : 0",
+        "^ = () -> Num => < \"\u{00A0}héllo\u{00A0}\".trimStart() == \"héllo\u{00A0}\" ? 1 : 0 >",
         1,
     );
     assert_exit(
-        "^ = () -> Num => \"\u{00A0}héllo\u{00A0}\".trimEnd() == \"\u{00A0}héllo\" ? 1 : 0",
+        "^ = () -> Num => < \"\u{00A0}héllo\u{00A0}\".trimEnd() == \"\u{00A0}héllo\" ? 1 : 0 >",
         1,
     );
 }
@@ -535,13 +535,13 @@ fn replace_with_multibyte_from_and_to() {
 
 #[test]
 fn slice_rejects_non_num_indices() {
-    assert_type_error("^ = () -> Num => \"Hello\".slice(\"a\", 2).size");
+    assert_type_error("^ = () -> Num => < \"Hello\".slice(\"a\", 2).size >");
 }
 
 #[test]
 fn replace_count_must_be_a_num() {
     // The 3rd arg is a Num count — a non-Num is a type error.
-    assert_type_error("^ = () -> Num => \"a-a-a\".replace(\"a\", \"b\", true).size");
+    assert_type_error("^ = () -> Num => < \"a-a-a\".replace(\"a\", \"b\", true).size >");
 }
 
 // ---- at / graphemes (the grapheme-access primitives) ----------------------
@@ -567,16 +567,16 @@ fn at_keeps_a_multi_codepoint_cluster_whole() {
 #[test]
 fn graphemes_yields_the_cluster_sequence() {
     // 5 graphemes; the empty text has none; a ZWJ family emoji is ONE.
-    assert_exit("^ = () -> Num => \"héllo\".graphemes().size", 5);
-    assert_exit("^ = () -> Num => \"\".graphemes().size", 0);
-    assert_exit("^ = () -> Num => \"👨‍👩‍👧\".graphemes().size", 1);
+    assert_exit("^ = () -> Num => < \"héllo\".graphemes().size >", 5);
+    assert_exit("^ = () -> Num => < \"\".graphemes().size >", 0);
+    assert_exit("^ = () -> Num => < \"👨‍👩‍👧\".graphemes().size >", 1);
 }
 
 #[test]
 fn graphemes_composes_with_array_methods() {
     // The []Text of graphemes goes through filter/map like any array.
     assert_exit(
-        "^ = () -> Num => \"a,b,c\".graphemes().filter(g => g == \",\").size",
+        "^ = () -> Num => < \"a,b,c\".graphemes().filter(g => g == \",\").size >",
         2,
     );
 }

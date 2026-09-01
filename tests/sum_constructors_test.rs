@@ -80,9 +80,11 @@ fn test_sum_constructor_in_match() {
     // Pattern match returns different Results
     let tokens = Lexer::tokenize(
         r#"
-        check = (x :: Num) => x ?
-            | 0 => NotOk("zero")
-            | _ => Ok(x)
+        check = (x :: Num) => <
+          x ?
+              | 0 => NotOk("zero")
+              | _ => Ok(x)
+        >
     "#,
     )
     .unwrap();
@@ -96,7 +98,7 @@ fn test_sum_constructor_as_return_value() {
     // Function that returns Result
     let tokens = Lexer::tokenize(
         r#"
-        make_ok = () => Ok(42)
+        make_ok = () => < Ok(42) >
         ^ = () -> Num => <
           x = make_ok()
           0

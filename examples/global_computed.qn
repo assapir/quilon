@@ -9,4 +9,4 @@ base = 10
 ~ An operator has to run somewhere, and there is nowhere: `base * 2` belongs in a function.
 doubled = base * 2
 
-^ = () -> Num => doubled
+^ = () -> Num => < doubled >

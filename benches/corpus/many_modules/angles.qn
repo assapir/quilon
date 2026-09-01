@@ -1,10 +1,10 @@
->> angles_offset = (x :: Num) -> Num => x + 0
->> angles_scale = (x :: Num) -> Num => x + 1
->> angles_clamp = (x :: Num) -> Num => x + 2
->> angles_round = (x :: Num) -> Num => x + 3
->> angles_wrap = (x :: Num) -> Num => x + 4
->> angles_snap = (x :: Num) -> Num => x + 5
->> angles_bias = (x :: Num) -> Num => x + 6
->> angles_damp = (x :: Num) -> Num => x + 7
->> angles_boost = (x :: Num) -> Num => x + 8
->> angles_trim = (x :: Num) -> Num => x + 9
+>> angles_offset = (x :: Num) -> Num => < x + 0 >
+>> angles_scale = (x :: Num) -> Num => < x + 1 >
+>> angles_clamp = (x :: Num) -> Num => < x + 2 >
+>> angles_round = (x :: Num) -> Num => < x + 3 >
+>> angles_wrap = (x :: Num) -> Num => < x + 4 >
+>> angles_snap = (x :: Num) -> Num => < x + 5 >
+>> angles_bias = (x :: Num) -> Num => < x + 6 >
+>> angles_damp = (x :: Num) -> Num => < x + 7 >
+>> angles_boost = (x :: Num) -> Num => < x + 8 >
+>> angles_trim = (x :: Num) -> Num => < x + 9 >

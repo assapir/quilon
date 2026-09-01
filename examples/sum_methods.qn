@@ -7,17 +7,21 @@
 
 Shape = Circle(Num) / Rect(Num, Num) {
   ~ A named method that matches on `it`:
-  area = () -> Num => it ?
-    | Circle(r)  => 3 * r * r         ~ ~pi*r^2 (pi ~= 3 here)
-    | Rect(w, h) => w * h
+  area = () -> Num => <
+    it ?
+      | Circle(r)  => 3 * r * r         ~ ~pi*r^2 (pi ~= 3 here)
+      | Rect(w, h) => w * h
+  >
 
   ~ A binary operator member: two shapes are equal when their areas match.
-  == = (other :: Shape) -> Bool => it.area() == other.area()
+  == = (other :: Shape) -> Bool => < it.area() == other.area() >
 
   ~ The render operator `` ` `` — a Shape's Text form:
-  ` = () -> Text => it ?
-    | Circle(r)  => "Circle(`r`)"
-    | Rect(w, h) => "Rect(`w`x`h`)"
+  ` = () -> Text => <
+    it ?
+      | Circle(r)  => "Circle(`r`)"
+      | Rect(w, h) => "Rect(`w`x`h`)"
+  >
 }
 
 ^ = () -> $ => <

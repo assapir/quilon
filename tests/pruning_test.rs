@@ -51,7 +51,7 @@ fn defines(ir: &str, name: &str) -> bool {
 #[test]
 fn an_unreachable_function_is_not_emitted() {
     let ir = emit(
-        "used = (n :: Num) -> Num => n + 1\nunused = (n :: Num) -> Num => n + 2\n^ = () -> Num => used(1)",
+        "used = (n :: Num) -> Num => < n + 1 >\nunused = (n :: Num) -> Num => < n + 2 >\n^ = () -> Num => < used(1) >",
     );
     assert!(defines(&ir, "used"), "the called function must be emitted");
     assert!(
@@ -63,11 +63,11 @@ fn an_unreachable_function_is_not_emitted() {
 #[test]
 fn reachability_follows_a_chain_of_calls() {
     let ir = emit(concat!(
-        "third = (n :: Num) -> Num => n + 3\n",
-        "second = (n :: Num) -> Num => third(n) + 2\n",
-        "first = (n :: Num) -> Num => second(n) + 1\n",
-        "orphan = (n :: Num) -> Num => third(n)\n",
-        "^ = () -> Num => first(0)"
+        "third = (n :: Num) -> Num => < n + 3 >\n",
+        "second = (n :: Num) -> Num => < third(n) + 2 >\n",
+        "first = (n :: Num) -> Num => < second(n) + 1 >\n",
+        "orphan = (n :: Num) -> Num => < third(n) >\n",
+        "^ = () -> Num => < first(0) >"
     ));
     for live in ["first", "second", "third"] {
         assert!(
@@ -89,7 +89,7 @@ fn an_operator_overload_reached_only_by_the_operator_survives() {
     // operator is a member of `Money`, and a type's members ride along with it.
     assert_exit(
         concat!(
-            "Money = { amount :: Num, + = (other :: Money) -> Money => Money { amount = it.amount + other.amount } }\n",
+            "Money = { amount :: Num, + = (other :: Money) -> Money => < Money { amount = it.amount + other.amount } >}\n",
             "^ = () -> Num => <\n",
             "  total = Money { amount = 40 } + Money { amount = 2 }\n",
             "  total.amount\n",
@@ -104,9 +104,9 @@ fn a_helper_called_only_from_a_method_survives() {
     // Methods ride along with their type declaration, so a method body is a root.
     assert_exit(
         concat!(
-            "scale = (n :: Num) -> Num => n * 10\n",
-            "Box = { size :: Num, scaled = => scale(it.size) }\n",
-            "^ = () -> Num => Box { size = 4 }.scaled()"
+            "scale = (n :: Num) -> Num => < n * 10 >\n",
+            "Box = { size :: Num, scaled = => < scale(it.size) >}\n",
+            "^ = () -> Num => < Box { size = 4 }.scaled() >"
         ),
         40,
     );
@@ -116,9 +116,9 @@ fn a_helper_called_only_from_a_method_survives() {
 fn a_helper_called_only_from_a_global_function_value_survives() {
     assert_exit(
         concat!(
-            "bump = (n :: Num) -> Num => n + 1\n",
-            "step = (n :: Num) => bump(n)\n",
-            "^ = () -> Num => step(6)"
+            "bump = (n :: Num) -> Num => < n + 1 >\n",
+            "step = (n :: Num) => < bump(n) >\n",
+            "^ = () -> Num => < step(6) >"
         ),
         7,
     );
@@ -130,7 +130,7 @@ fn a_render_override_reached_only_by_interpolation_survives() {
     assert_exit_linked(
         concat!(
             "<< core.test\n",
-            "Tag = { id :: Num, ` = => \"tag\" }\n",
+            "Tag = { id :: Num, ` = => < \"tag\" >}\n",
             "^ = () -> $ => <\n",
             "  t = Tag { id = 1 }\n",
             "  assert(\"a `t` b\", equals(\"a tag b\"))\n",
@@ -146,9 +146,9 @@ fn an_overload_member_reached_only_by_dispatch_survives() {
     // different one by argument type.
     assert_exit(
         concat!(
-            "describe = (n :: Num) -> Num => 1\n",
-            "describe = (t :: Text) -> Num => 2\n",
-            "^ = () -> Num => describe(1) + describe(\"x\")"
+            "describe = (n :: Num) -> Num => < 1 >\n",
+            "describe = (t :: Text) -> Num => < 2 >\n",
+            "^ = () -> Num => < describe(1) + describe(\"x\") >"
         ),
         3,
     );
@@ -159,9 +159,9 @@ fn a_methods_receiver_is_not_a_mention_of_a_top_level_name() {
     // Reading the receiver as a top-level mention keeps the harness's `it` function, and the
     // harness's whole chain behind it, in any program that declares a type with a method.
     let ir = emit(concat!(
-        "it = (name :: Text) -> Num => name.size\n",
-        "Box = { size :: Num, doubled = => it.size * 2 }\n",
-        "^ = () -> Num => Box { size = 21 }.doubled()"
+        "it = (name :: Text) -> Num => < name.size >\n",
+        "Box = { size :: Num, doubled = => < it.size * 2 >}\n",
+        "^ = () -> Num => < Box { size = 21 }.doubled() >"
     ));
     assert!(
         !defines(&ir, "it"),
@@ -175,9 +175,9 @@ fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
     // top-level function, and dropping it there would break the harness itself.
     assert_exit(
         concat!(
-            "it = (name :: Text) -> Num => name.size\n",
-            "Box = { size :: Num, doubled = => it.size * 2 }\n",
-            "^ = () -> Num => Box { size = 20 }.doubled() + it(\"ab\")"
+            "it = (name :: Text) -> Num => < name.size >\n",
+            "Box = { size :: Num, doubled = => < it.size * 2 >}\n",
+            "^ = () -> Num => < Box { size = 20 }.doubled() + it(\"ab\") >"
         ),
         42,
     );
@@ -187,7 +187,8 @@ fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
 fn a_module_with_no_entry_point_keeps_everything() {
     // Nothing is reachable from an entry point that does not exist, so a module compiled on
     // its own must not be emptied out — a later program may call any of it.
-    let ir = emit("first = (n :: Num) -> Num => n + 1\nsecond = (n :: Num) -> Num => n + 2");
+    let ir =
+        emit("first = (n :: Num) -> Num => < n + 1 >\nsecond = (n :: Num) -> Num => < n + 2 >");
     assert!(defines(&ir, "first"));
     assert!(defines(&ir, "second"));
 }
@@ -195,7 +196,7 @@ fn a_module_with_no_entry_point_keeps_everything() {
 #[test]
 fn a_program_without_text_methods_carries_no_core_text() {
     // The implicit `core.text` merge happens only when a composable Text method appears.
-    let ir = emit_linked("^ = () -> Num => 40 + 2\n");
+    let ir = emit_linked("^ = () -> Num => < 40 + 2 >\n");
     assert!(
         !ir.contains("core.text."),
         "a program using no Text method must not carry core.text"
@@ -206,7 +207,7 @@ fn a_program_without_text_methods_carries_no_core_text() {
 fn only_the_used_text_composables_survive_the_merge() {
     // `.trim()` pulls core.text in, but reachability keeps only trim's implementation —
     // the unmentioned composables (split, replace, …) are pruned back out.
-    let ir = emit_linked("^ = () -> Num => \"  x  \".trim().size\n");
+    let ir = emit_linked("^ = () -> Num => < \"  x  \".trim().size >\n");
     assert!(
         defines(&ir, "core.text.trim"),
         "the used composable must be emitted"

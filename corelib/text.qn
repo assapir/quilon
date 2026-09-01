@@ -29,44 +29,48 @@
 
 ~ `half + half` — what squares the doubling walk below without a value position for a
 ~ block.
-double = (half :: Text) -> Text => half + half
+double = (half :: Text) -> Text => < half + half >
 
 ~ `count` (a whole number, 0 or more) copies of `t`, by binary doubling: log(count)
 ~ concatenations rather than count. The walk behind `repeat`; validation lives in the
 ~ entry point below. (`test.failAt` pads its frame with `.repeat` — those counts are
 ~ always valid, so a failing `repeat` reports once rather than recursing.)
-copies = (t :: Text, count :: Num) -> Text =>
+copies = (t :: Text, count :: Num) -> Text => <
   count == 0
     ? ""
     : count % 2 == 1
       ? t + copies(t, count - 1)
       : double(copies(t, count / 2))
+>
 
 ~ Strip leading and trailing whitespace: the two one-sided walks, composed.
-trim = (t :: Text) -> Text => t.trimStart().trimEnd()
+trim = (t :: Text) -> Text => < t.trimStart().trimEnd() >
 
 ~ Whether `sub` occurs in `t`: where `indexOf` finds an index, `contains` is true.
-contains = (t :: Text, sub :: Text) -> Bool =>
+contains = (t :: Text, sub :: Text) -> Bool => <
   t.indexOf(sub) ?
     | Ok(_)    => true
     | NotOk(_) => false
+>
 
 ~ The pieces of `rest` split on `sep` (never empty here), appended to `acc`. `sepLen` is
 ~ `sep.length`, passed along so it is walked once, not once per piece. `.size` (bytes,
 ~ O(1)) is the "to the end" slice bound throughout this file: `slice` clamps its end to
 ~ the grapheme count, which the byte length always reaches, so it spares the full
 ~ grapheme walk `.length` would cost every iteration.
-splitOnto = (acc :: []Text, rest :: Text, sep :: Text, sepLen :: Num) -> []Text =>
+splitOnto = (acc :: []Text, rest :: Text, sep :: Text, sepLen :: Num) -> []Text => <
   rest.indexOf(sep) ?
     | Ok(i)    => splitOnto(acc + [rest.slice(0, i)], rest.slice(i + sepLen, rest.size), sep, sepLen)
     | NotOk(_) => acc + [rest]
+>
 
 ~ Split `t` on `sep`. Consecutive separators keep empty pieces, an empty `t` yields
 ~ `[""]`, and an EMPTY separator splits into graphemes (where an empty `t` yields `[]` —
 ~ the graphemes of nothing). `"".graphemes()` is how this file writes an empty `[]Text`:
 ~ a bare `[]` literal has no element type to take.
-split = (t :: Text, sep :: Text) -> []Text =>
+split = (t :: Text, sep :: Text) -> []Text => <
   sep.size == 0 ? t.graphemes() : splitOnto("".graphemes(), t, sep, sep.length)
+>
 
 ~ The end of a replace walk: the text is exhausted with `remaining` replacements still
 ~ owed — a `count` beyond the occurrences present, which fails loudly (the whole text
@@ -81,12 +85,13 @@ replaceRemainder = (acc :: Text, rest :: Text, count :: Num, remaining :: Num, s
 ~ `rest` with its first `remaining` occurrences of `from` replaced by `to`, appended to
 ~ `acc` — one pass, validating the count as it goes. A negative `remaining` never
 ~ reaches 0, which is how `replaceAll` replaces every occurrence.
-replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Text, remaining :: Num, count :: Num, site :: Site) -> Text =>
+replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Text, remaining :: Num, count :: Num, site :: Site) -> Text => <
   rest.indexOf(from) ?
     | Ok(i)    => remaining == 0
       ? acc + rest
       : replaceOnto(acc + rest.slice(0, i) + to, rest.slice(i + fromLen, rest.size), from, fromLen, to, remaining - 1, count, site)
     | NotOk(_) => replaceRemainder(acc, rest, count, remaining, site)
+>
 
 ~ Replace EVERY occurrence of `from` with `to`. An empty `from` is an ill-defined
 ~ request and fails loudly (exit 101) — never a silent no-op.

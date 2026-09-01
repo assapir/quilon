@@ -94,7 +94,7 @@ fn reduce_over_a_huge_range_does_not_materialize() {
 #[test]
 fn reduce_directly_on_a_range() {
     assert_exit(
-        "^ = () -> Num => (1 <- 4).reduce(0, (acc, n) => acc + n)",
+        "^ = () -> Num => < (1 <- 4).reduce(0, (acc, n) => acc + n) >",
         10,
     );
 }
@@ -134,7 +134,7 @@ fn reduce_on_a_descending_range() {
 #[test]
 fn other_consumptions_still_materialize() {
     assert_exit(
-        "size = (xs :: []Num) -> Num => xs.size\n\n^ = () -> Num => <\n  idx = (1 <- 5)[2]\n  bound = 1 <- 5\n  idx + bound.size + size(2 <- 4)\n>",
+        "size = (xs :: []Num) -> Num => < xs.size >\n\n^ = () -> Num => <\n  idx = (1 <- 5)[2]\n  bound = 1 <- 5\n  idx + bound.size + size(2 <- 4)\n>",
         // (1<-5)[2] = 3, bound.size = 5, size(2<-4) = 3.
         11,
     );

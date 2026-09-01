@@ -1,10 +1,10 @@
->> currency_offset = (x :: Num) -> Num => x + 0
->> currency_scale = (x :: Num) -> Num => x + 1
->> currency_clamp = (x :: Num) -> Num => x + 2
->> currency_round = (x :: Num) -> Num => x + 3
->> currency_wrap = (x :: Num) -> Num => x + 4
->> currency_snap = (x :: Num) -> Num => x + 5
->> currency_bias = (x :: Num) -> Num => x + 6
->> currency_damp = (x :: Num) -> Num => x + 7
->> currency_boost = (x :: Num) -> Num => x + 8
->> currency_trim = (x :: Num) -> Num => x + 9
+>> currency_offset = (x :: Num) -> Num => < x + 0 >
+>> currency_scale = (x :: Num) -> Num => < x + 1 >
+>> currency_clamp = (x :: Num) -> Num => < x + 2 >
+>> currency_round = (x :: Num) -> Num => < x + 3 >
+>> currency_wrap = (x :: Num) -> Num => < x + 4 >
+>> currency_snap = (x :: Num) -> Num => < x + 5 >
+>> currency_bias = (x :: Num) -> Num => < x + 6 >
+>> currency_damp = (x :: Num) -> Num => < x + 7 >
+>> currency_boost = (x :: Num) -> Num => < x + 8 >
+>> currency_trim = (x :: Num) -> Num => < x + 9 >

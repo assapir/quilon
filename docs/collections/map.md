@@ -26,9 +26,9 @@ empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 A record or sum type becomes a key by defining two members (see
 [operator members](../functions/overloading.md#operator-overloading)):
 
-- a **`%` hash hook** — a unary member `% = () -> Num => …` (`it` is the value) returning a
+- a **`%` hash hook** — a unary member `% = () -> Num => < … >` (`it` is the value) returning a
   `Num` hash;
-- an **`==` member** — the usual equality, `== = (other :: T) -> Bool => …`.
+- an **`==` member** — the usual equality, `== = (other :: T) -> Bool => < … >`.
 
 Both are required: a type used as a key with only one is a compile error. Keys are hashed
 and compared through these members, so `%` and `==` must agree — two keys that are `==`
@@ -38,8 +38,8 @@ hook has no call syntax of its own; the collections invoke it.
 ```quilon
 Point = {
   x :: Num, y :: Num,
-  == = (other :: Point) -> Bool => it.x == other.x && it.y == other.y,
-  % = () -> Num => it.x * 31 + it.y
+  == = (other :: Point) -> Bool => < it.x == other.x && it.y == other.y >,
+  % = () -> Num => < it.x * 31 + it.y >
 }
 grid :: [|Point => Text|] = [|Point { x = 0, y = 0 } => "origin"|]
 ```

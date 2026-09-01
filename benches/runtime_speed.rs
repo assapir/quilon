@@ -124,7 +124,7 @@ fn main() {
 /// which is exactly what made the first version of this table report two warm rows.
 fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
     let tiny = workdir.join("tiny.qn");
-    std::fs::write(&tiny, "^ = () -> Num => 0\n").expect("writing the latency program");
+    std::fs::write(&tiny, "^ = () -> Num => < 0 >\n").expect("writing the latency program");
     let out = workdir.join("tiny");
 
     let standalone = workdir.join("quilon-standalone");
@@ -138,7 +138,7 @@ fn latency_table(quilon: &Path, workdir: &Path, trend: &mut Trend) {
     let tiny_import = workdir.join("tiny_import.qn");
     std::fs::write(
         &tiny_import,
-        "<< core.test\n^ = () -> $ => assert(1 + 1, equals(2))\n",
+        "<< core.test\n^ = () -> $ => < assert(1 + 1, equals(2)) >\n",
     )
     .expect("writing the importing latency program");
 
@@ -359,9 +359,12 @@ fn tco_loop(iterations: u64) -> String {
     );
     let _ = writeln!(
         src,
-        "count = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : count(n - 1, acc + 1)"
+        "count = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : count(n - 1, acc + 1) >"
     );
-    let _ = writeln!(src, "^ = () -> Num => count({iterations}, 0) > 0 ? 0 : 1");
+    let _ = writeln!(
+        src,
+        "^ = () -> Num => < count({iterations}, 0) > 0 ? 0 : 1 >"
+    );
     src
 }
 
@@ -394,9 +397,12 @@ fn text_loop(iterations: u64) -> String {
     );
     let _ = writeln!(
         src,
-        "build = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : build(n - 1, acc + \"item `n` of `n * 2`\".size)"
+        "build = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : build(n - 1, acc + \"item `n` of `n * 2`\".size) >"
     );
-    let _ = writeln!(src, "^ = () -> Num => build({iterations}, 0) > 0 ? 0 : 1");
+    let _ = writeln!(
+        src,
+        "^ = () -> Num => < build({iterations}, 0) > 0 ? 0 : 1 >"
+    );
     src
 }
 
@@ -410,8 +416,11 @@ fn gc_churn(iterations: u64) -> String {
     );
     let _ = writeln!(
         src,
-        "churn = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : churn(n - 1, acc + [n, n + 1, n + 2].size)"
+        "churn = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : churn(n - 1, acc + [n, n + 1, n + 2].size) >"
     );
-    let _ = writeln!(src, "^ = () -> Num => churn({iterations}, 0) > 0 ? 0 : 1");
+    let _ = writeln!(
+        src,
+        "^ = () -> Num => < churn({iterations}, 0) > 0 ? 0 : 1 >"
+    );
     src
 }

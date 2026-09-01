@@ -10,12 +10,12 @@ Counter = {
   value :: Num,
 
   ~ A setter: declared with `:=`, so it may mutate in place.
-  bump := (by :: Num) => it.value := it.value + by,
+  bump := (by :: Num) => < it.value := it.value + by >,
 
-  peek = => it.value
+  peek = => < it.value >
 
   ~ Also `:=`: the write is inside a lambda, but it still lands on `it`.
-  bumpEach := (steps :: []Num) => steps.each(s => it.value := it.value + s)
+  bumpEach := (steps :: []Num) => < steps.each(s => it.value := it.value + s) >
 }
 
 ^ = () -> $ => <

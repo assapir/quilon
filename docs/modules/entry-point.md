@@ -6,9 +6,9 @@ title: "Entry point"
 
 Every executable defines `^` (main); the program starts there.
 ```quilon ignore
-^ = () -> Num => 42                              ~ no args/env
-^ = (args :: []Text) -> Num => args.size         ~ command-line arguments
-^ = (args :: []Text, env :: [|Text => Text|]) -> Num => env.get("HOME")   ~ args + environment
+^ = () -> Num => < 42 >                          ~ no args/env
+^ = (args :: []Text) -> Num => < args.size >     ~ command-line arguments
+^ = (args :: []Text, env :: [|Text => Text|]) -> Num => < env.get("HOME") > ~ args + environment
 ```
 **Arguments & environment.** `^` may declare, in order, two typed parameters, filled at
 startup:

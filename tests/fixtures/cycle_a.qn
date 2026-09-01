@@ -2,4 +2,4 @@
 
 << "cycle_b.qn"
 
->> ping = (x :: Num) -> Num => cycle_b.pong(x)
+>> ping = (x :: Num) -> Num => < cycle_b.pong(x) >

@@ -1,10 +1,10 @@
->> pricing_offset = (x :: Num) -> Num => x + 0
->> pricing_scale = (x :: Num) -> Num => x + 1
->> pricing_clamp = (x :: Num) -> Num => x + 2
->> pricing_round = (x :: Num) -> Num => x + 3
->> pricing_wrap = (x :: Num) -> Num => x + 4
->> pricing_snap = (x :: Num) -> Num => x + 5
->> pricing_bias = (x :: Num) -> Num => x + 6
->> pricing_damp = (x :: Num) -> Num => x + 7
->> pricing_boost = (x :: Num) -> Num => x + 8
->> pricing_trim = (x :: Num) -> Num => x + 9
+>> pricing_offset = (x :: Num) -> Num => < x + 0 >
+>> pricing_scale = (x :: Num) -> Num => < x + 1 >
+>> pricing_clamp = (x :: Num) -> Num => < x + 2 >
+>> pricing_round = (x :: Num) -> Num => < x + 3 >
+>> pricing_wrap = (x :: Num) -> Num => < x + 4 >
+>> pricing_snap = (x :: Num) -> Num => < x + 5 >
+>> pricing_bias = (x :: Num) -> Num => < x + 6 >
+>> pricing_damp = (x :: Num) -> Num => < x + 7 >
+>> pricing_boost = (x :: Num) -> Num => < x + 8 >
+>> pricing_trim = (x :: Num) -> Num => < x + 9 >

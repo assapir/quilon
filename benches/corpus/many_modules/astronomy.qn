@@ -1,10 +1,10 @@
->> astronomy_offset = (x :: Num) -> Num => x + 0
->> astronomy_scale = (x :: Num) -> Num => x + 1
->> astronomy_clamp = (x :: Num) -> Num => x + 2
->> astronomy_round = (x :: Num) -> Num => x + 3
->> astronomy_wrap = (x :: Num) -> Num => x + 4
->> astronomy_snap = (x :: Num) -> Num => x + 5
->> astronomy_bias = (x :: Num) -> Num => x + 6
->> astronomy_damp = (x :: Num) -> Num => x + 7
->> astronomy_boost = (x :: Num) -> Num => x + 8
->> astronomy_trim = (x :: Num) -> Num => x + 9
+>> astronomy_offset = (x :: Num) -> Num => < x + 0 >
+>> astronomy_scale = (x :: Num) -> Num => < x + 1 >
+>> astronomy_clamp = (x :: Num) -> Num => < x + 2 >
+>> astronomy_round = (x :: Num) -> Num => < x + 3 >
+>> astronomy_wrap = (x :: Num) -> Num => < x + 4 >
+>> astronomy_snap = (x :: Num) -> Num => < x + 5 >
+>> astronomy_bias = (x :: Num) -> Num => < x + 6 >
+>> astronomy_damp = (x :: Num) -> Num => < x + 7 >
+>> astronomy_boost = (x :: Num) -> Num => < x + 8 >
+>> astronomy_trim = (x :: Num) -> Num => < x + 9 >

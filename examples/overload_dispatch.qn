@@ -5,25 +5,25 @@
 
 << core.test
 
-kind = (n :: Num) -> Num => 1
-kind = (t :: Text) -> Num => 2
-kind = (b :: Bool) -> Num => 3
+kind = (n :: Num) -> Num => < 1 >
+kind = (t :: Text) -> Num => < 2 >
+kind = (b :: Bool) -> Num => < 3 >
 
-double = (x :: Num) -> Num => x * 2
+double = (x :: Num) -> Num => < x * 2 >
 
 ~ Two members of one set, one of them self-recursive in tail position. The recursive
 ~ call must reach THIS member (and lower to a loop), never its Text sibling.
-countdown = (t :: Text) -> Num => 0
-countdown = (n :: Num) -> Num => n == 0 ? 7 : countdown(n - 1)
+countdown = (t :: Text) -> Num => < 0 >
+countdown = (n :: Num) -> Num => < n == 0 ? 7 : countdown(n - 1) >
 
 ~ Every member annotates its return type, and a call sees only the members written
 ~ above it — names resolve top to bottom. So `step` comes before the `walk` that uses
 ~ it, and `walk` recurses into itself rather than into a partner defined below.
-step = (n :: Num) -> Num => n - 1
-step = (t :: Text) -> Num => 0
+step = (n :: Num) -> Num => < n - 1 >
+step = (t :: Text) -> Num => < 0 >
 
-walk = (t :: Text) -> Text => t
-walk = (n :: Num) -> Text => n == 0 ? "done" : walk(step(n))
+walk = (t :: Text) -> Text => < t >
+walk = (n :: Num) -> Text => < n == 0 ? "done" : walk(step(n)) >
 
 ^ = () -> $ => <
   words :: []Text = ["alpha", "beta"]

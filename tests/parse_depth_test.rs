@@ -58,7 +58,7 @@ fn assert_clean_depth_error(out: &Output, what: &str) {
 fn deeply_nested_parens_error_instead_of_crashing() {
     // The exact shape from the bug report: ~2000 nested parens in the entry body.
     let n = 2000;
-    let src = format!("^ = () -> Num => {}1{}\n", "(".repeat(n), ")".repeat(n));
+    let src = format!("^ = () -> Num => < {}1{} >\n", "(".repeat(n), ")".repeat(n));
     let out = check("parens", &src);
     assert_clean_depth_error(&out, "nested parens");
 }
@@ -68,7 +68,7 @@ fn deeply_nested_arrays_error_instead_of_crashing() {
     // A different construct: nested array literals `[[[ ... ]]]`.
     let n = 2000;
     let src = format!(
-        "^ = () -> Num => ({}1{}).size\n",
+        "^ = () -> Num => < ({}1{}).size >\n",
         "[".repeat(n),
         "]".repeat(n)
     );
@@ -81,7 +81,7 @@ fn deeply_nested_records_error_instead_of_crashing() {
     // A third construct: nested record literals `{a={a= ... }}`.
     let n = 2000;
     let src = format!(
-        "f = () -> Num => {}1{}\n^ = () -> Num => 0\n",
+        "f = () -> Num => < {}1{} >\n^ = () -> Num => < 0 >\n",
         "{a=".repeat(n),
         "}".repeat(n)
     );
@@ -97,7 +97,7 @@ fn deeply_nested_patterns_error_instead_of_crashing() {
     // nesting to overflow — hence the larger count here.
     let n = 50_000;
     let src = format!(
-        "^ = () -> Num => 0 ? | {}x{} => 0\n",
+        "^ = () -> Num => < 0 ? | {}x{} => 0 >\n",
         "Ok(".repeat(n),
         ")".repeat(n)
     );
@@ -110,7 +110,7 @@ fn deeply_chained_prefix_operators_error_instead_of_crashing() {
     // Chained prefix operators (`---…x`) re-enter `parse_unary` directly, outside
     // the `parse_expression` funnel — another independent, lighter recursion.
     let n = 100_000;
-    let src = format!("^ = () -> Num => {}1\n", "-".repeat(n));
+    let src = format!("^ = () -> Num => < {}1 >\n", "-".repeat(n));
     let out = check("unary", &src);
     assert_clean_depth_error(&out, "chained prefix operators");
 }
@@ -146,7 +146,7 @@ fn moderately_nested_input_still_parses() {
     // This must sail through parse + type-check and exit successfully, proving the
     // guard only rejects pathological depth, not ordinary nesting.
     let n = 120;
-    let src = format!("^ = () -> Num => {}1{}\n", "(".repeat(n), ")".repeat(n));
+    let src = format!("^ = () -> Num => < {}1{} >\n", "(".repeat(n), ")".repeat(n));
     let out = check("shallow", &src);
     assert!(
         out.status.success(),

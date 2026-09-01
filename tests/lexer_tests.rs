@@ -1,6 +1,6 @@
 // Integration tests for Quilon lexer
 
-use quilon::ast::{Expression, Item};
+use quilon::ast::{Expression, Item, Statement};
 use quilon::lexer::{Lexer, ROOT_FILE, TokenKind};
 use quilon::parser::parse;
 
@@ -24,9 +24,11 @@ main = => <
 #[test]
 fn test_factorial() {
     let source = r#"
-factorial = n :: Num => n ?
-  | 0 => 1
-  | n => n * factorial (n - 1)
+factorial = n :: Num => <
+  n ?
+    | 0 => 1
+    | n => n * factorial (n - 1)
+>
 "#;
 
     let tokens = Lexer::tokenize(source).unwrap();
@@ -53,7 +55,7 @@ fn test_mutable_variable() {
 
 #[test]
 fn test_function_with_parameters() {
-    let source = "add = (a :: Num, b :: Num) -> Num => a + b";
+    let source = "add = (a :: Num, b :: Num) -> Num => < a + b >";
     let tokens = Lexer::tokenize(source).unwrap();
 
     assert!(tokens.iter().any(|t| t.kind == TokenKind::ReturnArrow));
@@ -287,17 +289,23 @@ fn test_spans_carry_the_file_they_came_from() {
 fn test_parsed_nodes_inherit_their_files_id() {
     // Composed spans (a BinaryOperator over two operands, a call over its arguments) are built
     // by the parser rather than copied from a token, so they have to inherit the id too.
-    let tokens = Lexer::tokenize_in_file("f = (a :: Num) -> Num => a + 1 * 2", 7).unwrap();
+    let tokens = Lexer::tokenize_in_file("f = (a :: Num) -> Num => < a + 1 * 2 >", 7).unwrap();
     let program = parse(&tokens).unwrap();
     let Item::FunctionDeclaration(declaration) = &program.items[0] else {
         panic!("expected a function declaration");
     };
-    let mut spans = vec![declaration.body.span().clone()];
-    if let Expression::BinaryOperator { left, right, .. } = &declaration.body {
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    let Some(Statement::Expression(tail)) = statements.last() else {
+        panic!("expected a tail expression");
+    };
+    let mut spans = vec![declaration.body.span().clone(), tail.span().clone()];
+    if let Expression::BinaryOperator { left, right, .. } = tail {
         spans.push(left.span().clone());
         spans.push(right.span().clone());
     } else {
-        panic!("expected the body to be a binary operation");
+        panic!("expected the tail to be a binary operation");
     }
     assert!(
         spans.iter().all(|s| s.file == 7),

@@ -1,10 +1,10 @@
->> forecasting_offset = (x :: Num) -> Num => x + 0
->> forecasting_scale = (x :: Num) -> Num => x + 1
->> forecasting_clamp = (x :: Num) -> Num => x + 2
->> forecasting_round = (x :: Num) -> Num => x + 3
->> forecasting_wrap = (x :: Num) -> Num => x + 4
->> forecasting_snap = (x :: Num) -> Num => x + 5
->> forecasting_bias = (x :: Num) -> Num => x + 6
->> forecasting_damp = (x :: Num) -> Num => x + 7
->> forecasting_boost = (x :: Num) -> Num => x + 8
->> forecasting_trim = (x :: Num) -> Num => x + 9
+>> forecasting_offset = (x :: Num) -> Num => < x + 0 >
+>> forecasting_scale = (x :: Num) -> Num => < x + 1 >
+>> forecasting_clamp = (x :: Num) -> Num => < x + 2 >
+>> forecasting_round = (x :: Num) -> Num => < x + 3 >
+>> forecasting_wrap = (x :: Num) -> Num => < x + 4 >
+>> forecasting_snap = (x :: Num) -> Num => < x + 5 >
+>> forecasting_bias = (x :: Num) -> Num => < x + 6 >
+>> forecasting_damp = (x :: Num) -> Num => < x + 7 >
+>> forecasting_boost = (x :: Num) -> Num => < x + 8 >
+>> forecasting_trim = (x :: Num) -> Num => < x + 9 >

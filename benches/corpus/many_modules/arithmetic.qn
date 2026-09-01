@@ -1,10 +1,10 @@
->> arithmetic_offset = (x :: Num) -> Num => x + 0
->> arithmetic_scale = (x :: Num) -> Num => x + 1
->> arithmetic_clamp = (x :: Num) -> Num => x + 2
->> arithmetic_round = (x :: Num) -> Num => x + 3
->> arithmetic_wrap = (x :: Num) -> Num => x + 4
->> arithmetic_snap = (x :: Num) -> Num => x + 5
->> arithmetic_bias = (x :: Num) -> Num => x + 6
->> arithmetic_damp = (x :: Num) -> Num => x + 7
->> arithmetic_boost = (x :: Num) -> Num => x + 8
->> arithmetic_trim = (x :: Num) -> Num => x + 9
+>> arithmetic_offset = (x :: Num) -> Num => < x + 0 >
+>> arithmetic_scale = (x :: Num) -> Num => < x + 1 >
+>> arithmetic_clamp = (x :: Num) -> Num => < x + 2 >
+>> arithmetic_round = (x :: Num) -> Num => < x + 3 >
+>> arithmetic_wrap = (x :: Num) -> Num => < x + 4 >
+>> arithmetic_snap = (x :: Num) -> Num => < x + 5 >
+>> arithmetic_bias = (x :: Num) -> Num => < x + 6 >
+>> arithmetic_damp = (x :: Num) -> Num => < x + 7 >
+>> arithmetic_boost = (x :: Num) -> Num => < x + 8 >
+>> arithmetic_trim = (x :: Num) -> Num => < x + 9 >

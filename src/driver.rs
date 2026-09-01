@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn user_source_may_not_declare_an_at_primitive() {
-        let path = temp_source("@bad = () -> Num => 0\n^ = () -> Num => 0\n");
+        let path = temp_source("@bad = () -> Num => < 0 >\n^ = () -> Num => < 0 >\n");
         let result = front_end(&path);
         let _ = std::fs::remove_file(&path);
         match result {

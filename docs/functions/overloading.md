@@ -9,8 +9,8 @@ generics. Top-level definitions that share a name and each annotate their parame
 an overload set; there is no marker:
 
 ```quilon ignore
-score = (n :: Num)  -> Num => n + 1       ~ the Num member
-score = (s :: Text) -> Num => s.size      ~ the Text member
+score = (n :: Num)  -> Num => < n + 1 >   ~ the Num member
+score = (s :: Text) -> Num => < s.size >  ~ the Text member
 
 a = score(41)       ~ 42  — picks the Num member
 b = score("abcd")   ~ 4   — picks the Text member
@@ -26,13 +26,13 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
 - Every member must annotate **all** its parameters **and its return type** — the signature
   is what dispatch selects on, and a call has to know what it produces:
   ```quilon ignore
-  g = (n :: Num) => 1        ~ error: overload member 'g' (Num) has no return type
-  g = (t :: Text) -> Num => 2
+  g = (n :: Num) => < 1 >    ~ error: overload member 'g' (Num) has no return type
+  g = (t :: Text) -> Num => < 2 >
   ```
   Stating the whole signature on the binding annotates both at once:
   ```quilon ignore
-  g :: (Num) -> Num = (n) => 1
-  g :: (Text) -> Num = (t) => 2
+  g :: (Num) -> Num = (n) => < 1 >
+  g :: (Text) -> Num = (t) => < 2 >
   ```
 - A single ordinary `name = …` definition is **not** an overload set. It keeps its
   inferred return type — no return annotation needed. Its parameters are still annotated —
@@ -49,7 +49,7 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-),
   and a program builds on a module by wrapping it:
   ```quilon ignore
-  write = (content :: Text) -> Num => io.write(content, io.stdout)  ~ the program's own
+  write = (content :: Text) -> Num => < io.write(content, io.stdout) > ~ the program's own
   write("raw")                 ~ a plain call of the wrapper
   io.write("raw", io.stdout)   ~ the module's, through its binding
   ```
@@ -70,8 +70,8 @@ An operator member is always `=`-declared and yields a value; it never mutates `
 ```quilon
 Vec = {
   x :: Num, y :: Num,
-  + = (other :: Vec) -> Vec => Vec { x = it.x + other.x, y = it.y + other.y }
-  == = (other :: Vec) -> Bool => it.x == other.x && it.y == other.y
+  + = (other :: Vec) -> Vec => < Vec { x = it.x + other.x, y = it.y + other.y } >
+  == = (other :: Vec) -> Bool => < it.x == other.x && it.y == other.y >
 }
 
 v = Vec { x = 1, y = 2 } + Vec { x = 3, y = 4 }   ~ resolves to Vec's `+`
@@ -88,7 +88,7 @@ A **comparison/equality** member (`== != < <= > >=`) **must return `Bool`**; **a
 members (`+ - * / %`) return whatever they declare. A **top-level** operator definition is
 rejected — the operator must be a member of its type.
 
-**The `%` hash hook.** A **unary** `% = () -> Num => …` member (`it` the value, no explicit
+**The `%` hash hook.** A **unary** `% = () -> Num => < … >` member (`it` the value, no explicit
 parameter) is the type's **hash**, letting it be a [Map/Set key](../collections/README.md#maps) alongside its `==`
 member. Both are required together, and `%`/`==` must agree: equal values hash the same.
 This unary `%` is distinct from the binary `%` remainder operator, which takes one

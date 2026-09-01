@@ -28,10 +28,11 @@ reportFailure = (message :: Text) -> Num => <
   1                 ~ …and a non-zero exit
 >
 
-^ = () -> Num =>
+^ = () -> Num => <
   @tcpRequest("localhost:8080", "GET / HTTP/1.0\r\n\r\n") ?
     | Ok(response) => response.size > 0 ? 0 : 1   ~ forced by the match
     | NotOk(error) => reportFailure(error)
+>
 ```
 
 Being deferred, independent requests on one fiber overlap automatically — each forces where

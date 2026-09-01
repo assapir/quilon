@@ -160,7 +160,7 @@ fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
         ),
         (
             "lazy_nan_reduce",
-            "^ = () -> Num => (1 <- (0.0 / 0.0)).reduce(0, (acc, n) => acc + n)",
+            "^ = () -> Num => < (1 <- (0.0 / 0.0)).reduce(0, (acc, n) => acc + n) >",
         ),
         (
             "lazy_nan_map",

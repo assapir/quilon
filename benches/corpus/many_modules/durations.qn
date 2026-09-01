@@ -1,10 +1,10 @@
->> durations_offset = (x :: Num) -> Num => x + 0
->> durations_scale = (x :: Num) -> Num => x + 1
->> durations_clamp = (x :: Num) -> Num => x + 2
->> durations_round = (x :: Num) -> Num => x + 3
->> durations_wrap = (x :: Num) -> Num => x + 4
->> durations_snap = (x :: Num) -> Num => x + 5
->> durations_bias = (x :: Num) -> Num => x + 6
->> durations_damp = (x :: Num) -> Num => x + 7
->> durations_boost = (x :: Num) -> Num => x + 8
->> durations_trim = (x :: Num) -> Num => x + 9
+>> durations_offset = (x :: Num) -> Num => < x + 0 >
+>> durations_scale = (x :: Num) -> Num => < x + 1 >
+>> durations_clamp = (x :: Num) -> Num => < x + 2 >
+>> durations_round = (x :: Num) -> Num => < x + 3 >
+>> durations_wrap = (x :: Num) -> Num => < x + 4 >
+>> durations_snap = (x :: Num) -> Num => < x + 5 >
+>> durations_bias = (x :: Num) -> Num => < x + 6 >
+>> durations_damp = (x :: Num) -> Num => < x + 7 >
+>> durations_boost = (x :: Num) -> Num => < x + 8 >
+>> durations_trim = (x :: Num) -> Num => < x + 9 >

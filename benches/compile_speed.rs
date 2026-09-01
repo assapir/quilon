@@ -270,7 +270,7 @@ fn ms(d: Duration) -> String {
 fn flat_program(count: usize) -> String {
     let mut src = String::new();
     for i in 0..count {
-        let _ = writeln!(src, "f{i} = (x :: Num) -> Num => x * {i} + 1");
+        let _ = writeln!(src, "f{i} = (x :: Num) -> Num => < x * {i} + 1 >");
     }
     let _ = writeln!(src, "^ = () -> Num => <");
     for i in 0..count {
@@ -291,7 +291,7 @@ fn deep_program(functions: usize, depth: usize) -> String {
     }
     let mut src = String::new();
     for i in 0..functions {
-        let _ = writeln!(src, "d{i} = () -> Num => {expression}");
+        let _ = writeln!(src, "d{i} = () -> Num => < {expression} >");
     }
     let _ = writeln!(src, "^ = () -> Num => <");
     for i in 0..functions {
@@ -309,7 +309,7 @@ fn overload_program(members: usize) -> String {
         let _ = writeln!(src, "T{i} = {{ v :: Num }}");
     }
     for i in 0..members {
-        let _ = writeln!(src, "pick = (a :: T{i}) -> Num => a.v");
+        let _ = writeln!(src, "pick = (a :: T{i}) -> Num => < a.v >");
     }
     let _ = writeln!(src, "^ = () -> Num => <");
     for i in 0..members {
@@ -327,7 +327,8 @@ fn overload_program(members: usize) -> String {
 /// pruning shows up. The other corpora reach every function they define, so they keep
 /// measuring codegen; this one measures what an import costs.
 fn corelib_program() -> String {
-    "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => assert(1 + 1, equals(2))\n".to_string()
+    "<< core.io\n<< core.test\n<< core.cli\n\n^ = () -> $ => < assert(1 + 1, equals(2)) >\n"
+        .to_string()
 }
 
 /// Assertions far down a long file: every one is a call whose trailing `Site` the compiler
@@ -445,7 +446,7 @@ fn many_modules_program(count: usize) -> Vec<(String, String)> {
         for (step, operation) in OPERATIONS.iter().enumerate() {
             let _ = writeln!(
                 module,
-                ">> {subject}_{operation} = (x :: Num) -> Num => x + {step}"
+                ">> {subject}_{operation} = (x :: Num) -> Num => < x + {step} >"
             );
         }
         files.push((format!("{subject}.qn"), module));
@@ -474,7 +475,7 @@ fn interpolation_program(count: usize) -> String {
     for i in 0..count {
         let _ = writeln!(
             src,
-            "s{i} = (n :: Num, t :: Text) -> Text => \"item `n` of `t` at `n * {i}` end\""
+            "s{i} = (n :: Num, t :: Text) -> Text => < \"item `n` of `t` at `n * {i}` end\" >"
         );
     }
     let _ = writeln!(src, "^ = () -> Num => <");
@@ -506,14 +507,14 @@ fn record_program(types: usize, fields: usize, users: usize) -> String {
     for t in 0..types {
         let _ = writeln!(
             src,
-            "R{t} = {{\n{declared}\n  first = => it.f0,\n  scaled = (k :: Num) => it.f0 * k + it.f1,\n  total = => it.f0 + it.f1 + it.f2\n}}\n"
+            "R{t} = {{\n{declared}\n  first = => < it.f0 >,\n  scaled = (k :: Num) => < it.f0 * k + it.f1 >,\n  total = => < it.f0 + it.f1 + it.f2 >\n}}\n"
         );
     }
     for t in 0..types {
         for u in 0..users {
             let _ = writeln!(
                 src,
-                "read{t}_{u} = (r :: R{t}) -> Num => r.f0 + r.f1 + r.scaled(2) + r.total()"
+                "read{t}_{u} = (r :: R{t}) -> Num => < r.f0 + r.f1 + r.scaled(2) + r.total() >"
             );
             let _ = writeln!(
                 src,
@@ -542,7 +543,7 @@ fn sum_match_program(variants: usize, matches: usize) -> String {
             .map(|i| format!("  | V{i}(n) => n + {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let _ = writeln!(src, "pick{m} = (w :: Wide) -> Num => w ?\n{arms}\n");
+        let _ = writeln!(src, "pick{m} = (w :: Wide) -> Num => <\n  w ?\n{arms}\n>\n");
     }
     let _ = writeln!(src, "^ = () -> Num => <");
     for m in 0..matches {

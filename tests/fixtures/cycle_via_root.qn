@@ -3,4 +3,4 @@
 
 << "cycle_root.qn"
 
->> helper = (x :: Num) -> Num => x
+>> helper = (x :: Num) -> Num => < x >

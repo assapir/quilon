@@ -22,8 +22,8 @@ use std::thread;
 
 /// Allocates enough to force several collections.
 const ALLOCATING_PROGRAM: &str = r#"
-churn = (n :: Num, acc :: Num) -> Num => n == 0 ? acc : churn(n - 1, acc + [n, n + 1, n + 2].size)
-^ = () -> Num => churn(200000, 0) > 0 ? 0 : 1
+churn = (n :: Num, acc :: Num) -> Num => < n == 0 ? acc : churn(n - 1, acc + [n, n + 1, n + 2].size) >
+^ = () -> Num => < churn(200000, 0) > 0 ? 0 : 1 >
 "#;
 
 fn run_allocating_program() {

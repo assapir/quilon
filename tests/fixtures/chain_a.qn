@@ -3,4 +3,4 @@
 
 << "chain_b.qn"
 
->> incTwice = (x :: Num) -> Num => chain_b.inc(chain_b.inc(x))
+>> incTwice = (x :: Num) -> Num => < chain_b.inc(chain_b.inc(x)) >

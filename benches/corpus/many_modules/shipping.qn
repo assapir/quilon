@@ -1,10 +1,10 @@
->> shipping_offset = (x :: Num) -> Num => x + 0
->> shipping_scale = (x :: Num) -> Num => x + 1
->> shipping_clamp = (x :: Num) -> Num => x + 2
->> shipping_round = (x :: Num) -> Num => x + 3
->> shipping_wrap = (x :: Num) -> Num => x + 4
->> shipping_snap = (x :: Num) -> Num => x + 5
->> shipping_bias = (x :: Num) -> Num => x + 6
->> shipping_damp = (x :: Num) -> Num => x + 7
->> shipping_boost = (x :: Num) -> Num => x + 8
->> shipping_trim = (x :: Num) -> Num => x + 9
+>> shipping_offset = (x :: Num) -> Num => < x + 0 >
+>> shipping_scale = (x :: Num) -> Num => < x + 1 >
+>> shipping_clamp = (x :: Num) -> Num => < x + 2 >
+>> shipping_round = (x :: Num) -> Num => < x + 3 >
+>> shipping_wrap = (x :: Num) -> Num => < x + 4 >
+>> shipping_snap = (x :: Num) -> Num => < x + 5 >
+>> shipping_bias = (x :: Num) -> Num => < x + 6 >
+>> shipping_damp = (x :: Num) -> Num => < x + 7 >
+>> shipping_boost = (x :: Num) -> Num => < x + 8 >
+>> shipping_trim = (x :: Num) -> Num => < x + 9 >

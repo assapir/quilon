@@ -298,306 +298,306 @@ T296 = { v :: Num }
 T297 = { v :: Num }
 T298 = { v :: Num }
 T299 = { v :: Num }
-pick = (a :: T0) -> Num => a.v
-pick = (a :: T1) -> Num => a.v
-pick = (a :: T2) -> Num => a.v
-pick = (a :: T3) -> Num => a.v
-pick = (a :: T4) -> Num => a.v
-pick = (a :: T5) -> Num => a.v
-pick = (a :: T6) -> Num => a.v
-pick = (a :: T7) -> Num => a.v
-pick = (a :: T8) -> Num => a.v
-pick = (a :: T9) -> Num => a.v
-pick = (a :: T10) -> Num => a.v
-pick = (a :: T11) -> Num => a.v
-pick = (a :: T12) -> Num => a.v
-pick = (a :: T13) -> Num => a.v
-pick = (a :: T14) -> Num => a.v
-pick = (a :: T15) -> Num => a.v
-pick = (a :: T16) -> Num => a.v
-pick = (a :: T17) -> Num => a.v
-pick = (a :: T18) -> Num => a.v
-pick = (a :: T19) -> Num => a.v
-pick = (a :: T20) -> Num => a.v
-pick = (a :: T21) -> Num => a.v
-pick = (a :: T22) -> Num => a.v
-pick = (a :: T23) -> Num => a.v
-pick = (a :: T24) -> Num => a.v
-pick = (a :: T25) -> Num => a.v
-pick = (a :: T26) -> Num => a.v
-pick = (a :: T27) -> Num => a.v
-pick = (a :: T28) -> Num => a.v
-pick = (a :: T29) -> Num => a.v
-pick = (a :: T30) -> Num => a.v
-pick = (a :: T31) -> Num => a.v
-pick = (a :: T32) -> Num => a.v
-pick = (a :: T33) -> Num => a.v
-pick = (a :: T34) -> Num => a.v
-pick = (a :: T35) -> Num => a.v
-pick = (a :: T36) -> Num => a.v
-pick = (a :: T37) -> Num => a.v
-pick = (a :: T38) -> Num => a.v
-pick = (a :: T39) -> Num => a.v
-pick = (a :: T40) -> Num => a.v
-pick = (a :: T41) -> Num => a.v
-pick = (a :: T42) -> Num => a.v
-pick = (a :: T43) -> Num => a.v
-pick = (a :: T44) -> Num => a.v
-pick = (a :: T45) -> Num => a.v
-pick = (a :: T46) -> Num => a.v
-pick = (a :: T47) -> Num => a.v
-pick = (a :: T48) -> Num => a.v
-pick = (a :: T49) -> Num => a.v
-pick = (a :: T50) -> Num => a.v
-pick = (a :: T51) -> Num => a.v
-pick = (a :: T52) -> Num => a.v
-pick = (a :: T53) -> Num => a.v
-pick = (a :: T54) -> Num => a.v
-pick = (a :: T55) -> Num => a.v
-pick = (a :: T56) -> Num => a.v
-pick = (a :: T57) -> Num => a.v
-pick = (a :: T58) -> Num => a.v
-pick = (a :: T59) -> Num => a.v
-pick = (a :: T60) -> Num => a.v
-pick = (a :: T61) -> Num => a.v
-pick = (a :: T62) -> Num => a.v
-pick = (a :: T63) -> Num => a.v
-pick = (a :: T64) -> Num => a.v
-pick = (a :: T65) -> Num => a.v
-pick = (a :: T66) -> Num => a.v
-pick = (a :: T67) -> Num => a.v
-pick = (a :: T68) -> Num => a.v
-pick = (a :: T69) -> Num => a.v
-pick = (a :: T70) -> Num => a.v
-pick = (a :: T71) -> Num => a.v
-pick = (a :: T72) -> Num => a.v
-pick = (a :: T73) -> Num => a.v
-pick = (a :: T74) -> Num => a.v
-pick = (a :: T75) -> Num => a.v
-pick = (a :: T76) -> Num => a.v
-pick = (a :: T77) -> Num => a.v
-pick = (a :: T78) -> Num => a.v
-pick = (a :: T79) -> Num => a.v
-pick = (a :: T80) -> Num => a.v
-pick = (a :: T81) -> Num => a.v
-pick = (a :: T82) -> Num => a.v
-pick = (a :: T83) -> Num => a.v
-pick = (a :: T84) -> Num => a.v
-pick = (a :: T85) -> Num => a.v
-pick = (a :: T86) -> Num => a.v
-pick = (a :: T87) -> Num => a.v
-pick = (a :: T88) -> Num => a.v
-pick = (a :: T89) -> Num => a.v
-pick = (a :: T90) -> Num => a.v
-pick = (a :: T91) -> Num => a.v
-pick = (a :: T92) -> Num => a.v
-pick = (a :: T93) -> Num => a.v
-pick = (a :: T94) -> Num => a.v
-pick = (a :: T95) -> Num => a.v
-pick = (a :: T96) -> Num => a.v
-pick = (a :: T97) -> Num => a.v
-pick = (a :: T98) -> Num => a.v
-pick = (a :: T99) -> Num => a.v
-pick = (a :: T100) -> Num => a.v
-pick = (a :: T101) -> Num => a.v
-pick = (a :: T102) -> Num => a.v
-pick = (a :: T103) -> Num => a.v
-pick = (a :: T104) -> Num => a.v
-pick = (a :: T105) -> Num => a.v
-pick = (a :: T106) -> Num => a.v
-pick = (a :: T107) -> Num => a.v
-pick = (a :: T108) -> Num => a.v
-pick = (a :: T109) -> Num => a.v
-pick = (a :: T110) -> Num => a.v
-pick = (a :: T111) -> Num => a.v
-pick = (a :: T112) -> Num => a.v
-pick = (a :: T113) -> Num => a.v
-pick = (a :: T114) -> Num => a.v
-pick = (a :: T115) -> Num => a.v
-pick = (a :: T116) -> Num => a.v
-pick = (a :: T117) -> Num => a.v
-pick = (a :: T118) -> Num => a.v
-pick = (a :: T119) -> Num => a.v
-pick = (a :: T120) -> Num => a.v
-pick = (a :: T121) -> Num => a.v
-pick = (a :: T122) -> Num => a.v
-pick = (a :: T123) -> Num => a.v
-pick = (a :: T124) -> Num => a.v
-pick = (a :: T125) -> Num => a.v
-pick = (a :: T126) -> Num => a.v
-pick = (a :: T127) -> Num => a.v
-pick = (a :: T128) -> Num => a.v
-pick = (a :: T129) -> Num => a.v
-pick = (a :: T130) -> Num => a.v
-pick = (a :: T131) -> Num => a.v
-pick = (a :: T132) -> Num => a.v
-pick = (a :: T133) -> Num => a.v
-pick = (a :: T134) -> Num => a.v
-pick = (a :: T135) -> Num => a.v
-pick = (a :: T136) -> Num => a.v
-pick = (a :: T137) -> Num => a.v
-pick = (a :: T138) -> Num => a.v
-pick = (a :: T139) -> Num => a.v
-pick = (a :: T140) -> Num => a.v
-pick = (a :: T141) -> Num => a.v
-pick = (a :: T142) -> Num => a.v
-pick = (a :: T143) -> Num => a.v
-pick = (a :: T144) -> Num => a.v
-pick = (a :: T145) -> Num => a.v
-pick = (a :: T146) -> Num => a.v
-pick = (a :: T147) -> Num => a.v
-pick = (a :: T148) -> Num => a.v
-pick = (a :: T149) -> Num => a.v
-pick = (a :: T150) -> Num => a.v
-pick = (a :: T151) -> Num => a.v
-pick = (a :: T152) -> Num => a.v
-pick = (a :: T153) -> Num => a.v
-pick = (a :: T154) -> Num => a.v
-pick = (a :: T155) -> Num => a.v
-pick = (a :: T156) -> Num => a.v
-pick = (a :: T157) -> Num => a.v
-pick = (a :: T158) -> Num => a.v
-pick = (a :: T159) -> Num => a.v
-pick = (a :: T160) -> Num => a.v
-pick = (a :: T161) -> Num => a.v
-pick = (a :: T162) -> Num => a.v
-pick = (a :: T163) -> Num => a.v
-pick = (a :: T164) -> Num => a.v
-pick = (a :: T165) -> Num => a.v
-pick = (a :: T166) -> Num => a.v
-pick = (a :: T167) -> Num => a.v
-pick = (a :: T168) -> Num => a.v
-pick = (a :: T169) -> Num => a.v
-pick = (a :: T170) -> Num => a.v
-pick = (a :: T171) -> Num => a.v
-pick = (a :: T172) -> Num => a.v
-pick = (a :: T173) -> Num => a.v
-pick = (a :: T174) -> Num => a.v
-pick = (a :: T175) -> Num => a.v
-pick = (a :: T176) -> Num => a.v
-pick = (a :: T177) -> Num => a.v
-pick = (a :: T178) -> Num => a.v
-pick = (a :: T179) -> Num => a.v
-pick = (a :: T180) -> Num => a.v
-pick = (a :: T181) -> Num => a.v
-pick = (a :: T182) -> Num => a.v
-pick = (a :: T183) -> Num => a.v
-pick = (a :: T184) -> Num => a.v
-pick = (a :: T185) -> Num => a.v
-pick = (a :: T186) -> Num => a.v
-pick = (a :: T187) -> Num => a.v
-pick = (a :: T188) -> Num => a.v
-pick = (a :: T189) -> Num => a.v
-pick = (a :: T190) -> Num => a.v
-pick = (a :: T191) -> Num => a.v
-pick = (a :: T192) -> Num => a.v
-pick = (a :: T193) -> Num => a.v
-pick = (a :: T194) -> Num => a.v
-pick = (a :: T195) -> Num => a.v
-pick = (a :: T196) -> Num => a.v
-pick = (a :: T197) -> Num => a.v
-pick = (a :: T198) -> Num => a.v
-pick = (a :: T199) -> Num => a.v
-pick = (a :: T200) -> Num => a.v
-pick = (a :: T201) -> Num => a.v
-pick = (a :: T202) -> Num => a.v
-pick = (a :: T203) -> Num => a.v
-pick = (a :: T204) -> Num => a.v
-pick = (a :: T205) -> Num => a.v
-pick = (a :: T206) -> Num => a.v
-pick = (a :: T207) -> Num => a.v
-pick = (a :: T208) -> Num => a.v
-pick = (a :: T209) -> Num => a.v
-pick = (a :: T210) -> Num => a.v
-pick = (a :: T211) -> Num => a.v
-pick = (a :: T212) -> Num => a.v
-pick = (a :: T213) -> Num => a.v
-pick = (a :: T214) -> Num => a.v
-pick = (a :: T215) -> Num => a.v
-pick = (a :: T216) -> Num => a.v
-pick = (a :: T217) -> Num => a.v
-pick = (a :: T218) -> Num => a.v
-pick = (a :: T219) -> Num => a.v
-pick = (a :: T220) -> Num => a.v
-pick = (a :: T221) -> Num => a.v
-pick = (a :: T222) -> Num => a.v
-pick = (a :: T223) -> Num => a.v
-pick = (a :: T224) -> Num => a.v
-pick = (a :: T225) -> Num => a.v
-pick = (a :: T226) -> Num => a.v
-pick = (a :: T227) -> Num => a.v
-pick = (a :: T228) -> Num => a.v
-pick = (a :: T229) -> Num => a.v
-pick = (a :: T230) -> Num => a.v
-pick = (a :: T231) -> Num => a.v
-pick = (a :: T232) -> Num => a.v
-pick = (a :: T233) -> Num => a.v
-pick = (a :: T234) -> Num => a.v
-pick = (a :: T235) -> Num => a.v
-pick = (a :: T236) -> Num => a.v
-pick = (a :: T237) -> Num => a.v
-pick = (a :: T238) -> Num => a.v
-pick = (a :: T239) -> Num => a.v
-pick = (a :: T240) -> Num => a.v
-pick = (a :: T241) -> Num => a.v
-pick = (a :: T242) -> Num => a.v
-pick = (a :: T243) -> Num => a.v
-pick = (a :: T244) -> Num => a.v
-pick = (a :: T245) -> Num => a.v
-pick = (a :: T246) -> Num => a.v
-pick = (a :: T247) -> Num => a.v
-pick = (a :: T248) -> Num => a.v
-pick = (a :: T249) -> Num => a.v
-pick = (a :: T250) -> Num => a.v
-pick = (a :: T251) -> Num => a.v
-pick = (a :: T252) -> Num => a.v
-pick = (a :: T253) -> Num => a.v
-pick = (a :: T254) -> Num => a.v
-pick = (a :: T255) -> Num => a.v
-pick = (a :: T256) -> Num => a.v
-pick = (a :: T257) -> Num => a.v
-pick = (a :: T258) -> Num => a.v
-pick = (a :: T259) -> Num => a.v
-pick = (a :: T260) -> Num => a.v
-pick = (a :: T261) -> Num => a.v
-pick = (a :: T262) -> Num => a.v
-pick = (a :: T263) -> Num => a.v
-pick = (a :: T264) -> Num => a.v
-pick = (a :: T265) -> Num => a.v
-pick = (a :: T266) -> Num => a.v
-pick = (a :: T267) -> Num => a.v
-pick = (a :: T268) -> Num => a.v
-pick = (a :: T269) -> Num => a.v
-pick = (a :: T270) -> Num => a.v
-pick = (a :: T271) -> Num => a.v
-pick = (a :: T272) -> Num => a.v
-pick = (a :: T273) -> Num => a.v
-pick = (a :: T274) -> Num => a.v
-pick = (a :: T275) -> Num => a.v
-pick = (a :: T276) -> Num => a.v
-pick = (a :: T277) -> Num => a.v
-pick = (a :: T278) -> Num => a.v
-pick = (a :: T279) -> Num => a.v
-pick = (a :: T280) -> Num => a.v
-pick = (a :: T281) -> Num => a.v
-pick = (a :: T282) -> Num => a.v
-pick = (a :: T283) -> Num => a.v
-pick = (a :: T284) -> Num => a.v
-pick = (a :: T285) -> Num => a.v
-pick = (a :: T286) -> Num => a.v
-pick = (a :: T287) -> Num => a.v
-pick = (a :: T288) -> Num => a.v
-pick = (a :: T289) -> Num => a.v
-pick = (a :: T290) -> Num => a.v
-pick = (a :: T291) -> Num => a.v
-pick = (a :: T292) -> Num => a.v
-pick = (a :: T293) -> Num => a.v
-pick = (a :: T294) -> Num => a.v
-pick = (a :: T295) -> Num => a.v
-pick = (a :: T296) -> Num => a.v
-pick = (a :: T297) -> Num => a.v
-pick = (a :: T298) -> Num => a.v
-pick = (a :: T299) -> Num => a.v
+pick = (a :: T0) -> Num => < a.v >
+pick = (a :: T1) -> Num => < a.v >
+pick = (a :: T2) -> Num => < a.v >
+pick = (a :: T3) -> Num => < a.v >
+pick = (a :: T4) -> Num => < a.v >
+pick = (a :: T5) -> Num => < a.v >
+pick = (a :: T6) -> Num => < a.v >
+pick = (a :: T7) -> Num => < a.v >
+pick = (a :: T8) -> Num => < a.v >
+pick = (a :: T9) -> Num => < a.v >
+pick = (a :: T10) -> Num => < a.v >
+pick = (a :: T11) -> Num => < a.v >
+pick = (a :: T12) -> Num => < a.v >
+pick = (a :: T13) -> Num => < a.v >
+pick = (a :: T14) -> Num => < a.v >
+pick = (a :: T15) -> Num => < a.v >
+pick = (a :: T16) -> Num => < a.v >
+pick = (a :: T17) -> Num => < a.v >
+pick = (a :: T18) -> Num => < a.v >
+pick = (a :: T19) -> Num => < a.v >
+pick = (a :: T20) -> Num => < a.v >
+pick = (a :: T21) -> Num => < a.v >
+pick = (a :: T22) -> Num => < a.v >
+pick = (a :: T23) -> Num => < a.v >
+pick = (a :: T24) -> Num => < a.v >
+pick = (a :: T25) -> Num => < a.v >
+pick = (a :: T26) -> Num => < a.v >
+pick = (a :: T27) -> Num => < a.v >
+pick = (a :: T28) -> Num => < a.v >
+pick = (a :: T29) -> Num => < a.v >
+pick = (a :: T30) -> Num => < a.v >
+pick = (a :: T31) -> Num => < a.v >
+pick = (a :: T32) -> Num => < a.v >
+pick = (a :: T33) -> Num => < a.v >
+pick = (a :: T34) -> Num => < a.v >
+pick = (a :: T35) -> Num => < a.v >
+pick = (a :: T36) -> Num => < a.v >
+pick = (a :: T37) -> Num => < a.v >
+pick = (a :: T38) -> Num => < a.v >
+pick = (a :: T39) -> Num => < a.v >
+pick = (a :: T40) -> Num => < a.v >
+pick = (a :: T41) -> Num => < a.v >
+pick = (a :: T42) -> Num => < a.v >
+pick = (a :: T43) -> Num => < a.v >
+pick = (a :: T44) -> Num => < a.v >
+pick = (a :: T45) -> Num => < a.v >
+pick = (a :: T46) -> Num => < a.v >
+pick = (a :: T47) -> Num => < a.v >
+pick = (a :: T48) -> Num => < a.v >
+pick = (a :: T49) -> Num => < a.v >
+pick = (a :: T50) -> Num => < a.v >
+pick = (a :: T51) -> Num => < a.v >
+pick = (a :: T52) -> Num => < a.v >
+pick = (a :: T53) -> Num => < a.v >
+pick = (a :: T54) -> Num => < a.v >
+pick = (a :: T55) -> Num => < a.v >
+pick = (a :: T56) -> Num => < a.v >
+pick = (a :: T57) -> Num => < a.v >
+pick = (a :: T58) -> Num => < a.v >
+pick = (a :: T59) -> Num => < a.v >
+pick = (a :: T60) -> Num => < a.v >
+pick = (a :: T61) -> Num => < a.v >
+pick = (a :: T62) -> Num => < a.v >
+pick = (a :: T63) -> Num => < a.v >
+pick = (a :: T64) -> Num => < a.v >
+pick = (a :: T65) -> Num => < a.v >
+pick = (a :: T66) -> Num => < a.v >
+pick = (a :: T67) -> Num => < a.v >
+pick = (a :: T68) -> Num => < a.v >
+pick = (a :: T69) -> Num => < a.v >
+pick = (a :: T70) -> Num => < a.v >
+pick = (a :: T71) -> Num => < a.v >
+pick = (a :: T72) -> Num => < a.v >
+pick = (a :: T73) -> Num => < a.v >
+pick = (a :: T74) -> Num => < a.v >
+pick = (a :: T75) -> Num => < a.v >
+pick = (a :: T76) -> Num => < a.v >
+pick = (a :: T77) -> Num => < a.v >
+pick = (a :: T78) -> Num => < a.v >
+pick = (a :: T79) -> Num => < a.v >
+pick = (a :: T80) -> Num => < a.v >
+pick = (a :: T81) -> Num => < a.v >
+pick = (a :: T82) -> Num => < a.v >
+pick = (a :: T83) -> Num => < a.v >
+pick = (a :: T84) -> Num => < a.v >
+pick = (a :: T85) -> Num => < a.v >
+pick = (a :: T86) -> Num => < a.v >
+pick = (a :: T87) -> Num => < a.v >
+pick = (a :: T88) -> Num => < a.v >
+pick = (a :: T89) -> Num => < a.v >
+pick = (a :: T90) -> Num => < a.v >
+pick = (a :: T91) -> Num => < a.v >
+pick = (a :: T92) -> Num => < a.v >
+pick = (a :: T93) -> Num => < a.v >
+pick = (a :: T94) -> Num => < a.v >
+pick = (a :: T95) -> Num => < a.v >
+pick = (a :: T96) -> Num => < a.v >
+pick = (a :: T97) -> Num => < a.v >
+pick = (a :: T98) -> Num => < a.v >
+pick = (a :: T99) -> Num => < a.v >
+pick = (a :: T100) -> Num => < a.v >
+pick = (a :: T101) -> Num => < a.v >
+pick = (a :: T102) -> Num => < a.v >
+pick = (a :: T103) -> Num => < a.v >
+pick = (a :: T104) -> Num => < a.v >
+pick = (a :: T105) -> Num => < a.v >
+pick = (a :: T106) -> Num => < a.v >
+pick = (a :: T107) -> Num => < a.v >
+pick = (a :: T108) -> Num => < a.v >
+pick = (a :: T109) -> Num => < a.v >
+pick = (a :: T110) -> Num => < a.v >
+pick = (a :: T111) -> Num => < a.v >
+pick = (a :: T112) -> Num => < a.v >
+pick = (a :: T113) -> Num => < a.v >
+pick = (a :: T114) -> Num => < a.v >
+pick = (a :: T115) -> Num => < a.v >
+pick = (a :: T116) -> Num => < a.v >
+pick = (a :: T117) -> Num => < a.v >
+pick = (a :: T118) -> Num => < a.v >
+pick = (a :: T119) -> Num => < a.v >
+pick = (a :: T120) -> Num => < a.v >
+pick = (a :: T121) -> Num => < a.v >
+pick = (a :: T122) -> Num => < a.v >
+pick = (a :: T123) -> Num => < a.v >
+pick = (a :: T124) -> Num => < a.v >
+pick = (a :: T125) -> Num => < a.v >
+pick = (a :: T126) -> Num => < a.v >
+pick = (a :: T127) -> Num => < a.v >
+pick = (a :: T128) -> Num => < a.v >
+pick = (a :: T129) -> Num => < a.v >
+pick = (a :: T130) -> Num => < a.v >
+pick = (a :: T131) -> Num => < a.v >
+pick = (a :: T132) -> Num => < a.v >
+pick = (a :: T133) -> Num => < a.v >
+pick = (a :: T134) -> Num => < a.v >
+pick = (a :: T135) -> Num => < a.v >
+pick = (a :: T136) -> Num => < a.v >
+pick = (a :: T137) -> Num => < a.v >
+pick = (a :: T138) -> Num => < a.v >
+pick = (a :: T139) -> Num => < a.v >
+pick = (a :: T140) -> Num => < a.v >
+pick = (a :: T141) -> Num => < a.v >
+pick = (a :: T142) -> Num => < a.v >
+pick = (a :: T143) -> Num => < a.v >
+pick = (a :: T144) -> Num => < a.v >
+pick = (a :: T145) -> Num => < a.v >
+pick = (a :: T146) -> Num => < a.v >
+pick = (a :: T147) -> Num => < a.v >
+pick = (a :: T148) -> Num => < a.v >
+pick = (a :: T149) -> Num => < a.v >
+pick = (a :: T150) -> Num => < a.v >
+pick = (a :: T151) -> Num => < a.v >
+pick = (a :: T152) -> Num => < a.v >
+pick = (a :: T153) -> Num => < a.v >
+pick = (a :: T154) -> Num => < a.v >
+pick = (a :: T155) -> Num => < a.v >
+pick = (a :: T156) -> Num => < a.v >
+pick = (a :: T157) -> Num => < a.v >
+pick = (a :: T158) -> Num => < a.v >
+pick = (a :: T159) -> Num => < a.v >
+pick = (a :: T160) -> Num => < a.v >
+pick = (a :: T161) -> Num => < a.v >
+pick = (a :: T162) -> Num => < a.v >
+pick = (a :: T163) -> Num => < a.v >
+pick = (a :: T164) -> Num => < a.v >
+pick = (a :: T165) -> Num => < a.v >
+pick = (a :: T166) -> Num => < a.v >
+pick = (a :: T167) -> Num => < a.v >
+pick = (a :: T168) -> Num => < a.v >
+pick = (a :: T169) -> Num => < a.v >
+pick = (a :: T170) -> Num => < a.v >
+pick = (a :: T171) -> Num => < a.v >
+pick = (a :: T172) -> Num => < a.v >
+pick = (a :: T173) -> Num => < a.v >
+pick = (a :: T174) -> Num => < a.v >
+pick = (a :: T175) -> Num => < a.v >
+pick = (a :: T176) -> Num => < a.v >
+pick = (a :: T177) -> Num => < a.v >
+pick = (a :: T178) -> Num => < a.v >
+pick = (a :: T179) -> Num => < a.v >
+pick = (a :: T180) -> Num => < a.v >
+pick = (a :: T181) -> Num => < a.v >
+pick = (a :: T182) -> Num => < a.v >
+pick = (a :: T183) -> Num => < a.v >
+pick = (a :: T184) -> Num => < a.v >
+pick = (a :: T185) -> Num => < a.v >
+pick = (a :: T186) -> Num => < a.v >
+pick = (a :: T187) -> Num => < a.v >
+pick = (a :: T188) -> Num => < a.v >
+pick = (a :: T189) -> Num => < a.v >
+pick = (a :: T190) -> Num => < a.v >
+pick = (a :: T191) -> Num => < a.v >
+pick = (a :: T192) -> Num => < a.v >
+pick = (a :: T193) -> Num => < a.v >
+pick = (a :: T194) -> Num => < a.v >
+pick = (a :: T195) -> Num => < a.v >
+pick = (a :: T196) -> Num => < a.v >
+pick = (a :: T197) -> Num => < a.v >
+pick = (a :: T198) -> Num => < a.v >
+pick = (a :: T199) -> Num => < a.v >
+pick = (a :: T200) -> Num => < a.v >
+pick = (a :: T201) -> Num => < a.v >
+pick = (a :: T202) -> Num => < a.v >
+pick = (a :: T203) -> Num => < a.v >
+pick = (a :: T204) -> Num => < a.v >
+pick = (a :: T205) -> Num => < a.v >
+pick = (a :: T206) -> Num => < a.v >
+pick = (a :: T207) -> Num => < a.v >
+pick = (a :: T208) -> Num => < a.v >
+pick = (a :: T209) -> Num => < a.v >
+pick = (a :: T210) -> Num => < a.v >
+pick = (a :: T211) -> Num => < a.v >
+pick = (a :: T212) -> Num => < a.v >
+pick = (a :: T213) -> Num => < a.v >
+pick = (a :: T214) -> Num => < a.v >
+pick = (a :: T215) -> Num => < a.v >
+pick = (a :: T216) -> Num => < a.v >
+pick = (a :: T217) -> Num => < a.v >
+pick = (a :: T218) -> Num => < a.v >
+pick = (a :: T219) -> Num => < a.v >
+pick = (a :: T220) -> Num => < a.v >
+pick = (a :: T221) -> Num => < a.v >
+pick = (a :: T222) -> Num => < a.v >
+pick = (a :: T223) -> Num => < a.v >
+pick = (a :: T224) -> Num => < a.v >
+pick = (a :: T225) -> Num => < a.v >
+pick = (a :: T226) -> Num => < a.v >
+pick = (a :: T227) -> Num => < a.v >
+pick = (a :: T228) -> Num => < a.v >
+pick = (a :: T229) -> Num => < a.v >
+pick = (a :: T230) -> Num => < a.v >
+pick = (a :: T231) -> Num => < a.v >
+pick = (a :: T232) -> Num => < a.v >
+pick = (a :: T233) -> Num => < a.v >
+pick = (a :: T234) -> Num => < a.v >
+pick = (a :: T235) -> Num => < a.v >
+pick = (a :: T236) -> Num => < a.v >
+pick = (a :: T237) -> Num => < a.v >
+pick = (a :: T238) -> Num => < a.v >
+pick = (a :: T239) -> Num => < a.v >
+pick = (a :: T240) -> Num => < a.v >
+pick = (a :: T241) -> Num => < a.v >
+pick = (a :: T242) -> Num => < a.v >
+pick = (a :: T243) -> Num => < a.v >
+pick = (a :: T244) -> Num => < a.v >
+pick = (a :: T245) -> Num => < a.v >
+pick = (a :: T246) -> Num => < a.v >
+pick = (a :: T247) -> Num => < a.v >
+pick = (a :: T248) -> Num => < a.v >
+pick = (a :: T249) -> Num => < a.v >
+pick = (a :: T250) -> Num => < a.v >
+pick = (a :: T251) -> Num => < a.v >
+pick = (a :: T252) -> Num => < a.v >
+pick = (a :: T253) -> Num => < a.v >
+pick = (a :: T254) -> Num => < a.v >
+pick = (a :: T255) -> Num => < a.v >
+pick = (a :: T256) -> Num => < a.v >
+pick = (a :: T257) -> Num => < a.v >
+pick = (a :: T258) -> Num => < a.v >
+pick = (a :: T259) -> Num => < a.v >
+pick = (a :: T260) -> Num => < a.v >
+pick = (a :: T261) -> Num => < a.v >
+pick = (a :: T262) -> Num => < a.v >
+pick = (a :: T263) -> Num => < a.v >
+pick = (a :: T264) -> Num => < a.v >
+pick = (a :: T265) -> Num => < a.v >
+pick = (a :: T266) -> Num => < a.v >
+pick = (a :: T267) -> Num => < a.v >
+pick = (a :: T268) -> Num => < a.v >
+pick = (a :: T269) -> Num => < a.v >
+pick = (a :: T270) -> Num => < a.v >
+pick = (a :: T271) -> Num => < a.v >
+pick = (a :: T272) -> Num => < a.v >
+pick = (a :: T273) -> Num => < a.v >
+pick = (a :: T274) -> Num => < a.v >
+pick = (a :: T275) -> Num => < a.v >
+pick = (a :: T276) -> Num => < a.v >
+pick = (a :: T277) -> Num => < a.v >
+pick = (a :: T278) -> Num => < a.v >
+pick = (a :: T279) -> Num => < a.v >
+pick = (a :: T280) -> Num => < a.v >
+pick = (a :: T281) -> Num => < a.v >
+pick = (a :: T282) -> Num => < a.v >
+pick = (a :: T283) -> Num => < a.v >
+pick = (a :: T284) -> Num => < a.v >
+pick = (a :: T285) -> Num => < a.v >
+pick = (a :: T286) -> Num => < a.v >
+pick = (a :: T287) -> Num => < a.v >
+pick = (a :: T288) -> Num => < a.v >
+pick = (a :: T289) -> Num => < a.v >
+pick = (a :: T290) -> Num => < a.v >
+pick = (a :: T291) -> Num => < a.v >
+pick = (a :: T292) -> Num => < a.v >
+pick = (a :: T293) -> Num => < a.v >
+pick = (a :: T294) -> Num => < a.v >
+pick = (a :: T295) -> Num => < a.v >
+pick = (a :: T296) -> Num => < a.v >
+pick = (a :: T297) -> Num => < a.v >
+pick = (a :: T298) -> Num => < a.v >
+pick = (a :: T299) -> Num => < a.v >
 ^ = () -> Num => <
   n0 = pick(T0 { v = 0 })
   n1 = pick(T1 { v = 1 })

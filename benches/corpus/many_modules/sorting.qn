@@ -1,10 +1,10 @@
->> sorting_offset = (x :: Num) -> Num => x + 0
->> sorting_scale = (x :: Num) -> Num => x + 1
->> sorting_clamp = (x :: Num) -> Num => x + 2
->> sorting_round = (x :: Num) -> Num => x + 3
->> sorting_wrap = (x :: Num) -> Num => x + 4
->> sorting_snap = (x :: Num) -> Num => x + 5
->> sorting_bias = (x :: Num) -> Num => x + 6
->> sorting_damp = (x :: Num) -> Num => x + 7
->> sorting_boost = (x :: Num) -> Num => x + 8
->> sorting_trim = (x :: Num) -> Num => x + 9
+>> sorting_offset = (x :: Num) -> Num => < x + 0 >
+>> sorting_scale = (x :: Num) -> Num => < x + 1 >
+>> sorting_clamp = (x :: Num) -> Num => < x + 2 >
+>> sorting_round = (x :: Num) -> Num => < x + 3 >
+>> sorting_wrap = (x :: Num) -> Num => < x + 4 >
+>> sorting_snap = (x :: Num) -> Num => < x + 5 >
+>> sorting_bias = (x :: Num) -> Num => < x + 6 >
+>> sorting_damp = (x :: Num) -> Num => < x + 7 >
+>> sorting_boost = (x :: Num) -> Num => < x + 8 >
+>> sorting_trim = (x :: Num) -> Num => < x + 9 >

@@ -1,10 +1,10 @@
->> logging_offset = (x :: Num) -> Num => x + 0
->> logging_scale = (x :: Num) -> Num => x + 1
->> logging_clamp = (x :: Num) -> Num => x + 2
->> logging_round = (x :: Num) -> Num => x + 3
->> logging_wrap = (x :: Num) -> Num => x + 4
->> logging_snap = (x :: Num) -> Num => x + 5
->> logging_bias = (x :: Num) -> Num => x + 6
->> logging_damp = (x :: Num) -> Num => x + 7
->> logging_boost = (x :: Num) -> Num => x + 8
->> logging_trim = (x :: Num) -> Num => x + 9
+>> logging_offset = (x :: Num) -> Num => < x + 0 >
+>> logging_scale = (x :: Num) -> Num => < x + 1 >
+>> logging_clamp = (x :: Num) -> Num => < x + 2 >
+>> logging_round = (x :: Num) -> Num => < x + 3 >
+>> logging_wrap = (x :: Num) -> Num => < x + 4 >
+>> logging_snap = (x :: Num) -> Num => < x + 5 >
+>> logging_bias = (x :: Num) -> Num => < x + 6 >
+>> logging_damp = (x :: Num) -> Num => < x + 7 >
+>> logging_boost = (x :: Num) -> Num => < x + 8 >
+>> logging_trim = (x :: Num) -> Num => < x + 9 >

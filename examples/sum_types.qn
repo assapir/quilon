@@ -9,25 +9,31 @@
 Color = Red / Green / Blue
 
 ~ Map each color to a number.
-rank = (c :: Color) -> Num => c ?
-  | Red   => 0
-  | Green => 1
-  | Blue  => 2
+rank = (c :: Color) -> Num => <
+  c ?
+    | Red   => 0
+    | Green => 1
+    | Blue  => 2
+>
 
 ~ A sum type with payload variants (consistent payload types per position).
 Shape = Circle(Num) / Rect(Num, Num)
 
-area = (s :: Shape) -> Num => s ?
-  | Circle(r)  => 3 * r * r          ~ ~pi*r^2 (pi ~= 3 here, integer-only)
-  | Rect(w, h) => w * h
+area = (s :: Shape) -> Num => <
+  s ?
+    | Circle(r)  => 3 * r * r          ~ ~pi*r^2 (pi ~= 3 here, integer-only)
+    | Rect(w, h) => w * h
+>
 
 ~ `Ok($)` is the canonical "succeeded, no meaningful value" Result; `NotOk(code)`
 ~ carries a failure code. Matching `Ok(_)` ignores the unit payload.
-check = (n :: Num) -> Result => n <= 100 ? Ok($) : NotOk(n)
+check = (n :: Num) -> Result => < n <= 100 ? Ok($) : NotOk(n) >
 
-status = (n :: Num) -> Num => check(n) ?
-  | Ok(_)    => 0
-  | NotOk(c) => c
+status = (n :: Num) -> Num => <
+  check(n) ?
+    | Ok(_)    => 0
+    | NotOk(c) => c
+>
 
 ^ = () -> $ => <
   assert(area(Rect(6, 7)), equals(42))   ~ 6 * 7

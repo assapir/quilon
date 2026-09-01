@@ -10,7 +10,7 @@
 ~ program exits 0.
 << core.test
 
-double = (n :: Num) -> Num => n * 2
+double = (n :: Num) -> Num => < n * 2 >
 
 Point = { x :: Num, y :: Num }
 

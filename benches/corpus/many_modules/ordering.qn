@@ -1,10 +1,10 @@
->> ordering_offset = (x :: Num) -> Num => x + 0
->> ordering_scale = (x :: Num) -> Num => x + 1
->> ordering_clamp = (x :: Num) -> Num => x + 2
->> ordering_round = (x :: Num) -> Num => x + 3
->> ordering_wrap = (x :: Num) -> Num => x + 4
->> ordering_snap = (x :: Num) -> Num => x + 5
->> ordering_bias = (x :: Num) -> Num => x + 6
->> ordering_damp = (x :: Num) -> Num => x + 7
->> ordering_boost = (x :: Num) -> Num => x + 8
->> ordering_trim = (x :: Num) -> Num => x + 9
+>> ordering_offset = (x :: Num) -> Num => < x + 0 >
+>> ordering_scale = (x :: Num) -> Num => < x + 1 >
+>> ordering_clamp = (x :: Num) -> Num => < x + 2 >
+>> ordering_round = (x :: Num) -> Num => < x + 3 >
+>> ordering_wrap = (x :: Num) -> Num => < x + 4 >
+>> ordering_snap = (x :: Num) -> Num => < x + 5 >
+>> ordering_bias = (x :: Num) -> Num => < x + 6 >
+>> ordering_damp = (x :: Num) -> Num => < x + 7 >
+>> ordering_boost = (x :: Num) -> Num => < x + 8 >
+>> ordering_trim = (x :: Num) -> Num => < x + 9 >

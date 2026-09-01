@@ -1,10 +1,10 @@
->> telemetry_offset = (x :: Num) -> Num => x + 0
->> telemetry_scale = (x :: Num) -> Num => x + 1
->> telemetry_clamp = (x :: Num) -> Num => x + 2
->> telemetry_round = (x :: Num) -> Num => x + 3
->> telemetry_wrap = (x :: Num) -> Num => x + 4
->> telemetry_snap = (x :: Num) -> Num => x + 5
->> telemetry_bias = (x :: Num) -> Num => x + 6
->> telemetry_damp = (x :: Num) -> Num => x + 7
->> telemetry_boost = (x :: Num) -> Num => x + 8
->> telemetry_trim = (x :: Num) -> Num => x + 9
+>> telemetry_offset = (x :: Num) -> Num => < x + 0 >
+>> telemetry_scale = (x :: Num) -> Num => < x + 1 >
+>> telemetry_clamp = (x :: Num) -> Num => < x + 2 >
+>> telemetry_round = (x :: Num) -> Num => < x + 3 >
+>> telemetry_wrap = (x :: Num) -> Num => < x + 4 >
+>> telemetry_snap = (x :: Num) -> Num => < x + 5 >
+>> telemetry_bias = (x :: Num) -> Num => < x + 6 >
+>> telemetry_damp = (x :: Num) -> Num => < x + 7 >
+>> telemetry_boost = (x :: Num) -> Num => < x + 8 >
+>> telemetry_trim = (x :: Num) -> Num => < x + 9 >

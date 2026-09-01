@@ -1,10 +1,10 @@
->> filtering_offset = (x :: Num) -> Num => x + 0
->> filtering_scale = (x :: Num) -> Num => x + 1
->> filtering_clamp = (x :: Num) -> Num => x + 2
->> filtering_round = (x :: Num) -> Num => x + 3
->> filtering_wrap = (x :: Num) -> Num => x + 4
->> filtering_snap = (x :: Num) -> Num => x + 5
->> filtering_bias = (x :: Num) -> Num => x + 6
->> filtering_damp = (x :: Num) -> Num => x + 7
->> filtering_boost = (x :: Num) -> Num => x + 8
->> filtering_trim = (x :: Num) -> Num => x + 9
+>> filtering_offset = (x :: Num) -> Num => < x + 0 >
+>> filtering_scale = (x :: Num) -> Num => < x + 1 >
+>> filtering_clamp = (x :: Num) -> Num => < x + 2 >
+>> filtering_round = (x :: Num) -> Num => < x + 3 >
+>> filtering_wrap = (x :: Num) -> Num => < x + 4 >
+>> filtering_snap = (x :: Num) -> Num => < x + 5 >
+>> filtering_bias = (x :: Num) -> Num => < x + 6 >
+>> filtering_damp = (x :: Num) -> Num => < x + 7 >
+>> filtering_boost = (x :: Num) -> Num => < x + 8 >
+>> filtering_trim = (x :: Num) -> Num => < x + 9 >

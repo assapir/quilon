@@ -20,9 +20,10 @@ use quilon::parser::parse;
 fn a_site_parameter_receives_the_calls_own_line() {
     // The `line()` call is on line 3 of this source.
     let src = "\
-line = (site :: Site) -> Num => site.line
-^ = () -> Num =>
+line = (site :: Site) -> Num => < site.line >
+^ = () -> Num => <
   line()
+>
 ";
     assert_exit(src, 3);
 }
@@ -32,9 +33,10 @@ line = (site :: Site) -> Num => site.line
 #[test]
 fn a_site_parameter_frames_the_call_with_column_and_width() {
     let src = "\
-frame = (site :: Site) -> Num => site.column * 100 + site.width
-^ = () -> Num =>
+frame = (site :: Site) -> Num => < site.column * 100 + site.width >
+^ = () -> Num => <
   frame()
+>
 ";
     assert_exit(src, 3 * 100 + 7);
 }
@@ -45,9 +47,10 @@ frame = (site :: Site) -> Num => site.column * 100 + site.width
 fn a_site_parameter_carries_the_callers_file_and_source_line() {
     let src = format!(
         "\
-here = (site :: Site) -> Bool => site.file == \"{TEST_FILE}\" && site.excerpt.contains(\"here()\")
-^ = () -> Num =>
+here = (site :: Site) -> Bool => < site.file == \"{TEST_FILE}\" && site.excerpt.contains(\"here()\") >
+^ = () -> Num => <
   here() ? 9 : 0
+>
 "
     );
     assert_exit(&src, 9);
@@ -59,11 +62,12 @@ here = (site :: Site) -> Bool => site.file == \"{TEST_FILE}\" && site.excerpt.co
 fn an_explicitly_forwarded_site_propagates_through_a_chain() {
     // The `outer()` call is on line 5; the forwarding hops are on lines 1-3.
     let src = "\
-inner = (site :: Site) -> Num => site.line
-middle = (site :: Site) -> Num => inner(site)
-outer = (site :: Site) -> Num => middle(site)
-^ = () -> Num =>
+inner = (site :: Site) -> Num => < site.line >
+middle = (site :: Site) -> Num => < inner(site) >
+outer = (site :: Site) -> Num => < middle(site) >
+^ = () -> Num => <
   outer()
+>
 ";
     assert_exit(src, 5);
 }
@@ -73,10 +77,11 @@ outer = (site :: Site) -> Num => middle(site)
 #[test]
 fn a_hop_that_does_not_forward_reports_its_own_call() {
     let src = "\
-inner = (site :: Site) -> Num => site.line
-outer = (site :: Site) -> Num => inner()
-^ = () -> Num =>
+inner = (site :: Site) -> Num => < site.line >
+outer = (site :: Site) -> Num => < inner() >
+^ = () -> Num => <
   outer()
+>
 ";
     assert_exit(src, 2);
 }
@@ -86,9 +91,9 @@ outer = (site :: Site) -> Num => inner()
 #[test]
 fn overload_members_can_each_take_a_site() {
     let src = "\
-kind = (n :: Num, site :: Site) -> Num => 1
-kind = (t :: Text, site :: Site) -> Num => 2
-^ = () -> Num => kind(\"text\") * 10 + kind(7)
+kind = (n :: Num, site :: Site) -> Num => < 1 >
+kind = (t :: Text, site :: Site) -> Num => < 2 >
+^ = () -> Num => < kind(\"text\") * 10 + kind(7) >
 ";
     assert_exit(src, 21);
 }
@@ -98,10 +103,11 @@ kind = (t :: Text, site :: Site) -> Num => 2
 #[test]
 fn a_site_can_be_passed_explicitly() {
     let src = "\
-line = (site :: Site) -> Num => site.line
-relay = (site :: Site) -> Num => line(site)
-^ = () -> Num =>
+line = (site :: Site) -> Num => < site.line >
+relay = (site :: Site) -> Num => < line(site) >
+^ = () -> Num => <
   relay()
+>
 ";
     assert_exit(src, 4);
 }
@@ -111,10 +117,10 @@ relay = (site :: Site) -> Num => line(site)
 #[test]
 fn site_needs_no_import() {
     let src = "\
-sum = (site :: Site) -> Num => site.line + site.column
-^ = () -> Num => sum()
+sum = (site :: Site) -> Num => < site.line + site.column >
+^ = () -> Num => < sum() >
 ";
-    assert_exit(src, 2 + 18);
+    assert_exit(src, 2 + 20);
 }
 
 /// Only the LAST parameter can be filled in from the call site, so a `Site` before it
@@ -124,8 +130,8 @@ sum = (site :: Site) -> Num => site.line + site.column
 fn a_site_parameter_before_the_last_is_rejected() {
     assert_type_error(
         "\
-odd = (site :: Site, n :: Num) -> Num => n
-^ = () -> Num => odd(1)
+odd = (site :: Site, n :: Num) -> Num => < n >
+^ = () -> Num => < odd(1) >
 ",
     );
 }
@@ -138,7 +144,7 @@ fn a_site_parameter_on_a_nested_declaration_is_rejected() {
     assert_type_error(
         "\
 ^ = () -> Num => <
-  f = (n :: Num, site :: Site) -> Num => n
+  f = (n :: Num, site :: Site) -> Num => < n >
   f(1)
 >
 ",
@@ -151,9 +157,9 @@ fn a_site_parameter_on_a_nested_declaration_is_rejected() {
 fn a_site_parameter_on_a_lambda_is_rejected() {
     assert_type_error(
         "\
-apply = (f :: Num) -> Num => f
+apply = (f :: Num) -> Num => < f >
 ^ = () -> Num => <
-  g = (n :: Num, site :: Site) => n + site.line
+  g = (n :: Num, site :: Site) => < n + site.line >
   g(1)
 >
 ",
@@ -168,9 +174,9 @@ fn a_site_parameter_on_a_method_is_rejected() {
         "\
 Box = {
   n :: Num
-  where = (site :: Site) -> Num => site.line
+  where = (site :: Site) -> Num => < site.line >
 }
-^ = () -> Num => 0
+^ = () -> Num => < 0 >
 ",
     );
 }
@@ -182,9 +188,10 @@ Box = {
 #[test]
 fn a_recursive_function_taking_a_site_still_becomes_a_loop() {
     let src = "\
-countdown = (n :: Num, acc :: Num, site :: Site) -> Num =>
+countdown = (n :: Num, acc :: Num, site :: Site) -> Num => <
   n == 0 ? acc : countdown(n - 1, acc + 1)
-^ = () -> Num => countdown(500000, 0) - 499958
+>
+^ = () -> Num => < countdown(500000, 0) - 499958 >
 ";
     assert_exit(src, 42);
 }
@@ -194,7 +201,7 @@ countdown = (n :: Num, acc :: Num, site :: Site) -> Num =>
 /// reports its parameters as `(Text)`, not `(Text, Site)`.
 #[test]
 fn a_diagnostic_never_asks_for_the_filled_in_argument() {
-    let error = type_error_message("<< core.test\n^ = () -> $ => test.failAt()\n");
+    let error = type_error_message("<< core.test\n^ = () -> $ => < test.failAt() >\n");
     assert!(
         error.contains("expected 1") && !error.contains("Site"),
         "the arity must be counted without the filled-in Site, got: {error}"
@@ -206,7 +213,7 @@ fn a_diagnostic_never_asks_for_the_filled_in_argument() {
 /// which is what lets a program assert as often as it likes.
 #[test]
 fn a_call_site_is_a_constant_not_an_allocation() {
-    let src = "line = (site :: Site) -> Num => site.line\n^ = () -> Num => line()\n";
+    let src = "line = (site :: Site) -> Num => < site.line >\n^ = () -> Num => < line() >\n";
     let ir = ir_for(src);
     let entry = ir
         .split("define internal double @\"^\"")
@@ -251,7 +258,7 @@ tamper = (site :: Site) -> Num => <
   s.line := 99
   s.line
 >
-^ = () -> Num => tamper()
+^ = () -> Num => < tamper() >
 ",
     );
     assert!(
@@ -264,7 +271,7 @@ tamper = (site :: Site) -> Num => <
 /// definition — the same way `Result` is taken.
 #[test]
 fn a_program_cannot_declare_its_own_site_type() {
-    assert_type_error("Site = { x :: Num }\n^ = () -> Num => 0\n");
+    assert_type_error("Site = { x :: Num }\n^ = () -> Num => < 0 >\n");
 }
 
 /// Codegen must survive having NO source map: a program assembled in memory (as the
@@ -274,7 +281,7 @@ fn a_program_cannot_declare_its_own_site_type() {
 /// that the missing source map is not itself a failure.)
 #[test]
 fn a_call_site_without_a_source_map_still_compiles() {
-    let src = "line = (site :: Site) -> Num => site.line + site.column\n^ = () -> Num => line()\n";
+    let src = "line = (site :: Site) -> Num => < site.line + site.column >\n^ = () -> Num => < line() >\n";
     let ir = ir_for(src);
     assert!(
         ir.contains("@line(ptr %site)"),

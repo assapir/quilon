@@ -67,14 +67,14 @@
 ~ ── The run's state ────────────────────────────────────────────────────────────────
 
 ~ How many cases have run with no failing `expect`.
->> casesPassed = () -> Num => __test_passed()
+>> casesPassed = () -> Num => < __test_passed() >
 
 ~ How many cases have run with at least one failing `expect`. Non-zero is what makes a
 ~ run exit non-zero.
->> casesFailed = () -> Num => __test_failed()
+>> casesFailed = () -> Num => < __test_failed() >
 
 ~ How many `describe` groups are open: 0 outside any group, 1 inside an outermost one.
->> nestingDepth = () -> Num => __test_depth()
+>> nestingDepth = () -> Num => < __test_depth() >
 
 ~ ── The case lifecycle ─────────────────────────────────────────────────────────────
 ~ What `describe` and `it` call, in this order:
@@ -83,18 +83,18 @@
 
 ~ Open a group; yields the depth it sits at (1 for an outermost group), which is what the
 ~ report indents by.
->> enterSuite = () -> Num => __test_suite_enter()
+>> enterSuite = () -> Num => < __test_suite_enter() >
 
 ~ Close the group just entered; yields the depth that remains.
->> leaveSuite = () -> Num => __test_suite_leave()
+>> leaveSuite = () -> Num => < __test_suite_leave() >
 
 ~ Whether the case now running has already failed an `expect`. Ask BEFORE closing it —
 ~ closing clears the mark for the next case.
->> caseFailing = () -> Bool => __test_case_failing() == 1
+>> caseFailing = () -> Bool => < __test_case_failing() == 1 >
 
 ~ Close the case that just ran, tallying it as passed or failed; yields the depth to
 ~ report it at.
->> finishCase = () -> Num => __test_case_finish()
+>> finishCase = () -> Num => < __test_case_finish() >
 
 ~ ── The harness ────────────────────────────────────────────────────────────────────
 ~ The output is fixed, and written out at each site below rather than shared through

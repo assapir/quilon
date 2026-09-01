@@ -16,7 +16,7 @@ Pair = { x :: Num, y :: Num }
 Vec = {
   x :: Num,
   y :: Num,
-  sum = => it.x + it.y
+  sum = => < it.x + it.y >
 }
 
 ^ = () -> $ => <

@@ -1,4 +1,4 @@
 ~ Fixture: the module at the bottom of a two-level import chain (root -> chain_a ->
 ~ chain_b), used to prove a transitive import resolves, not just a direct one.
 
->> inc = (x :: Num) -> Num => x + 1
+>> inc = (x :: Num) -> Num => < x + 1 >

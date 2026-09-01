@@ -1,7 +1,7 @@
 ~ Double recursion. `<< core.test` verifies the result; on success the program exits 0.
 << core.test
 
-fib = (n :: Num) -> Num => n <= 1 ? n : fib(n - 1) + fib(n - 2)
+fib = (n :: Num) -> Num => < n <= 1 ? n : fib(n - 1) + fib(n - 2) >
 
 ^ = () -> $ => <
   assert(fib(10), equals(55))

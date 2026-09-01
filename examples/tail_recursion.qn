@@ -7,8 +7,9 @@
 ~ `<< core.test` verifies the result; on success the program exits 0.
 << core.test
 
-count = (n :: Num, acc :: Num) -> Num =>
+count = (n :: Num, acc :: Num) -> Num => <
   n == 0 ? acc : count(n - 1, acc == 250 ? 0 : acc + 1)
+>
 
 ^ = () -> $ => <
   assert(count(1000000, 0), equals(16))   ~ 1_000_000 mod 251 = 16

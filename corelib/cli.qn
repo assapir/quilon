@@ -18,7 +18,7 @@
 ~ Look up `key` in the env Map: `Ok(value)` when the variable is set, else
 ~ `NotOk`. The documented ergonomic name for the Map's own safe lookup, so both
 ~ `getEnv(env, "HOME")` and `env.get("HOME")` read the environment.
->> getEnv = (env :: [|Text => Text|], key :: Text) -> Result => env.get(key)
+>> getEnv = (env :: [|Text => Text|], key :: Text) -> Result => < env.get(key) >
 
 ~ True when the bare flag `flag` appears in `args`. The flag name works WITH or
 ~ WITHOUT a leading `--`, so `hasFlag(args, "verbose")` and
@@ -42,11 +42,11 @@
 >> getOpt = (args :: []Text, name :: Text) -> Result => <
   wanted :: Text = name.slice(0, 2) == "--" ? name : "--" + name
   ~ The option name of a token: the text before the first `=`, else the whole token.
-  optKey = (tok :: Text) -> Text => tok.indexOf("=") ? | Ok(p) => tok.slice(0, p) | NotOk(_) => tok
+  optKey = (tok :: Text) -> Text => < tok.indexOf("=") ? | Ok(p) => tok.slice(0, p) | NotOk(_) => tok >
   ~ The `--name=value` value of a token: the text after the first `=`, else empty.
-  optVal = (tok :: Text) -> Text => tok.indexOf("=") ? | Ok(p) => tok.slice(p + 1, tok.size) | NotOk(_) => ""
+  optVal = (tok :: Text) -> Text => < tok.indexOf("=") ? | Ok(p) => tok.slice(p + 1, tok.size) | NotOk(_) => "" >
   ~ Does a token name this option (in either form, with or without `--`)?
-  matches = (tok :: Text) -> Bool => optKey(tok) == name || optKey(tok) == wanted
+  matches = (tok :: Text) -> Bool => < optKey(tok) == name || optKey(tok) == wanted >
   ~ Indices into args, skipping argv[0].
   idx :: []Num = (0 <- (args.size - 1)).filter(i => i > 0)
   empty :: []Text = args.filter(x => false)

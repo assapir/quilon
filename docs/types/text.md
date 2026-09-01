@@ -113,7 +113,7 @@ The member binds `it` to the value, returns `Text`, and may use interpolation it
 User = {
   name :: Text,
   age  :: Num,
-  ` = () -> Text => "User(`it.name`, `it.age`)"   ~ override: `it` is the instance
+  ` = () -> Text => < "User(`it.name`, `it.age`)" > ~ override: `it` is the instance
 }
 ~ Now both `io.print(u)` and `"`u`"` render as  User(Ada, 36)
 ```

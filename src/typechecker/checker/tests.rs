@@ -44,7 +44,7 @@ fn test_undefined_var() {
 
 #[test]
 fn test_simple_function() {
-    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => a + b").unwrap();
+    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => < a + b >").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -53,7 +53,7 @@ fn test_simple_function() {
 #[test]
 fn test_function_call() {
     let tokens = Lexer::tokenize(
-        "add = (a :: Num, b :: Num) -> Num => a + b
+        "add = (a :: Num, b :: Num) -> Num => < a + b >
 ^ = () -> Num => <
   result = add(1, 2)
   result
@@ -68,7 +68,7 @@ fn test_function_call() {
 #[test]
 fn test_wrong_arg_count() {
     let tokens = Lexer::tokenize(
-        "add = (a :: Num, b :: Num) -> Num => a + b
+        "add = (a :: Num, b :: Num) -> Num => < a + b >
 result = add(1)",
     )
     .unwrap();
@@ -143,7 +143,7 @@ fn test_pattern_match() {
 #[test]
 fn test_inferred_return_type() {
     // Function without return type annotation - should infer from body
-    let tokens = Lexer::tokenize("double = (x :: Num) => x + x").unwrap();
+    let tokens = Lexer::tokenize("double = (x :: Num) => < x + x >").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_ok());
@@ -166,7 +166,7 @@ fn test_inferred_return_type() {
 fn test_unannotated_parameter_is_rejected() {
     // A function parameter with no annotation cannot be inferred from context, so it is
     // a compile error rather than silently defaulting to Num.
-    let tokens = Lexer::tokenize("add = (a, b) => a + b").unwrap();
+    let tokens = Lexer::tokenize("add = (a, b) => < a + b >").unwrap();
     let program = parse(&tokens).unwrap();
     let mut checker = TypeChecker::new();
     assert!(matches!(
@@ -258,7 +258,7 @@ fn test_overload_set_resolves_by_type() {
     // Two `f` definitions; each call resolves by exact argument type.
     assert!(
         check_ok(
-            "f = (n :: Num) -> Num => n\nf = (s :: Text) -> Num => s.size\n^ = () -> Num => f(1) + f(\"x\")"
+            "f = (n :: Num) -> Num => < n >\nf = (s :: Text) -> Num => < s.size >\n^ = () -> Num => < f(1) + f(\"x\") >"
         )
         .is_ok()
     );
@@ -268,7 +268,7 @@ fn test_overload_set_resolves_by_type() {
 fn test_overload_no_match_is_error() {
     // No `f` overload accepts a Bool (no implicit coercion).
     let err = check_ok(
-        "f = (n :: Num) -> Num => n\nf = (s :: Text) -> Num => s.size\n^ = () -> Num => f(true)",
+        "f = (n :: Num) -> Num => < n >\nf = (s :: Text) -> Num => < s.size >\n^ = () -> Num => < f(true) >",
     )
     .unwrap_err();
     assert!(matches!(err, TypeError::NoMatchingOverload { .. }));
@@ -276,19 +276,21 @@ fn test_overload_no_match_is_error() {
 
 #[test]
 fn test_duplicate_overload_signature_is_error() {
-    let err = check_ok("f = (n :: Num) -> Num => n\nf = (m :: Num) -> Num => m").unwrap_err();
+    let err =
+        check_ok("f = (n :: Num) -> Num => < n >\nf = (m :: Num) -> Num => < m >").unwrap_err();
     assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
 }
 
 #[test]
 fn test_comparison_operator_overload_must_return_bool() {
     // A `==` member returning a non-Bool is rejected with a clear diagnostic.
-    let err =
-        check_ok("V = { x :: Num, == = (other :: V) -> V => it }\n^ = () -> Num => 0").unwrap_err();
+    let err = check_ok("V = { x :: Num, == = (other :: V) -> V => < it >}\n^ = () -> Num => < 0 >")
+        .unwrap_err();
     assert!(matches!(err, TypeError::ComparisonOverloadNotBool { .. }));
     // `<=` too (a definable comparison operator).
     assert!(
-        check_ok("V = { x :: Num, <= = (other :: V) -> Num => 1 }\n^ = () -> Num => 0").is_err()
+        check_ok("V = { x :: Num, <= = (other :: V) -> Num => < 1 >}\n^ = () -> Num => < 0 >")
+            .is_err()
     );
 }
 
@@ -296,7 +298,7 @@ fn test_comparison_operator_overload_must_return_bool() {
 fn test_bool_returning_comparison_overload_is_accepted() {
     assert!(
         check_ok(
-            "V = { x :: Num, == = (other :: V) -> Bool => it.x == other.x }\n^ = () -> Num => V { x = 1 } == V { x = 1 } ? 1 : 0"
+            "V = { x :: Num, == = (other :: V) -> Bool => < it.x == other.x >}\n^ = () -> Num => < V { x = 1 } == V { x = 1 } ? 1 : 0 >"
         )
         .is_ok()
     );
@@ -307,7 +309,7 @@ fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
     // No homogeneity rule on arithmetic operators: `V * Num -> V` is fine.
     assert!(
         check_ok(
-            "V = { x :: Num, * = (k :: Num) -> V => V { x = it.x } }\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
+            "V = { x :: Num, * = (k :: Num) -> V => < V { x = it.x } >}\n^ = () -> Num => <\n  w = V { x = 2 } * 3\n  w.x\n>"
         )
         .is_ok()
     );
@@ -317,7 +319,7 @@ fn test_arithmetic_operator_overload_return_type_is_unconstrained() {
 fn test_user_operator_overload_typechecks() {
     assert!(
         check_ok(
-            "P = { x :: Num, == = (other :: P) -> Bool => it.x == other.x }\n^ = () -> Num => P { x = 1 } == P { x = 1 } ? 1 : 0"
+            "P = { x :: Num, == = (other :: P) -> Bool => < it.x == other.x >}\n^ = () -> Num => < P { x = 1 } == P { x = 1 } ? 1 : 0 >"
         )
         .is_ok()
     );
@@ -325,14 +327,14 @@ fn test_user_operator_overload_typechecks() {
 
 #[test]
 fn test_text_ordering_typechecks() {
-    assert!(check_ok("^ = () -> Num => \"a\" < \"b\" ? 1 : 0").is_ok());
-    assert!(check_ok("^ = () -> Num => \"a\" == \"a\" ? 1 : 0").is_ok());
+    assert!(check_ok("^ = () -> Num => < \"a\" < \"b\" ? 1 : 0 >").is_ok());
+    assert!(check_ok("^ = () -> Num => < \"a\" == \"a\" ? 1 : 0 >").is_ok());
 }
 
 #[test]
 fn test_operator_no_overload_for_operands_is_error() {
     // `+` has no Num/Bool member.
-    assert!(check_ok("^ = () -> Num => 1 + true").is_err());
+    assert!(check_ok("^ = () -> Num => < 1 + true >").is_err());
 }
 
 #[test]
@@ -364,7 +366,7 @@ fn test_for_loop_removed_is_rejected() {
     // A program using the old `for n <- collection => body` surface no longer
     // forms a loop — `for` is now an ordinary identifier — so it must fail to
     // compile (a parse or type error), never silently accept as before.
-    let tokens = Lexer::tokenize("test = => for n <- [1, 2, 3] => n").unwrap();
+    let tokens = Lexer::tokenize("test = => < for n <- [1, 2, 3] => n >").unwrap();
     let compiles = match parse(&tokens) {
         Ok(program) => TypeChecker::new().check_program(&program).is_ok(),
         Err(_) => false, // rejected already at parse time
@@ -382,7 +384,7 @@ fn test_method_call_simple() {
         "User = {
   name :: Text,
   age :: Num,
-  getName = => it.name
+  getName = => < it.name >
 }
 test = => <
   user = User { name = \"Alice\", age = 30 }
@@ -406,7 +408,7 @@ fn test_method_call_with_args() {
     check_ok(
         "Counter = {
   value :: Num,
-  add = (x :: Num) -> Num => it.value + x
+  add = (x :: Num) -> Num => < it.value + x >
 }
 test = => <
   c = Counter { value = 5 }
@@ -421,8 +423,8 @@ fn test_method_syntax_never_reaches_a_top_level_function() {
     // A top-level function is not a member of any type: `(5).double()` has no `double`
     // to resolve on `Num`, and the diagnostic names the type and the member.
     let err = check_ok(
-        "double = (x :: Num) -> Num => x * 2
-^ = () -> Num => (5).double()",
+        "double = (x :: Num) -> Num => < x * 2 >
+^ = () -> Num => < (5).double() >",
     )
     .unwrap_err();
     assert!(
@@ -440,7 +442,7 @@ fn test_overload_member_must_annotate_its_return_type() {
     // Called: the error lands on the call, which is where the unknown result type
     // stops the program, and names the member by its parameter types.
     let err = check_ok(
-        "g = (n :: Num) => \"a\"\ng = (t :: Text) -> Text => \"b\"\nh = () -> Text => g(1)\n^ = () -> Num => 0",
+        "g = (n :: Num) => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\nh = () -> Text => < g(1) >\n^ = () -> Num => < 0 >",
     )
     .unwrap_err();
     match err {
@@ -459,7 +461,7 @@ fn test_overload_member_must_annotate_its_return_type() {
     // Annotating it is all the fix takes.
     assert!(
         check_ok(
-            "g = (n :: Num) -> Text => \"a\"\ng = (t :: Text) -> Text => \"b\"\nh = () -> Text => g(1)\n^ = () -> Num => 0"
+            "g = (n :: Num) -> Text => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\nh = () -> Text => < g(1) >\n^ = () -> Num => < 0 >"
         )
         .is_ok()
     );
@@ -469,9 +471,10 @@ fn test_overload_member_must_annotate_its_return_type() {
 fn test_uncalled_overload_member_missing_return_is_reported_at_its_definition() {
     // Nothing calls the unannotated member, so there is no call to blame — the
     // definition is reported instead, rather than the omission passing unnoticed.
-    let err =
-        check_ok("g = (n :: Num) => 1\ng = (t :: Text) -> Num => 2\n^ = () -> Num => g(\"x\")")
-            .unwrap_err();
+    let err = check_ok(
+        "g = (n :: Num) => < 1 >\ng = (t :: Text) -> Num => < 2 >\n^ = () -> Num => < g(\"x\") >",
+    )
+    .unwrap_err();
     match err {
         TypeError::UnannotatedOverloadMember {
             name, parameters, ..
@@ -493,7 +496,7 @@ fn test_unannotated_overload_member_return_is_never_inferred_from_its_body() {
     // would make its signature depend on where the call sits relative to the
     // definition, which is the order dependence the requirement removes.
     let err = check_ok(
-        "g = (n :: Num) => \"a\"\ng = (t :: Text) -> Text => \"b\"\n^ = () -> Num => g(1).size",
+        "g = (n :: Num) => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\n^ = () -> Num => < g(1).size >",
     )
     .unwrap_err();
     assert!(matches!(err, TypeError::UnannotatedOverloadCall { .. }));
@@ -505,14 +508,14 @@ fn test_overload_member_recursion_needs_the_annotation_then_works() {
     // recursive call needs)…
     assert!(
         check_ok(
-            "p = (n :: Num) => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => 0"
+            "p = (n :: Num) => < n == 0 ? \"done\" : p(n - 1) >\np = (t :: Text) -> Num => < 0 >\n^ = () -> Num => < 0 >"
         )
         .is_err()
     );
     // …and annotating it makes the recursive member legal.
     assert!(
         check_ok(
-            "p = (n :: Num) -> Text => n == 0 ? \"done\" : p(n - 1)\np = (t :: Text) -> Num => 0\n^ = () -> Num => p(3).size"
+            "p = (n :: Num) -> Text => < n == 0 ? \"done\" : p(n - 1) >\np = (t :: Text) -> Num => < 0 >\n^ = () -> Num => < p(3).size >"
         )
         .is_ok()
     );
@@ -524,7 +527,7 @@ fn test_call_to_an_overload_member_defined_below_is_rejected() {
     // It used to resolve against the pre-registered signature and then fail in
     // codegen with no matching symbol.
     let err = check_ok(
-        "h = () -> Text => g(1)\ng = (n :: Num) -> Text => \"a\"\ng = (t :: Text) -> Text => \"b\"\n^ = () -> Num => 0",
+        "h = () -> Text => < g(1) >\ng = (n :: Num) -> Text => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\n^ = () -> Num => < 0 >",
     )
     .unwrap_err();
     match err {
@@ -538,7 +541,7 @@ fn test_mutually_recursive_overload_members_are_rejected_not_miscompiled() {
     // Whichever of the pair comes first must call the other before it exists. This
     // type-checked before and died in codegen; now it is refused at the forward call.
     let err = check_ok(
-        "even = (n :: Num) -> Bool => n == 0 ? true : odd(n - 1)\neven = (t :: Text) -> Bool => false\nodd = (n :: Num) -> Bool => n == 0 ? false : even(n - 1)\nodd = (t :: Text) -> Bool => true\n^ = () -> Num => 0",
+        "even = (n :: Num) -> Bool => < n == 0 ? true : odd(n - 1) >\neven = (t :: Text) -> Bool => < false >\nodd = (n :: Num) -> Bool => < n == 0 ? false : even(n - 1) >\nodd = (t :: Text) -> Bool => < true >\n^ = () -> Num => < 0 >",
     )
     .unwrap_err();
     match err {
@@ -552,7 +555,7 @@ fn test_a_call_resolves_against_the_members_above_it() {
     // Only `f`'s Num member is defined at the call, so a Text argument reports the
     // candidates that actually exist there rather than reaching forward.
     let err = check_ok(
-        "f = (n :: Num) -> Num => 1\nh = () -> Num => f(\"x\")\nf = (t :: Text) -> Num => 2\n^ = () -> Num => 0",
+        "f = (n :: Num) -> Num => < 1 >\nh = () -> Num => < f(\"x\") >\nf = (t :: Text) -> Num => < 2 >\n^ = () -> Num => < 0 >",
     )
     .unwrap_err();
     match err {
@@ -568,8 +571,8 @@ fn test_unannotated_comparison_operator_overload_asks_for_the_annotation() {
     // Without a return type there is nothing to compare against `Bool` yet, so the
     // actionable message wins: annotate it. Annotated non-Bool still gets the
     // comparison-specific error.
-    let err =
-        check_ok("V = { x :: Num, == = (other :: V) => it }\n^ = () -> Num => 0").unwrap_err();
+    let err = check_ok("V = { x :: Num, == = (other :: V) => < it >}\n^ = () -> Num => < 0 >")
+        .unwrap_err();
     assert!(matches!(err, TypeError::UnannotatedOverloadMember { .. }));
 }
 
@@ -602,7 +605,7 @@ fn test_named_update_refuses_a_source_that_cannot_fill_the_type() {
 
     // An anonymous record carries no methods, so it cannot fill a type that has one.
     let with_method = check_ok(
-        "V = { x :: Num, double = => it.x * 2 }\n^ = () -> Num => <\n  parts = { x = 1 }\n  v = V { <-parts }\n  v.x\n>",
+        "V = { x :: Num, double = => < it.x * 2 >}\n^ = () -> Num => <\n  parts = { x = 1 }\n  v = V { <-parts }\n  v.x\n>",
     )
     .unwrap_err();
     assert!(matches!(with_method, TypeError::TypeMismatch { .. }));

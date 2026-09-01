@@ -102,7 +102,7 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
 
     // A single-file program (no imports) so every emitted function maps to THIS file.
     // `factorial` is on line 2; the entry point `^` is on line 3.
-    let src = "\nfactorial = (n :: Num) -> Num => n <= 1 ? 1 : n * factorial(n - 1)\n^ = () -> Num => factorial(5)\n";
+    let src = "\nfactorial = (n :: Num) -> Num => < n <= 1 ? 1 : n * factorial(n - 1) >\n^ = () -> Num => < factorial(5) >\n";
     let dir = std::env::temp_dir().join(format!("quilon_dbg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let ql = dir.join("prog.qn");
@@ -258,7 +258,7 @@ describe = (p :: Point) -> Num => <
   p.x + p.y + count + nums.size
 >
 
-^ = () -> Num => describe(Point { x = 4, y = 5 })
+^ = () -> Num => < describe(Point { x = 4, y = 5 }) >
 ";
     let dir = std::env::temp_dir().join(format!("quilon_dbgvars_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
@@ -474,7 +474,7 @@ fn non_debug_build_has_no_ql_debug_info() {
     }
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let src = "^ = () -> Num => 7\n";
+    let src = "^ = () -> Num => < 7 >\n";
     let dir = std::env::temp_dir().join(format!("quilon_nodbg_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let ql = dir.join("plain.qn");
@@ -633,13 +633,13 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
     std::fs::create_dir_all(dir.join("lib")).expect("create temp lib dir");
     std::fs::write(
         dir.join("lib/util.qn"),
-        ">> triple = (n :: Num) -> Num => n * 3\n",
+        ">> triple = (n :: Num) -> Num => < n * 3 >\n",
     )
     .expect("write imported module");
     let ql = dir.join("main.qn");
     std::fs::write(
         &ql,
-        "<< \"lib/util.qn\"\n\n^ = () -> Num => util.triple(4)\n",
+        "<< \"lib/util.qn\"\n\n^ = () -> Num => < util.triple(4) >\n",
     )
     .expect("write root source");
     let bin = dir.join("main");
