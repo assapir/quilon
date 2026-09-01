@@ -35,8 +35,8 @@ error: No overload of 'score' matches argument types (Bool). Candidates: (Num), 
   g :: (Text) -> Num = (t) => < 2 >
   ```
 - A single ordinary `name = …` definition is **not** an overload set. It keeps its
-  inferred return type — no return annotation needed. Its parameters are still annotated;
-  only an unannotated **method** parameter defaults to `Num` (see
+  inferred return type — no return annotation needed. Its parameters are still annotated —
+  a **method** parameter is held to the same rule (see
   [named record types](../types/records.md#named-record-types-with-methods)).
 - **The built-in operators are members, not reserved names.** `+` on `Num` and `+` on
   `Text` are two members of the `+` set, and a type's own operator member joins it on the

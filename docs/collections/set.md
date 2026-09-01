@@ -49,7 +49,9 @@ the receiver is a Set):
 [|1, 2, 3|] +- [|3, 4, 5|]   ~ intersection → {3}   (`+-` and `-+` are the same operator)
 ```
 
-Like the empty array `[]` (which is `[]Num`), an **empty** set literal defaults to `Num`
-element type and cannot yet be annotated to another type.
+An **empty** set literal `[||]` has no element type of its own — it takes one from context:
+a type annotation on the binding, a call argument's declared parameter type, or a
+function's declared return type. With none of those available, it's a compile error (there
+is no `Num` default).
 
 (See `examples/sets.qn`.)

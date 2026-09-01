@@ -242,7 +242,7 @@ fn runnable_examples_match_across_jit_and_aot() {
             let native = Command::new(&bin)
                 .stdin(std::process::Stdio::null())
                 .output()
-                .expect("run native binary");
+                .unwrap_or_else(|e| panic!("run native binary {}: {e}", bin.display()));
             let native_code = native.status.code().unwrap_or(-1);
             assert_eq!(
                 native_code, 0,

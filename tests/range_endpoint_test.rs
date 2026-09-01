@@ -147,3 +147,41 @@ fn whole_endpoints_are_unaffected() {
         3,
     );
 }
+
+/// The LAZY method lowerings validate endpoints through the same shared header the
+/// materializing path uses, so a bad computed end aborts with the SAME message and the
+/// same range-expression frame — whether the range feeds `.each`, `.reduce`, or `.map`.
+#[test]
+fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
+    for (tag, source) in [
+        (
+            "lazy_nan_each",
+            "^ = () -> Num => <\n  (1 <- (0.0 / 0.0)).each(n => n)\n  0\n>",
+        ),
+        (
+            "lazy_nan_reduce",
+            "^ = () -> Num => < (1 <- (0.0 / 0.0)).reduce(0, (acc, n) => acc + n) >",
+        ),
+        (
+            "lazy_nan_map",
+            "^ = () -> Num => <\n  r = (1 <- (0.0 / 0.0)).map(n => n)\n  r.size\n>",
+        ),
+    ] {
+        let (code, stderr, _) = run_program(tag, source);
+        assert_eq!(code, 1, "{tag} must exit 1: {stderr}");
+        assert!(
+            stderr.contains("a range endpoint must be a whole number (got NaN)"),
+            "{tag} must say why, got: {stderr}"
+        );
+    }
+}
+
+/// A LITERAL bad end on a lazily-consumed range is still settled by the checker, at
+/// compile time — the lazy lowering changes nothing ahead of codegen.
+#[test]
+fn a_literal_bad_endpoint_on_a_lazily_consumed_range_is_a_compile_error() {
+    assert_eq!(
+        type_error_message("^ = () -> Num => <\n  r = (1.5 <- 3.9).map(n => n)\n  r.size\n>"),
+        "a range endpoint must be a whole number (got 1.5)"
+    );
+}

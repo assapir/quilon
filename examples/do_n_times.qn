@@ -1,0 +1,39 @@
+~ "Do N times" over a large range. `(lo <- hi).each(...)` is the bounded-repetition
+~ idiom (Quilon has no loop construct), and a range consumed DIRECTLY by an array
+~ method is not materialized: the loop iterates the endpoints, so repeating a body
+~ 100 million times allocates nothing — the range below would be an 800MB array if
+~ it were built. `.reduce` folds the same way; `.map`/`.filter` allocate only their
+~ result. The range stays an ordinary `[]Num` — bind it to a name, index it, or
+~ take `.size` and it materializes exactly as always.
+~ `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
+
+^ = () -> $ => <
+  n :: Num = 100000000                  ~ one hundred million repetitions
+
+  ~ Side-effecting repetition: `:=` declares a mutable binding the lambda updates.
+  total := 0
+  (1 <- n).each(i => <
+    total := total + i
+  >)
+  ~ 1 + 2 + ... + 100000000 = 5000000050000000 — exact in a Num (below 2^53).
+  assert(total, equals(5000000050000000))
+
+  ~ The same fold without mutation: `.reduce` over the range allocates nothing.
+  sum :: Num = (1 <- n).reduce(0, (acc :: Num, i :: Num) -> Num => acc + i)
+  assert(sum, equals(5000000050000000))
+
+  ~ `.map`/`.filter` on a range allocate only their result.
+  doubled :: []Num = (1 <- 4).map((i :: Num) -> Num => i * 2)
+  assert(doubled.size, equals(4))
+  assert(doubled[3], equals(8))
+
+  evens :: []Num = (1 <- 10).filter((i :: Num) -> Bool => i % 2 == 0)
+  assert(evens.size, equals(5))
+  assert(evens[4], equals(10))
+
+  ~ Any other consumption still materializes the array, unchanged.
+  bound :: []Num = 1 <- 5
+  assert(bound.size, equals(5))
+  assert((1 <- 5)[2], equals(3))
+>

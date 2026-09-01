@@ -22,7 +22,7 @@ User = {
   name :: Text,
   age  :: Num,
   greet   = => < "Hello, " + it.name >,
-  olderBy = years => < it.age + years >
+  olderBy = (years :: Num) => < it.age + years >
 }
 
 u = User { name = "Alice", age = 30 }
@@ -44,9 +44,9 @@ A method declared with `:=` instead of `=` is a **setter** — it may mutate its
 receiver — and calling one requires a mutable (`:=`) receiver
 (see [Mutation](../mutation.md)).
 
-An unannotated method parameter defaults to `Num` (as in any [ordinary
-definition](../functions/overloading.md)), and call sites are held to that default:
-`t.add("hi")` on `add = (x) => it.v + x` is a type error, not a runtime surprise.
+A method parameter must be annotated too, exactly like an [ordinary
+definition](../functions/overloading.md)'s — there is no `Num` default: `add = (x) => it.v + x`
+is a compile error naming the unannotated `x`.
 
 A method is reached through `recv.name(...)` and nowhere else, and a top-level function
 through `name(args)` and nowhere else — neither answers for the other. `recv.name(...)`

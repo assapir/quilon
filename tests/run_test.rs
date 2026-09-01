@@ -411,22 +411,22 @@ fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
 }
 
 #[test]
-fn unannotated_method_parameter_is_checked_as_num_at_the_call_site() {
-    // An unannotated method parameter defaults to `Num` when the BODY is checked, so
-    // the call site must hold arguments to that same commitment — exactly as a plain
-    // function's unannotated parameter already does. Leaving these unchecked let a
-    // `Text` argument through to codegen, where it surfaced as a raw LLVM verifier
-    // dump instead of a type error.
-    let src = "T = {\n  v :: Num,\n  add = (x) -> Num => < it.v + x >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(\"hello\")\n>";
-    assert_type_error(src);
-}
-
-#[test]
-fn unannotated_method_parameter_still_accepts_a_num() {
-    // The tightening must not reject the case it defaulted for: a `Num` argument is
-    // exactly what the body was checked against.
+fn unannotated_method_parameter_is_rejected() {
+    // No `Num` default any more: a method parameter must be annotated, exactly like an
+    // ordinary function's — even when every call site happens to pass a `Num` (the case
+    // the old default silently accepted).
     let src = "T = {\n  v :: Num,\n  add = (x) -> Num => < it.v + x >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.add(41)\n>";
-    assert_exit(src, 42);
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let err = checker
+        .check_program(&program)
+        .expect_err("an unannotated method parameter must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("'x'") && message.contains("'T.add'") && message.contains("has no type"),
+        "the diagnostic must name the parameter and the method, got: {message}"
+    );
 }
 
 #[test]
@@ -731,6 +731,136 @@ fn unit_is_incompatible_with_num() {
         checker.check_program(&program).is_err(),
         "expected `$` (Unit) body for a `-> Num` function to be a type error"
     );
+}
+
+// --- No silent `Num` default: an uninferable type is a compile error. ---
+
+#[test]
+fn unannotated_recursive_function_needs_a_return_type() {
+    // A self-recursive call needs to already know what the function returns; an
+    // unannotated function's return type isn't known until its body — which the
+    // recursive call sits inside — is fully checked. This used to silently assume
+    // `Num` for the recursive call, wrongly rejecting a valid non-`Num`-returning
+    // recursive function with a confusing `Type mismatch` instead of naming the real
+    // problem.
+    let message = common::type_error_message(
+        "f = (n :: Num) => < n <= 0 ? \"done\" : f(n - 1) >\n^ = () -> Num => < 0 >",
+    );
+    assert!(
+        message.contains("recursive function 'f'") && message.contains("annotated return type"),
+        "expected a clear recursive-return-type diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn annotated_recursive_function_with_a_non_num_return_type_works() {
+    // The exact shape the old `Num` placeholder used to wrongly reject: a recursive
+    // function returning `Text`, not `Num`. Annotating it resolves the recursive call's
+    // type correctly and the program runs.
+    assert_exit(
+        "f = (n :: Num) -> Text => < n <= 0 ? \"done\" : f(n - 1) >\n\
+         ^ = () -> Num => < f(3).size >",
+        4,
+    );
+}
+
+#[test]
+fn empty_block_is_a_compile_error() {
+    // A `< >` block with no statements at all has nothing that ran and nothing to
+    // evaluate to — a compile error, not a silent `Num` (or `$`).
+    let message = common::type_error_message("^ = () -> Num => <\n>");
+    assert!(
+        message.contains("no value") && message.contains("no statements"),
+        "expected a clear empty-block diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn block_ending_in_a_reassignment_is_unit_not_a_silent_num() {
+    // A block whose LAST statement is a declaration (`:=`/`=`), not an expression, has
+    // no value to hand back — it types as `$` (Unit), like an `it.field :=` method body,
+    // not a silently-assumed `Num`. This is the `.each` side-effecting-lambda idiom.
+    assert_exit(
+        "^ = () -> Num => <\n  sum := 0\n  [1, 2, 3].each(x => <\n    sum := sum + x\n  >)\n  sum\n>",
+        6,
+    );
+}
+
+#[test]
+fn block_ending_in_a_reassignment_is_incompatible_with_num() {
+    // The `$` a declaration-ending block types as is not `Num` — using it where a `Num`
+    // is expected must fail, exactly like any other `$`/`Num` mismatch.
+    assert_type_error("^ = () -> Num => <\n  x := 1\n>");
+}
+
+#[test]
+fn empty_array_literal_without_context_is_a_compile_error() {
+    // `[]` alone has no element type, and nothing here states one — a compile error
+    // naming the literal, not a silent `[]Num`.
+    let message = common::type_error_message("^ = () -> Num => <\n  xs = []\n  0\n>");
+    assert!(
+        message.contains("empty array literal") && message.contains("no element type"),
+        "expected a clear empty-array diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn empty_array_literal_infers_from_binding_annotation() {
+    // The binding's own annotation supplies the element type — here `Text`, so a `Num`
+    // default would have failed to compile (`.size` on an empty `[]Text` is fine; the
+    // point is the element type is genuinely `Text`, not `Num`).
+    assert_exit("^ = () -> Num => <\n  xs :: []Text = []\n  xs.size\n>", 0);
+}
+
+#[test]
+fn empty_array_literal_infers_from_call_argument_parameter_type() {
+    // `count`'s declared `[]Text` parameter type seeds the empty literal argument.
+    assert_exit(
+        "count = (xs :: []Text) -> Num => < xs.size >\n^ = () -> Num => < count([]) >",
+        0,
+    );
+}
+
+#[test]
+fn empty_array_literal_infers_from_declared_return_type() {
+    // The function's own `-> []Text` annotation seeds its empty-literal body.
+    assert_exit(
+        "empty = () -> []Text => < [] >\n^ = () -> Num => < empty().size >",
+        0,
+    );
+}
+
+#[test]
+fn empty_map_literal_without_context_is_a_compile_error() {
+    let message = common::type_error_message("^ = () -> Num => <\n  m = [|=>|]\n  0\n>");
+    assert!(
+        message.contains("empty map literal") && message.contains("no key/value type"),
+        "expected a clear empty-map diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn empty_map_literal_infers_non_num_types_from_binding_annotation() {
+    // `Text => Bool`, not `Num => Num` — proves the type comes from the annotation, not
+    // a coincidental default.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Bool|] = [|=>|]\n  m.size\n>",
+        0,
+    );
+}
+
+#[test]
+fn empty_set_literal_without_context_is_a_compile_error() {
+    let message = common::type_error_message("^ = () -> Num => <\n  s = [||]\n  0\n>");
+    assert!(
+        message.contains("empty set literal") && message.contains("no element type"),
+        "expected a clear empty-set diagnostic, got: {message}"
+    );
+}
+
+#[test]
+fn empty_set_literal_infers_non_num_type_from_binding_annotation() {
+    assert_exit("^ = () -> Num => <\n  s :: [|Text|] = [||]\n  s.size\n>", 0);
 }
 
 // --- Type-annotated bindings inside a `< >` block (parity with top-level). ---

@@ -99,13 +99,19 @@ impl TypeChecker {
     /// `(args :: []Text, env :: [|Text => Text|])`.
     /// The runtime builds `Text` args and a `Text => Text` env Map, so a differently-typed
     /// array (e.g. `[]Num`) must be rejected rather than silently handed mis-sized
-    /// elements. An unannotated parameter defaults to `Num` (matching codegen), so `^(x)`
-    /// is rejected like any other unsupported shape.
+    /// elements. `^` is checked like any other function first (in the `check_item` pass
+    /// above), so an unannotated parameter has already been rejected as
+    /// `UnannotatedParameter` by the time this runs — every parameter here is annotated.
     pub(super) fn check_entry_point_signature(
         declaration: &FunctionDeclaration,
     ) -> Result<(), TypeError> {
         let parameters: Vec<Type> = (0..declaration.parameters.len())
-            .map(|i| declaration.parameter_type(i).cloned().unwrap_or(Type::Num))
+            .map(|i| {
+                declaration
+                    .parameter_type(i)
+                    .cloned()
+                    .expect("^'s parameters are annotated: checked in check_function_declaration")
+            })
             .collect();
         let text_array = Type::Array(Box::new(Type::Text));
         let text_map = Type::Map(Box::new(Type::Text), Box::new(Type::Text));
@@ -370,12 +376,22 @@ impl TypeChecker {
             )?;
 
             // A method is dispatched on its receiver's type rather than called by name, so
-            // it never receives a call site — its last parameter included.
+            // it never receives a call site — its last parameter included. Every parameter
+            // must be annotated: there is no `Num` default (same rule as an ordinary
+            // definition's parameters — see `check_function_declaration`).
             let method_parameter_types: Vec<Type> = method
                 .parameters
                 .iter()
-                .map(|p| p.type_annotation.clone().unwrap_or(Type::Num))
-                .collect();
+                .map(|p| {
+                    p.type_annotation
+                        .clone()
+                        .ok_or_else(|| TypeError::UnannotatedParameter {
+                            function: format!("{}.{}", type_name, method.name),
+                            parameter: p.name.clone(),
+                            span: p.span.clone(),
+                        })
+                })
+                .collect::<Result<_, _>>()?;
             self.reject_unfillable_site_parameters(
                 &format!("method `{}.{}`", type_name, method.name),
                 &method.parameters,
@@ -383,15 +399,12 @@ impl TypeChecker {
                 false,
             )?;
 
-            for parameter in &method.parameters {
+            for (parameter, raw_type) in method.parameters.iter().zip(&method_parameter_types) {
                 // Resolve the annotation so a user-type parameter (`other :: Color`) carries
                 // its fields/variants — field access and matching on it then resolve. The
                 // type being defined is already registered (see `check_type_declaration`),
                 // so a parameter naming it (an operator's right operand) resolves too.
-                let parameter_type = match &parameter.type_annotation {
-                    Some(t) => self.resolve_type(t),
-                    None => Type::Num,
-                };
+                let parameter_type = self.resolve_type(raw_type);
                 self.env.define(
                     parameter.name.clone(),
                     parameter_type,
@@ -403,12 +416,13 @@ impl TypeChecker {
             // Type-check the body, then resolve the method's result type: the annotation
             // when present, otherwise the inferred body type. Storing the *resolved* type
             // keeps call sites in agreement with codegen (an unannotated setter whose body
-            // is a field write yields `$`, not Num).
-            let body_type = self.infer_expression(&method.body)?;
-            let resolved_return_type = if let Some(return_type) = &method.return_type {
-                // Resolve the annotation so an operator/method returning its own user type
-                // (`-> V`) compares against the body's fully-resolved type, not a bare name.
-                let resolved = self.resolve_type(return_type);
+            // is a field write yields `$`, not Num). The annotation is resolved FIRST so an
+            // otherwise-uninferable empty collection literal in the body can take its
+            // element type from it (see `infer_expression_expecting`).
+            let annotated_return_type = method.return_type.as_ref().map(|t| self.resolve_type(t));
+            let body_type =
+                self.infer_expression_expecting(&method.body, annotated_return_type.as_ref())?;
+            let resolved_return_type = if let Some(resolved) = annotated_return_type {
                 self.check_type_compatibility(&resolved, &body_type, &method.span)?;
                 // A generic return annotation (`-> Result`) is refined to the inferred body
                 // type, exactly as a top-level function's is — see
@@ -448,7 +462,7 @@ impl TypeChecker {
                 (type_name.to_string(), method.name.clone()),
                 (
                     method.parameters.clone(),
-                    Some(resolved_return_type),
+                    resolved_return_type,
                     method.body.clone(),
                 ),
             );
@@ -563,12 +577,18 @@ impl TypeChecker {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), TypeError> {
-        // Infer or check the type of the value
-        let value_type = self.infer_expression(&declaration.value)?;
+        // Resolve the annotation FIRST (when present) so an otherwise-uninferable empty
+        // collection literal on the right (`xs :: []Text = []`) can take its element type
+        // from it — see `infer_expression_expecting`.
+        let annotated_type = declaration
+            .type_annotation
+            .as_ref()
+            .map(|t| self.resolve_type(t));
+        let value_type =
+            self.infer_expression_expecting(&declaration.value, annotated_type.as_ref())?;
 
         // If type annotation exists, check it matches
-        let final_type = if let Some(ref annotated_type) = declaration.type_annotation {
-            let annotated_type = self.resolve_type(annotated_type);
+        let final_type = if let Some(annotated_type) = annotated_type {
             self.check_type_compatibility(&annotated_type, &value_type, &declaration.span)?;
             // A sum annotation (e.g. the generic `Result`) is satisfied by a more concrete
             // value of the same sum (`Ok(SomeRecord)`); keep the inferred type so its
@@ -766,29 +786,41 @@ impl TypeChecker {
             .declared_return_type()
             .map(|t| self.resolve_type(t));
 
-        // For recursion support, we need to add the function to the environment
-        // BEFORE checking its body. We'll use the annotated return type if available,
-        // or default to Num (which we'll verify later)
-        let preliminary_return_type = annotated_return.clone().unwrap_or(Type::Num);
-
         // An overloaded member (operator-named, or one of 2+ same-named defs) is NOT
         // a single `env` binding — its signature already lives in the overload set
         // (registered in the pre-pass). We only type-check its body here, then refine
         // that member's return type from the inferred body when it wasn't annotated.
         let is_overloaded = self.overloaded_names.contains(&declaration.name);
 
+        // For recursion support, the function needs to be callable from its own body —
+        // but only when its return type is already KNOWN (annotated): a self-recursive
+        // call needs to know what the call it's sitting inside of returns, and an
+        // unannotated function's return type isn't known until that body is fully
+        // checked. So an ANNOTATED function is defined in `env` before its body is
+        // checked (enabling recursion), while an UNANNOTATED one is left undefined for
+        // that window and marked `pending_return_type` instead — `check_call` reports a
+        // clear error for a recursive call that resolves to it, rather than either
+        // `UndefinedVariable` or (the historical bug) silently assuming `Num`.
+        let previous_pending = self.pending_return_type.take();
         if !is_overloaded {
-            let func_type = Type::Function {
-                parameters: parameter_types.clone(),
-                return_type: Box::new(preliminary_return_type.clone()),
-            };
-            // Define the function in current scope BEFORE checking body (enables recursion)
-            self.env.define(
-                declaration.name.clone(),
-                func_type,
-                false,
-                declaration.span.clone(),
-            )?;
+            match &annotated_return {
+                Some(ret) => {
+                    let func_type = Type::Function {
+                        parameters: parameter_types.clone(),
+                        return_type: Box::new(ret.clone()),
+                    };
+                    self.env.define(
+                        declaration.name.clone(),
+                        func_type,
+                        false,
+                        declaration.span.clone(),
+                    )?;
+                }
+                None => {
+                    self.pending_return_type =
+                        Some((declaration.name.clone(), declaration.span.clone()));
+                }
+            }
         }
 
         // Push scope for body type checking
@@ -805,18 +837,24 @@ impl TypeChecker {
             )?;
         }
 
-        // Check body and infer return type. A FUNCTION-typed return annotation is a
-        // contextual-typing position — the third, after arguments and declared bindings:
-        // a lambda body takes the parameter types the annotation states, so
-        // `adder = (n :: Num) -> (Num) -> Num => (x) => x + n` types `x` from the return.
-        // `infer_argument` is that exact rule (and a non-lambda body passes through it
-        // to plain inference).
-        let body_type = match &annotated_return {
-            Some(ret @ Type::Function { .. }) => {
-                self.infer_argument(&declaration.body, LambdaTarget::Declared(ret))?
-            }
-            _ => self.infer_expression(&declaration.body)?,
+        // Check body and infer return type through the same contextual-typing helper a
+        // call argument uses (`infer_argument`): a FUNCTION-typed return annotation types
+        // a lambda body's otherwise-unannotated parameters — the third contextual-typing
+        // position, after arguments and declared bindings — so
+        // `adder = (n :: Num) -> (Num) -> Num => (x) => x + n` types `x` from the return;
+        // any OTHER annotation is instead the expected type an otherwise-uninferable empty
+        // collection literal body takes its element type from
+        // (`f = () -> []Text => []`). Anything but a literal lambda or empty literal body
+        // infers exactly as before either way.
+        let target = match &annotated_return {
+            Some(ret) => LambdaTarget::Declared(ret),
+            None => LambdaTarget::None,
         };
+        let body_type = self.infer_argument(&declaration.body, target)?;
+
+        // Restore whatever the ENCLOSING declaration's pending state was — this function
+        // may itself be nested inside another unannotated one still being checked.
+        self.pending_return_type = previous_pending;
 
         self.env.pop_scope();
 
@@ -849,13 +887,21 @@ impl TypeChecker {
             // one type and a call below it another — which is precisely the order
             // dependence the annotation requirement removes. The omission is reported
             // instead, at the call or at the definition.
-        } else if body_type != preliminary_return_type {
-            // Update the function type with the inferred return type
-            let correct_func_type = Type::Function {
+        } else {
+            // Not annotated, not overloaded: `declaration.name` was left undefined for the
+            // body-check window (see above), so define it now, for real, with the type its
+            // body just proved — nothing before this point could have called it without
+            // hitting `RecursiveFunctionNeedsReturnType`.
+            let func_type = Type::Function {
                 parameters: parameter_types,
                 return_type: Box::new(body_type.clone()),
             };
-            let _ = self.env.update_type(&declaration.name, correct_func_type);
+            self.env.define(
+                declaration.name.clone(),
+                func_type,
+                false,
+                declaration.span.clone(),
+            )?;
         }
 
         Ok(())

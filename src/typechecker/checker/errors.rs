@@ -23,6 +23,7 @@ impl TypeError {
             | TypeError::UnannotatedParameter { span, .. }
             | TypeError::SignatureArity { span, .. }
             | TypeError::UninferableLambdaParameter { span, .. }
+            | TypeError::RecursiveFunctionNeedsReturnType { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
@@ -227,6 +228,14 @@ impl std::fmt::Display for TypeError {
                     ),
                     None => write!(f, "nothing here states a function type to take it from"),
                 }
+            }
+            TypeError::RecursiveFunctionNeedsReturnType { function, .. } => {
+                write!(
+                    f,
+                    "recursive function '{function}' needs an annotated return type (`-> T`) \
+                     — a call to itself needs to already know what it returns, and that isn't \
+                     known until its body (which the call sits inside) is fully checked"
+                )
             }
             TypeError::SiteIsImmutable { field, .. } => {
                 write!(

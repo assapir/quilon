@@ -148,6 +148,15 @@ pub enum TypeError {
         open_overload: Option<String>,
         span: Span,
     },
+    /// A self-recursive call to a function with no `-> T` return annotation: the call
+    /// needs to already know what the function returns, and an unannotated function's
+    /// return type is only known once its body — which the recursive call sits inside —
+    /// is fully checked. Anchored at the function's own definition, not the call, since
+    /// the fix is the same wherever the recursive call sits.
+    RecursiveFunctionNeedsReturnType {
+        function: String,
+        span: Span,
+    },
     /// A write to a field of a `Site`. The type is read-only as a whole: a location is a
     /// value, not a variable. It has to be — a compiler-filled call site is one shared
     /// read-only constant, and records alias, so a write through any binding of one would be
@@ -402,8 +411,10 @@ pub struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
 }
 
-/// A method's signature and body: (parameters, return type, body expression).
-type MethodDef = (Vec<Parameter>, Option<Type>, Expression);
+/// A method's signature and body: (parameters, return type, body expression). The return
+/// type is always resolved — `check_type_methods` infers it from the body when the method
+/// has no `-> Type` annotation, so a registered method always has a concrete one.
+type MethodDef = (Vec<Parameter>, Type, Expression);
 
 /// The **type oracle**: a side-table mapping each expression's — and each function
 /// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by
@@ -474,6 +485,15 @@ pub struct TypeChecker {
     // is only legal inside an `it` — which in turn is only compiled inside a `describe`.
     test_depth: usize,
     case_depth: usize,
+    // `(name, definition span)` of the non-overloaded, unannotated function currently
+    // having its body checked, when it has no `-> T` return type — its own name is left
+    // UNDEFINED in `env` for that window (see `check_function_declaration`), so a
+    // self-recursive call to it resolves here instead of as `UndefinedVariable`, and is
+    // reported as `RecursiveFunctionNeedsReturnType` rather than assuming `Num`. `None`
+    // outside that window, or while checking an annotated/overloaded function; saved and
+    // restored around a nested declaration's own check so it still names the right
+    // function afterward.
+    pending_return_type: Option<(String, Span)>,
 }
 
 impl Default for TypeChecker {
@@ -495,6 +515,7 @@ impl TypeChecker {
             unannotated_overload_member: None,
             test_depth: 0,
             case_depth: 0,
+            pending_return_type: None,
         };
 
         // Add built-in sum types to the environment

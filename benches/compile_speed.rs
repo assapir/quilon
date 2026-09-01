@@ -507,7 +507,7 @@ fn record_program(types: usize, fields: usize, users: usize) -> String {
     for t in 0..types {
         let _ = writeln!(
             src,
-            "R{t} = {{\n{declared}\n  first = => < it.f0 >,\n  scaled = k => < it.f0 * k + it.f1 >,\n  total = => < it.f0 + it.f1 + it.f2 >\n}}\n"
+            "R{t} = {{\n{declared}\n  first = => < it.f0 >,\n  scaled = (k :: Num) => < it.f0 * k + it.f1 >,\n  total = => < it.f0 + it.f1 + it.f2 >\n}}\n"
         );
     }
     for t in 0..types {

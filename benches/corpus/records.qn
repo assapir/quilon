@@ -20,7 +20,7 @@ R0 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -46,7 +46,7 @@ R1 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -72,7 +72,7 @@ R2 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -98,7 +98,7 @@ R3 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -124,7 +124,7 @@ R4 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -150,7 +150,7 @@ R5 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -176,7 +176,7 @@ R6 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -202,7 +202,7 @@ R7 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -228,7 +228,7 @@ R8 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -254,7 +254,7 @@ R9 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -280,7 +280,7 @@ R10 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -306,7 +306,7 @@ R11 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -332,7 +332,7 @@ R12 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -358,7 +358,7 @@ R13 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -384,7 +384,7 @@ R14 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -410,7 +410,7 @@ R15 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -436,7 +436,7 @@ R16 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -462,7 +462,7 @@ R17 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -488,7 +488,7 @@ R18 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -514,7 +514,7 @@ R19 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -540,7 +540,7 @@ R20 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -566,7 +566,7 @@ R21 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -592,7 +592,7 @@ R22 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -618,7 +618,7 @@ R23 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -644,7 +644,7 @@ R24 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -670,7 +670,7 @@ R25 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -696,7 +696,7 @@ R26 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -722,7 +722,7 @@ R27 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -748,7 +748,7 @@ R28 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
@@ -774,7 +774,7 @@ R29 = {
   f18 :: Num,
   f19 :: Num,
   first = => < it.f0 >,
-  scaled = k => < it.f0 * k + it.f1 >,
+  scaled = (k :: Num) => < it.f0 * k + it.f1 >,
   total = => < it.f0 + it.f1 + it.f2 >
 }
 
