@@ -31,7 +31,7 @@ sidebar:
 | Functions, recursion, blocks, type inference | ✅ |
 | Guaranteed self-tail-call optimization (tail self-recursion runs in constant stack) | ✅ |
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
-| Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`); endpoints must be whole numbers a `Num` holds exactly, materialized eagerly | ✅ |
+| Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`); endpoints must be whole numbers a `Num` holds exactly; consumed directly by an array method it iterates without materializing | ✅ |
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, wildcard, identifiers, sum-type variants); every match is total — a sum lists its variants, anything else takes a catch-all | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |

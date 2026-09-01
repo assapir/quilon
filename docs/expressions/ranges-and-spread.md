@@ -24,12 +24,22 @@ r.each(x => io.print(x))   ~ a range iterates with `.each` like any array
 Both ends are full `Num` expressions — they may be dynamic, not just literals. The
 direction (ascending vs descending) is decided at runtime. (See `examples/ranges.qn`.)
 
+**Performance note — no semantic difference.** A range consumed **directly** by an
+[array method](../collections/arrays.md#array-methods) — the receiver is the range
+expression itself, as in `(1 <- n).each(...)` — is **not materialized**: the method's
+loop iterates the endpoints instead, so `.each` and `.reduce` allocate nothing and
+`.map`/`.filter` allocate only their result. That makes "do this N times" scale to any
+`n`: `(1 <- 100000000).each(...)` runs as a counter, not an 800 MB array. Any other
+consumption — indexing `[i]`, `.size`, binding the range to a name, passing it to a
+function — builds the `[]Num` exactly as described above. The results are identical
+either way; only the allocation differs. (See `examples/do_n_times.qn`.)
+
 ### Endpoints must be whole numbers
 A range counts from one end to the other, so each end must be a **whole number** — and one a
 `Num` holds exactly, so at most 2^53 in magnitude (the
 [exact-integer limit](../types/README.md#the-exact-integer-limit)). Anything else is an
-**error**, never a truncation (a range is also
-[materialized in full](../status/limitations.md)):
+**error**, never a truncation — on every path, [materialized or
+not](../status/limitations.md):
 
 ```quilon ignore
 1.5 <- 3.9        ~ error: a range endpoint must be a whole number (got 1.5)
