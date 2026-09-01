@@ -108,6 +108,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .build_load(ty, global.as_pointer_value(), name)
                         .map_err(ctx("Failed to build load global"));
                 }
+                // A top-level function NAME used as a value (`pass(double)`, a body
+                // returning `double`): functions are not first-class values yet — only
+                // lambdas and closure bindings are. Say so, instead of "undefined".
+                if self.module.get_function(name).is_some()
+                    || self.overloads.contains_key(name.as_str())
+                {
+                    return Err(format!(
+                        "`{name}` is a top-level function, and a function name is not a \
+                         value yet — wrap it in a lambda that calls it"
+                    ));
+                }
                 Err(format!("Undefined variable: {}", name))
             }
 

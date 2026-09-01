@@ -1,13 +1,13 @@
 // Higher-order functions across the pipeline: parsing a function type, type-checking a
-// function-typed parameter (and rejecting an unannotated one), and running a user
-// function that takes a closure and calls it.
+// function-typed parameter (and rejecting an unannotated one), running a user function
+// that takes a closure and calls it, and returning a closure across the call boundary.
 
 use quilon::ast::{FunctionDeclaration, Item, Type};
 use quilon::lexer::Lexer;
 use quilon::parser;
 
 mod common;
-use common::{assert_exit, assert_parse_error, assert_type_error, type_error_message};
+use common::{assert_exit, assert_type_error, type_error_message};
 
 /// The first top-level function declaration of `src`.
 fn first_function(src: &str) -> FunctionDeclaration {
@@ -99,9 +99,20 @@ fn written_annotations_win_over_the_binding_type() {
 }
 
 #[test]
-fn rejects_curried_return_type() {
-    // A function-typed RETURN position (currying) is deferred and rejected for now.
-    assert_parse_error("apply = (f :: (Num) -> (Num) -> Bool) => f");
+fn parses_curried_function_type_right_associatively() {
+    // `(Num) -> (Num) -> Bool` is `(Num) -> ((Num) -> Bool)`: the return position is a
+    // full type, so a function type may return a function type.
+    let ty = first_parameter_type("apply = (f :: (Num) -> (Num) -> Bool) -> Bool => f(1)(2)");
+    assert_eq!(
+        ty,
+        Type::Function {
+            parameters: vec![Type::Num],
+            return_type: Box::new(Type::Function {
+                parameters: vec![Type::Num],
+                return_type: Box::new(Type::Bool),
+            }),
+        }
+    );
 }
 
 #[test]
@@ -111,9 +122,95 @@ fn unannotated_parameter_is_rejected() {
 }
 
 #[test]
-fn returning_a_function_is_rejected() {
-    // Taking a function is supported; handing one back across the call boundary is deferred.
-    assert_type_error("pick = (f :: (Num) -> Num) => f\n^ = () -> Num => 0");
+fn returned_closure_called_through_a_binding() {
+    // The canonical shape: `adder(5)` hands back a closure whose captured `n` outlives
+    // adder's frame, and the binding that receives it is callable.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => (x :: Num) => x + n\n\
+         ^ = () -> Num => <\n  add5 = adder(5)\n  add5(2)\n>",
+        7,
+    );
+}
+
+#[test]
+fn returned_closure_called_immediately() {
+    // A call on a call: the callee is a function-valued expression, not a name.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => (x :: Num) => x + n\n\
+         ^ = () -> Num => adder(5)(2)",
+        7,
+    );
+}
+
+#[test]
+fn returned_lambda_takes_its_parameter_types_from_the_declared_return() {
+    // The FUNCTION-typed return annotation is a contextual-typing position: `x` writes no
+    // annotation and takes `Num` from the declared `(Num) -> Num`.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => (x) => x + n\n\
+         ^ = () -> Num => adder(40)(2)",
+        42,
+    );
+}
+
+#[test]
+fn returned_closure_passed_on_to_another_function() {
+    // The returned closure crosses a second call boundary into a function-typed parameter.
+    assert_exit(
+        "apply = (f :: (Num) -> Num, x :: Num) -> Num => f(x)\n\
+         adder = (n :: Num) -> (Num) -> Num => (x :: Num) => x + n\n\
+         ^ = () -> Num => apply(adder(40), 2)",
+        42,
+    );
+}
+
+#[test]
+fn closure_returned_from_a_closure() {
+    // `make` is itself a closure (it captures `base`), and it returns a further closure
+    // capturing values from two enclosing frames. 10 + 3 + 4 = 17.
+    assert_exit(
+        "^ = () -> Num => <\n  base = 10\n  \
+         make = (a :: Num) -> (Num) -> Num => (b :: Num) => base + a + b\n  \
+         f = make(3)\n  f(4)\n>",
+        17,
+    );
+}
+
+#[test]
+fn returned_closure_keeps_its_mutable_capture_alive() {
+    // The classic counter: the `:=` cell is captured by reference and must survive
+    // `mkCounter`'s frame. Three calls count 1, 2, 3; the last two sum to 5.
+    assert_exit(
+        "mkCounter = () -> () -> Num => <\n  count := 0\n  \
+         () -> Num => <\n    count := count + 1\n    count\n  >\n>\n\
+         ^ = () -> Num => <\n  c = mkCounter()\n  c()\n  c() + c()\n>",
+        5,
+    );
+}
+
+#[test]
+fn returning_a_function_typed_parameter() {
+    // A function value received as a parameter may be handed back out unchanged.
+    assert_exit(
+        "pick = (f :: (Num) -> Num) -> (Num) -> Num => f\n\
+         ^ = () -> Num => pick((n :: Num) => n * 2)(21)",
+        42,
+    );
+}
+
+#[test]
+fn returned_lambda_of_the_wrong_arity_is_an_arity_error() {
+    // The declared return states `(Num) -> Num`; a two-parameter lambda body is an arity
+    // mismatch with it, reported as such.
+    let message = type_error_message(
+        "adder = (n :: Num) -> (Num) -> Num => (a, b) => a + b\n^ = () -> Num => 0",
+    );
+    assert!(
+        message.contains(
+            "this lambda takes 2 parameters, but the function type it must match takes 1"
+        ),
+        "unexpected message: {message}"
+    );
 }
 
 #[test]

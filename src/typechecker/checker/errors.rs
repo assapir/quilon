@@ -23,7 +23,6 @@ impl TypeError {
             | TypeError::UnannotatedParameter { span, .. }
             | TypeError::SignatureArity { span, .. }
             | TypeError::UninferableLambdaParameter { span, .. }
-            | TypeError::UnsupportedFunctionReturn { span, .. }
             | TypeError::SiteIsImmutable { span, .. }
             | TypeError::MisplacedSiteParameter { span, .. }
             | TypeError::OverloadCallBeforeDefinition { span, .. }
@@ -228,13 +227,6 @@ impl std::fmt::Display for TypeError {
                     ),
                     None => write!(f, "nothing here states a function type to take it from"),
                 }
-            }
-            TypeError::UnsupportedFunctionReturn { function, .. } => {
-                write!(
-                    f,
-                    "'{}' returns a function, which is not supported yet — a function may take a function as a parameter, but not return one",
-                    function
-                )
             }
             TypeError::SiteIsImmutable { field, .. } => {
                 write!(

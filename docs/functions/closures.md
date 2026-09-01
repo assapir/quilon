@@ -57,6 +57,44 @@ through every level. A closure value may itself be captured by another closure a
 A closure may also be **passed to a function** whose parameter has the matching
 [function type](README.md#function-types--higher-order-functions) and called there.
 
-Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing a
-polymorphic value, generic closures, and **returning** a closure across frames are deferred
-— see [Known limitations](../status/limitations.md). (See `examples/closures.qn`.)
+Closures are **monomorphic**: parameters and captured values are concrete-typed. Capturing
+a polymorphic value and generic closures are deferred — see
+[Known limitations](../status/limitations.md).
+
+## Returning a closure
+
+A function's result may itself be a function: the return is written as a
+[function type](README.md#function-types--higher-order-functions), and the body hands back
+a closure. Its captures live on the **GC heap**, so they outlive the frame that made them
+— by-value (`=`) snapshots and shared `:=` cells alike:
+
+```quilon
+adder = (n :: Num) -> (Num) -> Num => (x) => x + n
+
+mkCounter = () -> () -> Num => <
+  count := 0                 ~ the `:=` cell survives mkCounter's return
+  () -> Num => <
+    count := count + 1
+    count
+  >
+>
+
+^ = () -> Num => <
+  add5 = adder(5)            ~ call it through a binding…
+  seven = add5(2)
+  answer = adder(40)(2)      ~ …or immediately: a call on a function-valued expression
+  tick = mkCounter()
+  tick()                     ~ 1
+  seven + answer + tick()    ~ 7 + 42 + 2 = 51
+>
+```
+
+The declared return type is a **contextual-typing position**: the lambda handed back takes
+its parameter types from it (`(x) => x + n` above writes no annotation — the return says
+`x` is a `Num`), exactly as a lambda argument takes them from the receiving signature. A
+returned closure is an ordinary function value: bind it, call it, pass it on to another
+function, or return it from another closure.
+
+What is handed back must be a closure value — a lambda literal, a named closure binding,
+or a function-typed parameter. A bare **top-level function name** is not a value yet (see
+[Known limitations](../status/limitations.md)). (See `examples/closures.qn`.)

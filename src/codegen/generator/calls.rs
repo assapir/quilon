@@ -137,11 +137,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         member_call: bool,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // Get function name - only support direct calls for now
+        // Resolve the callee. A NAME goes through the dispatch chain below; anything else
+        // — `adder(5)(2)`, a call on any function-valued expression — is generated to a
+        // closure value and called through it, with the signature the oracle recorded.
         let function_name = if let Expression::Identifier { name, .. } = function {
             name
         } else {
-            return Err("Only direct function calls supported".to_string());
+            return self.generate_closure_value_call(function, arguments);
         };
 
         // The provided assertions, whose second argument is a matcher rather than a value —
