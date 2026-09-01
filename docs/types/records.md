@@ -30,7 +30,7 @@ g = u.greet()          ~ "Hello, Alice"
 a = u.olderBy(5)       ~ 35
 ```
 (See `examples/methods.qn`.) Members may appear in any order — a method may come before
-the fields it uses, including as the very first member (see `examples/type_method_first.qn`).
+the fields it uses, including as the very first member (see `examples/methods.qn`).
 
 A method declared with `:=` instead of `=` is a **setter** — it may mutate its
 receiver — and calling one requires a mutable (`:=`) receiver
