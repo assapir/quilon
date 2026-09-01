@@ -16,7 +16,7 @@
 //! importer: referencing one surfaces as "not exported".
 
 use crate::ast::qualify::{self, ModuleScope, QualifyError};
-use crate::ast::{Import, Item, ModulePath, Program, TypeDefinition};
+use crate::ast::{Expression, Import, Item, ModulePath, Program, TypeDefinition};
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use crate::parser;
 use crate::source_map::SourceMap;
@@ -61,7 +61,8 @@ pub fn link(
     let mut program = program;
     let linked = loader
         .root_scope(&program.imports, base_dir)
-        .and_then(|scope| qualify::resolve_program(&mut program, &scope));
+        .and_then(|scope| qualify::resolve_program(&mut program, &scope))
+        .and_then(|()| loader.inject_core_text(&program, base_dir));
     match linked {
         Ok(()) => {
             let mut items = loader.out;
@@ -110,6 +111,9 @@ struct Loader {
     /// identity: the type oracle is keyed by span, and a collision there hands codegen
     /// one module's inferred type for another module's expression.
     next_file: FileId,
+    /// The load in progress is [`Loader::inject_core_text`]'s own — the one caller
+    /// allowed to resolve `core.text`, which a written import of is rejected.
+    injecting_core_text: bool,
 }
 
 impl Loader {
@@ -122,6 +126,7 @@ impl Loader {
             out: Vec::new(),
             sources: SourceMap::default(),
             next_file: ROOT_FILE + 1,
+            injecting_core_text: false,
         }
     }
 
@@ -152,6 +157,30 @@ impl Loader {
         scope.add_import(alias, canonical, exports, &import.span)
     }
 
+    /// Merge `core.text` when the program (or anything merged into it) calls a composable
+    /// Text method — that is where those methods are implemented, and `Text` being a
+    /// built-in type, no `<<` names it. The module is pure implementation: it is loaded
+    /// WITHOUT binding a name in the root's scope, it exports nothing, and a written
+    /// `<< core.text` is rejected (see [`Loader::resolve_one`]) — member syntax is the
+    /// only way user code reaches these functions. Reachability prunes it all back out
+    /// of a program whose mention turns out not to be a Text's.
+    fn inject_core_text(&mut self, program: &Program, base_dir: &Path) -> Result<(), QualifyError> {
+        let uses = uses_text_composable_items(&program.items)
+            || program.test_blocks.iter().any(mentions_text_composable)
+            || uses_text_composable_items(&self.out);
+        if !uses {
+            return Ok(());
+        }
+        let import = Import {
+            path: ModulePath::BuiltinDotted(vec!["core".to_string(), "text".to_string()]),
+            span: Span::in_root(0, 0),
+        };
+        self.injecting_core_text = true;
+        let resolved = self.resolve_one(&import, base_dir).map(|_| ());
+        self.injecting_core_text = false;
+        resolved
+    }
+
     /// Load one module (and, transitively, its own imports), qualify its items under its
     /// canonical name, and append them to `out`. Returns the canonical name.
     fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, QualifyError> {
@@ -159,6 +188,18 @@ impl Loader {
         let (key, canonical, display, source, next_base) = match &import.path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
+                // `core.text` is the compiler's own — the built-in Text methods' bodies,
+                // merged by [`Loader::inject_core_text`] wherever one is called. It is
+                // not surface a program can name: it exports nothing, so an import could
+                // only ever mislead.
+                if name == "core.text" && !self.injecting_core_text {
+                    return Err(fail(
+                        &import.span,
+                        "`core.text` is the compiler's own and cannot be imported — the \
+                         Text methods it implements need no import at all"
+                            .to_string(),
+                    ));
+                }
                 let src = builtin_source(&name).ok_or_else(|| {
                     fail(&import.span, format!("unknown built-in module `{}`", name))
                 })?;
@@ -346,6 +387,7 @@ fn module_binding_name(path: &ModulePath, span: &Span) -> Result<String, Qualify
 // import resolver (`builtin_source`) and the trusted-origin check (`is_corelib_source`) draw
 // from the same strings — they cannot drift.
 const CORE_IO: &str = include_str!("../corelib/io.qn");
+const CORE_TEXT: &str = include_str!("../corelib/text.qn");
 const CORE_TEST: &str = include_str!("../corelib/test.qn");
 const CORE_CLI: &str = include_str!("../corelib/cli.qn");
 const CORE_TIME: &str = include_str!("../corelib/time.qn");
@@ -356,13 +398,18 @@ const CORE_INFO: &str = include_str!("../corelib/info.qn");
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
 const CORELIB_SOURCES: &[&str] = &[
-    CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP, CORE_INFO,
+    CORE_IO, CORE_TEXT, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP, CORE_INFO,
 ];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(CORE_IO),
+        // core.text — the self-hosted composable Text methods (`split`/`trim`/`contains`/
+        // `replace`/`replaceAll`/`repeat`), written in Quilon over the native grapheme
+        // primitives. No program imports it by name: [`link`] merges it implicitly into any
+        // program that calls one of those methods, so `Text` still needs no import.
+        "core.text" => Some(CORE_TEXT),
         // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
         // a check of your own, the run's recorded state, and the case lifecycle. Depends
         // transitively on core.io (it prints, and `failAt` renders its frame via `io.eprint`).
@@ -386,9 +433,6 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // compiler's version. Like `now`, the members are compiler-provided and the module
         // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
         "core.info" => Some(CORE_INFO),
-        // Text is a built-in primitive type (like Num/Bool/arrays): its operations
-        // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
-        // there is intentionally no `core.text` module.
         _ => None,
     }
 }
@@ -410,6 +454,41 @@ fn item_is_exported(item: &Item) -> bool {
     }
 }
 
+/// Whether any of `items`' bodies contains a member call to a composable Text method
+/// (one [`crate::ast::qn_text_impl`] names an implementation for). Syntactic and
+/// over-approximating — the receiver's type is unknown here, so `record.trim()` counts —
+/// which only ever merges `core.text` needlessly, never leaves it out.
+fn uses_text_composable_items(items: &[Item]) -> bool {
+    items.iter().any(|item| match item {
+        Item::FunctionDeclaration(declaration) => mentions_text_composable(&declaration.body),
+        Item::VariableDeclaration(declaration) => mentions_text_composable(&declaration.value),
+        Item::TypeDeclaration(declaration) => declaration
+            .type_definition
+            .methods()
+            .iter()
+            .any(|method| mentions_text_composable(&method.body)),
+    })
+}
+
+/// Whether `expression` contains a member call named after a composable Text method.
+fn mentions_text_composable(expression: &Expression) -> bool {
+    use std::ops::ControlFlow;
+    crate::ast::walk::try_for_each_subexpression(expression, &mut |e| match e {
+        Expression::Call {
+            function,
+            member_call: true,
+            ..
+        } if matches!(
+            function.as_ref(),
+            Expression::Identifier { name, .. } if crate::ast::qn_text_impl(name).is_some()
+        ) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

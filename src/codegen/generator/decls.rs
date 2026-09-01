@@ -346,7 +346,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The inert core.io print/eprint placeholder is never emitted (the compiler
         // lowers print/eprint to runtime intrinsics). A leaf `@` primitive (`@sleep`) is
         // likewise a corelib placeholder lowered to a runtime intrinsic at its call site.
-        if declaration.is_inert_corelib_placeholder() || declaration.name.starts_with('@') {
+        // The same predicate gates the pre-declaration pass, so the two cannot drift.
+        if !declaration.emits_module_function() {
             return Ok(());
         }
 
@@ -427,15 +428,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// Emit `declaration` as a top-level/module function (internal linkage). Clears and
-    /// repopulates the per-function emission state (`variables`, `closure_sigs`,
-    /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
-    /// implicit-0 treatment. Used for true top-level functions and for non-capturing
-    /// nested functions (which can recurse, unlike a closure value).
-    pub(super) fn emit_module_function(
+    /// Declare `declaration`'s LLVM function — signature and symbol, no body. What the
+    /// pre-declaration pass in [`CodeGenerator::generate`] runs over every reachable
+    /// top-level function, so a body emitted earlier in item order can call one emitted
+    /// later (a `core.text` implementation behind a member call, a harness function ahead
+    /// of the module implementing what it uses).
+    ///
+    /// Use internal linkage so a Quilon function name never collides with a C library /
+    /// runtime symbol when the whole program is linked into one native binary (AOT). For
+    /// example core.io's `write` placeholder, or a user function named `read`/`open`,
+    /// would otherwise shadow libc and break the runtime intrinsics. Only the generated
+    /// `main` wrapper is exported.
+    ///
+    /// An overloaded member (operator-named, or one of several same-named defs) is
+    /// declared under a per-signature MANGLED name so the members don't collide; each
+    /// call site dispatches to the matching mangled symbol by exact argument type.
+    pub(super) fn declare_module_function(
         &mut self,
         declaration: &FunctionDeclaration,
-    ) -> Result<(), String> {
+    ) -> Result<inkwell::values::FunctionValue<'ctx>, String> {
         // Convert parameter types to LLVM types via the shared boundary rule: an ARRAY
         // parameter crosses as the `{ ptr, i64 }` VALUE struct (so `.size`/indexing work),
         // everything else via `type_to_llvm` (a record/sum parameter stays by pointer/struct).
@@ -469,23 +480,44 @@ impl<'ctx> CodeGenerator<'ctx> {
             false,
         );
 
-        // Create the function. Use internal linkage so a Quilon function name never
-        // collides with a C library / runtime symbol when the whole program is linked
-        // into one native binary (AOT). For example core.io's `write` placeholder, or
-        // a user function named `read`/`open`, would otherwise shadow libc and break
-        // the runtime intrinsics. Only the generated `main` wrapper is exported.
-        //
-        // An overloaded member (operator-named, or one of several same-named defs) is
-        // emitted under a per-signature MANGLED name so the members don't collide; each
-        // call site dispatches to the matching mangled symbol by exact argument type.
-        let symbol = if self.overloads.contains_key(&declaration.name) {
+        let function = self
+            .module
+            .add_function(&self.module_symbol(declaration), fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
+        Ok(function)
+    }
+
+    /// The symbol `declaration` is emitted under: its name, or the per-signature mangled
+    /// form for an overload-set member. Shared by declaration and by the TCO analysis,
+    /// which recognizes a self-call by this symbol.
+    fn module_symbol(&self, declaration: &FunctionDeclaration) -> String {
+        if self.overloads.contains_key(&declaration.name) {
             let parameters = self.parameter_types(&declaration.parameters);
             mangle_overload(&declaration.name, &parameters)
         } else {
             declaration.name.clone()
+        }
+    }
+
+    /// Emit `declaration` as a top-level/module function (internal linkage). Clears and
+    /// repopulates the per-function emission state (`variables`, `closure_sigs`,
+    /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
+    /// implicit-0 treatment. Used for true top-level functions and for non-capturing
+    /// nested functions (which can recurse, unlike a closure value).
+    pub(super) fn emit_module_function(
+        &mut self,
+        declaration: &FunctionDeclaration,
+    ) -> Result<(), String> {
+        // A top-level function was declared by the pre-declaration pass — take that
+        // declaration (keyed by the item's span, its identity) and fill its body in. A
+        // NESTED plain function was not pre-declared and is declared here; keying by span
+        // (not symbol) is what keeps a nested function shadowing a top-level name from
+        // stealing the top-level declaration.
+        let function = match self.predeclared_functions.remove(&declaration.span) {
+            Some(function) => function,
+            None => self.declare_module_function(declaration)?,
         };
-        let function = self.module.add_function(&symbol, fn_type, None);
-        function.set_linkage(inkwell::module::Linkage::Internal);
+        let symbol = self.module_symbol(declaration);
         self.current_function = Some(function);
         let saved_scope = self.begin_di_function(function, &declaration.name, &declaration.span);
 

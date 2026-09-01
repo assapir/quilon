@@ -14,7 +14,8 @@ sidebar:
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
-| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`at`/`graphemes`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text = []Grapheme` model: `at`/`graphemes` grapheme access, and the composable methods self-hosted in Quilon (`corelib/text.qn`) over the native primitive floor | ✅ |
 | Ad-hoc overloading: same-named typed definitions, exact-type dispatch | ✅ |
 | Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads | ✅ |
 | `Bool` | ✅ |

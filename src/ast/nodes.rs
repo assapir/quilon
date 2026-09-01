@@ -201,6 +201,17 @@ pub struct FunctionDeclaration {
 }
 
 impl FunctionDeclaration {
+    /// Whether codegen emits a module function (declaration + body) for this item at all —
+    /// false for an inert corelib placeholder of a compiler-provided name, and for an `@`
+    /// leaf IO primitive (both are lowered at their call sites instead). The ONE predicate
+    /// the pre-declaration pass and body emission share, so a declaration is never left
+    /// bodiless by the two drifting apart.
+    pub fn emits_module_function(&self) -> bool {
+        !self.is_inert_corelib_placeholder() && !self.name.starts_with('@')
+    }
+}
+
+impl FunctionDeclaration {
     /// Whether this is the corelib's own declaration of a name the compiler provides
     /// itself (see [`BUILTIN_OVERLOADS`] and [`RENDERABLE_BUILTINS`]) — an inert placeholder
     /// that documents the signature while the real thing is a runtime intrinsic. It is
@@ -536,27 +547,43 @@ pub fn is_array_method(name: &str) -> bool {
 }
 
 /// The reserved built-in `Text` methods (`split`/`trim`/`replace`/`contains`/
-/// `indexOf`/`slice`/`toUpper`/`toLower`). Like [`is_array_method`], these are
-/// resolved ahead of any user overload when the receiver is a `Text`, so this
+/// `indexOf`/`slice`/`at`/`graphemes`/`toUpper`/`toLower`). Like [`is_array_method`],
+/// these are resolved ahead of any user overload when the receiver is a `Text`, so this
 /// predicate is the single source of truth shared by the type checker and codegen.
 /// Method names are lowercase/camelCase, so they never collide with (Capitalized)
-/// sum-constructor names.
+/// sum-constructor names. (`at` is also an array method; the receiver's type decides.)
 pub fn is_text_method(name: &str) -> bool {
-    matches!(
-        name,
-        "split"
-            | "trim"
-            | "trimStart"
-            | "trimEnd"
-            | "replace"
-            | "replaceAll"
-            | "contains"
-            | "indexOf"
-            | "slice"
-            | "toUpper"
-            | "toLower"
-            | "repeat"
-    )
+    qn_text_impl(name).is_some()
+        || matches!(
+            name,
+            "trimStart"
+                | "trimEnd"
+                | "indexOf"
+                | "slice"
+                | "at"
+                | "graphemes"
+                | "toUpper"
+                | "toLower"
+        )
+}
+
+/// The `core.text` function implementing the Text method `name` — its QUALIFIED name, as
+/// the link's rename leaves it — or `None` for a method that is a native primitive (or no
+/// Text method at all). The composable methods are written in Quilon (`corelib/text.qn`)
+/// over the primitives; a member call to one lowers to a plain call of the named function
+/// with the receiver as the first argument. Shared by codegen (the lowering),
+/// reachability (a mention of the method reaches the implementation), and the module
+/// loader (a program mentioning one gets `core.text` merged in).
+pub fn qn_text_impl(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "split" => "core.text.split",
+        "trim" => "core.text.trim",
+        "contains" => "core.text.contains",
+        "replace" => "core.text.replace",
+        "replaceAll" => "core.text.replaceAll",
+        "repeat" => "core.text.repeat",
+        _ => return None,
+    })
 }
 
 /// The name of the built-in call-site record type, written `Site` in a signature.
