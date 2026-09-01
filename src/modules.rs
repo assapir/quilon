@@ -153,8 +153,6 @@ impl Loader {
         scope.add_import(alias, canonical, exports, &import.span)
     }
 
-    /// Load one module (and, transitively, its own imports), qualify its items under its
-    /// canonical name, and append them to `out`. Returns the canonical name.
     /// Merge `core.text` when the program (or anything merged into it) calls a composable
     /// Text method — that is where those methods are implemented, and `Text` being a
     /// built-in type, no `<<` names it. The module is loaded WITHOUT binding a name in
@@ -176,6 +174,8 @@ impl Loader {
         self.resolve_one(&import, base_dir).map(|_| ())
     }
 
+    /// Load one module (and, transitively, its own imports), qualify its items under its
+    /// canonical name, and append them to `out`. Returns the canonical name.
     fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, QualifyError> {
         let from_corelib = matches!(import.path, ModulePath::BuiltinDotted(_));
         let (key, canonical, display, source, next_base) = match &import.path {

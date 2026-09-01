@@ -31,8 +31,8 @@ fn emit_linked(src: &str) -> String {
     let context = inkwell::context::Context::create();
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let (program, _sources) =
-        quilon::modules::link(program, std::path::Path::new(".")).expect("import linking failed");
+    let (program, _sources) = quilon::modules::link(program, std::path::Path::new("."), None)
+        .expect("import linking failed");
     let types = quilon::typechecker::TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
