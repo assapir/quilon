@@ -776,12 +776,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         let saved_scope = self.begin_di_lexical_block(span);
         let mut result = self.context.f64_type().const_float(0.0).into();
 
-        for statement in statements {
+        for (index, statement) in statements.iter().enumerate() {
             match statement {
                 crate::ast::Statement::Item(item) => {
                     self.generate_item(item)?;
                 }
                 crate::ast::Statement::Expression(expression) => {
+                    // A non-final statement's value is discarded, so a `(lo <- hi).each(f)`
+                    // here may run lazily over the range's bounds — its receiver (the only
+                    // value `.each` yields) is never observed, and nothing is allocated.
+                    if index + 1 < statements.len()
+                        && self.lower_discarded_range_each(expression)?
+                    {
+                        continue;
+                    }
                     result = self.generate_expression(expression)?;
                 }
             }

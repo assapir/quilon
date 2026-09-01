@@ -271,28 +271,71 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Materialize an inclusive range `lo <- hi` into a `[]Num` (the `{ptr, size}`
-    /// array shape, same as `generate_array`). The element count is `|hi - lo| + 1`
-    /// and the direction (ascending vs descending) is decided at runtime, since the
-    /// ends can be dynamic: `lo <= hi` counts up (`1 <- 4` → `[1,2,3,4]`), otherwise
-    /// down (`4 <- 1` → `[4,3,2,1]`). The backing storage comes from the shared
+    /// array shape, same as `generate_array`). The backing storage comes from the shared
     /// [`Self::alloc_array_data`], so the array may safely escape the current frame.
     ///
-    /// An end that is not a whole number a `Num` holds exactly is refused at `span`. Because
-    /// that bounds both ends by 2^53, the span below cannot overflow an `i64`. An end the
-    /// checker already evaluated becomes a constant, so a literal range's count — and its
-    /// fill loop's trip count — folds to a constant too.
+    /// This is the range's DEFAULT lowering — indexing, `.size`, binding to a name, and
+    /// passing to a function all consume the materialized array. A range consumed
+    /// directly by `.map`/`.filter`/`.reduce` (and a discarded `.each`) skips this and
+    /// iterates the bounds instead — see [`Self::generate_array_method`].
     pub(super) fn generate_range(
         &mut self,
         start: &Expression,
         end: &Expression,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let function = self
-            .current_function
-            .ok_or_else(|| "Range must be in a function".to_string())?;
-
-        let i64_type = self.context.i64_type();
+        if self.current_function.is_none() {
+            return Err("Range must be in a function".to_string());
+        }
         let f64_type = self.context.f64_type();
+        let (lo, step, count) = self.range_bounds(start, end, span)?;
+
+        let data_ptr = self.alloc_array_data(f64_type.into(), count)?;
+
+        // Fill loop: for i in 0..count: data[i] = (f64)(lo + i*step). `array_loop` and
+        // `array_struct` both allocate their stack slots in the function ENTRY block, not
+        // at this insert point: a range literal is an ordinary expression that can appear
+        // in a tail-recursive function body, and a raw `alloca` here would land inside the
+        // TCO-lowered loop and re-allocate every iteration, overflowing the stack.
+        self.array_loop(count, |this, i| {
+            let val = this.range_element(lo, step, i)?;
+            let elem_ptr = unsafe {
+                this.builder
+                    .build_gep(f64_type, data_ptr, &[i], "range_elem")
+                    .map_err(ctx("Failed to index range data"))?
+            };
+            this.builder
+                .build_store(elem_ptr, val)
+                .map_err(ctx("Failed to store range element"))?;
+            Ok(())
+        })?;
+        self.array_struct(data_ptr, count)
+    }
+
+    /// The lowered header of an inclusive range `lo <- hi`: both endpoints validated and
+    /// converted to `i64`, folded into `(lo, step, count)` — the step is `+1`/`-1` by the
+    /// runtime-decided direction (`lo <= hi` counts up), the count is `|hi - lo| + 1`.
+    /// Shared by the materializing [`Self::generate_range`] and the lazy method lowerings,
+    /// so endpoint validation is identical on both paths.
+    ///
+    /// An end that is not a whole number a `Num` holds exactly is refused at `span`. Because
+    /// that bounds both ends by 2^53, the span below cannot overflow an `i64`. An end the
+    /// checker already evaluated becomes a constant, so a literal range's count — and any
+    /// trip count derived from it — folds to a constant too.
+    pub(super) fn range_bounds(
+        &mut self,
+        start: &Expression,
+        end: &Expression,
+        span: &Span,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let i64_type = self.context.i64_type();
 
         let lo = self.range_endpoint(start, span)?;
         let hi = self.range_endpoint(end, span)?;
@@ -329,38 +372,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_int_add(span_abs, one, "range_count")
             .map_err(ctx("Failed to add range count"))?;
 
-        let data_ptr = self.alloc_array_data(f64_type.into(), count)?;
+        Ok((lo, step, count))
+    }
 
-        // Fill loop: for i in 0..count: data[i] = (f64)(lo + i*step).
-        let counter = self.create_entry_block_alloca("range_i", i64_type.into())?;
-        self.builder
-            .build_store(counter, i64_type.const_zero())
-            .map_err(ctx("Failed to init range counter"))?;
-
-        let header = self.context.append_basic_block(function, "range_header");
-        let body = self.context.append_basic_block(function, "range_body");
-        let exit = self.context.append_basic_block(function, "range_exit");
-
-        self.builder
-            .build_unconditional_branch(header)
-            .map_err(ctx("Failed to branch to range header"))?;
-
-        self.builder.position_at_end(header);
-        let i = self
-            .builder
-            .build_load(i64_type, counter, "i")
-            .map_err(ctx("Failed to load range counter"))?
-            .into_int_value();
-        let cond = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, i, count, "range_cond")
-            .map_err(ctx("Failed to build range condition"))?;
-        self.builder
-            .build_conditional_branch(cond, body, exit)
-            .map_err(ctx("Failed to build range branch"))?;
-
-        self.builder.position_at_end(body);
-        // value = lo + i*step
+    /// Element `i` of a range lowered from its bounds: `(f64)(lo + i * step)` — computed,
+    /// never loaded, so a lazily-consumed range needs no backing store.
+    fn range_element(
+        &mut self,
+        lo: inkwell::values::IntValue<'ctx>,
+        step: inkwell::values::IntValue<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let i_step = self
             .builder
             .build_int_mul(i, step, "range_i_step")
@@ -369,36 +391,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             .builder
             .build_int_add(lo, i_step, "range_val_i")
             .map_err(ctx("Failed to compute range element"))?;
-        let val_f = self
+        Ok(self
             .builder
-            .build_signed_int_to_float(val_i, f64_type, "range_val")
-            .map_err(ctx("Failed to convert range element"))?;
-        let elem_ptr = unsafe {
-            self.builder
-                .build_gep(f64_type, data_ptr, &[i], "range_elem")
-                .map_err(ctx("Failed to index range data"))?
-        };
-        self.builder
-            .build_store(elem_ptr, val_f)
-            .map_err(ctx("Failed to store range element"))?;
-        let next = self
-            .builder
-            .build_int_add(i, one, "range_next")
-            .map_err(ctx("Failed to increment range counter"))?;
-        self.builder
-            .build_store(counter, next)
-            .map_err(ctx("Failed to store range counter"))?;
-        self.builder
-            .build_unconditional_branch(header)
-            .map_err(ctx("Failed to loop range"))?;
-
-        // Build the `{ptr, size}` array struct via the shared helper (used by every other
-        // array producer). It allocates the struct slot in the function ENTRY block, not at
-        // this insert point: a range literal is an ordinary expression that can appear in a
-        // tail-recursive function body, and a raw `alloca` in this `exit` block would land
-        // inside the TCO-lowered loop and re-allocate every iteration, overflowing the stack.
-        self.builder.position_at_end(exit);
-        self.array_struct(data_ptr, count)
+            .build_signed_int_to_float(val_i, self.context.f64_type(), "range_val")
+            .map_err(ctx("Failed to convert range element"))?
+            .into())
     }
 
     /// One end of a range as an `i64`.
@@ -436,6 +433,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let recv = &args[0];
+
+        // Lazy range lowering: when the receiver is SYNTACTICALLY a `lo <- hi` expression,
+        // `.map`/`.filter`/`.reduce` iterate the bounds directly instead of materializing
+        // the `[]Num` — `.reduce` allocates nothing, `.map`/`.filter` allocate only their
+        // result. Endpoint validation is shared with the materializing path
+        // (`range_bounds`), so the same errors fire at the same site. `.each` takes the
+        // same lazy path only in discarded-statement position (`lower_discarded_range_each`
+        // in `generate_block`): an `.each` whose value is USED — chained, bound, returned —
+        // yields its receiver (Decision 19), so it must materialize the array below.
+        // ponytail: only the FIRST method of a chain is lazy — later links consume the
+        // (already result-sized) arrays it produces; fuse whole map/filter/each chains
+        // end-to-end if profiles ever demand it.
+        if let Expression::Range { start, end, span } = recv
+            && matches!(method, "map" | "filter" | "reduce")
+        {
+            let (lo, step, count) = self.range_bounds(start, end, span)?;
+            let source = ElemSource::Range { lo, step };
+            let f64_llvm: BasicTypeEnum<'ctx> = self.context.f64_type().into();
+            return match method {
+                "map" => self.array_map(&args[1], &Type::Num, f64_llvm, source, count),
+                "filter" => self.array_filter(&args[1], &Type::Num, f64_llvm, source, count),
+                "reduce" => {
+                    self.array_reduce(&args[1], &args[2], &Type::Num, f64_llvm, source, count)
+                }
+                _ => unreachable!("guarded by the matches! above"),
+            };
+        }
+
         // Element type of the receiver array, from the oracle: `[]elem`.
         let elem_qty = match self.oracle.expression_type(recv) {
             Some(Type::Array(e)) => (**e).clone(),
@@ -443,13 +468,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let elem_llvm = self.value_repr_type(&elem_qty)?;
         let (array_val, data_ptr, size) = self.extract_array(recv)?;
+        let source = ElemSource::Memory(data_ptr);
 
         match method {
-            "map" => self.array_map(&args[1], &elem_qty, elem_llvm, data_ptr, size),
-            "filter" => self.array_filter(&args[1], &elem_qty, elem_llvm, data_ptr, size),
-            "reduce" => self.array_reduce(&args[1], &args[2], &elem_qty, elem_llvm, data_ptr, size),
+            "map" => self.array_map(&args[1], &elem_qty, elem_llvm, source, size),
+            "filter" => self.array_filter(&args[1], &elem_qty, elem_llvm, source, size),
+            "reduce" => self.array_reduce(&args[1], &args[2], &elem_qty, elem_llvm, source, size),
             "each" => {
-                self.array_each(&args[1], &elem_qty, elem_llvm, data_ptr, size)?;
+                self.array_each(&args[1], &elem_qty, elem_llvm, source, size)?;
                 // Decision 19: a Unit-bodied method returns its receiver — `.each` yields
                 // the array itself so it chains. Re-emit the (already-evaluated) struct.
                 Ok(array_val)
@@ -458,6 +484,54 @@ impl<'ctx> CodeGenerator<'ctx> {
             "at" => self.array_at(&args[1], elem_llvm, data_ptr, size),
             other => Err(format!("unknown array method `{other}`")),
         }
+    }
+
+    /// A discarded-value `(lo <- hi).each(f)` statement, lowered lazily: the loop runs
+    /// over the range's bounds and NOTHING is allocated. Only `generate_block` calls this,
+    /// and only for a non-final statement — the one position where `.each`'s value (its
+    /// receiver, per Decision 19) is guaranteed unobserved, so skipping the
+    /// materialization cannot change behavior. Returns `false` (having emitted nothing)
+    /// when `expression` is not that exact shape; the caller then lowers it normally.
+    pub(super) fn lower_discarded_range_each(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<bool, String> {
+        let Expression::Call {
+            function,
+            arguments,
+            member_call: true,
+            ..
+        } = expression
+        else {
+            return Ok(false);
+        };
+        let Expression::Identifier { name, .. } = &**function else {
+            return Ok(false);
+        };
+        if name != "each" || arguments.len() != 2 {
+            return Ok(false);
+        }
+        let Expression::Range { start, end, span } = &arguments[0] else {
+            return Ok(false);
+        };
+        // Mirror the dispatch guard in `generate_call`: only an oracle-confirmed array
+        // receiver reaches the built-in `each` (an unchecked IR-only run stays eager).
+        if !matches!(
+            self.oracle.expression_type(&arguments[0]),
+            Some(Type::Array(_))
+        ) {
+            return Ok(false);
+        }
+        let (lo, step, count) = self.range_bounds(start, end, span)?;
+        let f64_llvm: BasicTypeEnum<'ctx> = self.context.f64_type().into();
+        self.array_each(
+            &arguments[1],
+            &Type::Num,
+            f64_llvm,
+            ElemSource::Range { lo, step },
+            count,
+        )?;
+        Ok(true)
     }
 
     /// Evaluate an array expression and break it into `(struct_value, data_ptr, size_i64)`.
@@ -556,6 +630,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to load out struct"))
     }
 
+    /// Element `i` of an array method's receiver: loaded from a materialized array's
+    /// backing store, or computed from a lazily-lowered range's bounds.
+    fn source_element(
+        &mut self,
+        source: ElemSource<'ctx>,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match source {
+            ElemSource::Memory(data_ptr) => self.load_element(data_ptr, elem_llvm, i),
+            ElemSource::Range { lo, step } => self.range_element(lo, step, i),
+        }
+    }
+
     /// Load `data_ptr[i]` as a value of `elem_llvm` (the array element representation).
     pub(super) fn load_element(
         &mut self,
@@ -644,7 +732,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        data_ptr: PointerValue<'ctx>,
+        source: ElemSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let result_llvm = match self.lambda_body_repr(lambda) {
@@ -653,7 +741,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let out_ptr = self.alloc_array_data(result_llvm, size)?;
         self.array_loop(size, |this, i| {
-            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let elem = this.source_element(source, elem_llvm, i)?;
             let mapped = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
             let dst = unsafe {
                 this.builder
@@ -676,7 +764,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        data_ptr: PointerValue<'ctx>,
+        source: ElemSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64t = self.context.i64_type();
@@ -686,7 +774,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_store(count_ptr, i64t.const_zero())
             .map_err(ctx("Failed to init filter count"))?;
         self.array_loop(size, |this, i| {
-            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let elem = this.source_element(source, elem_llvm, i)?;
             let keep = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
             let keep_bool = this.value_to_boolean(keep)?;
             let function = this.current_function.unwrap();
@@ -738,7 +826,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        data_ptr: PointerValue<'ctx>,
+        source: ElemSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let init_val = self.generate_expression(init)?;
@@ -749,7 +837,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to init acc"))?;
         let acc_llvm = init_val.get_type();
         self.array_loop(size, |this, i| {
-            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let elem = this.source_element(source, elem_llvm, i)?;
             let acc = this
                 .builder
                 .build_load(acc_llvm, acc_ptr, "reduce_load")
@@ -773,11 +861,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_qty: &Type,
         elem_llvm: BasicTypeEnum<'ctx>,
-        data_ptr: PointerValue<'ctx>,
+        source: ElemSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<(), String> {
         self.array_loop(size, |this, i| {
-            let elem = this.load_element(data_ptr, elem_llvm, i)?;
+            let elem = this.source_element(source, elem_llvm, i)?;
             this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
             Ok(())
         })?;

@@ -319,6 +319,18 @@ enum ArrayPart<'v> {
     Spread(BasicValueEnum<'v>),
 }
 
+/// Where an array method reads its receiver's elements from: a materialized `{ptr, size}`
+/// array's backing store, or — for a `lo <- hi` receiver lowered lazily — the range's own
+/// bounds, each element computed as `(f64)(lo + i * step)` with nothing allocated.
+#[derive(Clone, Copy)]
+enum ElemSource<'v> {
+    Memory(PointerValue<'v>),
+    Range {
+        lo: inkwell::values::IntValue<'v>,
+        step: inkwell::values::IntValue<'v>,
+    },
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
