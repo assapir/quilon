@@ -89,7 +89,7 @@ returning a parameter follows the same rule with its argument. The rule holds ho
 the value travels — through a local, a container, or a sum payload:
 
 ```quilon ignore
-T = { v :: Num, self = () -> T => it }
+T = { v :: Num, self = () -> T => < it > }
 t = T { v = 1 }
 x = t.self()       ~ legal: the result is immutable, like its receiver
 y := t.self()      ~ error: `t` is immutable

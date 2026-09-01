@@ -98,7 +98,7 @@ impl TypeChecker {
         // — every body is a block, so without it a returned lambda
         // (`adder = (n :: Num) -> (Num) -> Num => < (x) => x + n >`) would have nothing to
         // take `x` from.
-        if let Expression::Block { statements, .. } = argument
+        if let Expression::Block { statements, span } = argument
             && let Some((Statement::Expression(tail), leading)) = statements.split_last()
         {
             for statement in leading {
@@ -109,7 +109,11 @@ impl TypeChecker {
                     }
                 }
             }
-            return self.infer_argument(tail, target);
+            let ty = self.infer_argument(tail, target)?;
+            // Record the block's own type too, as `infer_expression` would have: the
+            // aliasing walk reads a body's type by ITS span before descending to the tail.
+            self.type_table.insert(span.clone(), ty.clone());
+            return Ok(ty);
         }
         let Expression::Lambda {
             parameters,

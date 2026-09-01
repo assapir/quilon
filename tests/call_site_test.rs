@@ -240,7 +240,7 @@ tamper = (site :: Site) -> Num => <
   site.line := 99
   site.line
 >
-^ = () -> Num => tamper()
+^ = () -> Num => < tamper() >
 ",
     );
     assert!(

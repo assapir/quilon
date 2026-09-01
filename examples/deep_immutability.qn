@@ -11,12 +11,12 @@ Cell = {
 
   ~ A getter whose result IS the receiver. It stays callable on any binding; the
   ~ result inherits the receiver's mutability at each call site.
-  self = () -> Cell => it
+  self = () -> Cell => < it >
 }
 
 ~ A function returning its parameter: each call's result inherits the argument's
 ~ mutability at that call site.
-same = (cell :: Cell) -> Cell => cell
+same = (cell :: Cell) -> Cell => < cell >
 
 ~ A function building its result in a local: the local dies at the return, so the
 ~ result is fresh and binds either way at the call site — `:=` locals included.
@@ -27,7 +27,7 @@ build = (start :: Num) -> Cell => <
 >
 
 ~ A parameter is a read-only view: a function reads a frozen record freely.
-read = (cell :: Cell) -> Num => cell.value
+read = (cell :: Cell) -> Num => < cell.value >
 
 ^ = () -> $ => <
   frozen = Cell { value = 40 }     ~ `=` -> the value itself is frozen

@@ -75,7 +75,7 @@ fn a_mutable_binding_of_an_escaping_getter_result_is_rejected() {
     // `self` returns `it`, so its result IS the receiver: on an `=` receiver the result
     // is immutable at the call site, and `x := t.self()` is the alias binding again.
     let error = type_error_message(
-        "T = {\n  v :: Num\n  self = () -> T => it\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x := t.self()\n  t.v\n>",
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x := t.self()\n  t.v\n>",
     );
     assert!(
         error.contains("'t' is immutable"),
@@ -87,7 +87,7 @@ fn a_mutable_binding_of_an_escaping_getter_result_is_rejected() {
 fn an_escaping_getter_stays_callable_on_an_immutable_receiver() {
     // The method itself stays callable: its result and scalar reads off it are legal.
     assert_type_checks(
-        "T = {\n  v :: Num\n  self = () -> T => it\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x = t.self()\n  y = t.self().v\n  x.v + y\n>",
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x = t.self()\n  y = t.self().v\n  x.v + y\n>",
     );
 }
 
@@ -95,7 +95,7 @@ fn an_escaping_getter_stays_callable_on_an_immutable_receiver() {
 fn run_an_escaping_getter_result_on_an_immutable_receiver_reads_back() {
     // `x = t.self()` is an immutable alias of `t`; reads work and `t` is unchanged.
     assert_exit(
-        "T = {\n  v :: Num\n  self = () -> T => it\n}\n^ = () -> Num => <\n  t = T { v = 21 }\n  x = t.self()\n  x.v + t.v\n>",
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 21 }\n  x = t.self()\n  x.v + t.v\n>",
         42,
     );
 }
@@ -105,7 +105,7 @@ fn run_an_escaping_getter_result_on_a_mutable_receiver_stays_mutable() {
     // On a `:=` receiver the escaping result inherits mutability: `z := m.self()` is
     // legal and a write through `z` reaches `m` — that is what `:=` declared.
     assert_exit(
-        "T = {\n  v :: Num\n  self = () -> T => it\n}\n^ = () -> Num => <\n  m := T { v = 5 }\n  z := m.self()\n  z.v := 42\n  m.v\n>",
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  m := T { v = 5 }\n  z := m.self()\n  z.v := 42\n  m.v\n>",
         42,
     );
 }
@@ -196,7 +196,7 @@ fn a_frozen_record_reached_through_a_sum_stays_frozen() {
     // a function returning the payload returns its parameter's value, so the call's
     // result inherits the argument's immutability.
     let error = type_error_message(
-        "T = { v :: Num }\nWrap = Held(T) / Empty\nunwrap = (s :: Wrap) -> T => s ? | Held(p) => p | Empty => T { v = 0 }\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := unwrap(Held(t))\n  t.v\n>",
+        "T = { v :: Num }\nWrap = Held(T) / Empty\nunwrap = (s :: Wrap) -> T => < s ? | Held(p) => p | Empty => T { v = 0 } >\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := unwrap(Held(t))\n  t.v\n>",
     );
     assert!(
         error.contains("'t' is immutable"),
@@ -235,7 +235,7 @@ fn run_a_mutable_alias_of_the_receiver_inside_a_setter_stays_legal() {
 fn a_field_write_through_a_call_result_aliasing_an_immutable_argument_is_rejected() {
     // Finding 42's shape: `id(t)` IS `t`, so the write is a write to the frozen value.
     let error = type_error_message(
-        "T = { v :: Num }\nid = (p :: T) -> T => p\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).v := 5\n  t.v\n>",
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).v := 5\n  t.v\n>",
     );
     assert!(
         error.contains("immutable 't'"),
@@ -246,7 +246,7 @@ fn a_field_write_through_a_call_result_aliasing_an_immutable_argument_is_rejecte
 #[test]
 fn a_setter_call_through_a_call_result_aliasing_an_immutable_argument_is_rejected() {
     let error = type_error_message(
-        "T = {\n  v :: Num\n  bump := () -> $ => it.v := 99\n}\nid = (p :: T) -> T => p\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).bump()\n  t.v\n>",
+        "T = {\n  v :: Num\n  bump := () -> $ => < it.v := 99 >\n}\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).bump()\n  t.v\n>",
     );
     assert!(
         error.contains("immutable 't'"),
@@ -273,7 +273,7 @@ fn a_returned_parameter_inherits_the_arguments_mutability_at_the_call_site() {
     // `id` returns its parameter, so `id(t)` IS `t` — binding it `:=` is the alias
     // binding again, however many calls it went through.
     let error = type_error_message(
-        "T = { v :: Num }\nid = (p :: T) -> T => p\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := id(t)\n  t.v\n>",
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := id(t)\n  t.v\n>",
     );
     assert!(
         error.contains("'t' is immutable"),
@@ -299,7 +299,7 @@ fn run_a_returned_parameter_stays_mutable_for_a_mutable_argument() {
     // The same function on a `:=` argument: the result inherits mutability, and the
     // write reaches the original.
     assert_exit(
-        "T = { v :: Num }\nid = (p :: T) -> T => p\n^ = () -> Num => <\n  m := T { v = 1 }\n  w := id(m)\n  w.v := 42\n  m.v\n>",
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  m := T { v = 1 }\n  w := id(m)\n  w.v := 42\n  m.v\n>",
         42,
     );
 }
@@ -319,7 +319,7 @@ fn run_passing_a_frozen_record_to_a_function_stays_legal_and_leaves_it_unchanged
     // Argument passing is not a binding: a function may read a frozen record freely —
     // and cannot change it.
     assert_exit(
-        "T = { v :: Num }\ndouble = (p :: T) -> Num => p.v * 2\n^ = () -> Num => <\n  t = T { v = 20 }\n  double(t) + (t.v == 20 ? 2 : 0)\n>",
+        "T = { v :: Num }\ndouble = (p :: T) -> Num => < p.v * 2 >\n^ = () -> Num => <\n  t = T { v = 20 }\n  double(t) + (t.v == 20 ? 2 : 0)\n>",
         42,
     );
 }

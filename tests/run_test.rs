@@ -415,7 +415,7 @@ fn a_lambda_parameter_named_it_gets_a_shadowing_hint() {
     // `it` is an ordinary identifier, so a lambda parameter named `it` shadows the
     // receiver — the verifier still (conservatively) reports the write as a receiver
     // mutation, and the diagnostic must say why, so the reader can rename the parameter.
-    let src = "P = { v :: Num }\nT = {\n  v :: Num,\n  poke = (ps :: []P) -> Num => <\n    ps.each(it => it.v := 5)\n    it.v\n  >\n}\n^ = () -> Num => 0";
+    let src = "P = { v :: Num }\nT = {\n  v :: Num,\n  poke = (ps :: []P) -> Num => <\n    ps.each(it => it.v := 5)\n    it.v\n  >\n}\n^ = () -> Num => < 0 >";
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
     let mut checker = TypeChecker::new();
