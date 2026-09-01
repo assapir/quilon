@@ -7,13 +7,16 @@
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver). Each is
-    /// lowered to its `quilon-rt` intrinsic; `split` yields the `[]Text` `{ptr,i64}`
-    /// struct the intrinsic builds, and `indexOf` builds an `Ok(Num)`/`NotOk` `Result`.
+    /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver).
     ///
-    /// `span` is the whole method call's span: the three methods with a fail-loud contract
-    /// (`repeat`, `replace`, `replaceAll`) hand it to the runtime as a `Site`, so a violated
-    /// contract reports where the call is written.
+    /// The PRIMITIVE methods (segmentation, search, slice, the whitespace walks, case
+    /// mapping) lower to their `quilon-rt` intrinsics; the COMPOSABLE ones (those
+    /// [`crate::ast::qn_text_impl`] names) lower to a plain call of their `core.text`
+    /// implementation, with the receiver as the first argument — the module loader merged
+    /// those functions in exactly because this call appears. The plain-call machinery also
+    /// fills in the trailing `Site` the fail-loud implementations (`repeat`, `replace`,
+    /// `replaceAll`) declare, so a violated contract reports where the METHOD call is
+    /// written.
     pub(super) fn generate_text_method(
         &mut self,
         method: &str,
@@ -21,6 +24,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
+
+        // A composable method: re-enter the call generator as the plain call it desugars
+        // to. `args` already leads with the receiver, which is the implementation's first
+        // parameter.
+        if let Some(implementation) = crate::ast::qn_text_impl(method) {
+            let callee = Expression::Identifier {
+                name: implementation.to_string(),
+                span: span.clone(),
+            };
+            return self.generate_call(&callee, args, false, span);
+        }
+
         let (recv_ptr, recv_len) = self.extract_text(&args[0])?;
 
         // Call a struct-returning ({ptr,i64}) Text intrinsic with the given metadata args.
@@ -39,28 +54,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         match method {
-            "trim" => {
-                // `trim` = `trimStart` then `trimEnd` (order-independent, identical to a
-                // direct both-sides trim) — composed from the two intrinsics so there is
-                // no separate `__text_trim`. The extra pass/allocation is fine for trim.
-                let started = call_struct(
-                    self,
-                    "__text_trim_start",
-                    &[recv_ptr.into(), recv_len.into()],
-                )?
-                .into_struct_value();
-                let sp = self
-                    .builder
-                    .build_extract_value(started, 0, "trim_mid_ptr")
-                    .map_err(ctx("Failed to extract trimStart ptr"))?
-                    .into_pointer_value();
-                let sl = self
-                    .builder
-                    .build_extract_value(started, 1, "trim_mid_len")
-                    .map_err(ctx("Failed to extract trimStart len"))?
-                    .into_int_value();
-                call_struct(self, "__text_trim_end", &[sp.into(), sl.into()])
-            }
             "trimStart" => call_struct(
                 self,
                 "__text_trim_start",
@@ -69,69 +62,36 @@ impl<'ctx> CodeGenerator<'ctx> {
             "trimEnd" => call_struct(self, "__text_trim_end", &[recv_ptr.into(), recv_len.into()]),
             "toUpper" => call_struct(self, "__text_to_upper", &[recv_ptr.into(), recv_len.into()]),
             "toLower" => call_struct(self, "__text_to_lower", &[recv_ptr.into(), recv_len.into()]),
-            "split" => {
-                let (sp, sl) = self.extract_text(&args[1])?;
-                call_struct(
+            "graphemes" => call_struct(
+                self,
+                "__text_graphemes",
+                &[recv_ptr.into(), recv_len.into()],
+            ),
+            "at" => {
+                // The grapheme at `index`, as an `Ok(Text)`/`NotOk` `Result` — a grapheme
+                // is never empty, so the intrinsic's empty answer IS "out of bounds".
+                let index = self.text_index_arg(&args[1], "at_idx")?;
+                let grapheme = call_struct(
                     self,
-                    "__text_split",
-                    &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
-                )
-            }
-            "repeat" => {
-                // `count` copies of the receiver. Passed as a Num (double): the runtime
-                // rejects a negative/fractional count instead of truncating it, and the
-                // checker already rejected a literal one.
-                let count = self.generate_expression(&args[1])?.into_float_value();
-                let site = self.site_value(span)?;
-                call_struct(
-                    self,
-                    "__text_repeat",
-                    &[recv_ptr.into(), recv_len.into(), count.into(), site.into()],
-                )
-            }
-            "replaceAll" => {
-                // Replace every occurrence. The intrinsic aborts (exit 101) on an empty
-                // `from`; there is no count.
-                let (fp, fl) = self.extract_text(&args[1])?;
-                let (tp, tl) = self.extract_text(&args[2])?;
-                let site = self.site_value(span)?;
-                call_struct(
-                    self,
-                    "__text_replace_all",
-                    &[
-                        recv_ptr.into(),
-                        recv_len.into(),
-                        fp.into(),
-                        fl.into(),
-                        tp.into(),
-                        tl.into(),
-                        site.into(),
-                    ],
-                )
-            }
-            "replace" => {
-                // Replace EXACTLY the first `count` occurrences. `count` is a Num,
-                // truncated toward zero (as with array indices). The intrinsic aborts
-                // (exit 101) on an empty `from`, count <= 0, or count > occurrences present
-                // — a literal `count <= 0` / literal empty `from` / all-literal
-                // count-exceeds were already rejected by the checker at compile time.
-                let (fp, fl) = self.extract_text(&args[1])?;
-                let (tp, tl) = self.extract_text(&args[2])?;
-                let count = self.text_index_arg(&args[3], "replace_count")?;
-                let site = self.site_value(span)?;
-                call_struct(
-                    self,
-                    "__text_replace_n",
-                    &[
-                        recv_ptr.into(),
-                        recv_len.into(),
-                        fp.into(),
-                        fl.into(),
-                        tp.into(),
-                        tl.into(),
-                        count.into(),
-                        site.into(),
-                    ],
+                    "__text_at",
+                    &[recv_ptr.into(), recv_len.into(), index.into()],
+                )?
+                .into_struct_value();
+                let (_, len) = self.split_text(grapheme, "at")?;
+                let found = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::SGT,
+                        len,
+                        len.get_type().const_zero(),
+                        "at_found",
+                    )
+                    .map_err(ctx("Failed to compare grapheme len"))?;
+                self.build_conditional_result(
+                    found,
+                    self.ptr_len_struct_type().into(),
+                    "text_at",
+                    |_| Ok(grapheme.into()),
                 )
             }
             "slice" => {
@@ -142,21 +102,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                     "__text_slice",
                     &[recv_ptr.into(), recv_len.into(), start.into(), end.into()],
                 )
-            }
-            "contains" => {
-                let (sp, sl) = self.extract_text(&args[1])?;
-                let f = self.get_intrinsic("__text_contains")?;
-                let r = self
-                    .builder
-                    .build_call(
-                        f,
-                        &[recv_ptr.into(), recv_len.into(), sp.into(), sl.into()],
-                        "txt_contains",
-                    )
-                    .map_err(ctx("Failed to call __text_contains"))?
-                    .as_any_value_enum()
-                    .into_int_value();
-                self.int_to_bool(r, "contains_bool")
             }
             "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
             other => Err(format!("unknown text method `{other}`")),

@@ -167,7 +167,7 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
     let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
 
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
-    let (mut program, mut sources) = match modules::link(program, base_dir) {
+    let (mut program, mut sources) = match modules::link(program, base_dir, Some(file)) {
         Ok(linked) => linked,
         // A link failure's span may point into an imported module; the error carries the
         // sources loaded so far, so the diagnostic renders against the right file.

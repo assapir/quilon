@@ -1,0 +1,6 @@
+~ Fixture: the entry file itself is reached again through a submodule's import — a
+~ cycle through the program's own root, not just between two other modules.
+
+<< "cycle_via_root.qn"
+
+^ = () -> Num => < 0 >

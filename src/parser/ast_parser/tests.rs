@@ -600,6 +600,168 @@ fn test_parse_type_declaration_method_with_parameters() {
     }
 }
 
+#[test]
+fn test_parse_type_declaration_method_with_parameters_as_first_member() {
+    // The disambiguating lookahead only looked at the FIRST member; a method whose
+    // parameter list is parenthesized (`(p :: Text) -> Text => ...`) put `(` right after
+    // `=`, which used to fall through to the record-literal reading.
+    let tokens = Lexer::tokenize(
+        "Greeter = {
+  label = (p :: Text) -> Text => < p >
+  name :: Text
+}",
+    )
+    .unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields, methods } = &declaration.type_definition
+    {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "label");
+        assert_eq!(methods[0].parameters.len(), 1);
+    } else {
+        panic!("Expected a Record type declaration");
+    }
+}
+
+#[test]
+fn test_parse_type_declaration_render_member_as_first_member() {
+    // The render operator `` ` `` as the first member failed even earlier — the old scan
+    // only recognized an Ident there.
+    let tokens = Lexer::tokenize("Point = { ` = () -> Text => < \"pt\" >, x :: Num }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields, methods } = &declaration.type_definition
+    {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "`");
+    } else {
+        panic!("Expected a Record type declaration");
+    }
+}
+
+#[test]
+fn test_parse_record_literal_first_field_parenthesized_expression_stays_literal() {
+    // `ident = (` is genuinely ambiguous with a method's parameter list; a parenthesized
+    // VALUE expression as a record literal's first field must still parse as a literal.
+    let tokens = Lexer::tokenize("point = { x = (1 + 2), y = 3 }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        if let Expression::Record { fields, .. } = &declaration.value {
+            assert_eq!(fields.len(), 2);
+        } else {
+            panic!("Expected Record expression");
+        }
+    } else {
+        panic!("Expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn test_methods_only_block_is_a_compile_error_regardless_of_case() {
+    // LOCKED: content decides a type declaration from a record literal, never the name's
+    // capitalization. A block with no `::` field anywhere, and nothing but method-shaped
+    // members, is ambiguous either way — a compile error, not a silent guess.
+    for name in ["x", "X"] {
+        let src = format!("{name} = {{ f = => 1 }}");
+        let tokens = Lexer::tokenize(&src).unwrap();
+        let result = parse(&tokens);
+        let Err(err) = result else {
+            panic!("expected `{src}` to be a parse error, got {result:?}");
+        };
+        assert!(
+            err.message.contains("ambiguous"),
+            "expected an ambiguity error for `{src}`, got: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn test_lowercase_name_with_field_is_still_a_type_declaration() {
+    // LOCKED: a `::` field makes it a type declaration whatever the name's case.
+    let tokens = Lexer::tokenize("x = { v :: Num }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0] {
+        assert_eq!(declaration.name, "x");
+        if let TypeDefinition::Record { fields, methods } = &declaration.type_definition {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(methods.len(), 0);
+        } else {
+            panic!("Expected Record type definition");
+        }
+    } else {
+        panic!("Expected type declaration");
+    }
+}
+
+#[test]
+fn test_record_literal_of_plain_values_stays_a_literal_binding() {
+    let tokens = Lexer::tokenize("p = { size = 5 }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("Expected VariableDeclaration");
+    };
+    let Expression::Record { fields, .. } = &declaration.value else {
+        panic!("Expected Record expression");
+    };
+    assert_eq!(fields.len(), 1);
+}
+
+#[test]
+fn test_method_first_block_with_a_later_field_is_a_type_declaration() {
+    // A method may legitimately come before the field(s) it uses (see
+    // `examples/methods.qn`); the `::` field anywhere in the block settles it.
+    let tokens = Lexer::tokenize("x = { f = => < it.v >, v :: Num }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields, methods } = &declaration.type_definition
+    {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(methods.len(), 1);
+    } else {
+        panic!("Expected a Record type declaration");
+    }
+}
+
 /// The body statements of the single `^` function in `src` (which must be a block).
 fn entry_block_statements(src: &str) -> Vec<Statement> {
     let tokens = Lexer::tokenize(src).unwrap();

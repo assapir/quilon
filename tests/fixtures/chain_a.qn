@@ -1,0 +1,6 @@
+~ Fixture: a module imported by the root that itself imports another module — the
+~ transitive half of a module-imports-module chain.
+
+<< "chain_b.qn"
+
+>> incTwice = (x :: Num) -> Num => < chain_b.inc(chain_b.inc(x)) >

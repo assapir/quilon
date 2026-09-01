@@ -681,9 +681,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
-    /// Call a closure value held in local variable `var_name`: extract the function and
-    /// environment pointers from its `{ ptr fn, ptr env }` struct and emit an indirect
-    /// call passing the source arguments followed by the environment pointer. `parameter_tys`
+    /// Call a closure value held in local variable `var_name`: load its
+    /// `{ ptr fn, ptr env }` struct from the slot and call through it. `parameter_tys`
     /// / `ret_ty` are the closure's recorded signature (excluding the implicit env parameter).
     pub(super) fn generate_closure_call(
         &mut self,
@@ -700,16 +699,60 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args.len()
             ));
         }
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let closure_ty = self.closure_struct_type();
-
-        // Load the closure struct from its slot, then split out fn and env pointers.
         let (slot, _) = *self.variables.get(var_name).expect("closure var bound");
         let closure_val = self
             .builder
             .build_load(closure_ty, slot, var_name)
             .map_err(ctx("Failed to load closure"))?
             .into_struct_value();
+        self.call_closure_value(closure_val, parameter_tys, ret_ty, args)
+    }
+
+    /// Call a function-valued EXPRESSION — `adder(5)(2)`, or any callee that is not a
+    /// bare name: generate it to a closure `{ ptr fn, ptr env }` value and call through
+    /// it, recovering the callee signature from the oracle's type for the expression.
+    pub(super) fn generate_closure_value_call(
+        &mut self,
+        function: &Expression,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some(Type::Function {
+            parameters,
+            return_type,
+        }) = self.oracle.expression_type(function).cloned()
+        else {
+            return Err(
+                "the callee is not a function name or a function-valued expression".to_string(),
+            );
+        };
+        if args.len() != parameters.len() {
+            return Err(format!(
+                "this closure expects {} argument(s), got {}",
+                parameters.len(),
+                args.len()
+            ));
+        }
+        let parameter_tys = parameters
+            .iter()
+            .map(|t| self.boundary_type(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret_ty = self.boundary_type(&return_type)?;
+        let closure_val = self.generate_expression(function)?.into_struct_value();
+        self.call_closure_value(closure_val, &parameter_tys, ret_ty, args)
+    }
+
+    /// The shared tail of every closure call: split the `{ ptr fn, ptr env }` value into
+    /// its function and environment pointers and emit an indirect call passing the source
+    /// arguments followed by the environment pointer.
+    fn call_closure_value(
+        &mut self,
+        closure_val: inkwell::values::StructValue<'ctx>,
+        parameter_tys: &[BasicTypeEnum<'ctx>],
+        ret_ty: BasicTypeEnum<'ctx>,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let fn_ptr = self
             .builder
             .build_extract_value(closure_val, 0, "clo_fn")

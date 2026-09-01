@@ -135,15 +135,23 @@ impl<'a> Parser<'a> {
 
     /// With the cursor on `(`, does a parenthesized parameter list followed by `=>` or
     /// `->` start here — the shape shared by a lambda and a function declaration?
+    pub(super) fn parameter_list_ahead(&self) -> bool {
+        self.parameter_list_ahead_from(0)
+    }
+
+    /// Same question as [`Self::parameter_list_ahead`], but starting from the `(` at
+    /// `peek_ahead(offset)` rather than the current token — lets a caller that has
+    /// already looked past other tokens (e.g. a member name and `=`) reuse the scan.
     ///
     /// Scans to the matching `)` and checks for a following `=>` or `->` (return type),
     /// ending at `Eof` on a stream that never closes the paren. Deliberately unbounded
     /// otherwise: a token-distance limit here would make a definition's MEANING depend on
     /// how long it is, silently re-reading a wide function as a variable holding a lambda
     /// instead of letting `parse_parameter_list` report what is actually wrong with it.
-    pub(super) fn parameter_list_ahead(&self) -> bool {
+    pub(super) fn parameter_list_ahead_from(&self, offset: usize) -> bool {
+        debug_assert!(self.peek_ahead(offset).kind == TokenKind::ParenOpen);
         let mut depth = 1usize;
-        let mut idx = 1;
+        let mut idx = offset + 1;
         loop {
             match self.peek_ahead(idx).kind {
                 TokenKind::ParenOpen => depth += 1,
@@ -154,6 +162,58 @@ impl<'a> Parser<'a> {
                         return *next == TokenKind::Arrow || *next == TokenKind::ReturnArrow;
                     }
                 }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            idx += 1;
+        }
+    }
+
+    /// With the cursor on the `{` that opens a `name = { … }` block whose first member is
+    /// method-shaped, does the block contain a `::` field ANYWHERE among its own members?
+    /// (LOCKED disambiguation: content decides a type declaration from a record literal —
+    /// never the name's capitalization — and a field can arrive after a leading method, as
+    /// `examples/methods.qn` already relies on.)
+    ///
+    /// `::` never appears bare in an expression — only in a field, a parameter type, or a
+    /// block-local annotated binding (`x :: Num = …`) — so it is enough to scan to the
+    /// matching `}` for an identifier or `` ` `` directly followed by `::`, while tracking
+    /// paren/brace/bracket depth (ruling out a parameter's or a nested type's `::`) and
+    /// `< … >` block-body depth (ruling out a method body's own local binding), via
+    /// [`ends_operand`] — the lexer already resolves every `>` into `BlockClose` or `Gt`.
+    pub(super) fn member_block_has_field(&self) -> bool {
+        debug_assert!(self.check(&TokenKind::BraceOpen));
+        let (mut brace, mut paren, mut bracket, mut block) = (1i32, 0i32, 0i32, 0i32);
+        let mut idx = 1;
+        loop {
+            if brace == 1
+                && paren == 0
+                && bracket == 0
+                && block == 0
+                && matches!(
+                    self.peek_ahead(idx).kind,
+                    TokenKind::Ident | TokenKind::Backtick
+                )
+                && self.peek_ahead(idx + 1).kind == TokenKind::TypeAnnotation
+            {
+                return true;
+            }
+            match self.peek_ahead(idx).kind {
+                TokenKind::BraceOpen => brace += 1,
+                TokenKind::BraceClose => {
+                    brace -= 1;
+                    if brace == 0 {
+                        return false;
+                    }
+                }
+                TokenKind::ParenOpen => paren += 1,
+                TokenKind::ParenClose => paren -= 1,
+                TokenKind::BracketOpen => bracket += 1,
+                TokenKind::BracketClose => bracket -= 1,
+                TokenKind::BlockOpen if !ends_operand(&self.peek_ahead(idx - 1).kind) => {
+                    block += 1;
+                }
+                TokenKind::BlockClose => block -= 1,
                 TokenKind::Eof => return false,
                 _ => {}
             }
@@ -210,4 +270,26 @@ impl<'a> Parser<'a> {
             None
         }
     }
+}
+
+/// Whether `kind` can be the last token of a complete operand — the mirror image of
+/// [`TokenKind::starts_operand`], and what [`Parser::member_block_has_field`] uses to tell a
+/// real `<` block-open from `<` used as the less-than operator — the same rule
+/// `match_comparison` applies at expression precedence, with the parser's real position in
+/// place of a raw previous token.
+fn ends_operand(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Number(_)
+            | TokenKind::String(_)
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Unit
+            | TokenKind::Ident
+            | TokenKind::Backtick
+            | TokenKind::ParenClose
+            | TokenKind::BracketClose
+            | TokenKind::BraceClose
+            | TokenKind::BlockClose
+    )
 }

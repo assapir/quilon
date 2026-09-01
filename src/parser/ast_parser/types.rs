@@ -132,9 +132,9 @@ impl<'a> Parser<'a> {
 
     /// Parse a function type, with the cursor at the opening `(`:
     /// `(P1, P2, …) -> R`. The parameter list may be empty (`() -> $`) and each parameter
-    /// type is itself a full type (so a parameter may be a function type). The return
-    /// position must be a NON-function type for now — a curried `(A) -> (B) -> C` is not
-    /// supported yet and is rejected with a clear message rather than silently accepted.
+    /// type is itself a full type, as is the return — so a parameter or the result may be
+    /// a function type, and `(A) -> (B) -> C` reads right-associatively as
+    /// `(A) -> ((B) -> C)`.
     fn parse_function_type(&mut self) -> Result<crate::ast::Type, ParseError> {
         self.expect(&TokenKind::ParenOpen)?;
         let mut parameters = Vec::new();
@@ -149,15 +149,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::ParenClose)?;
         self.expect(&TokenKind::ReturnArrow)?;
-        let return_arrow = self.previous_span();
         let return_type = self.parse_type()?;
-        if matches!(return_type, crate::ast::Type::Function { .. }) {
-            return Err(ParseError {
-                message: "a curried function type (a function-typed return) is not supported yet"
-                    .to_string(),
-                span: return_arrow,
-            });
-        }
         Ok(crate::ast::Type::Function {
             parameters,
             return_type: Box::new(return_type),

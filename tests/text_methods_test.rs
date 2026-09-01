@@ -543,3 +543,47 @@ fn replace_count_must_be_a_num() {
     // The 3rd arg is a Num count — a non-Num is a type error.
     assert_type_error("^ = () -> Num => < \"a-a-a\".replace(\"a\", \"b\", true).size >");
 }
+
+// ---- at / graphemes (the grapheme-access primitives) ----------------------
+
+#[test]
+fn at_reads_one_grapheme_and_is_notok_out_of_bounds() {
+    // "a🌍b": at(1) is the whole 4-byte emoji; at(3) and at(-1) are NotOk.
+    assert_exit(
+        "^ = () -> Num => <\n  g = \"a🌍b\".at(1) ?\n    | Ok(t)    => t == \"🌍\" ? 1 : 0\n    | NotOk(_) => 9\n  over = \"a🌍b\".at(3) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  under = \"a🌍b\".at(0 - 1) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  g * 100 + over * 10 + under\n>",
+        111,
+    );
+}
+
+#[test]
+fn at_keeps_a_multi_codepoint_cluster_whole() {
+    // NFD "é" (e + combining acute) is one grapheme of 3 bytes — never split.
+    assert_exit(
+        "^ = () -> Num => <\n  \"e\u{0301}llo\".at(0) ?\n    | Ok(g)    => g.size\n    | NotOk(_) => 0\n>",
+        3,
+    );
+}
+
+#[test]
+fn graphemes_yields_the_cluster_sequence() {
+    // 5 graphemes; the empty text has none; a ZWJ family emoji is ONE.
+    assert_exit("^ = () -> Num => < \"héllo\".graphemes().size >", 5);
+    assert_exit("^ = () -> Num => < \"\".graphemes().size >", 0);
+    assert_exit("^ = () -> Num => < \"👨‍👩‍👧\".graphemes().size >", 1);
+}
+
+#[test]
+fn graphemes_composes_with_array_methods() {
+    // The []Text of graphemes goes through filter/map like any array.
+    assert_exit(
+        "^ = () -> Num => < \"a,b,c\".graphemes().filter(g => g == \",\").size >",
+        2,
+    );
+}
+
+#[test]
+fn at_takes_exactly_one_num_index() {
+    assert_type_error(
+        "^ = () -> Num => <\n  \"abc\".at(\"x\") ?\n    | Ok(_) => 1\n    | NotOk(_) => 0\n>",
+    );
+}

@@ -1,0 +1,5 @@
+~ Fixture: the other half of the cycle_a <-> cycle_b import cycle.
+
+<< "cycle_a.qn"
+
+>> pong = (x :: Num) -> Num => < cycle_a.ping(x) >

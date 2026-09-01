@@ -43,6 +43,11 @@ user's `foo.test`), the short name is ambiguous and the compiler asks for the fu
 A module imported by file path has only its stem, so two file imports with the same stem
 are rejected at the import — rename the file.
 
+A file import resolves to the module's real path on disk, so the same file reached
+through two different spellings (`..`, a symlink, ...) loads once, not twice. An import
+cycle — a module that imports itself, directly or through others, including one that
+leads back to the program's own entry file — is a compile error naming the cycle.
+
 An import **claims its short name** for the whole file: after `<< core.http`, a binding
 named `http` (top-level, local, or a parameter) is an error. And an import binds only the
 code **below it** — like every other name, since the language has no hoisting.

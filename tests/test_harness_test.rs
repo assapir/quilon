@@ -459,7 +459,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
     let tokens = Lexer::tokenize("<< core.http\n^ = () -> Num => < 0 >\n").expect("lexing");
     let program = parser::parse(&tokens).expect("parsing");
     let (linked, _sources) =
-        quilon::modules::link(program, Path::new(".")).expect("import linking failed");
+        quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
     // Everything but the program's own `^` was contributed by the import.
     let mut contributed: Vec<&str> = linked
         .items
@@ -501,6 +501,20 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.lineFeedReply",
         "core.http.headerOr",
         "core.http.parsed",
+        // core.text, merged implicitly because the client calls composable Text methods
+        // (`.split`/`.trim`/`.contains`) — the implementations those calls lower to,
+        // qualified so they claim no name an importer could write.
+        "core.text.split",
+        "core.text.splitOnto",
+        "core.text.trim",
+        "core.text.contains",
+        "core.text.replace",
+        "core.text.replaceAll",
+        "core.text.replaceOnto",
+        "core.text.replaceRemainder",
+        "core.text.repeat",
+        "core.text.copies",
+        "core.text.double",
     ];
     expected.sort_unstable();
 
@@ -1057,6 +1071,40 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
     }
     assert!(
         out.stdout.contains("71 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+}
+
+/// The same gate for `corelib/text.qn` — the self-hosted Text methods' own suite, the one
+/// compilation of those blocks.
+#[test]
+fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("corelib")
+        .join("text.qn");
+    let out = quilon(&["test", module.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "corelib/text.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    for group in [
+        "split",
+        "trim",
+        "contains",
+        "replace",
+        "repeat",
+        "grapheme access",
+    ] {
+        assert!(
+            out.stdout.contains(group),
+            "the `{group}` group is missing from the report:\n{}",
+            out.stdout
+        );
+    }
+    assert!(
+        out.stdout.contains("20 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

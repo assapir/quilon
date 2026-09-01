@@ -16,7 +16,7 @@ fn gen_ir(source: &str) -> String {
     let source = format!("<< core.io\n{source}");
     let tokens = Lexer::tokenize(&source).unwrap();
     let program = parse(&tokens).unwrap();
-    let program = quilon::modules::link(program, std::path::Path::new("."))
+    let program = quilon::modules::link(program, std::path::Path::new("."), None)
         .expect("import linking failed")
         .0;
     let context = Context::create();

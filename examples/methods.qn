@@ -8,6 +8,14 @@ Counter = {
   bump = (by :: Num) -> Num => < it.value + by >
 }
 
+~ Members may appear in any order — including a method WITH parameters as the very
+~ first member, which the parser must tell apart from a record literal whose first
+~ field holds a parenthesized value (e.g. `x = (1 + 2)`).
+Greeter = {
+  greet = (name :: Text) -> Text => < "Hello, " + name >,
+  label :: Text
+}
+
 ~ A top-level function may share a name with a method. The two are unrelated: a member
 ~ call asks the receiver's type, a plain call names this function.
 bump = (by :: Num) -> Num => < by * 100 >
@@ -18,4 +26,8 @@ bump = (counter :: Counter, by :: Num) -> Num => < counter.value * by >
   assert(c.bump(5), equals(35))     ~ Counter's method: it.value + 5
   assert(bump(5), equals(500))      ~ the top-level function: 5 * 100
   assert(bump(c, 5), equals(150))   ~ the top-level function too: 30 * 5
+
+  g :: Greeter = Greeter { label = "front desk" }
+  assert(g.greet("Alice"), equals("Hello, Alice"))
+  assert(g.label, equals("front desk"))
 >

@@ -87,65 +87,33 @@ impl<'ctx> CodeGenerator<'ctx> {
             // native-map pointer, the same representation `[|…|]` literals lower to) from
             // the C envp.
             "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
-            // Text methods. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
-            // `Text` argument is passed as its (ptr, i64) fields. See `quilon-rt`.
-            // { ptr, i64 } trimStart / trimEnd / toUpper / toLower (i8*, i64). `trim` is
-            // composed from trimStart+trimEnd in codegen, so it has no own intrinsic.
-            "__text_trim_start" | "__text_trim_end" | "__text_to_upper" | "__text_to_lower" => self
+            // Text primitives. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
+            // `Text` argument is passed as its (ptr, i64) fields. Only the true primitives
+            // live here — the composable methods (`split`/`trim`/`contains`/`replace`/
+            // `replaceAll`/`repeat`) are Quilon (`corelib/text.qn`). See `quilon-rt`.
+            // { ptr, i64 } trimStart / trimEnd / toUpper / toLower / graphemes (i8*, i64);
+            // `graphemes` yields a `[]Text` of the grapheme clusters.
+            "__text_trim_start" | "__text_trim_end" | "__text_to_upper" | "__text_to_lower"
+            | "__text_graphemes" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into()], false),
-            // i64 __text_contains / __text_index_of (i8* hay, i64, i8* sub, i64).
+            // i64 __text_index_of(i8* hay, i64, i8* sub, i64) — grapheme index or -1.
+            // i64 __text_contains(i8* hay, i64, i8* sub, i64) — 1/0; backs the `contains`
+            // ASSERTION matcher (the `Text.contains` method is `core.text`'s).
             "__text_contains" | "__text_index_of" => {
                 i64t.fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false)
             }
-            // { ptr, i64 } __text_split(i8* hay, i64, i8* sep, i64) -> `[]Text`.
-            "__text_split" => self
-                .ptr_len_struct_type()
-                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __color_enabled(i64 fd) — 1 when `fd` is a terminal that wants color.
             "__color_enabled" => i64t.fn_type(&[i64t.into()], false),
-            // { ptr, i64 } __text_repeat(i8*, i64, double count, Site* site) — `count`
-            // copies of the text. The count stays a `double` so the runtime can reject a
-            // fractional or negative one rather than silently truncating it, and `site` is
-            // the call's location, which such a rejection is reported at.
-            "__text_repeat" => self
-                .ptr_len_struct_type()
-                .fn_type(&[ptr.into(), i64t.into(), f64t.into(), ptr.into()], false),
             // { ptr, i64 } __text_slice(i8*, i64, i64 start, i64 end).
             "__text_slice" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into(), i64t.into(), i64t.into()], false),
-            // { ptr, i64 } __text_replace_all(i8* hay,i64, i8* from,i64, i8* to,i64,
-            // Site* site).
-            "__text_replace_all" => self.ptr_len_struct_type().fn_type(
-                &[
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                ],
-                false,
-            ),
-            // { ptr, i64 } __text_replace_n(i8* hay,i64, i8* from,i64, i8* to,i64, i64 count,
-            // Site* site). The trailing `Site` — as on every Text intrinsic with a fail-loud
-            // contract — is the method call's own location, which the runtime frames its
-            // report around.
-            "__text_replace_n" => self.ptr_len_struct_type().fn_type(
-                &[
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                    i64t.into(),
-                    ptr.into(),
-                ],
-                false,
-            ),
+            // { ptr, i64 } __text_at(i8*, i64, i64 index) — the grapheme at `index`, or
+            // the empty text for an index out of bounds (a grapheme is never empty).
+            "__text_at" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), i64t.into()], false),
             // void __sleep(double seconds) — the `@sleep` leaf IO primitive: pause the
             // current fiber for `seconds` seconds, then continue.
             "__sleep" => void.fn_type(&[f64t.into()], false),

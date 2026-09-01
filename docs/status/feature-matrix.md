@@ -14,7 +14,8 @@ sidebar:
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
-| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`at`/`graphemes`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text = []Grapheme` model: `at`/`graphemes` grapheme access, and the composable methods self-hosted in Quilon (`corelib/text.qn`) over the native primitive floor | ✅ |
 | Ad-hoc overloading: same-named typed definitions, exact-type dispatch | ✅ |
 | Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads | ✅ |
 | `Bool` | ✅ |
@@ -57,9 +58,10 @@ sidebar:
 | `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | [Function types](../functions/README.md#function-types--higher-order-functions) (`(Num) -> Bool`, `() -> $`) + higher-order functions: a function-typed parameter called inside, taking a closure by literal or by name | ✅ |
-| [Contextual lambda typing](../functions/README.md#a-lambda-takes-its-parameter-types-from-the-target): a lambda takes its parameter types from the signature that receives it — a function-typed parameter (a user function's, a method's, or the member an overload set narrows to) or a binding that declares its function type | ✅ |
+| [Contextual lambda typing](../functions/README.md#a-lambda-takes-its-parameter-types-from-the-target): a lambda takes its parameter types from the signature that receives it — a function-typed parameter (a user function's, a method's, or the member an overload set narrows to), a binding that declares its function type, or a function-typed **return** annotation | ✅ |
+| [Returning a closure](../functions/closures.md#returning-a-closure): a function-typed return (`(Num) -> (Num) -> Num`), callable through a binding, immediately (`adder(5)(2)`), or passed on — captures live on the GC heap and outlive the maker's frame | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |
-| Overloaded or top-level function name passed as a value; a closure **returned** from a function | ❌ |
+| Overloaded or top-level function name passed as a value | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
 | [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, and the value-returning `@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |

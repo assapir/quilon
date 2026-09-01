@@ -80,9 +80,11 @@ twice = (f :: (Num) -> Num, x :: Num) -> Num => < f(f(x)) >
 ```
 
 The value passed in is a closure — a lambda literal (as above) or a named closure passed
-by its name. Function types may nest as parameter types (`((Num) -> Bool, Num) -> Bool`).
-A function-typed **return** (currying, `(A) -> (B) -> C`) is not supported yet. (See
-`examples/higher_order.qn`.)
+by its name. Function types may nest as parameter types (`((Num) -> Bool, Num) -> Bool`)
+**and as the return type**: `(A) -> (B) -> C` reads right-associatively as
+`(A) -> ((B) -> C)`, a function returning a function. A function may hand a closure back
+across the call boundary — see
+[returning a closure](closures.md#returning-a-closure). (See `examples/higher_order.qn`.)
 
 ### A lambda takes its parameter types from the target
 
@@ -92,7 +94,8 @@ and the lambda need not repeat them:
 ```quilon ignore
 apply(10, (n) => n + 1)          ~ `apply`'s `(Num) -> Num` parameter types `n`
 c.applyTo((n) => n * 2)          ~ so does a method's function-typed parameter
-scale :: (Num) -> Num = (n) => < n * 4 > ~ a binding that declares its function type
+scale :: (Num) -> Num = (n) => < n * 4 >             ~ a binding that declares its function type
+adder = (n :: Num) -> (Num) -> Num => < (x) => x + n >   ~ a function-typed RETURN types the lambda it hands back
 ```
 
 An annotation is always legal and wins where written (`(n :: Num) => n + 1`). Where the
