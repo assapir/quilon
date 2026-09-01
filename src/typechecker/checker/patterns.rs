@@ -36,12 +36,24 @@ impl TypeChecker {
 
         let mut result_type = None;
 
+        // What a pattern binds — the whole scrutinee or a payload it carries — is part of
+        // the scrutinee's value, so every binding inherits the scrutinee's aliasing: a
+        // payload record matched out of a parameter's sum still counts as that
+        // parameter's value.
+        let scrutinee_aliasing = self.value_aliasing(expression);
+
+        // The match's own aliasing (the union of its arms') is computed here, arm by
+        // arm, while each arm's bindings are still in scope — `value_aliasing` caches it
+        // under the match's span, since a later walk could no longer resolve them.
+        let mut arms_aliasing = ValueAliasing::default();
+
         for arm in arms {
             // Bind pattern variables and check body
             self.env.push_scope();
-            self.bind_pattern_vars(&arm.pattern, &expression_type)?;
+            self.bind_pattern_vars(&arm.pattern, &expression_type, &scrutinee_aliasing)?;
 
             let body_type = self.infer_expression(&arm.body)?;
+            arms_aliasing.merge(self.value_aliasing(&arm.body));
 
             self.env.pop_scope();
 
@@ -69,6 +81,8 @@ impl TypeChecker {
                 None => result_type = Some(body_type),
             }
         }
+
+        self.match_aliasing.insert(span.clone(), arms_aliasing);
 
         Ok(result_type.expect("an armless match was rejected above"))
     }
@@ -186,11 +200,18 @@ impl TypeChecker {
         &mut self,
         pattern: &Pattern,
         type_: &Type,
+        scrutinee_aliasing: &ValueAliasing,
     ) -> Result<(), TypeError> {
         match pattern {
             Pattern::Identifier { name, span } => {
-                self.env
-                    .define(name.clone(), type_.clone(), false, span.clone())?;
+                self.env.define_binding(
+                    name.clone(),
+                    type_.clone(),
+                    false,
+                    self.current_declaration,
+                    scrutinee_aliasing.clone(),
+                    span.clone(),
+                )?;
                 Ok(())
             }
             Pattern::Constructor {
@@ -205,7 +226,7 @@ impl TypeChecker {
                     && let Some(variant) = variants.iter().find(|v| &v.name == constructor_name)
                 {
                     for (arg_pattern, field_type) in arguments.iter().zip(variant.fields.iter()) {
-                        self.bind_pattern_vars(arg_pattern, field_type)?;
+                        self.bind_pattern_vars(arg_pattern, field_type, scrutinee_aliasing)?;
                     }
                 }
                 Ok(())

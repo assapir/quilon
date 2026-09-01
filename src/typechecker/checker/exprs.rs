@@ -308,7 +308,16 @@ impl TypeChecker {
                     });
                 }
 
-                if let Some(name) = self.immutable_mutation_root(target) {
+                // The write lands on whatever record the path reaches, however it was
+                // reached — a named binding, an element read, a call result. It is
+                // allowed only when that record aliases no `=` binding and no parameter
+                // (a setter's receiver, and anything reached only through `:=` bindings
+                // or freshly built, passes).
+                if let Expression::FieldAccess {
+                    expression: base, ..
+                } = target.as_ref()
+                    && let Some(name) = self.immutable_write_witness(base)
+                {
                     return Err(TypeError::ImmutableFieldWrite {
                         name,
                         span: span.clone(),

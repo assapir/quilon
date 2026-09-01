@@ -1,0 +1,351 @@
+// Deep immutability: `=` freezes the VALUE, not just the binding. A value reached
+// through an `=` binding is never reachable through a `:=` binding — in either
+// direction — so every aliasing route around the setter/field-write gates is a compile
+// error, while immutable aliases, matching-mutability stores, and fresh values stay
+// legal. Scalars (`Num`/`Bool`/`Text`) copy and are exempt.
+
+use quilon::lexer::Lexer;
+use quilon::parser;
+use quilon::typechecker::TypeChecker;
+
+mod common;
+use common::{assert_exit, type_error_message};
+
+/// Assert the type checker ACCEPTS `src` — for legal forms whose run behavior is not the
+/// point (or not yet lowered by codegen).
+fn assert_type_checks(src: &str) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    if let Err(error) = TypeChecker::new().check_program(&program) {
+        panic!("expected the program to type-check, got: {error}\nsource:\n{src}");
+    }
+}
+
+// --- Route 1: alias bindings. ---
+
+#[test]
+fn a_mutable_alias_of_an_immutable_record_is_rejected() {
+    // `a := t` would make `t`'s frozen value writable through `a`.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  t = T { v = 1 }\n  a := t\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the alias binding to name 't', got: {error}"
+    );
+}
+
+#[test]
+fn an_immutable_alias_of_a_mutable_record_is_rejected() {
+    // The other direction: `x = m` would freeze a value that writes through `m` keep
+    // changing underneath.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  m := T { v = 1 }\n  x = m\n  m.v\n>",
+    );
+    assert!(
+        error.contains("'m' is mutable"),
+        "expected the alias binding to name 'm', got: {error}"
+    );
+}
+
+#[test]
+fn run_an_immutable_alias_of_an_immutable_record_stays_legal() {
+    // `a = t` adds a second frozen name for the same frozen value: allowed, and the
+    // value stays what it was.
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  t = T { v = 40 }\n  a = t\n  a.v + (t.v == 40 ? 2 : 0)\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_a_scalar_read_out_of_a_frozen_record_copies() {
+    // Scalars copy: a field read into a `:=` binding takes the value out, and writing
+    // the copy leaves the record untouched.
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  t = T { v = 40 }\n  y := t.v\n  y := y + 2\n  y + (t.v == 40 ? 0 : 100)\n>",
+        42,
+    );
+}
+
+// --- Route 2: a method result that aliases its receiver. ---
+
+#[test]
+fn a_mutable_binding_of_an_escaping_getter_result_is_rejected() {
+    // `self` returns `it`, so its result IS the receiver: on an `=` receiver the result
+    // is immutable at the call site, and `x := t.self()` is the alias binding again.
+    let error = type_error_message(
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x := t.self()\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the escaping result to inherit 't''s immutability, got: {error}"
+    );
+}
+
+#[test]
+fn an_escaping_getter_stays_callable_on_an_immutable_receiver() {
+    // The method itself stays callable: its result and scalar reads off it are legal.
+    assert_type_checks(
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  x = t.self()\n  y = t.self().v\n  x.v + y\n>",
+    );
+}
+
+#[test]
+fn run_an_escaping_getter_result_on_an_immutable_receiver_reads_back() {
+    // `x = t.self()` is an immutable alias of `t`; reads work and `t` is unchanged.
+    assert_exit(
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  t = T { v = 21 }\n  x = t.self()\n  x.v + t.v\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_an_escaping_getter_result_on_a_mutable_receiver_stays_mutable() {
+    // On a `:=` receiver the escaping result inherits mutability: `z := m.self()` is
+    // legal and a write through `z` reaches `m` — that is what `:=` declared.
+    assert_exit(
+        "T = {\n  v :: Num\n  self = () -> T => < it >\n}\n^ = () -> Num => <\n  m := T { v = 5 }\n  z := m.self()\n  z.v := 42\n  m.v\n>",
+        42,
+    );
+}
+
+// --- Route 3: containers, in both directions. ---
+
+#[test]
+fn storing_an_immutable_record_in_a_mutable_container_is_rejected() {
+    // `b := Box { item = t }` would reach `t`'s frozen value through `b.item :=` writes.
+    let error = type_error_message(
+        "T = { v :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  t = T { v = 1 }\n  b := Box { item = t }\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the container store to name 't', got: {error}"
+    );
+}
+
+#[test]
+fn storing_a_mutable_record_in_an_immutable_container_is_rejected() {
+    // Symmetric: `c = Box { item = m }` would freeze a container whose content keeps
+    // changing through `m`.
+    let error = type_error_message(
+        "T = { v :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  m := T { v = 1 }\n  c = Box { item = m }\n  m.v\n>",
+    );
+    assert!(
+        error.contains("'m' is mutable"),
+        "expected the container store to name 'm', got: {error}"
+    );
+}
+
+#[test]
+fn storing_an_immutable_record_in_a_mutable_array_is_rejected() {
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  t = T { v = 1 }\n  arr := [t]\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the array store to name 't', got: {error}"
+    );
+}
+
+#[test]
+fn storing_a_mutable_record_in_an_immutable_array_is_rejected() {
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  m := T { v = 1 }\n  arr = [m]\n  m.v\n>",
+    );
+    assert!(
+        error.contains("'m' is mutable"),
+        "expected the array store to name 'm', got: {error}"
+    );
+}
+
+#[test]
+fn matching_mutability_stores_stay_legal() {
+    // `=` into `=`, `:=` into `:=`: both directions of the matching case pass the
+    // checker. (Running a record-typed field is a separate, pre-existing codegen gap —
+    // record fields of user types are a deferred follow-up.)
+    assert_type_checks(
+        "T = { v :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  t = T { v = 40 }\n  frozen = Box { item = t }\n  m := T { v = 1 }\n  open := Box { item = m }\n  m.v := 2\n  t.v + m.v\n>",
+    );
+}
+
+#[test]
+fn reading_a_record_out_of_an_immutable_container_yields_an_immutable_result() {
+    // Deep: what comes OUT of a frozen container is frozen too, for a field read and
+    // for an element read.
+    let error = type_error_message(
+        "T = { v :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  t = T { v = 1 }\n  b = Box { item = t }\n  x := b.item\n  t.v\n>",
+    );
+    assert!(
+        error.contains("is immutable"),
+        "expected the field read to stay frozen, got: {error}"
+    );
+
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  arr = [T { v = 1 }]\n  x := arr[0]\n  1\n>",
+    );
+    assert!(
+        error.contains("'arr' is immutable"),
+        "expected the element read to stay frozen, got: {error}"
+    );
+}
+
+#[test]
+fn a_frozen_record_reached_through_a_sum_stays_frozen() {
+    // A record wrapped in a sum payload and matched back out is still the same value:
+    // a function returning the payload returns its parameter's value, so the call's
+    // result inherits the argument's immutability.
+    let error = type_error_message(
+        "T = { v :: Num }\nWrap = Held(T) / Empty\nunwrap = (s :: Wrap) -> T => < s ? | Held(p) => p | Empty => T { v = 0 } >\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := unwrap(Held(t))\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the matched-out payload to stay frozen, got: {error}"
+    );
+}
+
+// --- Route 4: method-internal aliasing of the receiver. ---
+
+#[test]
+fn a_mutable_alias_of_the_receiver_inside_an_immutable_method_is_rejected() {
+    // The original `sneak`: an `=` method must not let `it` reach a mutable binding —
+    // the receiver may be `=`-bound at any call site.
+    let error = type_error_message(
+        "T = {\n  v :: Num\n  sneak = () -> Num => <\n    a := it\n    a.v := 99\n    it.v\n  >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.sneak()\n>",
+    );
+    assert!(
+        error.contains("receiver 'it'"),
+        "expected the receiver alias to be rejected, got: {error}"
+    );
+}
+
+#[test]
+fn run_a_mutable_alias_of_the_receiver_inside_a_setter_stays_legal() {
+    // A setter's receiver is mutable at every call site, so aliasing it mutably inside
+    // the setter is sound — and the write lands on the receiver.
+    assert_exit(
+        "T = {\n  v :: Num\n  bump := () -> $ => <\n    a := it\n    a.v := 42\n    $\n  >\n}\n^ = () -> Num => <\n  m := T { v = 1 }\n  m.bump()\n  m.v\n>",
+        42,
+    );
+}
+
+// --- Route 5: a field write rooted at a call. ---
+
+#[test]
+fn a_field_write_through_a_call_result_aliasing_an_immutable_argument_is_rejected() {
+    // Finding 42's shape: `id(t)` IS `t`, so the write is a write to the frozen value.
+    let error = type_error_message(
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).v := 5\n  t.v\n>",
+    );
+    assert!(
+        error.contains("immutable 't'"),
+        "expected the call-rooted write to name 't', got: {error}"
+    );
+}
+
+#[test]
+fn a_setter_call_through_a_call_result_aliasing_an_immutable_argument_is_rejected() {
+    let error = type_error_message(
+        "T = {\n  v :: Num\n  bump := () -> $ => < it.v := 99 >\n}\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).bump()\n  t.v\n>",
+    );
+    assert!(
+        error.contains("immutable 't'"),
+        "expected the call-rooted setter call to name 't', got: {error}"
+    );
+}
+
+// --- Route 6: plain functions cannot launder a parameter. ---
+
+#[test]
+fn a_mutable_alias_of_a_function_parameter_is_rejected() {
+    // A parameter's argument belongs to the caller and may be `=`-bound there.
+    let error = type_error_message(
+        "T = { v :: Num }\nlaunder = (p :: T) -> Num => <\n  a := p\n  a.v := 99\n  p.v\n>\n^ = () -> Num => <\n  t = T { v = 1 }\n  launder(t)\n>",
+    );
+    assert!(
+        error.contains("parameter 'p'"),
+        "expected the parameter alias to name 'p', got: {error}"
+    );
+}
+
+#[test]
+fn a_returned_parameter_inherits_the_arguments_mutability_at_the_call_site() {
+    // `id` returns its parameter, so `id(t)` IS `t` — binding it `:=` is the alias
+    // binding again, however many calls it went through.
+    let error = type_error_message(
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := id(t)\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the returned parameter to inherit 't''s immutability, got: {error}"
+    );
+}
+
+#[test]
+fn a_parameter_returned_through_a_local_still_inherits_mutability() {
+    // Laundering through an intermediate `=` local changes nothing: the local dies at
+    // the return, the parameter's value does not.
+    let error = type_error_message(
+        "T = { v :: Num }\nid = (p :: T) -> T => <\n  x = p\n  x\n>\n^ = () -> Num => <\n  t = T { v = 1 }\n  w := id(t)\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the locally-laundered parameter to inherit 't''s immutability, got: {error}"
+    );
+}
+
+#[test]
+fn run_a_returned_parameter_stays_mutable_for_a_mutable_argument() {
+    // The same function on a `:=` argument: the result inherits mutability, and the
+    // write reaches the original.
+    assert_exit(
+        "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  m := T { v = 1 }\n  w := id(m)\n  w.v := 42\n  m.v\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_a_function_building_its_result_locally_returns_a_fresh_value() {
+    // A local — even a `:=` one — dies at the return, so the result is fresh and binds
+    // either way at the call site.
+    assert_exit(
+        "T = { v :: Num }\nbuild = (start :: Num) -> T => <\n  draft := T { v = start }\n  draft.v := draft.v + 1\n  draft\n>\n^ = () -> Num => <\n  frozen = build(20)\n  open := build(20)\n  open.v := open.v + 0\n  frozen.v + open.v\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_passing_a_frozen_record_to_a_function_stays_legal_and_leaves_it_unchanged() {
+    // Argument passing is not a binding: a function may read a frozen record freely —
+    // and cannot change it.
+    assert_exit(
+        "T = { v :: Num }\ndouble = (p :: T) -> Num => < p.v * 2 >\n^ = () -> Num => <\n  t = T { v = 20 }\n  double(t) + (t.v == 20 ? 2 : 0)\n>",
+        42,
+    );
+}
+
+#[test]
+fn a_lambda_parameter_cannot_be_aliased_mutably_either() {
+    // The same parameter rule holds for lambda parameters — including one named `it`,
+    // which is an ordinary identifier, not the method receiver.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  ts = [T { v = 1 }]\n  ts.each(x => <\n    a := x\n    a.v := 9\n    $\n  >)\n  1\n>",
+    );
+    assert!(
+        error.contains("parameter 'x'"),
+        "expected the lambda-parameter alias to name 'x', got: {error}"
+    );
+}
+
+#[test]
+fn reassigning_a_mutable_binding_to_a_frozen_value_is_rejected() {
+    // The gate also covers REassignment: `m := t` on an existing `:=` binding is the
+    // same aliasing route.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  t = T { v = 1 }\n  m := T { v = 2 }\n  m := t\n  t.v\n>",
+    );
+    assert!(
+        error.contains("'t' is immutable"),
+        "expected the reassignment to name 't', got: {error}"
+    );
+}

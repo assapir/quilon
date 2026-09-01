@@ -13,6 +13,11 @@ counter := counter + 1  ~ reassign (also :=)
 Reassigning requires the binding to be mutable: `x := 5` on an immutable `x` is an error.
 Types are inferred but can be annotated: `x :: Num = 42`.
 
+For a record — and for containers holding records — the binding operator governs the
+**value**: an `=`-bound value is immutable through every alias, and a binding that would
+put one value on both sides of the `=`/`:=` line is a compile error (see
+[Deep immutability](mutation.md#deep-immutability)).
+
 ## A top-level binding must be a constant or a function
 
 A binding written outside any function is a **global**. A global's initializer has to be

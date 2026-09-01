@@ -293,10 +293,9 @@ impl TypeChecker {
                 // and arity only, identical in the parsed and resolved variant lists.
                 for variant in variants {
                     if variant.fields.is_empty() {
-                        self.env.define(
+                        self.env.define_constant(
                             variant.name.clone(),
                             sum_type.clone(),
-                            false,
                             declaration.span.clone(),
                         )?;
                     }
@@ -368,12 +367,29 @@ impl TypeChecker {
 
         for method in methods {
             self.env.push_scope();
-            self.env.define(
-                crate::ast::RECEIVER.to_string(),
-                self_type.clone(),
-                false,
-                method.span.clone(),
-            )?;
+            let enclosing_declaration = self.enter_declaration();
+            // A setter's receiver is mutable at every call site (owned by the enclosing
+            // declaration, so a result aliasing it stays classified that way); an `=`
+            // method's receiver is argument slot 0, its mutability the call site's.
+            let is_setter = self
+                .setter_methods
+                .contains(&(type_name.to_string(), method.name.clone()));
+            if is_setter {
+                self.env.define_setter_receiver(
+                    crate::ast::RECEIVER.to_string(),
+                    self_type.clone(),
+                    enclosing_declaration,
+                    method.span.clone(),
+                )?;
+            } else {
+                self.env.define_parameter(
+                    crate::ast::RECEIVER.to_string(),
+                    self_type.clone(),
+                    self.current_declaration,
+                    0,
+                    method.span.clone(),
+                )?;
+            }
 
             // A method is dispatched on its receiver's type rather than called by name, so
             // it never receives a call site — its last parameter included. Every parameter
@@ -399,16 +415,26 @@ impl TypeChecker {
                 false,
             )?;
 
-            for (parameter, raw_type) in method.parameters.iter().zip(&method_parameter_types) {
+            let mut resolved_parameter_types = Vec::with_capacity(method_parameter_types.len());
+            for (slot, (parameter, raw_type)) in method
+                .parameters
+                .iter()
+                .zip(&method_parameter_types)
+                .enumerate()
+            {
                 // Resolve the annotation so a user-type parameter (`other :: Color`) carries
                 // its fields/variants — field access and matching on it then resolve. The
                 // type being defined is already registered (see `check_type_declaration`),
                 // so a parameter naming it (an operator's right operand) resolves too.
                 let parameter_type = self.resolve_type(raw_type);
-                self.env.define(
+                resolved_parameter_types.push(parameter_type.clone());
+                // Slot 0 is the receiver; explicit parameters follow it, matching a
+                // member call's argument list.
+                self.env.define_parameter(
                     parameter.name.clone(),
                     parameter_type,
-                    false,
+                    self.current_declaration,
+                    slot + 1,
                     parameter.span.clone(),
                 )?;
             }
@@ -456,7 +482,30 @@ impl TypeChecker {
                 }
             }
 
+            // Classify the result's aliasing while the receiver and parameters are still
+            // in scope: a member returning `it` (or anything holding it) is what makes a
+            // call's result inherit the receiver's mutability at each call site.
+            let result_aliasing =
+                self.declaration_result_aliasing(&method.body, &resolved_return_type);
             self.env.pop_scope();
+            self.leave_declaration(enclosing_declaration);
+
+            if crate::ast::is_operator_symbol(&method.name) {
+                // An operator member dispatches through its overload set, so its
+                // classification lives on the registered member.
+                let mut operator_parameters = vec![self_type.clone()];
+                operator_parameters.extend(resolved_parameter_types);
+                self.set_overload_result_aliasing(
+                    &method.name,
+                    &operator_parameters,
+                    result_aliasing,
+                );
+            } else if result_aliasing != ResultAliasing::default() {
+                self.method_result_aliasing.insert(
+                    (type_name.to_string(), method.name.clone()),
+                    result_aliasing,
+                );
+            }
 
             self.methods.insert(
                 (type_name.to_string(), method.name.clone()),
@@ -492,6 +541,9 @@ impl TypeChecker {
                 return Err(TypeError::MutatingMethodDeclaredImmutable {
                     type_name: type_name.to_string(),
                     method: method.name.clone(),
+                    lambda_parameter_shadows_receiver: body_has_lambda_parameter_named_receiver(
+                        &method.body,
+                    ),
                     span,
                 });
             }
@@ -559,20 +611,6 @@ impl TypeChecker {
         }
     }
 
-    /// If a mutation rooted at `receiver` would write through an *immutable*
-    /// binding, return that binding's name; otherwise `None`. A `:=`-bound
-    /// receiver and the method receiver `it` (whose mutability is enforced at the
-    /// outer call site) are both allowed. Shared by the field-write and
-    /// setter-call mutability gates so they can never diverge.
-    pub(super) fn immutable_mutation_root(&self, receiver: &Expression) -> Option<String> {
-        let name = Self::field_path_root_name(receiver)?;
-        if name != crate::ast::RECEIVER && !self.env.is_mutable(&name) {
-            Some(name)
-        } else {
-            None
-        }
-    }
-
     pub(super) fn check_variable_declaration(
         &mut self,
         declaration: &VariableDeclaration,
@@ -607,32 +645,65 @@ impl TypeChecker {
             value_type
         };
 
+        // Rebinding an `=` name is its own error, reported before any aliasing gate: the
+        // fix is the binding operator, not the value.
+        if declaration.mutable
+            && self.env.get_type(&declaration.name).is_some()
+            && !self.env.is_mutable(&declaration.name)
+        {
+            return Err(TypeError::ImmutableAssignment {
+                name: declaration.name.clone(),
+                span: declaration.span.clone(),
+            });
+        }
+
+        // Deep immutability: a reference-typed value may not cross the `=`/`:=` line in
+        // either direction. Binding it `:=` while an `=` binding (or a parameter, whose
+        // argument belongs to the caller) still reaches it would make the frozen value
+        // writable; binding it `=` while a `:=` binding reaches it would let writes
+        // change the frozen value underneath. A fresh value binds either way.
+        let value_aliasing = self.value_aliasing(&declaration.value);
+        if declaration.mutable {
+            if let Some((witness, parameter)) = value_aliasing.immutable_witness() {
+                return Err(TypeError::MutableAliasOfImmutable {
+                    name: declaration.name.clone(),
+                    aliased: witness.to_string(),
+                    parameter,
+                    span: declaration.span.clone(),
+                });
+            }
+        } else if let Some(witness) = value_aliasing.mutable_witness() {
+            return Err(TypeError::ImmutableAliasOfMutable {
+                name: declaration.name.clone(),
+                aliased: witness.to_string(),
+                span: declaration.span.clone(),
+            });
+        }
+
         if declaration.mutable {
             // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
             if let Some(existing_type) = self.env.get_type(&declaration.name) {
-                if !self.env.is_mutable(&declaration.name) {
-                    return Err(TypeError::ImmutableAssignment {
-                        name: declaration.name.clone(),
-                        span: declaration.span.clone(),
-                    });
-                }
                 // Reassignment: the new value must match the binding's type.
                 self.check_type_compatibility(&existing_type, &final_type, &declaration.span)?;
                 Ok(())
             } else {
-                self.env.define(
+                self.env.define_binding(
                     declaration.name.clone(),
                     final_type,
                     true,
+                    self.current_declaration,
+                    value_aliasing,
                     declaration.span.clone(),
                 )
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.
-            self.env.define(
+            self.env.define_binding(
                 declaration.name.clone(),
                 final_type,
                 false,
+                self.current_declaration,
+                value_aliasing,
                 declaration.span.clone(),
             )
         }
@@ -825,14 +896,22 @@ impl TypeChecker {
 
         // Push scope for body type checking
         self.env.push_scope();
+        let enclosing_declaration = self.enter_declaration();
 
-        // Add parameters to scope
-        for (parameter, parameter_type) in declaration.parameters.iter().zip(parameter_types.iter())
+        // Add parameters to scope, each as its own argument slot: a parameter's value
+        // belongs to the caller, so the body may not alias it mutably, and a result built
+        // from it inherits the argument's mutability at each call site.
+        for (slot, (parameter, parameter_type)) in declaration
+            .parameters
+            .iter()
+            .zip(parameter_types.iter())
+            .enumerate()
         {
-            self.env.define(
+            self.env.define_parameter(
                 parameter.name.clone(),
                 parameter_type.clone(),
-                false,
+                self.current_declaration,
+                slot,
                 parameter.span.clone(),
             )?;
         }
@@ -856,7 +935,13 @@ impl TypeChecker {
         // may itself be nested inside another unannotated one still being checked.
         self.pending_return_type = previous_pending;
 
+        // Classify the result's aliasing while the parameters are still in scope: a
+        // function returning a parameter (however wrapped) makes each call's result
+        // inherit that argument's mutability at the call site.
+        let result_aliasing = self.declaration_result_aliasing(&declaration.body, &body_type);
+
         self.env.pop_scope();
+        self.leave_declaration(enclosing_declaration);
 
         // Verify the return type matches if annotated
         if let Some(annotated_type) = annotated_return {
@@ -893,7 +978,7 @@ impl TypeChecker {
             // body just proved — nothing before this point could have called it without
             // hitting `RecursiveFunctionNeedsReturnType`.
             let func_type = Type::Function {
-                parameters: parameter_types,
+                parameters: parameter_types.clone(),
                 return_type: Box::new(body_type.clone()),
             };
             self.env.define(
@@ -902,6 +987,19 @@ impl TypeChecker {
                 false,
                 declaration.span.clone(),
             )?;
+        }
+
+        // Record the classification where calls resolve this definition: the overload
+        // member for an overloaded name, the binding otherwise.
+        match is_overloaded {
+            true => self.set_overload_result_aliasing(
+                &declaration.name,
+                &parameter_types,
+                result_aliasing,
+            ),
+            false => self
+                .env
+                .set_result_aliasing(&declaration.name, result_aliasing),
         }
 
         Ok(())
@@ -972,11 +1070,15 @@ impl TypeChecker {
         self.reject_unfillable_site_parameters("a lambda", parameters, &parameter_types, false)?;
 
         self.env.push_scope();
-        for (parameter, parameter_type) in parameters.iter().zip(parameter_types.iter()) {
-            self.env.define(
+        let enclosing_declaration = self.enter_declaration();
+        for (slot, (parameter, parameter_type)) in
+            parameters.iter().zip(parameter_types.iter()).enumerate()
+        {
+            self.env.define_parameter(
                 parameter.name.clone(),
                 parameter_type.clone(),
-                false,
+                self.current_declaration,
+                slot,
                 parameter.span.clone(),
             )?;
         }
@@ -992,6 +1094,7 @@ impl TypeChecker {
             _ => self.infer_expression(body)?,
         };
         self.env.pop_scope();
+        self.leave_declaration(enclosing_declaration);
 
         // Honor an explicit `-> Type` annotation; otherwise the body's inferred type is
         // the return type.
@@ -1008,4 +1111,20 @@ impl TypeChecker {
             return_type: Box::new(ret),
         })
     }
+}
+
+/// Whether `body` contains a lambda with a parameter named `it`. `it` is an ordinary
+/// identifier, so such a parameter shadows the method receiver inside the lambda — and a
+/// write through it is then reported as a receiver mutation. The flag lets the diagnostic
+/// name the shadowing as the likely cause.
+fn body_has_lambda_parameter_named_receiver(body: &Expression) -> bool {
+    try_for_each_subexpression(body, &mut |e| match e {
+        Expression::Lambda { parameters, .. }
+            if parameters.iter().any(|p| p.name == crate::ast::RECEIVER) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
 }

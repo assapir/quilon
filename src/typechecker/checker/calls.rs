@@ -98,7 +98,7 @@ impl TypeChecker {
         // — every body is a block, so without it a returned lambda
         // (`adder = (n :: Num) -> (Num) -> Num => < (x) => x + n >`) would have nothing to
         // take `x` from.
-        if let Expression::Block { statements, .. } = argument
+        if let Expression::Block { statements, span } = argument
             && let Some((Statement::Expression(tail), leading)) = statements.split_last()
         {
             for statement in leading {
@@ -109,7 +109,11 @@ impl TypeChecker {
                     }
                 }
             }
-            return self.infer_argument(tail, target);
+            let ty = self.infer_argument(tail, target)?;
+            // Record the block's own type too, as `infer_expression` would have: the
+            // aliasing walk reads a body's type by ITS span before descending to the tail.
+            self.type_table.insert(span.clone(), ty.clone());
+            return Ok(ty);
         }
         let Expression::Lambda {
             parameters,
@@ -288,14 +292,14 @@ impl TypeChecker {
                         (parameters.clone(), return_type.clone())
                     })
                 {
-                    // A mutating (setter) method requires a mutable (`:=`) receiver.
-                    // The receiver is arguments[0]; `it` (a method calling a sibling
-                    // setter on its own receiver) is allowed — its mutability is
-                    // already enforced at the *outer* call site.
+                    // A mutating (setter) method requires a receiver that aliases no `=`
+                    // binding and no parameter — a `:=` binding, a fresh value, or a
+                    // setter's own `it` (mutable at every call site) all pass, however
+                    // the receiver expression reaches them.
                     if self
                         .setter_methods
                         .contains(&(type_name.clone(), name.clone()))
-                        && let Some(recv_name) = self.immutable_mutation_root(&arguments[0])
+                        && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
                     {
                         return Err(TypeError::MutatingMethodOnImmutable {
                             method: name.clone(),
@@ -814,19 +818,22 @@ impl TypeChecker {
         }
         self.record_parameter_types(parameters, parameter_types);
         self.env.push_scope();
-        for (parameter, ty) in parameters.iter().zip(parameter_types) {
+        let enclosing_declaration = self.enter_declaration();
+        for (slot, (parameter, ty)) in parameters.iter().zip(parameter_types).enumerate() {
             if let Some(ann) = &parameter.type_annotation {
                 self.check_type_compatibility(ann, ty, &parameter.span)?;
             }
-            self.env.define(
+            self.env.define_parameter(
                 parameter.name.clone(),
                 ty.clone(),
-                false,
+                self.current_declaration,
+                slot,
                 parameter.span.clone(),
             )?;
         }
         let body_type = self.infer_expression(body);
         self.env.pop_scope();
+        self.leave_declaration(enclosing_declaration);
         let body_type = body_type?;
         // Record the lambda node's own type as its body type, for completeness.
         self.type_table

@@ -411,6 +411,25 @@ fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
 }
 
 #[test]
+fn a_lambda_parameter_named_it_gets_a_shadowing_hint() {
+    // `it` is an ordinary identifier, so a lambda parameter named `it` shadows the
+    // receiver — the verifier still (conservatively) reports the write as a receiver
+    // mutation, and the diagnostic must say why, so the reader can rename the parameter.
+    let src = "P = { v :: Num }\nT = {\n  v :: Num,\n  poke = (ps :: []P) -> Num => <\n    ps.each(it => it.v := 5)\n    it.v\n  >\n}\n^ = () -> Num => < 0 >";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let err = checker
+        .check_program(&program)
+        .expect_err("the shadowed write is still reported as a receiver mutation");
+    let message = err.to_string();
+    assert!(
+        message.contains("shadows the receiver") && message.contains("rename"),
+        "the diagnostic must explain the `it` shadowing, got: {message}"
+    );
+}
+
+#[test]
 fn unannotated_method_parameter_is_rejected() {
     // No `Num` default any more: a method parameter must be annotated, exactly like an
     // ordinary function's — even when every call site happens to pass a `Num` (the case
