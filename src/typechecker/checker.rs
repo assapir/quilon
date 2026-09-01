@@ -530,6 +530,10 @@ pub struct TypeChecker {
     // slot i+1 the i-th explicit parameter — matching a member call's argument list. A
     // method absent here (a scalar-returning one) returns a fresh value.
     method_result_aliasing: std::collections::HashMap<(String, String), ResultAliasing>,
+    // Aliasing of each `?`/`|` match expression, keyed by its span — the union of its
+    // arms', computed in `check_match` WHILE each arm's pattern bindings are still in
+    // scope (a later walk could no longer resolve them).
+    match_aliasing: std::collections::HashMap<Span, ValueAliasing>,
     // Aliasing bookkeeping: each function/method/lambda body gets a fresh declaration id
     // (`declaration_counter` is the source; ids grow inward, so a nested declaration's id
     // is always greater than its encloser's). `current_declaration` is the body being
@@ -565,6 +569,7 @@ impl TypeChecker {
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
             method_result_aliasing: std::collections::HashMap::new(),
+            match_aliasing: std::collections::HashMap::new(),
             declaration_counter: 0,
             current_declaration: 0,
             test_depth: 0,

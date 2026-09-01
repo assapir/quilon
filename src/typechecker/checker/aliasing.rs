@@ -60,7 +60,6 @@ impl ValueAliasing {
     pub(super) fn mutable_witness(&self) -> Option<&str> {
         self.mutable.first().map(|(_, name)| name.as_str())
     }
-
 }
 
 /// A function's (or method's) result aliasing, evaluated once at its definition and
@@ -190,9 +189,11 @@ impl TypeChecker {
                 out = self.value_aliasing(then);
                 out.merge(self.value_aliasing(else_));
             }
-            Expression::Match { arms, .. } => {
-                for arm in arms {
-                    out.merge(self.value_aliasing(&arm.body));
+            Expression::Match { span, .. } => {
+                // The arms' union, computed by `check_match` while each arm's pattern
+                // bindings were still in scope — a walk here could not resolve them.
+                if let Some(cached) = self.match_aliasing.get(span) {
+                    out = cached.clone();
                 }
             }
             Expression::Block { statements, .. } => {
@@ -320,7 +321,9 @@ impl TypeChecker {
             .lookup(name)
             .and_then(|symbol| symbol.result_aliasing.as_ref())
         {
-            Some(result_aliasing) => self.apply_result_aliasing(&result_aliasing.clone(), &borrowed),
+            Some(result_aliasing) => {
+                self.apply_result_aliasing(&result_aliasing.clone(), &borrowed)
+            }
             None => self.every_argument_aliasing(arguments),
         }
     }
@@ -380,9 +383,7 @@ impl TypeChecker {
         for (declaration, slot, name) in aliasing.parameters {
             match declaration.cmp(&current) {
                 std::cmp::Ordering::Equal => result.argument_slots.push(slot),
-                std::cmp::Ordering::Less => {
-                    result.fixed.parameters.push((declaration, slot, name))
-                }
+                std::cmp::Ordering::Less => result.fixed.parameters.push((declaration, slot, name)),
                 std::cmp::Ordering::Greater => {}
             }
         }
