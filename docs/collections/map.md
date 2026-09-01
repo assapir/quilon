@@ -73,7 +73,9 @@ total = m.values().reduce(0, (acc, x) => acc + x)   ~ 3
 m.get("a") ? | Ok(v) => v | NotOk(_) => 0           ~ 1
 ```
 
-Like the empty array `[]` (which is `[]Num`), an **empty** map literal defaults to `Num`
-key/value types and cannot yet be annotated to another type.
+An **empty** map literal `[|=>|]` has no key/value type of its own — it takes one from
+context: a type annotation on the binding, a call argument's declared parameter type, or a
+function's declared return type. With none of those available, it's a compile error (there
+is no `Num` default).
 
 (See `examples/maps.qn`.)

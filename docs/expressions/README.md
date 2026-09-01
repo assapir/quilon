@@ -57,9 +57,13 @@ sidebar:
 > ```
 > (See `examples/statements.qn`.)
 - **Ternary:** `cond ? then : else`.
-- **Blocks:** `< stmt… last >` evaluate to their last expression. A block goes in **body**
-  position — a function's, a lambda's, or a method's — not in operand position, so a block
-  is never the left or right side of an operator:
+- **Blocks:** `< stmt… last >` evaluate to their last statement — an expression's own
+  type, or `$` (Unit) when the last statement is a declaration (`=`/`:=`) rather than an
+  expression, since the effect ran but there's nothing to hand back. A block goes in
+  **body** position — a function's, a lambda's, or a method's — not in operand position,
+  so a block is never the left or right side of an operator. An **empty** block — no
+  statements at all — is a compile error: there is nothing that ran and nothing to
+  evaluate to.
 ```quilon
 total = () -> Num => <
   x = 10

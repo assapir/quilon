@@ -16,6 +16,11 @@ An array is **immutable**. There is no element assignment, and every operation r
 new array. A `:=` binding may be rebound to a different array — that changes the binding,
 not the array.
 
+An **empty** array literal `[]` has no element type of its own — it takes one from
+context: a type annotation on the binding, a call argument's declared parameter type, or a
+function's declared return type. With none of those available, it's a compile error (there
+is no `Num` default).
+
 Indexing is **checked** — fail loud, never silent. An out-of-bounds, negative, or NaN index
 is a runtime error naming the read that failed ([shape](../tooling/errors.md)), with exit
 status 1 — never a silently wrong value. A **fractional** in-range index truncates toward
