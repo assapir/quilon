@@ -1,0 +1,5 @@
+~ Fixture: two modules that import each other with no root involved — an import cycle.
+
+<< "cycle_b.qn"
+
+>> ping = (x :: Num) -> Num => cycle_b.pong(x)

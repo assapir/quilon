@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! Text intrinsics — each backs a named, chainable `Text` method (`length`,
-//! `cmp`, `trim`, case mapping, `contains`/`indexOf`, `replace`, `slice`,
-//! `split`). All are UTF-8 correct and grapheme-based where an index/length is
+//! Text intrinsics — the PRIMITIVE floor under the built-in `Text` methods:
+//! segmentation (`length`, `graphemes`, `at`), comparison (`cmp`), the
+//! whitespace walks (`trimStart`/`trimEnd`), case mapping, substring search
+//! (`indexOf`), and grapheme-boundary `slice`. The composable methods
+//! (`split`/`trim`/`contains`/`replace`/`replaceAll`/`repeat`) are written in
+//! Quilon over these (`corelib/text.qn`), so they are deliberately NOT here.
+//! All are UTF-8 correct and grapheme-based where an index/length is
 //! user-visible (matching `Text.length`). A `Text` argument arrives as
 //! `(ptr, len)`; a `Text` / `[]Text` result is returned as a GC-allocated
 //! `QlSlice` so it outlives this call and is collected like any heap value. See
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{QlSlice, alloc_slots, alloc_text, format_num};
-use crate::report::{QlSite, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -86,36 +89,8 @@ pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str
     String::from_utf8_lossy(byte_slice(ptr, len))
 }
 
-/// Abort on an invalid `replace`/`replaceAll`/`repeat` request (empty `from`, non-positive
-/// `count`, or a `count` exceeding the occurrences present): report `msg` at `site` — the
-/// framed diagnostic an assertion failure also produces — and exit with the same status.
-/// Never returns. The
-/// detection lives in the runtime (not codegen) because the `count > occurrences` case needs
-/// the occurrence count.
-fn text_misuse(site: *const QlSite, msg: &str) -> ! {
-    fail_at(site, msg, crate::ASSERTION_EXIT_CODE)
-}
-
-/// Repeat the text `count` times, back to back. Backs `Text.repeat(count)`; `count` 0
-/// yields the empty text. Fails loudly (aborts the process, exit 101) on a `count` that is
-/// negative, fractional, or NaN — the checker rejects those at compile time when they are
-/// literal, and this is the runtime backstop for a computed one.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[unsafe(no_mangle)]
-pub extern "C" fn __text_repeat(
-    ptr: *const u8,
-    len: i64,
-    count: f64,
-    site: *const QlSite,
-) -> QlSlice {
-    if !count.is_finite() || count < 0.0 || count.fract() != 0.0 {
-        text_misuse(site, "repeat: `count` must be a whole number of 0 or more");
-    }
-    alloc_text(text_str(ptr, len).repeat(count as usize).as_bytes())
-}
-
 /// Strip leading-only (Unicode) whitespace. Backs `Text.trimStart()`. (`Text.trim()`
-/// is composed in codegen as `trimStart` then `trimEnd`, so it needs no own intrinsic.)
+/// composes the two walks in `core.text`, so it needs no own intrinsic.)
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_trim_start(ptr: *const u8, len: i64) -> QlSlice {
@@ -143,8 +118,10 @@ pub extern "C" fn __text_to_lower(ptr: *const u8, len: i64) -> QlSlice {
     alloc_text(text_str(ptr, len).to_lowercase().as_bytes())
 }
 
-/// Whether `sub` occurs in the haystack: 1 (true) / 0 (false). Backs
-/// `Text.contains(sub)`. (An empty `sub` is contained in every string.)
+/// Whether `sub` occurs in the haystack: 1 (true) / 0 (false). Backs the `contains`
+/// ASSERTION matcher (`assert(x, contains(sub))`) — the compiler lowers that check here
+/// directly. The `Text.contains` METHOD is Quilon (`core.text`), over `indexOf`.
+/// (An empty `sub` is contained in every string.)
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_contains(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> i64 {
@@ -169,70 +146,6 @@ pub extern "C" fn __text_index_of(hptr: *const u8, hlen: i64, sptr: *const u8, s
     }
 }
 
-/// Replace EVERY occurrence of `from` with `to`. Backs `Text.replaceAll(from, to)`.
-/// An empty `from` is an ill-defined request and ABORTS the process (see `abort_101`).
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[unsafe(no_mangle)]
-pub extern "C" fn __text_replace_all(
-    hptr: *const u8,
-    hlen: i64,
-    fptr: *const u8,
-    flen: i64,
-    tptr: *const u8,
-    tlen: i64,
-    site: *const QlSite,
-) -> QlSlice {
-    let hay = text_str(hptr, hlen);
-    let from = text_str(fptr, flen);
-    if from.is_empty() {
-        text_misuse(site, "replace: `from` must not be empty");
-    }
-    let to = text_str(tptr, tlen);
-    alloc_text(hay.replace(&*from, &to).as_bytes())
-}
-
-/// Replace EXACTLY the first `count` occurrences of `from` with `to`, left→right. Backs
-/// `Text.replace(from, to, count)`. Fails loudly (aborts the process, exit 101) on any
-/// invalid input — an empty `from`, a non-positive `count`, or a `count` greater than the
-/// number of occurrences actually present (no clamping, no no-op). The checker rejects
-/// these at compile time when they are determinable from literals; this is the runtime
-/// backstop for computed values.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[unsafe(no_mangle)]
-pub extern "C" fn __text_replace_n(
-    hptr: *const u8,
-    hlen: i64,
-    fptr: *const u8,
-    flen: i64,
-    tptr: *const u8,
-    tlen: i64,
-    count: i64,
-    site: *const QlSite,
-) -> QlSlice {
-    let hay = text_str(hptr, hlen);
-    let from = text_str(fptr, flen);
-    // Fail loudly on invalid input — no clamp, no silent no-op (see `text_misuse`).
-    if from.is_empty() {
-        text_misuse(site, "replace: `from` must not be empty");
-    }
-    if count <= 0 {
-        text_misuse(
-            site,
-            &format!("replace: count must be positive, got {count}"),
-        );
-    }
-    // Non-overlapping, left→right occurrences — exactly what `replacen` consumes.
-    let occurrences = hay.matches(&*from).count() as i64;
-    if count > occurrences {
-        text_misuse(
-            site,
-            &format!("replace: count {count} exceeds {occurrences} occurrences"),
-        );
-    }
-    let to = text_str(tptr, tlen);
-    alloc_text(hay.replacen(&*from, &to, count as usize).as_bytes())
-}
-
 /// The substring from grapheme `start` (inclusive) to grapheme `end` (exclusive).
 /// Indices count graphemes (like `Text.length`); both are CLAMPED to `[0, length]`
 /// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`.
@@ -254,26 +167,21 @@ pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -
     alloc_text(s[bounds[lo]..bounds[hi]].as_bytes())
 }
 
-/// Split the haystack on `sep`, returning a `[]Text`. Consecutive separators yield
-/// empty pieces (`"a,,b"` -> `["a","","b"]`); an empty haystack yields `[""]`. An
-/// EMPTY separator splits into individual graphemes (`"abc"` -> `["a","b","c"]`).
-/// Backs `Text.split(sep)`. Returns the array as a `QlSlice` over `len` contiguous
-/// `Text` structs — exactly the `[]Text` layout codegen loads.
+/// The individual graphemes of the text, as a `[]Text` of length-1 `Text`s — the
+/// segmentation primitive `Text = []Grapheme` rests on. Backs `Text.graphemes()` (and
+/// `split("")`, which `core.text` delegates here). An empty text has no graphemes: `[]`.
+/// Returns the array as a `QlSlice` over `len` contiguous `Text` structs — exactly the
+/// `[]Text` layout codegen loads.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> QlSlice {
-    let hay = text_str(hptr, hlen);
-    let sep = text_str(sptr, slen);
-    let parts: Vec<&str> = if sep.is_empty() {
-        hay.graphemes(true).collect()
-    } else {
-        hay.split(&*sep).collect()
-    };
+pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
+    let s = text_str(ptr, len);
+    let parts: Vec<&str> = s.graphemes(true).collect();
     let n = parts.len();
     if n == 0 {
         return QlSlice::empty();
     }
-    // Backing array of `n` Text structs (GC-owned), one per piece.
+    // Backing array of `n` Text structs (GC-owned), one per grapheme.
     let elems = alloc_slots::<QlSlice>(n);
     for (i, part) in parts.iter().enumerate() {
         // SAFETY: `elems` has room for `n` `QlSlice`s and `i < n`.
@@ -282,6 +190,22 @@ pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen
     QlSlice {
         data: elems as *const c_void,
         len: n as i64,
+    }
+}
+
+/// The grapheme at `index` (0-based), or the EMPTY text when `index` is out of bounds —
+/// a grapheme is never empty, so codegen reads the empty answer as `NotOk`. Backs
+/// `Text.at(index)`, without segmenting past the asked-for grapheme.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
+    if index < 0 {
+        return QlSlice::empty();
+    }
+    let s = text_str(ptr, len);
+    match s.graphemes(true).nth(index as usize) {
+        Some(grapheme) => alloc_text(grapheme.as_bytes()),
+        None => QlSlice::empty(),
     }
 }
 
@@ -343,93 +267,16 @@ mod tests {
     }
 
     #[test]
-    fn text_contains_and_index_of_are_grapheme_based() {
+    fn text_index_of_is_grapheme_based() {
         let (hp, hl) = text_of("héllo");
         let (sp, sl) = text_of("llo");
-        assert_eq!(__text_contains(hp, hl, sp, sl), 1);
         // "llo" starts after "hé" — 2 graphemes in, even though "é" is 2 bytes.
         assert_eq!(__text_index_of(hp, hl, sp, sl), 2);
         let (zp, zl) = text_of("z");
-        assert_eq!(__text_contains(hp, hl, zp, zl), 0);
         assert_eq!(__text_index_of(hp, hl, zp, zl), -1);
-        // An empty needle is contained at index 0.
+        // An empty needle is found at index 0.
         let (ep, el) = text_of("");
         assert_eq!(__text_index_of(hp, hl, ep, el), 0);
-    }
-
-    // NOTE: the fail-loud paths (empty `from`, count <= 0, count > occurrences) abort the
-    // process via `abort_101`, so they CANNOT be exercised from an in-process unit test —
-    // they would exit the test runner. They are covered by subprocess tests in
-    // tests/text_methods_test.rs (which run `quilon run` and assert exit 101). Here we only
-    // test the valid inputs.
-    #[test]
-    fn text_replace_n_valid_counts() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
-        let (hp, hl) = text_of("a-a-a");
-        let (fp, fl) = text_of("a");
-        let (tp, tl) = text_of("xx");
-        // count = 1 -> first only.
-        assert_eq!(
-            unsafe {
-                slice_str(__text_replace_n(
-                    hp,
-                    hl,
-                    fp,
-                    fl,
-                    tp,
-                    tl,
-                    1,
-                    std::ptr::null(),
-                ))
-            },
-            "xx-a-a"
-        );
-        // count = 2 -> first two.
-        assert_eq!(
-            unsafe {
-                slice_str(__text_replace_n(
-                    hp,
-                    hl,
-                    fp,
-                    fl,
-                    tp,
-                    tl,
-                    2,
-                    std::ptr::null(),
-                ))
-            },
-            "xx-xx-a"
-        );
-        // count == exact number of occurrences -> all three.
-        assert_eq!(
-            unsafe {
-                slice_str(__text_replace_n(
-                    hp,
-                    hl,
-                    fp,
-                    fl,
-                    tp,
-                    tl,
-                    3,
-                    std::ptr::null(),
-                ))
-            },
-            "xx-xx-xx"
-        );
-    }
-
-    #[test]
-    fn text_replace_all_replaces_every_occurrence() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
-        let (hp, hl) = text_of("a-a-a");
-        let (fp, fl) = text_of("a");
-        let (tp, tl) = text_of("xx");
-        assert_eq!(
-            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl, std::ptr::null())) },
-            "xx-xx-xx"
-        );
     }
 
     #[test]
@@ -443,22 +290,37 @@ mod tests {
     }
 
     #[test]
-    fn text_split_variants() {
+    fn text_graphemes_segments_clusters() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
-        let (hp, hl) = text_of("a,,b");
-        let (sp, sl) = text_of(",");
-        assert_eq!(split_parts(&__text_split(hp, hl, sp, sl)), ["a", "", "b"]);
-        // Empty haystack -> a single empty piece.
-        let (ep, el) = text_of("");
-        assert_eq!(split_parts(&__text_split(ep, el, sp, sl)), [""]);
-        // Empty separator -> graphemes.
         let (gp, gl) = text_of("héllo");
-        let (esp, esl) = text_of("");
         assert_eq!(
-            split_parts(&__text_split(gp, gl, esp, esl)),
+            split_parts(&__text_graphemes(gp, gl)),
             ["h", "é", "l", "l", "o"]
         );
+        // An empty text has no graphemes.
+        let (ep, el) = text_of("");
+        assert!(split_parts(&__text_graphemes(ep, el)).is_empty());
+        // A ZWJ family emoji is ONE grapheme, kept whole.
+        let (fp, fl) = text_of("👨‍👩‍👧");
+        assert_eq!(split_parts(&__text_graphemes(fp, fl)), ["👨‍👩‍👧"]);
+    }
+
+    #[test]
+    fn text_at_indexes_graphemes_and_answers_empty_out_of_bounds() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // "a🌍b": graphemes a(0) 🌍(1) b(2) — 🌍 is 4 bytes but one grapheme.
+        let (p, l) = text_of("a🌍b");
+        assert_eq!(unsafe { slice_str(__text_at(p, l, 0)) }, "a");
+        assert_eq!(unsafe { slice_str(__text_at(p, l, 1)) }, "🌍");
+        assert_eq!(unsafe { slice_str(__text_at(p, l, 2)) }, "b");
+        // Out of bounds — either side — is the empty answer, never a partial cluster.
+        assert_eq!(__text_at(p, l, 3).len, 0);
+        assert_eq!(__text_at(p, l, -1).len, 0);
+        // A multi-codepoint cluster comes back whole.
+        let (cp, cl) = text_of("e\u{0301}llo");
+        assert_eq!(unsafe { slice_str(__text_at(cp, cl, 0)) }, "e\u{0301}");
     }
 
     #[test]
@@ -480,33 +342,17 @@ mod tests {
     }
 
     #[test]
-    fn text_index_of_and_contains_are_grapheme_correct_on_multibyte() {
+    fn text_index_of_is_grapheme_correct_on_multibyte() {
         // "a🌍b": 🌍 is 4 bytes / 1 grapheme; "b" is at grapheme index 2, byte offset 5.
         let (hp, hl) = text_of("a🌍b");
         let (bp, bl) = text_of("b");
         assert_eq!(__text_index_of(hp, hl, bp, bl), 2);
         let (ep, el) = text_of("🌍");
         assert_eq!(__text_index_of(hp, hl, ep, el), 1);
-        assert_eq!(__text_contains(hp, hl, ep, el), 1);
         // 🌎 (U+1F30E) shares its first 3 UTF-8 bytes with 🌍 (U+1F30D) but differs in the
         // last — a byte-overlapping-but-different substring must NOT falsely match.
         let (fp, fl) = text_of("🌎");
-        assert_eq!(__text_contains(hp, hl, fp, fl), 0);
         assert_eq!(__text_index_of(hp, hl, fp, fl), -1);
-    }
-
-    #[test]
-    fn text_split_on_multibyte_separator_and_cluster_stays_whole() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
-        // Split on a 4-byte emoji separator.
-        let (hp, hl) = text_of("a🌍b🌍c");
-        let (sp, sl) = text_of("🌍");
-        assert_eq!(split_parts(&__text_split(hp, hl, sp, sl)), ["a", "b", "c"]);
-        // Empty-separator split of a multi-codepoint grapheme keeps it as ONE element.
-        let (fp, fl) = text_of("👨‍👩‍👧");
-        let (esp, esl) = text_of("");
-        assert_eq!(split_parts(&__text_split(fp, fl, esp, esl)), ["👨‍👩‍👧"]);
     }
 
     #[test]
@@ -534,35 +380,5 @@ mod tests {
         let started = __text_trim_start(p, l);
         let trimmed = __text_trim_end(started.data as *const u8, started.len);
         assert_eq!(unsafe { slice_str(trimmed) }, "héllo");
-    }
-
-    #[test]
-    fn text_replace_with_multibyte_from_and_to() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
-        let (hp, hl) = text_of("a🌍b🌍c");
-        let (fp, fl) = text_of("🌍");
-        let (tp, tl) = text_of("é");
-        // replaceAll: both 4-byte emoji separators become the 2-byte "é".
-        assert_eq!(
-            unsafe { slice_str(__text_replace_all(hp, hl, fp, fl, tp, tl, std::ptr::null())) },
-            "aébéc"
-        );
-        // replace count = 1: only the first.
-        assert_eq!(
-            unsafe {
-                slice_str(__text_replace_n(
-                    hp,
-                    hl,
-                    fp,
-                    fl,
-                    tp,
-                    tl,
-                    1,
-                    std::ptr::null(),
-                ))
-            },
-            "aéb🌍c"
-        );
     }
 }

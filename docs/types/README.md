@@ -27,6 +27,20 @@ it is an error rather than a silently wrong count.
 `true` / `false` (the literals are lowercase; note that a `Bool` *renders* as capitalized
 `True`/`False` — see [interpolation](text.md#string-interpolation-and-the-render-operator-)).
 
+## `Text`
+UTF-8 text, built in like `Num` and `Bool` — no import for the type or any of its
+methods. A `Text` is a **sequence of graphemes** (user-perceived characters): every
+index and length counts grapheme clusters, `.at(i)` reads one (itself a length-1
+`Text`), `.graphemes()` yields them all as a `[]Text`, and `+` concatenates. Some of
+the methods bottom out in native segmentation primitives; the rest are ordinary Quilon
+the compiler merges in behind the scenes — invisible either way. The full reference,
+methods table, and string interpolation live in [`text.md`](text.md).
+```quilon
+"héllo".length       ~ 5 graphemes (é is one, whatever its bytes)
+"a🌍b".at(1)         ~ Ok("🌍") — the whole cluster, never half of it
+"a,b".split(",")     ~ ["a", "b"]
+```
+
 ## `Unit` — `$`
 The **unit type**, written `$`. It has exactly one value, also written `$` — so `$` is
 both the type (in type position, e.g. `-> $`) and its sole value (in value position),

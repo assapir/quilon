@@ -1,0 +1,4 @@
+~ Fixture: a module reached from the root via two different path spellings (a diamond
+~ import of one file), used to prove it loads once rather than twice.
+
+>> add = (a :: Num, b :: Num) -> Num => a + b

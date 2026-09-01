@@ -837,29 +837,26 @@ impl TypeChecker {
             )?;
         }
 
-        // Check body and infer return type. The annotation (when present) is the expected
-        // type, so an otherwise-uninferable empty collection literal directly in the body
-        // (`f = () -> []Text => []`) can take its element type from it.
-        let body_type =
-            self.infer_expression_expecting(&declaration.body, annotated_return.as_ref())?;
+        // Check body and infer return type through the same contextual-typing helper a
+        // call argument uses (`infer_argument`): a FUNCTION-typed return annotation types
+        // a lambda body's otherwise-unannotated parameters — the third contextual-typing
+        // position, after arguments and declared bindings — so
+        // `adder = (n :: Num) -> (Num) -> Num => (x) => x + n` types `x` from the return;
+        // any OTHER annotation is instead the expected type an otherwise-uninferable empty
+        // collection literal body takes its element type from
+        // (`f = () -> []Text => []`). Anything but a literal lambda or empty literal body
+        // infers exactly as before either way.
+        let target = match &annotated_return {
+            Some(ret) => LambdaTarget::Declared(ret),
+            None => LambdaTarget::None,
+        };
+        let body_type = self.infer_argument(&declaration.body, target)?;
 
         // Restore whatever the ENCLOSING declaration's pending state was — this function
         // may itself be nested inside another unannotated one still being checked.
         self.pending_return_type = previous_pending;
 
         self.env.pop_scope();
-
-        // Returning a function value is deferred: a function may TAKE a function as a
-        // parameter, but handing one back across the call boundary is not supported yet.
-        // Checked on both the annotation and the inferred body so neither slips through.
-        let returns_function = matches!(body_type, Type::Function { .. })
-            || matches!(annotated_return, Some(Type::Function { .. }));
-        if returns_function {
-            return Err(TypeError::UnsupportedFunctionReturn {
-                function: declaration.name.clone(),
-                span: declaration.span.clone(),
-            });
-        }
 
         // Verify the return type matches if annotated
         if let Some(annotated_type) = annotated_return {
@@ -983,14 +980,23 @@ impl TypeChecker {
                 parameter.span.clone(),
             )?;
         }
-        let body_type = self.infer_expression(body)?;
+        // A FUNCTION-typed `-> Type` annotation types a lambda body contextually, the
+        // same way a named function's return annotation does (see
+        // `check_function_declaration`) — so a closure returned from a closure needs no
+        // repeated parameter annotations.
+        let annotated_return = return_type.map(|t| self.resolve_type(t));
+        let body_type = match &annotated_return {
+            Some(ret @ Type::Function { .. }) => {
+                self.infer_argument(body, LambdaTarget::Declared(ret))?
+            }
+            _ => self.infer_expression(body)?,
+        };
         self.env.pop_scope();
 
         // Honor an explicit `-> Type` annotation; otherwise the body's inferred type is
         // the return type.
-        let ret = match return_type {
+        let ret = match annotated_return {
             Some(annotated) => {
-                let annotated = self.resolve_type(annotated);
                 self.check_type_compatibility(&annotated, &body_type, body.span())?;
                 annotated
             }

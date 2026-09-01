@@ -16,7 +16,7 @@
 //! importer: referencing one surfaces as "not exported".
 
 use crate::ast::qualify::{self, ModuleScope, QualifyError};
-use crate::ast::{Import, Item, ModulePath, Program, TypeDefinition};
+use crate::ast::{Expression, Import, Item, ModulePath, Program, TypeDefinition};
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use crate::parser;
 use crate::source_map::SourceMap;
@@ -38,12 +38,31 @@ pub struct LinkError {
 /// qualified items prepended to its own (imports cleared, since they are resolved), the
 /// program's own qualified references (`http.send`) resolved against what it imported,
 /// plus the [`SourceMap`] of the modules everything came from.
-pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), LinkError> {
+///
+/// `root_path` is the real file the program was read from, if any (a program built from
+/// an in-memory source, as most tests do, has none). When given, its canonicalized path
+/// seeds the resolver's cycle guard, so a module that imports back the entry file itself
+/// is caught as an import cycle rather than loaded a second time.
+pub fn link(
+    program: Program,
+    base_dir: &Path,
+    root_path: Option<&Path>,
+) -> Result<(Program, SourceMap), LinkError> {
     let mut loader = Loader::new();
+    if let Some(root) = root_path {
+        let key = format!("file:{}", canonical_key(root).to_string_lossy());
+        let label = root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the program".to_string());
+        loader.in_progress.insert(key);
+        loader.stack.push(label);
+    }
     let mut program = program;
     let linked = loader
         .root_scope(&program.imports, base_dir)
-        .and_then(|scope| qualify::resolve_program(&mut program, &scope));
+        .and_then(|scope| qualify::resolve_program(&mut program, &scope))
+        .and_then(|()| loader.inject_core_text(&program, base_dir));
     match linked {
         Ok(()) => {
             let mut items = loader.out;
@@ -69,10 +88,18 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), L
 
 struct Loader {
     /// Canonical module name -> the resolution key it was first loaded under
-    /// (`builtin:core.io` / `file:/abs/path.qn`). Detects two DIFFERENT modules claiming
-    /// one canonical name (two file imports both named `util.qn`), which the whole-program
-    /// rename cannot allow.
+    /// (`builtin:core.io` / `file:/abs/path.qn`, the latter canonicalized). Detects two
+    /// DIFFERENT modules claiming one canonical name (two file imports both named
+    /// `util.qn`), which the whole-program rename cannot allow; also what makes a diamond
+    /// import (the same module reached twice, however spelled) resolve to one load.
     loaded: HashMap<String, String>,
+    /// Resolution keys currently on the import DFS stack — importing one of these again,
+    /// directly or transitively, is a cycle. Seeded with the root program's own key (see
+    /// [`link`]) so a cycle back to the entry file is caught the same way.
+    in_progress: HashSet<String>,
+    /// Canonical names of the modules on the current DFS stack, in order — purely for a
+    /// cycle diagnostic that names the chain.
+    stack: Vec<String>,
     /// Canonical module name -> its exported bare names, for building importer scopes.
     exports: HashMap<String, HashSet<String>>,
     out: Vec<Item>,
@@ -84,16 +111,22 @@ struct Loader {
     /// identity: the type oracle is keyed by span, and a collision there hands codegen
     /// one module's inferred type for another module's expression.
     next_file: FileId,
+    /// The load in progress is [`Loader::inject_core_text`]'s own — the one caller
+    /// allowed to resolve `core.text`, which a written import of is rejected.
+    injecting_core_text: bool,
 }
 
 impl Loader {
     fn new() -> Self {
         Self {
             loaded: HashMap::new(),
+            in_progress: HashSet::new(),
+            stack: Vec::new(),
             exports: HashMap::new(),
             out: Vec::new(),
             sources: SourceMap::default(),
             next_file: ROOT_FILE + 1,
+            injecting_core_text: false,
         }
     }
 
@@ -124,6 +157,30 @@ impl Loader {
         scope.add_import(alias, canonical, exports, &import.span)
     }
 
+    /// Merge `core.text` when the program (or anything merged into it) calls a composable
+    /// Text method — that is where those methods are implemented, and `Text` being a
+    /// built-in type, no `<<` names it. The module is pure implementation: it is loaded
+    /// WITHOUT binding a name in the root's scope, it exports nothing, and a written
+    /// `<< core.text` is rejected (see [`Loader::resolve_one`]) — member syntax is the
+    /// only way user code reaches these functions. Reachability prunes it all back out
+    /// of a program whose mention turns out not to be a Text's.
+    fn inject_core_text(&mut self, program: &Program, base_dir: &Path) -> Result<(), QualifyError> {
+        let uses = uses_text_composable_items(&program.items)
+            || program.test_blocks.iter().any(mentions_text_composable)
+            || uses_text_composable_items(&self.out);
+        if !uses {
+            return Ok(());
+        }
+        let import = Import {
+            path: ModulePath::BuiltinDotted(vec!["core".to_string(), "text".to_string()]),
+            span: Span::in_root(0, 0),
+        };
+        self.injecting_core_text = true;
+        let resolved = self.resolve_one(&import, base_dir).map(|_| ());
+        self.injecting_core_text = false;
+        resolved
+    }
+
     /// Load one module (and, transitively, its own imports), qualify its items under its
     /// canonical name, and append them to `out`. Returns the canonical name.
     fn resolve_one(&mut self, import: &Import, base_dir: &Path) -> Result<String, QualifyError> {
@@ -131,6 +188,18 @@ impl Loader {
         let (key, canonical, display, source, next_base) = match &import.path {
             ModulePath::BuiltinDotted(parts) => {
                 let name = parts.join(".");
+                // `core.text` is the compiler's own — the built-in Text methods' bodies,
+                // merged by [`Loader::inject_core_text`] wherever one is called. It is
+                // not surface a program can name: it exports nothing, so an import could
+                // only ever mislead.
+                if name == "core.text" && !self.injecting_core_text {
+                    return Err(fail(
+                        &import.span,
+                        "`core.text` is the compiler's own and cannot be imported — the \
+                         Text methods it implements need no import at all"
+                            .to_string(),
+                    ));
+                }
                 let src = builtin_source(&name).ok_or_else(|| {
                     fail(&import.span, format!("unknown built-in module `{}`", name))
                 })?;
@@ -161,12 +230,18 @@ impl Loader {
                         format!("cannot read module `{}`: {}", full.display(), e),
                     )
                 })?;
-                let next_base = full
+                // Canonicalize so the same file reached through two different spellings
+                // (`./sub/../sub/mod.qn` vs `sub/mod.qn`, a symlink, ...) dedups to one
+                // module instead of two. The read above already proved `full` exists, so
+                // canonicalization failing here is only a hedge — fall back to the
+                // as-joined path rather than fail a load that just succeeded.
+                let canonical_full = canonical_key(&full);
+                let next_base = canonical_full
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| base_dir.to_path_buf());
                 (
-                    format!("file:{}", full.to_string_lossy()),
+                    format!("file:{}", canonical_full.to_string_lossy()),
                     stem,
                     full.to_string_lossy().into_owned(),
                     source,
@@ -175,9 +250,26 @@ impl Loader {
             }
         };
 
-        // Cycle / duplicate guard: a module already loaded on this resolution is not
-        // loaded again — but one canonical name may only ever mean one module, since the
-        // whole linked program shares a single qualified namespace.
+        // Cycle guard: a module still on the DFS stack (this one included, via the root
+        // seed) being imported again — directly or transitively — is an import cycle, not
+        // a module to silently skip or duplicate.
+        if self.in_progress.contains(&key) {
+            let mut chain = self.stack.clone();
+            chain.push(canonical.clone());
+            return Err(fail(
+                &import.span,
+                format!(
+                    "import cycle: {} — a module cannot import itself, directly or \
+                     through others",
+                    chain.join(" -> ")
+                ),
+            ));
+        }
+
+        // Duplicate guard: a module already fully loaded is not loaded again (a diamond
+        // import, however spelled, merges into one) — but one canonical name may only
+        // ever mean one module, since the whole linked program shares a single qualified
+        // namespace.
         if let Some(existing_key) = self.loaded.get(&canonical) {
             if *existing_key == key {
                 return Ok(canonical);
@@ -191,6 +283,8 @@ impl Loader {
             ));
         }
         self.loaded.insert(canonical.clone(), key.clone());
+        self.in_progress.insert(key.clone());
+        self.stack.push(canonical.clone());
 
         let file = self.next_file;
         self.next_file += 1;
@@ -221,8 +315,21 @@ impl Loader {
             }
             self.out.push(item);
         }
+        // Done resolving this module (and everything it imports) — it leaves the DFS
+        // stack, so a later diamond import of it is a plain, already-loaded lookup rather
+        // than a cycle.
+        self.in_progress.remove(&key);
+        self.stack.pop();
         Ok(canonical)
     }
+}
+
+/// Canonicalize `path` for use as a module resolution key. Falls back to `path` itself if
+/// canonicalization fails (a nonexistent file) — the caller either already proved the file
+/// exists (a successful read) or is about to try reading it, which fails with the ordinary
+/// "cannot read module" error instead of this silently swallowing the problem.
+fn canonical_key(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The bare names a module's items export: `>>`-marked functions, constants, and types —
@@ -280,6 +387,7 @@ fn module_binding_name(path: &ModulePath, span: &Span) -> Result<String, Qualify
 // import resolver (`builtin_source`) and the trusted-origin check (`is_corelib_source`) draw
 // from the same strings — they cannot drift.
 const CORE_IO: &str = include_str!("../corelib/io.qn");
+const CORE_TEXT: &str = include_str!("../corelib/text.qn");
 const CORE_TEST: &str = include_str!("../corelib/test.qn");
 const CORE_CLI: &str = include_str!("../corelib/cli.qn");
 const CORE_TIME: &str = include_str!("../corelib/time.qn");
@@ -290,13 +398,18 @@ const CORE_INFO: &str = include_str!("../corelib/info.qn");
 /// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
 /// primitives.
 const CORELIB_SOURCES: &[&str] = &[
-    CORE_IO, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP, CORE_INFO,
+    CORE_IO, CORE_TEXT, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP, CORE_INFO,
 ];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
     match name {
         "core.io" => Some(CORE_IO),
+        // core.text — the self-hosted composable Text methods (`split`/`trim`/`contains`/
+        // `replace`/`replaceAll`/`repeat`), written in Quilon over the native grapheme
+        // primitives. No program imports it by name: [`link`] merges it implicitly into any
+        // program that calls one of those methods, so `Text` still needs no import.
+        "core.text" => Some(CORE_TEXT),
         // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
         // a check of your own, the run's recorded state, and the case lifecycle. Depends
         // transitively on core.io (it prints, and `failAt` renders its frame via `io.eprint`).
@@ -320,9 +433,6 @@ fn builtin_source(name: &str) -> Option<&'static str> {
         // compiler's version. Like `now`, the members are compiler-provided and the module
         // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
         "core.info" => Some(CORE_INFO),
-        // Text is a built-in primitive type (like Num/Bool/arrays): its operations
-        // (`+`, `.size`, `.length`) are compiler-intrinsic and need no import, so
-        // there is intentionally no `core.text` module.
         _ => None,
     }
 }
@@ -344,6 +454,41 @@ fn item_is_exported(item: &Item) -> bool {
     }
 }
 
+/// Whether any of `items`' bodies contains a member call to a composable Text method
+/// (one [`crate::ast::qn_text_impl`] names an implementation for). Syntactic and
+/// over-approximating — the receiver's type is unknown here, so `record.trim()` counts —
+/// which only ever merges `core.text` needlessly, never leaves it out.
+fn uses_text_composable_items(items: &[Item]) -> bool {
+    items.iter().any(|item| match item {
+        Item::FunctionDeclaration(declaration) => mentions_text_composable(&declaration.body),
+        Item::VariableDeclaration(declaration) => mentions_text_composable(&declaration.value),
+        Item::TypeDeclaration(declaration) => declaration
+            .type_definition
+            .methods()
+            .iter()
+            .any(|method| mentions_text_composable(&method.body)),
+    })
+}
+
+/// Whether `expression` contains a member call named after a composable Text method.
+fn mentions_text_composable(expression: &Expression) -> bool {
+    use std::ops::ControlFlow;
+    crate::ast::walk::try_for_each_subexpression(expression, &mut |e| match e {
+        Expression::Call {
+            function,
+            member_call: true,
+            ..
+        } if matches!(
+            function.as_ref(),
+            Expression::Identifier { name, .. } if crate::ast::qn_text_impl(name).is_some()
+        ) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

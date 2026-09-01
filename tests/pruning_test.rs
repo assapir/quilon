@@ -25,6 +25,22 @@ fn emit(src: &str) -> String {
     codegen.generate(&program).expect("codegen failed")
 }
 
+/// [`emit`], but resolving imports first — including the implicit `core.text` merge a
+/// composable Text method triggers, which is what the tests below measure.
+fn emit_linked(src: &str) -> String {
+    let context = inkwell::context::Context::create();
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let (program, _sources) = quilon::modules::link(program, std::path::Path::new("."), None)
+        .expect("import linking failed");
+    let types = quilon::typechecker::TypeChecker::new()
+        .check_program(&program)
+        .expect("type checking failed");
+    let mut codegen = quilon::codegen::CodeGenerator::new(&context, "test");
+    codegen.set_type_table(types);
+    codegen.generate(&program).expect("codegen failed")
+}
+
 fn defines(ir: &str, name: &str) -> bool {
     ir.lines().any(|line| {
         line.starts_with("define")
@@ -174,6 +190,35 @@ fn a_module_with_no_entry_point_keeps_everything() {
     let ir = emit("first = (n :: Num) -> Num => n + 1\nsecond = (n :: Num) -> Num => n + 2");
     assert!(defines(&ir, "first"));
     assert!(defines(&ir, "second"));
+}
+
+#[test]
+fn a_program_without_text_methods_carries_no_core_text() {
+    // The implicit `core.text` merge happens only when a composable Text method appears.
+    let ir = emit_linked("^ = () -> Num => 40 + 2\n");
+    assert!(
+        !ir.contains("core.text."),
+        "a program using no Text method must not carry core.text"
+    );
+}
+
+#[test]
+fn only_the_used_text_composables_survive_the_merge() {
+    // `.trim()` pulls core.text in, but reachability keeps only trim's implementation —
+    // the unmentioned composables (split, replace, …) are pruned back out.
+    let ir = emit_linked("^ = () -> Num => \"  x  \".trim().size\n");
+    assert!(
+        defines(&ir, "core.text.trim"),
+        "the used composable must be emitted"
+    );
+    assert!(
+        !defines(&ir, "core.text.split"),
+        "`split` is used by nothing here"
+    );
+    assert!(
+        !defines(&ir, "core.text.replace"),
+        "`replace` is used by nothing here"
+    );
 }
 
 #[test]

@@ -181,6 +181,11 @@ pub struct CodeGenerator<'ctx> {
     // lowering; only USER operator overloads add an operator symbol to this map.
     // Each member is its `(parameter types, return type)`.
     overloads: HashMap<String, Vec<(Vec<Type>, Type)>>,
+    // Every reachable top-level function's LLVM declaration, made before any body is
+    // emitted so bodies may call functions later in item order (see
+    // `declare_module_function`). Keyed by the declaration's span — its identity — and
+    // consumed by `emit_module_function` as each body is filled in.
+    predeclared_functions: HashMap<Span, inkwell::values::FunctionValue<'ctx>>,
     // Quilon type of each in-scope local/parameter, for argument-type inference at
     // overloaded call sites (codegen lacks the type checker's full inference, so it
     // tracks just enough — locals, parameters, and constructor results — to mangle).
@@ -343,6 +348,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             defer: crate::deferral::DeferInfo::default(),
             aot: false,
             overloads: HashMap::new(),
+            predeclared_functions: HashMap::new(),
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
             tco: None,
@@ -584,6 +590,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         // pruned.
         let reachable = crate::ast::reachability::reachable_functions(program);
 
+        // Pre-pass: DECLARE every top-level function that will be emitted, so a body may
+        // call a function later in item order. Item order still governs name RESOLUTION
+        // (no hoisting — the checker enforced it); this only decouples emission from it,
+        // which the compiler's own cross-module calls need: a member call lowers to its
+        // `core.text` implementation wherever the module landed in the merge.
+        for item in program.items.iter() {
+            if let Item::FunctionDeclaration(declaration) = item
+                && declaration.emits_module_function()
+                && reachable
+                    .as_ref()
+                    .is_none_or(|reachable| reachable.contains(declaration.name.as_str()))
+            {
+                let function = self.declare_module_function(declaration)?;
+                self.predeclared_functions
+                    .insert(declaration.span.clone(), function);
+            }
+        }
+
         // Generate code for all top-level items. Reset the current-function context
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level declaration (which would make it
@@ -598,6 +622,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.current_function = None;
             self.generate_item(item)?;
         }
+
+        // Every pre-declared function must have had its body filled in — a leftover means
+        // the pre-pass and body emission disagreed on what gets emitted, which would
+        // otherwise only surface as a bodiless declaration failing module verification,
+        // nowhere near the cause.
+        debug_assert!(
+            self.predeclared_functions.is_empty(),
+            "pre-declared but never emitted: the pre-pass and `generate_function_declaration` \
+             disagree on what is emitted"
+        );
 
         // Check if entry point function (^) exists and generate C main wrapper.
         // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the

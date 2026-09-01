@@ -226,7 +226,7 @@ impl Corpus {
             total.parse += start.elapsed();
 
             let start = Instant::now();
-            let (program, mut sources) = quilon::modules::link(program, &self.dir)
+            let (program, mut sources) = quilon::modules::link(program, &self.dir, None)
                 .expect("benchmark corpus must resolve its imports");
             total.link += start.elapsed();
             // The corpus's own text, under the name the table shows. Codegen resolves a

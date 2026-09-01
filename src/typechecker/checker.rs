@@ -148,13 +148,6 @@ pub enum TypeError {
         open_overload: Option<String>,
         span: Span,
     },
-    /// A function whose result is itself a function value. Taking a function as a parameter
-    /// works, but returning one across the call boundary is deferred, so it is rejected
-    /// rather than miscompiled.
-    UnsupportedFunctionReturn {
-        function: String,
-        span: Span,
-    },
     /// A self-recursive call to a function with no `-> T` return annotation: the call
     /// needs to already know what the function returns, and an unannotated function's
     /// return type is only known once its body — which the recursive call sits inside —
