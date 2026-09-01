@@ -29,8 +29,10 @@ u = User { name = "Alice", age = 30 }
 g = u.greet()          ~ "Hello, Alice"
 a = u.olderBy(5)       ~ 35
 ```
-(See `examples/methods.qn`.) Members may appear in any order — a method may come before
-the fields it uses, including as the very first member (see `examples/methods.qn`).
+(See `examples/methods.qn`, which also exercises a method with parameters as the very
+first member — a shape the parser must tell apart from a record literal whose first
+field holds a parenthesized value.) Members may appear in any order — a method may come
+before the fields it uses.
 
 ### Type declaration vs. record literal
 `name = { … }` is either of these, and the block's CONTENT decides which — never the
