@@ -15,8 +15,8 @@ unannotated parameter is a compile error that names it. The exception is a **lam
 which takes its parameter types from whatever receives it whenever that states them (see
 [below](#a-lambda-takes-its-parameter-types-from-the-target)) — a built-in collection
 method (`.map` / `.filter` / `.reduce` / `.each`) states the element type, and a
-function-typed parameter or binding states its own. An unannotated **method** parameter
-still defaults to `Num` (see
+function-typed parameter or binding states its own. A **method** parameter is held to the
+same rule (see
 [named record types](../types/records.md#named-record-types-with-methods)).
 Multi-statement bodies use `< >` blocks (the last expression is the value):
 ```quilon

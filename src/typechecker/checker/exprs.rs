@@ -37,6 +37,47 @@ impl TypeChecker {
         Ok(ty)
     }
 
+    /// Infer an expression's type the way [`Self::infer_expression`] does, except an empty
+    /// collection literal (`[]`, `[|=>|]`, `[||]`) — otherwise uninferable, with no element
+    /// type of its own — takes its type from `expected` when that names a matching
+    /// container type. `expected` is the type context already known at this position: a
+    /// binding's annotation, a call argument's declared parameter type, or a function's
+    /// declared return type. Every other expression form (and an empty literal against a
+    /// non-matching or absent `expected`) is inferred exactly as before, so a genuinely
+    /// uninferable literal still reports the clear compile error.
+    pub(super) fn infer_expression_expecting(
+        &mut self,
+        expression: &Expression,
+        expected: Option<&Type>,
+    ) -> Result<Type, TypeError> {
+        let seeded = match (expression, expected) {
+            (Expression::Array { elements, .. }, Some(ty @ Type::Array(_)))
+                if elements.is_empty() =>
+            {
+                Some(ty.clone())
+            }
+            (Expression::MapLiteral { entries, .. }, Some(ty @ Type::Map(_, _)))
+                if entries.is_empty() =>
+            {
+                Some(ty.clone())
+            }
+            (Expression::SetLiteral { elements, .. }, Some(ty @ Type::Set(_)))
+                if elements.is_empty() =>
+            {
+                Some(ty.clone())
+            }
+            _ => None,
+        };
+        match seeded {
+            Some(ty) => {
+                self.type_table
+                    .insert(expression.span().clone(), ty.clone());
+                Ok(ty)
+            }
+            None => self.infer_expression(expression),
+        }
+    }
+
     pub(super) fn infer_expression_inner(
         &mut self,
         expression: &Expression,
@@ -102,29 +143,40 @@ impl TypeChecker {
                 ..
             } => self.check_lambda(parameters, return_type.as_ref(), body),
 
-            Expression::Block {
-                statements,
-                span: _,
-            } => {
-                if statements.is_empty() {
-                    return Ok(Type::Num); // Default to Num for empty blocks
-                }
-
-                // Process statements in order, last one is the result
-                let mut result_type = Type::Num;
-
-                for statement in statements.iter() {
+            Expression::Block { statements, span } => {
+                // A block's value is its LAST statement: an expression's own type, or `$`
+                // (Unit) when the last statement is a declaration — the effect ran, but
+                // there is no value to hand back (the same "no value" `$` an `it.field :=`
+                // method body gets). An EMPTY block has no last statement at all — nothing
+                // ran, nothing to return — which is a compile error, not a silent `Num`.
+                let Some((last, rest)) = statements.split_last() else {
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: "a `< >` block has no value: it has no statements — a \
+                                  block needs at least one, and its last one is what the \
+                                  block evaluates to"
+                            .to_string(),
+                        span: span.clone(),
+                    });
+                };
+                for statement in rest {
                     match statement {
                         crate::ast::Statement::Item(item) => {
                             self.check_item(item, Nesting::Nested)?;
                         }
                         crate::ast::Statement::Expression(expression) => {
-                            result_type = self.infer_expression(expression)?;
+                            self.infer_expression(expression)?;
                         }
                     }
                 }
-
-                Ok(result_type)
+                match last {
+                    crate::ast::Statement::Item(item) => {
+                        self.check_item(item, Nesting::Nested)?;
+                        Ok(Type::Unit)
+                    }
+                    crate::ast::Statement::Expression(expression) => {
+                        self.infer_expression(expression)
+                    }
+                }
             }
 
             Expression::If {
@@ -304,8 +356,17 @@ impl TypeChecker {
 
             Expression::Array { elements, span } => {
                 if elements.is_empty() {
-                    // Empty array - infer as Array(Num) for now
-                    return Ok(Type::Array(Box::new(Type::Num)));
+                    // An empty `[]` has no element type of its own; a caller wanting one
+                    // inferred from context goes through `infer_expression_expecting`
+                    // instead, which reaches here only when that context didn't apply.
+                    return Err(TypeError::InvalidBuiltinArgument {
+                        message: "empty array literal `[]` has no element type: annotate \
+                                  the binding (`:: []T`), or use it where an expected \
+                                  array type is already known — a call argument's \
+                                  parameter type, or a function's declared return type"
+                            .to_string(),
+                        span: span.clone(),
+                    });
                 }
 
                 // The element type each element contributes: a plain element contributes
@@ -339,7 +400,11 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(Type::Array(Box::new(elem_type.unwrap_or(Type::Num))))
+                // `elements` is non-empty (checked above), so the loop ran at least once
+                // and set `elem_type`.
+                Ok(Type::Array(Box::new(
+                    elem_type.expect("non-empty elements"),
+                )))
             }
 
             Expression::MapLiteral { entries, span } => self.infer_map_literal(entries, span),
@@ -431,8 +496,14 @@ impl TypeChecker {
                                         span: span.clone(),
                                     })?;
 
-                                // Type-check the field value
-                                let actual_type = self.infer_expression(field_expression)?;
+                                // Type-check the field value. The field's declared type is
+                                // already known here, so an otherwise-uninferable empty
+                                // collection literal (`x = []`) takes its element type from
+                                // it — see `infer_expression_expecting`.
+                                let actual_type = self.infer_expression_expecting(
+                                    field_expression,
+                                    Some(&expected_type),
+                                )?;
                                 self.check_type_compatibility(&expected_type, &actual_type, span)?;
                             }
 
@@ -607,13 +678,25 @@ impl TypeChecker {
     }
 
     /// Infer a map literal `[|k1 => v1, ...|]` as `Map(K, V)`. Every key must share one
-    /// hashable type `K`; every value one type `V`. An empty `[|=>|]` defaults to
-    /// `Map(Num, Num)` (mirroring the empty-array default).
+    /// hashable type `K`; every value one type `V`. An empty `[|=>|]` has no key/value type
+    /// of its own — a caller wanting one inferred from context (a binding annotation, a
+    /// call argument's parameter type, a declared return type) goes through
+    /// `infer_expression_expecting` instead, which reaches here only when that didn't apply.
     pub(super) fn infer_map_literal(
         &mut self,
         entries: &[(Expression, Expression)],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        if entries.is_empty() {
+            return Err(TypeError::InvalidBuiltinArgument {
+                message: "empty map literal `[|=>|]` has no key/value type: annotate the \
+                          binding (`:: [|K => V|]`), or use it where an expected map type \
+                          is already known — a call argument's parameter type, or a \
+                          function's declared return type"
+                    .to_string(),
+                span: span.clone(),
+            });
+        }
         let mut key_type: Option<Type> = None;
         let mut value_type: Option<Type> = None;
         for (key, value) in entries {
@@ -629,19 +712,31 @@ impl TypeChecker {
                 Some(first) => self.check_type_compatibility(first, &v, span)?,
             }
         }
+        // `entries` is non-empty (checked above), so the loop set both.
         Ok(Type::Map(
-            Box::new(key_type.unwrap_or(Type::Num)),
-            Box::new(value_type.unwrap_or(Type::Num)),
+            Box::new(key_type.expect("non-empty entries")),
+            Box::new(value_type.expect("non-empty entries")),
         ))
     }
 
     /// Infer a set literal `[|e1, e2, ...|]` as `Set(T)`. Every element must share one
-    /// hashable type `T`. An empty `[||]` defaults to `Set(Num)`.
+    /// hashable type `T`. An empty `[||]` has no element type of its own — same context
+    /// fallback and error as an empty map literal above.
     pub(super) fn infer_set_literal(
         &mut self,
         elements: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        if elements.is_empty() {
+            return Err(TypeError::InvalidBuiltinArgument {
+                message: "empty set literal `[||]` has no element type: annotate the \
+                          binding (`:: [|T|]`), or use it where an expected set type is \
+                          already known — a call argument's parameter type, or a \
+                          function's declared return type"
+                    .to_string(),
+                span: span.clone(),
+            });
+        }
         let mut elem_type: Option<Type> = None;
         for elem in elements {
             let t = self.infer_expression(elem)?;
@@ -651,7 +746,7 @@ impl TypeChecker {
                 Some(first) => self.check_type_compatibility(first, &t, span)?,
             }
         }
-        Ok(Type::Set(Box::new(elem_type.unwrap_or(Type::Num))))
+        Ok(Type::Set(Box::new(elem_type.expect("non-empty elements"))))
     }
 
     pub(super) fn check_binary_operator(
@@ -662,7 +757,19 @@ impl TypeChecker {
         span: &Span,
     ) -> Result<Type, TypeError> {
         let left_type = self.infer_expression(left)?;
-        let right_type = self.infer_expression(right)?;
+        // Array `+` and Set `+`/`-`/`+-` are polymorphic over the OPERAND's own
+        // array/set type (see below), so an otherwise-uninferable empty literal on the
+        // right can safely take the left's type as its expected type: `a + []` is a
+        // no-op concat, matching `[]T + []T -> []T` (and likewise for sets).
+        let expects_matching_container = matches!(
+            operator,
+            BinaryOperator::Add | BinaryOperator::Sub | BinaryOperator::SetIntersect
+        ) && matches!(left_type, Type::Array(_) | Type::Set(_));
+        let right_type = if expects_matching_container {
+            self.infer_expression_expecting(right, Some(&left_type))?
+        } else {
+            self.infer_expression(right)?
+        };
 
         // `+` on arrays always builds a NEW array (neither operand is mutated), in three
         // exact-type-dispatched forms — polymorphic over the element type `T`, so they

@@ -409,8 +409,10 @@ pub struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
 }
 
-/// A method's signature and body: (parameters, return type, body expression).
-type MethodDef = (Vec<Parameter>, Option<Type>, Expression);
+/// A method's signature and body: (parameters, return type, body expression). The return
+/// type is always resolved — `check_type_methods` infers it from the body when the method
+/// has no `-> Type` annotation, so a registered method always has a concrete one.
+type MethodDef = (Vec<Parameter>, Type, Expression);
 
 /// The **type oracle**: a side-table mapping each expression's — and each function
 /// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by

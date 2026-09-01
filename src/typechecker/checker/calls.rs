@@ -83,8 +83,10 @@ impl TypeChecker {
     /// Infer an argument's type, handing a lambda argument the type its position states.
     /// This is **contextual typing**: `apply(10, (n) => n + 1)` types `n` from `apply`'s
     /// own `(Num) -> Num` parameter, so a higher-order call states the parameter types
-    /// once — at the definition that receives them. Anything but a lambda is inferred on
-    /// its own, `target` unused.
+    /// once — at the definition that receives them. Anything but a lambda is inferred
+    /// against that same stated type as the expected type (`infer_expression_expecting`),
+    /// so an otherwise-uninferable empty collection literal argument (`f([])`) can take its
+    /// element type from the parameter it fills.
     pub(super) fn infer_argument(
         &mut self,
         argument: &Expression,
@@ -97,7 +99,7 @@ impl TypeChecker {
             span,
         } = argument
         else {
-            return self.infer_expression(argument);
+            return self.infer_expression_expecting(argument, target.stated());
         };
         let ty = self.check_lambda_against(parameters, return_type.as_ref(), body, target)?;
         self.type_table.insert(span.clone(), ty.clone());
@@ -145,10 +147,15 @@ impl TypeChecker {
         // which visibly hung the checker on ~25-deep call chains.
         // A LAMBDA first argument is left out: its type may depend on the signature this
         // call resolves to, which is only known further down. It is no loss — a lambda is
-        // never a receiver, so none of the probes below can want it.
+        // never a receiver, so none of the probes below can want it. An empty collection
+        // literal (`[]`, `[|=>|]`, `[||]`) is left out for the same reason — inferring it
+        // here, with no expected type in hand, would always hit the "no element type"
+        // error even when the call's own parameter type would have supplied one further
+        // down (`infer_argument`, reached below when `first_ty` is `None`).
         let first_ty = match (function, arguments.first()) {
             (Expression::Identifier { .. }, Some(first))
-                if !matches!(first, Expression::Lambda { .. }) =>
+                if !matches!(first, Expression::Lambda { .. })
+                    && !is_empty_collection_literal(first) =>
             {
                 Some(self.infer_expression(first)?)
             }
@@ -274,25 +281,23 @@ impl TypeChecker {
                         });
                     }
 
-                    // An unannotated parameter is not unchecked: the body was checked with it
-                    // defaulted to `Num`, so the call has to meet that same commitment —
-                    // exactly as a plain function's unannotated parameter already does.
-                    // Skipping these let a `Text` argument reach codegen and surface as a raw
-                    // LLVM verifier dump.
+                    // Every method parameter is annotated — `check_type_methods` rejects an
+                    // unannotated one before the method is ever registered here.
                     //
                     // The annotation is deliberately NOT resolved here, unlike at the
                     // definition site: a user-typed parameter is broken end to end today, and
                     // resolving it only moves the failure from the checker into codegen, which
                     // has no field types for a method parameter.
                     for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
-                        let parameter_type = parameter.type_annotation.clone().unwrap_or(Type::Num);
+                        let parameter_type = parameter.type_annotation.clone().expect(
+                            "method parameters are annotated: checked in check_type_methods",
+                        );
                         let arg_type =
                             self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
                         self.check_type_compatibility(&parameter_type, &arg_type, span)?;
                     }
 
-                    // Return the method's return type (or Num if not specified)
-                    return Ok(method_return_type.unwrap_or(Type::Num));
+                    return Ok(method_return_type);
                 }
             }
         }
@@ -784,5 +789,17 @@ impl TypeChecker {
         self.type_table
             .insert(arg.span().clone(), body_type.clone());
         Ok(body_type)
+    }
+}
+
+/// Whether `expression` is an empty collection literal (`[]`, `[|=>|]`, `[||]`) — the forms
+/// with no element type of their own, whose inference depends entirely on an expected type
+/// from context (see `infer_expression_expecting`).
+fn is_empty_collection_literal(expression: &Expression) -> bool {
+    match expression {
+        Expression::Array { elements, .. } => elements.is_empty(),
+        Expression::MapLiteral { entries, .. } => entries.is_empty(),
+        Expression::SetLiteral { elements, .. } => elements.is_empty(),
+        _ => false,
     }
 }
