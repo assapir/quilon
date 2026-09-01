@@ -1,0 +1,6 @@
+~ Fixture: imports the root file back by its own relative path, closing a cycle through
+~ the program's own entry file.
+
+<< "cycle_root.qn"
+
+>> helper = (x :: Num) -> Num => x
