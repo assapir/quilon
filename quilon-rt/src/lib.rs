@@ -251,8 +251,14 @@ pub(crate) mod test_support {
         (s.as_ptr(), s.len() as i64)
     }
 
-    /// Collect a `[]Text` `QlSlice` result into owned `String`s. Shared by the split tests.
+    /// Collect a `[]Text` `QlSlice` result into owned `String`s. Shared by the split and
+    /// grapheme tests. The empty answer (`QlSlice::empty()`, a NULL data pointer) is
+    /// guarded like `byte_slice` guards it — `slice::from_raw_parts` forbids null even
+    /// for a length of zero.
     pub(crate) fn split_parts(s: &QlSlice) -> Vec<String> {
+        if s.data.is_null() || s.len <= 0 {
+            return Vec::new();
+        }
         let parts = unsafe { std::slice::from_raw_parts(s.data as *const QlSlice, s.len as usize) };
         parts
             .iter()
