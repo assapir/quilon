@@ -599,6 +599,83 @@ fn test_parse_type_declaration_method_with_parameters() {
     }
 }
 
+#[test]
+fn test_parse_type_declaration_method_with_parameters_as_first_member() {
+    // The disambiguating lookahead only looked at the FIRST member; a method whose
+    // parameter list is parenthesized (`(p :: Text) -> Text => ...`) put `(` right after
+    // `=`, which used to fall through to the record-literal reading.
+    let tokens = Lexer::tokenize(
+        "Greeter = {
+  label = (p :: Text) -> Text => p
+  name :: Text
+}",
+    )
+    .unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields, methods } = &declaration.type_definition
+    {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "label");
+        assert_eq!(methods[0].parameters.len(), 1);
+    } else {
+        panic!("Expected a Record type declaration");
+    }
+}
+
+#[test]
+fn test_parse_type_declaration_render_member_as_first_member() {
+    // The render operator `` ` `` as the first member failed even earlier — the old scan
+    // only recognized an Ident there.
+    let tokens = Lexer::tokenize("Point = { ` = () -> Text => \"pt\", x :: Num }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::TypeDeclaration(declaration) = &program.items[0]
+        && let TypeDefinition::Record { fields, methods } = &declaration.type_definition
+    {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "`");
+    } else {
+        panic!("Expected a Record type declaration");
+    }
+}
+
+#[test]
+fn test_parse_record_literal_first_field_parenthesized_expression_stays_literal() {
+    // `ident = (` is genuinely ambiguous with a method's parameter list; a parenthesized
+    // VALUE expression as a record literal's first field must still parse as a literal.
+    let tokens = Lexer::tokenize("point = { x = (1 + 2), y = 3 }").unwrap();
+    let result = parse(&tokens);
+    if let Err(e) = result.as_ref() {
+        eprintln!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    let program = result.unwrap();
+    if let Item::VariableDeclaration(declaration) = &program.items[0] {
+        if let Expression::Record { fields, .. } = &declaration.value {
+            assert_eq!(fields.len(), 2);
+        } else {
+            panic!("Expected Record expression");
+        }
+    } else {
+        panic!("Expected VariableDeclaration");
+    }
+}
+
 /// The body statements of the single `^` function in `src` (which must be a block).
 fn entry_block_statements(src: &str) -> Vec<Statement> {
     let tokens = Lexer::tokenize(src).unwrap();
