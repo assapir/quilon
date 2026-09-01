@@ -2,6 +2,7 @@
 //! module's binding, privates traveling with their module, and the import-time errors.
 
 use quilon::ast::{Item, Program};
+use quilon::driver;
 use quilon::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use quilon::modules;
 use quilon::parser::parse;
@@ -18,7 +19,7 @@ fn check_with_base(source: &str, base_dir: &Path) -> Result<(), String> {
     let tokens = Lexer::tokenize(source).map_err(|e| format!("lex: {}", e))?;
     let program: Program = parse(&tokens).map_err(|e| format!("parse: {}", e))?;
     let (linked, _sources) =
-        modules::link(program, base_dir).map_err(|e| format!("link: {}", e.message))?;
+        modules::link(program, base_dir, None).map_err(|e| format!("link: {}", e.message))?;
     let mut checker = TypeChecker::new();
     checker
         .check_program(&linked)
@@ -281,7 +282,7 @@ fn test_each_module_gets_its_own_file_identity() {
     "#;
     let tokens = Lexer::tokenize(source).unwrap();
     let program = parse(&tokens).unwrap();
-    let (linked, _sources) = modules::link(program, &fixtures_dir()).unwrap();
+    let (linked, _sources) = modules::link(program, &fixtures_dir(), None).unwrap();
 
     // Everything but the program's own `^` came from a module.
     let files: HashSet<FileId> = linked
@@ -296,6 +297,61 @@ fn test_each_module_gets_its_own_file_identity() {
         "no imported item may claim the root file's identity: {:?}",
         files
     );
+}
+
+#[test]
+fn test_module_imports_module_chain_resolves() {
+    // A module-imports-module chain, two levels deep: the root imports `chain_a`, which
+    // itself imports `chain_b` — not just a single-level import.
+    let source = r#"
+        << "chain_a.qn"
+        ^ = () -> Num => chain_a.incTwice(5)
+    "#;
+    let result = check_with_base(source, &fixtures_dir());
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_import_cycle_between_two_modules_is_an_error() {
+    // `cycle_a.qn` and `cycle_b.qn` import each other — a cycle with no root involved.
+    let source = r#"
+        << "cycle_a.qn"
+        ^ = () -> Num => 0
+    "#;
+    let result = check_with_base(source, &fixtures_dir());
+    let err = result.expect_err("an a<->b import cycle must be rejected");
+    assert!(err.contains("cycle"), "unexpected error: {}", err);
+}
+
+#[test]
+fn test_import_cycle_back_to_the_root_is_an_error_not_a_duplicate() {
+    // `cycle_root.qn` (the root) imports `cycle_via_root.qn`, which imports
+    // `cycle_root.qn` back by its own relative path — a cycle through the entry file
+    // itself. This must fail clearly, not silently re-load the root and duplicate every
+    // one of its items.
+    let root = fixtures_dir().join("cycle_root.qn");
+    let result = driver::front_end(&root);
+    let err = result
+        .err()
+        .expect("a cycle back to the root must be rejected");
+    assert!(
+        err.to_string().contains("cycle"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_duplicate_import_via_different_spellings_resolves_once() {
+    // The same file, imported twice under two different (but equivalent) spellings of
+    // its path, must merge into one module — not error as "two different modules".
+    let source = r#"
+        << "sub/mod.qn"
+        << "sub/../sub/mod.qn"
+        ^ = () -> Num => mod.add(2, 3)
+    "#;
+    let result = check_with_base(source, &fixtures_dir());
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
 }
 
 fn item_span(item: &Item) -> &Span {

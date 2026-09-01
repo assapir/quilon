@@ -194,7 +194,7 @@ pub fn tool_available(tool: &str) -> bool {
 pub fn type_error_message(src: &str) -> String {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let program = quilon::modules::link(program, Path::new("."))
+    let program = quilon::modules::link(program, Path::new("."), None)
         .expect("import linking failed")
         .0;
     match TypeChecker::new().check_program(&program) {
@@ -219,7 +219,7 @@ pub fn front_end(
     // method call, even in a program importing nothing.
     let dir = base_dir.unwrap_or_else(|| Path::new("."));
     let (program, mut sources) =
-        quilon::modules::link(program, dir).expect("import linking failed");
+        quilon::modules::link(program, dir, None).expect("import linking failed");
     sources.set_root(TEST_FILE, src);
     let types = TypeChecker::new()
         .check_program(&program)

@@ -38,8 +38,26 @@ pub struct LinkError {
 /// qualified items prepended to its own (imports cleared, since they are resolved), the
 /// program's own qualified references (`http.send`) resolved against what it imported,
 /// plus the [`SourceMap`] of the modules everything came from.
-pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), LinkError> {
+///
+/// `root_path` is the real file the program was read from, if any (a program built from
+/// an in-memory source, as most tests do, has none). When given, its canonicalized path
+/// seeds the resolver's cycle guard, so a module that imports back the entry file itself
+/// is caught as an import cycle rather than loaded a second time.
+pub fn link(
+    program: Program,
+    base_dir: &Path,
+    root_path: Option<&Path>,
+) -> Result<(Program, SourceMap), LinkError> {
     let mut loader = Loader::new();
+    if let Some(root) = root_path {
+        let key = format!("file:{}", canonical_key(root).to_string_lossy());
+        let label = root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the program".to_string());
+        loader.in_progress.insert(key);
+        loader.stack.push(label);
+    }
     let mut program = program;
     let linked = loader
         .root_scope(&program.imports, base_dir)
@@ -70,10 +88,18 @@ pub fn link(program: Program, base_dir: &Path) -> Result<(Program, SourceMap), L
 
 struct Loader {
     /// Canonical module name -> the resolution key it was first loaded under
-    /// (`builtin:core.io` / `file:/abs/path.qn`). Detects two DIFFERENT modules claiming
-    /// one canonical name (two file imports both named `util.qn`), which the whole-program
-    /// rename cannot allow.
+    /// (`builtin:core.io` / `file:/abs/path.qn`, the latter canonicalized). Detects two
+    /// DIFFERENT modules claiming one canonical name (two file imports both named
+    /// `util.qn`), which the whole-program rename cannot allow; also what makes a diamond
+    /// import (the same module reached twice, however spelled) resolve to one load.
     loaded: HashMap<String, String>,
+    /// Resolution keys currently on the import DFS stack — importing one of these again,
+    /// directly or transitively, is a cycle. Seeded with the root program's own key (see
+    /// [`link`]) so a cycle back to the entry file is caught the same way.
+    in_progress: HashSet<String>,
+    /// Canonical names of the modules on the current DFS stack, in order — purely for a
+    /// cycle diagnostic that names the chain.
+    stack: Vec<String>,
     /// Canonical module name -> its exported bare names, for building importer scopes.
     exports: HashMap<String, HashSet<String>>,
     out: Vec<Item>,
@@ -91,6 +117,8 @@ impl Loader {
     fn new() -> Self {
         Self {
             loaded: HashMap::new(),
+            in_progress: HashSet::new(),
+            stack: Vec::new(),
             exports: HashMap::new(),
             out: Vec::new(),
             sources: SourceMap::default(),
@@ -183,12 +211,18 @@ impl Loader {
                         format!("cannot read module `{}`: {}", full.display(), e),
                     )
                 })?;
-                let next_base = full
+                // Canonicalize so the same file reached through two different spellings
+                // (`./sub/../sub/mod.qn` vs `sub/mod.qn`, a symlink, ...) dedups to one
+                // module instead of two. The read above already proved `full` exists, so
+                // canonicalization failing here is only a hedge — fall back to the
+                // as-joined path rather than fail a load that just succeeded.
+                let canonical_full = canonical_key(&full);
+                let next_base = canonical_full
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| base_dir.to_path_buf());
                 (
-                    format!("file:{}", full.to_string_lossy()),
+                    format!("file:{}", canonical_full.to_string_lossy()),
                     stem,
                     full.to_string_lossy().into_owned(),
                     source,
@@ -197,9 +231,26 @@ impl Loader {
             }
         };
 
-        // Cycle / duplicate guard: a module already loaded on this resolution is not
-        // loaded again — but one canonical name may only ever mean one module, since the
-        // whole linked program shares a single qualified namespace.
+        // Cycle guard: a module still on the DFS stack (this one included, via the root
+        // seed) being imported again — directly or transitively — is an import cycle, not
+        // a module to silently skip or duplicate.
+        if self.in_progress.contains(&key) {
+            let mut chain = self.stack.clone();
+            chain.push(canonical.clone());
+            return Err(fail(
+                &import.span,
+                format!(
+                    "import cycle: {} — a module cannot import itself, directly or \
+                     through others",
+                    chain.join(" -> ")
+                ),
+            ));
+        }
+
+        // Duplicate guard: a module already fully loaded is not loaded again (a diamond
+        // import, however spelled, merges into one) — but one canonical name may only
+        // ever mean one module, since the whole linked program shares a single qualified
+        // namespace.
         if let Some(existing_key) = self.loaded.get(&canonical) {
             if *existing_key == key {
                 return Ok(canonical);
@@ -213,6 +264,8 @@ impl Loader {
             ));
         }
         self.loaded.insert(canonical.clone(), key.clone());
+        self.in_progress.insert(key.clone());
+        self.stack.push(canonical.clone());
 
         let file = self.next_file;
         self.next_file += 1;
@@ -243,8 +296,21 @@ impl Loader {
             }
             self.out.push(item);
         }
+        // Done resolving this module (and everything it imports) — it leaves the DFS
+        // stack, so a later diamond import of it is a plain, already-loaded lookup rather
+        // than a cycle.
+        self.in_progress.remove(&key);
+        self.stack.pop();
         Ok(canonical)
     }
+}
+
+/// Canonicalize `path` for use as a module resolution key. Falls back to `path` itself if
+/// canonicalization fails (a nonexistent file) — the caller either already proved the file
+/// exists (a successful read) or is about to try reading it, which fails with the ordinary
+/// "cannot read module" error instead of this silently swallowing the problem.
+fn canonical_key(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The bare names a module's items export: `>>`-marked functions, constants, and types —
