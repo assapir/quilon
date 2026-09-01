@@ -182,28 +182,52 @@ impl<'a> Parser<'a> {
         // Type declarations can't be mutable and don't have type annotations
         // AND they must have field declarations (name :: Type) or methods (name = => ...)
         if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
-            // What opens the brace says which one this is: a type declaration starts with a
-            // field (`{ name :: Type … }`) or a method — parameterless (`{ name = => … }`)
-            // or with parameters (`{ name = (p :: T) -> R => … }`) — named by an ordinary
-            // identifier or the render operator `` ` ``; a record literal starts with a
-            // value (`{ name = value … }`). `name = (` alone is genuinely ambiguous with a
-            // parenthesized literal expression (`x = (1 + 2)`), so that shape needs the same
-            // real scan to the matching `)` that a lambda's parameter list uses.
-            let is_type_declaration = matches!(
+            // What opens the brace says which one this is: named by an ordinary identifier
+            // or the render operator `` ` ``, a first member can be a field (`{ name :: Type
+            // … }`) — unambiguous, always a type declaration — or a method, parameterless
+            // (`{ name = => … }`) or with parameters (`{ name = (p :: T) -> R => … }`).
+            // `name = (` alone is genuinely ambiguous with a parenthesized literal expression
+            // (`x = (1 + 2)`), so that shape needs the same real scan to the matching `)`
+            // that a lambda's parameter list uses.
+            let first_member_is_field = matches!(
                 self.peek_ahead(1).kind,
                 TokenKind::Ident | TokenKind::Backtick
-            ) && match self.peek_ahead(2).kind {
-                TokenKind::TypeAnnotation => true,
-                TokenKind::Assign => match self.peek_ahead(3).kind {
+            ) && self.peek_ahead(2).kind == TokenKind::TypeAnnotation;
+            let first_member_is_method = matches!(
+                self.peek_ahead(1).kind,
+                TokenKind::Ident | TokenKind::Backtick
+            ) && self.peek_ahead(2).kind == TokenKind::Assign
+                && match self.peek_ahead(3).kind {
                     TokenKind::Arrow => true,
                     TokenKind::ParenOpen => self.parameter_list_ahead_from(3),
                     _ => false,
-                },
-                _ => false,
-            };
+                };
 
-            if is_type_declaration {
+            if first_member_is_field {
                 return self.parse_type_declaration(name, start, exported);
+            }
+
+            // A method-shaped first member is ambiguous on its own (LOCKED: content, never
+            // the name's capitalization, decides — `x = { f = => 1 }` and `X = { f = => 1 }`
+            // read the same way). A `::` field anywhere else in the block settles it as a
+            // type declaration (a method may legitimately come before the fields it uses,
+            // see `examples/methods.qn`); with no field at all, a block of nothing
+            // but methods is neither reading unambiguously and is a compile error rather
+            // than a silent guess.
+            if first_member_is_method {
+                if self.member_block_has_field() {
+                    return self.parse_type_declaration(name, start, exported);
+                }
+                return Err(ParseError {
+                    message: format!(
+                        "`{name} = {{ … }}` is ambiguous — every member here is method-shaped \
+                         and there is no `::` field to settle it. Add a `::` field to make \
+                         this a type declaration (e.g. `{name} = {{ v :: Num, f = => 1 }}`), \
+                         or replace the method bodies with plain values to make it a record \
+                         literal (e.g. `{name} = {{ f = 1 }}`)"
+                    ),
+                    span: self.current_span(),
+                });
             }
         }
 
