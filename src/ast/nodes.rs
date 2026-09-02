@@ -405,20 +405,32 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[Type::Num],
         ret: Type::Bool,
     },
-    // The test registry (see `is_test_registry_intrinsic`): the harness's event sink, which
-    // `core.test`'s `describe`/`it` and the provided `expect` drive. Enter and leave a
-    // `describe` group, each yielding the resulting nesting depth; read that depth without
-    // moving it; ask whether the running case has already failed; close a case, yielding the
-    // depth to indent it at; and read the two totals back for the summary. `core.test` wraps
-    // the three read-only ones as named `.qn` functions, which is what a case reads.
+    // The test registry (see `is_test_registry_intrinsic`): the harness's event sink and
+    // reporter, which `core.test`'s `describe`/`it` and the provided `expect` drive. Enter
+    // (by name, reporting the group) and leave a `describe` group, each yielding the
+    // resulting nesting depth; read that depth without moving it; ask whether a group or a
+    // case is selected for the run; ask whether the running case has already failed; close a
+    // case by name, reporting it and yielding its depth; read the two totals back; and
+    // report the summary, yielding the run's status. `core.test` wraps the read-only ones as
+    // named `.qn` functions, which is what a case reads.
     BuiltinOverload {
         name: "__test_suite_enter",
-        parameters: &[],
+        parameters: &[Type::Text],
         ret: Type::Num,
     },
     BuiltinOverload {
         name: "__test_suite_leave",
         parameters: &[],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_suite_selected",
+        parameters: &[Type::Text],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_case_selected",
+        parameters: &[Type::Text],
         ret: Type::Num,
     },
     BuiltinOverload {
@@ -433,6 +445,11 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
     },
     BuiltinOverload {
         name: "__test_case_finish",
+        parameters: &[Type::Text],
+        ret: Type::Num,
+    },
+    BuiltinOverload {
+        name: "__test_summary",
         parameters: &[],
         ret: Type::Num,
     },
@@ -489,16 +506,26 @@ pub fn matcher_variant(matcher: &str) -> Option<&'static str> {
 /// The prefix marking a test-registry primitive.
 const TEST_REGISTRY_PREFIX: &str = "__test_";
 
-/// Whether `name` is one of the test registry's primitives — the event sink behind
-/// `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above. The
-/// registry counts and nests; it renders nothing, so the rendering is `core.test`'s to do
+/// Whether `name` is one of the test registry's primitives — the event sink and reporter
+/// behind `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above.
+/// The registry counts, nests, and renders each event per the reporter `quilon test` chose
 /// (see `docs/corelib/test/README.md`).
 ///
-/// Every one takes no arguments and yields a `Num`, which is what lets codegen lower the
-/// whole family through this one predicate. `__`-prefixed and exported by no module for the
-/// same reason as `__exit`: they are the harness's plumbing, not user-facing surface.
+/// Every one takes `Text` and `Num` arguments only and yields a `Num`, which is what lets
+/// codegen lower the whole family through this one predicate and
+/// [`builtin_parameters`]. `__`-prefixed and exported by no module for the same reason as
+/// `__exit`: they are the harness's plumbing, not user-facing surface.
 pub fn is_test_registry_intrinsic(name: &str) -> bool {
     name.starts_with(TEST_REGISTRY_PREFIX)
+}
+
+/// The parameter types the built-in overload member `name` declares, or `None` if the
+/// compiler provides no such member.
+pub fn builtin_parameters(name: &str) -> Option<&'static [Type]> {
+    BUILTIN_OVERLOADS
+        .iter()
+        .find(|member| member.name == name)
+        .map(|member| member.parameters)
 }
 
 /// Every name the compiler provides itself, across both builtin tables — the one scan the

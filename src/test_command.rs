@@ -15,6 +15,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub use quilon_rt::test_registry::Reporter;
+use quilon_rt::test_registry::{selects, set_reporter, set_selection};
+
+use crate::ast::{self, Expression, Statement, TEST_BLOCK_MARKER, TEST_CASE_MARKER};
 use crate::driver::{self, TestBlocks};
 use crate::jit;
 use crate::source_extension;
@@ -23,19 +27,36 @@ use crate::source_extension;
 /// nothing. (Hidden entries are skipped separately, by their leading dot.)
 const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules"];
 
+/// How a run was asked to report and what it was asked to run.
+pub struct Options {
+    pub reporter: Reporter,
+    /// The `/`-joined suite and case paths selected; empty selects everything.
+    pub only: Vec<String>,
+}
+
 /// Run the suites at `root` — one file, or every suite under a directory — and return how
-/// many FAILED. A suite fails when a case fails, or when the file does not compile.
+/// many FAILED. A suite fails when a case fails, when the file does not compile, or when a
+/// selected path is not in it.
 ///
 /// A single suite runs here, in this process, under its own path as a heading. Several run
-/// one process each (see the module docs), and a closing line tallies them.
-pub fn run(root: &Path) -> usize {
+/// one process each (see the module docs), and a closing line tallies them. The JSON
+/// reporter writes the suites' events and nothing else.
+pub fn run(root: &Path, options: &Options) -> usize {
     // A path that is not there is a failure, not an empty run: a mistyped path in a CI
     // invocation must not report success.
     if !root.exists() {
         eprintln!("❌ no such file or directory: {}", root.display());
         return 1;
     }
+    if !options.only.is_empty() && root.is_dir() {
+        eprintln!(
+            "❌ `--only` selects within one suite file; give the file rather than {}",
+            root.display()
+        );
+        return 1;
+    }
 
+    let human = options.reporter == Reporter::Human;
     let suites = discover(root);
     match suites.as_slice() {
         [] => {
@@ -43,24 +64,28 @@ pub fn run(root: &Path) -> usize {
                 "no tests found in {} — a test file imports `core.test` and has top-level \
                  `test.{}` blocks",
                 root.display(),
-                crate::ast::display_name(crate::ast::TEST_BLOCK_MARKER)
+                ast::display_name(TEST_BLOCK_MARKER)
             );
             0
         }
         [suite] => {
-            println!("{}", suite.display());
-            usize::from(!compile_and_run(suite))
+            if human {
+                println!("{}", suite.display());
+            }
+            usize::from(!compile_and_run(suite, options))
         }
         many => {
             let failed = many
                 .iter()
-                .filter(|suite| !run_in_its_own_process(suite))
+                .filter(|suite| !run_in_its_own_process(suite, options))
                 .count();
-            println!(
-                "{} suites: {} passed, {failed} failed",
-                many.len(),
-                many.len() - failed
-            );
+            if human {
+                println!(
+                    "{} suites: {} passed, {failed} failed",
+                    many.len(),
+                    many.len() - failed
+                );
+            }
             failed
         }
     }
@@ -72,7 +97,7 @@ pub fn run(root: &Path) -> usize {
 /// Handing the suite to a child is what keeps a fatal `assert` — which exits — from ending
 /// the whole run at the first failing suite, and keeps each suite's tally its own. Named with exactly one file, the
 /// child takes the single-suite path above and does not spawn again.
-fn run_in_its_own_process(suite: &Path) -> bool {
+fn run_in_its_own_process(suite: &Path, options: &Options) -> bool {
     let quilon = match std::env::current_exe() {
         Ok(path) => path,
         Err(error) => {
@@ -83,11 +108,23 @@ fn run_in_its_own_process(suite: &Path) -> bool {
                  case will end the run",
                 suite.display()
             );
-            println!("{}", suite.display());
-            return compile_and_run(suite);
+            if options.reporter == Reporter::Human {
+                println!("{}", suite.display());
+            }
+            return compile_and_run(suite, options);
         }
     };
-    match Command::new(quilon).arg("test").arg(suite).status() {
+    let reporter = match options.reporter {
+        Reporter::Human => "human",
+        Reporter::Json => "json",
+    };
+    match Command::new(quilon)
+        .arg("test")
+        .arg(suite)
+        .arg("--reporter")
+        .arg(reporter)
+        .status()
+    {
         Ok(status) => status.success(),
         Err(error) => {
             eprintln!("❌ could not run {}: {error}", suite.display());
@@ -97,9 +134,10 @@ fn run_in_its_own_process(suite: &Path) -> bool {
 }
 
 /// Type-check `suite` with its test blocks compiled in, then JIT the synthesized entry
-/// point. `true` when the run exited 0. A front-end failure is reported like any other
-/// compile error and counts as a failure.
-fn compile_and_run(suite: &Path) -> bool {
+/// point under `options`. `true` when the run exited 0. A front-end failure is reported
+/// like any other compile error and counts as a failure, as does a selected path the suite
+/// does not have.
+fn compile_and_run(suite: &Path, options: &Options) -> bool {
     let checked = match driver::front_end_with(suite, TestBlocks::Run) {
         Ok(checked) => checked,
         Err(error) => {
@@ -107,6 +145,24 @@ fn compile_and_run(suite: &Path) -> bool {
             return false;
         }
     };
+
+    if !options.only.is_empty() {
+        let available = available_paths(&checked.program);
+        let unknown = options
+            .only
+            .iter()
+            .find(|selected| !available.iter().any(|path| selects(selected, path)));
+        if let Some(unknown) = unknown {
+            eprintln!(
+                "❌ no suite or case `{unknown}` in {}; its paths are:\n  {}",
+                suite.display(),
+                available.join("\n  ")
+            );
+            return false;
+        }
+    }
+    set_reporter(options.reporter);
+    set_selection(options.only.clone());
 
     // A suite takes no arguments of its own — the entry point the front end synthesizes has
     // no parameters — so `argv` is just the program's path, the way a native build sees it.
@@ -124,6 +180,62 @@ fn compile_and_run(suite: &Path) -> bool {
             eprintln!("❌ Runtime error in {}: {}", suite.display(), error);
             false
         }
+    }
+}
+
+/// Every suite and case path in `program`, in source order — each `describe`/`it` call
+/// with a literal name, the names joined by `/` through the nesting. Read off the entry
+/// point the front end synthesized, which holds the file's blocks.
+///
+/// ponytail: a static read, so a case whose name is computed (an `it` inside `.each`) is
+/// listed under no path; make the runtime record the paths it is asked about if that is ever
+/// wanted.
+fn available_paths(program: &ast::Program) -> Vec<String> {
+    let mut paths = Vec::new();
+    for item in &program.items {
+        if let ast::Item::FunctionDeclaration(entry) = item
+            && entry.name == "^"
+        {
+            collect_paths(&entry.body, "", &mut paths);
+        }
+    }
+    paths
+}
+
+fn collect_paths(expression: &Expression, prefix: &str, paths: &mut Vec<String>) {
+    match expression {
+        Expression::Call {
+            function,
+            arguments,
+            ..
+        } => {
+            if let Expression::Identifier { name, .. } = function.as_ref()
+                && (name == TEST_BLOCK_MARKER || name == TEST_CASE_MARKER)
+                && let [Expression::String { value, .. }, body] = arguments.as_slice()
+            {
+                let path = match prefix.is_empty() {
+                    true => value.clone(),
+                    false => format!("{prefix}/{value}"),
+                };
+                paths.push(path.clone());
+                if name == TEST_BLOCK_MARKER {
+                    collect_paths(body, &path, paths);
+                }
+                return;
+            }
+            for argument in arguments {
+                collect_paths(argument, prefix, paths);
+            }
+        }
+        Expression::Lambda { body, .. } => collect_paths(body, prefix, paths),
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                if let Statement::Expression(expression) = statement {
+                    collect_paths(expression, prefix, paths);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

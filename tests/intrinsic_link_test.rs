@@ -85,10 +85,12 @@ const EVERY_INTRINSIC: &str = r#"
   ~ The test registry, which `core.test`'s describe/it record through. Called directly,
   ~ because `quilon test` is the only thing that compiles a `describe` block and this gate
   ~ is an ordinary program: one group, one case in it, and the total.
-  assert(__test_suite_enter(), equals(1))
+  assert(__test_suite_selected("group"), equals(1))
+  assert(__test_suite_enter("group"), equals(1))
   assert(__test_depth(), equals(1))
+  assert(__test_case_selected("case"), equals(1))
   assert(__test_case_failing(), equals(0))
-  assert(__test_case_finish(), equals(1))
+  assert(__test_case_finish("case"), equals(1))
   ~ `core.test`'s `failAt`, on a branch that never runs — it is what reaches the exit
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")
@@ -96,6 +98,7 @@ const EVERY_INTRINSIC: &str = r#"
   assert(__test_passed() >= 1, equals(true))
   assert(__test_failed(), equals(0))
   assert(__test_suite_leave(), equals(0))
+  assert(__test_summary(), equals(0))
 
   ~ __text_cmp and __text_length.
   assert("abc" < "abd", equals(true))
