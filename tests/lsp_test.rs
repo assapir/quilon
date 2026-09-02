@@ -82,7 +82,10 @@ fn hover_reports_the_smallest_covering_expressions_type() {
     // On the parameter reference `x` in the body: its own type, not the product's.
     let (label, span) = hover_at(&checked.types, offset_of(text, "x * 2", 0)).expect("a hover");
     assert_eq!(label, "Num");
-    assert_eq!((span.start, span.end), (offset_of(text, "x * 2", 0), offset_of(text, "x * 2", 1)));
+    assert_eq!(
+        (span.start, span.end),
+        (offset_of(text, "x * 2", 0), offset_of(text, "x * 2", 1))
+    );
 
     // On a `Text` literal.
     let text = "^ = () -> Num => < s = \"hi\"\n0 >\n";
@@ -131,9 +134,15 @@ fn definition_resolves_across_a_file_import() {
 
     let definition = definition_at(&checked.program, offset_of(text, "lib.add", 4))
         .expect("the imported function resolves");
-    assert_ne!(definition.file, ROOT_FILE, "the definition is in the module's own file");
+    assert_ne!(
+        definition.file, ROOT_FILE,
+        "the definition is in the module's own file"
+    );
 
-    let location = checked.sources.locate(&definition).expect("a locatable definition");
+    let location = checked
+        .sources
+        .locate(&definition)
+        .expect("a locatable definition");
     assert!(
         location.path.ends_with("lib.qn"),
         "unexpected path: {}",
@@ -164,20 +173,32 @@ fn block_delimiters_and_comparisons_are_told_apart() {
     assert_eq!(kind_at(text, "< a", 0), SemanticTokenKind::BlockDelimiter);
     assert_eq!(kind_at(text, "b >\n", 2), SemanticTokenKind::BlockDelimiter);
     // The `>` between two operands is the comparison.
-    assert_eq!(kind_at(text, "a > b", 2), SemanticTokenKind::ComparisonOperator);
+    assert_eq!(
+        kind_at(text, "a > b", 2),
+        SemanticTokenKind::ComparisonOperator
+    );
 
     // A `<` after a completed operand is less-than, not a block opener.
     let text = "below = (a :: Num, b :: Num) -> Bool => < a < b >\n";
     assert_eq!(kind_at(text, "< a", 0), SemanticTokenKind::BlockDelimiter);
-    assert_eq!(kind_at(text, "a < b", 2), SemanticTokenKind::ComparisonOperator);
+    assert_eq!(
+        kind_at(text, "a < b", 2),
+        SemanticTokenKind::ComparisonOperator
+    );
 }
 
 #[test]
 fn declared_names_classify_as_types_functions_and_parameters() {
     let text = "Point = { x :: Num }\nshift = (amount :: Num) -> Num => < amount + 1 >\n^ = () -> Num => < shift(2) >\n";
     assert_eq!(kind_at(text, "Point", 0), SemanticTokenKind::TypeName);
-    assert_eq!(kind_at(text, "shift(2)", 0), SemanticTokenKind::FunctionName);
-    assert_eq!(kind_at(text, "amount + 1", 0), SemanticTokenKind::ParameterName);
+    assert_eq!(
+        kind_at(text, "shift(2)", 0),
+        SemanticTokenKind::FunctionName
+    );
+    assert_eq!(
+        kind_at(text, "amount + 1", 0),
+        SemanticTokenKind::ParameterName
+    );
 }
 
 #[test]
@@ -207,8 +228,14 @@ fn test_lenses_locate_every_suite_and_case() {
             (TestLensKind::Case, "second"),
         ]
     );
-    assert_eq!(lenses[0].span.start, offset_of(text, "test.describe(\"outer\"", 0));
-    assert_eq!(lenses[1].span.start, offset_of(text, "test.it(\"first\"", 0));
+    assert_eq!(
+        lenses[0].span.start,
+        offset_of(text, "test.describe(\"outer\"", 0)
+    );
+    assert_eq!(
+        lenses[1].span.start,
+        offset_of(text, "test.it(\"first\"", 0)
+    );
 }
 
 #[test]
@@ -259,7 +286,10 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     let diagnostics_of = |message: Message| match message {
         Message::Notification(published) => {
             assert_eq!(published.method, "textDocument/publishDiagnostics");
-            published.params["diagnostics"].as_array().expect("an array").clone()
+            published.params["diagnostics"]
+                .as_array()
+                .expect("an array")
+                .clone()
         }
         other => panic!("expected publishDiagnostics, got {other:?}"),
     };
@@ -269,8 +299,15 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
         .send(request(1, "initialize", json!({ "capabilities": {} })))
         .unwrap();
     let initialized = response_of(receive());
-    assert!(initialized["capabilities"]["hoverProvider"].as_bool().unwrap_or(false));
-    client.sender.send(notification("initialized", json!({}))).unwrap();
+    assert!(
+        initialized["capabilities"]["hoverProvider"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    client
+        .sender
+        .send(notification("initialized", json!({})))
+        .unwrap();
 
     // Open a document with a type error: one diagnostic, on the offending line.
     let uri = "file:///buffer.qn";
@@ -356,10 +393,19 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     assert_eq!(lenses[0]["command"]["title"], "▶ Run suite");
     assert_eq!(lenses[1]["command"]["title"], "▶ Run case");
 
-    client.sender.send(request(5, "shutdown", Value::Null)).unwrap();
+    client
+        .sender
+        .send(request(5, "shutdown", Value::Null))
+        .unwrap();
     response_of(receive());
-    client.sender.send(notification("exit", Value::Null)).unwrap();
-    served.join().expect("the server thread joins").expect("the server exits cleanly");
+    client
+        .sender
+        .send(notification("exit", Value::Null))
+        .unwrap();
+    served
+        .join()
+        .expect("the server thread joins")
+        .expect("the server exits cleanly");
 }
 
 // --- The parse helper -------------------------------------------------------

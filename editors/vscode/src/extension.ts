@@ -1,26 +1,27 @@
 // Quilon VS Code extension.
 //
-// Two responsibilities:
+// Three responsibilities:
 //   1. Commands that run the Quilon compiler on the active .qn file in a terminal
-//      ("Quilon: Check / Run Current File").
-//   2. Inline diagnostics: on open/save of a .qn file, run `<command> check` on
-//      it, parse the rustc-style `path:line:col: error: message` output, and
-//      surface each as an editor squiggle in a shared DiagnosticCollection.
+//      ("Quilon: Check / Run Current File", "Quilon: Run Tests in Current File").
+//   2. The language client: spawns `quilon lsp` (the compiler's own language server)
+//      and lets it provide diagnostics, go-to-definition, hover, semantic tokens,
+//      and the test code lenses.
+//   3. Debugging: the `quilon.debug` command and debug-configuration provider
+//      (CodeLLDB over a `--debug` build).
 
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as vscode from "vscode";
+import { LanguageClient, type ServerOptions } from "vscode-languageclient/node";
 import {
   type CompilerProbe,
+  languageServerInvocation,
   missingCompilerMessage,
   resolveCompilerCommand,
   type ResolvedCompiler,
   shellCommand,
 } from "./compilerCommand";
 import { registerDebug } from "./debug";
-import { firstNonEmptyLine } from "./debugConfig";
-import { parseDiagnostics, type ParsedDiagnostic } from "./diagnostics";
 import { findEntryPoints } from "./entryPoints";
 
 // --- Locating the compiler -------------------------------------------------
@@ -84,8 +85,8 @@ export function forgetResolvedCompiler(): void {
 
 /**
  * Report a compiler that could not be spawned, offering the setting that fixes
- * it. `severity` keeps a background diagnostics failure a warning while a
- * user-initiated action reports an error.
+ * it. `severity` keeps a background failure a warning while a user-initiated
+ * action reports an error.
  */
 export function showMissingCompiler(
   resolved: ResolvedCompiler,
@@ -106,6 +107,14 @@ export function showMissingCompiler(
 
 // --- Terminal commands -----------------------------------------------------
 
+/** The shared "Quilon" terminal, created on first use. */
+function quilonTerminal(): vscode.Terminal {
+  return (
+    vscode.window.terminals.find((t) => t.name === "Quilon") ??
+    vscode.window.createTerminal("Quilon")
+  );
+}
+
 function runOnActiveFile(subcommand: string): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "quilon") {
@@ -117,151 +126,70 @@ function runOnActiveFile(subcommand: string): void {
   void document.save().then(() => {
     const cmd = shellCommand(resolvedQuilonCompiler());
     const file = document.fileName;
-    const term =
-      vscode.window.terminals.find((t) => t.name === "Quilon") ??
-      vscode.window.createTerminal("Quilon");
+    const term = quilonTerminal();
     term.show();
     // Quote the path to tolerate spaces.
     term.sendText(`${cmd} ${subcommand} "${file}"`);
   });
 }
 
-// --- Inline diagnostics ----------------------------------------------------
-
 /**
- * True once we've warned that the compiler is missing, so we don't spam. Reset
- * after any successful run so a later re-break (command removed again) warns
- * afresh rather than failing silently.
+ * Run `quilon test` on a file, in the shared terminal. The test code lenses the
+ * language server places above `describe`/`it` blocks invoke this with the
+ * file's path; invoked bare (from the command palette) it targets the active
+ * file. The whole file's suites run — the compiler does not yet select a single
+ * suite or case.
  */
-let warnedMissingCommand = false;
-
-/**
- * Monotonic check counter per file URI. A check stamps its sequence number and,
- * on completion, only publishes if it is still the latest — so an older run that
- * finishes after a newer one can't overwrite fresh results with stale ones.
- */
-const latestCheck = new Map<string, number>();
-
-/** Convert one parsed diagnostic into a VS Code diagnostic against `document`. */
-function toVsDiagnostic(
-  parsed: ParsedDiagnostic,
-  document: vscode.TextDocument,
-): vscode.Diagnostic {
-  // Compiler line/column are 1-based; VS Code positions are 0-based.
-  const line = Math.max(0, parsed.line - 1);
-  const startChar = Math.max(0, parsed.column - 1);
-  const start = new vscode.Position(line, startChar);
-
-  // Prefer the caret-run width; otherwise underline the token at the column,
-  // and if even that is empty, fall back to a one-character range so the
-  // squiggle is visible.
-  let end: vscode.Position;
-  if (parsed.span !== undefined && parsed.span > 0) {
-    end = new vscode.Position(line, startChar + parsed.span);
-  } else {
-    const wordRange = document.getWordRangeAtPosition(start);
-    end =
-      wordRange && wordRange.end.isAfter(start)
-        ? wordRange.end
-        : new vscode.Position(line, startChar + 1);
+async function runTestsInFile(filePath?: string): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  const target = filePath ?? editor?.document.fileName;
+  if (target === undefined) {
+    void vscode.window.showErrorMessage("Quilon: no .qn file to test.");
+    return;
   }
-
-  const diagnostic = new vscode.Diagnostic(
-    new vscode.Range(start, end),
-    parsed.message,
-    vscode.DiagnosticSeverity.Error,
-  );
-  diagnostic.source = "quilon";
-  return diagnostic;
+  // The compiler reads the file from disk; save the buffer it is about to test.
+  if (editor && editor.document.fileName === target && editor.document.isDirty) {
+    await editor.document.save();
+  }
+  const cmd = shellCommand(resolvedQuilonCompiler());
+  const term = quilonTerminal();
+  term.show();
+  term.sendText(`${cmd} test "${target}"`);
 }
 
+// --- The language client ---------------------------------------------------
+
+let client: LanguageClient | undefined;
+
 /**
- * Run `<command> check <file>` and publish the resulting diagnostics for
- * `document`. Clears them when the file checks clean. Robust to a missing
- * command (warns once), non-zero exit, out-of-order completion of overlapping
- * runs, and multi-error output.
+ * Spawn `quilon lsp` with the resolved compiler invocation and connect the
+ * editor to it. Diagnostics, go-to-definition, hover, semantic tokens, and the
+ * test code lenses all come from the server; a failure to start is reported
+ * once, with the setting that fixes it.
  */
-function checkDocument(
-  document: vscode.TextDocument,
-  collection: vscode.DiagnosticCollection,
-): void {
-  if (document.languageId !== "quilon" || document.uri.scheme !== "file") {
-    return;
-  }
-
-  // The compiler reads the file from disk, so a dirty buffer would yield
-  // diagnostics positioned against stale text. Skip until it's saved (the
-  // on-save handler re-runs once the buffer and disk agree).
-  if (document.isDirty) {
-    return;
-  }
-
+async function startLanguageClient(): Promise<void> {
   const compiler = resolvedQuilonCompiler();
-  const cwd = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
-
-  // Stamp this run so a slower earlier run can't clobber a faster later one.
-  const uri = document.uri;
-  const key = uri.toString();
-  const seq = (latestCheck.get(key) ?? 0) + 1;
-  latestCheck.set(key, seq);
-
-  const args = [...compiler.baseArgs, "check", document.fileName];
-  execFile(compiler.exe, args, { cwd }, (error, stdout, stderr) => {
-    if (latestCheck.get(key) !== seq) {
-      return; // A newer check superseded this one; drop its (stale) result.
-    }
-
-    // ENOENT => the compiler isn't where we resolved it. Forget the resolution
-    // so a compiler installed mid-session is found on the next check.
-    if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      forgetResolvedCompiler();
-      if (!warnedMissingCommand) {
-        warnedMissingCommand = true;
-        showMissingCompiler(compiler, "diagnostics unavailable — ", "warning");
-      }
-      collection.delete(uri);
-      return;
-    }
-
-    // We ran the compiler successfully; allow a fresh warning if it later breaks.
-    warnedMissingCommand = false;
-
-    // Parse the rustc-style report. Diagnostics go to stderr; include stdout
-    // for forward-compatibility.
-    const combined = `${stderr}\n${stdout}`;
-    const parsed = parseDiagnostics(combined);
-    if (parsed.length > 0) {
-      collection.set(
-        uri,
-        parsed.map((d) => toVsDiagnostic(d, document)),
-      );
-      return;
-    }
-
-    // No parseable diagnostics. A zero exit means a clean check; a non-zero exit
-    // with unrecognized output (a panic/backtrace, or a future message format)
-    // is still a failure — surface it rather than silently reporting "clean".
-    if (error) {
-      collection.set(uri, [unparsedFailureDiagnostic(combined)]);
-    } else {
-      collection.delete(uri);
-    }
+  const serverOptions: ServerOptions = languageServerInvocation(compiler);
+  client = new LanguageClient("quilon", "Quilon Language Server", serverOptions, {
+    documentSelector: [{ language: "quilon" }],
   });
+  try {
+    await client.start();
+  } catch {
+    client = undefined;
+    forgetResolvedCompiler();
+    showMissingCompiler(compiler, "language server unavailable — ", "warning");
+  }
 }
 
-/**
- * A whole-file diagnostic for a compiler failure whose output we couldn't parse
- * into a located error, so the user still sees that the check failed.
- */
-function unparsedFailureDiagnostic(output: string): vscode.Diagnostic {
-  const detail = firstNonEmptyLine(output) ?? "unknown error";
-  const diagnostic = new vscode.Diagnostic(
-    new vscode.Range(0, 0, 0, 0),
-    `Quilon check failed: ${detail}`,
-    vscode.DiagnosticSeverity.Error,
-  );
-  diagnostic.source = "quilon";
-  return diagnostic;
+/** Stop the running client (if any) and start a fresh one — after a setting change. */
+async function restartLanguageClient(): Promise<void> {
+  const running = client;
+  client = undefined;
+  if (running) {
+    await running.stop().then(undefined, () => {});
+  }
+  await startLanguageClient();
 }
 
 // --- CodeLens: Run above each `^` entry point ------------------------------
@@ -272,7 +200,8 @@ function unparsedFailureDiagnostic(output: string): vscode.Diagnostic {
  * on the active editor — and since the lenses live in that document, clicking
  * one (which focuses the doc) targets the right file without threading the URI
  * through. Debug builds the file with `--debug` and launches it under CodeLLDB
- * so breakpoints in the `.qn` source are hit.
+ * so breakpoints in the `.qn` source are hit. (The test lenses above
+ * `describe`/`it` blocks come from the language server instead.)
  */
 class EntryPointCodeLensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
@@ -297,11 +226,6 @@ class EntryPointCodeLensProvider implements vscode.CodeLensProvider {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const diagnostics = vscode.languages.createDiagnosticCollection("quilon");
-  context.subscriptions.push(diagnostics);
-
-  const check = (document: vscode.TextDocument): void => checkDocument(document, diagnostics);
-
   // Debug integration (CodeLLDB): the `quilon.debug` command and the `quilon`
   // debug-configuration provider that builds with `--debug` and launches lldb.
   registerDebug(context);
@@ -309,51 +233,31 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("quilon.check", () => runOnActiveFile("check")),
     vscode.commands.registerCommand("quilon.run", () => runOnActiveFile("run")),
+    vscode.commands.registerCommand("quilon.runTests", (filePath?: string) =>
+      runTestsInFile(filePath),
+    ),
     vscode.languages.registerCodeLensProvider(
       { language: "quilon" },
       new EntryPointCodeLensProvider(),
     ),
     // A changed setting or a changed set of folders can change which compiler
-    // we should be running, so drop the cached resolution and re-check.
+    // we should be running, so drop the cached resolution and reconnect the
+    // language server to the right one.
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("quilon.command")) {
         forgetResolvedCompiler();
-        const document = vscode.window.activeTextEditor?.document;
-        if (document) {
-          check(document);
-        }
+        void restartLanguageClient();
       }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => forgetResolvedCompiler()),
-    vscode.workspace.onDidOpenTextDocument(check),
-    vscode.workspace.onDidSaveTextDocument(check),
-    // Re-check when focus lands on a file (e.g. switching to an already-open tab
-    // that was never saved this session), so its diagnostics are current.
-    vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor) {
-        check(editor.document);
-      }
-    }),
-    vscode.workspace.onDidCloseTextDocument((document) => {
-      diagnostics.delete(document.uri);
-      latestCheck.delete(document.uri.toString());
-    }),
   );
 
-  // Check the active editor's document on activation. Other already-open files
-  // get checked lazily on their first save (or when re-opened), avoiding a
-  // startup stampede of compiler processes — which, with the documented
-  // `cargo run --` setting, would otherwise all contend on the same build lock.
-  const active = vscode.window.activeTextEditor?.document;
-  if (active) {
-    check(active);
-  }
+  void startLanguageClient();
 }
 
-export function deactivate(): void {
-  // The DiagnosticCollection is disposed via context.subscriptions; reset the
-  // module-level state so a re-activation in the same host starts clean.
-  latestCheck.clear();
-  warnedMissingCommand = false;
+export function deactivate(): Thenable<void> | undefined {
   forgetResolvedCompiler();
+  const running = client;
+  client = undefined;
+  return running?.stop();
 }

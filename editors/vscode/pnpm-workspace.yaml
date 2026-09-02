@@ -10,3 +10,9 @@
 allowBuilds:
   "@vscode/vsce-sign": false
   keytar: false
+
+# Hoist dependencies flat into node_modules (instead of pnpm's default
+# symlinked-store layout) so @vscode/vsce can walk a conventional dependency
+# tree when packaging the runtime dependencies (vscode-languageclient) into the
+# .vsix. pnpm 10+ reads this setting from here, not from .npmrc.
+nodeLinker: hoisted

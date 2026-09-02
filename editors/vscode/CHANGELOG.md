@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The extension is a language client.** It spawns the compiler's own language server
+  (`quilon lsp`, located with the same resolution every other feature uses) and receives
+  from it: live diagnostics against the unsaved buffer, go to definition (imports
+  included), hover with the inferred type, semantic tokens (block `< >` delimiters
+  colored apart from the `<` / `>` comparison operators), and a **▶ Run suite** /
+  **▶ Run case** CodeLens above every `describe` and `it` block. The lenses invoke the
+  new `quilon.runTests` command, which runs `quilon test` on the file in the "Quilon"
+  terminal.
+
+### Changed
+
+- **Diagnostics come from the language server, not from a `quilon check` subprocess.**
+  The shell-out path (run `check` on save, parse the rustc-style report) is gone;
+  squiggles now update as you type. The minimum VS Code version rises to 1.82, which the
+  language client library requires.
+
 ### Fixed
 
 - **A debug session no longer fails with `could not run "quilon"` when the compiler is

@@ -136,7 +136,8 @@ impl LanguageServer {
                     return Vec::new();
                 };
                 let uri = params.text_document.uri;
-                self.documents.insert(uri.clone(), params.text_document.text);
+                self.documents
+                    .insert(uri.clone(), params.text_document.text);
                 vec![self.diagnostics_for(&uri)]
             }
             "textDocument/didChange" => {
@@ -267,9 +268,10 @@ impl LanguageServer {
             return Response::new_ok(id, serde_json::Value::Null);
         };
         let positions = DocumentPositions::new(text);
-        let offset =
-            positions.byte_offset(position_params.position.line, position_params.position.character)
-                as u32;
+        let offset = positions.byte_offset(
+            position_params.position.line,
+            position_params.position.character,
+        ) as u32;
         let Ok(checked) = analysis::check_text(&path, text) else {
             return Response::new_ok(id, serde_json::Value::Null);
         };

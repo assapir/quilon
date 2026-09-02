@@ -192,15 +192,15 @@ impl DefinitionFinder {
                     found
                 })
             }),
-            Expression::BinaryOperator { left, right, .. } => self
-                .expression(left)
-                .or_else(|| self.expression(right)),
+            Expression::BinaryOperator { left, right, .. } => {
+                self.expression(left).or_else(|| self.expression(right))
+            }
             Expression::UnaryOperator { expression, .. }
             | Expression::FieldAccess { expression, .. }
             | Expression::Spread { expression, .. } => self.expression(expression),
-            Expression::FieldAssign { target, value, .. } => self
-                .expression(target)
-                .or_else(|| self.expression(value)),
+            Expression::FieldAssign { target, value, .. } => {
+                self.expression(target).or_else(|| self.expression(value))
+            }
             Expression::Index {
                 expression, index, ..
             } => self
@@ -224,9 +224,9 @@ impl DefinitionFinder {
             Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
                 fields.iter().find_map(|(_, value)| self.expression(value))
             }
-            Expression::Range { start, end, .. } => self
-                .expression(start)
-                .or_else(|| self.expression(end)),
+            Expression::Range { start, end, .. } => {
+                self.expression(start).or_else(|| self.expression(end))
+            }
             Expression::Interpolation { parts, .. } => parts.iter().find_map(|part| match part {
                 InterpolationPart::Hole(hole) => self.expression(hole),
                 InterpolationPart::Literal(_) => None,
