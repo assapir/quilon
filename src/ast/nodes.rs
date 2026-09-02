@@ -1172,20 +1172,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_test_registry_primitive_is_a_zero_argument_num_builtin() {
+    fn every_test_registry_primitive_takes_text_or_num_and_yields_a_num() {
         // Codegen lowers the whole family through one path, which only works while they all
-        // share that signature.
+        // keep to the parameter types it knows how to pass and the one result it reads.
         let registry: Vec<&BuiltinOverload> = BUILTIN_OVERLOADS
             .iter()
             .filter(|member| is_test_registry_intrinsic(member.name))
             .collect();
         assert!(!registry.is_empty(), "the registry has no members at all");
         for member in registry {
-            assert!(
-                member.parameters.is_empty(),
-                "`{}` must take no arguments",
-                member.name
-            );
+            for parameter in member.parameters {
+                assert!(
+                    matches!(parameter, Type::Text | Type::Num),
+                    "`{}` takes a {parameter:?}, which codegen cannot pass",
+                    member.name
+                );
+            }
             assert_eq!(member.ret, Type::Num, "`{}` must yield a Num", member.name);
         }
     }
