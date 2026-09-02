@@ -285,6 +285,115 @@ fn test_spans_carry_the_file_they_came_from() {
     assert_ne!(root[0].span, module[0].span);
 }
 
+/// Trojan Source guard (CVE-2021-42574 class, see `quilon::lexer::bidi`): a balanced
+/// isolate inside a string literal lexes normally, and the literal text is preserved
+/// exactly (no reordering, no stripped or injected characters).
+#[test]
+fn test_balanced_bidi_isolate_in_a_literal_lexes() {
+    let source = "x = \"\u{2067}hello\u{2069}\"";
+    let tokens = Lexer::tokenize(source).expect("a balanced isolate must lex");
+    match &tokens[2].kind {
+        TokenKind::String(chunks) => assert_eq!(
+            chunks.as_slice(),
+            [quilon::lexer::StrChunk::Lit(
+                "\u{2067}hello\u{2069}".to_string()
+            )]
+        ),
+        other => panic!("expected a string token, got {other:?}"),
+    }
+}
+
+/// Nesting an embedding inside an isolate — RLI, then LRE, then PDF (closes the
+/// embedding), then PDI (closes the isolate) — is valid UAX #9 nesting and must lex.
+#[test]
+fn test_embedding_nested_inside_isolate_in_a_literal_lexes() {
+    let source = "\"\u{2067}\u{202A}x\u{202C}\u{2069}\"";
+    assert!(Lexer::tokenize(source).is_ok());
+}
+
+/// An opener with no matching closer before the string ends is a lex error naming the
+/// character and the token it was found in.
+#[test]
+fn test_unterminated_bidi_override_in_a_literal_errors() {
+    let source = "x = \"\u{202E}hello\"";
+    let error = Lexer::tokenize(source).expect_err("an unclosed override must fail");
+    assert!(
+        error.message.contains("U+202E") && error.message.contains("string literal"),
+        "{}",
+        error.message
+    );
+}
+
+/// The same guard applies inside a `~` comment.
+#[test]
+fn test_unterminated_bidi_control_in_a_comment_errors() {
+    let source = "x = 1 ~ \u{202B}gone wrong\ny = 2";
+    let error = Lexer::tokenize(source).expect_err("an unclosed embedding must fail");
+    assert!(
+        error.message.contains("U+202B") && error.message.contains("comment"),
+        "{}",
+        error.message
+    );
+}
+
+/// A bidi control appearing outside any string literal or comment is a lex error.
+#[test]
+fn test_bidi_control_outside_a_token_errors() {
+    let source = "x \u{202E} = 1";
+    let error = Lexer::tokenize(source).expect_err("a bare bidi control must fail");
+    assert!(error.message.contains("U+202E"), "{}", error.message);
+}
+
+/// LRM (a scopeless mark) needs no closer and lexes fine inside a literal.
+#[test]
+fn test_lrm_inside_a_literal_lexes() {
+    let source = "x = \"a\u{200E}b\"";
+    assert!(Lexer::tokenize(source).is_ok());
+}
+
+/// A closer with nothing open to close (PDF or PDI) is a stray-closer lex error.
+#[test]
+fn test_closer_with_no_opener_errors() {
+    for source in ["x = \"a\u{202C}b\"", "x = \"a\u{2069}b\""] {
+        let error = Lexer::tokenize(source).expect_err("a stray closer must fail");
+        assert!(
+            error.message.contains("no matching opener"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+/// A closer of the wrong family (PDF over an isolate, PDI over an embedding) is also a
+/// stray closer — UAX #9 nesting requires each closer to match the innermost scope's own
+/// kind, not just any open scope.
+#[test]
+fn test_mismatched_bidi_closer_family_errors() {
+    let source = "\"\u{2067}x\u{202C}\u{2069}\""; // RLI ... PDF (wrong family) ... PDI
+    let error = Lexer::tokenize(source).expect_err("a wrong-family closer must fail");
+    assert!(
+        error.message.contains("no matching opener"),
+        "{}",
+        error.message
+    );
+}
+
+/// A legitimate Hebrew/Arabic literal — no bidi controls, just RTL letters — lexes exactly
+/// like any other string.
+#[test]
+fn test_legitimate_rtl_literal_is_unaffected() {
+    let text = "שלום مرحبا"; // Hebrew "hello" + Arabic "hello", no bidi controls
+    let source = format!("\"{text}\"");
+    let tokens = Lexer::tokenize(&source).expect("plain RTL text must lex");
+    match &tokens[0].kind {
+        TokenKind::String(chunks) => assert_eq!(
+            chunks.as_slice(),
+            [quilon::lexer::StrChunk::Lit(text.to_string())]
+        ),
+        other => panic!("expected a string token, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_parsed_nodes_inherit_their_files_id() {
     // Composed spans (a BinaryOperator over two operands, a call over its arguments) are built
