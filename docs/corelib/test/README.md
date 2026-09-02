@@ -37,12 +37,12 @@ A holding assertion does nothing. A failure reports in the standard
 [error frame](../../tooling/errors.md) at **your** call site — the line the assertion
 is written on, including inside a helper rather than `^`:
 
-```
-demo.qn:4:3:
-assertion failed: expected 41, got 42
-  |
-4 |   assert(6 * 7, equals(41))
-  |   ^^^^^^^^^^^^^^^^^^^^^^^^^
+```text
+error[Q069]: assertion failed: expected 41, got 42
+   ╭─[demo.qn:4:3]
+ 4 │   assert(6 * 7, equals(41))
+   ·   ─────────────────────────
+   ╰────
 ```
 
 ### The matchers

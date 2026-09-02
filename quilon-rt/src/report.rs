@@ -6,9 +6,10 @@
 //! the runtime's own fail-loud checks (an invalid `arr[i]`, a `Text.replace`/`repeat`
 //! contract violation), all from the [`QlSite`] the code generator hands in at the check.
 //!
-//! `core.test`'s `failAt` composes the same frame in Quilon, for an assertion helper of your
-//! own; `tests/fail_loud_location_test.rs` pins the two to the same byte-level shape, so a
-//! failure reported from either side reads identically.
+//! The frame is the compiler's own (`diagnostic::Diagnostic::render`, drawn by `miette`),
+//! composed here by hand since a compiled program carries no renderer;
+//! `tests/fail_loud_location_test.rs` pins the two to the same byte-level shape, so a
+//! compile error and a runtime failure read identically.
 
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};

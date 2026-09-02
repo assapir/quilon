@@ -96,7 +96,7 @@ fn version() -> String {
 
 /// Print `diagnostic` the way every report is printed, and exit 1.
 fn fail(diagnostic: &Diagnostic, sources: &SourceMap, status: &Status) -> ! {
-    eprintln!("{}", diagnostic.render(sources, status.color()));
+    status.report(diagnostic, sources);
     std::process::exit(1)
 }
 

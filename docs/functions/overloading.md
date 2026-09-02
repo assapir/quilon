@@ -19,8 +19,9 @@ b = score("abcd")   ~ 4   — picks the Text member
 **Dispatch is by exact static argument type, with NO implicit coercion.** No match, or two
 members sharing a parameter-type list, is a compile error listing the candidates:
 
-```
-error: No overload of 'score' matches argument types (Bool). Candidates: (Num), (Text)
+```text
+error[Q038]: no overload of `score` takes (Bool)
+  help: the members of `score` are (Num), (Text)
 ```
 
 - Every member must annotate **all** its parameters **and its return type** — the signature

@@ -2,6 +2,48 @@
 
 All notable changes to Quilon are documented here.
 
+## Unreleased
+
+### Changed
+
+- **Diagnostics are data, with a code.** Every compile error and runtime failure is a
+  structured diagnostic — a code from a registry (`Q000` upward in pipeline order), a
+  message, labelled byte spans, an optional `help:` — rendered through `miette`:
+
+  ```text
+  error[Q038]: no overload of `+` takes (Num, Text)
+     ╭─[program.qn:1:20]
+   1 │ ^ = () -> Num => < 1 + "x" >
+     ·                    ┬   ─┬─
+     ·                    │    ╰── Text
+     ·                    ╰── Num
+     ╰────
+    help: to join a number and text, interpolate: "`n`x"
+  ```
+
+  Colored on a terminal, the same frame plain under `NO_COLOR`, `TERM=dumb`, or a
+  redirected stderr. A failing `assert`/`expect` and the runtime's fail-loud checks draw
+  the same frame from inside the compiled program. Messages use the language's own words
+  — a parse error says "found a block close `>`", never an internal token name — and the
+  fix, where one is idiomatic, moves out of the message into `help:`.
+  `docs/tooling/errors.md` carries one section per code and is the single source
+  `quilon explain Q038` prints from. The front end's error type
+  (`driver::FrontEndError`) exposes the diagnostic and the source map, which is what a
+  language server consumes. `core.test`'s `failAt` still composes its own frame in Quilon.
+
+- **Status output.** The emoji banners and the "Program contains N top-level item(s)" line
+  are gone. On a terminal, `check`/`build`/`compile`/`test` show the stages as one live
+  spinner line (`indicatif`) that collapses into a closing line — the file, the elapsed
+  time, and a quip (`✓ hello.qn (9ms) — no keywords were harmed`); off a terminal, one
+  short line per stage. `quilon test` closes each suite with its verdict and elapsed time.
+  `--quiet`/`-q` prints no status; `QUILON_QUIP_SEED=<n>` pins the quips. `quilon run`
+  says nothing beyond the program's own output. `--version` carries the release codename
+  from `release-codenames.tsv`, and `quilon` with no arguments prints the help.
+
+### Added
+
+- `quilon explain <code>` — the reference section for an error code.
+
 ## 0.9.3 "Hegemon" — 2026-08-28
 
 ### Added

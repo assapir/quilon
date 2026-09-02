@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::diagnostic::Diagnostic;
 use crate::quips;
+use crate::source_map::SourceMap;
 
 /// A stage of a command, in pipeline order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +144,13 @@ impl Status {
         if let Mode::Live(spinner) = &self.mode {
             spinner.finish_and_clear();
         }
+    }
+
+    /// Print `diagnostic` on stderr, drawn against `sources` — the spinner cleared first,
+    /// so the report opens on a line of its own. A diagnostic prints under `quiet` too.
+    pub fn report(&self, diagnostic: &Diagnostic, sources: &SourceMap) {
+        self.clear();
+        eprintln!("{}", diagnostic.render(sources, self.color));
     }
 
     /// `text` in ANSI style `code` when color is on, bare otherwise.

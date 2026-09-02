@@ -82,10 +82,7 @@ pub fn run(root: &Path, quiet: bool) -> usize {
 
 /// Print a diagnostic with no source location, the way every report is printed.
 fn report(code: Code, message: String, status: &Status) {
-    eprintln!(
-        "{}",
-        Diagnostic::new(code, message).render(&SourceMap::default(), status.color())
-    );
+    status.report(&Diagnostic::new(code, message), &SourceMap::default());
 }
 
 /// Run one suite by re-invoking this binary on it, its output going straight to our own
@@ -140,7 +137,7 @@ fn compile_and_run(suite: &Path, status: &Status) -> bool {
     let checked = match driver::front_end_reporting(suite, TestBlocks::Run, status) {
         Ok(checked) => checked,
         Err(error) => {
-            eprintln!("{}", error.render(status.color()));
+            status.report(&error.diagnostic, &error.sources);
             return false;
         }
     };

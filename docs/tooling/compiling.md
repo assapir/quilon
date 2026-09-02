@@ -16,7 +16,31 @@ quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
 ```
 
-`quilon --version` (or `-V`) prints the compiler version.
+`quilon --version` (or `-V`) prints the compiler version and its release codename.
+`quilon explain Q038` prints the reference section for an error code (see
+[Error messages](errors.md)).
+
+## Status output
+
+Every command reports its progress on **stderr**, apart from diagnostics and the program's
+own output. On a terminal, `check`, `build`, `compile`, and `test` show the stages (lexing,
+parsing, resolving, checking, generating, linking) as one live line that collapses, on
+success, into a single closing line — the file, the elapsed time, and a quip:
+
+```text
+✓ examples/hello_world.qn (9ms) — no keywords were harmed
+```
+
+Without a terminal (a pipe, a CI log) each stage prints as one short line, then the same
+closing line. `quilon run` prints nothing of its own beyond the program's output; a failure
+is reported the same way everywhere.
+
+- `--quiet` (`-q`, before or after the subcommand) prints no status at all. Diagnostics
+  still print.
+- `NO_COLOR` set to a non-empty value, or `TERM=dumb`, keeps every line plain; so does a
+  redirected stderr.
+- `QUILON_QUIP_SEED=<n>` pins which quip each line carries, so a run is reproducible end
+  to end. `quilon test`'s closing line and the multi-suite tally carry one too.
 
 `quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
 any case failed. It runs a file's top-level `describe` blocks, which every other command

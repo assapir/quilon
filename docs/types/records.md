@@ -60,8 +60,8 @@ Counter = { value :: Num, bump = (by :: Num) -> Num => < it.value + by >}
 double = (x :: Num) -> Num => < x * 2 >
 
 c.bump(5)      ~ 35
-bump(c, 5)     ~ error: no function 'bump' in scope
-(5).double()   ~ error: 'Num' has no member 'double'
+bump(c, 5)     ~ error: no function `bump` in scope
+(5).double()   ~ error: Num has no member `double`
 double(5)      ~ 10
 ```
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
