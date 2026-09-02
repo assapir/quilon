@@ -357,8 +357,8 @@ impl LanguageServer {
 
     // --- Shared helpers -----------------------------------------------------
 
-    /// The document's filesystem path and current text. The text is the open buffer when
-    /// the client sent one, else the file's content from disk.
+    /// The open document's filesystem path and buffer text — `None` for a document the
+    /// client has not opened, or one that is not a file.
     fn document(&self, uri: &Url) -> Option<(PathBuf, &str)> {
         let path = uri.to_file_path().ok()?;
         let text = self.documents.get(uri)?;
