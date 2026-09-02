@@ -46,14 +46,15 @@ Download a binary from the [latest release](https://github.com/assapir/quilon/re
 | --- | --- |
 | Linux, x86_64 (glibc) | `quilon-linux-x86_64` |
 | Linux, aarch64 (glibc) | `quilon-linux-aarch64` |
+| macOS, Apple silicon (arm64) | `quilon-macos-aarch64` |
 
-`uname -m` prints which one you want.
+`uname -m` prints which Linux one you want.
 
-Both are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither. Every release publishes the `ldd` of each asset in its job summary, so that is checkable rather than promised.
+All are **self-contained** — LLVM and the collector are linked into them, so they run on a machine that has neither. Every release publishes the `ldd`/`otool -L` of each asset in its job summary, so that is checkable rather than promised.
 
-These assets are the ones to use on **any** glibc distro, Arch included: they are built on Ubuntu, against an older glibc than a rolling distro carries, and glibc runs binaries built against older versions of itself — the reverse does not hold, which is why the portable build is the Ubuntu one.
+The Linux assets are the ones to use on **any** glibc distro, Arch included: they are built on Ubuntu, against an older glibc than a rolling distro carries, and glibc runs binaries built against older versions of itself — the reverse does not hold, which is why the portable build is the Ubuntu one.
 
-**macOS has no prebuilt binary yet** — build from source. See [Prerequisites](#prerequisites).
+**Intel Macs are not covered** — the macOS asset is arm64 only. Build from source on one.
 
 `quilon build` links the executable it produces with `clang` or `gcc`, so that one subcommand needs a C toolchain on the machine. `run` and `check` need nothing.
 

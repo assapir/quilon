@@ -84,9 +84,110 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
+  macos:
+    name: Build macos-aarch64
+    runs-on: macos-latest
+
+    env:
+      ASSET: quilon-macos-aarch64
+      # Homebrew's llvm@22 is built LLVM_LINK_LLVM_DYLIB=ON and ships no static
+      # LLVM, so a binary linked against it needs that exact formula installed to
+      # start. The upstream release package is a static build.
+      LLVM_RELEASE: 22.1.8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM ${{ env.LLVM_RELEASE }}
+        run: |
+          set -euxo pipefail
+          package="LLVM-${LLVM_RELEASE}-macOS-ARM64"
+          mkdir -p "$RUNNER_TEMP/llvm"
+          # Only what llvm-sys reads — the archives, the headers, and llvm-config.
+          # The whole package unpacks to ~8 GB, most of it tools this build never runs.
+          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_RELEASE}/${package}.tar.xz" \
+            | tar -xf - -C "$RUNNER_TEMP/llvm" \
+              "${package}/bin/llvm-config" "${package}/include" "${package}/lib"
+          prefix="$RUNNER_TEMP/llvm/${package}"
+          "$prefix/bin/llvm-config" --version
+          mode="$("$prefix/bin/llvm-config" --shared-mode)"
+          if [ "$mode" != static ]; then
+            echo "::error::LLVM at $prefix links $mode, not static"
+            exit 1
+          fi
+          # --system-libs names Homebrew's zstd by absolute path; the archive goes
+          # into the binary, but the link needs the formula present.
+          brew list zstd >/dev/null 2>&1 || brew install zstd
+          for lib in $("$prefix/bin/llvm-config" --system-libs); do
+            case "$lib" in
+              /*)
+                test -f "$lib" && continue
+                echo "::error::LLVM links $lib, which is not installed here"
+                exit 1
+                ;;
+            esac
+          done
+          # This package's own libc++.1.dylib sits on the same -L path llvm-sys adds
+          # for the static archives and would shadow the SDK's, which -lc++ must
+          # resolve to instead. libLTO.dylib stays — the next step needs it.
+          rm -f "$prefix"/lib/libc++*.dylib "$prefix"/lib/libc++abi*.dylib
+          {
+            echo "LLVM_SYS_221_PREFIX=$prefix"
+            # Apple's ld reads LTO bitcode through libLTO.dylib; the one Xcode
+            # ships is an older LLVM than 22 and rejects this package's bitcode
+            # archive members. Point it at the matching reader instead.
+            echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,-lto_library,$prefix/lib/libLTO.dylib"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release
+        run: |
+          set -euxo pipefail
+          cargo build --release --bin quilon
+          mv target/release/quilon "$ASSET"
+
+      - name: Verify the asset is self-contained
+        run: |
+          set -euo pipefail
+          file "$ASSET"
+          otool -L "$ASSET"
+          ./"$ASSET" check examples/hello_world.qn
+          # Only macOS system libraries may appear: an @rpath entry, a Homebrew
+          # prefix, or the LLVM package's own libc++/libLLVM is a dependency the
+          # asset promises it does not have.
+          otool -L "$ASSET" | tail -n +2 | while read -r lib _; do
+            case "$lib" in
+              /usr/lib/*|/System/Library/*) ;;
+              *)
+                echo "::error::$ASSET names a non-system library: $lib"
+                exit 1
+                ;;
+            esac
+          done
+          {
+            echo "### \`$ASSET\`"
+            echo
+            echo '```'
+            file "$ASSET"
+            otool -L "$ASSET"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
   publish:
     if: github.event_name == 'push'
-    needs: [linux]
+    needs: [linux, macos]
     runs-on: ubuntu-latest
 
     steps:
