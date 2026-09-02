@@ -1,5 +1,7 @@
 // Lexer implementation for Quilon
 
+use crate::lexer::bidi;
+use crate::lexer::token::BidiIssue;
 use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind, TokenLexError};
 use logos::Logos;
 
@@ -49,10 +51,21 @@ impl Lexer {
                     let span = lexer.span();
                     let text = source[span.clone()].to_string();
                     return Err(LexerError {
-                        message: if error == TokenLexError::UnterminatedString {
-                            "unterminated string literal".to_string()
-                        } else {
-                            format!("Invalid token: '{}'", text)
+                        message: match error {
+                            TokenLexError::UnterminatedString => {
+                                "unterminated string literal".to_string()
+                            }
+                            TokenLexError::Bidi(BidiIssue::Unclosed { ch, token }) => {
+                                format!("{} opened in this {token} is never closed", bidi::name(ch))
+                            }
+                            TokenLexError::Bidi(BidiIssue::StrayCloser { ch, token }) => {
+                                format!("{} in this {token} has no matching opener", bidi::name(ch))
+                            }
+                            TokenLexError::Bidi(BidiIssue::Outside(ch)) => format!(
+                                "{} is only allowed inside a string literal or a comment",
+                                bidi::name(ch)
+                            ),
+                            TokenLexError::InvalidToken => format!("Invalid token: '{}'", text),
                         },
                         span: Span::in_file(span.start as u32, span.end as u32, file),
                     });
