@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Diagnostics come from the language server, not from a `quilon check` subprocess.**
   The shell-out path (run `check` on save, parse the rustc-style report) is gone;
-  squiggles now update as you type. The minimum VS Code version rises to 1.82, which the
+  squiggles now update as you type. The minimum VS Code version rises to 1.91, which the
   language client library requires.
 
 ### Fixed

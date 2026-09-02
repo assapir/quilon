@@ -39,7 +39,7 @@ quilon-rt = { path = "quilon-rt" }
 # from a distributed binary. Pure-Rust backend (miniz_oxide) by default.
 flate2 = "1.1"
 lsp-server = "0.10.0"
-lsp-types = "0.95"
+lsp-types = "0.97"
 serde_json = "1.0.151"
 
 # The Unicode Bidirectional Algorithm (UAX #9), used only to compute a diagnostic's caret

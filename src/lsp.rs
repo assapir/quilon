@@ -18,7 +18,7 @@
 pub mod analysis;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
@@ -28,7 +28,7 @@ use lsp_types::{
     MarkedString, OneOf, Position, PublishDiagnosticsParams, Range, SemanticToken,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensServerCapabilities,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 
 use crate::lexer::{ROOT_FILE, Span};
@@ -120,7 +120,7 @@ pub fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error + S
 /// The server's whole state: the text of every open document, keyed by its URI. The
 /// editor's buffer — not the disk — is the source of truth for these.
 struct LanguageServer {
-    documents: HashMap<Url, String>,
+    documents: HashMap<Uri, String>,
 }
 
 impl LanguageServer {
@@ -168,7 +168,7 @@ impl LanguageServer {
 
     /// The publishDiagnostics notification for the document at `uri`, from a fresh
     /// front-end run: empty when the document checks clean.
-    fn diagnostics_for(&self, uri: &Url) -> Notification {
+    fn diagnostics_for(&self, uri: &Uri) -> Notification {
         let Some((path, text)) = self.document(uri) else {
             return publish(uri.clone(), Vec::new());
         };
@@ -359,11 +359,35 @@ impl LanguageServer {
 
     /// The open document's filesystem path and buffer text — `None` for a document the
     /// client has not opened, or one that is not a file.
-    fn document(&self, uri: &Url) -> Option<(PathBuf, &str)> {
-        let path = uri.to_file_path().ok()?;
+    fn document(&self, uri: &Uri) -> Option<(PathBuf, &str)> {
+        let path = file_path(uri)?;
         let text = self.documents.get(uri)?;
         Some((path, text.as_str()))
     }
+}
+
+/// The filesystem path a `file:` URI names, percent-decoded. `None` for any other scheme.
+fn file_path(uri: &Uri) -> Option<PathBuf> {
+    if uri.scheme()?.as_str() != "file" {
+        return None;
+    }
+    let decoded = uri.path().as_estr().decode().into_string().ok()?;
+    Some(PathBuf::from(decoded.into_owned()))
+}
+
+/// The `file:` URI naming `path`, with every byte outside the unreserved set and `/`
+/// percent-encoded.
+fn file_uri(path: &Path) -> Option<Uri> {
+    let mut encoded = String::from("file://");
+    for byte in path.to_str()?.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded.parse().ok()
 }
 
 /// A protocol `Location` for a span in one of the program's OTHER files (an imported
@@ -372,7 +396,7 @@ impl LanguageServer {
 fn location_in_other_file(checked: &crate::driver::Checked, span: &Span) -> Option<Location> {
     let resolved = checked.sources.locate(span)?;
     let path = std::fs::canonicalize(&resolved.path).ok()?;
-    let uri = Url::from_file_path(path).ok()?;
+    let uri = file_uri(&path)?;
     let text = checked.sources.get_text(span.file)?;
     let positions = DocumentPositions::new(text);
     Some(Location {
@@ -391,7 +415,7 @@ fn range_of(positions: &DocumentPositions, span: &Span) -> Range {
     }
 }
 
-fn publish(uri: Url, diagnostics: Vec<Diagnostic>) -> Notification {
+fn publish(uri: Uri, diagnostics: Vec<Diagnostic>) -> Notification {
     Notification {
         method: "textDocument/publishDiagnostics".to_string(),
         params: serde_json::to_value(PublishDiagnosticsParams {
@@ -409,4 +433,23 @@ fn invalid_params(id: RequestId, error: serde_json::Error) -> Response {
         lsp_server::ErrorCode::InvalidParams as i32,
         error.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_uris_round_trip_through_percent_encoding() {
+        let path = Path::new("/tmp/my project/héllo.qn");
+        let uri = file_uri(path).expect("a file uri");
+        assert_eq!(uri.as_str(), "file:///tmp/my%20project/h%C3%A9llo.qn");
+        assert_eq!(file_path(&uri).as_deref(), Some(path));
+    }
+
+    #[test]
+    fn a_non_file_uri_names_no_path() {
+        let uri: Uri = "untitled:Untitled-1".parse().unwrap();
+        assert_eq!(file_path(&uri), None);
+    }
 }
