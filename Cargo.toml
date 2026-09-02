@@ -42,7 +42,7 @@ flate2 = "1.1"
 # The Unicode Bidirectional Algorithm (UAX #9), used only to compute a diagnostic's caret
 # position from a quoted source line's VISUAL order when that line has right-to-left
 # characters — `Text` itself stays logical order end to end (see docs/types/text.md).
-unicode-bidi = "0.3"
+unicode-bidi = "0.3.18"
 
 [dev-dependencies]
 # `wait4`, for the exact peak RSS the kernel recorded for a benchmarked child process.
