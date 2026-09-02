@@ -37,7 +37,11 @@ compiles to native code via LLVM. Files use the `.qn` extension.
     comparison operators (which a grammar alone cannot tell apart), plus declared
     type, function, and parameter names.
   - **Test CodeLens** — **▶ Run suite** / **▶ Run case** actions above each
-    `describe` and `it` block, running `quilon test` on the file.
+    `describe` and `it` block, running just that suite or case.
+- **Test Explorer** — the "Testing" view lists every `describe`/`it` in an open `.qn`
+  file, built from the language server's `quilon/testItems`; a ▶ Run there runs the
+  selection through `quilon test --reporter json` and reports pass/fail per case (see
+  [Test Explorer](#test-explorer)).
 - **Editor tasks & commands** to run the compiler on the active file.
 - **CodeLens** — **▶ Run** and **▶ Debug** actions appear above each `^`
   entry-point definition (see [Running the compiler](#running-the-compiler-from-the-editor)).
@@ -97,8 +101,8 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests (`pnpm test`) cover three things, all kept free of any `vscode`
-import so they run under plain Node:
+Unit tests (`pnpm test`) cover the extension's pure logic, all kept free of any
+`vscode` import so they run under plain Node:
 
 - compiler resolution (`src/compilerCommand.ts` ↔ `src/compilerCommand.test.ts`) —
   the search order above, over an injected view of a make-believe machine
@@ -106,6 +110,13 @@ import so they run under plain Node:
   `quilon lsp` invocation the language client spawns;
 - the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
   `src/entryPoints.test.ts`);
+- the debug build/launch helpers (`src/debugConfig.ts` ↔ `src/debugConfig.test.ts`) —
+  the `build --debug` argv, the resolved CodeLLDB configuration, and the in-flight-build
+  guard;
+- the Test Explorer's tree-building and NDJSON parsing (`src/testRunner.ts` ↔
+  `src/testRunner.test.ts`) — nesting a flat `quilon/testItems` list by its `/`-joined
+  paths, the `quilon test --reporter json --only …` argv, and parsing `--reporter json`
+  events (including malformed/truncated lines, which must not throw);
 - **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
   `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
   (`=>`, `->`, `:=`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
@@ -125,7 +136,9 @@ To verify the **language server** end-to-end manually:
 4. Hover an expression (its inferred type appears), Ctrl/Cmd-click a name (its
    definition opens), and open a test file (Run lenses appear above each
    `describe` and `it`).
-5. Point `quilon.command` at a non-existent binary and reload — a warning
+5. Open the "Testing" view — the file's suites and cases appear, nested; run one
+   and watch it turn green or red as `quilon test --reporter json` reports it.
+6. Point `quilon.command` at a non-existent binary and reload — a warning
    notification appears, naming that setting and offering **Open Settings**.
 
 To verify **`$` highlighting**, open `examples/unit.qn`: both the `-> $` return
@@ -209,16 +222,42 @@ included. It provides:
 - **Semantic tokens** — block `< >` delimiters versus `<` / `>` comparisons,
   plus declared type / function / parameter names.
 - **Test CodeLens** — a **▶ Run suite** / **▶ Run case** lens above every
-  `describe` and `it`, invoking the extension's `quilon.runTests` command,
-  which runs `quilon test <file>` in the "Quilon" terminal. Both lens kinds run
-  the whole file's suites: the compiler does not yet select a single suite or
-  case.
+  `describe` and `it`, invoking the extension's `quilon.runTests` command with the
+  block's own `/`-joined path, which runs `quilon test <file> --only <path>` in the
+  "Quilon" terminal — a suite lens runs just that suite, a case lens just that case.
+- **`quilon/testItems`** — the same test tree the lenses read, as one flat list (each
+  entry's path, name, kind, and range), which the Test Explorer builds its tree from
+  instead of re-parsing the file itself.
 
 If the server cannot be spawned, a warning notification names the
 `quilon.command` setting and offers **Open Settings**.
 
 See [the language server's reference page](../../docs/tooling/language-server.md)
 for the protocol surface and for wiring other editors.
+
+## Test Explorer
+
+The "Testing" view (the flask icon in the Activity Bar) lists every `describe`/`it`
+found in an open `.qn` file, one node per suite and case, nested the way they're
+written. The tree is built from `quilon/testItems` — the same data the CodeLens read —
+and refreshes when a `.qn` document opens, is saved, or is edited (debounced).
+
+Selecting **▶ Run** on a node runs `quilon test <file> --reporter json`, adding
+`--only <path>` for each selected suite or case (a whole-file run when the file's own
+root node is selected); several selected files run in parallel, each its own process.
+The run's NDJSON events are parsed back into the view: each case turns green or red as
+its result arrives, and a failing case's message and `file:line` appear inline —
+Ctrl/Cmd-click the location to jump there, the same as any other test failure VS Code
+reports. **Run All** (▶ at the top of the view) runs every known file's suites.
+
+There is no Debug profile here: `quilon test` runs only under the compiler's in-process
+JIT, and the extension's only debug path ([below](#debugging)) launches a NATIVE
+`quilon build --debug` binary under CodeLLDB — there is no JIT process for a debugger to
+attach to, so a test-specific Debug profile would have nothing to build. Set a
+breakpoint inside a case's own logic (a helper function it calls, say) and use
+**▶ Debug** on the file's `^` instead when you need to step through it; the case's
+`test.it`/`expect` framing itself won't be included, since building the file for debug
+erases its test blocks the same way `quilon build` always does.
 
 ## Debugging
 

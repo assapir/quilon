@@ -1,6 +1,6 @@
 // Quilon VS Code extension.
 //
-// Three responsibilities:
+// Four responsibilities:
 //   1. Commands that run the Quilon compiler on the active .qn file in a terminal
 //      ("Quilon: Check / Run Current File", "Quilon: Run Tests in Current File").
 //   2. The language client: spawns `quilon lsp` (the compiler's own language server)
@@ -8,6 +8,9 @@
 //      and the test code lenses.
 //   3. Debugging: the `quilon.debug` command and debug-configuration provider
 //      (CodeLLDB over a `--debug` build).
+//   4. The Test Explorer (`testExplorer.ts`): the "Testing" view's tree, built from
+//      the language server's `quilon/testItems`, with a Run profile that parses
+//      `quilon test --reporter json` back into pass/fail results.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -23,6 +26,7 @@ import {
 } from "./compilerCommand";
 import { registerDebug } from "./debug";
 import { findEntryPoints } from "./entryPoints";
+import { registerTestExplorer } from "./testExplorer";
 
 // --- Locating the compiler -------------------------------------------------
 
@@ -134,13 +138,13 @@ function runOnActiveFile(subcommand: string): void {
 }
 
 /**
- * Run `quilon test` on a file, in the shared terminal. The test code lenses the
- * language server places above `describe`/`it` blocks invoke this with the
- * file's path; invoked bare (from the command palette) it targets the active
- * file. The whole file's suites run — the compiler does not yet select a single
- * suite or case.
+ * Run `quilon test` on a file, in the shared terminal. The test code lenses the language
+ * server places above `describe`/`it` blocks invoke this with the file's path and the
+ * block's own `/`-joined path, so a suite lens runs just that suite and a case lens just
+ * that case (`--only <testPath>`); invoked bare (from the command palette, with no
+ * `testPath`) it targets the active file's whole suite set.
  */
-async function runTestsInFile(filePath?: string): Promise<void> {
+async function runTestsInFile(filePath?: string, testPath?: string): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   const target = filePath ?? editor?.document.fileName;
   if (target === undefined) {
@@ -154,7 +158,8 @@ async function runTestsInFile(filePath?: string): Promise<void> {
   const cmd = shellCommand(resolvedQuilonCompiler());
   const term = quilonTerminal();
   term.show();
-  term.sendText(`${cmd} test "${target}"`);
+  const only = testPath ? ` --only "${testPath}"` : "";
+  term.sendText(`${cmd} test "${target}"${only}`);
 }
 
 // --- The language client ---------------------------------------------------
@@ -233,8 +238,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("quilon.check", () => runOnActiveFile("check")),
     vscode.commands.registerCommand("quilon.run", () => runOnActiveFile("run")),
-    vscode.commands.registerCommand("quilon.runTests", (filePath?: string) =>
-      runTestsInFile(filePath),
+    vscode.commands.registerCommand("quilon.runTests", (filePath?: string, testPath?: string) =>
+      runTestsInFile(filePath, testPath),
     ),
     vscode.languages.registerCodeLensProvider(
       { language: "quilon" },
@@ -251,6 +256,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => forgetResolvedCompiler()),
   );
+
+  // The Test Explorer: its tree comes from the language server's `quilon/testItems`
+  // request, so it needs the running client — read lazily since the client starts
+  // asynchronously below and may restart later.
+  registerTestExplorer(context, () => client, resolvedQuilonCompiler);
 
   void startLanguageClient();
 }

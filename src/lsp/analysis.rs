@@ -449,6 +449,10 @@ pub struct TestLens {
     pub kind: TestLensKind,
     /// The block's description — its first argument when that is a string literal.
     pub name: String,
+    /// The `/`-joined path from the outermost enclosing `describe` down to this suite or
+    /// case — the same path `quilon test --only` expects (see
+    /// `docs/corelib/test/README.md#paths`).
+    pub path: String,
     /// The span of the whole `describe(...)` / `it(...)` call.
     pub span: Span,
 }
@@ -456,55 +460,79 @@ pub struct TestLens {
 /// Every test suite and case in the document's own parse, in document order: each
 /// top-level `describe` block and, inside the blocks, every nested `describe` and every
 /// `it` call. Empty when the document does not parse or has no test blocks.
+///
+/// Mirrors `test_command::collect_paths`'s path-building (the names from the outermost
+/// `describe` down, joined by `/`), but walks the document's OWN pre-link parse rather
+/// than the linked, qualified program: lenses and semantic tokens both speak about the
+/// text as written.
 pub fn test_lenses(text: &str) -> Vec<TestLens> {
     let Some(program) = parse_text(text) else {
         return Vec::new();
     };
     let mut lenses = Vec::new();
     for block in &program.test_blocks {
-        walk_expressions(block, &mut |node| {
-            if let Some(lens) = harness_call_lens(node) {
-                lenses.push(lens);
-            }
-        });
+        collect_test_lenses(block, "", &mut lenses);
     }
-    lenses.sort_by_key(|lens| lens.span.start);
     lenses
 }
 
-/// The lens for `node`, when it is a module-qualified call of the harness's `describe`
-/// or `it` (`test.describe(...)`, `core.test.it(...)`) — the pre-link spelling, since the
-/// lenses read the document's own parse.
-fn harness_call_lens(node: &Expression) -> Option<TestLens> {
-    let Expression::Call {
-        function,
-        arguments,
-        member_call: false,
-        span,
-    } = node
-    else {
-        return None;
-    };
-    let Expression::Identifier { name, .. } = function.as_ref() else {
+fn collect_test_lenses(expression: &Expression, prefix: &str, lenses: &mut Vec<TestLens>) {
+    match expression {
+        Expression::Call {
+            function,
+            arguments,
+            member_call: false,
+            span,
+        } => {
+            if let Some(kind) = harness_call_kind(function)
+                && let [Expression::String { value, .. }, body] = arguments.as_slice()
+            {
+                let path = match prefix.is_empty() {
+                    true => value.clone(),
+                    false => format!("{prefix}/{value}"),
+                };
+                lenses.push(TestLens {
+                    kind,
+                    name: value.clone(),
+                    path: path.clone(),
+                    span: span.clone(),
+                });
+                if kind == TestLensKind::Suite {
+                    collect_test_lenses(body, &path, lenses);
+                }
+                return;
+            }
+            collect_test_lenses(function, prefix, lenses);
+            for argument in arguments {
+                collect_test_lenses(argument, prefix, lenses);
+            }
+        }
+        Expression::Lambda { body, .. } => collect_test_lenses(body, prefix, lenses),
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                if let Statement::Expression(nested) = statement {
+                    collect_test_lenses(nested, prefix, lenses);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `function` is a module-qualified call of the harness's `describe` or `it`
+/// (`test.describe`, `core.test.it`) — the pre-link spelling.
+fn harness_call_kind(function: &Expression) -> Option<TestLensKind> {
+    let Expression::Identifier { name, .. } = function else {
         return None;
     };
     if !name.contains('.') {
         return None;
     }
-    let kind = match display_name(name) {
-        "describe" => TestLensKind::Suite,
-        "it" => TestLensKind::Case,
-        _ => return None,
-    };
-    let name = match arguments.first() {
-        Some(Expression::String { value, .. }) => value.clone(),
-        _ => String::new(),
-    };
-    Some(TestLens {
-        kind,
-        name,
-        span: span.clone(),
-    })
+    match display_name(name) {
+        "describe" => Some(TestLensKind::Suite),
+        "it" => Some(TestLensKind::Case),
+        _ => None,
+    }
 }
 
 // --- Shared expression walk -------------------------------------------------

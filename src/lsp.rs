@@ -9,8 +9,10 @@
 //! Capabilities: publish diagnostics on open/change, go-to-definition, hover (the
 //! expression's inferred type), semantic tokens (block `< >` delimiters versus comparison
 //! operators, plus declared type/function/parameter names), and a code lens on every test
-//! suite and case. The lens carries the client-side `quilon.runTests` command; running is
-//! the editor's job.
+//! suite and case. The lens carries the client-side `quilon.runTests` command with the
+//! block's own `/`-joined path; running is the editor's job. The custom `quilon/testItems`
+//! request answers the same test tree as a flat list, each entry carrying that same path,
+//! for a client building a test explorer rather than a lens.
 //!
 //! The protocol speaks UTF-16 line/column positions; every span crosses that boundary
 //! through [`DocumentPositions`], the shared byte-offset translation in `source_map`.
@@ -225,6 +227,14 @@ impl LanguageServer {
                 Ok(params) => self.code_lenses(id, params),
                 Err(error) => invalid_params(id, error),
             },
+            "quilon/testItems" => match request_uri(&request.params) {
+                Some(uri) => self.test_items(id, &uri),
+                None => Response::new_err(
+                    id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    "expected { textDocument: { uri } }".to_string(),
+                ),
+            },
             _ => Response::new_err(
                 id,
                 lsp_server::ErrorCode::MethodNotFound as i32,
@@ -344,15 +354,46 @@ impl LanguageServer {
                     command: Some(Command {
                         title: title.to_string(),
                         command: RUN_TESTS_COMMAND.to_string(),
-                        arguments: Some(vec![serde_json::Value::String(
-                            path.display().to_string(),
-                        )]),
+                        // The file, then the lens's own `/`-joined path — the client passes
+                        // the second as `--only`, so a suite lens runs just that suite and
+                        // a case lens just that case, rather than the whole file.
+                        arguments: Some(vec![
+                            serde_json::Value::String(path.display().to_string()),
+                            serde_json::Value::String(lens.path),
+                        ]),
                     }),
                     data: None,
                 }
             })
             .collect();
         Response::new_ok(id, lenses)
+    }
+
+    /// The document's whole test tree, flat: one entry per suite and case, in document
+    /// order, each carrying the `/`-joined path `quilon test --only` expects. Answers the
+    /// custom `quilon/testItems` request — a client building a test explorer reads this
+    /// instead of the `describe`/`it` lenses `textDocument/codeLens` carries.
+    fn test_items(&self, id: RequestId, uri: &Uri) -> Response {
+        let Some((_, text)) = self.document(uri) else {
+            return Response::new_ok(id, Vec::<serde_json::Value>::new());
+        };
+        let positions = DocumentPositions::new(text);
+        let items: Vec<serde_json::Value> = analysis::test_lenses(text)
+            .into_iter()
+            .map(|lens| {
+                let kind = match lens.kind {
+                    TestLensKind::Suite => "suite",
+                    TestLensKind::Case => "case",
+                };
+                serde_json::json!({
+                    "path": lens.path,
+                    "name": lens.name,
+                    "kind": kind,
+                    "range": range_of(&positions, &lens.span),
+                })
+            })
+            .collect();
+        Response::new_ok(id, items)
     }
 
     // --- Shared helpers -----------------------------------------------------
@@ -364,6 +405,18 @@ impl LanguageServer {
         let text = self.documents.get(uri)?;
         Some((path, text.as_str()))
     }
+}
+
+/// The `textDocument.uri` out of a request's raw params — `{ textDocument: { uri } }`,
+/// the shape every request naming one document (but nothing else) shares. `quilon/testItems`
+/// is the only caller; it needs no dedicated params type for that one field.
+fn request_uri(params: &serde_json::Value) -> Option<Uri> {
+    params
+        .get("textDocument")?
+        .get("uri")?
+        .as_str()?
+        .parse()
+        .ok()
 }
 
 /// The filesystem path a `file:` URI names, percent-decoded. `None` for any other scheme.

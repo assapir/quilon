@@ -239,6 +239,18 @@ fn test_lenses_locate_every_suite_and_case() {
 }
 
 #[test]
+fn test_lens_paths_join_by_slash_through_the_nesting_matching_only() {
+    // The `path` a lens carries is exactly what `quilon test --only` expects: the names
+    // from the outermost `describe` down, joined by `/`.
+    let text = "<< core.test\n\ntest.describe(\"outer\", () => <\n  test.it(\"first\", () => <\n    expect(1, equals(1))\n  >)\n  test.describe(\"inner\", () => <\n    test.it(\"second\", () => <\n      expect(2, equals(2))\n    >)\n  >)\n>)\n";
+    let paths: Vec<String> = test_lenses(text).into_iter().map(|l| l.path).collect();
+    assert_eq!(
+        paths,
+        vec!["outer", "outer/first", "outer/inner", "outer/inner/second"]
+    );
+}
+
+#[test]
 fn a_program_without_test_blocks_has_no_lenses() {
     assert!(test_lenses("^ = () -> Num => < 0 >\n").is_empty());
     assert!(test_lenses("not even quilon (((").is_empty());
@@ -392,10 +404,34 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     assert_eq!(lenses[0]["command"]["command"], "quilon.runTests");
     assert_eq!(lenses[0]["command"]["title"], "▶ Run suite");
     assert_eq!(lenses[1]["command"]["title"], "▶ Run case");
+    // Each lens's second argument is its own `/`-joined path, so the client can run just
+    // that suite or case with `--only`.
+    assert_eq!(lenses[0]["command"]["arguments"][1], "s");
+    assert_eq!(lenses[1]["command"]["arguments"][1], "s/c");
+
+    // The custom `quilon/testItems` request answers the same test tree flat, each entry
+    // carrying the `/`-joined path `quilon test --only` expects.
+    client
+        .sender
+        .send(request(
+            5,
+            "quilon/testItems",
+            json!({ "textDocument": { "uri": suite_uri } }),
+        ))
+        .unwrap();
+    let items = response_of(receive());
+    let items = items.as_array().expect("a test item array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["kind"], "suite");
+    assert_eq!(items[0]["name"], "s");
+    assert_eq!(items[0]["path"], "s");
+    assert_eq!(items[1]["kind"], "case");
+    assert_eq!(items[1]["name"], "c");
+    assert_eq!(items[1]["path"], "s/c");
 
     client
         .sender
-        .send(request(5, "shutdown", Value::Null))
+        .send(request(6, "shutdown", Value::Null))
         .unwrap();
     response_of(receive());
     client

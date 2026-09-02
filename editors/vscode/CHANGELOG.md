@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **▶ Run case** CodeLens above every `describe` and `it` block. The lenses invoke the
   new `quilon.runTests` command, which runs `quilon test` on the file in the "Quilon"
   terminal.
+- **Test Explorer.** The "Testing" view lists every `describe`/`it` in an open `.qn`
+  file, nested, from the language server's new `quilon/testItems` request. Its Run
+  profile executes the selection with `quilon test --reporter json`, adding
+  `--only <path>` per selected suite or case, and turns each case green or red as the
+  run's NDJSON events arrive — a failing case's message and `file:line` appear inline,
+  and the tree refreshes as `.qn` documents open, save, or change. No Debug profile:
+  `quilon test` runs only under the JIT, and the extension's debug path builds and
+  debugs a native binary, so there is nothing for a test-specific debugger to attach to.
+- **The ▶ Run suite / ▶ Run case CodeLens now scope to just that block.** Each lens
+  carries its own `/`-joined path, and `quilon.runTests` passes it as `--only`, so
+  running a suite or case no longer re-runs the whole file.
 
 ### Changed
 
