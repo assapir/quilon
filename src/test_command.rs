@@ -15,9 +15,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::diagnostic::{Code, Diagnostic};
 use crate::driver::{self, TestBlocks};
 use crate::jit;
+use crate::quips;
 use crate::source_extension;
+use crate::source_map::SourceMap;
+use crate::status::{Stage, Status, format_duration};
 
 /// Directory names never searched for suites: walking build output is slow and finds
 /// nothing. (Hidden entries are skipped separately, by their leading dot.)
@@ -27,12 +31,18 @@ const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules"];
 /// many FAILED. A suite fails when a case fails, or when the file does not compile.
 ///
 /// A single suite runs here, in this process, under its own path as a heading. Several run
-/// one process each (see the module docs), and a closing line tallies them.
-pub fn run(root: &Path) -> usize {
+/// one process each (see the module docs), and a closing line tallies them. `quiet` keeps
+/// the runner's own status lines off stderr; the suites' reports print regardless.
+pub fn run(root: &Path, quiet: bool) -> usize {
+    let status = Status::for_command(quiet);
     // A path that is not there is a failure, not an empty run: a mistyped path in a CI
     // invocation must not report success.
     if !root.exists() {
-        eprintln!("❌ no such file or directory: {}", root.display());
+        report(
+            Code::SourceNotReadable,
+            format!("no such file or directory: {}", root.display()),
+            &status,
+        );
         return 1;
     }
 
@@ -49,15 +59,19 @@ pub fn run(root: &Path) -> usize {
         }
         [suite] => {
             println!("{}", suite.display());
-            usize::from(!compile_and_run(suite))
+            usize::from(!compile_and_run(suite, &status))
         }
         many => {
             let failed = many
                 .iter()
-                .filter(|suite| !run_in_its_own_process(suite))
+                .filter(|suite| !run_in_its_own_process(suite, quiet))
                 .count();
+            let quip = match failed {
+                0 => quips::pick(quips::TESTS_PASSED),
+                _ => quips::pick(quips::TESTS_FAILED),
+            };
             println!(
-                "{} suites: {} passed, {failed} failed",
+                "{} suites: {} passed, {failed} failed. {quip}",
                 many.len(),
                 many.len() - failed
             );
@@ -66,31 +80,53 @@ pub fn run(root: &Path) -> usize {
     }
 }
 
+/// Print a diagnostic with no source location, the way every report is printed.
+fn report(code: Code, message: String, status: &Status) {
+    eprintln!(
+        "{}",
+        Diagnostic::new(code, message).render(&SourceMap::default(), status.color())
+    );
+}
+
 /// Run one suite by re-invoking this binary on it, its output going straight to our own
 /// stdout/stderr. `true` when the child exited 0.
 ///
 /// Handing the suite to a child is what keeps a fatal `assert` — which exits — from ending
 /// the whole run at the first failing suite, and keeps each suite's tally its own. Named with exactly one file, the
 /// child takes the single-suite path above and does not spawn again.
-fn run_in_its_own_process(suite: &Path) -> bool {
+fn run_in_its_own_process(suite: &Path, quiet: bool) -> bool {
+    let status = Status::for_command(quiet);
     let quilon = match std::env::current_exe() {
         Ok(path) => path,
         Err(error) => {
             // Without our own path there is no child to run in. Fall back to this process,
             // where a failing case ends the run early — and say so rather than looking fine.
-            eprintln!(
-                "❌ cannot locate the quilon binary ({error}); running {} here, so a failing \
-                 case will end the run",
-                suite.display()
+            report(
+                Code::SourceNotReadable,
+                format!(
+                    "cannot locate the quilon binary ({error}); running {} here, so a \
+                     failing case will end the run",
+                    suite.display()
+                ),
+                &status,
             );
             println!("{}", suite.display());
-            return compile_and_run(suite);
+            return compile_and_run(suite, &status);
         }
     };
-    match Command::new(quilon).arg("test").arg(suite).status() {
-        Ok(status) => status.success(),
+    let mut command = Command::new(quilon);
+    command.arg("test").arg(suite);
+    if quiet {
+        command.arg("--quiet");
+    }
+    match command.status() {
+        Ok(exit) => exit.success(),
         Err(error) => {
-            eprintln!("❌ could not run {}: {error}", suite.display());
+            report(
+                Code::SourceNotReadable,
+                format!("could not run {}: {error}", suite.display()),
+                &status,
+            );
             false
         }
     }
@@ -98,12 +134,13 @@ fn run_in_its_own_process(suite: &Path) -> bool {
 
 /// Type-check `suite` with its test blocks compiled in, then JIT the synthesized entry
 /// point. `true` when the run exited 0. A front-end failure is reported like any other
-/// compile error and counts as a failure.
-fn compile_and_run(suite: &Path) -> bool {
-    let checked = match driver::front_end_with(suite, TestBlocks::Run) {
+/// compile error and counts as a failure. The suite's own report is `core.test`'s; the
+/// line after it — the verdict, the elapsed time, and a quip — is the runner's.
+fn compile_and_run(suite: &Path, status: &Status) -> bool {
+    let checked = match driver::front_end_reporting(suite, TestBlocks::Run, status) {
         Ok(checked) => checked,
         Err(error) => {
-            eprintln!("{}", error);
+            eprintln!("{}", error.render(status.color()));
             return false;
         }
     };
@@ -112,7 +149,9 @@ fn compile_and_run(suite: &Path) -> bool {
     // no parameters — so `argv` is just the program's path, the way a native build sees it.
     let argv = [suite.to_string_lossy().into_owned()];
 
-    match jit::run_program(
+    status.stage(Stage::Generating);
+    status.clear();
+    let passed = match jit::run_program(
         &checked.program,
         checked.types,
         checked.defer,
@@ -121,10 +160,24 @@ fn compile_and_run(suite: &Path) -> bool {
     ) {
         Ok(code) => code == 0,
         Err(error) => {
-            eprintln!("❌ Runtime error in {}: {}", suite.display(), error);
+            report(
+                Code::CodegenFailed,
+                format!("in {}: {error}", suite.display()),
+                status,
+            );
             false
         }
-    }
+    };
+    let (mark, quip) = match passed {
+        true => (status.paint("32", "✓"), quips::pick(quips::TESTS_PASSED)),
+        false => (status.paint("31", "✗"), quips::pick(quips::TESTS_FAILED)),
+    };
+    status.done_with(&format!(
+        "{mark} {} ({}) — {quip}",
+        suite.display(),
+        status.paint("2", &format_duration(status.elapsed()))
+    ));
+    passed
 }
 
 /// Every suite at `root`, sorted so a run's order is the same everywhere: `root` itself when

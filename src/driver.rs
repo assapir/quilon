@@ -7,57 +7,47 @@
 
 use std::path::Path;
 
-use crate::diagnostic::{self, Severity};
+use crate::diagnostic::{Code, Diagnostic};
 use crate::lexer::{SYNTHESIZED_FILE, Span};
 use crate::source_map::SourceMap;
+use crate::status::{Stage, Status};
 use crate::{ast, lexer, modules, parser, typechecker};
 use std::rc::Rc;
 
-/// A failure from any stage of the front-end. Its `Display` is the exact
-/// diagnostic the CLI prints to stderr before exiting: for stages that know a
-/// source location (`lex`, `parse`, `type`) it is a rustc-style
-/// `path:line:col: error: …` report with the offending source line and a caret;
-/// for location-less failures (`read`, `import`) it is a one-line message.
+/// A failure from any stage of the front end: the structured [`Diagnostic`] — code,
+/// message, byte spans into the files in `sources` — which is what a language server
+/// consumes, and which `Display` renders as the report the CLI prints.
+///
+/// The type checker runs over the linked program, so a span can point into any module
+/// that was merged in; `sources` holds every file loaded before the failure, so the report
+/// names the file the span is actually in rather than underlining whatever sat at that byte
+/// offset in the root.
+#[derive(Debug)]
 pub struct FrontEndError {
-    /// The diagnostic, fully rendered against the source at construction time.
-    rendered: String,
+    pub diagnostic: Diagnostic,
+    pub sources: SourceMap,
 }
 
 impl std::fmt::Display for FrontEndError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.rendered)
+        f.write_str(&self.render(false))
     }
 }
 
 impl FrontEndError {
-    /// A source-located error: render it rustc-style with the caret context.
-    fn at(path: &str, source: &str, span: &Span, message: &str) -> Self {
+    /// The report, colored or plain.
+    pub fn render(&self, color: bool) -> String {
+        self.diagnostic.render(&self.sources, color)
+    }
+
+    /// An error in the root file, before any module was linked.
+    fn in_root(path: &str, source: &str, diagnostic: Diagnostic) -> Self {
+        let mut sources = SourceMap::default();
+        sources.set_root(path, source);
         Self {
-            rendered: diagnostic::render(path, source, span, Severity::Error, message),
+            diagnostic,
+            sources,
         }
-    }
-
-    /// A source-located error whose span may belong to an IMPORTED module, resolved through
-    /// the [`SourceMap`] so it is reported against the file it is actually in.
-    ///
-    /// Type checking runs over the linked program, so a span can point into any module that
-    /// was merged in. Rendering all of them against the root file's text named the wrong
-    /// file and underlined whatever happened to sit at that byte offset in the root — a
-    /// diagnostic pointing at innocent code. Falls back to the root file for a span whose
-    /// file is unknown (an in-memory program), which is where the compiler is looking anyway.
-    fn at_span(sources: &SourceMap, span: &Span, message: &str) -> Self {
-        let Some(location) = sources.locate_or_root(span) else {
-            return Self::plain(message.to_string());
-        };
-        let source = sources
-            .get_text(span.file)
-            .unwrap_or_else(|| sources.root_text());
-        Self::at(&location.path, source, span, message)
-    }
-
-    /// An error with no source location (file read failure, import resolution).
-    fn plain(message: String) -> Self {
-        Self { rendered: message }
     }
 }
 
@@ -119,17 +109,41 @@ pub fn front_end(file: &Path) -> Result<Checked, FrontEndError> {
 
 /// [`front_end`], choosing what happens to the file's top-level `describe` blocks.
 pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEndError> {
+    front_end_reporting(file, tests, &Status::silent())
+}
+
+/// [`front_end_with`], announcing each stage through `status` as it begins.
+pub fn front_end_reporting(
+    file: &Path,
+    tests: TestBlocks,
+    status: &Status,
+) -> Result<Checked, FrontEndError> {
     let path = file.display().to_string();
-    crate::source_extension::require_source(&path).map_err(FrontEndError::plain)?;
+    let unlocated = |code, message| FrontEndError {
+        diagnostic: Diagnostic::new(code, message),
+        sources: SourceMap::default(),
+    };
+    crate::source_extension::require_source(&path)
+        .map_err(|message| unlocated(Code::NotAQuilonSource, message))?;
 
-    let source = std::fs::read_to_string(file)
-        .map_err(|e| FrontEndError::plain(format!("error reading {}: {}", path, e)))?;
+    let source = std::fs::read_to_string(file).map_err(|e| {
+        unlocated(
+            Code::SourceNotReadable,
+            format!("cannot read `{path}`: {e}"),
+        )
+    })?;
 
-    let tokens = lexer::Lexer::tokenize(&source)
-        .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
+    status.stage(Stage::Lexing);
+    let tokens = lexer::Lexer::tokenize(&source).map_err(|e| {
+        FrontEndError::in_root(&path, &source, Diagnostic::at(e.code, &e.span, e.message))
+    })?;
 
-    let mut program = parser::parse(&tokens)
-        .map_err(|e| FrontEndError::at(&path, &source, &e.span, &e.message))?;
+    status.stage(Stage::Parsing);
+    let mut program = parser::parse(&tokens).map_err(|e| {
+        let mut diagnostic = Diagnostic::at(e.code, &e.span, e.message);
+        diagnostic.help = e.help;
+        FrontEndError::in_root(&path, &source, diagnostic)
+    })?;
 
     // Checking a corelib file directly (`quilon check corelib/io.qn`) is legitimate, and
     // its declarations are the corelib's own wherever they are read from — including the
@@ -152,20 +166,24 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
     if !modules::is_corelib_source(&source)
         && let Some((span, name)) = first_at_declaration(&program)
     {
-        return Err(FrontEndError::at(
+        return Err(FrontEndError::in_root(
             &path,
             &source,
-            span,
-            &format!(
-                "`{name}` cannot be declared here: `@` marks a built-in IO primitive \
-                 (like `@sleep` from core.time), which only the corelib defines — user \
-                 code calls one, it does not declare one"
-            ),
+            Diagnostic::at(
+                Code::AtDeclarationOutsideCorelib,
+                span,
+                format!(
+                    "`{name}` cannot be declared here: `@` marks a built-in IO primitive \
+                     (like `@sleep` from core.time), which only the corelib defines"
+                ),
+            )
+            .help("user code calls a primitive; it does not declare one"),
         ));
     }
 
     let tests_only = !program.test_blocks.is_empty() && !has_entry_point(&program);
 
+    status.stage(Stage::Resolving);
     let base_dir = file.parent().unwrap_or_else(|| Path::new("."));
     let (mut program, mut sources) = match modules::link(program, base_dir, Some(file)) {
         Ok(linked) => linked,
@@ -173,23 +191,33 @@ pub fn front_end_with(file: &Path, tests: TestBlocks) -> Result<Checked, FrontEn
         // sources loaded so far, so the diagnostic renders against the right file.
         Err(mut error) => {
             error.sources.set_root(path.clone(), source.clone());
-            return Err(FrontEndError::at_span(
-                &error.sources,
-                &error.span,
-                &error.message,
-            ));
+            return Err(FrontEndError {
+                diagnostic: Diagnostic::at(error.code, &error.span, error.message),
+                sources: error.sources,
+            });
         }
     };
     sources.set_root(path.clone(), source.clone());
 
-    if tests == TestBlocks::Run {
-        synthesize_test_entry(&mut program)
-            .map_err(|(span, message)| FrontEndError::at_span(&sources, &span, &message))?;
+    if tests == TestBlocks::Run
+        && let Err(diagnostic) = synthesize_test_entry(&mut program)
+    {
+        return Err(FrontEndError {
+            diagnostic,
+            sources,
+        });
     }
 
-    let types = typechecker::TypeChecker::new()
-        .check_program(&program)
-        .map_err(|e| FrontEndError::at_span(&sources, e.span(), &e.to_string()))?;
+    status.stage(Stage::Checking);
+    let types = match typechecker::TypeChecker::new().check_program(&program) {
+        Ok(types) => types,
+        Err(error) => {
+            return Err(FrontEndError {
+                diagnostic: error.diagnostic(),
+                sources,
+            });
+        }
+    };
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
@@ -267,7 +295,7 @@ fn synthesized_span(node: Synthesized) -> Span {
 /// already have something under that name. Whatever it is, it belongs to the program and not
 /// to the test run, and only one thing can carry the name: it is dropped, because the entry
 /// appended below is the entry point now.
-fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String)> {
+fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), Diagnostic> {
     let Some(first_block) = program.test_blocks.first() else {
         return Ok(());
     };
@@ -276,13 +304,12 @@ fn synthesize_test_entry(program: &mut ast::Program) -> Result<(), (Span, String
     // at the first test block, rather than by the type checker at the synthesized call — which
     // has no source location to point a diagnostic at.
     if !defines_function(program, SUMMARY_FUNCTION) {
-        return Err((
-            first_block.span().clone(),
-            format!(
-                "no test harness in scope: `{SUMMARY_FUNCTION}` is undefined. \
-                 Add `<< {HARNESS_MODULE}`"
-            ),
-        ));
+        return Err(Diagnostic::at(
+            Code::NoTestHarness,
+            first_block.span(),
+            format!("no test harness in scope: `{SUMMARY_FUNCTION}` is undefined"),
+        )
+        .help(format!("add `<< {HARNESS_MODULE}` above this block")));
     }
 
     let summary = ast::Expression::Call {

@@ -17,6 +17,7 @@
 
 use crate::ast::qualify::{self, ModuleScope, QualifyError};
 use crate::ast::{Expression, Import, Item, ModulePath, Program, TypeDefinition};
+use crate::diagnostic::Code;
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span};
 use crate::parser;
 use crate::source_map::SourceMap;
@@ -29,6 +30,7 @@ use std::path::Path;
 /// actually in. The root file is the caller's to record.
 #[derive(Debug)]
 pub struct LinkError {
+    pub code: Code,
     pub span: Span,
     pub message: String,
     pub sources: SourceMap,
@@ -79,6 +81,7 @@ pub fn link(
             ))
         }
         Err(error) => Err(LinkError {
+            code: error.code,
             span: error.span,
             message: error.message,
             sources: loader.sources,
@@ -195,13 +198,18 @@ impl Loader {
                 if name == "core.text" && !self.injecting_core_text {
                     return Err(fail(
                         &import.span,
+                        Code::UnknownModule,
                         "`core.text` is the compiler's own and cannot be imported — the \
                          Text methods it implements need no import at all"
                             .to_string(),
                     ));
                 }
                 let src = builtin_source(&name).ok_or_else(|| {
-                    fail(&import.span, format!("unknown built-in module `{}`", name))
+                    fail(
+                        &import.span,
+                        Code::UnknownModule,
+                        format!("unknown built-in module `{name}`"),
+                    )
                 })?;
                 (
                     format!("builtin:{}", name),
@@ -222,11 +230,12 @@ impl Loader {
                 // An imported module never reaches the CLI front end, so the source-name
                 // rule is applied here too.
                 crate::source_extension::require_source(&full.to_string_lossy())
-                    .map_err(|message| fail(&import.span, message))?;
+                    .map_err(|message| fail(&import.span, Code::NotAQuilonSource, message))?;
                 let stem = module_binding_name(&import.path, &import.span)?;
                 let source = std::fs::read_to_string(&full).map_err(|e| {
                     fail(
                         &import.span,
+                        Code::UnknownModule,
                         format!("cannot read module `{}`: {}", full.display(), e),
                     )
                 })?;
@@ -258,6 +267,7 @@ impl Loader {
             chain.push(canonical.clone());
             return Err(fail(
                 &import.span,
+                Code::ImportCycle,
                 format!(
                     "import cycle: {} — a module cannot import itself, directly or \
                      through others",
@@ -276,6 +286,7 @@ impl Loader {
             }
             return Err(fail(
                 &import.span,
+                Code::ModuleNameCollision,
                 format!(
                     "two different modules are both named `{canonical}` — every imported \
                      module needs a distinct name; rename one of the files"
@@ -289,10 +300,11 @@ impl Loader {
         let file = self.next_file;
         self.next_file += 1;
         self.sources.insert(file, display, source.clone());
+        let in_module = |message: String| format!("in module `{canonical}`: {message}");
         let tokens = Lexer::tokenize_in_file(&source, file)
-            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
-        let mut sub = parser::parse(&tokens)
-            .map_err(|e| fail(&e.span, format!("in module `{canonical}`: {}", e.message)))?;
+            .map_err(|e| fail(&e.span, e.code, in_module(e.message)))?;
+        let mut sub =
+            parser::parse(&tokens).map_err(|e| fail(&e.span, e.code, in_module(e.message)))?;
 
         // Resolve the module's own imports first (transitive), building the scope ITS
         // qualified references resolve against — a module reaches only what it imported.
@@ -355,8 +367,9 @@ fn exported_names(items: &[Item]) -> HashSet<String> {
 }
 
 /// A located link failure — the shape [`qualify`]'s own errors already have.
-fn fail(span: &Span, message: String) -> QualifyError {
+fn fail(span: &Span, code: Code, message: String) -> QualifyError {
     QualifyError {
+        code,
         span: span.clone(),
         message,
     }
@@ -373,6 +386,7 @@ fn module_binding_name(path: &ModulePath, span: &Span) -> Result<String, Qualify
     if !valid {
         return Err(fail(
             span,
+            Code::ModuleNameCollision,
             format!(
                 "the module file name `{stem}` is not usable as a binding — call sites \
                  reach the module as `{stem}.<name>`, so the stem must be a valid \

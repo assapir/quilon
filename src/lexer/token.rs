@@ -343,6 +343,63 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// The token as a diagnostic names it — the symbol itself, in the language's own
+    /// words, never this enum's variant name.
+    pub fn describe(&self) -> String {
+        let symbol = match self {
+            TokenKind::Comment => return "a `~` comment".to_string(),
+            TokenKind::StrayBidiControl => return "a bidirectional control character".to_string(),
+            TokenKind::Number(_) => return "a number".to_string(),
+            TokenKind::String(_) => return "a string literal".to_string(),
+            TokenKind::Ident => return "a name".to_string(),
+            TokenKind::Eof => return "the end of the file".to_string(),
+            TokenKind::True => "true",
+            TokenKind::False => "false",
+            TokenKind::Underscore => "_",
+            TokenKind::Assign => "=",
+            TokenKind::MutAssign => ":=",
+            TokenKind::Arrow => "=>",
+            TokenKind::ReturnArrow => "->",
+            TokenKind::LeftArrow => "<-",
+            TokenKind::TypeAnnotation => "::",
+            TokenKind::At => "@",
+            TokenKind::EntryPoint => "^",
+            TokenKind::Unit => "$",
+            TokenKind::Export => ">>",
+            TokenKind::Import => "<<",
+            TokenKind::Question => "?",
+            TokenKind::Pipe => "|",
+            TokenKind::BlockOpen => return "a block open `<`".to_string(),
+            TokenKind::BlockClose => return "a block close `>`".to_string(),
+            TokenKind::Gt => ">",
+            TokenKind::BraceOpen => "{",
+            TokenKind::BraceClose => "}",
+            TokenKind::ParenOpen => "(",
+            TokenKind::ParenClose => ")",
+            TokenKind::BracketOpen => "[",
+            TokenKind::BracketClose => "]",
+            TokenKind::Comma => ",",
+            TokenKind::Dot => ".",
+            TokenKind::Plus => "+",
+            TokenKind::Minus => "-",
+            TokenKind::Star => "*",
+            TokenKind::Slash => "/",
+            TokenKind::Percent => "%",
+            TokenKind::PlusMinus => "+-",
+            TokenKind::MinusPlus => "-+",
+            TokenKind::Eq => "==",
+            TokenKind::Ne => "!=",
+            TokenKind::Le => "<=",
+            TokenKind::Ge => ">=",
+            TokenKind::And => "&&",
+            TokenKind::Or => "||",
+            TokenKind::Not => "!",
+            TokenKind::Colon => ":",
+            TokenKind::Backtick => return "the render operator `` ` ``".to_string(),
+        };
+        format!("`{symbol}`")
+    }
+
     /// Whether this kind can be the first token of an operand — exactly the parser's
     /// `parse_unary`/`parse_primary` entry set, which a `debug_assert!` there keeps in
     /// step with this list. It is what makes a preceding `>` a comparison rather than a

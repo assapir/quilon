@@ -1,5 +1,6 @@
 // Lexer implementation for Quilon
 
+use crate::diagnostic::Code;
 use crate::lexer::bidi;
 use crate::lexer::token::BidiIssue;
 use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind, TokenLexError};
@@ -50,23 +51,33 @@ impl Lexer {
                 Some(Err(error)) => {
                     let span = lexer.span();
                     let text = source[span.clone()].to_string();
-                    return Err(LexerError {
-                        message: match error {
-                            TokenLexError::UnterminatedString => {
-                                "unterminated string literal".to_string()
-                            }
-                            TokenLexError::Bidi(BidiIssue::Unclosed { ch, token }) => {
-                                format!("{} opened in this {token} is never closed", bidi::name(ch))
-                            }
-                            TokenLexError::Bidi(BidiIssue::StrayCloser { ch, token }) => {
-                                format!("{} in this {token} has no matching opener", bidi::name(ch))
-                            }
-                            TokenLexError::Bidi(BidiIssue::Outside(ch)) => format!(
+                    let (code, message) = match error {
+                        TokenLexError::UnterminatedString => (
+                            Code::UnterminatedString,
+                            "unterminated string literal".to_string(),
+                        ),
+                        TokenLexError::Bidi(BidiIssue::Unclosed { ch, token }) => (
+                            Code::BidiControl,
+                            format!("{} opened in this {token} is never closed", bidi::name(ch)),
+                        ),
+                        TokenLexError::Bidi(BidiIssue::StrayCloser { ch, token }) => (
+                            Code::BidiControl,
+                            format!("{} in this {token} has no matching opener", bidi::name(ch)),
+                        ),
+                        TokenLexError::Bidi(BidiIssue::Outside(ch)) => (
+                            Code::BidiControl,
+                            format!(
                                 "{} is only allowed inside a string literal or a comment",
                                 bidi::name(ch)
                             ),
-                            TokenLexError::InvalidToken => format!("Invalid token: '{}'", text),
-                        },
+                        ),
+                        TokenLexError::InvalidToken => {
+                            (Code::InvalidToken, format!("invalid token `{text}`"))
+                        }
+                    };
+                    return Err(LexerError {
+                        code,
+                        message,
                         span: Span::in_file(span.start as u32, span.end as u32, file),
                     });
                 }
@@ -134,6 +145,7 @@ fn is_first_on_line(source: &str, at: usize) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexerError {
+    pub code: Code,
     pub message: String,
     pub span: Span,
 }
