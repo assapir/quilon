@@ -14,7 +14,7 @@ quilon run     program.qn   # typecheck, then run directly (exit code = ^'s resu
 quilon build   program.qn   # produce a native executable
 quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
-quilon lsp                  # serve the Language Server Protocol for editors (see language-server.md)
+quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
 `quilon --version` (or `-V`) prints the compiler version.
