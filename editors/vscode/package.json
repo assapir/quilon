@@ -13,7 +13,7 @@
     "directory": "editors/vscode"
   },
   "engines": {
-    "vscode": "^1.82.0"
+    "vscode": "^1.91.0"
   },
   "activationEvents": [
     "onLanguage:quilon"
@@ -43,11 +43,11 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@types/vscode": "^1.82.0",
+    "@types/vscode": "^1.91.0",
     "@vscode/vsce": "^3.9.2",
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
