@@ -133,10 +133,12 @@ jobs:
                 ;;
             esac
           done
-          # This package's own libc++.1.dylib sits on the same -L path llvm-sys adds
-          # for the static archives and would shadow the SDK's, which -lc++ must
-          # resolve to instead. libLTO.dylib stays — the next step needs it.
-          rm -f "$prefix"/lib/libc++*.dylib "$prefix"/lib/libc++abi*.dylib
+          # This package ships its own libc++ (dylib and static archive both) on the
+          # same -L path llvm-sys adds for the LLVM archives; either shadows the
+          # SDK's, and the static one alone is missing the ABI/exception symbols
+          # normally paired with it. Drop every libc++/libc++abi file so -lc++ falls
+          # through to the SDK's complete one. libLTO.dylib stays — the next step needs it.
+          rm -f "$prefix"/lib/libc++*
           {
             echo "LLVM_SYS_221_PREFIX=$prefix"
             # Apple's ld reads LTO bitcode through libLTO.dylib; the one Xcode

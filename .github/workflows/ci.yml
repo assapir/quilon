@@ -143,10 +143,12 @@ jobs:
                 ;;
             esac
           done
-          # Same two fixes release.yml needs: drop the package's own libc++, which
-          # would shadow the SDK's, and point the linker's bitcode reader at the
-          # matching LTO library so Apple's ld can read this LLVM's archives.
-          rm -f "$prefix"/lib/libc++*.dylib "$prefix"/lib/libc++abi*.dylib
+          # Same two fixes release.yml needs: drop every libc++/libc++abi file the
+          # package ships (dylib and static archive both — the static one alone is
+          # missing the ABI/exception symbols), so -lc++ falls through to the SDK's
+          # complete one; and point the linker's bitcode reader at the matching LTO
+          # library so Apple's ld can read this LLVM's archives.
+          rm -f "$prefix"/lib/libc++*
           {
             echo "LLVM_SYS_221_PREFIX=$prefix"
             echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,-lto_library,$prefix/lib/libLTO.dylib"
