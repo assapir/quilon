@@ -134,6 +134,13 @@ jobs:
             exit 1
           fi
           brew list zstd >/dev/null 2>&1 || brew install zstd
+          zstd_prefix="$(brew --prefix zstd)"
+          if [ -f "$zstd_prefix/lib/libzstd.a" ]; then
+            cp "$zstd_prefix/lib/libzstd.a" "$prefix/lib/libzstd.a"
+          else
+            echo "::error::No static libzstd.a at $zstd_prefix/lib; the link would depend on Homebrew's zstd"
+            exit 1
+          fi
           for lib in $("$prefix/bin/llvm-config" --system-libs); do
             case "$lib" in
               /*)
@@ -143,12 +150,13 @@ jobs:
                 ;;
             esac
           done
-          # Same two fixes release.yml needs: drop every libc++/libc++abi file the
-          # package ships (dylib and static archive both — the static one alone is
-          # missing the ABI/exception symbols), so -lc++ falls through to the SDK's
-          # complete one; and point the linker's bitcode reader at the matching LTO
-          # library so Apple's ld can read this LLVM's archives.
-          rm -f "$prefix"/lib/libc++*
+          # Same fixes release.yml needs: force a static zstd (above), drop every
+          # libc++/libunwind file the package ships (dylib and static archive both
+          # — the static libc++ alone is missing the ABI/exception symbols, and the
+          # libunwind dylib has no rpath) so both fall through to the SDK's, and
+          # point the linker's bitcode reader at the matching LTO library so
+          # Apple's ld can read this LLVM's archives.
+          rm -f "$prefix"/lib/libc++* "$prefix"/lib/libunwind*
           {
             echo "LLVM_SYS_221_PREFIX=$prefix"
             echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,-lto_library,$prefix/lib/libLTO.dylib"

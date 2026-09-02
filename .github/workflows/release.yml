@@ -121,9 +121,18 @@ jobs:
             echo "::error::LLVM at $prefix links $mode, not static"
             exit 1
           fi
-          # --system-libs names Homebrew's zstd by absolute path; the archive goes
-          # into the binary, but the link needs the formula present.
+          # --system-libs names zstd; the runner's default library search picks up
+          # Homebrew's dylib for it unless a static archive outranks it, so copy one
+          # onto the -L path llvm-sys already adds (which is checked first) rather
+          # than trust the recorded entry to be the static one.
           brew list zstd >/dev/null 2>&1 || brew install zstd
+          zstd_prefix="$(brew --prefix zstd)"
+          if [ -f "$zstd_prefix/lib/libzstd.a" ]; then
+            cp "$zstd_prefix/lib/libzstd.a" "$prefix/lib/libzstd.a"
+          else
+            echo "::error::No static libzstd.a at $zstd_prefix/lib; the asset would depend on Homebrew's zstd"
+            exit 1
+          fi
           for lib in $("$prefix/bin/llvm-config" --system-libs); do
             case "$lib" in
               /*)
@@ -133,12 +142,14 @@ jobs:
                 ;;
             esac
           done
-          # This package ships its own libc++ (dylib and static archive both) on the
-          # same -L path llvm-sys adds for the LLVM archives; either shadows the
-          # SDK's, and the static one alone is missing the ABI/exception symbols
-          # normally paired with it. Drop every libc++/libc++abi file so -lc++ falls
-          # through to the SDK's complete one. libLTO.dylib stays — the next step needs it.
-          rm -f "$prefix"/lib/libc++*
+          # This package ships its own libc++ and libunwind (dylib and static
+          # archive both) on the same -L path llvm-sys adds for the LLVM archives;
+          # either shadows the SDK's, its libunwind dylib has no rpath so the
+          # binary cannot load it, and the static libc++ alone is missing the
+          # ABI/exception symbols normally paired with it. Drop every file from
+          # both families so -lc++/-lunwind fall through to the SDK's complete
+          # ones. libLTO.dylib stays — the next step needs it.
+          rm -f "$prefix"/lib/libc++* "$prefix"/lib/libunwind*
           {
             echo "LLVM_SYS_221_PREFIX=$prefix"
             # Apple's ld reads LTO bitcode through libLTO.dylib; the one Xcode
