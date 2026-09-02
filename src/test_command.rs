@@ -66,12 +66,13 @@ pub fn run(root: &Path, quiet: bool) -> usize {
                 .iter()
                 .filter(|suite| !run_in_its_own_process(suite, quiet))
                 .count();
-            let quip = match failed {
-                0 => quips::pick(quips::TESTS_PASSED),
-                _ => quips::pick(quips::TESTS_FAILED),
+            let quip = match (quiet, failed) {
+                (true, _) => String::new(),
+                (false, 0) => format!(". {}", quips::pick(quips::TESTS_PASSED)),
+                (false, _) => format!(". {}", quips::pick(quips::TESTS_FAILED)),
             };
             println!(
-                "{} suites: {} passed, {failed} failed. {quip}",
+                "{} suites: {} passed, {failed} failed{quip}",
                 many.len(),
                 many.len() - failed
             );
