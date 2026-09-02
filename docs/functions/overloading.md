@@ -20,7 +20,7 @@ b = score("abcd")   ~ 4   — picks the Text member
 members sharing a parameter-type list, is a compile error listing the candidates:
 
 ```text
-error[Q038]: no overload of `score` takes (Bool)
+error[QN311]: no overload of `score` takes (Bool)
   help: the members of `score` are (Num), (Text)
 ```
 

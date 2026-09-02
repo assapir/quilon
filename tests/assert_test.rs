@@ -406,7 +406,7 @@ fn a_failing_assert_reports_the_call_site_in_full() {
 
     let path = tmp_dir().join("site_full.qn");
     let expected = format!(
-        "error[Q069]: assertion failed: expected 41, got 42\n{}\n",
+        "error[QN500]: assertion failed: expected 41, got 42\n{}\n",
         frame(
             &position(&path, 2, 3),
             2,

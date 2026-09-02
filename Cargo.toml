@@ -56,6 +56,8 @@ indicatif = "0.18"
 # `wait4`, for the exact peak RSS the kernel recorded for a benchmarked child process.
 # Already in the dependency graph; this only makes it directly visible to the benches.
 libc = "0.2"
+# Reading the `quilon test --reporter json` event stream back in the harness tests.
+serde_json = "1.0"
 
 [build-dependencies]
 # Compressing `libquilon_rt.a` before it is embedded into the compiler binary.

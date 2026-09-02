@@ -38,7 +38,7 @@ A holding assertion does nothing. A failure reports in the standard
 is written on, including inside a helper rather than `^`:
 
 ```text
-error[Q069]: assertion failed: expected 41, got 42
+error[QN500]: assertion failed: expected 41, got 42
    ╭─[demo.qn:4:3]
  4 │   assert(6 * 7, equals(41))
    ·   ─────────────────────────
@@ -132,7 +132,8 @@ Text
 | `test.it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
 
 The compiler recognizes a top-level `test.describe(…)` call **by name** — there is no attribute
-or `cfg`. What the report looks like is currently fixed.
+or `cfg`. The report takes one of two forms, chosen with
+[`--reporter`](#selecting-cases-and-choosing-the-reporter).
 
 The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
 straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
@@ -144,6 +145,56 @@ diagnostic, so each stream reads on its own when they are captured separately.
 Suites run one process each, so a failure in one does not stop the others. A suite that
 imports no harness at all is a compile error at its first `test.describe`, naming the import that
 fixes it — never a silent run with no output.
+
+## Selecting cases and choosing the reporter
+
+`quilon test` takes two options:
+
+| Option | Effect |
+|--------|--------|
+| `--reporter human` | The report above: the case tree on stdout, then the summary line. The default. |
+| `--reporter json` | One JSON object per event on stdout, one object per line — [the events below](#the-json-events). |
+| `--only <path>` | Run the suite or case at `path` and pass over the rest. Repeatable; each occurrence adds a path. Given with one suite file. |
+
+### Paths
+
+A path is the names from the outermost `describe` down to a suite or a case, joined by `/`.
+In the suite above, `Text/splitting` names the nested group and
+`Text/splitting/splits on a separator` its first case. A name is a text literal; `/` is the
+separator.
+
+A case path selects that case. A suite path selects every case under it. A `describe` or
+`it` with a selected case under it runs; every other one is passed over — body and all —
+with no event and no output. The summary counts the cases that ran.
+
+```bash
+quilon test tests/text.qn --only "Text/splitting"                   # every case in the group
+quilon test tests/text.qn --only "Text/trims both ends" --only "Text/finds a part"
+```
+
+`--only` is checked against the file's paths before the run. A path the file lacks is an
+error on stderr that lists the file's paths, and the run exits 1.
+
+### The JSON events
+
+Under `--reporter json`, stdout carries the run's events and nothing else, one JSON object
+per line, in the order they happen. A failing `expect`'s
+[error frame](../../tooling/errors.md) goes to stderr under both reporters. The schema is
+stable.
+
+| Event | Fields | Written when |
+|-------|--------|--------------|
+| `suite` | `path` — the suite's path; `depth` — the count of enclosing suites, `0` for an outermost one. | A `describe` opens. |
+| `case` | `path` — the case's path; `status` — `"pass"` or `"fail"`. With `"fail"`: `message` — the first failing `expect`'s message; `file` — its source file, as the compiler resolved it; `line` — its line number. | A case closes. |
+| `summary` | `passed`, `failed` — the run's totals. | The run ends. |
+
+```json
+{"event":"suite","path":"Text","depth":0}
+{"event":"case","path":"Text/trims both ends","status":"pass"}
+{"event":"suite","path":"Text/splitting","depth":1}
+{"event":"case","path":"Text/splitting/splits on a separator","status":"fail","message":"assertion failed: expected 4, got 3","file":"tests/text.qn","line":9}
+{"event":"summary","passed":1,"failed":1}
+```
 
 ## A failing case does not stop the run
 
@@ -216,13 +267,16 @@ and the case lifecycle `describe` and `it` drive:
 
 | Function | Effect |
 |----------|--------|
-| `test.enterSuite() -> Num` | Open a group; yields the depth it sits at. |
+| `test.enterSuite(name :: Text) -> Num` | Open the group `name` and report it; yields the depth it sits at. |
 | `test.leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
 | `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
-| `test.finishCase() -> Num` | Close the case, tallying it passed or failed; yields the depth to report it at. |
+| `test.finishCase(name :: Text) -> Num` | Close the case `name`, tallying it passed or failed and reporting it; yields the depth it sits at. |
 
 `test.reportSummary() -> Num` ends the run: the entry point `quilon test` synthesizes calls it
 last, and its result is the run's status — 0 passes the suite, anything else fails it.
+
+Each of these reports its event through the compiler, which renders it per the chosen
+[reporter](#selecting-cases-and-choosing-the-reporter).
 
 A suite that imports no harness at all is a compile error at its first `test.describe`, naming the
 import that fixes it — never a silent run with no output.

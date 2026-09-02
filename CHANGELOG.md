@@ -7,11 +7,13 @@ All notable changes to Quilon are documented here.
 ### Changed
 
 - **Diagnostics are data, with a code.** Every compile error and runtime failure is a
-  structured diagnostic — a code from a registry (`Q000` upward in pipeline order), a
-  message, labelled byte spans, an optional `help:` — rendered through `miette`:
+  structured diagnostic — a code from a registry (`QN` and three digits, the first naming
+  the pipeline family: lexer, parser, module resolution, checker, codegen/build, runtime,
+  CLI/usage), a message, labelled byte spans, an optional `help:` — rendered through
+  `miette`:
 
   ```text
-  error[Q038]: no overload of `+` takes (Num, Text)
+  error[QN311]: no overload of `+` takes (Num, Text)
      ╭─[program.qn:1:20]
    1 │ ^ = () -> Num => < 1 + "x" >
      ·                    ┬   ─┬─
@@ -27,7 +29,7 @@ All notable changes to Quilon are documented here.
   — a parse error says "found a block close `>`", never an internal token name — and the
   fix, where one is idiomatic, moves out of the message into `help:`.
   `docs/tooling/errors.md` carries one section per code and is the single source
-  `quilon explain Q038` prints from. The front end's error type
+  `quilon explain QN311` prints from. The front end's error type
   (`driver::FrontEndError`) exposes the diagnostic and the source map, which is what a
   language server consumes. `core.test`'s `failAt` still composes its own frame in Quilon.
 
@@ -39,6 +41,11 @@ All notable changes to Quilon are documented here.
   `--quiet`/`-q` prints no status; `QUILON_QUIP_SEED=<n>` pins the quips. `quilon run`
   says nothing beyond the program's own output. `--version` carries the release codename
   from `release-codenames.tsv`, and `quilon` with no arguments prints the help.
+
+- **`quilon test --reporter json`/`--only` carry the new status voice too.** The human
+  report is `core.test`'s, unchanged; the runner's own closing lines — the file, the
+  elapsed time, a quip — print only for `--reporter human`. `--reporter json` stays pure
+  NDJSON on stdout: no status lines, no quips, no color, ever.
 
 ### Added
 

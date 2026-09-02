@@ -487,7 +487,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.leaveSuite",
         "core.test.caseFailing",
         "core.test.finishCase",
+        "core.test.runSuite",
         "core.test.describe",
+        "core.test.runCase",
         "core.test.it",
         "core.test.reportSummary",
         // core.net, and the client itself.
@@ -636,7 +638,7 @@ fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
     );
     assert!(
         out.stderr
-            .contains("error[Q069]: assertion failed: expected 5, got 4")
+            .contains("error[QN500]: assertion failed: expected 5, got 4")
             && out.stderr.contains("───"),
         "the failure must carry the coded message and an underline:\n{}",
         out.stderr
@@ -741,6 +743,225 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         out.stderr.contains("only works inside an `it` case"),
         "the diagnostic must name the case:\n{}",
         out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── The JSON reporter, and `--only` ─────────────────────────────────────────────────────
+
+/// Every line of `stdout` as the JSON object it is. A line that is not one fails here, so a
+/// heading or a case line leaking into the stream is caught at the parse.
+fn json_events(stdout: &str) -> Vec<serde_json::Value> {
+    stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("not a JSON event: {line:?} ({error})"))
+        })
+        .collect()
+}
+
+/// The `(event, path)` of every event in `events`, with a summary's path as `""`.
+fn event_paths(events: &[serde_json::Value]) -> Vec<(&str, &str)> {
+    events
+        .iter()
+        .map(|event| {
+            (
+                event["event"].as_str().expect("an event kind"),
+                event["path"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_json_reporter_emits_one_event_per_line_for_a_nested_suite() {
+    let dir = work_dir("json_pass");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap(), "--reporter", "json"]);
+    assert_eq!(out.code, 0, "a passing suite exits 0:\n{}", out.stderr);
+
+    let events = json_events(&out.stdout);
+    assert_eq!(
+        event_paths(&events),
+        vec![
+            ("suite", "numbers"),
+            ("case", "numbers/adds"),
+            ("case", "numbers/orders"),
+            ("suite", "numbers/nested"),
+            ("case", "numbers/nested/still runs"),
+            ("suite", "text"),
+            ("case", "text/contains"),
+            ("summary", ""),
+        ]
+    );
+    assert_eq!(events[0]["depth"], 0, "an outermost suite sits at depth 0");
+    assert_eq!(events[3]["depth"], 1, "a nested suite sits one deeper");
+    for case in events.iter().filter(|event| event["event"] == "case") {
+        assert_eq!(case["status"], "pass");
+        assert!(
+            case.get("message").is_none() && case.get("file").is_none(),
+            "a passing case carries no failure: {case}"
+        );
+    }
+    assert_eq!(events[7]["passed"], 4);
+    assert_eq!(events[7]["failed"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_json_reporter_carries_a_failing_cases_message_file_and_line() {
+    let dir = work_dir("json_fail");
+    let source = write(&dir, "suite.qn", FAILING_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap(), "--reporter", "json"]);
+    assert_ne!(out.code, 0, "a failing suite exits non-zero");
+
+    let events = json_events(&out.stdout);
+    let failed = events
+        .iter()
+        .find(|event| event["path"] == "arithmetic/does not hold")
+        .expect("the failing case is reported");
+    assert_eq!(failed["status"], "fail");
+    assert_eq!(failed["message"], "assertion failed: expected 5, got 4");
+    assert_eq!(failed["file"], source.to_str().unwrap());
+    assert_eq!(failed["line"], 6);
+    let summary = events.last().expect("a summary ends the stream");
+    assert_eq!(summary["event"], "summary");
+    assert_eq!(summary["passed"], 2);
+    assert_eq!(summary["failed"], 1);
+    // The failure's frame still goes to stderr, where a human reads it.
+    assert!(
+        out.stderr.contains("expected 5, got 4"),
+        "the frame is missing from stderr:\n{}",
+        out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_runs_the_one_case_it_names_and_opens_nothing_else() {
+    let dir = work_dir("only_case");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        source.to_str().unwrap(),
+        "--reporter",
+        "json",
+        "--only",
+        "numbers/orders",
+    ]);
+    assert_eq!(out.code, 0, "the selected case passes:\n{}", out.stderr);
+
+    let events = json_events(&out.stdout);
+    assert_eq!(
+        event_paths(&events),
+        vec![
+            ("suite", "numbers"),
+            ("case", "numbers/orders"),
+            ("summary", "")
+        ]
+    );
+    assert_eq!(events[2]["passed"], 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_with_a_suite_path_runs_every_case_under_it() {
+    let dir = work_dir("only_suite");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        source.to_str().unwrap(),
+        "--reporter",
+        "json",
+        "--only",
+        "numbers",
+    ]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+
+    let events = json_events(&out.stdout);
+    assert_eq!(
+        event_paths(&events),
+        vec![
+            ("suite", "numbers"),
+            ("case", "numbers/adds"),
+            ("case", "numbers/orders"),
+            ("suite", "numbers/nested"),
+            ("case", "numbers/nested/still runs"),
+            ("summary", ""),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_repeats_to_select_several_paths() {
+    let dir = work_dir("only_many");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        source.to_str().unwrap(),
+        "--only",
+        "numbers/adds",
+        "--only",
+        "text/contains",
+    ]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(
+        out.stdout.contains("✓ adds")
+            && out.stdout.contains("✓ contains")
+            && !out.stdout.contains("orders")
+            && !out.stdout.contains("nested"),
+        "only the two named cases run:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("2 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_with_a_path_the_suite_does_not_have_is_an_error_listing_its_paths() {
+    let dir = work_dir("only_unknown");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        source.to_str().unwrap(),
+        "--only",
+        "numbers/adds",
+        "--only",
+        "numbers/divides",
+    ]);
+    assert_eq!(
+        out.code, 1,
+        "an unknown path fails the run:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("numbers/divides"),
+        "the diagnostic names the unknown path:\n{}",
+        out.stderr
+    );
+    for available in [
+        "numbers",
+        "numbers/adds",
+        "numbers/nested/still runs",
+        "text/contains",
+    ] {
+        assert!(
+            out.stderr.contains(&format!("\n  {available}\n"))
+                || out.stderr.ends_with(&format!("\n  {available}\n")),
+            "`{available}` is missing from the listed paths:\n{}",
+            out.stderr
+        );
+    }
+    assert!(
+        !out.stdout.contains("passed,"),
+        "nothing ran:\n{}",
+        out.stdout
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

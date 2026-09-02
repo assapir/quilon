@@ -64,8 +64,14 @@ enum Commands {
         /// File or directory to search for suites (defaults to the current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// How the run reports: `human` prints the case tree, `json` one event per line
+        #[arg(long, default_value = "human", value_parser = ["human", "json"])]
+        reporter: String,
+        /// Run only this suite or case, named by its `/`-joined path (repeatable)
+        #[arg(long, value_name = "PATH")]
+        only: Vec<String>,
     },
-    /// Explain an error code (`quilon explain Q028`)
+    /// Explain an error code (`quilon explain QN301`)
     Explain {
         /// The code, as a report prints it
         code: String,
@@ -256,14 +262,29 @@ fn main() {
             checked(&file, &status);
             status.done(&file.display().to_string(), quips::pick(quips::SUCCESS));
         }
-        Commands::Test { path } => {
-            let failed = test_command::run(&path, cli.quiet);
+        Commands::Test {
+            path,
+            reporter,
+            only,
+        } => {
+            let reporter = match reporter.as_str() {
+                "json" => test_command::Reporter::Json,
+                _ => test_command::Reporter::Human,
+            };
+            let failed = test_command::run(
+                &path,
+                &test_command::Options {
+                    reporter,
+                    only,
+                    quiet: cli.quiet,
+                },
+            );
             std::process::exit(i32::from(failed > 0));
         }
         Commands::Explain { code } => {
             let Some(code) = Code::parse(&code) else {
                 eprintln!(
-                    "no error code `{code}` — codes run Q000 to {}",
+                    "no error code `{code}` — codes run QN000 to {}",
                     codes::ALL[codes::ALL.len() - 1]
                 );
                 std::process::exit(2);

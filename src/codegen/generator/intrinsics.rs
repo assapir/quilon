@@ -128,10 +128,28 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__assert_failed" | "__expect_failed" => {
                 void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
             }
-            // double __test_*() — the test registry (see `is_test_registry_intrinsic`): the
-            // harness's event sink, which `core.test`'s `describe` and `it` drive. Every one
-            // takes no arguments and yields a count or a depth.
-            name if crate::ast::is_test_registry_intrinsic(name) => f64t.fn_type(&[], false),
+            // double __test_*(…) — the test registry (see `is_test_registry_intrinsic`): the
+            // harness's event sink and reporter, which `core.test`'s `describe` and `it`
+            // drive. Each takes the `Text` (as `i8*, i64`) and `Num` parameters its table
+            // entry declares and yields a count, a depth, a 0/1 answer, or the run's status.
+            name if crate::ast::is_test_registry_intrinsic(name) => {
+                let parameters = crate::ast::builtin_parameters(name).ok_or_else(|| {
+                    format!(
+                        "Unknown runtime intrinsic: {name} — the compiler declares no such builtin"
+                    )
+                })?;
+                let mut abi: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+                for parameter in parameters {
+                    match parameter {
+                        Type::Text => {
+                            abi.push(ptr.into());
+                            abi.push(i64t.into());
+                        }
+                        _ => abi.push(f64t.into()),
+                    }
+                }
+                f64t.fn_type(&abi, false)
+            }
             // { ptr, i64 } __read_launch(Site* site) — the `@read` leaf IO primitive: launch
             // a background read of one line from stdin and return the DEFERRED Text
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
@@ -352,21 +370,38 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Lower one of the test registry's primitives (see
-    /// [`crate::ast::is_test_registry_intrinsic`]) to its runtime intrinsic. They take no
-    /// arguments and yield a `Num` — a nesting depth or a count — so the whole family
-    /// lowers through this one path.
+    /// [`crate::ast::is_test_registry_intrinsic`]) to its runtime intrinsic. Each takes the
+    /// `Text` and `Num` arguments its table entry declares — a `Text` crossing as its
+    /// `(bytes, length)` pair — and yields a `Num`, so the whole family lowers through this
+    /// one path.
     pub(super) fn generate_test_registry(
         &mut self,
         name: &str,
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if !args.is_empty() {
-            return Err(format!("{name} expects no arguments, got {}", args.len()));
+        let parameters = crate::ast::builtin_parameters(name).unwrap_or_default();
+        if args.len() != parameters.len() {
+            return Err(format!(
+                "{name} expects {} arguments, got {}",
+                parameters.len(),
+                args.len()
+            ));
+        }
+        let mut values: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        for (argument, parameter) in args.iter().zip(parameters) {
+            match parameter {
+                Type::Text => {
+                    let (data, length) = self.extract_text(argument)?;
+                    values.push(data.into());
+                    values.push(length.into());
+                }
+                _ => values.push(self.generate_expression(argument)?.into()),
+            }
         }
         let f = self.get_intrinsic(name)?;
         let call = self
             .builder
-            .build_call(f, &[], name)
+            .build_call(f, &values, name)
             .map_err(ctx("Failed to call a test registry primitive"))?;
         Self::call_result_to_basic(call)
     }

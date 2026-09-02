@@ -94,7 +94,7 @@ fn an_invalid_index_reports_its_own_location() {
     );
     assert_eq!(code, 1);
     assert!(
-        stderr.starts_with("error[Q070]: index 7 out of bounds for an array of size 3\n")
+        stderr.starts_with("error[QN501]: index 7 out of bounds for an array of size 3\n")
             && stderr.contains(":4:3]"),
         "the report must locate the failing read, got: {stderr}"
     );

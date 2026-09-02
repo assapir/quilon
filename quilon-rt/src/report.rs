@@ -14,7 +14,7 @@
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
-use crate::test_registry::mark_case_failed;
+use crate::test_registry::{Failure, mark_case_failed};
 use std::os::raw::c_int;
 
 /// The exit status a failing `assert` leaves — the Rust-panic convention, so a self-verifying
@@ -68,12 +68,12 @@ pub fn shorten_path(path: &str) -> String {
 /// assigns to the failures a compiled program can report. A program reports without the
 /// compiler, so the numbers live here too; the compiler's tests pin the two.
 pub mod codes {
-    pub const ASSERTION_FAILED: u16 = 69;
-    pub const INDEX_OUT_OF_BOUNDS: u16 = 70;
-    pub const RANGE_ENDPOINT_NOT_WHOLE: u16 = 71;
-    pub const MATCH_FAILED: u16 = 72;
-    pub const ALLOCATION_FAILED: u16 = 73;
-    pub const READ_FAILED: u16 = 74;
+    pub const ASSERTION_FAILED: u16 = 500;
+    pub const INDEX_OUT_OF_BOUNDS: u16 = 501;
+    pub const RANGE_ENDPOINT_NOT_WHOLE: u16 = 502;
+    pub const MATCH_FAILED: u16 = 503;
+    pub const ALLOCATION_FAILED: u16 = 504;
+    pub const READ_FAILED: u16 = 505;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants
@@ -104,7 +104,7 @@ impl Style {
 /// source line, and an underline beneath the failing expression:
 ///
 /// ```text
-/// error[Q070]: index 7 out of bounds for an array of size 3
+/// error[QN501]: index 7 out of bounds for an array of size 3
 ///    ╭─[demo.qn:5:11]
 ///  5 │   value = items[7]
 ///    ·           ────────
@@ -132,7 +132,7 @@ pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: 
 pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
     let style = Style::for_stderr();
     let mut out = format!(
-        "{}error[Q{code:03}]:{} {message}\n",
+        "{}error[QN{code:03}]:{} {message}\n",
         style.problem, style.plain
     );
     if let Some(site) = unsafe { site.as_ref() }
@@ -188,12 +188,26 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
 #[unsafe(no_mangle)]
 pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, length: i64) {
-    report_at(
-        site,
-        codes::ASSERTION_FAILED,
-        &message_text(message, length),
-    );
-    mark_case_failed();
+    let message = message_text(message, length);
+    report_at(site, codes::ASSERTION_FAILED, &message);
+    let (file, line) = location_of(site);
+    mark_case_failed(Failure {
+        message,
+        file,
+        line,
+    });
+}
+
+/// The file and line `site` names, as a JSON reporter carries them — empty and 0 for a
+/// site with no source (see [`report_at`]).
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
+fn location_of(site: *const QlSite) -> (String, u64) {
+    match unsafe { site.as_ref() } {
+        Some(site) => (site.file.as_text().into_owned(), site.line as u64),
+        None => (String::new(), 0),
+    }
 }
 
 /// A `?`/`|` match no arm matched: report at `site` (the match expression's own location)

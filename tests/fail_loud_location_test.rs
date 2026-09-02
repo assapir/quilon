@@ -32,7 +32,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         assert_stderr,
         format!(
-            "error[Q069]: assertion failed: expected 2, got 1\n{}\n",
+            "error[QN500]: assertion failed: expected 2, got 1\n{}\n",
             frame(
                 &position(&assertion, 3, 3),
                 3,
@@ -51,7 +51,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         bounds_stderr,
         format!(
-            "error[Q070]: index 9 out of bounds for an array of size 1\n{}\n",
+            "error[QN501]: index 9 out of bounds for an array of size 1\n{}\n",
             frame(&position(&bounds, 4, 3), 4, 3, "  a[n]", "a[n]".len())
         )
     );
@@ -75,7 +75,7 @@ fn a_compile_error_frames_alike() {
     assert_eq!(
         stderr,
         format!(
-            "error[Q028]: type mismatch: expected Num, got Bool\n{}\n",
+            "error[QN301]: type mismatch: expected Num, got Bool\n{}\n",
             frame(
                 &position(&file, 2, 3),
                 2,
@@ -123,7 +123,7 @@ fn a_native_build_reports_the_same_location() {
         "native and JIT reports must be identical"
     );
     assert!(
-        jit_stderr.starts_with("error[Q070]: index 5 out of bounds for an array of size 2\n")
+        jit_stderr.starts_with("error[QN501]: index 5 out of bounds for an array of size 2\n")
             && jit_stderr.contains(":4:3]"),
         "the report must name the failing read, got: {jit_stderr}"
     );

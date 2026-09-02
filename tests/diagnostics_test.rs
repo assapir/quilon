@@ -90,7 +90,7 @@ fn quiet_prints_no_status_but_still_the_diagnostic() {
 
     let (ok, stderr) = run("^ = () -> Num => < # >\n");
     assert!(!ok);
-    assert!(stderr.starts_with("error[Q002]:"), "{stderr}");
+    assert!(stderr.starts_with("error[QN002]:"), "{stderr}");
     assert!(!stderr.contains("lexing"), "{stderr}");
 }
 
@@ -102,7 +102,7 @@ fn type_error_reports_line_col_and_caret() {
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains("error[Q038]: no overload of `+` takes (Num, Bool)"),
+        stderr.contains("error[QN311]: no overload of `+` takes (Num, Bool)"),
         "no coded header: {stderr}"
     );
     assert!(stderr.contains(":2:30]"), "no line:col position: {stderr}");
@@ -142,7 +142,7 @@ fn lexer_error_reports_line_col_and_caret() {
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains("error[Q002]: invalid token `#`\n"),
+        stderr.contains("error[QN002]: invalid token `#`\n"),
         "{stderr}"
     );
     assert!(stderr.contains(":1:20]"), "no line:col position: {stderr}");
@@ -158,7 +158,7 @@ fn parse_error_reports_line_col() {
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains("error[Q005]: expected `)`, found a block close `>`\n"),
+        stderr.contains("error[QN100]: expected `)`, found a block close `>`\n"),
         "{stderr}"
     );
     assert!(stderr.contains(":1:27]"), "{stderr}");
@@ -253,13 +253,13 @@ fn a_lambda_body_may_still_be_a_bare_expression() {
 #[test]
 fn explain_prints_the_section_for_a_code() {
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["explain", "Q038"])
+        .args(["explain", "QN311"])
         .output()
         .expect("run quilon");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success());
     assert!(
-        stdout.starts_with("### Q038 — no matching overload"),
+        stdout.starts_with("### QN311 — no matching overload"),
         "{stdout}"
     );
     assert!(
@@ -268,7 +268,7 @@ fn explain_prints_the_section_for_a_code() {
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["explain", "Q999"])
+        .args(["explain", "QN999"])
         .output()
         .expect("run quilon");
     assert_eq!(out.status.code(), Some(2));

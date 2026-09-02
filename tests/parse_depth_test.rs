@@ -49,7 +49,7 @@ fn assert_clean_depth_error(out: &Output, what: &str) {
         "{what}: missing depth-guard message; stderr was:\n{stderr}"
     );
     assert!(
-        stderr.contains("error[Q006]: "),
+        stderr.contains("error[QN101]: "),
         "{what}: missing the coded header; stderr was:\n{stderr}"
     );
 }

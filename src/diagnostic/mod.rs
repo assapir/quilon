@@ -11,7 +11,7 @@
 //! reads like a type error:
 //!
 //! ```text
-//! error[Q038]: no overload of `+` takes (Num, Bool)
+//! error[QN311]: no overload of `+` takes (Num, Bool)
 //!    ╭─[program.qn:1:30]
 //!  1 │ add = (a :: Num) -> Num => < a + true >
 //!    ·                              ┬   ──┬─
@@ -414,7 +414,7 @@ mod tests {
         let out = Diagnostic::at(Code::TypeMismatch, &Span::in_root(10, 14), "bad")
             .render(&sources(src), false);
         let expected = "\
-error[Q028]: bad
+error[QN301]: bad
    ╭─[f.qn:1:11]
  1 │ add = 1 + true
    ·           ────
@@ -431,7 +431,7 @@ error[Q028]: bad
             .help("interpolate instead")
             .note("a note")
             .render(&sources(src), false);
-        assert!(out.starts_with("error[Q038]: no `+` for these\n"), "{out}");
+        assert!(out.starts_with("error[QN311]: no `+` for these\n"), "{out}");
         assert!(out.contains("─ Num"), "{out}");
         assert!(out.contains("─ Bool"), "{out}");
         assert!(out.contains("help: interpolate instead"), "{out}");
@@ -441,7 +441,7 @@ error[Q028]: bad
     #[test]
     fn a_report_with_no_location_is_the_header_alone() {
         let out = Diagnostic::new(Code::SourceNotReadable, "gone").render(&sources(""), false);
-        assert_eq!(out, "error[Q000]: gone");
+        assert_eq!(out, "error[QN000]: gone");
     }
 
     #[test]

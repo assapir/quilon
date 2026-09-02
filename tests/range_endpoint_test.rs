@@ -49,7 +49,7 @@ fn a_literal_endpoint_a_num_cannot_hold_is_a_compile_error() {
     ] {
         assert_eq!(
             type_error_message(source),
-            format!("error[Q055]: {expected}"),
+            format!("error[QN328]: {expected}"),
             "for:\n{source}"
         );
     }
@@ -113,7 +113,7 @@ fn an_abort_reports_the_range_expression() {
     let (code, stderr, path) = run_program("range_located", NAN_END);
     assert_eq!(code, 1);
     let expected = format!(
-        "error[Q071]: a range endpoint must be a whole number (got NaN)\n{}",
+        "error[QN502]: a range endpoint must be a whole number (got NaN)\n{}",
         frame(&position(&path, 2, 7), 2, 7, "  r = 1 <- (0.0 / 0.0)", 15)
     );
     assert!(
@@ -183,6 +183,6 @@ fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
 fn a_literal_bad_endpoint_on_a_lazily_consumed_range_is_a_compile_error() {
     assert_eq!(
         type_error_message("^ = () -> Num => <\n  r = (1.5 <- 3.9).map(n => n)\n  r.size\n>"),
-        "error[Q055]: a range endpoint must be a whole number (got 1.5)"
+        "error[QN328]: a range endpoint must be a whole number (got 1.5)"
     );
 }
