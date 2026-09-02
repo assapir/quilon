@@ -35,7 +35,7 @@ pub enum Reporter {
 }
 
 /// What the first failing `expect` of a case recorded.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct Failure {
     pub(crate) message: String,
     pub(crate) file: String,
