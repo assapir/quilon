@@ -587,3 +587,99 @@ fn at_takes_exactly_one_num_index() {
         "^ = () -> Num => <\n  \"abc\".at(\"x\") ?\n    | Ok(_) => 1\n    | NotOk(_) => 0\n>",
     );
 }
+
+// ---- bidi text corpus (Hebrew/Arabic, LOGICAL order) -----------------------
+//
+// `Text` is stored and processed in LOGICAL order (docs/types/text.md): every index,
+// length, search, and concatenation addresses the order the text was TYPED in, never the
+// order a bidi-aware display would draw it in. These are not new operations — the same
+// `length`/`graphemes`/`at`/`slice`/`indexOf`/`+`/`split` above — run over Hebrew, Arabic,
+// and mixed-direction literals to confirm right-to-left script makes no difference to any
+// of them.
+
+#[test]
+fn hebrew_literal_length_and_size() {
+    // "שלום" (Hebrew "hello"): 4 graphemes, 2 UTF-8 bytes each -> 8 bytes.
+    assert_exit(
+        "^ = () -> Num => <\n  t = \"שלום\"\n  t.length * 100 + t.size\n>",
+        408,
+    );
+}
+
+#[test]
+fn arabic_literal_length_and_size() {
+    // "مرحبا" (Arabic "hello"): 5 graphemes, 2 UTF-8 bytes each -> 10 bytes.
+    assert_exit(
+        "^ = () -> Num => <\n  t = \"مرحبا\"\n  t.length * 100 + t.size\n>",
+        510,
+    );
+}
+
+#[test]
+fn hebrew_graphemes_and_at_are_logical_order() {
+    // The FIRST grapheme is the FIRST-TYPED letter (`ש`) — the one a right-to-left reader
+    // encounters last — not whatever a bidi-aware display would draw in that position.
+    assert_exit(
+        "^ = () -> Num => <\n  t = \"שלום\"\n  count = t.graphemes().size\n  first = t.at(0) ?\n    | Ok(g)    => g == \"ש\" ? 1 : 0\n    | NotOk(_) => 0\n  count * 10 + first\n>",
+        41,
+    );
+}
+
+#[test]
+fn hebrew_slice_is_logical_order() {
+    // slice(0, 2) takes the first TWO TYPED letters ("של"), not the last two.
+    assert_exit(
+        "^ = () -> Num => < \"שלום\".slice(0, 2) == \"של\" ? 1 : 0 >",
+        1,
+    );
+}
+
+#[test]
+fn mixed_direction_index_of_is_logical_order() {
+    // "שלום world": the Hebrew word is typed FIRST, so "world" starts at grapheme index 5
+    // (4 Hebrew letters + 1 space) — its typed position, not its visual one.
+    assert_exit(
+        "^ = () -> Num => < \"שלום world\".indexOf(\"world\") ? | Ok(i) => i | NotOk(_) => 99 >",
+        5,
+    );
+}
+
+#[test]
+fn arabic_and_digits_index_of_is_logical_order() {
+    // "مرحبا 123": the digits are typed AFTER the Arabic word, so `indexOf` finds them at
+    // grapheme index 6 (5 Arabic letters + 1 space) regardless of Arabic being RTL and
+    // digits being LTR.
+    assert_exit(
+        "^ = () -> Num => < \"مرحبا 123\".indexOf(\"123\") ? | Ok(i) => i | NotOk(_) => 99 >",
+        6,
+    );
+}
+
+#[test]
+fn plus_concatenates_scripts_in_logical_order() {
+    // `+` builds the typed order, Hebrew then Arabic, with nothing reordered or inserted.
+    assert_exit(
+        "^ = () -> Num => <\n  s = \"שלום\" + \" \" + \"مرحبا\"\n  matches = s == \"שלום مرحبا\" ? 1 : 0\n  matches * 10000 + s.length * 100 + s.size\n>",
+        11019,
+    );
+}
+
+#[test]
+fn split_a_mixed_direction_sentence_keeps_logical_piece_order() {
+    // A mixed sentence with punctuation: the three comma-separated pieces come back in the
+    // order they were TYPED — Hebrew, then Arabic, then the Latin word.
+    assert_exit(
+        "^ = () -> Num => <\n  parts = \"שלום, مرحبا, world\".split(\", \")\n  a = parts[0] == \"שלום\" ? 1 : 0\n  b = parts[1] == \"مرحبا\" ? 1 : 0\n  c = parts[2] == \"world\" ? 1 : 0\n  parts.size * 1000 + a * 100 + b * 10 + c\n>",
+        3111,
+    );
+}
+
+#[test]
+fn rtl_literal_with_trailing_punctuation_is_logical_order() {
+    // "שלום!": the exclamation mark is typed (and stored) LAST, regardless of how a
+    // bidi-aware display might position it relative to the Hebrew letters.
+    assert_exit(
+        "^ = () -> Num => <\n  t = \"שלום!\"\n  length_ok = t.length == 5 ? 1 : 0\n  last = t.at(4) ?\n    | Ok(g)    => g == \"!\" ? 1 : 0\n    | NotOk(_) => 0\n  length_ok * 10 + last\n>",
+        11,
+    );
+}

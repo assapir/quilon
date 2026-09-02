@@ -6,6 +6,25 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`Text` is documented as logical order, and the lexer guards against Trojan Source.**
+  `docs/types/text.md` now states the contract directly: every `Text` index, length,
+  search, and concatenation addresses logical order — the order the text was typed and is
+  read — and `print`/`write` emit that same logical order, leaving visual (bidi) ordering to
+  the display device. No operation reorders `Text` data or inserts direction marks; this is
+  a documentation clarification, not a behavior change. Alongside it, the lexer now rejects
+  the CVE-2021-42574 class of attack: a bidi embedding, override, or isolate control opened
+  inside a string literal or a `~` comment must be closed before that token ends (UAX #9
+  nesting enforced with a stack), and any of these controls — or a scopeless mark
+  (LRM/RLM/ALM) — appearing outside a literal or comment is a lex error naming the
+  character. Legitimate Hebrew/Arabic literals are unaffected. See `src/lexer/bidi.rs`.
+
+- **A diagnostic's caret lands under the right grapheme on a right-to-left source line.**
+  When the quoted source line contains right-to-left characters, the `^^^` underline in a
+  compiler diagnostic is now positioned from the line's VISUAL order per UAX #9 (via the new
+  `unicode-bidi` dependency, LTR paragraph level) rather than its logical order, so it still
+  points at the right place on a bidi-aware terminal. A plain-ASCII line — the overwhelming
+  common case — never touches the bidi crate and renders byte-for-byte as before.
+
 - **`core.info` — what a program can ask about itself.** `<< core.info` brings in
   `platform()`, `os()`, `pointerWidth()`, `endianness()` and `runMode()`, each a sum type
   so a match over one is exhaustive and a typo is a compile error, plus `quilonVersion()`
