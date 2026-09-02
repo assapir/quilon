@@ -14,10 +14,11 @@
 //! error[Q038]: no overload of `+` takes (Num, Bool)
 //!    ╭─[program.qn:1:30]
 //!  1 │ add = (a :: Num) -> Num => < a + true >
-//!    ·                              ────┬───
-//!    ·                                  ╰── Num + Bool
+//!    ·                              ┬   ──┬─
+//!    ·                              │     ╰── Bool
+//!    ·                              ╰── Num
 //!    ╰────
-//!   help: the `+` members are (Num, Num) and (Text, Text)
+//!   help: the members of `+` are (Num, Num), (Text, Text)
 //! ```
 
 pub mod codes;

@@ -28,18 +28,14 @@ pub struct FrontEndError {
     pub sources: SourceMap,
 }
 
+/// The plain report.
 impl std::fmt::Display for FrontEndError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.render(false))
+        f.write_str(&self.diagnostic.render(&self.sources, false))
     }
 }
 
 impl FrontEndError {
-    /// The report, colored or plain.
-    pub fn render(&self, color: bool) -> String {
-        self.diagnostic.render(&self.sources, color)
-    }
-
     /// An error in the root file, before any module was linked.
     fn in_root(path: &str, source: &str, diagnostic: Diagnostic) -> Self {
         let mut sources = SourceMap::default();
