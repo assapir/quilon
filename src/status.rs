@@ -1,10 +1,14 @@
 //! What a command says about its own progress, on stderr.
 //!
-//! On a terminal the stages (lexing, parsing, …) run through one live spinner that clears
-//! itself, and a successful command ends on a single line: the file, the elapsed time, and
-//! a quip. Without a terminal each stage is one short line. `--quiet` prints nothing here —
-//! diagnostics still print, they are not status. `quilon run` clears the spinner and says
-//! nothing more, so the program's own output stands alone.
+//! Per-stage progress (lexing, parsing, …) exists ONLY on a terminal, and only as a live
+//! spinner line that clears itself — nothing from it survives into scrollback. Off a
+//! terminal, or with `CI` set in the environment (a pty a CI runner allocates is still not
+//! interactive), no stage line prints at all: just the final one-liner (`✓ file (9ms) —
+//! quip`) and diagnostics. `--quiet` silences the final line too — diagnostics still print,
+//! they are not status. `quilon run` clears the spinner and says nothing more, so the
+//! program's own output stands alone. `quilon test` never shows per-stage progress for a
+//! suite's compile, even on a terminal — [`Status::compiling`] is the one transient line it
+//! gets, cleared before the suite's own case tree prints.
 
 use std::cell::OnceCell;
 use std::io::IsTerminal;
@@ -46,10 +50,11 @@ impl Stage {
 
 enum Mode {
     Quiet,
-    /// One line per stage — stderr is not a terminal.
-    Lines,
-    /// A live spinner that collapses to the final line. Started by the first stage, so a
-    /// status that only ever reports a failure draws nothing.
+    /// The final line only — no per-stage lines. Stderr is not a terminal, or `CI` is set.
+    Plain,
+    /// A live spinner that collapses to the final line. Started by the first stage (or the
+    /// first [`Status::compiling`]), so a status that only ever reports a failure draws
+    /// nothing.
     Live(OnceCell<ProgressBar>),
 }
 
@@ -69,10 +74,10 @@ impl Status {
         }
     }
 
-    /// The status a command reports on stderr: silent under `quiet`, live on a terminal,
-    /// one line per stage otherwise.
+    /// The status a command reports on stderr: silent under `quiet`, a live per-stage
+    /// spinner on an interactive terminal, the final line alone otherwise.
     pub fn for_command(quiet: bool) -> Self {
-        Self::new(quiet, Mode::Lines)
+        Self::new(quiet, Mode::Plain)
     }
 
     /// The status of a command whose output is the program's own (`run`): live on a
@@ -82,7 +87,7 @@ impl Status {
     }
 
     fn new(quiet: bool, without_terminal: Mode) -> Self {
-        let mode = match (quiet, std::io::stderr().is_terminal()) {
+        let mode = match (quiet, is_interactive()) {
             (true, _) => Mode::Quiet,
             (false, false) => without_terminal,
             (false, true) => Mode::Live(OnceCell::new()),
@@ -94,25 +99,40 @@ impl Status {
         }
     }
 
+    /// The spinner this status draws through, building it on first use. `Live` only —
+    /// callers check the mode first.
+    fn spinner(&self) -> Option<&ProgressBar> {
+        match &self.mode {
+            Mode::Live(spinner) => Some(spinner.get_or_init(|| {
+                let spinner = ProgressBar::new_spinner().with_style(
+                    ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                        .expect("a fixed template"),
+                );
+                spinner.enable_steady_tick(Duration::from_millis(80));
+                spinner
+            })),
+            _ => None,
+        }
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }
 
-    /// Announce that `stage` begins.
+    /// Announce that `stage` begins — a live spinner update on an interactive terminal,
+    /// nothing anywhere else (see the module docs: there is no non-terminal stage line).
     pub fn stage(&self, stage: Stage) {
-        match &self.mode {
-            Mode::Quiet => {}
-            Mode::Lines => eprintln!("{}", stage.line()),
-            Mode::Live(spinner) => spinner
-                .get_or_init(|| {
-                    let spinner = ProgressBar::new_spinner().with_style(
-                        ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                            .expect("a fixed template"),
-                    );
-                    spinner.enable_steady_tick(Duration::from_millis(80));
-                    spinner
-                })
-                .set_message(stage.line()),
+        if let Some(spinner) = self.spinner() {
+            spinner.set_message(stage.line());
+        }
+    }
+
+    /// The one progress line `quilon test` shows for a suite's compile: a live "compiling
+    /// `what`" spinner update on an interactive terminal, nothing elsewhere. Never the
+    /// per-stage lines `stage` draws — a suite's own case tree is the progress that matters.
+    pub fn compiling(&self, what: &str) {
+        if let Some(spinner) = self.spinner() {
+            spinner.set_message(format!("compiling {what}"));
         }
     }
 
@@ -130,7 +150,7 @@ impl Status {
     pub fn done_with(&self, line: &str) {
         match &self.mode {
             Mode::Quiet => {}
-            Mode::Lines => eprintln!("{line}"),
+            Mode::Plain => eprintln!("{line}"),
             Mode::Live(_) => {
                 self.clear();
                 eprintln!("{line}");
@@ -167,6 +187,13 @@ impl Status {
 /// the same answer the runtime gives a compiled program.
 pub fn color_enabled() -> bool {
     quilon_rt::__color_enabled(2) == 1
+}
+
+/// Whether stderr is a terminal a person is watching live: a tty, and `CI` unset — a CI
+/// runner often allocates a pty, but there is no one there to watch a spinner animate, so
+/// it gets the same plain, scrollback-safe output a pipe does.
+fn is_interactive() -> bool {
+    std::io::stderr().is_terminal() && !std::env::var_os("CI").is_some_and(|v| !v.is_empty())
 }
 
 /// A duration as a reader scans it: whole milliseconds under a second, otherwise seconds

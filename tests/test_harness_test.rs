@@ -1121,6 +1121,16 @@ fn a_directory_runs_every_suite_it_holds() {
         "one suite's totals leaked into another's summary:\n{}",
         out.stdout
     );
+    // Off a terminal (a captured pipe, exactly what this harness gives every test), no
+    // per-file compile stage ever prints — a suite's own file heading and case tree are
+    // the progress `quilon test` shows.
+    for stage in ["lexing", "parsing", "resolving", "checking", "generating"] {
+        assert!(
+            !out.stderr.lines().any(|line| line.starts_with(stage)),
+            "a per-stage line leaked into a multi-suite run: {}",
+            out.stderr
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

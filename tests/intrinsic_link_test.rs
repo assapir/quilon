@@ -281,9 +281,16 @@ fn the_smoke_program_reaches_every_intrinsic() {
         stdout.is_empty(),
         "`quilon compile` wrote status to stdout: {stdout}"
     );
+    // Off a terminal (a captured pipe, exactly what `Command::output` gives this test) no
+    // per-stage line prints at all — only the final one-liner.
     assert!(
-        stderr.lines().any(|line| line.starts_with("generating")),
-        "missing the generating stage line from stderr: {stderr}"
+        !stderr.lines().any(|line| line.starts_with("generating")),
+        "a per-stage line leaked off a terminal: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "off a terminal, stderr is the final status line alone: {stderr}"
     );
     assert!(
         stderr

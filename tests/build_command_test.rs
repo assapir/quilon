@@ -117,12 +117,19 @@ fn build_hello_and_run(
         stdout.is_empty(),
         "`quilon build` wrote status to stdout: {stdout}"
     );
+    // Off a terminal (a captured pipe, exactly what `Command::output` gives this test) no
+    // per-stage line prints at all — only the final one-liner.
     for stage in ["generating", "linking"] {
         assert!(
-            stderr.lines().any(|line| line.starts_with(stage)),
-            "missing the {stage} stage line from stderr: {stderr}"
+            !stderr.lines().any(|line| line.starts_with(stage)),
+            "a per-stage line leaked off a terminal: {stderr}"
         );
     }
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "off a terminal, stderr is the final status line alone: {stderr}"
+    );
     assert!(
         stderr
             .lines()

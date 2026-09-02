@@ -36,8 +36,10 @@ fn check(name: &str, source: &str) -> (bool, String) {
     )
 }
 
-/// Status goes to stderr, never stdout; without a terminal it is one line per stage and
-/// a closing line naming the file and the elapsed time.
+/// Status goes to stderr, never stdout; without a terminal (a captured pipe, exactly what
+/// `Command::output` gives this test) there is NO per-stage line at all — stage progress is
+/// a live-terminal-only spinner that leaves no trace — just the closing line naming the
+/// file and the elapsed time.
 #[test]
 fn check_writes_status_to_stderr_not_stdout() {
     let out = check_output("status", "^ = () -> Num => < 0 >\n");
@@ -51,10 +53,15 @@ fn check_writes_status_to_stderr_not_stdout() {
     );
     for stage in ["lexing", "parsing", "resolving", "checking"] {
         assert!(
-            stderr.lines().any(|line| line.starts_with(stage)),
-            "missing the {stage} stage line from stderr: {stderr}"
+            !stderr.lines().any(|line| line.starts_with(stage)),
+            "a per-stage line leaked off a terminal: {stderr}"
         );
     }
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "off a terminal, stderr is the closing line alone: {stderr}"
+    );
     let last = stderr.lines().last().unwrap_or_default();
     assert!(
         last.starts_with("✓ ") && last.contains("quilon_diag_") && last.contains("ms)"),

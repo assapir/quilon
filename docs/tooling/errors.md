@@ -232,13 +232,13 @@ Group the parameters into a record type and take that record as one parameter.
 
 ### QN103 — match with no arms
 
-A `?` match has no `|` arm.
+A `?` match has no `|` arm — the parser reaches `?` and the arm list that should follow
+it turns out empty, a defensive check for a construct the grammar otherwise keeps from
+being written. Write at least one arm: `1 ? | 1 => 0 | _ => 1`.
 
-```quilon ignore
-^ = () -> Num => < 1 ? >
+```text
+error[QN103]: a match needs at least one `|` arm
 ```
-
-Write at least one arm: `1 ? | 1 => 0 | _ => 1`.
 
 ### QN104 — interpolation hole with more than one expression
 
@@ -296,13 +296,17 @@ Declare it with `=`: `+ = (other :: Point) -> Point => < … >`.
 
 ### QN109 — lowercase sum-type variant
 
-A variant of a sum type starts with a lowercase letter.
+A variant of a sum type starts with a lowercase letter. (The first two variants decide
+that a `Name = A / B / …` line is a sum-type declaration rather than division — see
+[the disambiguation rule](../types/sum-types.md) — so this fires from the third variant on;
+a lowercase first or second variant instead reads as dividing undefined names, an
+[undefined name](#qn300--undefined-name) error.)
 
 ```quilon ignore
-Color = red / Green
+Color = Red / Green / blue
 ```
 
-Capitalize every variant: `Color = Red / Green`.
+Capitalize every variant: `Color = Red / Green / Blue`.
 
 ### QN110 — sum type with fields or a mutating method
 
@@ -412,7 +416,7 @@ An import's binding name appears where a value is required.
 
 ```quilon ignore
 << core.io
-^ = () -> Num => < x = io  0 >
+^ = () -> Num => < x = io >
 ```
 
 Reach the module's exports through the binding: `io.print(…)`.
@@ -424,7 +428,7 @@ A short prefix is bound by more than one imported module.
 ```quilon ignore
 << core.http
 << "vendor/http.qn"
-^ = () -> Num => < http.send(request)  0 >
+^ = () -> Num => < http.send(request) >
 ```
 
 Write the full path: `core.http.send(…)`.
@@ -432,13 +436,16 @@ Write the full path: `core.http.send(…)`.
 ### QN208 — test blocks without `core.test`
 
 A file has top-level `test.describe` blocks and `quilon test` finds the harness's summary
-function out of scope.
+function out of scope. Recognizing a call as a test block already requires `<< core.test`
+above it — an unimported `test.describe` reads as an ordinary qualified reference and is
+[QN106](#qn106--qualified-name-through-a-missing-import) instead — so this is the
+defensive backstop for `core.test` itself failing to define its summary function, not a
+mistake a program with the import in place can make.
 
-```quilon ignore
-test.describe("math", () => < test.it("adds", () => expect(2, equals(2))) >)
+```text
+error[QN208]: no test harness in scope: `core.test.reportSummary` is undefined
+  help: add `<< core.test` above this block
 ```
-
-Add `<< core.test` above the first block.
 
 ## Checker
 
@@ -488,7 +495,7 @@ Pass exactly the declared parameters: `double(1)`.
 A binding made with `=` is reassigned.
 
 ```quilon ignore
-^ = () -> Num => < n = 1  n := 2  n >
+^ = () -> Num => < n = 1  n := 2 >
 ```
 
 Bind it with `:=` to allow writes: `n := 1`.
@@ -499,7 +506,7 @@ A field is written through a binding made with `=`.
 
 ```quilon ignore
 Point = { x :: Num }
-^ = () -> Num => < p = Point { x = 1 }  p.x := 2  p.x >
+^ = () -> Num => < p = Point { x = 1 }  p.x := 2 >
 ```
 
 Bind the record with `:=`: `p := Point { x = 1 }`.
@@ -507,21 +514,25 @@ Bind the record with `:=`: `p := Point { x = 1 }`.
 ### QN306 — `:=` binding aliasing an immutable value
 
 A `:=` binding takes the value of an `=` binding, a parameter, or the receiver `it` of an
-`=` method. A value bound with `=` stays immutable through every alias.
+`=` method. A value bound with `=` stays immutable through every alias. Only reference
+types are checked — a record, or an array/`Set`/`Map` holding one; an array of `Num`,
+`Bool`, or `Text` copies freely and is exempt.
 
 ```quilon ignore
-^ = () -> Num => < a = [1]  b := a  0 >
+Point = { x :: Num }
+^ = () -> Num => < p = Point { x = 1 }  q := p >
 ```
 
-Bind with `=`, or build a fresh value: `b := a + []`.
+Bind with `=`, or build a fresh value: `q := Point { x = p.x }`.
 
 ### QN307 — `=` binding aliasing a mutable value
 
 An `=` binding takes the value of a `:=` binding; writes through the mutable binding would
-change the `=`-bound value.
+change the `=`-bound value. Only reference types are checked, the same as QN306 above.
 
 ```quilon ignore
-^ = () -> Num => < a := [1]  b = a  0 >
+Point = { x :: Num }
+^ = () -> Num => < p := Point { x = 1 }  q = p >
 ```
 
 Bind with `:=`, or build a fresh value.
@@ -532,7 +543,7 @@ A `:=` method is called on a receiver bound with `=`.
 
 ```quilon ignore
 Counter = { n :: Num, bump := () -> $ => < it.n := it.n + 1 > }
-^ = () -> Num => < c = Counter { n = 0 }  c.bump()  c.n >
+^ = () -> Num => < c = Counter { n = 0 }  c.bump() >
 ```
 
 Bind the receiver with `:=`: `c := Counter { n = 0 }`.
@@ -565,7 +576,7 @@ A call, or an operator, has argument types that match no member of its overload 
 Dispatch is by exact type.
 
 ```quilon ignore
-^ = () -> Num => < 1 + "x"  0 >
+^ = () -> Num => < 1 + "x" >
 ```
 
 Pass the types a member takes; the `help:` line lists the members. To join a number and
@@ -573,15 +584,19 @@ text, interpolate: `` "`n`x" ``.
 
 ### QN312 — ambiguous overload
 
-More than one member of an overload set matches the argument types — two members share a
-parameter list.
+More than one member of an overload set matches a call's argument types. Two members with
+the very same parameter types are rejected up front, as a
+[duplicate definition](#qn310--duplicate-definition) — this is the narrower case a call site
+still finds ambiguous: a member taking a trailing `site :: Site` the compiler fills in
+automatically, alongside one that does not, both accept a call that omits it.
 
 ```quilon ignore
 f = (n :: Num) -> Num => < n >
-f = (n :: Num) -> Num => < n * 2 >
+f = (n :: Num, site :: Site) -> Num => < n >
+^ = () -> Num => < f(1) >
 ```
 
-Give the members distinct parameter types.
+Give the members distinct parameter types, or call with enough arguments to rule one out.
 
 ### QN313 — overload member with an unannotated parameter
 
@@ -611,21 +626,22 @@ A definition, or a lambda, declares a different number of parameters than the fu
 it must match.
 
 ```quilon ignore
-f :: (Num, Num) -> Num = (a :: Num) => a
+f :: (Num, Num) -> Num = (a :: Num) => < a >
 ```
 
 Declare exactly the parameters the type states.
 
 ### QN316 — lambda parameter with an open type
 
-A lambda leaves a parameter unannotated in a position that states no function type — or
-an overload set the other arguments leave open.
+A lambda leaves a parameter unannotated in a position that states no function type — an
+array element, a plain expression, a sum payload — or an overload set the other arguments
+leave open.
 
 ```quilon ignore
-^ = () -> Num => < g = (x) => x + 1  g(1) >
+^ = () -> Num => < fns = [x => x + 1] >
 ```
 
-Annotate the parameter: `(x :: Num) => x + 1`.
+Annotate the parameter: `[(x :: Num) => x + 1]`.
 
 ### QN317 — recursive function without a return type
 
@@ -661,14 +677,18 @@ Move the `Site` parameter last: `check = (n :: Num, site :: Site) -> $ => < $ >`
 
 ### QN320 — call before the definition
 
-A call reaches an overload set whose every member is defined below the call.
+A call reaches an overload set — two or more same-named definitions — every member of
+which is defined below the call. A name with only ONE definition below the call is instead
+[undefined](#qn300--undefined-name): names resolve top to bottom, and there is no set yet
+to name specially.
 
 ```quilon ignore
-^ = () -> Num => < f(1) >
-f = (n :: Num) -> Num => < n >
+h = () -> Text => < g(1) >
+g = (n :: Num) -> Text => < "a" >
+g = (t :: Text) -> Text => < "b" >
 ```
 
-Move the definition above the call.
+Move the definitions above the call.
 
 ### QN321 — overload member without a return type
 
@@ -937,10 +957,15 @@ A computed `lo <- hi` endpoint is a fraction, NaN, infinite, or beyond the whole
 `Num` holds exactly.
 
 ```quilon ignore
-^ = () -> Num => < half = 0.5  (1 <- half).size >
+^ = () -> Num => <
+  half = 0.5
+  (1 <- half).size
+>
 ```
 
-Compute whole-number endpoints.
+Compute whole-number endpoints. (The range expression is written on its own line here — a
+`(` that instead followed `half = 0.5` on the SAME line would open a call on `half`, per
+[the statement-boundary rule](../expressions/README.md).)
 
 ### QN503 — no arm matched
 

@@ -25,7 +25,7 @@ use crate::jit;
 use crate::quips;
 use crate::source_extension;
 use crate::source_map::SourceMap;
-use crate::status::{Stage, Status, format_duration};
+use crate::status::{Status, format_duration};
 
 /// Directory names never searched for suites: walking build output is slow and finds
 /// nothing. (Hidden entries are skipped separately, by their leading dot.)
@@ -179,8 +179,13 @@ fn run_in_its_own_process(suite: &Path, options: &Options) -> bool {
 /// like any other compile error and counts as a failure, as does a selected path the suite
 /// does not have. The suite's own report is `core.test`'s; the line after it — the verdict,
 /// the elapsed time, and a quip — is the runner's, printed only for the human reporter.
+///
+/// Compiling never shows the per-stage progress `check`/`build`/`compile` do — a suite's own
+/// case tree is the progress that matters here. `status.compiling` is the one transient line
+/// (live-terminal only), and the front end runs under its own silent status.
 fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
-    let checked = match driver::front_end_reporting(suite, TestBlocks::Run, status) {
+    status.compiling(&suite.display().to_string());
+    let checked = match driver::front_end_with(suite, TestBlocks::Run) {
         Ok(checked) => checked,
         Err(error) => {
             status.report(&error.diagnostic, &error.sources);
@@ -211,7 +216,6 @@ fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
     // no parameters — so `argv` is just the program's path, the way a native build sees it.
     let argv = [suite.to_string_lossy().into_owned()];
 
-    status.stage(Stage::Generating);
     status.clear();
     let passed = match jit::run_program(
         &checked.program,
