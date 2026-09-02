@@ -1,0 +1,31 @@
+name: Set up pnpm and Node
+description: Install pnpm, Node.js (LTS, with pnpm cache), and the project's dependencies.
+
+inputs:
+  working-directory:
+    description: Directory containing package.json and pnpm-lock.yaml.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Install pnpm before setup-node so `cache: pnpm` can find it. The pnpm
+    # version comes from the `packageManager` field in the target
+    # package.json; point action-setup at it explicitly since action-setup
+    # defaults to the repo-root cwd.
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v6.0.10
+      with:
+        package_json_file: ${{ inputs.working-directory }}/package.json
+
+    - name: Set up Node.js (LTS)
+      uses: actions/setup-node@v7
+      with:
+        node-version: lts/*
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm install --frozen-lockfile

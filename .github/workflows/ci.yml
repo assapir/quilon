@@ -26,32 +26,12 @@ jobs:
         with:
           submodules: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
         with:
-          components: rustfmt, clippy
-
-      - name: Install LLVM 22
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gcc clang
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev libpolly-22-dev
-          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
-
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            gate-cargo-
+          llvm-source: apt
+          cache-key-prefix: gate
+          rustup-components: rustfmt, clippy
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -99,40 +79,11 @@ jobs:
         with:
           submodules: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install LLVM 22 and system dependencies (apt)
-        if: matrix.pkg == 'apt'
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gcc clang
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev libpolly-22-dev
-          sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
-          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
-
-      - name: Install LLVM 22 (brew)
-        if: matrix.pkg == 'brew'
-        run: |
-          set -euxo pipefail
-          brew update
-          brew install llvm@22
-          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
-
-      - name: Cache cargo
-        uses: actions/cache@v6
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.key }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.key }}-cargo-
+          llvm-source: ${{ matrix.pkg }}
+          cache-key-prefix: ${{ matrix.key }}
 
       - name: Build
         run: cargo build --workspace --all-targets --verbose
@@ -196,13 +147,12 @@ jobs:
   # Mirrors release.yml's macos job for a single `--release --bin quilon` link,
   # so a PR catches a release-link regression without running LTO over ~54
   # test/bench binaries the way build-and-test's full `--all-targets` would.
+  # Waits on build-and-test (all legs, macOS included) rather than just gate,
+  # so a broken macOS test run blocks this instead of racing it.
   macos-release-link:
     name: macos-release-link
-    needs: gate
+    needs: build-and-test
     runs-on: macos-latest
-
-    env:
-      LLVM_RELEASE: 22.1.8
 
     steps:
       - name: Checkout
@@ -210,80 +160,15 @@ jobs:
         with:
           submodules: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install LLVM ${{ env.LLVM_RELEASE }}
-        run: |
-          set -euxo pipefail
-          package="LLVM-${LLVM_RELEASE}-macOS-ARM64"
-          mkdir -p "$RUNNER_TEMP/llvm"
-          # Only what llvm-sys reads — the archives, the headers, and llvm-config.
-          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_RELEASE}/${package}.tar.xz" \
-            | tar -xf - -C "$RUNNER_TEMP/llvm" \
-              "${package}/bin/llvm-config" "${package}/include" "${package}/lib"
-          prefix="$RUNNER_TEMP/llvm/${package}"
-          "$prefix/bin/llvm-config" --version
-          mode="$("$prefix/bin/llvm-config" --shared-mode)"
-          if [ "$mode" != static ]; then
-            echo "::error::LLVM at $prefix links $mode, not static"
-            exit 1
-          fi
-          # --system-libs names zstd; the runner's default library search picks up
-          # Homebrew's dylib for it unless a static archive outranks it, so copy one
-          # onto the -L path llvm-sys already adds (which is checked first) rather
-          # than trust the recorded entry to be the static one.
-          brew list zstd >/dev/null 2>&1 || brew install zstd
-          zstd_prefix="$(brew --prefix zstd)"
-          if [ -f "$zstd_prefix/lib/libzstd.a" ]; then
-            cp "$zstd_prefix/lib/libzstd.a" "$prefix/lib/libzstd.a"
-          else
-            echo "::error::No static libzstd.a at $zstd_prefix/lib; the link would depend on Homebrew's zstd"
-            exit 1
-          fi
-          for lib in $("$prefix/bin/llvm-config" --system-libs); do
-            case "$lib" in
-              /*)
-                test -f "$lib" && continue
-                echo "::error::LLVM links $lib, which is not installed here"
-                exit 1
-                ;;
-            esac
-          done
-          # This package ships its own libc++ and libunwind (dylib and static
-          # archive both) on the same -L path llvm-sys adds for the LLVM archives;
-          # either shadows the SDK's, its libunwind dylib has no rpath so the
-          # binary cannot load it, and the static libc++ alone is missing the
-          # ABI/exception symbols normally paired with it. Drop every file from
-          # both families so -lc++/-lunwind fall through to the SDK's complete
-          # ones. libLTO.dylib stays — the next step needs it.
-          rm -f "$prefix"/lib/libc++* "$prefix"/lib/libunwind*
-          {
-            echo "LLVM_SYS_221_PREFIX=$prefix"
-            # Apple's ld reads LTO bitcode through libLTO.dylib; the one Xcode
-            # ships is an older LLVM than 22 and rejects this package's bitcode
-            # archive members. Point it at the matching reader instead.
-            echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,-lto_library,$prefix/lib/libLTO.dylib"
-          } >> "$GITHUB_ENV"
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
+        with:
+          llvm-source: macos-static
 
       - name: Build release
         run: cargo build --release --bin quilon
 
-      - name: Verify the binary is self-contained
-        run: |
-          set -euo pipefail
-          file target/release/quilon
-          otool -L target/release/quilon
-          ./target/release/quilon check examples/hello_world.qn
-          # Only macOS system libraries may appear: an @rpath entry, a Homebrew
-          # prefix, or the LLVM package's own libc++/libLLVM is a dependency the
-          # binary promises it does not have.
-          otool -L target/release/quilon | tail -n +2 | while read -r lib _; do
-            case "$lib" in
-              /usr/lib/*|/System/Library/*) ;;
-              *)
-                echo "::error::quilon names a non-system library: $lib"
-                exit 1
-                ;;
-            esac
-          done
+      - name: Verify the asset is self-contained
+        uses: ./.github/actions/verify-self-contained-asset
+        with:
+          binary-path: target/release/quilon

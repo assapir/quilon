@@ -14,21 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6.0.10
+      - name: Set up pnpm and Node
+        uses: ./.github/actions/setup-node-pnpm
         with:
-          package_json_file: site/package.json
-
-      - name: Install Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: site/pnpm-lock.yaml
-
-      - name: Install dependencies
-        working-directory: site
-        run: pnpm install --frozen-lockfile
+          working-directory: site
 
       - name: Build the site
         working-directory: site
