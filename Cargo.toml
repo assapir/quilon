@@ -39,6 +39,11 @@ quilon-rt = { path = "quilon-rt" }
 # from a distributed binary. Pure-Rust backend (miniz_oxide) by default.
 flate2 = "1.1"
 
+# The Unicode Bidirectional Algorithm (UAX #9), used only to compute a diagnostic's caret
+# position from a quoted source line's VISUAL order when that line has right-to-left
+# characters — `Text` itself stays logical order end to end (see docs/types/text.md).
+unicode-bidi = "0.3.18"
+
 [dev-dependencies]
 # `wait4`, for the exact peak RSS the kernel recorded for a benchmarked child process.
 # Already in the dependency graph; this only makes it directly visible to the benches.
