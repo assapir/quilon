@@ -118,18 +118,15 @@ fn build_hello_and_run(
         "`quilon build` wrote status to stdout: {stdout}"
     );
     // Off a terminal (a captured pipe, exactly what `Command::output` gives this test) no
-    // per-stage line prints at all — only the final one-liner.
+    // per-stage line prints at all — only the final one-liner, last (the system linker may
+    // add its own warning line ahead of it — e.g. an SDK-version notice on macOS CI runners
+    // — which is the linker's stderr, not this compiler's status).
     for stage in ["generating", "linking"] {
         assert!(
             !stderr.lines().any(|line| line.starts_with(stage)),
             "a per-stage line leaked off a terminal: {stderr}"
         );
     }
-    assert_eq!(
-        stderr.lines().count(),
-        1,
-        "off a terminal, stderr is the final status line alone: {stderr}"
-    );
     assert!(
         stderr
             .lines()
