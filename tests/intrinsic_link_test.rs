@@ -279,15 +279,14 @@ fn the_smoke_program_reaches_every_intrinsic() {
         "`quilon compile` wrote status to stdout: {stdout}"
     );
     assert!(
-        stderr.contains("🔨 Compiling:"),
-        "missing compile status from stderr: {stderr}"
+        stderr.lines().any(|line| line.starts_with("generating")),
+        "missing the generating stage line from stderr: {stderr}"
     );
     assert!(
-        stderr.contains("✅ Type checking passed!"),
-        "missing type-check status from stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("✅ LLVM IR written to:"),
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("✓ ")),
         "missing compile success status from stderr: {stderr}"
     );
 

@@ -275,9 +275,10 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
             "`quilon {command}` on a tests-only file must succeed, said:\n{}\n{}",
             out.stdout, out.stderr
         );
+        // The stage lines are status; the skip itself reports nothing and builds nothing.
         assert!(
-            out.stdout.is_empty() && out.stderr.is_empty(),
-            "`quilon {command}` must say nothing at all, said:\n{}\n{}",
+            out.stdout.is_empty() && !out.stderr.contains("error[") && !out.stderr.contains("✓"),
+            "`quilon {command}` must report nothing and build nothing, said:\n{}\n{}",
             out.stdout,
             out.stderr
         );
@@ -634,8 +635,10 @@ fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
         out.stderr
     );
     assert!(
-        out.stderr.contains("expected 5, got 4") && out.stderr.contains("^^^"),
-        "the failure must carry the message and a caret run:\n{}",
+        out.stderr
+            .contains("error[Q069]: assertion failed: expected 5, got 4")
+            && out.stderr.contains("───"),
+        "the failure must carry the coded message and an underline:\n{}",
         out.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1006,8 +1009,8 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         build.stdout, build.stderr
     );
     assert!(
-        build.stdout.is_empty() && build.stderr.is_empty(),
-        "the skip must be silent, said:\n{}\n{}",
+        build.stdout.is_empty() && !build.stderr.contains("error[") && !build.stderr.contains("✓"),
+        "the skip must report nothing and build nothing, said:\n{}\n{}",
         build.stdout,
         build.stderr
     );

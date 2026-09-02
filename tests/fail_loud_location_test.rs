@@ -1,11 +1,10 @@
 //! One frame for every located failure.
 //!
-//! Three things now report a `file:line:column` with the offending source line and a caret
-//! run: a compile error (`src/diagnostic.rs`), a failing `core.test` assertion (composed in
-//! Quilon by `failAt`), and a fail-loud runtime check (composed in Rust by
-//! `quilon-rt::report::fail_at`). Three renderers, one shape — which only stays true if
-//! something checks it, because the Quilon one is deliberately hackable and the Rust one has
-//! to abort from inside an intrinsic where there is no Quilon frame to compose from.
+//! A compile error (`src/diagnostic`, drawn by `miette`) and a fail-loud runtime check
+//! (composed in Rust by `quilon-rt::report::fail_at`, which has to abort from inside an
+//! intrinsic with no renderer to lean on) report the same frame: the `error[Q…]:` header,
+//! the position, the source line, the underline. Two renderers, one shape — which only
+//! stays true if something checks it.
 //!
 //! Every case runs as a SUBPROCESS: these programs exit through `__exit`, which would take
 //! the test runner with them.
@@ -14,27 +13,15 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{ensure_runtime_lib, position, run_program, tool_available};
+use common::{ensure_runtime_lib, frame, position, run_program, tool_available};
 
 fn quilon() -> &'static str {
     env!("CARGO_BIN_EXE_quilon")
 }
 
-/// The frame a report should carry for a failure at `line`/`column` of `source_line`,
-/// underlining `width` characters — everything except the message itself.
-fn expected_frame(line: usize, column: usize, source_line: &str, width: usize) -> String {
-    let number = line.to_string();
-    let gutter = " ".repeat(number.len());
-    format!(
-        "{gutter} |\n{number} | {source_line}\n{gutter} | {}{}",
-        " ".repeat(column - 1),
-        "^".repeat(width)
-    )
-}
-
 /// A failing assertion and a failing bounds check frame their location identically — the
-/// position line, the message on its own line under it, then the same gutter, source line,
-/// and caret run — differing only in the message text.
+/// coded header with the message, then the same position, source line, and underline —
+/// differing only in the code and the message text.
 #[test]
 fn an_assertion_and_a_runtime_check_frame_alike() {
     let (assert_code, assert_stderr, assertion) = run_program(
@@ -45,9 +32,14 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         assert_stderr,
         format!(
-            "{}\nassertion failed: expected 2, got 1\n{}\n",
-            position(&assertion, 3, 3),
-            expected_frame(3, 3, "  assert(1, equals(2))", "assert(1, equals(2))".len())
+            "error[Q069]: assertion failed: expected 2, got 1\n{}\n",
+            frame(
+                &position(&assertion, 3, 3),
+                3,
+                3,
+                "  assert(1, equals(2))",
+                "assert(1, equals(2))".len()
+            )
         )
     );
 
@@ -59,27 +51,39 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
     assert_eq!(
         bounds_stderr,
         format!(
-            "{}\nindex 9 out of bounds for an array of size 1\n{}\n",
-            position(&bounds, 4, 3),
-            expected_frame(4, 3, "  a[n]", "a[n]".len())
+            "error[Q070]: index 9 out of bounds for an array of size 1\n{}\n",
+            frame(&position(&bounds, 4, 3), 4, 3, "  a[n]", "a[n]".len())
         )
     );
 }
 
-/// A compile error frames the same way — with `error:` before the message, since that one
-/// says which severity it is. Keeps the three renderers honest about the gutter and caret.
+/// A compile error frames the same way. Keeps the two renderers honest about the gutter
+/// and the underline.
 #[test]
 fn a_compile_error_frames_alike() {
-    let (_, _, file) = run_program("mismatch", "^ = () -> Num => <\n  x = 1 + true\n  x\n>\n");
+    // A plain type mismatch is a one-span report, the frame the runtime draws.
+    let (_, _, file) = run_program(
+        "mismatch",
+        "^ = () -> Num => <\n  x :: Num = true\n  x\n>\n",
+    );
     let out = Command::new(quilon())
-        .args(["check", file.to_str().unwrap()])
+        .args(["--quiet", "check", file.to_str().unwrap()])
         .output()
         .expect("spawn quilon check");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(
-        stderr.contains(&expected_frame(2, 7, "  x = 1 + true", "1 + true".len())),
-        "a compile error must carry the same frame, got: {stderr}"
+    assert_eq!(
+        stderr,
+        format!(
+            "error[Q028]: type mismatch: expected Num, got Bool\n{}\n",
+            frame(
+                &position(&file, 2, 3),
+                2,
+                3,
+                "  x :: Num = true",
+                "x :: Num = true".len()
+            )
+        )
     );
 }
 
@@ -119,7 +123,8 @@ fn a_native_build_reports_the_same_location() {
         "native and JIT reports must be identical"
     );
     assert!(
-        jit_stderr.contains(":4:3:\nindex 5 out of bounds for an array of size 2"),
+        jit_stderr.starts_with("error[Q070]: index 5 out of bounds for an array of size 2\n")
+            && jit_stderr.contains(":4:3]"),
         "the report must name the failing read, got: {jit_stderr}"
     );
 }

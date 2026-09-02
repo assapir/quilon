@@ -117,12 +117,17 @@ fn build_hello_and_run(
         stdout.is_empty(),
         "`quilon build` wrote status to stdout: {stdout}"
     );
+    for stage in ["generating", "linking"] {
+        assert!(
+            stderr.lines().any(|line| line.starts_with(stage)),
+            "missing the {stage} stage line from stderr: {stderr}"
+        );
+    }
     assert!(
-        stderr.contains("🔨 Building:"),
-        "missing build status from stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("✅ Built native executable:"),
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("✓ ")),
         "missing build success status from stderr: {stderr}"
     );
 

@@ -145,7 +145,10 @@ fn main() {
         .version(&*version().leak())
         .after_help(quips::pick(quips::BANNER));
     let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
-    let status = Status::for_command(cli.quiet);
+    let status = match cli.command {
+        Commands::Run { .. } => Status::transient(cli.quiet),
+        _ => Status::for_command(cli.quiet),
+    };
 
     match cli.command {
         Commands::Run { file, args } => {

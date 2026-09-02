@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
-use common::{ensure_runtime_lib, position};
+use common::{ensure_runtime_lib, frame, position};
 
 const FAIL_CODE: i32 = 101;
 
@@ -242,7 +242,7 @@ fn a_generic_payload_is_only_compared_against_a_num() {
         let (code, stderr) = run_jit(tag, &program.replace("MATCHER", matcher));
         assert_ne!(code, 0, "`{matcher}` on a generic payload must be refused");
         assert!(
-            stderr.contains("error:"),
+            stderr.contains("error[Q"),
             "`{matcher}` must be refused with a diagnostic, got: {stderr:?}"
         );
     }
@@ -406,8 +406,14 @@ fn a_failing_assert_reports_the_call_site_in_full() {
 
     let path = tmp_dir().join("site_full.qn");
     let expected = format!(
-        "{}\nassertion failed: expected 41, got 42\n  |\n2 |   assert(6 * 7, equals(41))\n  |   ^^^^^^^^^^^^^^^^^^^^^^^^^\n",
-        position(&path, 2, 3)
+        "error[Q069]: assertion failed: expected 41, got 42\n{}\n",
+        frame(
+            &position(&path, 2, 3),
+            2,
+            3,
+            "  assert(6 * 7, equals(41))",
+            "assert(6 * 7, equals(41))".len()
+        )
     );
     assert_eq!(stderr, expected, "unexpected failure report");
 }
@@ -422,7 +428,7 @@ fn an_assert_inside_a_helper_reports_that_helper_line() {
 
     let path = tmp_dir().join("site_helper_line.qn");
     assert!(
-        stderr.starts_with(&format!("{}\n", position(&path, 2, 3))),
+        stderr.contains(&position(&path, 2, 3)),
         "must report the assertion's own line 2, column 3, got: {stderr:?}"
     );
     assert!(
@@ -439,11 +445,13 @@ fn fail_at_reports_its_caller() {
     let (code, stderr) = run_jit("site_fail_at", src);
     assert_eq!(code, FAIL_CODE);
 
+    // `failAt` composes its frame in Quilon (`corelib/test.qn`): the position line, then
+    // the message.
     let path = tmp_dir().join("site_fail_at.qn");
     assert!(
         stderr.starts_with(&format!(
-            "{}\nassertion failed: 3 is odd",
-            position(&path, 7, 3)
+            "{}:7:3:\nassertion failed: 3 is odd",
+            quilon::source_map::shorten_path(&path.display().to_string())
         )),
         "a check of your own must report ITS caller (line 7), got: {stderr:?}"
     );
@@ -473,7 +481,7 @@ fn a_failure_in_an_imported_module_reports_that_module() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.starts_with(&format!("{}\n", position(&helper, 2, 3))),
+        stderr.contains(&position(&helper, 2, 3)),
         "the report must name the imported module and its line, got: {stderr:?}"
     );
     assert!(
@@ -563,9 +571,10 @@ fn native_aot_assert_exit_codes() {
         // The location is compiled IN, so a native binary reports it exactly as the JIT
         // does — no debug info, no unwinder, nothing to install.
         assert!(
-            stderr.starts_with(&format!(
-                "{}\n",
-                position(&tmp_dir().join(format!("aot_fail_{linker}.qn")), 1, 18)
+            stderr.contains(&position(
+                &tmp_dir().join(format!("aot_fail_{linker}.qn")),
+                1,
+                18
             )),
             "native AOT ({linker}): the report must name its call site, got: {stderr:?}"
         );

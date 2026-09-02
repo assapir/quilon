@@ -68,9 +68,19 @@ impl Status {
     /// The status a command reports on stderr: silent under `quiet`, live on a terminal,
     /// one line per stage otherwise.
     pub fn for_command(quiet: bool) -> Self {
+        Self::new(quiet, Mode::Lines)
+    }
+
+    /// The status of a command whose output is the program's own (`run`): live on a
+    /// terminal, where the spinner leaves no trace, and silent everywhere else.
+    pub fn transient(quiet: bool) -> Self {
+        Self::new(quiet, Mode::Quiet)
+    }
+
+    fn new(quiet: bool, without_terminal: Mode) -> Self {
         let mode = match (quiet, std::io::stderr().is_terminal()) {
             (true, _) => Mode::Quiet,
-            (false, false) => Mode::Lines,
+            (false, false) => without_terminal,
             (false, true) => {
                 let spinner = ProgressBar::new_spinner().with_style(
                     ProgressStyle::with_template("{spinner:.cyan} {msg}")

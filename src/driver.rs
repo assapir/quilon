@@ -24,7 +24,7 @@ use std::rc::Rc;
 /// offset in the root.
 #[derive(Debug)]
 pub struct FrontEndError {
-    pub diagnostic: Diagnostic,
+    pub diagnostic: Box<Diagnostic>,
     pub sources: SourceMap,
 }
 
@@ -45,7 +45,7 @@ impl FrontEndError {
         let mut sources = SourceMap::default();
         sources.set_root(path, source);
         Self {
-            diagnostic,
+            diagnostic: Box::new(diagnostic),
             sources,
         }
     }
@@ -120,7 +120,7 @@ pub fn front_end_reporting(
 ) -> Result<Checked, FrontEndError> {
     let path = file.display().to_string();
     let unlocated = |code, message| FrontEndError {
-        diagnostic: Diagnostic::new(code, message),
+        diagnostic: Box::new(Diagnostic::new(code, message)),
         sources: SourceMap::default(),
     };
     crate::source_extension::require_source(&path)
@@ -192,7 +192,7 @@ pub fn front_end_reporting(
         Err(mut error) => {
             error.sources.set_root(path.clone(), source.clone());
             return Err(FrontEndError {
-                diagnostic: Diagnostic::at(error.code, &error.span, error.message),
+                diagnostic: Box::new(Diagnostic::at(error.code, &error.span, error.message)),
                 sources: error.sources,
             });
         }
@@ -203,7 +203,7 @@ pub fn front_end_reporting(
         && let Err(diagnostic) = synthesize_test_entry(&mut program)
     {
         return Err(FrontEndError {
-            diagnostic,
+            diagnostic: Box::new(diagnostic),
             sources,
         });
     }
@@ -213,7 +213,7 @@ pub fn front_end_reporting(
         Ok(types) => types,
         Err(error) => {
             return Err(FrontEndError {
-                diagnostic: error.diagnostic(),
+                diagnostic: Box::new(error.diagnostic()),
                 sources,
             });
         }

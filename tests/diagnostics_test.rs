@@ -1,8 +1,7 @@
 //! End-to-end diagnostics gate: drives the real `quilon` binary on deliberately
-//! broken programs and asserts the `path:line:col:` position line, the `error: …` message
-//! line under it,
-//! (with the offending source line and a caret underline) reaches stderr, and
-//! that the process still exits non-zero.
+//! broken programs and asserts the `error[Q…]:` header, the `╭─[path:line:col]` position,
+//! the offending source line and its underline reach stderr, and that the process still
+//! exits non-zero.
 
 use std::io::Write;
 use std::process::Command;
@@ -37,6 +36,8 @@ fn check(name: &str, source: &str) -> (bool, String) {
     )
 }
 
+/// Status goes to stderr, never stdout; without a terminal it is one line per stage and
+/// a closing line naming the file and the elapsed time.
 #[test]
 fn check_writes_status_to_stderr_not_stdout() {
     let out = check_output("status", "^ = () -> Num => < 0 >\n");
@@ -48,18 +49,49 @@ fn check_writes_status_to_stderr_not_stdout() {
         stdout.is_empty(),
         "`quilon check` wrote status to stdout: {stdout}"
     );
+    for stage in ["lexing", "parsing", "resolving", "checking"] {
+        assert!(
+            stderr.lines().any(|line| line.starts_with(stage)),
+            "missing the {stage} stage line from stderr: {stderr}"
+        );
+    }
+    let last = stderr.lines().last().unwrap_or_default();
     assert!(
-        stderr.contains("🔍 Checking:"),
-        "missing check status from stderr: {stderr}"
+        last.starts_with("✓ ") && last.contains("quilon_diag_") && last.contains("ms)"),
+        "the closing line names the file and the elapsed time: {stderr}"
     );
     assert!(
-        stderr.contains("✅ Type checking passed!"),
-        "missing type-check status from stderr: {stderr}"
+        !stderr.contains("\x1b["),
+        "no color off a terminal: {stderr}"
     );
-    assert!(
-        stderr.contains("📋 Program contains 1 top-level item(s)"),
-        "missing program summary from stderr: {stderr}"
-    );
+}
+
+/// `--quiet` silences every status line; a diagnostic still prints.
+#[test]
+fn quiet_prints_no_status_but_still_the_diagnostic() {
+    let run = |source: &str| {
+        let mut path = std::env::temp_dir();
+        path.push(format!("quilon_diag_quiet_{}.qn", std::process::id()));
+        std::fs::write(&path, source).expect("write temp .qn");
+        let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+            .args(["--quiet", "check"])
+            .arg(&path)
+            .output()
+            .expect("run quilon");
+        let _ = std::fs::remove_file(&path);
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (ok, stderr) = run("^ = () -> Num => < 0 >\n");
+    assert!(ok);
+    assert!(stderr.is_empty(), "quiet says nothing: {stderr}");
+
+    let (ok, stderr) = run("^ = () -> Num => < # >\n");
+    assert!(!ok);
+    assert!(stderr.starts_with("error[Q002]:"), "{stderr}");
+    assert!(!stderr.contains("lexing"), "{stderr}");
 }
 
 #[test]
@@ -69,23 +101,36 @@ fn type_error_reports_line_col_and_caret() {
     let (ok, stderr) = check("type", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
-    // The position line, with the message on the line under it.
     assert!(
-        stderr.contains(":2:30:\nerror:"),
-        "no line:col position line: {stderr}"
+        stderr.contains("error[Q038]: no overload of `+` takes (Num, Bool)"),
+        "no coded header: {stderr}"
     );
-    // `+` is now a visible overload set; a Num/Bool mix matches no member.
-    assert!(
-        stderr.contains("No overload of '+'"),
-        "no message: {stderr}"
-    );
+    assert!(stderr.contains(":2:30]"), "no line:col position: {stderr}");
     // The offending source line is echoed...
     assert!(
         stderr.contains("add = (a :: Num) -> Num => < a + true >"),
         "source line missing: {stderr}"
     );
-    // ...with a caret underline beneath it.
-    assert!(stderr.contains('^'), "no caret underline: {stderr}");
+    // ...with each operand labelled with its type, and the members offered as help.
+    assert!(
+        stderr.contains("─ Num") && stderr.contains("─ Bool"),
+        "operands are labelled: {stderr}"
+    );
+    assert!(
+        stderr.contains("help: the members of `+` are (Num, Num), (Text, Text)"),
+        "no help: {stderr}"
+    );
+}
+
+/// `Num + Text` is the one mix with an idiomatic fix, so the help shows it.
+#[test]
+fn num_plus_text_suggests_interpolation() {
+    let (ok, stderr) = check("interpolate", "^ = () -> Num => < x = 1 + \"x\"  0 >\n");
+    assert!(!ok);
+    assert!(
+        stderr.contains("help: to join a number and text, interpolate"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -97,41 +142,30 @@ fn lexer_error_reports_line_col_and_caret() {
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
     assert!(
-        stderr.contains(":1:20:\nerror:"),
-        "no line:col position line: {stderr}"
+        stderr.contains("error[Q002]: invalid token `#`\n"),
+        "{stderr}"
     );
-    assert!(stderr.contains("Invalid token"), "no message: {stderr}");
-    assert!(stderr.contains('^'), "no caret underline: {stderr}");
+    assert!(stderr.contains(":1:20]"), "no line:col position: {stderr}");
+    assert!(stderr.contains('─'), "no underline: {stderr}");
 }
 
+/// A parse error names the tokens in the language's own words — a block close is
+/// "a block close `>`", never the compiler's internal name for it.
 #[test]
 fn parse_error_reports_line_col() {
-    // A function with no body after `=>` is a parse error.
-    let src = "^ = () -> Num =>\n";
+    let src = "^ = () -> Num => < (1 + 2 >\n";
     let (ok, stderr) = check("parse", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
-    // The position line + message shape holds for parse failures too.
     assert!(
-        position_line_followed_by_error(&stderr),
-        "no `:line:col:` position line with an `error:` line under it: {stderr}"
+        stderr.contains("error[Q005]: expected `)`, found a block close `>`\n"),
+        "{stderr}"
     );
-}
-
-/// Whether `stderr` has a `…:<line>:<col>:` position line immediately followed by an
-/// `error: <message>` line — the two-line header every diagnostic opens with.
-fn position_line_followed_by_error(stderr: &str) -> bool {
-    let lines: Vec<&str> = stderr.lines().collect();
-    lines.windows(2).any(|pair| {
-        let Some(position) = pair[0].strip_suffix(':') else {
-            return false;
-        };
-        // The two segments at the end of the position line are the line and column.
-        let mut numbers = position.rsplit(':');
-        let column = numbers.next().and_then(|s| s.parse::<usize>().ok());
-        let row = numbers.next().and_then(|s| s.parse::<usize>().ok());
-        column.is_some() && row.is_some() && pair[1].starts_with("error: ")
-    })
+    assert!(stderr.contains(":1:27]"), "{stderr}");
+    assert!(
+        !stderr.contains("BlockClose"),
+        "internal names leak: {stderr}"
+    );
 }
 
 /// A type error inside an IMPORTED module is reported against that module — its path, its
@@ -161,7 +195,7 @@ fn a_type_error_in_an_imported_module_names_that_module() {
 
     assert!(!out.status.success(), "the program must be rejected");
     assert!(
-        stderr.contains(&format!("{}\nerror:", position(&module, 2, 1))),
+        stderr.contains(&position(&module, 2, 1)),
         "the error must be reported against the imported module, got: {stderr:?}"
     );
     assert!(
@@ -212,4 +246,30 @@ fn a_lambda_body_may_still_be_a_bare_expression() {
         ok,
         "a lambda's bare body must still check, stderr was: {stderr}"
     );
+}
+
+/// `quilon explain` prints the reference section for a code, and says so for a code the
+/// registry lacks.
+#[test]
+fn explain_prints_the_section_for_a_code() {
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["explain", "Q038"])
+        .output()
+        .expect("run quilon");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(
+        stdout.starts_with("### Q038 — no matching overload"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("```"),
+        "the section shows an example: {stdout}"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["explain", "Q999"])
+        .output()
+        .expect("run quilon");
+    assert_eq!(out.status.code(), Some(2));
 }

@@ -33,7 +33,7 @@ fn a_non_exhaustive_match_on_a_non_sum_is_a_compile_error() {
         "the diagnostic must name the scrutinee's type, got: {message}"
     );
     assert!(
-        message.contains("'_'"),
+        message.contains("help: add a `_` arm"),
         "the diagnostic must point at the fix, got: {message}"
     );
 }

@@ -103,7 +103,7 @@ impl Diagnostic {
         theme.characters.error = header;
         let handler = GraphicalReportHandler::new_themed(theme)
             .with_context_lines(1)
-            .with_width(100);
+            .with_wrap_lines(false);
 
         let mut rendered = String::new();
         let report = Report::new(self, sources);
@@ -157,7 +157,7 @@ impl miette::SourceCode for Source {
         };
         Ok(Box::new(miette::MietteSpanContents::new_named(
             self.name.clone(),
-            text[from..to].as_bytes(),
+            &text.as_bytes()[from..to],
             (from, to - from).into(),
             line,
             column,

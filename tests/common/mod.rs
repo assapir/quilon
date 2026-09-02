@@ -32,7 +32,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// spelled with `path.display()` fails while the compiler is behaving exactly as documented.
 pub fn position(path: &Path, line: usize, column: usize) -> String {
     let shown = quilon::source_map::shorten_path(&path.display().to_string());
-    format!("{shown}:{line}:{column}:")
+    format!("╭─[{shown}:{line}:{column}]")
+}
+
+/// The frame a report draws for a failure at `line`/`column` of `source_line`, underlining
+/// `width` characters of it — everything under the `error[…]: message` line. `position`
+/// is the report's own position line (see [`position`]).
+pub fn frame(
+    position: &str,
+    line: usize,
+    column: usize,
+    source_line: &str,
+    width: usize,
+) -> String {
+    let gutter = " ".repeat(line.to_string().len() + 2);
+    format!(
+        "{gutter}{position}\n {line} │ {source_line}\n{gutter}· {}{}\n{gutter}╰────",
+        " ".repeat(column - 1),
+        "─".repeat(width)
+    )
 }
 
 /// LLVM's JIT and native-target initialization are not safe to run from several threads
@@ -189,8 +207,10 @@ pub fn tool_available(tool: &str) -> bool {
         .is_ok()
 }
 
-/// The type error `src` is rejected with, as its rendered message. Panics if the program
-/// type-checks — a test asserting on a diagnostic needs there to be one.
+/// The type error `src` is rejected with, as its report — the coded header with the
+/// message, and the `help:` line where the error has one (no source snippet: the program
+/// is in memory). Panics if the program type-checks — a test asserting on a diagnostic
+/// needs there to be one.
 pub fn type_error_message(src: &str) -> String {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
@@ -198,7 +218,7 @@ pub fn type_error_message(src: &str) -> String {
         .expect("import linking failed")
         .0;
     match TypeChecker::new().check_program(&program) {
-        Err(e) => e.to_string(),
+        Err(e) => e.diagnostic().render(&SourceMap::default(), false),
         Ok(_) => panic!("expected a type error for source:\n{src}"),
     }
 }

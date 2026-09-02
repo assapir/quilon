@@ -311,6 +311,7 @@ fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bo
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC. The two stages
 /// — code generation, then the link — are announced through `status`.
+#[allow(clippy::too_many_arguments)] // one call site, the CLI, which passes what it was given
 pub fn build_native(
     program: &Program,
     types: TypeTable,
