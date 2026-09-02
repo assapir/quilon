@@ -6,6 +6,7 @@
 //! diagnostics still print, they are not status. `quilon run` clears the spinner and says
 //! nothing more, so the program's own output stands alone.
 
+use std::cell::OnceCell;
 use std::io::IsTerminal;
 use std::time::{Duration, Instant};
 
@@ -47,8 +48,9 @@ enum Mode {
     Quiet,
     /// One line per stage — stderr is not a terminal.
     Lines,
-    /// A live spinner that collapses to the final line.
-    Live(ProgressBar),
+    /// A live spinner that collapses to the final line. Started by the first stage, so a
+    /// status that only ever reports a failure draws nothing.
+    Live(OnceCell<ProgressBar>),
 }
 
 pub struct Status {
@@ -83,25 +85,13 @@ impl Status {
         let mode = match (quiet, std::io::stderr().is_terminal()) {
             (true, _) => Mode::Quiet,
             (false, false) => without_terminal,
-            (false, true) => {
-                let spinner = ProgressBar::new_spinner().with_style(
-                    ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                        .expect("a fixed template"),
-                );
-                spinner.enable_steady_tick(Duration::from_millis(80));
-                Mode::Live(spinner)
-            }
+            (false, true) => Mode::Live(OnceCell::new()),
         };
         Self {
             mode,
             color: color_enabled(),
             started: Instant::now(),
         }
-    }
-
-    /// Whether reports to stderr may carry color.
-    pub fn color(&self) -> bool {
-        self.color
     }
 
     pub fn elapsed(&self) -> Duration {
@@ -113,7 +103,16 @@ impl Status {
         match &self.mode {
             Mode::Quiet => {}
             Mode::Lines => eprintln!("{}", stage.line()),
-            Mode::Live(spinner) => spinner.set_message(stage.line()),
+            Mode::Live(spinner) => spinner
+                .get_or_init(|| {
+                    let spinner = ProgressBar::new_spinner().with_style(
+                        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                            .expect("a fixed template"),
+                    );
+                    spinner.enable_steady_tick(Duration::from_millis(80));
+                    spinner
+                })
+                .set_message(stage.line()),
         }
     }
 
@@ -132,8 +131,8 @@ impl Status {
         match &self.mode {
             Mode::Quiet => {}
             Mode::Lines => eprintln!("{line}"),
-            Mode::Live(spinner) => {
-                spinner.finish_and_clear();
+            Mode::Live(_) => {
+                self.clear();
                 eprintln!("{line}");
             }
         }
@@ -141,7 +140,9 @@ impl Status {
 
     /// End the command with nothing said — the spinner is cleared, the stage lines stay.
     pub fn clear(&self) {
-        if let Mode::Live(spinner) = &self.mode {
+        if let Mode::Live(spinner) = &self.mode
+            && let Some(spinner) = spinner.get()
+        {
             spinner.finish_and_clear();
         }
     }

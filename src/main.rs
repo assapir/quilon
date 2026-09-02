@@ -75,8 +75,8 @@ enum Commands {
 /// The release codenames, matched against the package version.
 const CODENAMES: &str = include_str!("../release-codenames.tsv");
 
-/// `quilon 0.9.3 "Hegemon"` — the version with its codename, when the release table
-/// names one.
+/// `0.9.3 "Hegemon"` — the version with its codename, when the release table names one —
+/// and, on a line of its own so the first line stays parseable, a quip.
 fn version() -> String {
     let version = env!("CARGO_PKG_VERSION");
     let codename = CODENAMES
@@ -88,10 +88,11 @@ fn version() -> String {
             None => *pattern == version,
         })
         .map(|(_, name)| name.trim());
-    match codename {
+    let named = match codename {
         Some(name) => format!("{version} \"{name}\""),
         None => version.to_string(),
-    }
+    };
+    format!("{named}\n{}", quips::pick(quips::BANNER))
 }
 
 /// Print `diagnostic` the way every report is printed, and exit 1.
@@ -311,8 +312,8 @@ mod tests {
             .map(|(_, name)| name.trim());
         if let Some(name) = expected {
             assert_eq!(
-                version(),
-                format!("{} \"{name}\"", env!("CARGO_PKG_VERSION"))
+                version().lines().next(),
+                Some(format!("{} \"{name}\"", env!("CARGO_PKG_VERSION")).as_str())
             );
         }
     }
