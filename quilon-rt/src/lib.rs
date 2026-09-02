@@ -70,8 +70,8 @@ pub use report::{
 };
 pub use scheduler::__run_fiber_main;
 pub use test_registry::{
-    __test_case_failing, __test_case_finish, __test_depth, __test_failed, __test_passed,
-    __test_suite_enter, __test_suite_leave,
+    __test_case_failing, __test_case_finish, __test_case_selected, __test_depth, __test_failed,
+    __test_passed, __test_suite_enter, __test_suite_leave, __test_suite_selected, __test_summary,
 };
 pub use text::{
     __bool_to_text, __num_to_text, __text_at, __text_cmp, __text_contains, __text_graphemes,
@@ -215,13 +215,16 @@ intrinsic_registry! {
     __set_union: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_diff: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
     __set_intersect: extern "C" fn(*const c_void, *const c_void) -> *mut c_void,
-    __test_suite_enter: extern "C" fn() -> f64,
+    __test_suite_enter: extern "C" fn(*const u8, i64) -> f64,
     __test_suite_leave: extern "C" fn() -> f64,
+    __test_suite_selected: extern "C" fn(*const u8, i64) -> f64,
+    __test_case_selected: extern "C" fn(*const u8, i64) -> f64,
     __test_depth: extern "C" fn() -> f64,
     __test_case_failing: extern "C" fn() -> f64,
-    __test_case_finish: extern "C" fn() -> f64,
+    __test_case_finish: extern "C" fn(*const u8, i64) -> f64,
     __test_passed: extern "C" fn() -> f64,
     __test_failed: extern "C" fn() -> f64,
+    __test_summary: extern "C" fn() -> f64,
     __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
     __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
 }

@@ -28,12 +28,16 @@
 ~ `reportSummary()`, whose result is the run's status — 0 passes the suite, anything else
 ~ fails it.
 ~
-~ Everything the run records is reachable through these (each called `test.<name>()`),
+~ Everything the run records is reachable through these (each called `test.<name>(…)`),
 ~ and a suite may ask about it too:
 ~
 ~   casesPassed()  casesFailed()  nestingDepth()      what the run has recorded
-~   enterSuite()   leaveSuite()                       open and close a group
-~   caseFailing()  finishCase()                       ask about, then close, a case
+~   enterSuite(name)   leaveSuite()                   open and close a group
+~   caseFailing()  finishCase(name)                   ask about, then close, a case
+~
+~ ── The report ──────────────────────────────────────────────────────────────────────
+~ The lifecycle reports each event through the compiler's test registry, which renders it
+~ the way `quilon test` asked (`--reporter human|json`) and skips what `--only` left out.
 << core.io
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
@@ -78,12 +82,12 @@
 
 ~ ── The case lifecycle ─────────────────────────────────────────────────────────────
 ~ What `describe` and `it` call, in this order:
-~   enterSuite() … the group's body … leaveSuite()
-~   the case's body … caseFailing() … finishCase()
+~   enterSuite(name) … the group's body … leaveSuite()
+~   the case's body … finishCase(name)
 
-~ Open a group; yields the depth it sits at (1 for an outermost group), which is what the
-~ report indents by.
->> enterSuite = () -> Num => < __test_suite_enter() >
+~ Open the group `name`, reporting it; yields the depth it sits at (1 for an outermost
+~ group).
+>> enterSuite = (name :: Text) -> Num => < __test_suite_enter(name) >
 
 ~ Close the group just entered; yields the depth that remains.
 >> leaveSuite = () -> Num => < __test_suite_leave() >
@@ -92,47 +96,41 @@
 ~ closing clears the mark for the next case.
 >> caseFailing = () -> Bool => < __test_case_failing() == 1 >
 
-~ Close the case that just ran, tallying it as passed or failed; yields the depth to
-~ report it at.
->> finishCase = () -> Num => < __test_case_finish() >
+~ Close the case `name` that just ran, tallying it as passed or failed and reporting it;
+~ yields the depth it sits at.
+>> finishCase = (name :: Text) -> Num => < __test_case_finish(name) >
 
 ~ ── The harness ────────────────────────────────────────────────────────────────────
-~ The output is fixed, and written out at each site below rather than shared through
-~ helpers no suite has a reason to call.
 
-~ A group of cases, nestable. `body` runs immediately; the group is only there to name and
-~ indent what it contains.
->> describe = (name :: Text, body :: () -> $) -> $ => <
-  depth = enterSuite()
-  lead = "  ".repeat(depth - 1)
-  io.print("`lead``name`")
+~ A group's run: open it, run its body, close it.
+runSuite = (name :: Text, body :: () -> $) -> $ => <
+  enterSuite(name)
   body()
   leaveSuite()
   $
 >
 
+~ A group of cases, nestable. `body` runs immediately; the group is only there to name
+~ what it contains. A group the run did not select is passed over, body and all.
+>> describe = (name :: Text, body :: () -> $) -> $ => <
+  __test_suite_selected(name) == 1 ? runSuite(name, body) : $
+>
+
+~ A case's run: run its body, then close it.
+runCase = (name :: Text, body :: () -> $) -> $ => <
+  body()
+  finishCase(name)
+  $
+>
+
 ~ One case, reported once `body` has run. A failing `expect` inside `body` marks the case
 ~ and skips what is left of it, so the report says which way the case went and the run
-~ continues with the next one.
+~ continues with the next one. A case the run did not select is passed over.
 >> it = (name :: Text, body :: () -> $) -> $ => <
-  body()
-  failed = caseFailing()
-  depth = finishCase()
-  lead = "  ".repeat(depth)
-  glyph = failed ? "✗" : "✓"
-  color = failed ? "31" : "32"
-  mark = __color_enabled(io.stdout) ? "\e[`color`m`glyph`\e[0m" : glyph
-  io.print("`lead``mark` `name`")
+  __test_case_selected(name) == 1 ? runCase(name, body) : $
 >
 
 ~ The run's total, and its status — non-zero when any case failed. The synthesized entry
 ~ point `quilon test` runs ends with this call, so what it returns is what the suite exits
 ~ with.
->> reportSummary = () -> Num => <
-  failed = casesFailed()
-  tally = "`casesPassed()` passed, `failed` failed"
-  color = failed == 0 ? "32" : "31"
-  io.print("")
-  io.print(__color_enabled(io.stdout) ? "\e[`color`m`tally`\e[0m" : tally)
-  failed == 0 ? 0 : 1
->
+>> reportSummary = () -> Num => < __test_summary() >

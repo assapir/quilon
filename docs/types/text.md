@@ -27,6 +27,16 @@ A literal accepts these escapes: `\n`, `\r`, `\t`, `\"`, `\\`, `\<`, and `\e`. `
 a literal `<`, which would otherwise open a block. `\e` is the ESC byte that leads an ANSI
 terminal sequence (`"\e[1m" + text + "\e[0m"`). Any other escape is a lex error.
 
+## Text order
+
+`Text` is **logical order**: the order in which it was typed and is read, independent of
+any script's display direction. Every index, length, search, and concatenation is logical
+order — `.length`, `.at`, `.graphemes()`, `.slice`, `.indexOf`, `.split`, and `+` all
+address and produce logical-order text. `print` and `write` emit `Text` in logical order;
+the display device performs the Unicode Bidirectional Algorithm to render it in visual
+order. No operation reorders `Text` data, and no operation inserts direction or isolate
+marks into it. (See `examples/text.qn`.)
+
 ## Text methods
 
 `Text` carries **built-in, compiler-provided methods**, called as `text.method(...)` and

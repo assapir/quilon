@@ -13,7 +13,7 @@
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
-use crate::test_registry::mark_case_failed;
+use crate::test_registry::{Failure, mark_case_failed};
 use std::os::raw::c_int;
 
 /// The exit status a failing `assert` leaves — the Rust-panic convention, so a self-verifying
@@ -173,8 +173,26 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
 #[unsafe(no_mangle)]
 pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, length: i64) {
-    report_at(site, &message_text(message, length));
-    mark_case_failed();
+    let message = message_text(message, length);
+    report_at(site, &message);
+    let (file, line) = location_of(site);
+    mark_case_failed(Failure {
+        message,
+        file,
+        line,
+    });
+}
+
+/// The file and line `site` names, as a JSON reporter carries them — empty and 0 for a
+/// site with no source (see [`report_at`]).
+///
+/// # Safety contract (upheld by the compiler)
+/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
+fn location_of(site: *const QlSite) -> (String, u64) {
+    match unsafe { site.as_ref() } {
+        Some(site) => (site.file.as_text().into_owned(), site.line as u64),
+        None => (String::new(), 0),
+    }
 }
 
 /// A `?`/`|` match no arm matched: report at `site` (the match expression's own location)

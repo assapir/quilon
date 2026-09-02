@@ -14,6 +14,8 @@ quilon run     program.qn   # typecheck, then run directly (exit code = ^'s resu
 quilon build   program.qn   # produce a native executable
 quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
+quilon test    suite.qn --reporter json          # one JSON event per line, for a tool
+quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeatable)
 quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
@@ -22,7 +24,8 @@ quilon lsp                  # serve the Language Server Protocol over stdin/stdo
 `quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
 any case failed. It runs a file's top-level `describe` blocks, which every other command
 erases — so tests may sit in the file they test, its `^` included, and still cost a release
-build nothing. See [the test harness](../corelib/test/README.md).
+build nothing. `--reporter json` and `--only` are described with
+[the test harness](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter).
 
 `quilon build` produces a **self-contained** native executable — it runs on a machine with nothing else installed:
 ```bash

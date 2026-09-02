@@ -1,6 +1,7 @@
 // Token types for Quilon lexer
 
-use logos::Logos;
+use crate::lexer::bidi::{self, ScopeStack};
+use logos::{Logos, Skip};
 
 /// Which source a [`Span`]'s byte offsets index into. `ROOT_FILE` is the file the
 /// compiler was invoked on; every `<<`-loaded module gets its own id from the module
@@ -124,18 +125,49 @@ pub enum StrChunk {
     Hole { src: String, offset: usize },
 }
 
+/// Where a Trojan-Source-guard violation (`crate::lexer::bidi`) happened, so the message
+/// can name the token it was found in — a bidi control's whole point is that it renders
+/// invisibly, so the character alone is not enough to place it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BidiIssue {
+    /// An opener (LRE/RLE/LRO/RLO/LRI/RLI/FSI) was never closed before `token` ended.
+    Unclosed { ch: char, token: &'static str },
+    /// A closer (PDF/PDI) appeared in `token` with no matching opener to close.
+    StrayCloser { ch: char, token: &'static str },
+    /// A bidi control, or a scopeless mark (LRM/RLM/ALM), appeared outside any string
+    /// literal or comment.
+    Outside(char),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TokenLexError {
     #[default]
     InvalidToken,
     UnterminatedString,
+    Bidi(BidiIssue),
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(error = TokenLexError)]
 #[logos(skip r"[ \t\r\n]+")] // Skip whitespace
-#[logos(skip("~[^\n]*", allow_greedy = true))] // Skip comments (rest of line)
 pub enum TokenKind {
+    // A `~` comment, discarded like whitespace once checked for a Trojan-Source-class bidi
+    // control (see `lex_comment`) — logos treats a `Skip`-returning callback as invisible,
+    // same as `#[logos(skip(...))]`, but a callback (unlike a bare skip pattern) can still
+    // fail the lex.
+    #[regex(r"~[^\n]*", lex_comment, allow_greedy = true)]
+    Comment,
+
+    // Trojan Source guard (CVE-2021-42574 class): any bidi embedding, override, isolate, or
+    // scopeless mark outside a string literal or comment is rejected outright — see
+    // `crate::lexer::bidi` for what these characters are. The character class here is the
+    // complete set `bidi::is_bidi_control` recognizes; keep the two in sync.
+    #[regex(
+        r"[\u{200E}\u{200F}\u{061C}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}]",
+        stray_bidi_control
+    )]
+    StrayBidiControl,
+
     // Literals
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
     Number(NumLit),
@@ -335,6 +367,41 @@ impl TokenKind {
     }
 }
 
+/// Lex a `~` comment (the whole rest of its line, already matched by the regex) and
+/// discard it like whitespace — after checking it for a Trojan Source guard violation
+/// (`crate::lexer::bidi`): a comment can carry the same bidi embedding/override/isolate
+/// controls a string literal can, and every opener must be closed before the line ends.
+fn lex_comment(lex: &mut logos::Lexer<TokenKind>) -> Result<Skip, TokenLexError> {
+    let mut bidi_scopes = ScopeStack::new();
+    for ch in lex.slice().chars() {
+        if let Err(ch) = bidi_scopes.feed(ch) {
+            return Err(TokenLexError::Bidi(BidiIssue::StrayCloser {
+                ch,
+                token: "comment",
+            }));
+        }
+    }
+    match bidi_scopes.unclosed() {
+        Some(ch) => Err(TokenLexError::Bidi(BidiIssue::Unclosed {
+            ch,
+            token: "comment",
+        })),
+        None => Ok(Skip),
+    }
+}
+
+/// Reject a bidi control (or scopeless mark) matched outside a string literal or comment —
+/// the Trojan Source guard's rule (b). See `crate::lexer::bidi`.
+fn stray_bidi_control(lex: &mut logos::Lexer<TokenKind>) -> Result<(), TokenLexError> {
+    let ch = lex
+        .slice()
+        .chars()
+        .next()
+        .expect("the regex matched exactly one character");
+    debug_assert!(bidi::is_bidi_control(ch));
+    Err(TokenLexError::Bidi(BidiIssue::Outside(ch)))
+}
+
 /// Lex a whole string literal, starting just after the opening `"` (which the `#[token]`
 /// already matched). Scans to the matching close quote, decoding escapes, collapsing a
 /// doubled backtick ` `` ` to one literal backtick, and splitting off backtick
@@ -354,6 +421,12 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Result<Vec<StrChunk>, TokenL
     let mut i = 0usize;
     let mut chunks: Vec<StrChunk> = Vec::new();
     let mut lit = String::new();
+    // Trojan Source guard (`crate::lexer::bidi`): every bidi embedding/override/isolate
+    // opened anywhere in this string literal — across interpolation holes too, since they
+    // are all one token — must be closed before the closing quote. Escapes can never
+    // produce one (the escape whitelist below has no unicode escape), so only the "normal
+    // character copied verbatim" arm can introduce one.
+    let mut bidi_scopes = ScopeStack::new();
 
     loop {
         if i >= bytes.len() {
@@ -414,10 +487,23 @@ fn lex_string(lex: &mut logos::Lexer<TokenKind>) -> Result<Vec<StrChunk>, TokenL
             _ => {
                 // A normal (possibly multi-byte) character copied verbatim.
                 let ch = rem[i..].chars().next().unwrap();
+                if let Err(ch) = bidi_scopes.feed(ch) {
+                    return Err(TokenLexError::Bidi(BidiIssue::StrayCloser {
+                        ch,
+                        token: "string literal",
+                    }));
+                }
                 lit.push(ch);
                 i += ch.len_utf8();
             }
         }
+    }
+
+    if let Some(ch) = bidi_scopes.unclosed() {
+        return Err(TokenLexError::Bidi(BidiIssue::Unclosed {
+            ch,
+            token: "string literal",
+        }));
     }
 
     // Keep a trailing literal, and keep a single empty literal for the empty string `""`.

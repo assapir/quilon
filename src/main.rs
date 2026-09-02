@@ -58,6 +58,12 @@ enum Commands {
         /// File or directory to search for suites (defaults to the current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// How the run reports: `human` prints the case tree, `json` one event per line
+        #[arg(long, default_value = "human", value_parser = ["human", "json"])]
+        reporter: String,
+        /// Run only this suite or case, named by its `/`-joined path (repeatable)
+        #[arg(long, value_name = "PATH")]
+        only: Vec<String>,
     },
     /// Serve the Language Server Protocol over stdio (for editors)
     Lsp,
@@ -226,8 +232,16 @@ fn main() {
                 program.items.len()
             );
         }
-        Commands::Test { path } => {
-            let failed = test_command::run(&path);
+        Commands::Test {
+            path,
+            reporter,
+            only,
+        } => {
+            let reporter = match reporter.as_str() {
+                "json" => test_command::Reporter::Json,
+                _ => test_command::Reporter::Human,
+            };
+            let failed = test_command::run(&path, &test_command::Options { reporter, only });
             std::process::exit(i32::from(failed > 0));
         }
         Commands::Lsp => {
