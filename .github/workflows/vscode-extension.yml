@@ -77,7 +77,17 @@ jobs:
         run: pnpm test
 
       - name: Package extension (.vsix)
-        run: pnpm exec vsce package
+        run: pnpm exec vsce package --no-dependencies
+
+      # A bundled .vsix is a handful of files; a node_modules tree is hundreds.
+      - name: Check .vsix file count stays small
+        run: |
+          count=$(unzip -Z1 ./*.vsix | wc -l)
+          echo "Files in .vsix: $count"
+          if [ "$count" -ge 40 ]; then
+            echo "::error::.vsix contains $count files (expected fewer than 40) — is it still bundled?"
+            exit 1
+          fi
 
       - name: Upload .vsix artifact
         uses: actions/upload-artifact@v7
@@ -115,7 +125,7 @@ jobs:
       # `vsce package` compiles first via the `vscode:prepublish` hook
       # (`pnpm run compile`), so no separate compile step is needed here.
       - name: Package extension (.vsix)
-        run: pnpm exec vsce package
+        run: pnpm exec vsce package --no-dependencies
 
       # Always: attach the built .vsix to a GitHub Release for this tag.
       - name: Publish GitHub Release

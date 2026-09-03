@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The extension ships bundled.** `pnpm run compile` now bundles `src/extension.ts` into
+  a single `out/extension.js` with [rolldown](https://rolldown.rs) (`vscode` stays
+  external, provided by the host); `.vscodeignore` excludes `node_modules` and every
+  other build/source file, so the packaged `.vsix` carries a small, fixed set of files
+  instead of the whole unbundled dependency tree.
+
 ## [0.10.0] - 2026-09-03
 
 Version matches the Quilon compiler it targets.

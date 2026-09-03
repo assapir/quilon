@@ -33,14 +33,14 @@
   "main": "./out/extension.js",
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && rolldown -c rolldown.config.mjs",
     "watch": "tsc -watch -p ./",
     "test": "pnpm run compile && node --test \"out/**/*.test.js\"",
     "lint": "oxlint src",
     "lint:fix": "oxlint --fix src",
     "fmt": "oxfmt --write src",
     "fmt:check": "oxfmt --check src",
-    "package": "vsce package"
+    "package": "vsce package --no-dependencies"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.1"
@@ -51,6 +51,7 @@
     "@vscode/vsce": "^3.9.2",
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
+    "rolldown": "^1.2.6",
     "typescript": "^7.0.2"
   },
   "contributes": {
