@@ -12,30 +12,25 @@ first = nums[0]        ~ → 1
 ```
 (See `examples/arrays.qn`.)
 
-An array is **immutable**. There is no element assignment, and every operation returns a
-new array. A `:=` binding may be rebound to a different array — that changes the binding,
-not the array.
+An array is **immutable**: every operation returns a new array. A `:=` binding may be
+rebound to a different array — that changes the binding.
 
-An **empty** array literal `[]` has no element type of its own — it takes one from
-context: a type annotation on the binding, a call argument's declared parameter type, or a
-function's declared return type. With none of those available, it's a compile error (there
-is no `Num` default).
+An **empty** array literal `[]` takes its element type from context: a type annotation on
+the binding, a call argument's declared parameter type, or a function's declared return
+type. With none of those available, it is a compile error.
 
-Indexing is **checked** — fail loud, never silent. An out-of-bounds, negative, or NaN index
-is a runtime error naming the read that failed ([shape](../tooling/errors.md)), with exit
-status 1 — never a silently wrong value. A **fractional** in-range index truncates toward
-zero: `nums[1.7]` reads `nums[1]`. That is deliberate — with one unified `Num`, index
-arithmetic like `size / 2` legitimately produces fractions. When an index might be out of
-range, use [`at(n)`](#array-methods), the non-aborting `Ok`/`NotOk` form — see the
-computed-index case at the end of `examples/array_methods.qn`.
+Indexing is **checked**. An out-of-bounds, negative, or NaN index is a runtime error naming
+the read that failed ([shape](../tooling/errors.md)), with exit status 1. A **fractional**
+in-range index truncates toward zero: `nums[1.7]` reads `nums[1]`, so index arithmetic
+like `size / 2` indexes directly. For an index that may be out of range,
+[`at(n)`](#array-methods) is the `Ok`/`NotOk` form — see the computed-index case at the
+end of `examples/array_methods.qn`.
 
 ## Array methods
 
 Arrays carry a set of **built-in, compiler-provided methods**, called with method
 syntax (`array.method(...)`) and freely chainable. The higher-order ones take a **lambda**
-(`x => …`, `(a, b) => …`): an anonymous function literal valid **only** as a direct
-argument to one of these methods. This is a deliberate specialization — Quilon's
-closures are not accepted as higher-order arguments here.
+(`x => …`, `(a, b) => …`) written as a direct argument to the method.
 
 | Method | Result | Notes |
 |--------|--------|-------|
@@ -44,7 +39,7 @@ closures are not accepted as higher-order arguments here.
 | `reduce(initial, (accumulator, x) => …)` | the accumulator | fold-left from `initial`; the reducer's result type must match `initial`'s type |
 | `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains |
 | `find(predicate)` | `Ok(element)` / `NotOk` | the first element satisfying `predicate`, absent-safe; `predicate` returns `Bool` |
-| `at(n :: Num)` | `Ok(element)` / `NotOk` | non-aborting index — `Ok` in bounds, `NotOk` otherwise (including NaN); a raw `array[n]` aborts with a runtime error instead |
+| `at(n :: Num)` | `Ok(element)` / `NotOk` | checked index as a value — `Ok` in bounds, `NotOk` otherwise (NaN included); a raw `array[n]` out of bounds is a runtime error |
 
 ```quilon
 nums = [1, 2, 3, 4, 5, 6]
@@ -63,15 +58,15 @@ third = nums.at(2) ?             ~ Ok(3)
   | NotOk(_) => 0
 ```
 
-These methods are **reserved on arrays**: a user can define a same-named function/overload
-(e.g. a `map` on a `Num`), but on an *array receiver* the built-in always wins — it is
-resolved ahead of the overload set. `map`/`reduce`/`find` work over any element type
-(e.g. `[]Text`), not just `[]Num`. (See `examples/array_methods.qn`.)
+These methods are **reserved on arrays**: on an *array receiver* the built-in wins over a
+same-named user function or overload (e.g. a `map` on a `Num`) — it is resolved ahead of
+the overload set. `map`/`reduce`/`find` work over every element type (`[]Text` as much as
+`[]Num`). (See `examples/array_methods.qn`.)
 
 ## Array concatenation — `+`
 
-`+` on arrays builds a **new** array; it never mutates an operand. It has three forms.
-The **exact** operand types select the form, so there is never any ambiguity:
+`+` on arrays builds a **new** array, leaving both operands as they were. It has three
+forms, and the **exact** operand types select the form:
 
 ```quilon
 ~ concat:  []T + []T -> []T
@@ -86,9 +81,9 @@ The **exact** operand types select the form, so there is never any ambiguity:
 0 + [1, 2]               ~ [0, 1, 2]
 ```
 
-Both sides must agree on the element type — `[]Num + []Text` (or `[]Num + Text`) is a
-type error. The forms are mutually exclusive, because an array `[]T` can never equal its
-own element `T`. Even nested arrays disambiguate cleanly: `[][]Num + []Num` is an
-**append** (the `[]Num` is a single new row → `[][]Num`), while `[][]Num + [][]Num` is a
-**concat**. `[]T + []T` is the same as the spread `[<-a, <-b]`, for `[]Num`, `[]Text`,
-and nested arrays alike. (See `examples/array_concat.qn`.)
+Both sides agree on the element type — `[]Num + []Text` (or `[]Num + Text`) is a type
+error. The forms are mutually exclusive: an array `[]T` is a distinct type from its element
+`T`. Nested arrays follow the same rule: `[][]Num + []Num` is an **append** (the `[]Num` is
+a single new row → `[][]Num`), and `[][]Num + [][]Num` is a **concat**. `[]T + []T` is the
+same as the spread `[<-a, <-b]`, for `[]Num`, `[]Text`, and nested arrays alike. (See
+`examples/array_concat.qn`.)

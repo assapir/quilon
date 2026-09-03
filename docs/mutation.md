@@ -13,19 +13,18 @@ reassignment:
   is a compile error.
 - A `:=`-bound instance is **mutable**: a direct field write `obj.field := value` (in place,
   no re-allocation) and any **setter** method.
-- One exception is by type rather than by binding: a [`Site`](functions/site.md) is
-  read-only. A location is a value, not a variable, so writing one of its fields is an
-  error even through a `:=` binding.
+- A [`Site`](functions/site.md) is read-only by type: writing one of its fields is an
+  error through a `:=` binding as well.
 
 A method is a **setter** when it is **declared** with `:=`. The binding operator is
-the marker, exactly as it is for a variable — a method's right to mutate is part of its
+the marker, as it is for a variable — a method's right to mutate is part of its
 signature.
 
 ```quilon
 Counter = {
   value :: Num,
   bump := (by :: Num) => < it.value := it.value + by > ~ may mutate `it`
-  peek = => < it.value >                            ~ promises not to
+  peek = => < it.value >                            ~ reads only
 }
 
 c := Counter { value = 30 }   ~ `:=` -> mutable
@@ -33,11 +32,10 @@ c.bump(5)                      ~ setter mutates in place -> value = 35
 c.value := c.value + 7         ~ direct field write    -> value = 42
 ```
 
-An `=` method is **held to its promise**: writing `it.field := …` in one, or calling a
-`:=` sibling on `it`, is a compile error telling you to declare it `:=`. The write counts
+An `=` method is **verified non-mutating**: writing `it.field := …` in one, or calling a
+`:=` sibling on `it`, is a compile error naming `:=` as the declaration. The write counts
 **wherever it appears in the body** — nested inside a lambda, an array or record literal,
-a match arm, an argument list, or a function declared inside the body. Nesting does not
-launder a mutation:
+a match arm, an argument list, or a function declared inside the body:
 
 ```quilon ignore
 ~ error: method `Counter.bumpAll` mutates `it` but is declared with `=`
@@ -48,14 +46,14 @@ A setter call requires a `:=` receiver:
 
 ```quilon ignore
 c = Counter { value = 30 }   ~ `=` -> immutable
-c.value := 99                 ~ error: cannot write a field of immutable `c`
-c.bump(5)                     ~ error: cannot call mutating method `bump` on immutable `c`
+c.value := 99                 ~ error: `c` is immutable
+c.bump(5)                     ~ error: `bump` is a setter; `c` is immutable
 ```
 
 ## Deep immutability
 
-`=` freezes the **value**. A value reached through an `=` binding is never reachable
-through a `:=` binding, in either direction. The rule covers the values with reference
+`=` freezes the **value**. A value reached through an `=` binding is reachable through
+`=` bindings only, and a value reached through a `:=` binding through `:=` bindings only. The rule covers the values with reference
 semantics — records, and the containers that hold them (arrays, maps, sets, and sum
 payloads). `Num`, `Bool`, and `Text` copy on binding and bind either way.
 
@@ -113,20 +111,19 @@ path reaches, however it is reached — a field read, an element read, or a call
 
 (See `examples/deep_immutability.qn`.)
 
-**Setters live on records.** Only a record's named methods may be declared `:=`. A sum's
-methods, and operator members on either kind (`` ` ``, `==`, `+`, …), are always `=` and
-non-mutating; `:=` on one is a compile error. Nothing they can do mutates the receiver
-anyway: a sum keeps its data in variant payloads, whose match bindings are immutable, and
-an operator or render member yields a value.
+**Setters live on records.** A record's named methods may be declared `:=`. A sum's
+methods, and operator members on either kind (`` ` ``, `==`, `+`, …), are `=` and
+non-mutating; `:=` on one is a compile error. A sum keeps its data in variant payloads,
+whose match bindings are immutable, and an operator or render member yields a value.
 
 ```quilon ignore
 Shape = Circle(Num) / Rect(Num, Num) {
-  area := () -> Num => < 0 >  ~ error: a sum cannot have a mutating method
+  area := () -> Num => < 0 >  ~ error: a sum's methods are `=`
 }
 
 Counter = {
   value :: Num,
-  + := (other :: Counter) -> Num => < it.value > ~ error: an operator member is never `:=`
+  + := (other :: Counter) -> Num => < it.value > ~ error: an operator member is `=`
 }
 ```
 

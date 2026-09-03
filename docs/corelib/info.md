@@ -10,8 +10,8 @@ sidebar:
 Import with `<< core.info`. See the [corelib index](README.md) and `examples/info.qn`.
 
 What a program can ask about itself. Each answer is fixed when the program is compiled, and
-each closed set of answers is a [sum type](../types/sum-types.md) rather than a `Text`, so a
-match over one is exhaustive and a typo is a compile error.
+each closed set of answers is a [sum type](../types/sum-types.md): a match over one is
+exhaustive and a misspelt variant is a compile error.
 
 | Function | Result |
 |----------|--------|
@@ -59,24 +59,22 @@ Every type also defines `` ` ``, delegating to `name()`, so all five interpolate
 
 ## What these mean
 
-**Target, not host.** The answers describe the machine the program will **run** on. For an
-ordinary build that is the machine that built it, but a cross-compiled binary reports its
-target — the useful answer, since the program is the thing asking.
+**The target.** The answers describe the machine the program **runs** on. For an ordinary
+build that is the machine that built it; a cross-compiled binary reports its target.
 
 **`WtfPlatform` and `WtfOs` say which.** They carry the raw text the compiler saw — the
-architecture, and the whole target triple — so a target with no variant of its own still
-reports what it is rather than collapsing to a shrug. `name()` returns it.
+architecture, and the whole target triple — so a target outside the named variants
+reports what it is. `name()` returns it.
 
-**Names people use, not triple spellings.** `Os` has a `MacOS` variant, never a `Darwin` one.
-A target triple is a build-system detail.
+**Common names.** `Os` has a `MacOS` variant; the target triple's own spelling stays inside
+`WtfOs`.
 
-**`PointerWidth` and `Endianness` come from LLVM's data layout**, not from the architecture's
-name — which is a poor guide, since `powerpc64le` and `mips64el` are little-endian despite
-their spelling, and `s390x` is 64-bit without saying so.
+**`PointerWidth` and `Endianness` come from LLVM's data layout** for the target:
+`powerpc64le` and `mips64el` report little-endian, and `s390x` reports 64-bit.
 
-**`runMode()` is the one that is not about the target.** It reports how the program is being
-executed: `Jit` under `quilon run`, `Aot` for a binary from `quilon build`. `quilon compile`
-emits the IR an ahead-of-time build would, so it reports `Aot` too.
+**`runMode()` describes the execution.** It reports how the program is being executed:
+`Jit` under `quilon run`, `Aot` for a binary from `quilon build`. `quilon compile` emits the
+IR an ahead-of-time build would, and reports `Aot` too.
 
-**The import is required**, unlike `core.time`'s. The types and functions are real Quilon
-declared in this module, so `<< core.info` is what brings them into scope.
+**The import is required.** The types and functions are Quilon declared in this module;
+`<< core.info` brings them into scope.

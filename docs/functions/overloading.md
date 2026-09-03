@@ -4,9 +4,8 @@ title: "Overloading"
 
 # Overloading
 
-Quilon has **explicit ad-hoc overloading** — the only polymorphism, since there are no
-generics. Top-level definitions that share a name and each annotate their parameters *are*
-an overload set; there is no marker:
+Quilon has **explicit ad-hoc overloading** — its polymorphism. Top-level definitions that
+share a name and each annotate their parameters *are* an overload set, with no marker:
 
 ```quilon ignore
 score = (n :: Num)  -> Num => < n + 1 >   ~ the Num member
@@ -35,18 +34,17 @@ error[QN311]: no overload of `score` takes (Bool)
   g :: (Num) -> Num = (n) => < 1 >
   g :: (Text) -> Num = (t) => < 2 >
   ```
-- A single ordinary `name = …` definition is **not** an overload set. It keeps its
-  inferred return type — no return annotation needed. Its parameters are still annotated —
-  a **method** parameter is held to the same rule (see
+- An overload set has two or more members; a single `name = …` definition is an ordinary
+  function with an inferred return type. Its parameters are annotated — a **method**
+  parameter is held to the same rule (see
   [named record types](../types/records.md#named-record-types-with-methods)).
-- **The built-in operators are members, not reserved names.** `+` on `Num` and `+` on
+- **The built-in operators are members.** `+` on `Num` and `+` on
   `Text` are two members of the `+` set, and a type's own operator member joins it on the
   same terms.
 - **A module's overload sets are [closed](../modules/README.md#closed-overload-sets).**
-  `io.print` / `io.write` / `time.now` are reached only through their module's binding, so
-  a program's own bare `print` or `write` — at any signature — is an unrelated function,
-  never a member beside the built-in. The output built-ins already take any renderable
-  value; a type becomes printable by defining its
+  `io.print` / `io.write` / `time.now` are reached through their module's binding, and
+  a program's own bare `print` or `write` — at any signature — is an unrelated function.
+  The output built-ins take any renderable value; a type becomes printable by defining its
   [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-),
   and a program builds on a module by wrapping it:
   ```quilon ignore
@@ -56,8 +54,8 @@ error[QN311]: no overload of `score` takes (Bool)
   ```
 - A member joins its set where it is written, so a call resolves only against the members
   above it ([names resolve top to bottom](README.md#names-resolve-top-to-bottom)).
-- Dispatch is resolved at **direct call sites** by static argument types. Passing an
-  overloaded name as a value (higher-order use) is not yet supported.
+- Dispatch is resolved at **direct call sites** by static argument types. An overloaded
+  name is called; a lambda that calls it is the value to pass on.
 
 ## Operator overloading
 
@@ -65,7 +63,7 @@ An operator is user-overloadable — `+ - * / %`, `== != < <= > >=` — as a **m
 type it operates on** (a [record](../types/records.md#named-record-types-with-methods) or a
 [sum](../types/sum-types.md)). `it` is the **left** operand. A **binary** operator member takes one
 explicit parameter, the **right** operand; a unary one (the render `` ` ``) takes none.
-An operator member is always `=`-declared and yields a value; it never mutates `it`
+An operator member is `=`-declared and yields a value, leaving `it` as it was
 (see [Mutation](../mutation.md)):
 
 ```quilon
@@ -78,12 +76,12 @@ Vec = {
 v = Vec { x = 1, y = 2 } + Vec { x = 3, y = 4 }   ~ resolves to Vec's `+`
 ```
 
-`a <op> b` resolves the operator from the **left operand's** type; the right operand need
-not be the same type (`Vec * Num -> Vec`). Resolution is exact-typed like any overload, and
+`a <op> b` resolves the operator from the **left operand's** type; the right operand may
+be any type (`Vec * Num -> Vec`). Resolution is exact-typed like any overload, and
 lowers to a direct call. The built-in operators (`Num`/`Text` `+`, `==` over any scalar,
-`<`/`>`/`<=`/`>=` over `Num`/`Text`) are members of the same sets, so `"abc" < "abd"` works
-out of the box. (`<`/`>` are not definable as members — a `<`/`>` at member-name position
-would read as a block; use `<=`/`>=`.)
+`<`/`>`/`<=`/`>=` over `Num`/`Text`) are members of the same sets, so `"abc" < "abd"` is
+defined. The definable comparison members are `<=`/`>=`, `==`/`!=`; a `<`/`>` at
+member-name position reads as a block.
 
 A **comparison/equality** member (`== != < <= > >=`) **must return `Bool`**; **arithmetic**
 members (`+ - * / %`) return whatever they declare. A **top-level** operator definition is

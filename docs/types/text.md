@@ -5,14 +5,13 @@ sidebar:
 ---
 
 # `Text`
-UTF-8 text. A **built-in** type (like `Num`/`Bool`/arrays) — **no import needed**.
+UTF-8 text. A **built-in** type, like `Num`/`Bool`/arrays, available without an import.
 
-A `Text` is conceptually a **sequence of graphemes** (`Text = []Grapheme`): every
-user-visible index and length counts grapheme clusters — user-perceived characters — and a
-single grapheme is itself a length-1 `Text` (there is no separate `Grapheme` type).
-`.at(i)` reads one grapheme, `.graphemes()` yields them all as a `[]Text`, and `+` builds
-a `Text` back up. Under the hood the representation stays UTF-8 bytes (`.size` is the byte
-length); the grapheme sequence is how the language addresses it, not how it is stored.
+A `Text` is a **sequence of graphemes** (`Text = []Grapheme`): every user-visible index
+and length counts grapheme clusters — user-perceived characters — and a single grapheme is
+itself a length-1 `Text`. `.at(i)` reads one grapheme, `.graphemes()` yields them all as a
+`[]Text`, and `+` builds a `Text` back up. The representation is UTF-8 bytes (`.size` is
+the byte length); the grapheme sequence is how the language addresses it.
 
 ```quilon
 greeting = "héllo" + " 🌍"   ~ + concatenates (GC-allocated)
@@ -34,14 +33,14 @@ any script's display direction. Every index, length, search, and concatenation i
 order — `.length`, `.at`, `.graphemes()`, `.slice`, `.indexOf`, `.split`, and `+` all
 address and produce logical-order text. `print` and `write` emit `Text` in logical order;
 the display device performs the Unicode Bidirectional Algorithm to render it in visual
-order. No operation reorders `Text` data, and no operation inserts direction or isolate
-marks into it. (See `examples/text.qn`.)
+order. Every operation preserves the data's order and content; direction and isolate marks
+are content like any other grapheme. (See `examples/text.qn`.)
 
 ## Text methods
 
 `Text` carries **built-in, compiler-provided methods**, called as `text.method(...)` and
-freely chainable. User-visible indices and lengths are **grapheme-based** (matching
-`.length`), not byte-based.
+freely chainable. User-visible indices and lengths are **grapheme-based**, matching
+`.length`.
 
 | Method | Result | Notes |
 |--------|--------|-------|
@@ -51,8 +50,8 @@ freely chainable. User-visible indices and lengths are **grapheme-based** (match
 | `replaceAll(from :: Text, to :: Text)` | `Text` | replace **every** occurrence of `from` with `to` |
 | `replace(from :: Text, to :: Text, count :: Num)` | `Text` | replace **exactly** the first `count` occurrences (left→right); `count` truncates toward zero |
 | `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
-| `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` if absent — **no `-1` sentinel** |
-| `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds (never an error), and `end ≤ start` yields `""` |
+| `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` when absent |
+| `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds, and `end ≤ start` yields `""` |
 | `at(index :: Num)` | `Ok(Text)` / `NotOk` | the grapheme at `index` (a length-1 `Text`, multi-codepoint clusters kept whole), `NotOk` out of bounds — mirroring array [`.at`](../collections/arrays.md#array-methods) |
 | `graphemes()` | `[]Text` | every grapheme cluster in order, one length-1 `Text` each (`""` → `[]`); composes with the array methods |
 | `toUpper()` / `toLower()` | `Text` | Unicode-aware case mapping |
@@ -75,25 +74,25 @@ freely chainable. User-visible indices and lengths are **grapheme-based** (match
 ```
 
 These methods are **reserved on `Text`**, like the [array methods](../collections/arrays.md#array-methods)
-are on arrays. A same-named user overload on another type is fine, but on a `Text` receiver
-the built-in wins. `split`/`graphemes` yield a plain `[]Text`, so they compose with `.size`, `[i]`, the
-[array methods](../collections/arrays.md#array-methods), and array `+`. There is **no `join`** — collapse a `[]Text`
-with `reduce` + `+`.
+are on arrays: on a `Text` receiver the built-in wins over a same-named user overload on
+another type. `split`/`graphemes` yield a plain `[]Text`, which composes with `.size`, `[i]`, the
+[array methods](../collections/arrays.md#array-methods), and array `+`. A `[]Text` collapses
+to a `Text` with `reduce` + `+`.
 
-Only the true primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
+The primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
 `slice`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison, and `+`. The composable
 methods — `split`, `trim`, `contains`, `replace`, `replaceAll`, `repeat` — are ordinary
-Quilon over those (`corelib/text.qn`), merged in by the compiler — under its qualified
-names, binding nothing in the program's own scope — when a program uses one. That module
-is the compiler's own: it exports nothing, `<< core.text` is rejected, and member syntax
-is the only way these methods are reached. No import is ever needed, or possible.
+Quilon over those (`corelib/text.qn`), merged in by the compiler under its qualified
+names, binding nothing in the program's own scope, when a program uses one. That module
+is the compiler's own: member syntax is the way its methods are reached, and `<< core.text`
+is rejected.
 
-`replace`/`replaceAll`/`repeat` **fail loudly**. They never silently no-op or clamp. Three
-inputs are rejected: an empty `from`; a `replace` `count` that is `<= 0` or exceeds the
-occurrences present; and a negative or fractional `repeat` count. A literal violation is a
-compile error (`"a".replace("a", "b", 0)`, `"aa".replace("a", "b", 5)`). A computed one is
-a [located diagnostic](../tooling/errors.md) at run time, with exit `101`. Use `replaceAll`
-for "replace everything"; `replace(count)` means exactly that many.
+`replace`/`replaceAll`/`repeat` **fail loudly**. Three inputs are rejected: an empty
+`from`; a `replace` `count` that is `<= 0` or exceeds the occurrences present; and a
+negative or fractional `repeat` count. A literal violation is a compile error
+(`"a".replace("a", "b", 0)`, `"aa".replace("a", "b", 5)`). A computed one is a
+[located diagnostic](../tooling/errors.md) at run time, with exit `101`. `replaceAll`
+replaces every occurrence; `replace(count)` replaces exactly `count`.
 
 (See `examples/text.qn` and `examples/text_methods.qn`.)
 
@@ -104,13 +103,13 @@ Each hole is rendered to `Text` and spliced in:
 
 ```quilon ignore
 "hi `user.name`"      ~ splices the rendered value of user.name
-"sum: `a + b`"        ~ any expression, not just a variable
+"sum: `a + b`"        ~ any expression
 "port `getPort()`"    ~ a call
 ```
 
 A hole can be **any expression**, and its value can be of **any type** — every type is
-renderable. To write a **literal backtick**, double it: `` `` `` yields one `` ` `` (never
-starts a hole). A plain string with no holes is an ordinary `Text` literal.
+renderable. To write a **literal backtick**, double it: `` `` `` yields one `` ` `` and
+opens no hole. A plain string with no holes is an ordinary `Text` literal.
 
 **One render path.** Interpolation and [`print`/`eprint`/`write`](../corelib/io.md) all
 render a value by invoking its `` ` `` (backtick) operator. Every built-in type has a
@@ -128,27 +127,27 @@ User = {
 ~ Now both `io.print(u)` and `"`u`"` render as  User(Ada, 36)
 ```
 
-So `io.print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
-present, the built-in default otherwise. (A `` ` `` that renders `it` *wholesale* falls
-back to the default rather than recursing forever.)
+`io.print(u)` and `` "`u`" `` take the same path through `u`'s `` ` `` — the override when
+present, the built-in default otherwise. A `` ` `` that renders `it` *wholesale* renders
+through the default.
 
 **Default rendering** (the built-in `` ` `` per type):
 
 | Type | Renders as | Example |
 |------|-----------|---------|
 | `Num` | integer-valued → no decimals; else shortest round-trip | `5`, `5.5`, `0.5` |
-| `Bool` | `True` / `False` — **capitalized** (deliberately unlike the `true`/`false` literals) | `True` |
+| `Bool` | `True` / `False` — **capitalized**; the literals are `true`/`false` | `True` |
 | `Text` | itself | `hi` |
 | record | the **type name** (unless overridden) | `Point` |
 | sum type | the **variant/constructor name** (unless overridden) | `Green`, `Ok` |
 | array | length **≤ 10** → full `[a, b, c]` (each element via its own `` ` ``); length **> 10** → truncated `[first <- last]` | `[1, 2, 3]`, `[1 <- 100]` |
 
-A **function** value is the one thing that does not render; handing one to `print` names the
-missing member. There are **no format specifiers** (width/precision/etc.). (See
+Every type renders except a **function** value; handing one to `print` is a compile error
+naming the missing member. Rendering takes no format specifiers. (See
 `examples/interpolation.qn`.)
 
-**On output, `print` shows the text for a reader and `write` does not.** `print`/`eprint`
-write text for a reader: a `Text` whose bytes are not valid UTF-8 arrives with each invalid
-byte shown as the replacement character `�`. [`write`](../corelib/io.md) renders its argument
-the same way but passes the bytes through as they are. Both write the whole `Text`: a NUL byte
-is content, never a terminator.
+**On output, `print` shows the text for a reader and `write` passes the bytes through.**
+`print`/`eprint` write text for a reader: each byte of a `Text` outside valid UTF-8
+arrives as the replacement character `�`. [`write`](../corelib/io.md) renders its argument
+the same way and passes the bytes through as they are. Both write the whole `Text`: a NUL
+byte is content.

@@ -18,6 +18,6 @@ sum = nums
   .map(n => n * 2)                    ~ [2, 4, 6]
   .reduce(0, (acc, n) => acc + n)     ~ 12
 ```
-When iteration doesn't fit a method, use **recursion**: a self-tail-call is
-[guaranteed to run in constant stack](../functions/closures.md#tail-self-recursion-runs-in-constant-stack-guaranteed),
-so even deep recursion is safe. (See `examples/iteration.qn`.)
+Iteration beyond the methods is **recursion**: a self-tail-call
+[runs in constant stack](../functions/closures.md#tail-self-recursion-runs-in-constant-stack-guaranteed),
+at any depth. (See `examples/iteration.qn`.)
