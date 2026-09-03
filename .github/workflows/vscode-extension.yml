@@ -79,10 +79,7 @@ jobs:
       - name: Package extension (.vsix)
         run: pnpm exec vsce package --no-dependencies
 
-      # The extension is bundled (see rolldown.config.mjs), so the .vsix should
-      # ship a small, fixed set of files (out/extension.js(.map), syntaxes,
-      # icons, docs) rather than the whole unbundled node_modules tree. Guard
-      # against that regressing silently.
+      # A bundled .vsix is a handful of files; a node_modules tree is hundreds.
       - name: Check .vsix file count stays small
         run: |
           count=$(unzip -Z1 ./*.vsix | wc -l)
@@ -127,9 +124,6 @@ jobs:
 
       # `vsce package` compiles first via the `vscode:prepublish` hook
       # (`pnpm run compile`), so no separate compile step is needed here.
-      # `--no-dependencies` skips the npm/yarn dependency-tree walk: the
-      # extension is bundled (see rolldown.config.mjs), so there is nothing
-      # under node_modules left to package.
       - name: Package extension (.vsix)
         run: pnpm exec vsce package --no-dependencies
 

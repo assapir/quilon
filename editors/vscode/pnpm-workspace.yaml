@@ -29,10 +29,6 @@ minimumReleaseAgeExclude:
   - '@rolldown/binding-win32-x64-msvc@1.2.7'
   - rolldown@1.2.7
 
-# Hoist dependencies flat into node_modules (instead of pnpm's default
-# symlinked-store layout) so tools that expect a conventional
-# node_modules/<package> layout (rolldown resolving vscode-languageclient at
-# bundle time, the extension host resolving it when running unbundled under
-# `watch`/F5) find it without extra resolver configuration. pnpm 10+ reads
-# this setting from here, not from .npmrc.
+# Flat node_modules: rolldown and the unbundled F5 extension host resolve
+# vscode-languageclient conventionally. pnpm 10+ reads this here, not .npmrc.
 nodeLinker: hoisted
