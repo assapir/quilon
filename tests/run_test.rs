@@ -1727,6 +1727,19 @@ fn aot_method_parameter_typed_as_a_user_record_resolves() {
     assert_eq!(code, 42, "a native build must exit 42 on the same program");
 }
 
+/// Regression (#259): an instance method constructing a fresh value of its OWN type. The
+/// checker's `self`-referential return type used to leave codegen unable to resolve
+/// `p.twin().x` — a field access whose base is a call result rather than a plain
+/// variable. Point { x = 5 }.twin().x = 5.
+#[test]
+fn run_method_returning_a_fresh_value_of_its_own_type() {
+    let src = r#"
+        Point = { x :: Num, twin = () -> Point => < Point { x = it.x } > }
+        ^ = () -> Num => < p = Point { x = 5 }  p.twin().x >
+    "#;
+    assert_exit(src, 5);
+}
+
 #[test]
 fn run_line_first_paren_is_new_statement() {
     // Statement-boundary rule end-to-end: without it, `x = f()` followed by the line

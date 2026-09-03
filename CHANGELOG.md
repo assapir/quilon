@@ -16,6 +16,14 @@ All notable changes to Quilon are documented here.
   function's parameter did), so a resolved call no longer dies at run time with "Field
   access not fully implemented" either. (#194)
 
+- **A method that constructs a fresh value of its own type is usable through a chained
+  call.** `p.twin().x`, where `twin` returns a new `Point`, used to fail at run time with
+  "Field access not fully implemented" — codegen's field-access lowering only recognized a
+  plain variable as the base of `.field`, so a field read off a call result (rather than a
+  binding) had nowhere to look up its type. Field access now also resolves against the
+  type oracle's inferred type for any record-valued expression, not just an identifier.
+  (#259)
+
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
 ### Added
