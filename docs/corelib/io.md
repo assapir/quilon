@@ -37,5 +37,5 @@ The module's names are reached through its binding, and its
   0
 >
 ```
-There is no `println` — `print` owns the newline; `write` is the raw form. (See
-`examples/io.qn`, and `examples/printing.qn` for printing a type of your own.)
+`print` writes the newline; `write` is the raw form. (See `examples/io.qn`, and
+`examples/printing.qn` for printing a user type.)
