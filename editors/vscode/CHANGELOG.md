@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A Debug run profile in the Test Explorer.** Selecting **🐞 Debug** on a node builds and
   debugs it the same way as the lens — the whole file when the file's own root node is
   selected — one session at a time for several selected items, each ending before the next
-  starts. A debugged item is marked started, with no pass/fail verdict: the point is
-  stepping through it by hand, not an automated result.
+  starts. A debugged item is marked started; its outcome is whatever you observe while
+  stepping through it.
 
 ### Changed
 

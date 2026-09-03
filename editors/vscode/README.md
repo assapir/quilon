@@ -266,10 +266,9 @@ reports. **Run All** (▶ at the top of the view) runs every known file's suites
 
 Selecting **🐞 Debug** on a node builds that item — `quilon test <file> [--only <path>]
 --binary <tmp>` (whole file when the file's own root node is selected) — and launches the
-result under CodeLLDB, breakpoints in the case honoured. Several selected items debug one
-at a time, each session ending before the next starts, so sessions never stack up. A
-debugged item is marked started but carries no pass/fail verdict — stepping through it by
-hand is the point, not an automated result.
+result under CodeLLDB, breakpoints in the case honoured. Several selected items debug
+one after another. A debugged item is marked started; its outcome is whatever you observe
+while stepping through it.
 
 ## Debugging
 
