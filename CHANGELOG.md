@@ -20,14 +20,14 @@ All notable changes to Quilon are documented here.
   overload set) resolves to its declaration and every use. Rename requires a single bare
   identifier as the new name and refuses a target declared in another file, pointing there
   instead. See `docs/tooling/language-server.md`.
+- `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
+  code, and the summary table matches the registry.
 
 ### Fixed
 
 - **A parameter's declaration span covers its name, not just its type annotation.** Go to
   definition on a parameter used to land on its `:: Type` annotation; it now lands on the
   parameter itself.
-
-### Fixed
 
 - **A method parameter annotated with a user record or sum type now works end to end.**
   The checker compared the call site's UNRESOLVED annotation (`Named { fields: [] }`, the
