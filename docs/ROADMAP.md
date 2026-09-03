@@ -25,7 +25,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M3** | Closures & functional core | ✅ Complete |
 | **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | 🔨 In progress (partly 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
-| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC ([#98]) | 🔨 In progress (Stage 1 ✅) — **core** |
+| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
 | **M8** | **Web — a native HTTP server built on the M6 runtime** | ⬜ Planned |
 
@@ -41,7 +41,6 @@ monomorphization line and all of M5 are **deprioritized** and off the critical p
 served an auto-data-parallelism goal the project no longer pursues.
 
 [#120]: https://github.com/assapir/quilon/issues/120
-[#98]: https://github.com/assapir/quilon/issues/98
 [#60]: https://github.com/assapir/quilon/issues/60
 [#49]: https://github.com/assapir/quilon/issues/49
 
@@ -109,7 +108,7 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op | ✅ |
-| **Stage 2** — M:N work-stealing scheduler + Boehm GC across threads ([#98]) | ⬜ |
+| **Stage 2** — M:N work-stealing scheduler + Boehm GC across threads ([#120]) | ⬜ |
 
 ### M7 — Polish 🔨
 

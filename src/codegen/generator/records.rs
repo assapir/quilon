@@ -400,74 +400,65 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// LLVM type — the shared primitive for both reads (`generate_field_access`) and
     /// in-place writes (`generate_field_assign`).
     ///
-    /// `base` must be a record/named-type identifier (a variable such as `u`, or the
-    /// method receiver `it`); the variable's alloca holds a pointer-to-struct (the
-    /// record ABI). The struct's field types are recovered from the **type oracle** (the
-    /// record's declared field types), mapped through `value_repr_type` so the
-    /// reconstructed struct type matches exactly how `generate_record` laid it out —
-    /// `Text`/array/etc. fields keep their real type instead of being treated as `f64`.
-    /// The returned LLVM type is what the read site must `load` (and the write site is
-    /// already type-checked to match).
+    /// `base` may be any record-valued expression — a variable (including the method
+    /// receiver `it`), a method/function call result (`p.twin().x`), a functional update, …
+    /// — evaluated once via `generate_expression`: a record VALUE is always a pointer to
+    /// its struct (see `value_repr_type`, and for an `Identifier` specifically,
+    /// `generate_expression`'s own load of its alloca), so there is no separate pointer
+    /// indirection to reconstruct here.
+    ///
+    /// The struct's field names/types come from the **type oracle**'s inferred type for
+    /// `base`, mapped through `value_repr_type` so the reconstructed struct type matches
+    /// exactly how `generate_record` laid it out — `Text`/array/etc. fields keep their real
+    /// type instead of being treated as `f64`. Without an oracle entry — the IR-only
+    /// codegen tests (`tests.rs`), which build a module with no type-check pass — `base`
+    /// must be an `Identifier` already tracked in `record_types` (a variable's or `it`'s
+    /// field NAMES, set independently of the oracle), and the struct is reconstructed as
+    /// all-`f64`, preserving the historical numeric layout those tests exercise. The
+    /// returned LLVM type is what the read site must `load` (and the write site is already
+    /// type-checked to match).
     ///
     /// Nested records (`a.b.c`) are rejected by the type checker before codegen, so a
-    /// single GEP level suffices. Returns `Ok(None)` when `base` isn't a tracked record
-    /// (so the read path can fall through to its Text/array `.size` handling).
+    /// single GEP level suffices. Returns `Ok(None)` when `base` isn't a record at all (so
+    /// the read path can fall through to its Text/array `.size` handling).
     pub(super) fn record_field_pointer(
         &mut self,
         base: &Expression,
         field: &str,
     ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>, String> {
-        let Expression::Identifier { name, .. } = base else {
-            return Ok(None);
-        };
-        let Some(field_names) = self.record_types.get(name).cloned() else {
-            return Ok(None);
-        };
+        let (field_names, struct_type): (Vec<String>, inkwell::types::StructType<'ctx>) =
+            match self.oracle.expression_type(base) {
+                Some(Type::Named { fields, .. }) => {
+                    let fields = Rc::clone(fields);
+                    let names = fields.iter().map(|(n, _)| n.clone()).collect();
+                    (names, self.record_struct_type(&fields)?)
+                }
+                Some(Type::Record(fields)) => {
+                    let fields = fields.clone();
+                    let names = fields.iter().map(|(n, _)| n.clone()).collect();
+                    (names, self.record_struct_type(&fields)?)
+                }
+                _ => {
+                    let Expression::Identifier { name, .. } = base else {
+                        return Ok(None);
+                    };
+                    let Some(field_names) = self.record_types.get(name).cloned() else {
+                        return Ok(None);
+                    };
+                    let f64t: BasicTypeEnum = self.context.f64_type().into();
+                    let struct_type = self
+                        .context
+                        .struct_type(&vec![f64t; field_names.len()], false);
+                    (field_names, struct_type)
+                }
+            };
         let Some(field_idx) = field_names.iter().position(|f| f == field) else {
             return Ok(None);
-        };
-
-        // Reconstruct the record's struct type from the oracle (its declared field types,
-        // in declared order) via the shared `record_struct_type`, so the GEP type matches
-        // construction. Fall back to all-`f64` only if the oracle has no record type for
-        // `base` (it always should for a tracked record) — preserving the historical
-        // numeric layout. The loaded field's own LLVM type is then just the indexed slot.
-        let struct_type = match self.oracle.expression_type(base) {
-            // Cloned out of the oracle (an `Rc` bump for a named type, whose declaration
-            // is shared) so the borrow ends before `record_struct_type` takes `&self`.
-            Some(Type::Record(fields)) => {
-                let fields = fields.clone();
-                self.record_struct_type(&fields)?
-            }
-            Some(Type::Named { fields, .. }) => {
-                let fields = Rc::clone(fields);
-                self.record_struct_type(&fields)?
-            }
-            _ => {
-                let f64t: BasicTypeEnum = self.context.f64_type().into();
-                self.context
-                    .struct_type(&vec![f64t; field_names.len()], false)
-            }
         };
         let field_llvm = struct_type
             .get_field_type_at_index(field_idx as u32)
             .ok_or_else(|| format!("record field index {field_idx} out of range"))?;
-
-        // The variable's alloca holds a pointer to the struct; load it.
-        let (var_ptr, _) = self
-            .variables
-            .get(name)
-            .ok_or_else(|| format!("Variable not found: {}", name))?;
-        let struct_ptr = self
-            .builder
-            .build_load(
-                self.context.ptr_type(AddressSpace::default()),
-                *var_ptr,
-                "load_struct_ptr",
-            )
-            .map_err(ctx("Failed to load struct pointer"))?
-            .into_pointer_value();
-
+        let struct_ptr = self.generate_expression(base)?.into_pointer_value();
         let field_ptr = self
             .builder
             .build_struct_gep(

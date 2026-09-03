@@ -323,14 +323,17 @@ impl TypeChecker {
                     // Every method parameter is annotated — `check_type_methods` rejects an
                     // unannotated one before the method is ever registered here.
                     //
-                    // The annotation is deliberately NOT resolved here, unlike at the
-                    // definition site: a user-typed parameter is broken end to end today, and
-                    // resolving it only moves the failure from the checker into codegen, which
-                    // has no field types for a method parameter.
+                    // Resolved here exactly as at the definition site (`check_type_methods`):
+                    // an unresolved user-type annotation (`Type::named_ref`, empty field
+                    // list) never matches the resolved type an argument infers to, even for
+                    // the very same type — see the `named_ref` doc comment. Codegen carries
+                    // the matching fix (`generate_method` now tracks a method parameter's
+                    // named-type fields the same way a top-level function's does).
                     for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
-                        let parameter_type = parameter.type_annotation.clone().expect(
+                        let raw_type = parameter.type_annotation.clone().expect(
                             "method parameters are annotated: checked in check_type_methods",
                         );
+                        let parameter_type = self.resolve_type(&raw_type);
                         let arg_type =
                             self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
                         self.check_type_compatibility(&parameter_type, &arg_type, span)?;

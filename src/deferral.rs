@@ -232,7 +232,14 @@ impl Taint {
                 Statement::Item(Item::FunctionDeclaration(f)) => {
                     self.strict(&f.body, &Scope::new());
                 }
-                Statement::Item(Item::TypeDeclaration(_)) => {}
+                // A block-declared type's methods are analyzed exactly like a
+                // top-level type's (see `analyze_item`): each method body is its own
+                // strict slot, in a fresh scope.
+                Statement::Item(Item::TypeDeclaration(t)) => {
+                    for method in t.type_definition.methods() {
+                        self.analyze_method(method);
+                    }
+                }
                 Statement::Expression(e) => {
                     if index == last {
                         result_deferred = self.visit(e, &local);

@@ -11,6 +11,7 @@ use std::path::Path;
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
+    build_and_run_native, tool_available,
 };
 
 #[test]
@@ -1655,6 +1656,108 @@ fn run_method_returning_array_is_usable() {
     "#;
     // pair() = ["hi","hi"] (size 2); ps[1] = "hi" (size 2) -> 4.
     assert_exit(src, 4);
+}
+
+/// Regression (#194): a method parameter annotated with a user-defined RECORD type. The
+/// checker used to compare the call site's unresolved annotation (`Named { fields: [] }`)
+/// against the resolved argument type and reject two `P`s that print the same but compare
+/// unequal; codegen then had no field types for a method parameter. t.v(1) + p.n(41) = 42.
+#[test]
+fn run_method_parameter_typed_as_a_user_record_resolves() {
+    let src = r#"
+        P = { n :: Num }
+        T = {
+          v :: Num,
+          take = (p :: P) -> Num => < it.v + p.n >
+        }
+
+        ^ = () -> Num => <
+          t = T { v = 1 }
+          t.take(P { n = 41 })
+        >
+    "#;
+    assert_exit(src, 42);
+}
+
+/// Regression (#194): the same shape with a SUM-typed method parameter — the acceptance
+/// criteria's other required case. 1 (T.v) + 6*6 (Circle payload) = 37.
+#[test]
+fn run_method_parameter_typed_as_a_user_sum_resolves() {
+    let src = r#"
+        Shape = Circle(Num) / Square(Num)
+
+        T = {
+          v :: Num,
+          area = (s :: Shape) -> Num => <
+            s ? | Circle(r) => it.v + r * r
+                | Square(side) => it.v + side * side
+          >
+        }
+
+        ^ = () -> Num => <
+          t = T { v = 1 }
+          t.area(Circle(6))
+        >
+    "#;
+    assert_exit(src, 37);
+}
+
+/// Regression (#194), AOT: the same record-typed-parameter method call must produce the
+/// same result through `quilon build` as through the JIT — the checker/codegen fix is not
+/// JIT-only.
+#[test]
+fn aot_method_parameter_typed_as_a_user_record_resolves() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native method-parameter check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        P = { n :: Num }
+        T = {
+          v :: Num,
+          take = (p :: P) -> Num => < it.v + p.n >
+        }
+
+        ^ = () -> Num => <
+          t = T { v = 1 }
+          t.take(P { n = 41 })
+        >
+    "#;
+    let (code, _) = build_and_run_native("method_param_user_record", src);
+    assert_eq!(code, 42, "a native build must exit 42 on the same program");
+}
+
+/// Regression (#259): an instance method constructing a fresh value of its OWN type. The
+/// checker's `self`-referential return type used to leave codegen unable to resolve
+/// `p.twin().x` — a field access whose base is a call result rather than a plain
+/// variable. Point { x = 5 }.twin().x = 5.
+#[test]
+fn run_method_returning_a_fresh_value_of_its_own_type() {
+    let src = r#"
+        Point = { x :: Num, twin = () -> Point => < Point { x = it.x } > }
+        ^ = () -> Num => < p = Point { x = 5 }  p.twin().x >
+    "#;
+    assert_exit(src, 5);
+}
+
+/// Regression (#257): a type declared INSIDE a block (nested in `^`'s body, not at the
+/// top level) whose method calls an `@` leaf IO primitive. Both AST walkers used to skip
+/// `Statement::Item(Item::TypeDeclaration(_))` entirely, and codegen's own type-declaration
+/// emission unconditionally cleared `current_function` — either broke the enclosing body's
+/// emission or (with a value-producing `@`) left the scheduler analysis blind to the call.
+#[test]
+fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
+    assert_exit_linked(
+        r#"
+<< core.time
+^ = () -> Num => <
+  Fetcher = { url :: Text, run = () -> Num => < @sleep(0.01)  42 > }
+  f = Fetcher { url = "x" }
+  f.run()
+>
+"#,
+        42,
+    );
 }
 
 #[test]
