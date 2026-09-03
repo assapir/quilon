@@ -4,6 +4,21 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- **The language server finds references and renames.** `textDocument/references` and
+  `textDocument/rename` join go-to-definition, both document-scoped: a parameter, a
+  block-local, a pattern binding, or a top-level function or type (every member of an
+  overload set) resolves to its declaration and every use. Rename requires a single bare
+  identifier as the new name and refuses a target declared in another file, pointing there
+  instead. See `docs/tooling/language-server.md`.
+
+### Fixed
+
+- **A parameter's declaration span covers its name, not just its type annotation.** Go to
+  definition on a parameter used to land on its `:: Type` annotation; it now lands on the
+  parameter itself.
+
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
 ### Added

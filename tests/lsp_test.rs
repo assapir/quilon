@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use quilon::lexer::ROOT_FILE;
 use quilon::lsp::analysis::{
-    self, SemanticTokenKind, TestLensKind, check_text, definition_at, hover_at, semantic_tokens,
-    test_lenses,
+    self, SemanticTokenKind, TestLensKind, check_text, definition_at, hover_at, is_identifier,
+    references_at, semantic_tokens, test_lenses,
 };
 
 /// A unique temporary directory for a test that needs real files (import resolution).
@@ -101,12 +101,11 @@ fn definition_resolves_parameters_locals_and_top_level_functions() {
     let text = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < y = 3\ndouble(y) >\n";
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
 
-    // `x` in the body resolves to the parameter. A parameter's declaration span is the
-    // parser's: it points at the parameter's final token — here the `Num` annotation —
-    // which still lands inside the declaring parameter list.
+    // `x` in the body resolves to the parameter, at the parameter's own span — the name
+    // through its type annotation.
     let definition =
         definition_at(&checked.program, offset_of(text, "x * 2", 0)).expect("x resolves");
-    assert_eq!(definition.start, offset_of(text, "Num) -> Num", 0));
+    assert_eq!(definition.start, offset_of(text, "x :: Num", 0));
 
     // `y` in the call resolves to the block-local binding.
     let definition =
@@ -151,6 +150,124 @@ fn definition_resolves_across_a_file_import() {
     assert_eq!(definition.start, offset_of(module_text, ">> add", 0));
 
     std::fs::remove_dir_all(&directory).ok();
+}
+
+// --- Find references ---------------------------------------------------------
+
+/// The byte offsets `references_at` answers, sorted (its own contract), for the easiest
+/// possible assertion: a plain list of numbers.
+fn reference_starts(program: &quilon::ast::Program, text: &str, offset: u32) -> Vec<u32> {
+    references_at(program, text, offset)
+        .expect("a resolvable target")
+        .into_iter()
+        .map(|span| span.start)
+        .collect()
+}
+
+#[test]
+fn references_cover_a_parameters_declaration_and_every_use() {
+    let text = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < double(4) >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let expected = vec![offset_of(text, "x :: Num", 0), offset_of(text, "x * 2", 0)];
+
+    // From a use inside the body...
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "x * 2", 0)),
+        expected
+    );
+    // ...and from the declaration itself, the answer is the same.
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "x :: Num", 0)),
+        expected
+    );
+}
+
+#[test]
+fn references_to_a_block_local_stay_inside_its_own_function() {
+    // Two functions each bind a local named `y`; references from one must never pull in
+    // the other's declaration or uses.
+    let text = "f = () -> Num => < y = 1\ny >\n^ = () -> Num => < y = 2\ny + y >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "y = 1", 0)),
+        vec![offset_of(text, "y = 1", 0), offset_of(text, "y >", 0)]
+    );
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "y = 2", 0)),
+        vec![
+            offset_of(text, "y = 2", 0),
+            offset_of(text, "y + y", 0),
+            offset_of(text, "y + y", 4),
+        ]
+    );
+}
+
+#[test]
+fn references_to_a_top_level_name_cover_every_overload_member() {
+    let text = "same = (x :: Num) -> Num => < x >\n\
+                 same = (x :: Text) -> Text => < x >\n\
+                 ^ = () -> Num => < same(1) >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "same(1)", 0)),
+        vec![
+            offset_of(text, "same = (x :: Num)", 0),
+            offset_of(text, "same = (x :: Text)", 0),
+            offset_of(text, "same(1)", 0),
+        ]
+    );
+}
+
+#[test]
+fn references_to_a_pattern_binding_cover_its_uses() {
+    let text = "^ = () -> Num => < Ok(5) ? | Ok(n) => n * n | NotOk(_) => 0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "n * n", 0)),
+        vec![
+            offset_of(text, "Ok(n)", 3),
+            offset_of(text, "n * n", 0),
+            offset_of(text, "n * n", 4),
+        ]
+    );
+}
+
+#[test]
+fn references_answer_nothing_for_an_unresolvable_offset() {
+    let text = "^ = () -> Num => < 1 + 1 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    assert!(references_at(&checked.program, text, offset_of(text, "+ 1", 0)).is_none());
+}
+
+#[test]
+fn references_answer_nothing_for_a_name_declared_in_another_file() {
+    let directory = temporary_directory("import_references");
+    let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
+    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+
+    let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
+    let root = directory.join("buffer.qn");
+    let checked = check_text(&root, text).expect("checks clean");
+
+    assert!(references_at(&checked.program, text, offset_of(text, "lib.add", 4)).is_none());
+
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+// --- Rename -------------------------------------------------------------------
+
+#[test]
+fn only_a_bare_name_is_accepted_as_a_rename_target() {
+    assert!(is_identifier("newName"));
+    assert!(is_identifier("_private"));
+    assert!(!is_identifier("1abc"));
+    assert!(!is_identifier("a.b"));
+    assert!(!is_identifier("two names"));
+    assert!(!is_identifier(""));
 }
 
 // --- Semantic tokens --------------------------------------------------------
@@ -451,6 +568,73 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     assert_eq!(items[1]["kind"], "case");
     assert_eq!(items[1]["name"], "c");
     assert_eq!(items[1]["path"], "s/c");
+
+    // References on the parameter `x`: its own declaration and its one use.
+    client
+        .sender
+        .send(lsp_request(
+            7,
+            "textDocument/references",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": fixed.find("x * 2").unwrap() },
+                "context": { "includeDeclaration": true } }),
+        ))
+        .unwrap();
+    let locations = lsp_response(lsp_receive(&client));
+    let locations = locations.as_array().expect("a location array");
+    assert_eq!(locations.len(), 2);
+    let mut starts: Vec<u32> = locations
+        .iter()
+        .map(|location| location["range"]["start"]["character"].as_u64().unwrap() as u32)
+        .collect();
+    starts.sort();
+    assert_eq!(
+        starts,
+        vec![
+            fixed.find("x :: Num").unwrap() as u32,
+            fixed.find("x * 2").unwrap() as u32,
+        ]
+    );
+
+    // Renaming `x` rewrites both the declaration and its use, in the same document.
+    client
+        .sender
+        .send(lsp_request(
+            8,
+            "textDocument/rename",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": fixed.find("x * 2").unwrap() },
+                "newName": "renamed" }),
+        ))
+        .unwrap();
+    let edit = lsp_response(lsp_receive(&client));
+    let edits = edit["changes"][uri]
+        .as_array()
+        .expect("edits for the document");
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().all(|edit| edit["newText"] == "renamed"));
+
+    // Renaming to something that is not a bare identifier is refused.
+    client
+        .sender
+        .send(lsp_request(
+            9,
+            "textDocument/rename",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": fixed.find("x * 2").unwrap() },
+                "newName": "1abc" }),
+        ))
+        .unwrap();
+    match lsp_receive(&client) {
+        lsp_server::Message::Response(response) => {
+            let error = response.response_result.expect_err("an error response");
+            assert!(
+                error.message.contains("1abc"),
+                "unexpected message: {error:?}"
+            );
+        }
+        other => panic!("expected a response, got {other:?}"),
+    }
 
     client
         .sender
