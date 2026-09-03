@@ -6,6 +6,15 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`quilon test --binary <out>` — a native, debuggable test executable.** Builds a suite
+  into a native executable at `out`, without running it, always with DWARF debug info, so
+  a debugger (`gdb`/`lldb`) can step through a case. `--only`, given alongside `--binary`,
+  is baked into the executable — the build drops every `describe`/`it` the selection
+  excludes before code generation, so `out` alone reproduces the filtered run with nothing
+  further to pass at launch. Lays the CLI groundwork for the VS Code extension's upcoming
+  per-case Run/Debug CodeLens (#271). See `docs/tooling/compiling.md` and
+  `docs/corelib/test/README.md`.
+
 - **Static methods: a method whose body never reads `it` may be called on the bare TYPE
   NAME** (`Point.origin()`), not just on a value — the natural spelling for a constructor
   (`Request.get(url)`). This settles #259's design call: a method called on a type name
