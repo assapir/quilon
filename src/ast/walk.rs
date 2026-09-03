@@ -11,8 +11,9 @@ use std::ops::ControlFlow;
 /// fails to compile here until it is given an arm, which is what keeps every caller
 /// from silently ignoring it.
 ///
-/// Descends into a nested function declaration's body, since that body is still code the
-/// enclosing expression runs; it does not descend into item SIGNATURES or type declarations.
+/// Descends into a nested function declaration's body and a nested type declaration's
+/// methods' bodies, since those bodies are still code the enclosing expression runs; it
+/// does not descend into item SIGNATURES (parameter/return annotations, field types).
 ///
 /// To visit everything, return `ControlFlow::Continue(())` throughout. To search, break —
 /// the walk then stops instead of traversing the rest.
@@ -112,7 +113,14 @@ pub fn try_for_each_subexpression<B>(
                     Statement::Item(Item::FunctionDeclaration(fun)) => {
                         try_for_each_subexpression(&fun.body, f)?
                     }
-                    Statement::Item(Item::TypeDeclaration(_)) => {}
+                    // A block-declared type's methods are ordinary function bodies —
+                    // code the enclosing expression runs whenever a method is called —
+                    // so they are walked exactly like a nested `FunctionDeclaration`'s.
+                    Statement::Item(Item::TypeDeclaration(declaration)) => {
+                        for method in declaration.type_definition.methods() {
+                            try_for_each_subexpression(&method.body, f)?;
+                        }
+                    }
                 }
             }
         }

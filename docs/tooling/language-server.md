@@ -24,6 +24,15 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   parameter, a block-local binding, a pattern binding, a top-level function or type, or a
   declaration in an imported file (the location points into that file). A name declared in
   a bundled module (`core.io`, `core.test`, …) yields no location.
+- **Find references** on an identifier — or on the name in its own declaration — yields
+  every place that binds or reads it: a parameter's declaration and every use in its
+  function, a top-level function's or type's declaration (every member, for an overload
+  set) and every use across the document, a block-local's or pattern binding's declaration
+  and every use in its own scope. Both cover the names an identifier binds: parameters,
+  block-locals, pattern bindings, and top-level functions and types.
+- **Rename** on the same targets as find references rewrites the declaration and every use
+  in one edit. The new name must be a single bare identifier; a target declared in another
+  file answers with a message naming that file, so the rename happens there instead.
 - **Hover** yields the inferred type of the smallest expression covering the cursor, from
   the type checker's table: `Num`, `[]Text`, `(Num) -> Num`, a record or sum type's name.
 - **Semantic tokens** classify:

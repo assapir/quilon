@@ -14,8 +14,50 @@ All notable changes to Quilon are documented here.
   further to pass at launch. Lays the CLI groundwork for the VS Code extension's upcoming
   per-case Run/Debug CodeLens (#271). See `docs/tooling/compiling.md` and
   `docs/corelib/test/README.md`.
+- **The language server finds references and renames.** `textDocument/references` and
+  `textDocument/rename` join go-to-definition, both document-scoped: a parameter, a
+  block-local, a pattern binding, or a top-level function or type (every member of an
+  overload set) resolves to its declaration and every use. Rename requires a single bare
+  identifier as the new name and refuses a target declared in another file, pointing there
+  instead. See `docs/tooling/language-server.md`.
 - `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
   code, and the summary table matches the registry.
+
+### Fixed
+
+- **A parameter's declaration span covers its name, not just its type annotation.** Go to
+  definition on a parameter used to land on its `:: Type` annotation; it now lands on the
+  parameter itself.
+
+- **A method parameter annotated with a user record or sum type now works end to end.**
+  The checker compared the call site's UNRESOLVED annotation (`Named { fields: [] }`, the
+  parser's placeholder for a capitalized name) against the resolved argument type, so two
+  `P`s that print the same compared unequal and every such call was rejected with
+  `QN301 type mismatch: expected P, got P`. Call-site checking now resolves the parameter
+  annotation exactly as the definition site already does; codegen's method-parameter
+  emission now also tracks a record/sum parameter's fields (previously only a top-level
+  function's parameter did), so a resolved call no longer dies at run time with "Field
+  access not fully implemented" either. (#194)
+
+- **A method that constructs a fresh value of its own type is usable through a chained
+  call.** `p.twin().x`, where `twin` returns a new `Point`, used to fail at run time with
+  "Field access not fully implemented" — codegen's field-access lowering only recognized a
+  plain variable as the base of `.field`, so a field read off a call result (rather than a
+  binding) had nowhere to look up its type. Field access now also resolves against the
+  type oracle's inferred type for any record-valued expression, not just an identifier.
+  (#259)
+
+- **A type declared INSIDE a block is no longer invisible to the compiler's analyses.**
+  `Statement::Item(Item::TypeDeclaration(_))` used to be a silent no-op in both AST walkers
+  (`src/ast/walk.rs`, `src/deferral.rs`), so a nested type's methods were never visited —
+  in particular, a method calling a value-returning `@` primitive was invisible to the
+  deferred-value analysis. Codegen's own type-declaration emission had a matching gap: it
+  unconditionally cleared the enclosing function's context and dropped its local-variable
+  frame after emitting a nested type's methods, breaking the rest of the enclosing body's
+  emission. Both walkers now descend into a block-declared type's methods exactly as they
+  already do for a nested function declaration, and type-declaration emission now
+  saves/restores the enclosing function, its frame, and the builder's position around a
+  nested type's methods. (#257)
 
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
