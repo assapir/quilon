@@ -4,6 +4,119 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+## 0.10.0 "Demosthenes" — 2026-09-03
+
+### Added
+
+- **`core.info` — what a program can ask about itself.** `<< core.info` brings in
+  `platform()`, `os()`, `pointerWidth()`, `endianness()` and `runMode()`, each a sum type
+  so a match over one is exhaustive and a typo is a compile error, plus `quilonVersion()`
+  as a `Text` (a version is an open set):
+
+  ```quilon ignore
+  << core.info
+
+  ^ = () -> Num => <
+    print("`platform()`-`os()` `pointerWidth()`, quilon `quilonVersion()` (`runMode()`)")
+    os() ? | Linux => 0 | MacOS => 0 | WtfOs(name) => name.size | _ => 1
+  >
+  ```
+
+  The answers describe the machine the program will **run** on, so a cross-compiled binary
+  reports its target. A target with no variant of its own is `WtfPlatform(Text)` /
+  `WtfOs(Text)`, carrying the architecture and the whole triple rather than collapsing to a
+  shrug. `pointerWidth()` and `endianness()` come from LLVM's data layout, not from the
+  architecture's name — `powerpc64le` is little-endian despite its spelling. `runMode()` is
+  the one that is not about the target: `Jit` under `quilon run`, `Aot` for a built binary.
+
+  Each is a compile-time constant, lowered to the same global byte constant a `Text`
+  literal becomes: no call in the emitted IR, no syscall, and two reads always agree. The
+  types are ordinary Quilon in `corelib/info.qn` over `__`-prefixed primitives, the way
+  `core.http` sits on `core.net`, so the import is required. See `docs/corelib/info.md`.
+
+- **`Text` is documented as logical order, and the lexer guards against Trojan Source.**
+  `docs/types/text.md` now states the contract directly: every `Text` index, length,
+  search, and concatenation addresses logical order — the order the text was typed and is
+  read — and `print`/`write` emit that same logical order, leaving visual (bidi) ordering to
+  the display device. No operation reorders `Text` data or inserts direction marks; this is
+  a documentation clarification, not a behavior change. Alongside it, the lexer now rejects
+  the CVE-2021-42574 class of attack: a bidi embedding, override, or isolate control opened
+  inside a string literal or a `~` comment must be closed before that token ends (UAX #9
+  nesting enforced with a stack), and any of these controls — or a scopeless mark
+  (LRM/RLM/ALM) — appearing outside a literal or comment is a lex error naming the
+  character. Legitimate Hebrew/Arabic literals are unaffected. See `src/lexer/bidi.rs`.
+
+  A diagnostic's caret also lands under the right grapheme on a right-to-left source line:
+  when the quoted source line contains right-to-left characters, the `^^^` underline is now
+  positioned from the line's VISUAL order per UAX #9 (via the new `unicode-bidi` dependency,
+  LTR paragraph level) rather than its logical order. A plain-ASCII line never touches the
+  bidi crate and renders byte-for-byte as before.
+
+- **`Text` is `[]Grapheme`: grapheme access, and the composable methods are Quilon.**
+  `text.at(i)` returns `Ok(Text)`/`NotOk` for the grapheme at index `i` (mirroring array
+  `.at`), and `text.graphemes()` returns `[]Text`, so a `Text` composes with every array
+  method (`.map`, `.filter`, `.reduce`, ...). `split`, `trim`, `contains`, `replace`,
+  `replaceAll` and `repeat` move out of the runtime into `corelib/text.qn`, written in
+  Quilon over a native primitive floor (segmentation, `indexOf`, `slice`, case conversion,
+  comparison, `+`, IO); the module merges in implicitly wherever a program calls one of
+  them, qualified under `core.text.*`, and cannot be imported directly. Same contracts,
+  same fail-loud messages, same exit 101 — a `Text` behaves the same from the outside; the
+  one visible refinement is that the walk is now grapheme-aware, so a separator matching
+  inside a combining cluster no longer splits it.
+
+- **Closure returns: a function may hand a closure back across the call boundary.** A
+  function type is now written right-associatively in return position
+  (`(n :: Num) -> (Num) -> Num`), a top-level function, lambda, nested function or another
+  closure may return one — captures, `=` snapshots and `:=` cells alike, already live on the
+  GC heap and outlive the frame that built them — and the result is callable every way:
+  bound and called, called immediately off the return, or passed on to a function-typed
+  parameter. A lambda in return position takes its own parameter types from the declared
+  return type, the same contextual-typing rule an argument or a declared binding already
+  gets:
+
+  ```quilon
+  adder = (n :: Num) -> (Num) -> Num => (x) => x + n
+  add5 = adder(5)
+  add5(2)          ~ 7
+  adder(5)(2)      ~ 7, called immediately
+  ```
+
+  A bare top-level function name used as a value (`pass = () -> (Num) -> Num => double`) is
+  still rejected — a function name is not a first-class value yet — now with a diagnostic
+  naming the fix (wrap it in a lambda that calls it).
+
+- **Array methods on a range no longer materialize it.** When the receiver of `.each`,
+  `.map`, `.filter` or `.reduce` is syntactically a `lo <- hi` range, the loop computes each
+  element in place instead of first allocating the `[]Num` the range would otherwise become
+  — `.each` in discarded-statement position and `.reduce` allocate nothing at all; `.map`/
+  `.filter` still allocate their result. `(1 <- 100000000).reduce(...)` now runs in constant
+  memory instead of materializing an 800 MB array first. A range is still a plain `[]Num`
+  everywhere else: indexing, `.size`, binding to a name, and any method past the first in a
+  chain all materialize exactly as before.
+
+- **`quilon lsp` — a real language server, and the VS Code extension as its client.** The
+  compiler gains an `lsp` subcommand (built on the synchronous `lsp-server` crate) serving
+  diagnostics from a full front-end run over the editor's buffer text (saved or not),
+  go-to-definition, hover, semantic tokens (the same `<`/`>` block-vs-comparison rule the
+  lexer and parser already apply), and one CodeLens per test suite/case. The extension's
+  `quilon check` shell-out diagnostics path is gone, replaced by `vscode-languageclient`
+  spawning `quilon lsp`. A new **Test Explorer** builds its tree from a `quilon/testItems`
+  request and runs suites/cases through `quilon test --reporter json --only <path>`,
+  reporting each result as it arrives; there is no Debug profile for tests, since
+  `quilon test` runs only under the in-process JIT and the extension's debugger (CodeLLDB)
+  attaches to a native `--debug` build.
+
+- **`quilon test --reporter json` and repeatable `--only "Suite/case"`.** `--reporter json`
+  (default stays `human`, unchanged byte-for-byte) emits one NDJSON event per line on
+  stdout — `suite`, `case` (`pass`, or `fail` with `message`/`file`/`line`), `summary` — and
+  nothing else: no status lines, no color, ever, which is what a tool (an editor's Test
+  Explorer, CI) parses instead of scraping the human report. `--only "Suite/case"` selects
+  one case or, given just a suite path, every case under it; it may repeat, and is checked
+  against the file's own `describe`/`it` structure — an unknown path is an error listing
+  what the file has. See `docs/corelib/test/README.md`.
+
+- `quilon explain <code>` — the reference section for an error code.
+
 ### Changed
 
 - **Diagnostics are data, with a code.** Every compile error and runtime failure is a
@@ -47,58 +160,168 @@ All notable changes to Quilon are documented here.
   elapsed time, a quip — print only for `--reporter human`. `--reporter json` stays pure
   NDJSON on stdout: no status lines, no quips, no color, ever.
 
-### Added
+- **BREAKING: a method does not answer the plain call form**
+  ([#285](https://github.com/assapir/quilon/issues/285)). A method is reached through
+  `recv.name(...)` and nowhere else; `name(recv, args)` resolves in the top-level
+  namespace alone. The two halves now match: a member call never falls through to a
+  function, and a plain call never redirects into an argument's type.
 
-- `quilon explain <code>` — the reference section for an error code.
+  ```quilon ignore
+  Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
+
+  c.bump(5)      ~ 35
+  bump(c, 5)     ~ error: no function 'bump' in scope — 'bump' is a member of Counter
+  split(s, ",")  ~ error: no function 'split' in scope — 'split' is a member of Text
+  ```
+
+  What breaks: any call reaching a method through the plain form `name(recv, args)` —
+  including the methods reserved on `Text`, arrays, `Map` and `Set`. Migration: write it as
+  `recv.name(args)`. The error names the type the member lives on and spells that call out.
+
+- **BREAKING: an import binds a qualified namespace, not a pile of names.** `<< core.http`
+  no longer merges `core.http`'s exports into the importing file — it binds the name
+  `http`, and every export is reached through it, in every position (values, patterns,
+  types):
+
+  ```quilon
+  << core.http
+
+  classify = (m :: http.Method) -> Num => m ?
+    | http.Get     => 1
+    | http.Post(_) => 2
+    | _            => 0
+
+  request = http.Request { method = http.Get, url = "http://example.com/" }
+  ```
+
+  The full path (`core.http.send`) always works too, and is the escape hatch when two
+  imports share a last segment. Privates travel with their module and are callable from its
+  own exports but reached by nothing outside it. Module overload sets are now closed:
+  `print`, `eprint`, `write` and `now` are ordinary exports of `core.io`/`core.time`
+  (import required, reached as `io.print(...)`/`time.now()`), and a program's own bare
+  `print` is an unrelated function — `@` primitives (`@sleep`, ...) and the
+  compiler-provided `assert`/`expect`/matchers/`test.describe` are unaffected. What breaks:
+  every `<< core.*` import in a program that used a brought-in name directly now needs the
+  module's binding prefixed. Migration is mechanical — prefix each use with the module's
+  name — and the error at an unqualified use names the fix.
+
+- **BREAKING: the pipe operator `|>` is gone.** First-argument injection is removed from
+  the language entirely — the lexer's `Pipeline` token, the parser's pipe precedence level,
+  and the `Expression::Pipeline` node with it. What breaks: any program using
+  `x |> f(...)`. Migration is a direct call: `x |> f(y)` becomes `f(x, y)`.
+
+- **BREAKING: a named function's and a method's body is always a `< >` block.** `=>` used
+  to accept either a block or a bare expression — one spelling too many, and the short one
+  hid where a definition ended. A lambda keeps the bare form, so a callback still fits on
+  one line:
+
+  ```quilon
+  square = (n :: Num) -> Num => < n * n >     ~ was: => n * n
+  xs.map(x => x * 2)                          ~ lambdas unaffected
+  ```
+
+  Match arms and ternary branches are expression positions, not bodies, and are unaffected
+  (a block there is still a parse error). What breaks: any named function or method whose
+  body was a bare expression. Migration: wrap it in `< >`.
+
+- **BREAKING: an uninferable type is a compile error, never a silent `Num`.** Every place
+  the checker used to default an unknown type to `Num` now either infers it from context —
+  a binding's annotation, a call argument's declared parameter type, a function's declared
+  return type — or reports a compile error naming what needs annotating: an empty
+  collection literal (`[]`, `[|=>|]`, `[||]`) with no surrounding context, a method
+  parameter with no annotation (methods now follow the rule plain functions and lambdas
+  already had), and a **self-recursive function with no annotated return type** (the
+  self-call used to type as `Num` until the body finished checking, silently accepting
+  whatever it actually returned; it is now an error at the function's own definition,
+  naming the fix). An empty `< >` block is also now a compile error, and a block whose last
+  statement is a declaration (not an expression) types as `$` rather than defaulting to
+  `Num`. What breaks: a method with an unannotated parameter, a self-recursive function
+  with no `-> T`, an empty collection literal the compiler cannot infer from context, or an
+  empty block. Migration: annotate what the error names.
+
+- **BREAKING: a `{ }` block of only method-shaped members is a compile error.**
+  `name = { ... }` is a type declaration if any member anywhere in the block has a `::`
+  field, and a record literal if every member is a plain `name = value` pair — decided by
+  content, never by the binding's capitalization. A block of nothing but methods
+  (`f = => ...`), with no field anywhere, used to silently parse as a type declaration; it
+  is now a compile error explaining both readings and how to get each, regardless of case.
+  What breaks: a program relying on the old fallback to read a methods-only block as a
+  type. Migration: add a `::` field if a type was intended, or make every member a plain
+  value if a record literal was.
+
+- **BREAKING: deep immutability — `=` freezes the value it binds, not just the binding.** A
+  value reached through an `=` binding is now unreachable through any `:=` alias, in either
+  direction. The checker tracks, per reference-typed expression (records, and
+  arrays/maps/sets/sum payloads that hold them — scalars copy and are exempt), which
+  bindings its value may alias, and rejects the routes that used to let a `:=` write reach
+  an `=`-bound value underneath it: binding an alias either direction, a method whose result
+  inherits an immutable receiver's mutability, storing into or reading out of a container
+  the wrong direction, aliasing `it` inside an `=` method, and laundering a value through a
+  function parameter or another call's result. What breaks: a program that mutated an
+  `=`-bound value indirectly — through an alias, a container, or a passthrough call — all
+  previously silent aliasing bugs. Migration: bind with `:=` wherever the value needs to
+  stay mutable. See `docs/mutation.md`.
+
+- **A warning is an error everywhere, not just in CI.** `[workspace.lints.rust]
+  warnings = "deny"` is now declared in the workspace manifest, so every `cargo
+  build`/`test`/`check` — not only CI's `RUSTFLAGS=-D warnings` — fails on a warning in this
+  codebase's own crates; narrower than the environment variable it complements, since it
+  doesn't reach dependencies.
+
+- **The release carries a macOS (Apple silicon) asset again, self-contained.**
+  `quilon-macos-aarch64` returns to the release, linked against LLVM's static macOS-ARM64
+  package (not Homebrew's dylib-linked build, which would leave the binary unable to start
+  without that exact formula installed) and verified self-contained (`otool -L` lists only
+  system libraries). CI's repeated toolchain/cache/self-containment-check logic across
+  `ci.yml`, `release.yml`, `vscode-extension.yml` and `docs-site.yml` is now three shared
+  composite actions.
+
+- **The release carries a Linux aarch64 asset, and CI runs the same gate on every
+  platform.** `quilon-linux-aarch64` joins `quilon-linux-x86_64`, built natively on
+  `ubuntu-24.04-arm` (not cross-compiled — the statically-linked GC and the LLVM link both
+  need a matching host toolchain); a release now ships both Linux assets or neither. Asset
+  names drop the target triple (`quilon-linux-x86_64`, not
+  `quilon-x86_64-unknown-linux-gnu`). CI's `fmt`/`clippy` now run once in a shared `gate`
+  job, and `build-and-test` is one matrix over Linux x86_64, Linux aarch64, macOS and Arch
+  Linux — every leg now gates the merge (no more `continue-on-error` on macOS/Arch), and
+  each compares its benchmarks against its own history.
+
+- **`quilon build` binaries are smaller: the linker discards what nothing reaches.**
+  `--gc-sections` (`-dead_strip` on macOS) is now passed to the AOT link, on top of the
+  runtime's existing function-sections; a stripped `hello_world` drops from 1.4 MB to 662 KB
+  (−54%) and 4766 symbols to 1934 (−59%). The concurrency runtime is unaffected — every
+  intrinsic is still seeded as a linker root — only the unreferenced std/support code around
+  it goes.
+
+### Fixed
+
+- **Module resolution: canonicalized paths, and an import cycle is a compile error.** A
+  module reached via two different spellings of its path (a `./sub/../sub` detour, a
+  symlink) used to be loaded twice, or rejected as "two different modules" reaching the same
+  file; paths are now canonicalized before they key the loader's cache, so the same file
+  merges into one module however it's spelled. An import cycle — `a` imports `b` imports
+  `a`, or a submodule cycling back to the program's own entry file — used to silently
+  duplicate every item of the module it cycled back into; it is now a compile error naming
+  the chain (`import cycle: a -> b -> a`).
+
+- **Type declaration: a first member with parameters, or the render operator, parses
+  correctly.** `Name = { ... }`'s type-vs-record-literal lookahead only recognized a first
+  member shaped `ident ::` (a field) or `ident = =>` (a parameterless method); a method
+  whose first member takes parameters (`f = (x :: Num) -> Num => ...`), or the render
+  operator `` ` `` as the first member, fell through to the record-literal reading and
+  errored on the next member. The lookahead now scans to the matching `)` the way the rest
+  of the parser does, and accepts `` ` `` as a member name.
+
+- **Deep non-tail recursion no longer overflows its stack.** `^` now always runs on the
+  fiber scheduler's seed fiber (previously only when the program used an `@` primitive — a
+  split that saved nothing, since the scheduler's symbols were already linked into every
+  binary regardless), and that seed fiber is now sized like a process stack (8 MiB) rather
+  than a spawned fiber's 512 KiB. A program had roughly 16x less non-tail-recursion depth
+  than a process stack allows; that gap is closed.
 
 ## 0.9.3 "Hegemon" — 2026-08-28
 
 ### Added
-
-- **`Text` is documented as logical order, and the lexer guards against Trojan Source.**
-  `docs/types/text.md` now states the contract directly: every `Text` index, length,
-  search, and concatenation addresses logical order — the order the text was typed and is
-  read — and `print`/`write` emit that same logical order, leaving visual (bidi) ordering to
-  the display device. No operation reorders `Text` data or inserts direction marks; this is
-  a documentation clarification, not a behavior change. Alongside it, the lexer now rejects
-  the CVE-2021-42574 class of attack: a bidi embedding, override, or isolate control opened
-  inside a string literal or a `~` comment must be closed before that token ends (UAX #9
-  nesting enforced with a stack), and any of these controls — or a scopeless mark
-  (LRM/RLM/ALM) — appearing outside a literal or comment is a lex error naming the
-  character. Legitimate Hebrew/Arabic literals are unaffected. See `src/lexer/bidi.rs`.
-
-- **A diagnostic's caret lands under the right grapheme on a right-to-left source line.**
-  When the quoted source line contains right-to-left characters, the `^^^` underline in a
-  compiler diagnostic is now positioned from the line's VISUAL order per UAX #9 (via the new
-  `unicode-bidi` dependency, LTR paragraph level) rather than its logical order, so it still
-  points at the right place on a bidi-aware terminal. A plain-ASCII line — the overwhelming
-  common case — never touches the bidi crate and renders byte-for-byte as before.
-
-- **`core.info` — what a program can ask about itself.** `<< core.info` brings in
-  `platform()`, `os()`, `pointerWidth()`, `endianness()` and `runMode()`, each a sum type
-  so a match over one is exhaustive and a typo is a compile error, plus `quilonVersion()`
-  as a `Text` (a version is an open set):
-
-  ```quilon ignore
-  << core.info
-
-  ^ = () -> Num => <
-    print("`platform()`-`os()` `pointerWidth()`, quilon `quilonVersion()` (`runMode()`)")
-    os() ? | Linux => 0 | MacOS => 0 | WtfOs(name) => name.size | _ => 1
-  >
-  ```
-
-  The answers describe the machine the program will **run** on, so a cross-compiled binary
-  reports its target. A target with no variant of its own is `WtfPlatform(Text)` /
-  `WtfOs(Text)`, carrying the architecture and the whole triple rather than collapsing to a
-  shrug. `pointerWidth()` and `endianness()` come from LLVM's data layout, not from the
-  architecture's name — `powerpc64le` is little-endian despite its spelling. `runMode()` is
-  the one that is not about the target: `Jit` under `quilon run`, `Aot` for a built binary.
-
-  Each is a compile-time constant, lowered to the same global byte constant a `Text`
-  literal becomes: no call in the emitted IR, no syscall, and two reads always agree. The
-  types are ordinary Quilon in `corelib/info.qn` over `__`-prefixed primitives, the way
-  `core.http` sits on `core.net`, so the import is required. See `docs/corelib/info.md`.
 
 - **A lambda takes its parameter types from the signature that receives it.** Where a
   lambda lands on a known function type, that type says what its parameters are:
@@ -139,24 +362,6 @@ All notable changes to Quilon are documented here.
   delimits the body. See `docs/corelib/http.md`.
 
 ### Changed
-
-- **BREAKING: a method does not answer the plain call form**
-  ([#285](https://github.com/assapir/quilon/issues/285)). A method is reached through
-  `recv.name(...)` and nowhere else; `name(recv, args)` resolves in the top-level
-  namespace alone. The two halves now match: a member call never falls through to a
-  function, and a plain call never redirects into an argument's type.
-
-  ```quilon ignore
-  Counter = { value :: Num, bump = (by :: Num) -> Num => it.value + by }
-
-  c.bump(5)      ~ 35
-  bump(c, 5)     ~ error: no function 'bump' in scope — 'bump' is a member of Counter
-  split(s, ",")  ~ error: no function 'split' in scope — 'split' is a member of Text
-  ```
-
-  What breaks: any call reaching a method through the plain form `name(recv, args)` —
-  including the methods reserved on `Text`, arrays, `Map` and `Set`. Migration: write it as
-  `recv.name(args)`. The error names the type the member lives on and spells that call out.
 
 - **BREAKING: a range endpoint must be a whole number a `Num` holds exactly** ([#215](https://github.com/assapir/quilon/issues/215)).
   `lo <- hi` counts from one end to the other, so an end must be a whole number — and a

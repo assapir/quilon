@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "quilon"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "clap",
  "flate2",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "quilon-rt"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "cc",
  "corosensei",

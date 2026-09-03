@@ -6,7 +6,7 @@
 
 Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
-> **Status: 0.9.2 — "stable basics."** The core language compiles, runs, and is tested end-to-end, but it is **not** feature-complete. For what is and isn't implemented, see the **[feature matrix](./docs/status/feature-matrix.md)**.
+> **Status: 0.10.0 — "Demosthenes".** The core language compiles, runs, and is tested end-to-end. What is implemented is listed in the **[feature matrix](./docs/status/feature-matrix.md)**, and what is deferred under **[known limitations](./docs/status/limitations.md)**.
 
 ## A taste
 

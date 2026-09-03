@@ -106,7 +106,7 @@
 
 >> runMode = () -> RunMode => < __is_aot() ? Aot : Jit >
 
-~ The version of the Quilon compiler that built this program, e.g. "0.9.3".
+~ The version of the Quilon compiler that built this program, e.g. "0.10.0".
 >> quilonVersion = () -> Text => < __quilon_version() >
 
 >> answerToTheUltimateQuestionOfLifeTheUniverseAndEverything = () -> Num => < 42 >

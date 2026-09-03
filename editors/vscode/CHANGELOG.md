@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-03
+
+Version matches the Quilon compiler it targets.
+
 ### Added
 
 - **The extension is a language client.** It spawns the compiler's own language server
@@ -35,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The shell-out path (run `check` on save, parse the rustc-style report) is gone;
   squiggles now update as you type. The minimum VS Code version rises to 1.91, which the
   language client library requires.
+- **Breaking: the pipe operator `|>` is gone from the grammar.** It no longer highlights —
+  matching its removal from the compiler.
 
 ### Fixed
 

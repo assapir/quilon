@@ -20,7 +20,7 @@ exhaustive and a misspelt variant is a compile error.
 | `info.pointerWidth() -> PointerWidth` | `Width64` / `Width32` |
 | `info.endianness() -> Endianness` | `Little` / `Big` |
 | `info.runMode() -> RunMode` | `Aot` / `Jit` — whether this program was built ahead of time or is running through `quilon run` |
-| `info.quilonVersion() -> Text` | the compiler that built it, e.g. `"0.9.3"` — an open set, so a `Text` |
+| `info.quilonVersion() -> Text` | the compiler that built it, e.g. `"0.10.0"` — an open set, so a `Text` |
 
 Every type renders, so it interpolates with no conversion:
 
