@@ -14,6 +14,7 @@ quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
 quilon test    suite.qn --reporter json          # one JSON event per line, for a tool
 quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeatable)
+quilon test    suite.qn --binary out             # build a debuggable executable, without running
 quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
@@ -62,6 +63,21 @@ quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
+
+`quilon test <file> --binary <out>` builds the suite into a **native, debuggable
+executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
+(`gdb`/`lldb`) can step through a case. `<file>` names one suite; a directory (the default
+`.` included) is a diagnostic error, since a build has one entry point. `--only`, given
+alongside `--binary`, is baked into the executable: the build drops every `describe`/`it`
+the selection excludes before code generation, so running `<out>` alone reproduces the
+filtered run — the shape a debugger's launch configuration wants.
+```bash
+quilon test suite.qn --binary suite_debug
+quilon test suite.qn --only "Suite/one case" --binary suite_debug   # only that case is built in
+gdb ./suite_debug
+```
+The executable's exit code follows `quilon test`'s own convention: 0 when every case that
+ran passed.
 
 Add `--debug` (or `-g`) to emit **DWARF debug info** for source-level debugging — a
 debugger (`gdb`/`lldb`) can then set breakpoints, step, show backtraces in terms of

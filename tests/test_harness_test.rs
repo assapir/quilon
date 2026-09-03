@@ -18,6 +18,19 @@ use quilon::parser;
 mod common;
 use common::{ensure_runtime_lib, tool_available};
 
+/// Run the executable at `path` with no arguments, capturing what it produced.
+fn execute(path: &Path) -> Output {
+    let out = Command::new(path)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run the built executable");
+    Output {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
 /// A passing suite: two groups, one nested inside the other.
 const PASSING_SUITE: &str = r#"
 << core.test
@@ -1403,4 +1416,174 @@ fn the_shipped_example_runs_its_tests_under_quilon_test() {
             out.stdout
         );
     }
+}
+
+// ── `--binary`: a native, debuggable test executable ─────────────────────────────────────
+
+/// `quilon test <file> --binary <out>`, requiring a linker on PATH (`--binary` always links
+/// with `clang`) — the produced executable is native, so there is nothing to assert
+/// without one.
+fn build_binary(dir: &Path, source: &Path, name: &str, extra: &[&str]) -> Option<PathBuf> {
+    if !tool_available("clang") {
+        return None;
+    }
+    ensure_runtime_lib(
+        Path::new(env!("CARGO_BIN_EXE_quilon"))
+            .parent()
+            .expect("the compiler's directory"),
+    );
+    let binary = dir.join(name);
+    let mut arguments = vec![
+        "test",
+        source.to_str().unwrap(),
+        "--binary",
+        binary.to_str().unwrap(),
+    ];
+    arguments.extend_from_slice(extra);
+    let build = quilon(&arguments);
+    assert_eq!(
+        build.code, 0,
+        "`quilon test --binary` failed:\n{}",
+        build.stderr
+    );
+    Some(binary)
+}
+
+#[test]
+fn binary_builds_an_executable_that_passes_a_passing_suite() {
+    let dir = work_dir("binary_pass");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &[]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_eq!(
+                run.code, 0,
+                "a passing suite's binary must exit 0:\n{}\n{}",
+                run.stdout, run.stderr
+            );
+            assert!(
+                run.stdout.contains("4 passed, 0 failed"),
+                "unexpected summary:\n{}",
+                run.stdout
+            );
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn binary_of_a_failing_suite_exits_non_zero() {
+    let dir = work_dir("binary_fail");
+    let source = write(&dir, "suite.qn", FAILING_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &[]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_ne!(run.code, 0, "a failing suite's binary must exit non-zero");
+            assert!(
+                run.stdout.contains("2 passed, 1 failed"),
+                "unexpected summary:\n{}",
+                run.stdout
+            );
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--only`, given at the build, is baked into the binary: running it plain reproduces the
+/// filtered run, with no argument or environment variable needed at launch — the shape a
+/// debugger's launch configuration wants.
+#[test]
+fn binary_honours_only_and_runs_nothing_else() {
+    let dir = work_dir("binary_only");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &["--only", "numbers/orders"]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_eq!(
+                run.code, 0,
+                "the selected case passes:\n{}\n{}",
+                run.stdout, run.stderr
+            );
+            assert!(
+                run.stdout.contains("✓ orders") && run.stdout.contains("1 passed, 0 failed"),
+                "only the selected case must have run:\n{}",
+                run.stdout
+            );
+            for excluded in ["adds", "nested", "text", "contains"] {
+                assert!(
+                    !run.stdout.contains(excluded),
+                    "`{excluded}` must not appear — it was excluded by `--only`:\n{}",
+                    run.stdout
+                );
+            }
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn binary_with_an_unknown_only_path_fails_the_build_listing_the_suites_paths() {
+    let dir = work_dir("binary_only_unknown");
+    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        source.to_str().unwrap(),
+        "--binary",
+        dir.join("unused").to_str().unwrap(),
+        "--only",
+        "numbers/divides",
+    ]);
+    assert_ne!(out.code, 0, "an unknown `--only` path must fail the build");
+    assert!(
+        out.stderr.contains("numbers/divides") && out.stderr.contains("numbers/adds"),
+        "the diagnostic must name the unknown path and list what the suite has:\n{}",
+        out.stderr
+    );
+    assert!(
+        !dir.join("unused").exists(),
+        "nothing should have been built"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn binary_targeting_a_directory_is_a_diagnostic_error() {
+    let dir = work_dir("binary_dir");
+    write(&dir, "suite.qn", PASSING_SUITE);
+    let out = quilon(&[
+        "test",
+        dir.to_str().unwrap(),
+        "--binary",
+        dir.join("out").to_str().unwrap(),
+    ]);
+    assert_ne!(out.code, 0, "`--binary` on a directory must fail");
+    assert!(
+        out.stderr.contains("--binary") && out.stderr.contains(&dir.display().to_string()),
+        "the diagnostic must name the flag and the directory given:\n{}",
+        out.stderr
+    );
+    assert!(!dir.join("out").exists(), "nothing should have been built");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The default path is `.`, a directory — the same diagnostic as naming one explicitly.
+#[test]
+fn binary_with_the_default_path_is_the_same_diagnostic_error() {
+    let dir = work_dir("binary_default_path");
+    write(&dir, "suite.qn", PASSING_SUITE);
+    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["test", "--binary", dir.join("out").to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .expect("spawn quilon test");
+    assert_ne!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "`--binary` with the default `.` path must fail"
+    );
+    assert!(!dir.join("out").exists(), "nothing should have been built");
+    let _ = std::fs::remove_dir_all(&dir);
 }

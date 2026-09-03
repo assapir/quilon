@@ -4,6 +4,17 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- **`quilon test --binary <out>` — a native, debuggable test executable.** Builds a suite
+  into a native executable at `out`, without running it, always with DWARF debug info, so
+  a debugger (`gdb`/`lldb`) can step through a case. `--only`, given alongside `--binary`,
+  is baked into the executable — the build drops every `describe`/`it` the selection
+  excludes before code generation, so `out` alone reproduces the filtered run with nothing
+  further to pass at launch. Lays the CLI groundwork for the VS Code extension's upcoming
+  per-case Run/Debug CodeLens (#271). See `docs/tooling/compiling.md` and
+  `docs/corelib/test/README.md`.
+
 ### Fixed
 
 - **A method parameter annotated with a user record or sum type now works end to end.**
