@@ -70,6 +70,11 @@ enum Commands {
         /// Run only this suite or case, named by its `/`-joined path (repeatable)
         #[arg(long, value_name = "PATH")]
         only: Vec<String>,
+        /// Build the suite into a native, debuggable executable at this path instead of
+        /// running it (always with DWARF debug info, for stepping a case under a
+        /// debugger). Requires one suite file — not a directory, and not the default `.`
+        #[arg(long, value_name = "PATH")]
+        binary: Option<PathBuf>,
     },
     /// Serve the Language Server Protocol over stdio (for editors)
     Lsp,
@@ -268,7 +273,12 @@ fn main() {
             path,
             reporter,
             only,
+            binary,
         } => {
+            if let Some(binary) = binary {
+                let built = test_command::build_binary(&path, &only, &binary, &status);
+                std::process::exit(i32::from(!built));
+            }
             let reporter = match reporter.as_str() {
                 "json" => test_command::Reporter::Json,
                 _ => test_command::Reporter::Human,
