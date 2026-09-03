@@ -34,8 +34,7 @@ compiles to native code via LLVM. Files use the `.qn` extension.
     import supplies (jumping into the imported file).
   - **Hover** — the inferred type of the expression under the cursor.
   - **Semantic tokens** — block `< >` delimiters colored apart from the `<` / `>`
-    comparison operators (which a grammar alone cannot tell apart), plus declared
-    type, function, and parameter names.
+    comparison operators, plus declared type, function, and parameter names.
   - **Test CodeLens** — **▶ Run suite** / **▶ Run case** actions above each
     `describe` and `it` block, running just that suite or case.
 - **Test Explorer** — the "Testing" view lists every `describe`/`it` in an open `.qn`
@@ -270,8 +269,7 @@ The `quilon` debug type does two things when a session starts:
    which emits DWARF line info into the native binary.
 2. Launches that binary under CodeLLDB (`type: "lldb"`).
 
-Because the binary's DWARF line table references the `.qn` source, breakpoints
-you set in the source and single-stepping both work. Start a session with the
+Breakpoints you set in the source and single-stepping both work. Start a session with the
 **▶ Debug** CodeLens above `^`, the **Quilon: Debug Current File** command, or a
 `launch.json` entry:
 
@@ -292,7 +290,7 @@ struct), and a `[]T` expands to an indexed list of its elements, each keeping it
 own type — so a `[][]Text` expands to a list of inner `[]Text` arrays, each of
 its own `Text` values. Long arrays cap the default expansion and note the
 remaining count in the summary (an explicit `array[i]` past the cap still works).
-Records and sum types currently fall back to lldb's default struct rendering.
+Records and sum types fall back to lldb's default struct rendering.
 
 ## Publishing
 
@@ -331,7 +329,7 @@ workflow succeeds for forks/contributors without credentials:
 - **VS Code Marketplace** — set a `VSCE_PAT` repository secret (a
   [Personal Access Token](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token)
   for your Azure DevOps publisher). The `publisher` field in `package.json` is
-  currently the placeholder `quilon`; replace it with your **real, registered**
+  the placeholder `quilon`; replace it with your **real, registered**
   Marketplace publisher id before the first publish, since the PAT must belong
   to that publisher.
 - **Open VSX** — set an `OVSX_PAT` repository secret
