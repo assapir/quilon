@@ -34,6 +34,6 @@ operating system refuses to start a native binary with one. Any other `^` signat
 a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported
 by `check` as well as `run`/`build`.
 
-**Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
+**Exit code:** when `^`'s body evaluates to a `Num`, that value is the exit code. A body of any other type (e.g. a side-effecting block) exits **0**; an effect-only `main` ends without a trailing `0`. (The implicit 0 applies to `^`; an ordinary function returns its last expression's value.)
 
 (See `examples/hello_world.qn` and `examples/args.qn`.)

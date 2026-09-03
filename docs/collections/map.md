@@ -47,8 +47,8 @@ grid :: [|Point => Text|] = [|Point { x = 0, y = 0 } => "origin"|]
 `keys`/`values`/`each` is an implementation detail that may change between runs.
 
 **Access is via `.get`, which returns a `Result`** — `Ok(value)` when the key is present,
-`NotOk` when it is absent — so a caller must handle the missing case. There is **no bracket
-indexing on a map** (`m[k]` is a type error; bracket indexing is arrays only).
+`NotOk` when it is absent — and a caller matches both cases. Bracket indexing is defined on
+arrays; `m[k]` on a map is a type error.
 
 A map carries a built-in `.size` **field** (entry count, like an array's `.size`);
 everything else is a reserved method (resolved ahead of any same-named user overload when

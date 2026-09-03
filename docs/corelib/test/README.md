@@ -252,7 +252,7 @@ and the case lifecycle `describe` and `it` drive:
 | Function | Effect |
 |----------|--------|
 | `test.enterSuite(name :: Text) -> Num` | Open the group `name` and report it; yields the depth it sits at. |
-| `test.leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
+| `test.leaveSuite() -> Num` | Close the innermost open group; yields the depth that remains. |
 | `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Closing the case clears the mark. |
 | `test.finishCase(name :: Text) -> Num` | Close the case `name`, tallying it passed or failed and reporting it; yields the depth it sits at. |
 

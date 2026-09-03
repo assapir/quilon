@@ -10,8 +10,8 @@ double = (x :: Num) => < x * 2 >           ~ one param
 add    = (a :: Num, b :: Num) => < a + b > ~ multiple params
 typed  = (a :: Num, b :: Num) -> Num => < a + b >
 ```
-Every function parameter must be annotated — there is no default type; an
-unannotated parameter is a compile error that names it. The exception is a **lambda**,
+Every function parameter is annotated; an unannotated parameter is a compile error that
+names it. The exception is a **lambda**,
 which takes its parameter types from whatever receives it whenever that states them (see
 [below](#a-lambda-takes-its-parameter-types-from-the-target)) — a built-in collection
 method (`.map` / `.filter` / `.reduce` / `.each`) states the element type, and a

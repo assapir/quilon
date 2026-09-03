@@ -4,9 +4,8 @@ title: "Overloading"
 
 # Overloading
 
-Quilon has **explicit ad-hoc overloading** — the only polymorphism, since there are no
-generics. Top-level definitions that share a name and each annotate their parameters *are*
-an overload set; there is no marker:
+Quilon has **explicit ad-hoc overloading** — its polymorphism. Top-level definitions that
+share a name and each annotate their parameters *are* an overload set, with no marker:
 
 ```quilon ignore
 score = (n :: Num)  -> Num => < n + 1 >   ~ the Num member

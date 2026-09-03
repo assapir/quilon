@@ -36,9 +36,9 @@ area = (s :: Shape) -> Num => <
     | Rect(w, h) => w * h          ~ binds both payload fields
 >
 ```
-A match over a sum type **must be exhaustive**: cover every variant, or end with a `_`
-(or a lowercase binding) wildcard. Each pattern must also name a variant the scrutinee's
-type actually has. (See `examples/sum_types.qn`.)
+A match over a sum type **is exhaustive**: it covers every variant, or ends with a `_`
+(or a lowercase binding) wildcard. Each pattern names a variant of the scrutinee's type.
+(See `examples/sum_types.qn`.)
 
 ## Methods — the optional `{ }` block
 A sum type may carry a trailing `{ }` block of **methods**. The block is optional: a sum

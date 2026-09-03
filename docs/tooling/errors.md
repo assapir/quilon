@@ -846,7 +846,7 @@ Pass the matcher's arguments: `equals(1)`.
 
 ### QN335 — matcher on a type outside its reach
 
-A matcher meets a type it has no way to inspect: `equals` on a type with no `==`,
+A matcher meets a type outside its reach: `equals` on a type without a `==` member,
 `contains` on anything but `Text` or an array, `isOk`/`isNotOk` on anything but a `Result`.
 
 ```quilon ignore

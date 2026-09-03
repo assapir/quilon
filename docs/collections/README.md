@@ -10,8 +10,8 @@ Quilon has three built-in parametric collections: arrays, maps, and sets.
 
 An array `[]T` is the **base built-in parametric collection** — the one Maps and Sets
 define themselves against — written as a bracket literal (`[1, 2, 3]`). It is immutable:
-there is no element assignment, and every operation returns a new array. `.size` counts its
-elements. Indexing (`nums[0]`) is checked and fails loud; use `at(n)` for the `Ok`/`NotOk`
+every operation returns a new array. `.size` counts its elements. Indexing (`nums[0]`) is
+checked and fails loud; `at(n)` is the `Ok`/`NotOk`
 form. Its built-in methods (`map`/`filter`/`reduce`/`each`/`find`/`at`) chain freely, and
 `+` builds a new array. Full reference: [`docs/collections/arrays.md`](arrays.md) (and
 `examples/arrays.qn`, `examples/array_methods.qn`, `examples/array_concat.qn`).
