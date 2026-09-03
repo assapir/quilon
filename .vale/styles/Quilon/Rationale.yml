@@ -1,0 +1,17 @@
+extends: existence
+message: "State what the behavior is, not why it exists: '%s'."
+level: error
+ignorecase: true
+tokens:
+  - because
+  - so that
+  - the reason
+  - which is why
+  - in order to
+  - this is why
+  - the point is
+  - this matters
+  - worth
+  - on purpose
+  - deliberately
+  - by design

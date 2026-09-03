@@ -51,7 +51,7 @@ sequenceDiagram
 
 ## Walkthrough
 
-- **Parking is a userspace context switch, not an OS wait.** When `inner.read`
+- **Parking is a userspace context switch.** When `inner.read`
   returns `WouldBlock`, `io_loop` arms read interest with `reregister_readiness`
   (a cheap, non-blocking `epoll_ctl`) and then calls `park_on_readiness`, which
   suspends the fiber back to the scheduler via a `corosensei` stack switch. The
@@ -63,11 +63,11 @@ sequenceDiagram
   once. Whichever fires first — a socket token becoming ready or the timer
   elapsing — returns it. `ready_tokens()` then hands each fired token to
   `wait_and_wake`, which maps it back through `readiness_waiters` to the exact
-  fiber and requeues it; on resume the op simply retries.
+  fiber and requeues it; on resume the op retries.
 - **Why fiber stacks are registered with the GC.** Boehm only scans the OS
   thread's stack, but a parked fiber's live roots sit on its own `corosensei`
   stack. Each fiber's stack range is registered (`gc::register`), so on a
   collection `push_fiber_roots` pushes every *parked* fiber's range with
   `GC_push_all_eager`, while the *running* fiber is covered by
   `GC_set_stackbottom` — so a collection triggered by another fiber's allocation
-  never frees a socket-parked fiber's live objects.
+  keeps a socket-parked fiber's live objects.

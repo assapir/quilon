@@ -1,0 +1,15 @@
+extends: existence
+message: "State the current behavior, not its history: '%s'."
+level: error
+ignorecase: true
+tokens:
+  - no longer
+  - used to
+  - previously
+  - formerly
+  - now that
+  - anymore
+  - not yet
+  - for now
+  - today
+  - currently

@@ -6,7 +6,7 @@ sidebar:
 
 # Feature matrix
 
-✅ = works end-to-end with a passing run test · 🚧 = partial · ❌ = not yet
+✅ = works end-to-end with a passing run test · 🚧 = partial · ❌ = planned
 
 | Feature | Status |
 |---|---|
@@ -50,12 +50,13 @@ sidebar:
 | I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
 | Test harness: [`quilon test`](../corelib/test/README.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
+| [Language server](../tooling/language-server.md): `quilon lsp` — diagnostics on open/change, go-to-definition (imports included), hover with the inferred type, semantic tokens (block `< >` and comparison `<` `>` classified apart), a code lens per test suite and case | 🚧 |
 | Test runner options: [`--reporter human\|json`](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter) (the case tree, or one JSON event per line with a stable schema) and `--only "Suite/case"` (run one suite or case by its `/`-joined path; repeatable) | ✅ |
-| Tree-shaken imports: an item nothing in the compilation unit references is not emitted, so an import the erased `describe` blocks were the only user of reaches no build — no marker needed | ✅ |
+| Tree-shaken imports: the build emits the items the compilation unit references, so an import used by the erased `describe` blocks alone stays out of the build, with no marker | ✅ |
 | [Call-site locations](../functions/site.md): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
 | [Coded diagnostics](../tooling/errors.md): every compile error and runtime failure reports as `error[QNnnn]: message` with the source line, a labelled underline per span, and a `help:` line where a fix is idiomatic; the codes are a stable registry, grouped by pipeline family, and `quilon explain QNnnn` prints the reference section for one | ✅ |
-| [Status output](../tooling/compiling.md#status-output): live stage progress on a terminal collapsing to one closing line with the elapsed time, one line per stage otherwise, `--quiet` for none, `QUILON_QUIP_SEED` for a reproducible run | ✅ |
+| [Status output](../tooling/compiling.md#status-output): live stage progress on a terminal collapsing to one closing line with the elapsed time, the closing line alone off a terminal, `--quiet` for none, `QUILON_QUIP_SEED` for a reproducible run | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Garbage-collected memory (no manual free; self-contained binaries) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |

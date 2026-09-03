@@ -1,0 +1,16 @@
+extends: existence
+message: "Drop the hedge and state the fact plainly: '%s'."
+level: error
+ignorecase: true
+tokens:
+  - just
+  - simply
+  - basically
+  - actually
+  - of course
+  - obviously
+  - note that
+  - remember
+  - you can still
+  - never a silent
+  - cuts both ways

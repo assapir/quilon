@@ -13,7 +13,7 @@
     "directory": "editors/vscode"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.91.0"
   },
   "activationEvents": [
     "onLanguage:quilon"
@@ -42,9 +42,12 @@
     "fmt:check": "oxfmt --check src",
     "package": "vsce package"
   },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.1"
+  },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@types/vscode": "^1.75.1",
+    "@types/vscode": "^1.91.0",
     "@vscode/vsce": "^3.9.2",
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
@@ -87,6 +90,10 @@
       {
         "command": "quilon.debug",
         "title": "Quilon: Debug Current File"
+      },
+      {
+        "command": "quilon.runTests",
+        "title": "Quilon: Run Tests in Current File"
       }
     ],
     "taskDefinitions": [

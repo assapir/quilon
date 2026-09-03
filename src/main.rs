@@ -71,6 +71,8 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         only: Vec<String>,
     },
+    /// Serve the Language Server Protocol over stdio (for editors)
+    Lsp,
     /// Explain an error code (`quilon explain QN301`)
     Explain {
         /// The code, as a report prints it
@@ -280,6 +282,12 @@ fn main() {
                 },
             );
             std::process::exit(i32::from(failed > 0));
+        }
+        Commands::Lsp => {
+            if let Err(e) = quilon::lsp::run() {
+                eprintln!("❌ Language server error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Explain { code } => {
             let Some(code) = Code::parse(&code) else {

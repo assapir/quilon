@@ -162,6 +162,56 @@ impl SourceMap {
     }
 }
 
+/// One document's byte-offset ⇄ protocol-position translation: zero-based lines and
+/// **UTF-16 code unit** columns, which is what the Language Server Protocol requires of a
+/// position. Distinct from [`Location`], whose one-based, character-counted columns are for
+/// humans. Built once per document (it reuses the [`LineIndex`] machinery), and placed here
+/// so span-to-position consumers — the language server today, debug tooling tomorrow —
+/// share one translation.
+pub struct DocumentPositions<'a> {
+    text: &'a str,
+    lines: LineIndex,
+}
+
+impl<'a> DocumentPositions<'a> {
+    pub fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            lines: LineIndex::new(text),
+        }
+    }
+
+    /// The zero-based line and UTF-16 column of `byte_offset`. An offset past the end of
+    /// the text clamps to the final position; an offset inside a multi-byte character
+    /// counts as that character's start.
+    pub fn position_utf16(&self, byte_offset: usize) -> (u32, u32) {
+        let offset = floor_char_boundary(self.text, byte_offset);
+        let (line_one_based, line_start) = self.lines.line_at(offset);
+        let column: usize = self.text[line_start..offset]
+            .chars()
+            .map(char::len_utf16)
+            .sum();
+        ((line_one_based - 1) as u32, column as u32)
+    }
+
+    /// The byte offset of the position at zero-based `line` and UTF-16 column `character`.
+    /// A line past the end of the text yields the text's length; a column past the end of
+    /// its line stops at the line's end (before the newline), as the protocol specifies.
+    pub fn byte_offset(&self, line: u32, character: u32) -> usize {
+        let Some(&line_start) = self.lines.starts.get(line as usize) else {
+            return self.text.len();
+        };
+        let mut remaining = character as usize;
+        for (index, ch) in self.text[line_start..].char_indices() {
+            if ch == '\n' || remaining == 0 {
+                return line_start + index;
+            }
+            remaining = remaining.saturating_sub(ch.len_utf16());
+        }
+        self.text.len()
+    }
+}
+
 /// Resolve `span` against one known file, without a map. `path` names the file and `source`
 /// is its full text. Builds a line table for the single lookup, so prefer
 /// [`SourceMap::locate`] when resolving many spans in the same file.
@@ -314,6 +364,67 @@ mod tests {
         assert!(map.locate(&unknown_file).is_none());
         assert_eq!(map.locate_or_root(&unknown_file).unwrap().path, "root.qn");
         assert!(SourceMap::default().locate_or_root(&unknown_file).is_none());
+    }
+
+    #[test]
+    fn utf16_positions_are_zero_based_line_and_column() {
+        let positions = DocumentPositions::new("ab\ncd\n");
+        assert_eq!(positions.position_utf16(0), (0, 0));
+        assert_eq!(positions.position_utf16(1), (0, 1));
+        assert_eq!(positions.position_utf16(3), (1, 0));
+        assert_eq!(positions.position_utf16(4), (1, 1));
+    }
+
+    #[test]
+    fn utf16_positions_count_code_units_not_bytes_or_characters() {
+        // 'é' is 2 UTF-8 bytes but 1 UTF-16 unit; '😀' is 4 UTF-8 bytes and 2 UTF-16
+        // units. The column after both must count 1 + 2 = 3 units, not bytes (6) and not
+        // characters (2).
+        let text = "é😀x";
+        let positions = DocumentPositions::new(text);
+        let offset_of_x = text.find('x').unwrap();
+        assert_eq!(positions.position_utf16(offset_of_x), (0, 3));
+    }
+
+    #[test]
+    fn utf16_positions_handle_a_multi_grapheme_cluster() {
+        // The family emoji is ONE grapheme built from four scalars joined by zero-width
+        // joiners: 25 UTF-8 bytes, 11 UTF-16 units. The protocol counts units.
+        let text = "👨‍👩‍👧‍👦!";
+        let positions = DocumentPositions::new(text);
+        let offset_of_bang = text.find('!').unwrap();
+        assert_eq!(positions.position_utf16(offset_of_bang), (0, 11));
+    }
+
+    #[test]
+    fn utf16_position_clamps_past_the_end_and_floors_mid_character() {
+        let positions = DocumentPositions::new("aé");
+        assert_eq!(positions.position_utf16(99), (0, 2));
+        // Byte 2 is inside 'é' (bytes 1..3): it floors to the character's start.
+        assert_eq!(positions.position_utf16(2), (0, 1));
+    }
+
+    #[test]
+    fn byte_offset_inverts_position_utf16() {
+        let text = "a😀b\ncé d\n";
+        let positions = DocumentPositions::new(text);
+        for (offset, _) in text.char_indices() {
+            let (line, character) = positions.position_utf16(offset);
+            assert_eq!(
+                positions.byte_offset(line, character),
+                offset,
+                "round trip failed at byte {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_offset_clamps_a_column_past_the_line_end() {
+        let positions = DocumentPositions::new("ab\ncd");
+        // Column 99 on line 0 stops before the newline.
+        assert_eq!(positions.byte_offset(0, 99), 2);
+        // A line past the end of the text yields the text's length.
+        assert_eq!(positions.byte_offset(9, 0), 5);
     }
 
     #[test]
