@@ -24,6 +24,18 @@ All notable changes to Quilon are documented here.
   type oracle's inferred type for any record-valued expression, not just an identifier.
   (#259)
 
+- **A type declared INSIDE a block is no longer invisible to the compiler's analyses.**
+  `Statement::Item(Item::TypeDeclaration(_))` used to be a silent no-op in both AST walkers
+  (`src/ast/walk.rs`, `src/deferral.rs`), so a nested type's methods were never visited —
+  in particular, a method calling a value-returning `@` primitive was invisible to the
+  deferred-value analysis. Codegen's own type-declaration emission had a matching gap: it
+  unconditionally cleared the enclosing function's context and dropped its local-variable
+  frame after emitting a nested type's methods, breaking the rest of the enclosing body's
+  emission. Both walkers now descend into a block-declared type's methods exactly as they
+  already do for a nested function declaration, and type-declaration emission now
+  saves/restores the enclosing function, its frame, and the builder's position around a
+  nested type's methods. (#257)
+
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
 ### Added

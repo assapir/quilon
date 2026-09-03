@@ -1740,6 +1740,26 @@ fn run_method_returning_a_fresh_value_of_its_own_type() {
     assert_exit(src, 5);
 }
 
+/// Regression (#257): a type declared INSIDE a block (nested in `^`'s body, not at the
+/// top level) whose method calls an `@` leaf IO primitive. Both AST walkers used to skip
+/// `Statement::Item(Item::TypeDeclaration(_))` entirely, and codegen's own type-declaration
+/// emission unconditionally cleared `current_function` — either broke the enclosing body's
+/// emission or (with a value-producing `@`) left the scheduler analysis blind to the call.
+#[test]
+fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
+    assert_exit_linked(
+        r#"
+<< core.time
+^ = () -> Num => <
+  Fetcher = { url :: Text, run = () -> Num => < @sleep(0.01)  42 > }
+  f = Fetcher { url = "x" }
+  f.run()
+>
+"#,
+        42,
+    );
+}
+
 #[test]
 fn run_line_first_paren_is_new_statement() {
     // Statement-boundary rule end-to-end: without it, `x = f()` followed by the line

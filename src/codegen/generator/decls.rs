@@ -69,19 +69,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Pass 2: generate each receiver-dispatched method body, then lower each operator
-        // member to its overload function.
-        for method in methods {
-            if crate::ast::is_operator_symbol(&method.name) {
-                self.emit_operator_member(type_name, method)?;
-            } else {
-                self.generate_method(type_name, &field_names, method)?;
-            }
-        }
+        // member to its overload function. A type may be declared INSIDE a block (nested
+        // mid-emission of the enclosing function's body) — emitting a method body re-enters
+        // function emission, which reassigns `current_function` and starts each method from
+        // a fresh, dropped frame. Save/restore the enclosing function, its frame, and the
+        // builder's position around the method loop (the same discipline a nested plain
+        // function declaration uses — see `generate_function_declaration`), so the enclosing
+        // body's own locals and position survive. At the top level this is a no-op restore
+        // (there is no enclosing function to return to).
+        let saved_block = self.builder.get_insert_block();
+        let saved_function = self.current_function;
+        let saved_frame = self.take_frame();
 
-        // Type declarations are not inside a function; clear any stray function context so a
-        // following global declaration is not mistaken for a local.
-        self.current_function = None;
-        Ok(())
+        let result = (|| {
+            for method in methods {
+                if crate::ast::is_operator_symbol(&method.name) {
+                    self.emit_operator_member(type_name, method)?;
+                } else {
+                    self.generate_method(type_name, &field_names, method)?;
+                }
+            }
+            Ok(())
+        })();
+
+        self.restore_frame(saved_frame);
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        result
     }
 
     /// Lower an operator member to its overload function: a function with the receiver `it`
