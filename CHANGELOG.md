@@ -20,6 +20,8 @@ All notable changes to Quilon are documented here.
   overload set) resolves to its declaration and every use. Rename requires a single bare
   identifier as the new name and refuses a target declared in another file, pointing there
   instead. See `docs/tooling/language-server.md`.
+- `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
+  code, and the summary table matches the registry.
 - **Static methods: a method whose body never reads `it` may be called on the bare TYPE
   NAME** (`Point.origin()`), not just on a value — the natural spelling for a constructor
   (`Request.get(url)`). This settles #259's design call: a method called on a type name

@@ -237,6 +237,39 @@ mod tests {
         assert_eq!(documented, ALL.len(), "sections and codes are one set");
     }
 
+    /// The `## The codes` summary table lists exactly the registered codes, in ascending
+    /// order, each with the registry's own title — the table is read by eye far more often
+    /// than any single section, so it drifting from the registry is the likeliest way this
+    /// reference goes stale.
+    #[test]
+    fn the_summary_table_matches_the_registry() {
+        let heading_line = REFERENCE
+            .lines()
+            .position(|line| line.trim() == "## The codes")
+            .expect("the reference has a `## The codes` heading");
+        let rows: Vec<(u16, &str)> = REFERENCE
+            .lines()
+            .skip(heading_line + 1)
+            .take_while(|line| !line.trim_start().starts_with("## "))
+            .filter_map(|line| {
+                let line = line.trim();
+                let cells = line.strip_prefix("| QN")?;
+                let (number, rest) = cells.split_once(" | ")?;
+                let title = rest.strip_suffix(" |")?;
+                Some((number.parse().ok()?, title))
+            })
+            .collect();
+
+        let registry: Vec<(u16, &str)> = ALL
+            .iter()
+            .map(|code| (code.number(), code.title()))
+            .collect();
+        assert_eq!(
+            rows, registry,
+            "the summary table's rows (number, title) must match the registry, in order"
+        );
+    }
+
     /// The runtime's copies of its own codes match the registry.
     #[test]
     fn the_runtime_mirrors_its_codes() {
