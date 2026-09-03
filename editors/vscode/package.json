@@ -2,7 +2,7 @@
   "name": "quilon",
   "displayName": "Quilon",
   "description": "Syntax highlighting and editor tasks for the Quilon programming language (.qn).",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "publisher": "assapir",
   "icon": "icon.png",
   "license": "GPL-2.0-only",

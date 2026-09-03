@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-03
+
+Version matches the Quilon compiler it targets.
+
+### Added
+
+- **A real language server.** The extension now spawns `quilon lsp` (via
+  `vscode-languageclient`) instead of shelling out to `quilon check` for diagnostics.
+  Diagnostics, go-to-definition, hover, and semantic tokens (`<`/`>` correctly classified as
+  block punctuation or the comparison operator) all come from the compiler's own front end
+  now, over an open buffer's live text rather than what was last saved.
+- **Test Explorer.** A `vscode.tests.createTestController` view, filled from the language
+  server's `quilon/testItems` request and refreshed on open/save/change. Its Run profile
+  spawns `quilon test <file> --reporter json [--only <path> ...]` per selected file and
+  reports pass/fail with file:line as results arrive. There is no Debug profile for tests —
+  `quilon test` runs only under the in-process JIT, and the extension's only debug path
+  launches a native `--debug` build under CodeLLDB.
+- **CodeLenses per test.** A **▶ Run suite** lens above every `describe` and a **▶ Run case**
+  lens above every `it`, each running just that suite or case rather than the whole file.
+
+### Changed
+
+- **Breaking: the pipe operator `|>` is gone from the grammar.** It no longer highlights —
+  matching its removal from the compiler.
+
 ### Fixed
 
 - **A debug session no longer fails with `could not run "quilon"` when the compiler is
