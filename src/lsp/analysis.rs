@@ -308,17 +308,21 @@ fn covers(span: &Span, offset: u32) -> bool {
     span.file == ROOT_FILE && span.start <= offset && offset < span.end
 }
 
-/// The span of the declaration binding the identifier at byte `offset` in the root
-/// document, resolved against the import-linked `program` — so a name an import supplies
-/// resolves to its declaration in the imported module's own file. `None` when the offset
-/// is not on a resolvable identifier.
-pub fn definition_at(program: &Program, offset: u32) -> Option<Span> {
-    let resolver = Resolver::walk(program);
-    resolver
+/// The name and span of the declaration binding the identifier at byte `offset` in the
+/// root document, resolved against the import-linked `program` — so a name an import
+/// supplies resolves to its declaration in the imported module's own file. `None` when
+/// the offset is not on a resolvable identifier.
+pub fn declaration_at(program: &Program, offset: u32) -> Option<(String, Span)> {
+    Resolver::walk(program)
         .references
-        .iter()
+        .into_iter()
         .find(|reference| covers(&reference.use_span, offset))
-        .map(|reference| reference.declaration.span.clone())
+        .map(|reference| (reference.declaration.name, reference.declaration.span))
+}
+
+/// The span alone of [`declaration_at`]'s answer — what go-to-definition needs.
+pub fn definition_at(program: &Program, offset: u32) -> Option<Span> {
+    declaration_at(program, offset).map(|(_, span)| span)
 }
 
 /// The declaration's own name token: the first `Ident` token in `tokens` with the

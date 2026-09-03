@@ -345,12 +345,20 @@ impl LanguageServer {
             // file (an imported name) — a real target, just not one it can rewrite here.
             // That second walk only runs for this already-empty-handed path, not on every
             // rename.
-            None => match analysis::definition_at(&checked.program, offset) {
-                Some(definition) if definition.file != ROOT_FILE => Response::new_err(
-                    id,
-                    lsp_server::ErrorCode::RequestFailed as i32,
-                    "declared in another file; rename it there".to_string(),
-                ),
+            None => match analysis::declaration_at(&checked.program, offset) {
+                Some((name, definition)) if definition.file != ROOT_FILE => {
+                    let message = match checked.sources.locate(&definition) {
+                        Some(location) => {
+                            let file_name = Path::new(&location.path)
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or(location.path);
+                            format!("`{name}` is declared in {file_name}; rename it there")
+                        }
+                        None => format!("`{name}` is declared in another file; rename it there"),
+                    };
+                    Response::new_err(id, lsp_server::ErrorCode::RequestFailed as i32, message)
+                }
                 _ => Response::new_ok(id, serde_json::Value::Null),
             },
         }

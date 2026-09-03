@@ -648,6 +648,78 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     served.join().expect("the server thread joins");
 }
 
+/// A rename request on a name reached through an import cannot rewrite that name's
+/// declaration — it lives in a document this session never opened — so it answers an
+/// error naming the file where it actually is.
+#[test]
+fn rename_on_an_imported_name_answers_an_error_naming_its_file() {
+    use serde_json::{Value, json};
+
+    let directory = temporary_directory("import_rename");
+    let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
+    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+
+    let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
+    let root = directory.join("buffer.qn");
+    let uri = format!("file://{}", root.display());
+
+    let (client, served) = started_session();
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    lsp_diagnostics_of(lsp_receive(&client));
+
+    let call_line = text
+        .lines()
+        .position(|line| line.contains("lib.add"))
+        .expect("the call is on some line");
+    let character = text
+        .lines()
+        .nth(call_line)
+        .unwrap()
+        .find("lib.add")
+        .unwrap() as u32
+        + 4;
+    client
+        .sender
+        .send(lsp_request(
+            1,
+            "textDocument/rename",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": call_line, "character": character },
+                "newName": "sum" }),
+        ))
+        .unwrap();
+    match lsp_receive(&client) {
+        lsp_server::Message::Response(response) => {
+            let error = response.response_result.expect_err("an error response");
+            assert!(
+                error.message.contains("lib.qn"),
+                "unexpected message: {error:?}"
+            );
+        }
+        other => panic!("expected a response, got {other:?}"),
+    }
+
+    client
+        .sender
+        .send(lsp_request(2, "shutdown", Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
+
+    std::fs::remove_dir_all(&directory).ok();
+}
+
 /// A `Num + Text` overload mismatch — `Code::NoMatchingOverload` (`QN311`) — carries the
 /// code in `Diagnostic.code`, its own message (with the operator's dedicated help text
 /// appended) as the message, and each operand's type as a separate `relatedInformation`
