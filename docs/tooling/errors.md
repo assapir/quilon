@@ -59,6 +59,9 @@ statements, `[]T` element types, constructor patterns, or chained prefix operato
 
 ## The codes
 
+An example spanning more than one file adds a fenced block per extra file, titled with
+its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
+
 | Code | Title |
 |------|-------|
 | QN000 | unreadable source file |
@@ -174,10 +177,11 @@ Remove the character, or write a `~` comment where prose is wanted.
 
 ### QN003 — unterminated string literal
 
-A `"` opens a string that reaches the end of the file with no closing `"`.
+A `"` opens a string that reaches the end of its line with no closing `"`.
 
 ```quilon ignore
 greeting = "hello
+
 ```
 
 Close the string on the same line: `greeting = "hello"`.
@@ -215,7 +219,7 @@ An expression nests more than 128 levels of parentheses, literals, blocks, eleme
 constructor patterns, or prefix operators.
 
 ```quilon ignore
-^ = () -> Num => < ((((((… 200 levels …)))))) >
+^ = () -> Num => < ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) >
 ```
 
 Split the expression into named bindings.
@@ -393,7 +397,12 @@ Rename the binding; the import keeps its name.
 A module imports itself, directly or through other modules.
 
 ```quilon ignore
-<< "a.qn"   ~ where a.qn imports this file
+<< "cycle_lib.qn"
+^ = () -> Num => < 0 >
+```
+
+```quilon title="cycle_lib.qn"
+<< "root.qn"
 ```
 
 Move the shared definitions into a third module both import.
@@ -406,6 +415,14 @@ directories, or a file stem that is unusable as a binding.
 ```quilon ignore
 << "lib/util.qn"
 << "vendor/util.qn"
+```
+
+```quilon title="lib/util.qn"
+answer = 1
+```
+
+```quilon title="vendor/util.qn"
+answer = 2
 ```
 
 Rename one of the files, or drop one of the imports.
@@ -982,8 +999,11 @@ File the program as an issue.
 The collector had no memory for the request, or the requested size was outside what a
 `Num` represents.
 
-```text
-error[QN504]: out of memory allocating 17179869184 bytes
+```quilon ignore
+^ = () -> Num => <
+  xs = 1 <- 9007199254740992
+  xs.size
+>
 ```
 
 Allocate within the machine's memory, and compute sizes that stay whole numbers.

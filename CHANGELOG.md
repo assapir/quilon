@@ -4,6 +4,11 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Added
+
+- `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
+  code, and the summary table matches the registry.
+
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
 ### Added
