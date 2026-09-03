@@ -12,3 +12,7 @@ tokens:
   - never
   - there is no
   - no way to
+  # 'still' reads as a change-over-time claim ("no longer X, still Y") often
+  # enough to warn on, but also as a plain contrastive/definitional word
+  # ("parameters are still annotated") too often to fail the build on.
+  - still
