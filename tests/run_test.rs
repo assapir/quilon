@@ -1799,6 +1799,54 @@ fn aot_static_method_called_on_the_type_name_constructs_a_value() {
     assert_eq!(code, 7, "a native build must exit 7 on the same program");
 }
 
+/// A SUM type's trailing `{ }` methods block may declare a static member too — the same
+/// static-eligibility rule (never reads `it`) applies regardless of whether the receiver
+/// type is a record or a sum. `"a shape"`.size = 7.
+#[test]
+fn run_static_method_on_a_sum_types_trailing_methods_block() {
+    let src = r#"
+        Shape = Circle(Num) / Square(Num) {
+          describe = () -> Text => < "a shape" >
+        }
+        ^ = () -> Num => < Shape.describe().size >
+    "#;
+    assert_exit(src, 7);
+}
+
+/// A static call reached through a MODULE BINDING: `<< "point_lib.qn"` binds `point_lib`,
+/// and after import qualification the type's own name is `point_lib.Point` — the checker's
+/// and codegen's type-name-receiver detection must still line up on the QUALIFIED name,
+/// not just a bare local type. `point_lib.Point.origin()` builds `{x=0,y=0}`; 0 + 0 = 0.
+#[test]
+fn run_static_method_called_through_a_module_binding() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let src = r#"
+        << "point_lib.qn"
+        ^ = () -> Num => <
+          p = point_lib.Point.origin()
+          p.x + p.y
+        >
+    "#;
+    assert_exit_linked_from(src, &fixtures, 0);
+}
+
+/// A static-eligible method (one that never reads `it`) is unaffected when called on an
+/// ordinary VALUE instead of the type name — static-eligibility only gates the type-name
+/// receiver shape, never restricts the value-receiver form. `q.origin()` on an existing
+/// `Point` still builds a fresh `{x=0,y=0}`.
+#[test]
+fn run_static_eligible_method_called_on_a_value_is_unaffected() {
+    let src = r#"
+        Point = { x :: Num, y :: Num, origin = () -> Point => < Point { x = 0, y = 0 } > }
+        ^ = () -> Num => <
+          p = Point { x = 1, y = 2 }
+          q = p.origin()
+          q.x + q.y
+        >
+    "#;
+    assert_exit(src, 0);
+}
+
 /// Regression (#257): a type declared INSIDE a block (nested in `^`'s body, not at the
 /// top level) whose method calls an `@` leaf IO primitive. Both AST walkers used to skip
 /// `Statement::Item(Item::TypeDeclaration(_))` entirely, and codegen's own type-declaration

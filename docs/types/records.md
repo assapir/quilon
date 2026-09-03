@@ -66,18 +66,20 @@ The same holds for the methods reserved on the built-in types: `"a,b".split(",")
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the TYPE NAME
 itself, with no receiver value — the natural spelling for a constructor.
-```quilon ignore
+```quilon
 Point = {
   x :: Num,
   y :: Num,
   origin = () -> Point => < Point { x = 0, y = 0 } >,
-  distance = () -> Num => < it.x >   ~ reads `it` — not static
+  distance = () -> Num => < it.x >   ~ reads `it`: called on a value
 }
 
-p = Point.origin()      ~ ok: `origin` never reads `it`
-Point.distance()        ~ error QN340: `distance` needs a value of Point
-p.distance()            ~ ok: called on a value, `it` is bound
+^ = () -> Num => <
+  p = Point.origin()  ~ ok: `origin` never reads `it`
+  p.distance()         ~ ok: called on a value, `it` is bound
+>
 ```
-A method that reads `it` may still be called on an ordinary value, exactly as before —
-being static-eligible is a property of a method's body, not a declaration; a call on a
-value never needs it.
+A static method is also callable on a value, the same way as any other method.
+```quilon ignore
+Point.distance()        ~ error QN340: `distance` needs a value of Point
+```
