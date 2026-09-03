@@ -402,7 +402,7 @@ fn an_unknown_member_on_a_lambda_receiver_names_the_receivers_type() {
     // rather than fall through to "undefined variable".
     let message = type_error_message("^ = () -> Num => < ((n :: Num) => n + 1).foo(2) >");
     assert!(
-        message.contains("'(Num) -> Num' has no member 'foo'"),
+        message.contains("(Num) -> Num has no member `foo`"),
         "unexpected message: {message}"
     );
 }

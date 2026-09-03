@@ -54,6 +54,8 @@ sidebar:
 | Tree-shaken imports: an item nothing in the compilation unit references is not emitted, so an import the erased `describe` blocks were the only user of reaches no build — no marker needed | ✅ |
 | [Call-site locations](../functions/site.md): a trailing `site :: Site` parameter filled in by the compiler and forwarded by passing it on (track-caller) — a failing assertion reports YOUR call's `file:line:column` with a caret, identically under JIT and native | ✅ |
 | Terminal-aware color: a failing assertion's report is colored on a terminal and plain when redirected or under `NO_COLOR`/`TERM=dumb`; the `\e` (ESC) string escape writes an ANSI sequence from `.qn` | ✅ |
+| [Coded diagnostics](../tooling/errors.md): every compile error and runtime failure reports as `error[QNnnn]: message` with the source line, a labelled underline per span, and a `help:` line where a fix is idiomatic; the codes are a stable registry, grouped by pipeline family, and `quilon explain QNnnn` prints the reference section for one | ✅ |
+| [Status output](../tooling/compiling.md#status-output): live stage progress on a terminal collapsing to one closing line with the elapsed time, one line per stage otherwise, `--quiet` for none, `QUILON_QUIP_SEED` for a reproducible run | ✅ |
 | CLI helpers: `<< core.cli` (`getEnv` / `hasFlag` / `getOpt`; both `--name value` and `--name=value`; flag names with or without `--`) | ✅ |
 | Garbage-collected memory (no manual free; self-contained binaries) | ✅ |
 | `Text` (and nested arrays) in records/arrays, or as a sum-type payload (`Ok(text)`) | ✅ |

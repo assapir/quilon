@@ -275,9 +275,10 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
             "`quilon {command}` on a tests-only file must succeed, said:\n{}\n{}",
             out.stdout, out.stderr
         );
+        // The stage lines are status; the skip itself reports nothing and builds nothing.
         assert!(
-            out.stdout.is_empty() && out.stderr.is_empty(),
-            "`quilon {command}` must say nothing at all, said:\n{}\n{}",
+            out.stdout.is_empty() && !out.stderr.contains("error[") && !out.stderr.contains("✓"),
+            "`quilon {command}` must report nothing and build nothing, said:\n{}\n{}",
             out.stdout,
             out.stderr
         );
@@ -636,8 +637,10 @@ fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
         out.stderr
     );
     assert!(
-        out.stderr.contains("expected 5, got 4") && out.stderr.contains("^^^"),
-        "the failure must carry the message and a caret run:\n{}",
+        out.stderr
+            .contains("error[QN500]: assertion failed: expected 5, got 4")
+            && out.stderr.contains("───"),
+        "the failure must carry the coded message and an underline:\n{}",
         out.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1118,6 +1121,16 @@ fn a_directory_runs_every_suite_it_holds() {
         "one suite's totals leaked into another's summary:\n{}",
         out.stdout
     );
+    // Off a terminal (a captured pipe, exactly what this harness gives every test), no
+    // per-file compile stage ever prints — a suite's own file heading and case tree are
+    // the progress `quilon test` shows.
+    for stage in ["lexing", "parsing", "resolving", "checking", "generating"] {
+        assert!(
+            !out.stderr.lines().any(|line| line.starts_with(stage)),
+            "a per-stage line leaked into a multi-suite run: {}",
+            out.stderr
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1227,8 +1240,8 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         build.stdout, build.stderr
     );
     assert!(
-        build.stdout.is_empty() && build.stderr.is_empty(),
-        "the skip must be silent, said:\n{}\n{}",
+        build.stdout.is_empty() && !build.stderr.contains("error[") && !build.stderr.contains("✓"),
+        "the skip must report nothing and build nothing, said:\n{}\n{}",
         build.stdout,
         build.stderr
     );

@@ -159,7 +159,8 @@ impl TypeChecker {
         }
 
         let arg_types: Vec<Type> = arg_types.into_iter().flatten().collect();
-        self.resolve_overload(name, &arg_types, span)
+        let arg_spans: Vec<Span> = arguments.iter().map(|a| a.span().clone()).collect();
+        self.resolve_overload(name, &arg_types, &arg_spans, span)
     }
 
     /// The type every still-possible member of `name` gives the argument at `index` — the
@@ -198,6 +199,7 @@ impl TypeChecker {
         &self,
         name: &str,
         arg_types: &[Type],
+        arg_spans: &[Span],
         span: &Span,
     ) -> Result<Type, TypeError> {
         let set = self.overloads.get(name);
@@ -221,6 +223,7 @@ impl TypeChecker {
             [] => Err(TypeError::NoMatchingOverload {
                 name: name.to_string(),
                 arg_types: arg_types.to_vec(),
+                arg_spans: arg_spans.to_vec(),
                 candidates: candidates(),
                 span: span.clone(),
             }),

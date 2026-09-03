@@ -142,10 +142,10 @@ fn test_interpolation_still_works_with_string_newline_guard() {
 fn test_invalid_string_escape_keeps_invalid_token_error() {
     let error = Lexer::tokenize(r#""bad\q""#).expect_err("invalid escape must fail");
 
-    assert!(error.message.starts_with("Invalid token:"));
+    assert!(error.message.starts_with("invalid token"));
 
     let error = Lexer::tokenize("\"bad\\q\rnext").expect_err("invalid escape must fail");
-    assert!(error.message.starts_with("Invalid token:"));
+    assert!(error.message.starts_with("invalid token"));
 }
 
 #[test]

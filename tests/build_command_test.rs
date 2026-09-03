@@ -117,12 +117,21 @@ fn build_hello_and_run(
         stdout.is_empty(),
         "`quilon build` wrote status to stdout: {stdout}"
     );
+    // Off a terminal (a captured pipe, exactly what `Command::output` gives this test) no
+    // per-stage line prints at all — only the final one-liner, last (the system linker may
+    // add its own warning line ahead of it — e.g. an SDK-version notice on macOS CI runners
+    // — which is the linker's stderr, not this compiler's status).
+    for stage in ["generating", "linking"] {
+        assert!(
+            !stderr.lines().any(|line| line.starts_with(stage)),
+            "a per-stage line leaked off a terminal: {stderr}"
+        );
+    }
     assert!(
-        stderr.contains("🔨 Building:"),
-        "missing build status from stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("✅ Built native executable:"),
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("✓ ")),
         "missing build success status from stderr: {stderr}"
     );
 

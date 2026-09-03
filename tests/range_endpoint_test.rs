@@ -8,7 +8,8 @@
 
 mod common;
 use common::{
-    assert_exit, build_and_run_native, position, run_program, tool_available, type_error_message,
+    assert_exit, build_and_run_native, frame, position, run_program, tool_available,
+    type_error_message,
 };
 
 /// A NaN end, which is only NaN once the division has run — the one shape here that
@@ -46,7 +47,11 @@ fn a_literal_endpoint_a_num_cannot_hold_is_a_compile_error() {
             format!("{LIMIT} (got -10000000000000000000)"),
         ),
     ] {
-        assert_eq!(type_error_message(source), expected, "for:\n{source}");
+        assert_eq!(
+            type_error_message(source),
+            format!("error[QN328]: {expected}"),
+            "for:\n{source}"
+        );
     }
 }
 
@@ -108,16 +113,12 @@ fn an_abort_reports_the_range_expression() {
     let (code, stderr, path) = run_program("range_located", NAN_END);
     assert_eq!(code, 1);
     let expected = format!(
-        "{}\na range endpoint must be a whole number (got NaN)",
-        position(&path, 2, 7)
+        "error[QN502]: a range endpoint must be a whole number (got NaN)\n{}",
+        frame(&position(&path, 2, 7), 2, 7, "  r = 1 <- (0.0 / 0.0)", 15)
     );
     assert!(
         stderr.contains(&expected),
         "the report must locate the range, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("2 |   r = 1 <- (0.0 / 0.0)") && stderr.contains(&"^".repeat(15)),
-        "the report must show the range with a caret under it, got: {stderr}"
     );
 }
 
@@ -182,6 +183,6 @@ fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
 fn a_literal_bad_endpoint_on_a_lazily_consumed_range_is_a_compile_error() {
     assert_eq!(
         type_error_message("^ = () -> Num => <\n  r = (1.5 <- 3.9).map(n => n)\n  r.size\n>"),
-        "a range endpoint must be a whole number (got 1.5)"
+        "error[QN328]: a range endpoint must be a whole number (got 1.5)"
     );
 }

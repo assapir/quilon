@@ -71,10 +71,11 @@ impl<'a> Parser<'a> {
             match chunks.as_slice() {
                 [StrChunk::Lit(s)] => ModulePath::FilePath(s.clone()),
                 _ => {
-                    return Err(ParseError {
-                        message: "import path cannot contain interpolation".to_string(),
+                    return Err(ParseError::new(
+                        Code::ImportPathInterpolated,
                         span,
-                    });
+                        "an import path is a plain string literal",
+                    ));
                 }
             }
         } else {
@@ -136,14 +137,15 @@ impl<'a> Parser<'a> {
         // chain would have been consumed as one name before ever reaching parse_item).
         // The common case is a test suite missing its harness: name the fix.
         if self.check_same_line(&TokenKind::Dot) {
-            return Err(ParseError {
-                message: format!(
-                    "`{name}` is not an imported module here — a qualified name like \
-                     `{name}.<member>(...)` needs its `<<` import above this line \
-                     (a `test.describe` suite imports `<< core.test`)"
-                ),
-                span: self.current_span(),
-            });
+            return Err(ParseError::new(
+                Code::NotAnImportedModule,
+                self.current_span(),
+                format!("`{name}` is not an imported module here"),
+            )
+            .help(format!(
+                "a qualified name like `{name}.<member>(...)` needs its `<<` import above \
+                 this line — a `test.describe` suite imports `<< core.test`"
+            )));
         }
 
         // Check for type annotation
@@ -218,16 +220,19 @@ impl<'a> Parser<'a> {
                 if self.member_block_has_field() {
                     return self.parse_type_declaration(name, start, exported);
                 }
-                return Err(ParseError {
-                    message: format!(
-                        "`{name} = {{ … }}` is ambiguous — every member here is method-shaped \
-                         and there is no `::` field to settle it. Add a `::` field to make \
-                         this a type declaration (e.g. `{name} = {{ v :: Num, f = => 1 }}`), \
-                         or replace the method bodies with plain values to make it a record \
-                         literal (e.g. `{name} = {{ f = 1 }}`)"
+                return Err(ParseError::new(
+                    Code::AmbiguousTypeDeclaration,
+                    self.current_span(),
+                    format!(
+                        "`{name} = {{ … }}` is ambiguous — every member here is \
+                         method-shaped and there is no `::` field to settle it"
                     ),
-                    span: self.current_span(),
-                });
+                )
+                .help(format!(
+                    "add a `::` field to make this a type declaration \
+                     (`{name} = {{ v :: Num, f = => 1 }}`), or replace the method bodies \
+                     with plain values to make it a record literal (`{name} = {{ f = 1 }}`)"
+                )));
             }
         }
 
@@ -370,13 +375,15 @@ impl<'a> Parser<'a> {
                 // Caught here so the author gets the rule rather than "expected identifier":
                 // `operator_def_name` only recognizes `op = …`, so `op := …` would otherwise
                 // fall through to the name parser and fail as a stray symbol.
-                return Err(ParseError {
-                    message: format!(
-                        "operator member `{}` cannot be declared with `:=` — an operator yields a value and never mutates `it`",
-                        operator
+                return Err(ParseError::new(
+                    Code::OperatorMemberMutable,
+                    self.peek().span.clone(),
+                    format!(
+                        "operator member `{operator}` cannot be declared with `:=` — an \
+                         operator yields a value and never mutates `it`"
                     ),
-                    span: self.peek().span.clone(),
-                });
+                )
+                .help(format!("declare it with `=`: `{operator} = (other) => …`")));
             } else {
                 self.expect_ident()?
             };
@@ -395,10 +402,13 @@ impl<'a> Parser<'a> {
                 // nothing enforces. (`operator_def_name` already refuses `+ := …` for the
                 // symbol operators; the render member reaches here by its own branch.)
                 if mutating && member_name == "`" {
-                    return Err(ParseError {
-                        message: "The render member ` cannot be declared with ':=' — it renders a value rather than mutating `it`".to_string(),
-                        span: self.peek().span.clone(),
-                    });
+                    return Err(ParseError::new(
+                        Code::OperatorMemberMutable,
+                        self.peek().span.clone(),
+                        "the render member `` ` `` cannot be declared with `:=` — it renders \
+                         a value rather than mutating `it`",
+                    )
+                    .help("declare it with `=`: `` ` = () -> Text => < … > ``"));
                 }
                 self.advance();
 
@@ -431,10 +441,14 @@ impl<'a> Parser<'a> {
                     span: self.span(method_start.start, method_end.end),
                 });
             } else {
-                return Err(ParseError {
-                    message: "Expected ::, = or := after field/method name".to_string(),
-                    span: self.peek().span.clone(),
-                });
+                return Err(ParseError::new(
+                    Code::UnexpectedToken,
+                    self.peek().span.clone(),
+                    format!(
+                        "expected `::`, `=` or `:=` after the member name, found {}",
+                        self.peek().kind.describe()
+                    ),
+                ));
             }
 
             // Optional comma separator
@@ -462,13 +476,13 @@ impl<'a> Parser<'a> {
         loop {
             let variant_name = self.expect_ident()?;
             if !is_capitalized(&variant_name) {
-                return Err(ParseError {
-                    message: format!(
-                        "Sum-type variant '{}' must start with an uppercase letter",
-                        variant_name
+                return Err(ParseError::new(
+                    Code::VariantNotCapitalized,
+                    self.previous_span(),
+                    format!(
+                        "sum-type variant `{variant_name}` must start with an uppercase letter"
                     ),
-                    span: self.previous_span(),
-                });
+                ));
             }
 
             // Optional payload-type list: `(Num)` or `(Num, Text)`.
@@ -506,13 +520,15 @@ impl<'a> Parser<'a> {
         let methods = if self.check(&TokenKind::BraceOpen) {
             let (fields, methods) = self.parse_member_block()?;
             if !fields.is_empty() {
-                return Err(ParseError {
-                    message: format!(
-                        "sum type `{}` cannot have fields — its `{{ }}` block holds methods only (sums carry data in their variant payloads, not fields)",
-                        name
+                return Err(ParseError::new(
+                    Code::SumTypeHasFields,
+                    self.previous_span(),
+                    format!(
+                        "sum type `{name}` cannot have fields — its `{{ }}` block holds \
+                         methods only"
                     ),
-                    span: self.previous_span(),
-                });
+                )
+                .help("a sum carries data in its variant payloads: `Name = A(Num) / B`"));
             }
             // A sum's receiver has no writable field — its data lives in variant payloads,
             // reached by matching, and a match binding is immutable. So `:=` here would
@@ -520,13 +536,19 @@ impl<'a> Parser<'a> {
             // operator members refuse it. If payload mutation ever lands, allowing `:=`
             // then only widens what is accepted.
             if let Some(mutating) = methods.iter().find(|m| m.mutating) {
-                return Err(ParseError {
-                    message: format!(
-                        "sum type `{}` cannot have a mutating method — `{}` is declared with `:=`, but a sum has no fields to write (its data lives in variant payloads)",
-                        name, mutating.name
+                return Err(ParseError::new(
+                    Code::SumTypeHasFields,
+                    mutating.span.clone(),
+                    format!(
+                        "sum type `{name}` cannot have a mutating method — `{}` is declared \
+                         with `:=`, but a sum has no fields to write",
+                        mutating.name
                     ),
-                    span: mutating.span.clone(),
-                });
+                )
+                .help(format!(
+                    "declare it with `=`; a sum's data lives in its variant payloads: `{} = …`",
+                    mutating.name
+                )));
             }
             methods
         } else {
@@ -545,10 +567,11 @@ impl<'a> Parser<'a> {
     /// A definition's body is always a `< >` block; only a lambda's may be a bare expression.
     fn parse_body(&mut self, what: &str) -> Result<Expression, ParseError> {
         if !self.check(&TokenKind::BlockOpen) {
-            return Err(ParseError {
-                message: format!("a {what} body must be a `< >` block — write `=> < … >`"),
-                span: self.peek().span.clone(),
-            });
+            return Err(ParseError::new(
+                Code::BodyNotABlock,
+                self.peek().span.clone(),
+                format!("a {what} body must be a `< >` block — write `=> < … >`"),
+            ));
         }
         self.parse_block()
     }
@@ -575,12 +598,12 @@ impl<'a> Parser<'a> {
             // `Export` token by maximal munch, and an export is never a statement, so say
             // what the fix is instead of failing further along on a phantom marker.
             if self.check(&TokenKind::Export) {
-                return Err(ParseError {
-                    message: "`>>` here is the export marker, not two block closers — \
-                              separate them with a space (`> >`)"
-                        .to_string(),
-                    span: self.current_span(),
-                });
+                return Err(ParseError::new(
+                    Code::ExportMarkerAsBlockClosers,
+                    self.current_span(),
+                    "`>>` here is the export marker, not two block closers",
+                )
+                .help("separate them with a space: `> >`"));
             }
 
             // Try to parse as item first (for nested declarations / reassignments).

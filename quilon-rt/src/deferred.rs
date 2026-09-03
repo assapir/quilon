@@ -33,7 +33,7 @@
 //! calls therefore read consecutive lines in launch order rather than racing the fd.
 
 use crate::mem::{__alloc, QlSlice, alloc_text};
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, fail_at};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{
     deregister_readiness, park_on_address, park_on_readiness, register_readiness,
     reregister_readiness, spawn, wake_address,
@@ -282,6 +282,7 @@ fn read_stdin_text(site: *const QlSite) -> QlSlice {
 fn fail_read(site: *const QlSite, error: &io::Error) -> ! {
     fail_at(
         site,
+        codes::READ_FAILED,
         &format!("@readStdin failed: {error}"),
         RUNTIME_EXIT_CODE,
     )

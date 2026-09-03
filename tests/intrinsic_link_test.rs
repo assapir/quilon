@@ -281,16 +281,22 @@ fn the_smoke_program_reaches_every_intrinsic() {
         stdout.is_empty(),
         "`quilon compile` wrote status to stdout: {stdout}"
     );
+    // Off a terminal (a captured pipe, exactly what `Command::output` gives this test) no
+    // per-stage line prints at all — only the final one-liner.
     assert!(
-        stderr.contains("🔨 Compiling:"),
-        "missing compile status from stderr: {stderr}"
+        !stderr.lines().any(|line| line.starts_with("generating")),
+        "a per-stage line leaked off a terminal: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "off a terminal, stderr is the final status line alone: {stderr}"
     );
     assert!(
-        stderr.contains("✅ Type checking passed!"),
-        "missing type-check status from stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("✅ LLVM IR written to:"),
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("✓ ")),
         "missing compile success status from stderr: {stderr}"
     );
 

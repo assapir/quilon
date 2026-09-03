@@ -6,9 +6,10 @@
 //! the runtime's own fail-loud checks (an invalid `arr[i]`, a `Text.replace`/`repeat`
 //! contract violation), all from the [`QlSite`] the code generator hands in at the check.
 //!
-//! `core.test`'s `failAt` composes the same frame in Quilon, for an assertion helper of your
-//! own; `tests/fail_loud_location_test.rs` pins the two to the same byte-level shape, so a
-//! failure reported from either side reads identically.
+//! The frame is the compiler's own (`diagnostic::Diagnostic::render`, drawn by `miette`),
+//! composed here by hand since a compiled program carries no renderer;
+//! `tests/fail_loud_location_test.rs` pins the two to the same byte-level shape, so a
+//! compile error and a runtime failure read identically.
 
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
@@ -63,11 +64,22 @@ pub fn shorten_path(path: &str) -> String {
     }
 }
 
+/// The runtime's error codes — the numbers the compiler's registry (`diagnostic::codes`)
+/// assigns to the failures a compiled program can report. A program reports without the
+/// compiler, so the numbers live here too; the compiler's tests pin the two.
+pub mod codes {
+    pub const ASSERTION_FAILED: u16 = 500;
+    pub const INDEX_OUT_OF_BOUNDS: u16 = 501;
+    pub const RANGE_ENDPOINT_NOT_WHOLE: u16 = 502;
+    pub const MATCH_FAILED: u16 = 503;
+    pub const ALLOCATION_FAILED: u16 = 504;
+    pub const READ_FAILED: u16 = 505;
+}
+
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants
-/// it. Mirrors the four styles `core.test`'s `failAt` uses.
+/// it. The three styles are the ones the compiler's renderer paints the same frame with.
 #[derive(Default)]
 struct Style {
-    position: &'static str,
     problem: &'static str,
     frame: &'static str,
     plain: &'static str,
@@ -78,8 +90,7 @@ impl Style {
         match __color_enabled(2) {
             0 => Style::default(),
             _ => Style {
-                position: "\x1b[36m",
-                problem: "\x1b[1;31m",
+                problem: "\x1b[31m",
                 frame: "\x1b[2m",
                 plain: "\x1b[0m",
             },
@@ -87,70 +98,69 @@ impl Style {
     }
 }
 
-/// Report `message` at `site` and terminate with `code`.
+/// Report `message` under error code `code` at `site` and terminate with `exit_code`.
 ///
-/// The frame is the one a compiler error uses — position, message, the source line, and a
-/// caret run under the failing expression:
+/// The frame is the one a compiler error uses — the code and message, the position, the
+/// source line, and an underline beneath the failing expression:
 ///
 /// ```text
-/// demo.qn:5:11:
-/// index 7 out of bounds for an array of size 3
-///   |
-/// 5 |   value = items[7]
-///   |           ^^^^^^^^
+/// error[QN501]: index 7 out of bounds for an array of size 3
+///    ╭─[demo.qn:5:11]
+///  5 │   value = items[7]
+///    ·           ────────
+///    ╰────
 /// ```
 ///
 /// A site with no source to show — an empty `file` (a program assembled in memory rather
 /// than read from one) or an empty `excerpt` (a position past the last line that has text) —
-/// prints the message on its own rather than framing it around a position that would be made
-/// up, matching what `crate::diagnostic` does with the same case. A null site means the
-/// caller predates this plumbing and is treated the same way.
+/// prints the header on its own rather than framing it around a position that would be made
+/// up, matching what the compiler does with the same case. A null site means the caller
+/// predates this plumbing and is treated the same way.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
-pub(crate) fn fail_at(site: *const QlSite, message: &str, code: c_int) -> ! {
-    report_at(site, message);
-    __exit(code)
+pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: c_int) -> ! {
+    report_at(site, code, message);
+    __exit(exit_code)
 }
 
-/// Report `message` at `site` on stderr and RETURN — the recorded half of the same frame
-/// [`fail_at`] ends the process with.
+/// Report `message` under `code` at `site` on stderr and RETURN — the recorded half of the
+/// same frame [`fail_at`] ends the process with.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
-pub(crate) fn report_at(site: *const QlSite, message: &str) {
-    let mut out = String::new();
-    match unsafe { site.as_ref() } {
-        Some(site) if !site.file.is_empty() && !site.excerpt.is_empty() => {
-            let style = Style::for_stderr();
-            let (file, excerpt) = (site.file.as_text(), site.excerpt.as_text());
-            let line = format_num(site.line);
-            let gutter = " ".repeat(line.chars().count());
-            let lead = " ".repeat(site.column.max(1.0) as usize - 1);
-            let carets = "^".repeat(site.width.max(1.0) as usize);
+pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
+    let style = Style::for_stderr();
+    let mut out = format!(
+        "{}error[QN{code:03}]:{} {message}\n",
+        style.problem, style.plain
+    );
+    if let Some(site) = unsafe { site.as_ref() }
+        && !site.file.is_empty()
+        && !site.excerpt.is_empty()
+    {
+        let (file, excerpt) = (site.file.as_text(), site.excerpt.as_text());
+        let line = format_num(site.line);
+        let gutter = " ".repeat(line.chars().count() + 2);
+        let lead = " ".repeat(site.column.max(1.0) as usize - 1);
+        let underline = "─".repeat(site.width.max(1.0) as usize);
 
-            out.push_str(&format!(
-                "{}{}:{line}:{}:{}\n",
-                style.position,
-                shorten_path(&file),
-                format_num(site.column),
-                style.plain
-            ));
-            out.push_str(&format!("{}{message}{}\n", style.problem, style.plain));
-            out.push_str(&format!("{}{gutter} |{}\n", style.frame, style.plain));
-            out.push_str(&format!(
-                "{}{line} |{} {excerpt}\n",
-                style.frame, style.plain
-            ));
-            out.push_str(&format!(
-                "{}{gutter} |{} {lead}{}{carets}{}\n",
-                style.frame, style.plain, style.problem, style.plain
-            ));
-        }
-        _ => {
-            out.push_str(message);
-            out.push('\n');
-        }
+        out.push_str(&format!(
+            "{}{gutter}╭─[{}:{line}:{}]{}\n",
+            style.frame,
+            shorten_path(&file),
+            format_num(site.column),
+            style.plain
+        ));
+        out.push_str(&format!(
+            "{} {line} │{} {excerpt}\n",
+            style.frame, style.plain
+        ));
+        out.push_str(&format!(
+            "{}{gutter}·{} {lead}{}{underline}{}\n",
+            style.frame, style.plain, style.problem, style.plain
+        ));
+        out.push_str(&format!("{}{gutter}╰────{}\n", style.frame, style.plain));
     }
     write_to_fd(2, out.as_bytes());
 }
@@ -162,7 +172,12 @@ pub(crate) fn report_at(site: *const QlSite, message: &str) {
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
 #[unsafe(no_mangle)]
 pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, length: i64) -> ! {
-    fail_at(site, &message_text(message, length), ASSERTION_EXIT_CODE)
+    fail_at(
+        site,
+        codes::ASSERTION_FAILED,
+        &message_text(message, length),
+        ASSERTION_EXIT_CODE,
+    )
 }
 
 /// A failing `expect(actual, matcher)`: report `message` at the assertion's own call site,
@@ -174,7 +189,7 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 #[unsafe(no_mangle)]
 pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, length: i64) {
     let message = message_text(message, length);
-    report_at(site, &message);
+    report_at(site, codes::ASSERTION_FAILED, &message);
     let (file, line) = location_of(site);
     mark_case_failed(Failure {
         message,
@@ -208,6 +223,7 @@ fn location_of(site: *const QlSite) -> (String, u64) {
 pub extern "C" fn __match_fail(site: *const QlSite) -> ! {
     fail_at(
         site,
+        codes::MATCH_FAILED,
         "no arm of this match matched the value",
         RUNTIME_EXIT_CODE,
     )

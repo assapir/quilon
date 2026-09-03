@@ -94,11 +94,12 @@ fn an_invalid_index_reports_its_own_location() {
     );
     assert_eq!(code, 1);
     assert!(
-        stderr.contains(":4:3:\nindex 7 out of bounds for an array of size 3"),
+        stderr.starts_with("error[QN501]: index 7 out of bounds for an array of size 3\n")
+            && stderr.contains(":4:3]"),
         "the report must locate the failing read, got: {stderr}"
     );
     assert!(
-        stderr.contains("4 |   a[n]") && stderr.contains("  ^^^^"),
+        stderr.contains("4 │   a[n]") && stderr.contains("  ────"),
         "the report must show the read with a caret under it, got: {stderr}"
     );
 }
@@ -110,7 +111,7 @@ fn each_read_reports_its_own_line() {
     let src = "^ = () -> Num => <\n  a = [1]\n  n = 3\n  first = a[0]\n  second = a[n]\n  first + second\n>";
     let (_, stderr) = run("which_read", src);
     assert!(
-        stderr.contains(":5:12:") && stderr.contains("second = a[n]"),
+        stderr.contains(":5:12]") && stderr.contains("second = a[n]"),
         "the failing read is on line 5, got: {stderr}"
     );
 }

@@ -40,7 +40,7 @@ a match arm, an argument list, or a function declared inside the body. Nesting d
 launder a mutation:
 
 ```quilon ignore
-~ error: Method 'Counter.bumpAll' mutates 'it' but is declared with '='
+~ error: method `Counter.bumpAll` mutates `it` but is declared with `=`
 bumpAll = (steps :: []Num) => < steps.each(s => it.value := s) >
 ```
 

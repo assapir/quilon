@@ -853,7 +853,12 @@ impl TypeChecker {
         // against the operator's overload set, which holds the built-in members
         // (Num/Text `+`, the comparisons, …) PLUS any user-defined operator overloads
         // — so built-ins and user operators dispatch through the same mechanism.
-        self.resolve_overload(operator.symbol(), &[left_type, right_type], span)
+        self.resolve_overload(
+            operator.symbol(),
+            &[left_type, right_type],
+            &[left.span().clone(), right.span().clone()],
+            span,
+        )
     }
 
     pub(super) fn check_unary_operator(

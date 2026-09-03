@@ -128,7 +128,7 @@ fn a_call_at_another_arity_reports_the_builtins_arity() {
     ] {
         let message = type_error_message(source);
         assert!(
-            message.contains("Wrong number of arguments"),
+            message.contains("wrong number of arguments"),
             "expected an arity error, got: {message}"
         );
     }

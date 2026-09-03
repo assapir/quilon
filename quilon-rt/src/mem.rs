@@ -10,7 +10,7 @@
 
 use crate::io::write_to_fd;
 use crate::process::__exit;
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, fail_at};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
 
 // The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
@@ -97,7 +97,12 @@ impl Drop for GcThread {
 #[cold]
 #[inline(never)]
 fn alloc_fail(message: &str) -> ! {
-    fail_at(std::ptr::null(), message, RUNTIME_EXIT_CODE)
+    fail_at(
+        std::ptr::null(),
+        codes::ALLOCATION_FAILED,
+        message,
+        RUNTIME_EXIT_CODE,
+    )
 }
 
 /// Allocate `size` bytes of GC-managed, zeroed-on-demand memory.
@@ -203,6 +208,7 @@ pub(crate) fn alloc_slots<T>(count: usize) -> *mut T {
 pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! {
     fail_at(
         site,
+        codes::INDEX_OUT_OF_BOUNDS,
         &format!(
             "index {} out of bounds for an array of size {}",
             format_num(index),
@@ -249,7 +255,12 @@ pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
 pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
     match check_range_endpoint(value) {
         Ok(endpoint) => endpoint,
-        Err(message) => fail_at(site, &message, RUNTIME_EXIT_CODE),
+        Err(message) => fail_at(
+            site,
+            codes::RANGE_ENDPOINT_NOT_WHOLE,
+            &message,
+            RUNTIME_EXIT_CODE,
+        ),
     }
 }
 
