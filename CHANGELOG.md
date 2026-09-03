@@ -4,6 +4,18 @@ All notable changes to Quilon are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **A method parameter annotated with a user record or sum type now works end to end.**
+  The checker compared the call site's UNRESOLVED annotation (`Named { fields: [] }`, the
+  parser's placeholder for a capitalized name) against the resolved argument type, so two
+  `P`s that print the same compared unequal and every such call was rejected with
+  `QN301 type mismatch: expected P, got P`. Call-site checking now resolves the parameter
+  annotation exactly as the definition site already does; codegen's method-parameter
+  emission now also tracks a record/sum parameter's fields (previously only a top-level
+  function's parameter did), so a resolved call no longer dies at run time with "Field
+  access not fully implemented" either. (#194)
+
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
 ### Added

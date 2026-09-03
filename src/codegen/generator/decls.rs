@@ -179,6 +179,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.variables
                 .insert(parameter.name.clone(), (alloca, parameter_type));
             let qty = self.parameter_type(parameter);
+            // Track a record/sum-typed parameter's fields the same way a top-level
+            // function's parameter does (`emit_module_function`), so `p.field` on a
+            // method parameter resolves instead of hitting the "need type information"
+            // fallback.
+            if let Type::Named { name, .. } | Type::Sum { name, .. } = &qty {
+                self.var_named_types
+                    .insert(parameter.name.clone(), name.clone());
+                if let Some(fields) = self.named_type_fields.get(name) {
+                    self.record_types
+                        .insert(parameter.name.clone(), fields.clone());
+                }
+            }
             self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
