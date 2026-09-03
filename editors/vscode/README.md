@@ -36,7 +36,7 @@ compiles to native code via LLVM. Files use the `.qn` extension.
   - **Semantic tokens** — block `< >` delimiters colored apart from the `<` / `>`
     comparison operators, plus declared type, function, and parameter names.
   - **Test CodeLens** — **▶ Run suite** / **▶ Run case** actions above each
-    `describe` and `it` block, running just that suite or case.
+    `describe` and `it` block, running that suite or case.
 - **Test Explorer** — the "Testing" view lists every `describe`/`it` in an open `.qn`
   file, built from the language server's `quilon/testItems`; a ▶ Run there runs the
   selection through `quilon test --reporter json` and reports pass/fail per case (see
@@ -223,7 +223,7 @@ included. It provides:
 - **Test CodeLens** — a **▶ Run suite** / **▶ Run case** lens above every
   `describe` and `it`, invoking the extension's `quilon.runTests` command with the
   block's own `/`-joined path, which runs `quilon test <file> --only <path>` in the
-  "Quilon" terminal — a suite lens runs just that suite, a case lens just that case.
+  "Quilon" terminal — a suite lens runs that suite, a case lens that case.
 - **`quilon/testItems`** — the same test tree the lenses read, as one flat list (each
   entry's path, name, kind, and range), which the Test Explorer builds its tree from
   instead of re-parsing the file itself.
