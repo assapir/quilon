@@ -40,7 +40,7 @@ span marks every line it covers.
 
 Runtime failures use the same frame at the expression responsible: a failing
 [assertion](../corelib/test/README.md) at its own call site, a fail-loud check (a bad
-`array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-must-be-whole-numbers)
+`array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-are-whole-numbers)
 that is a fraction) at the expression that broke the contract. A [failed or unrepresentable
 allocation](../memory.md) has no expression to point at and prints its first line alone. A
 runtime report carries the source line it names, so that line's text is embedded in the

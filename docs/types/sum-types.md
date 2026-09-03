@@ -13,20 +13,19 @@ Color = Red / Green / Blue                 ~ three nullary variants
 Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 ```
 - **Payloads are built-in scalars or a named record**: `Num`, `Text`, `Bool`, `$`
-  (Unit), or a previously-declared **record** type. There are no type variables (no
-  generics). A variant may still take several payload fields (e.g. `Rect(Num, Num)`). A `$`
-  payload carries no value — it is the "this variant has no data" case (see `Ok($)` below).
+  (Unit), or a **record** type declared above the sum. A variant may take several payload
+  fields (e.g. `Rect(Num, Num)`). A `$` payload carries no value — the variant's data is
+  its identity (see `Ok($)` below).
 - A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
-  where `Body` is a record. The record must be declared **above** the sum (no hoisting).
-  A match arm binds it at its full type, so `Post(b) => b.payload` reads its fields
-  and calls its methods. (Nesting another **sum** as a payload is not yet supported; see
-  `examples/nested_composites.qn`.)
-- At a given payload position, every variant with a concrete (non-`$`) field there must
-  agree on its type, including the named-record case. `$` may coexist with a concrete
-  type at the same position: `Done($) / Pending(Num)` is fine; `A(Num) / B(Text)` and
+  where `Body` is a record declared **above** the sum. A match arm binds it at its full
+  type, so `Post(b) => b.payload` reads its fields and calls its methods. A payload is a
+  scalar or a record; see `examples/nested_composites.qn` for composing sums with records.
+- At a given payload position, every variant with a concrete (non-`$`) field there agrees
+  on its type, the named-record case included. `$` may coexist with a concrete type at the
+  same position: `Done($) / Pending(Num)` is accepted; `A(Num) / B(Text)` and
   `Wrap(Body) / Plain(Num)` are rejected.
-- **Variant (constructor) names are unique per scope** — two sum types can't share a
-  variant name.
+- **Variant (constructor) names are unique per scope**: each variant name belongs to one
+  sum type.
 
 **Construct** a value by naming the variant (with payload arguments if it has any), and
 **consume** it with `?`/`|` pattern matching, which binds the payload:
@@ -74,8 +73,8 @@ classify = (v :: Result) => <
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
 *usable* at the match site: `Ok("x") ? Ok(s) => s.size` binds `s : Text`, and passing
-`s` to an [overload set](../functions/overloading.md) dispatches to the `Text` member, not a generic
-fallback. This holds across a function boundary too. A function returning `Ok("x")` —
+`s` to an [overload set](../functions/overloading.md) dispatches to the `Text` member.
+This holds across a function boundary too. A function returning `Ok("x")` —
 return type inferred or annotated `-> Result` — hands the caller a usable `Text` payload.
 And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`/`getOpt`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
@@ -104,4 +103,4 @@ Color = Red / Green / Blue       ~ sum type: name + operands are Capitalized
 half  = a / b                    ~ division: lowercase operands are values
 ```
 A single bare Capitalized name with no `/` (e.g. `x = Red`) is an ordinary value binding
-(here, of an existing nullary variant), not a one-variant sum-type declaration.
+(here, of an existing nullary variant); a sum-type declaration has two or more variants.

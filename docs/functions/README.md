@@ -28,10 +28,9 @@ compute = (x :: Num) => <
   doubled * doubled
 >
 ```
-Functions may recurse; a **self-recursive function must annotate its return type**
-(`-> Type`) — a recursive call needs to already know what the function returns, which
-isn't known until its body (the call sits inside it) is fully checked, so an unannotated
-self-recursive call is a compile error naming the function:
+Functions may recurse; a **self-recursive function annotates its return type**
+(`-> Type`). A recursive call inside a function without one is a compile error naming the
+function:
 ```quilon
 factorial = (n :: Num) -> Num => < n == 0 ? 1 : n * factorial(n - 1) >
 ```
@@ -66,10 +65,10 @@ volume = (p :: Parcel) -> Num => < p.lengthCm * p.widthCm * p.heightCm >
 ## Function types & higher-order functions
 
 A **function type** is written with the arrow, reusing `->`. The parameter types go in
-parentheses; `$` (Unit) names a function that returns nothing:
+parentheses; `$` (Unit) names a function that returns unit:
 
 ```quilon ignore
-() -> $              ~ takes nothing, returns unit
+() -> $              ~ no parameters, returns unit
 (Num) -> Bool        ~ one parameter
 (Num, Text) -> Bool  ~ two parameters
 ```
@@ -93,8 +92,8 @@ across the call boundary — see
 
 ### A lambda takes its parameter types from the target
 
-Where a lambda lands on a **known function type**, that type says what its parameters are
-and the lambda need not repeat them:
+Where a lambda lands on a **known function type**, that type supplies its parameter types,
+and the lambda may leave them unwritten:
 
 ```quilon ignore
 apply(10, (n) => n + 1)          ~ `apply`'s `(Num) -> Num` parameter types `n`
@@ -103,9 +102,9 @@ scale :: (Num) -> Num = (n) => < n * 4 >             ~ a binding that declares i
 adder = (n :: Num) -> (Num) -> Num => < (x) => x + n >   ~ a function-typed RETURN types the lambda it hands back
 ```
 
-An annotation is always legal and wins where written (`(n :: Num) => n + 1`). Where the
-target type is **not** known, the annotation is required and the error says so rather than
-assuming a type:
+An annotation is legal everywhere and wins where written (`(n :: Num) => n + 1`). Where
+the target type is **unknown**, the annotation is required, and the error names the
+parameter:
 
 ```quilon ignore
 fs = [(n) => n + 1]   ~ error: parameter 'n' of this lambda has no type: annotate it
@@ -118,9 +117,8 @@ names the set that left it open.
 
 ## Names resolve top to bottom
 
-A call may only name something **already defined above it** — there is no hoisting. A
-definition is in scope for its own body (so a function may recurse) and for everything
-that follows it, but not for anything before it:
+A call names something **defined above it**. A definition is in scope for its own body (a
+function may recurse) and for everything that follows it:
 ```quilon ignore
 ^ = () -> Num => < later() > ~ error: Undefined variable 'later'
 later = () -> Num => < 7 >
@@ -131,7 +129,6 @@ h = () -> Text => < g(1) > ~ error: cannot call 'g' before its definition
 g = (n :: Num) -> Text => < "a" >
 g = (t :: Text) -> Text => < "b" >
 ```
-So **mutual recursion between top-level functions is not expressible**: whichever of the
-pair comes first would have to call the other before it exists. Self-recursion is
-unaffected, including a recursive overload member calling itself. Restructure a mutual
-pair into one self-recursive function.
+**Recursion between top-level functions is self-recursion**: a function calls itself, a
+recursive overload member included. A mutually recursive pair is written as one
+self-recursive function.

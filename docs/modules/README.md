@@ -18,8 +18,7 @@ title: "Modules"
 
 ## Qualified access
 
-An import does not merge names into the file — it binds the module's **last path
-segment** (`<< core.http` binds `http`; a file import binds its file stem), and every
+An import binds one name in the file — the module's **last path segment** (`<< core.http` binds `http`; a file import binds its file stem), and every
 export is reached through that binding: `http.send(...)`, `io.print(...)`,
 `http.Request { … }`. Types, their variants, constants, and functions all qualify the
 same way, in every position:
@@ -44,7 +43,7 @@ A module imported by file path has only its stem, so two file imports with the s
 are rejected at the import — rename the file.
 
 A file import resolves to the module's real path on disk, so the same file reached
-through two different spellings (`..`, a symlink, ...) loads once, not twice. An import
+through two different spellings (`..`, a symlink, ...) loads once. An import
 cycle — a module that imports itself, directly or through others, including one that
 leads back to the program's own entry file — is a compile error naming the cycle.
 
@@ -61,13 +60,13 @@ Two spellings stay bare:
 
 ## Privacy
 
-A module exposes only its `>>`-exported items, but its private items **travel with it**:
-an exported function may call a private sibling, and the importer still cannot reach it —
-`math.helper` answers ``​`helper` is not exported by `math`​`` whether `helper` is private
-or does not exist at all.
+A module exposes its `>>`-exported items, and its private items **travel with it**:
+an exported function may call a private sibling, and the importer reaches the exports
+alone — `math.helper` answers ``​`helper` is not exported by `math`​`` for a private
+`helper` and for an absent one alike.
 
-There is **no selective import, no re-export, and no aliasing**. A module that wants to
-build on another holds it and delegates (composition):
+An import is whole and named by the module: the binding carries every export under the
+module's own name. A module that builds on another holds it and delegates (composition):
 
 ```quilon ignore
 << core.http
@@ -76,15 +75,14 @@ build on another holds it and delegates (composition):
 
 ## Closed overload sets
 
-Qualified access closes a module's overload sets: a program cannot add a member to an
-imported module's function from outside. `core.io.print` already takes **any renderable
-value** — a type becomes printable by defining its own `` ` `` render member, never by
-extending `print`. A program's own bare `print` (or `now`, or `write`) is simply an
-unrelated function.
+Qualified access closes a module's overload sets: an imported module's function has the
+members the module declares. `core.io.print` takes **any renderable value** — a type
+becomes printable by defining its own `` ` `` render member. A program's own bare `print`
+(or `now`, or `write`) is an unrelated function.
 
 - The built-in modules are `core.io`, `core.test`, `core.cli`, `core.time`, `core.info`, `core.net`, and `core.http`; their members are real functions. See the [corelib](../corelib/README.md) index for each module's API reference.
-- `Text` and the operators are built-ins and need **no** import.
-- A file's [`test.describe` blocks](../corelib/test/README.md) need `<< core.test`; every command but `quilon test` erases the blocks, and with nothing left referencing it the harness is tree-shaken out of the build.
+- `Text` and the operators are built-ins, available without an import.
+- A file's [`test.describe` blocks](../corelib/test/README.md) need `<< core.test`; every command but `quilon test` erases the blocks, and the harness is emitted with the blocks it serves.
 
 (See `examples/qualified_modules.qn` for the access model end to end, and
 `examples/use_module.qn`, which imports `examples/mathlib.qn` by file path.)
