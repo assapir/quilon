@@ -6,6 +6,12 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **VS Code: 🐞 Debug suite / 🐞 Debug case CodeLens and a Test Explorer Debug profile.**
+  The language server now places a Debug lens beside every Run suite/Run case lens above a
+  `describe`/`it`; the extension's new `quilon.debugTests` command builds just that suite or
+  case (`quilon test <file> --only <path> --binary <tmp>`, from #319) and launches it under
+  CodeLLDB, breakpoints honoured. The Test Explorer gains a matching Debug run profile.
+  Closes #271. See `docs/tooling/language-server.md` and the extension's own changelog.
 - **`quilon test --binary <out>` — a native, debuggable test executable.** Builds a suite
   into a native executable at `out`, without running it, always with DWARF debug info, so
   a debugger (`gdb`/`lldb`) can step through a case. `--only`, given alongside `--binary`,

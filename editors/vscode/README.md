@@ -35,11 +35,13 @@ compiles to native code via LLVM. Files use the `.qn` extension.
   - **Hover** — the inferred type of the expression under the cursor.
   - **Semantic tokens** — block `< >` delimiters colored apart from the `<` / `>`
     comparison operators, plus declared type, function, and parameter names.
-  - **Test CodeLens** — **▶ Run suite** / **▶ Run case** actions above each
-    `describe` and `it` block, running that suite or case.
+  - **Test CodeLens** — **▶ Run suite** / **🐞 Debug suite** and **▶ Run case** /
+    **🐞 Debug case** actions above each `describe` and `it` block: Run executes that
+    suite or case, Debug launches it under CodeLLDB with breakpoints honoured.
 - **Test Explorer** — the "Testing" view lists every `describe`/`it` in an open `.qn`
   file, built from the language server's `quilon/testItems`; a ▶ Run there runs the
-  selection through `quilon test --reporter json` and reports pass/fail per case (see
+  selection through `quilon test --reporter json` and reports pass/fail per case, and a
+  🐞 Debug profile launches each selected item under CodeLLDB (see
   [Test Explorer](#test-explorer)).
 - **Editor tasks & commands** to run the compiler on the active file.
 - **CodeLens** — **▶ Run** and **▶ Debug** actions appear above each `^`
@@ -118,8 +120,8 @@ Unit tests (`pnpm test`) cover the extension's pure logic, all kept free of any
 - the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
   `src/entryPoints.test.ts`);
 - the debug build/launch helpers (`src/debugConfig.ts` ↔ `src/debugConfig.test.ts`) —
-  the `build --debug` argv, the resolved CodeLLDB configuration, and the in-flight-build
-  guard;
+  the `build --debug` and `test --binary` argv, the resolved CodeLLDB configuration, and
+  the in-flight-build guard;
 - the Test Explorer's tree-building and NDJSON parsing (`src/testRunner.ts` ↔
   `src/testRunner.test.ts`) — nesting a flat `quilon/testItems` list by its `/`-joined
   paths, the `quilon test --reporter json --only …` argv, and parsing `--reporter json`
@@ -141,10 +143,12 @@ To verify the **language server** end-to-end manually:
    reported span, with the message in the Problems panel.
 3. Fix the error — the squiggle clears as you type, no save needed.
 4. Hover an expression (its inferred type appears), Ctrl/Cmd-click a name (its
-   definition opens), and open a test file (Run lenses appear above each
-   `describe` and `it`).
+   definition opens), and open a test file (Run and Debug lenses appear above each
+   `describe` and `it`) — click **🐞 Debug case** on one and confirm a CodeLLDB session
+   starts, with a breakpoint set inside the case honoured.
 5. Open the "Testing" view — the file's suites and cases appear, nested; run one
-   and watch it turn green or red as `quilon test --reporter json` reports it.
+   and watch it turn green or red as `quilon test --reporter json` reports it, then
+   debug one and confirm the same CodeLLDB session starts from there.
 6. Point `quilon.command` at a non-existent binary and reload — a warning
    notification appears, naming that setting and offering **Open Settings**.
 
@@ -205,8 +209,8 @@ actions:
   [Debugging](#debugging)).
 
 Both act on the file containing the lens. Test files get their own lenses —
-**▶ Run suite** / **▶ Run case** above each `describe` and `it` — from
-[the language server](#the-language-server).
+**▶ Run suite** / **🐞 Debug suite** and **▶ Run case** / **🐞 Debug case** above each
+`describe` and `it` — from [the language server](#the-language-server).
 
 ## The language server
 
@@ -228,10 +232,13 @@ included. It provides:
   from the type checker's own table.
 - **Semantic tokens** — block `< >` delimiters versus `<` / `>` comparisons,
   plus declared type / function / parameter names.
-- **Test CodeLens** — a **▶ Run suite** / **▶ Run case** lens above every
-  `describe` and `it`, invoking the extension's `quilon.runTests` command with the
-  block's own `/`-joined path, which runs `quilon test <file> --only <path>` in the
-  "Quilon" terminal — a suite lens runs that suite, a case lens that case.
+- **Test CodeLens** — a **▶ Run suite** / **▶ Run case** and a **🐞 Debug suite** /
+  **🐞 Debug case** lens above every `describe` and `it`, both carrying the block's own
+  `/`-joined path. Run invokes the extension's `quilon.runTests` command, which runs
+  `quilon test <file> --only <path>` in the "Quilon" terminal — a suite lens runs that
+  suite, a case lens that case. Debug invokes `quilon.debugTests`, which builds
+  `quilon test <file> --only <path> --binary <tmp>` and launches the result under
+  CodeLLDB, so breakpoints in the case are hit (see [Debugging](#debugging)).
 - **`quilon/testItems`** — the same test tree the lenses read, as one flat list (each
   entry's path, name, kind, and range), which the Test Explorer builds its tree from
   instead of re-parsing the file itself.
@@ -257,14 +264,12 @@ its result arrives, and a failing case's message and `file:line` appear inline �
 Ctrl/Cmd-click the location to jump there, the same as any other test failure VS Code
 reports. **Run All** (▶ at the top of the view) runs every known file's suites.
 
-There is no Debug profile here: `quilon test` runs only under the compiler's in-process
-JIT, and the extension's only debug path ([below](#debugging)) launches a NATIVE
-`quilon build --debug` binary under CodeLLDB — there is no JIT process for a debugger to
-attach to, so a test-specific Debug profile would have nothing to build. Set a
-breakpoint inside a case's own logic (a helper function it calls, say) and use
-**▶ Debug** on the file's `^` instead when you need to step through it; the case's
-`test.it`/`expect` framing itself won't be included, since building the file for debug
-erases its test blocks the same way `quilon build` always does.
+Selecting **🐞 Debug** on a node builds that item — `quilon test <file> [--only <path>]
+--binary <tmp>` (whole file when the file's own root node is selected) — and launches the
+result under CodeLLDB, breakpoints in the case honoured. Several selected items debug one
+at a time, each session ending before the next starts, so sessions never stack up. A
+debugged item is marked started but carries no pass/fail verdict — stepping through it by
+hand is the point, not an automated result.
 
 ## Debugging
 

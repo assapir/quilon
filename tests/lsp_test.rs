@@ -540,14 +540,22 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
         .unwrap();
     let lenses = lsp_response(lsp_receive(&client));
     let lenses = lenses.as_array().expect("a lens array");
-    assert_eq!(lenses.len(), 2);
+    // Each suite/case gets a Run lens and a Debug lens, in that order.
+    assert_eq!(lenses.len(), 4);
     assert_eq!(lenses[0]["command"]["command"], "quilon.runTests");
     assert_eq!(lenses[0]["command"]["title"], "▶ Run suite");
-    assert_eq!(lenses[1]["command"]["title"], "▶ Run case");
-    // Each lens's second argument is its own `/`-joined path, so the client can run just
-    // that suite or case with `--only`.
+    assert_eq!(lenses[1]["command"]["command"], "quilon.debugTests");
+    assert_eq!(lenses[1]["command"]["title"], "🐞 Debug suite");
+    assert_eq!(lenses[2]["command"]["command"], "quilon.runTests");
+    assert_eq!(lenses[2]["command"]["title"], "▶ Run case");
+    assert_eq!(lenses[3]["command"]["command"], "quilon.debugTests");
+    assert_eq!(lenses[3]["command"]["title"], "🐞 Debug case");
+    // Each lens's second argument is its own `/`-joined path, so the client can run or
+    // debug just that suite or case with `--only`.
     assert_eq!(lenses[0]["command"]["arguments"][1], "s");
-    assert_eq!(lenses[1]["command"]["arguments"][1], "s/c");
+    assert_eq!(lenses[1]["command"]["arguments"][1], "s");
+    assert_eq!(lenses[2]["command"]["arguments"][1], "s/c");
+    assert_eq!(lenses[3]["command"]["arguments"][1], "s/c");
 
     // The custom `quilon/testItems` request answers the same test tree flat, each entry
     // carrying the `/`-joined path `quilon test --only` expects.

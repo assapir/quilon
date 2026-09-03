@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **🐞 Debug suite / 🐞 Debug case CodeLens**, next to **▶ Run suite** / **▶ Run case** above
+  every `describe` and `it`. Debug builds just that suite or case into a native, debuggable
+  executable (`quilon test <file> --only <path> --binary <tmp>`) and launches it under
+  CodeLLDB, so a breakpoint inside a failing case can be stepped through. The new
+  `quilon.debugTests` command backs the lens; a shared `buildDebuggable` helper in
+  `debug.ts` builds and launches — the same step the `^` **▶ Debug** CodeLens already used
+  for a plain `quilon build --debug`.
+- **A Debug run profile in the Test Explorer.** Selecting **🐞 Debug** on a node builds and
+  debugs it the same way as the lens — the whole file when the file's own root node is
+  selected — one session at a time for several selected items, each ending before the next
+  starts. A debugged item is marked started, with no pass/fail verdict: the point is
+  stepping through it by hand, not an automated result.
+
 ### Changed
 
 - **The extension ships bundled.** `pnpm run compile` now bundles `src/extension.ts` into

@@ -8,11 +8,12 @@
 //!
 //! Capabilities: publish diagnostics on open/change, go-to-definition, find references,
 //! rename, hover (the expression's inferred type), semantic tokens (block `< >` delimiters
-//! versus comparison operators, plus declared type/function/parameter names), and a code
-//! lens on every test suite and case. The lens carries the client-side `quilon.runTests`
-//! command with the block's own `/`-joined path; running is the editor's job. The custom
-//! `quilon/testItems` request answers the same test tree as a flat list, each entry
-//! carrying that same path, for a client building a test explorer rather than a lens.
+//! versus comparison operators, plus declared type/function/parameter names), and a Run and
+//! a Debug code lens on every test suite and case. Both carry the block's own `/`-joined
+//! path as their client-side command's argument — `quilon.runTests` or `quilon.debugTests`
+//! — so running and debugging are the editor's job. The custom `quilon/testItems` request
+//! answers the same test tree as a flat list, each entry carrying that same path, for a
+//! client building a test explorer rather than a lens.
 //!
 //! Find references and rename share one table: [`analysis::Resolver`] walks the
 //! import-linked program once, resolving every identifier to the declaration it binds.
@@ -70,9 +71,16 @@ fn legend_index(kind: SemanticTokenKind) -> u32 {
     }
 }
 
-/// The client-side command a test code lens invokes, with the document's path as its one
-/// argument. The Visual Studio Code extension contributes it; any other client may too.
+/// The client-side command a test's Run lens invokes, with the document's path and the
+/// block's own `/`-joined path as its two arguments. The Visual Studio Code extension
+/// contributes it; any other client may too.
 const RUN_TESTS_COMMAND: &str = "quilon.runTests";
+
+/// The client-side command a test's Debug lens invokes — the same two arguments as
+/// [`RUN_TESTS_COMMAND`], but building the suite into a native, debuggable executable
+/// (`quilon test --only <path> --binary <out>`) and launching it under a debugger instead
+/// of running it in place.
+const DEBUG_TESTS_COMMAND: &str = "quilon.debugTests";
 
 /// Serve the Language Server Protocol over stdio until the client shuts the session down.
 pub fn run() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
@@ -406,26 +414,39 @@ impl LanguageServer {
         let positions = DocumentPositions::new(text);
         let lenses: Vec<CodeLens> = analysis::test_lenses(text)
             .into_iter()
-            .map(|lens| {
-                let title = match lens.kind {
-                    TestLensKind::Suite => "▶ Run suite",
-                    TestLensKind::Case => "▶ Run case",
+            .flat_map(|lens| {
+                let range = range_of(&positions, &lens.span);
+                // The file, then the lens's own `/`-joined path — the client passes the
+                // second as `--only`, so a suite lens runs (or debugs) just that suite and
+                // a case lens just that case, rather than the whole file.
+                let arguments = Some(vec![
+                    serde_json::Value::String(path.display().to_string()),
+                    serde_json::Value::String(lens.path),
+                ]);
+                let (run_title, debug_title) = match lens.kind {
+                    TestLensKind::Suite => ("▶ Run suite", "🐞 Debug suite"),
+                    TestLensKind::Case => ("▶ Run case", "🐞 Debug case"),
                 };
-                CodeLens {
-                    range: range_of(&positions, &lens.span),
-                    command: Some(Command {
-                        title: title.to_string(),
-                        command: RUN_TESTS_COMMAND.to_string(),
-                        // The file, then the lens's own `/`-joined path — the client passes
-                        // the second as `--only`, so a suite lens runs just that suite and
-                        // a case lens just that case, rather than the whole file.
-                        arguments: Some(vec![
-                            serde_json::Value::String(path.display().to_string()),
-                            serde_json::Value::String(lens.path),
-                        ]),
-                    }),
-                    data: None,
-                }
+                [
+                    CodeLens {
+                        range,
+                        command: Some(Command {
+                            title: run_title.to_string(),
+                            command: RUN_TESTS_COMMAND.to_string(),
+                            arguments: arguments.clone(),
+                        }),
+                        data: None,
+                    },
+                    CodeLens {
+                        range,
+                        command: Some(Command {
+                            title: debug_title.to_string(),
+                            command: DEBUG_TESTS_COMMAND.to_string(),
+                            arguments,
+                        }),
+                        data: None,
+                    },
+                ]
             })
             .collect();
         Response::new_ok(id, lenses)

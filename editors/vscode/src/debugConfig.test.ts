@@ -10,6 +10,7 @@ import {
   InFlightBuilds,
   splitCommand,
   tempBinaryPath,
+  testBuildArgs,
   toLldbConfiguration,
 } from "./debugConfig";
 
@@ -77,6 +78,39 @@ test("buildArgs: preserves base args from the command setting", () => {
     "/w/app.qn",
     "-o",
     "/tmp/app",
+  ]);
+});
+
+test("testBuildArgs: a suite/case path becomes `--only <path> --binary <out>`", () => {
+  assert.deepEqual(testBuildArgs([], "/w/suite.qn", "Suite/case", "/tmp/out"), [
+    "test",
+    "/w/suite.qn",
+    "--only",
+    "Suite/case",
+    "--binary",
+    "/tmp/out",
+  ]);
+});
+
+test("testBuildArgs: no path builds the whole file, with no `--only`", () => {
+  assert.deepEqual(testBuildArgs([], "/w/suite.qn", undefined, "/tmp/out"), [
+    "test",
+    "/w/suite.qn",
+    "--binary",
+    "/tmp/out",
+  ]);
+});
+
+test("testBuildArgs: preserves base args from the command setting", () => {
+  assert.deepEqual(testBuildArgs(["run", "--"], "/w/suite.qn", "Suite", "/tmp/out"), [
+    "run",
+    "--",
+    "test",
+    "/w/suite.qn",
+    "--only",
+    "Suite",
+    "--binary",
+    "/tmp/out",
   ]);
 });
 

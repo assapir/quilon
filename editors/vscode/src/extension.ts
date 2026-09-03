@@ -6,11 +6,13 @@
 //   2. The language client: spawns `quilon lsp` (the compiler's own language server)
 //      and lets it provide diagnostics, go-to-definition, hover, semantic tokens,
 //      and the test code lenses.
-//   3. Debugging: the `quilon.debug` command and debug-configuration provider
-//      (CodeLLDB over a `--debug` build).
+//   3. Debugging (`debug.ts`): the `quilon.debug` command and debug-configuration provider
+//      (CodeLLDB over a `--debug` build), plus `quilon.debugTests` for the language
+//      server's Debug suite/case lenses (CodeLLDB over a `quilon test --binary` build).
 //   4. The Test Explorer (`testExplorer.ts`): the "Testing" view's tree, built from
 //      the language server's `quilon/testItems`, with a Run profile that parses
-//      `quilon test --reporter json` back into pass/fail results.
+//      `quilon test --reporter json` back into pass/fail results, and a Debug profile
+//      that builds and launches the selection under CodeLLDB.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
