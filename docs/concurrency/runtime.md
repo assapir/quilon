@@ -63,7 +63,7 @@ sequenceDiagram
   once. Whichever fires first — a socket token becoming ready or the timer
   elapsing — returns it. `ready_tokens()` then hands each fired token to
   `wait_and_wake`, which maps it back through `readiness_waiters` to the exact
-  fiber and requeues it; on resume the op simply retries.
+  fiber and requeues it; on resume the op retries.
 - **Why fiber stacks are registered with the GC.** Boehm only scans the OS
   thread's stack, but a parked fiber's live roots sit on its own `corosensei`
   stack. Each fiber's stack range is registered (`gc::register`), so on a

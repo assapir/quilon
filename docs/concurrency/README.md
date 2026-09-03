@@ -54,7 +54,7 @@ That seed fiber has an 8 MiB stack, the size of a process stack, and larger than
 independently of `ulimit -s`: the collector scans a parked fiber's stack whole, and the
 seed's size bounds that scan.
 
-## Runnable today
+## Implemented primitives
 
 `core.time` — **`@sleep(seconds)`** takes a fractional `Num` and is effect-only (`-> $`): it
 waits on the current fiber, then execution continues in program order. It carries no value,

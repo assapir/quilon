@@ -25,7 +25,7 @@ a compile error naming the missing member.
 
 The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare
-`print` or `write` — at any signature — is simply an unrelated function beside `io.print`.
+`print` or `write` — at any signature — is an unrelated function beside `io.print`.
 (`@readStdin`, like every `@` primitive, keeps its bare name once the module is imported.)
 
 ```quilon

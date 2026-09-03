@@ -9,11 +9,10 @@ sidebar:
 How a compiled Quilon program represents values, calls functions, and talks to the runtime
 and the operating system.
 
-**None of this is a promise.** Every build is whole-program: the compiler emits one object
-and links it against its own runtime, so nothing outside a build depends on these choices and
-they can change in any release. There is no stable Quilon ABI, no separate compilation, and no
-supported way to link a Quilon library into another program. Read this to understand or debug
-the compiler's output, not to build against it.
+**These choices are internal and may change in any release.** Every build is whole-program:
+the compiler emits one object and links it against its own runtime, and every dependency on
+these choices lives inside one build. This page describes the compiler's output for
+understanding and debugging it.
 
 ## Three layers
 
@@ -27,8 +26,8 @@ Quilon picks the third layer and adopts the first two unchanged.
 
 ## Calling convention
 
-Quilon defines no calling convention of its own. Codegen never sets an LLVM calling
-convention, so every emitted function uses the default `ccc` — the platform's C convention.
+Quilon uses the platform's C calling convention. Codegen leaves every emitted function on
+LLVM's default `ccc`.
 A Quilon function is callable from C, and vice versa, with no shim.
 
 `^ = () -> Num => 42`, built and disassembled on aarch64. Arguments first:
@@ -58,12 +57,12 @@ Then the return value, in the thunk `main` handed over:
 
 On aarch64 the convention is: integer and pointer arguments in `x0`–`x7` in order,
 floating-point in `d0`–`d7`, integer results in `x0`/`w0`, floating-point results in `d0`, the
-return address in `x30`, and `x19`–`x28` preserved across a call. x86-64 differs in the
-registers, not the idea. Both are the platform's published C convention.
+return address in `x30`, and `x19`–`x28` preserved across a call. x86-64 uses its own
+registers under the same convention. Both are the platform's published C convention.
 
-Two things worth naming. `^` returns a `Num`, so its value comes back in `d0`, and `fcvtzs` is
-where a `Num` becomes a process exit code. And the thunk's address is loaded from the global
-offset table rather than being an immediate, because the binary is position-independent.
+`^` returns a `Num`, so its value comes back in `d0`, and `fcvtzs` is where a `Num` becomes a
+process exit code. The binary is position-independent, and the thunk's address is loaded
+from the global offset table.
 
 ## Value representations
 
@@ -82,24 +81,20 @@ What each Quilon type is in memory. `ptr` is a pointer, `i64` a 64-bit integer.
 | `Result` | `{ i8 tag, { ptr, i64 } }` — one canonical slot, whatever the payload |
 | function value | `{ ptr fn, ptr env }` — the closure pair |
 
-`Text` and arrays share a shape, and so do records and sums after lowering, so the LLVM type
-alone cannot tell them apart. Anything that needs to distinguish them reads the *declared*
-Quilon type (see the type oracle in [compiler architecture](architecture.md)).
+`Text` and arrays share a shape, and so do records and sums after lowering; the *declared*
+Quilon type distinguishes them (see the type oracle in
+[compiler architecture](architecture.md)).
 
 ## The runtime boundary
 
-`libquilon_rt` is written in Rust but linked as a C library. Two rules make that work, and
-both are load-bearing:
+`libquilon_rt` is written in Rust and linked as a C library, under two rules:
 
-- Every symbol generated code calls is `extern "C"` — the C convention, not Rust's, which is
-  unspecified and free to change between compiler versions.
+- Every symbol generated code calls is `extern "C"` — the platform's C convention.
 - Every type crossing the boundary is `#[repr(C)]`, so field offsets match what codegen emits.
-  Without it Rust may reorder fields, and a `Text` would arrive with its parts swapped.
 
-So a binary contains both: unmangled names such as `__run_fiber_main` at the boundary, and
-mangled `_RNv…` names for the runtime's private Rust-to-Rust calls. Only the first kind is
-ever reached from generated code, which is why the runtime could be replaced by a C or Zig
-implementation exporting the same symbols without changing the compiler.
+A binary contains both: unmangled names such as `__run_fiber_main` at the boundary, and
+mangled `_RNv…` names for the runtime's private Rust-to-Rust calls. Generated code reaches
+the first kind; the boundary is the set of exported symbols.
 
 ## Start-up, end to end
 
@@ -131,7 +126,7 @@ flowchart TD
     main --> done
 ```
 
-The kernel jumps to `_start`, not to `main`. Everything from there to `^` is machinery: the C
+The kernel jumps to `_start`. Everything from there to `^` is machinery: the C
 runtime, the collector, and the scheduler that gives `^` a fiber to park on. The exit code
 travels back up the same path — `^` returns a `Num` in `d0`, `__ql_entry` truncates it to
 `i32`, and `main` hands that to the C runtime as the process status.
@@ -140,9 +135,9 @@ travels back up the same path — `^` returns a `Num` in `d0`, `__ql_entry` trun
 
 - The compiler generates `int main(int argc, char **argv, char **envp)` — the POSIX
   three-argument form — which initializes the collector, then runs `^`.
-- `^` does not run on the process stack. `main` hands a `__ql_entry` thunk to
-  `__run_fiber_main`, which runs it as the scheduler's seed fiber so that any `@` primitive it
-  reaches has a fiber to park on. See [the concurrency runtime](../concurrency/runtime.md).
+- `^` runs on the scheduler's seed fiber. `main` hands a `__ql_entry` thunk to
+  `__run_fiber_main`, which runs it as that fiber, and any `@` primitive it reaches has a
+  fiber to park on. See [the concurrency runtime](../concurrency/runtime.md).
 - `^` is a real symbol named `^`. It appears that way in `nm` and `objdump` output.
 - `^` takes one of three shapes: `()`, `(args :: []Text)`, or
   `(args :: []Text, env :: [|Text => Text|])`. See [entry point](../modules/entry-point.md).

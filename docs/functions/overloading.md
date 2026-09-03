@@ -35,9 +35,9 @@ error[QN311]: no overload of `score` takes (Bool)
   g :: (Num) -> Num = (n) => < 1 >
   g :: (Text) -> Num = (t) => < 2 >
   ```
-- A single ordinary `name = …` definition is **not** an overload set. It keeps its
-  inferred return type — no return annotation needed. Its parameters are still annotated —
-  a **method** parameter is held to the same rule (see
+- An overload set has two or more members; a single `name = …` definition is an ordinary
+  function with an inferred return type. Its parameters are annotated — a **method**
+  parameter is held to the same rule (see
   [named record types](../types/records.md#named-record-types-with-methods)).
 - **The built-in operators are members.** `+` on `Num` and `+` on
   `Text` are two members of the `+` set, and a type's own operator member joins it on the

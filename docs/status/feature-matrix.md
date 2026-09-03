@@ -6,7 +6,7 @@ sidebar:
 
 # Feature matrix
 
-✅ = works end-to-end with a passing run test · 🚧 = partial · ❌ = not yet
+✅ = works end-to-end with a passing run test · 🚧 = partial · ❌ = planned
 
 | Feature | Status |
 |---|---|

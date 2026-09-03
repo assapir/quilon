@@ -43,7 +43,7 @@ Runtime failures use the same frame at the expression responsible: a failing
 `array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-are-whole-numbers)
 that is a fraction) at the expression that broke the contract. A [failed or unrepresentable
 allocation](../memory.md) has no expression to point at and prints its first line alone. A
-runtime report carries the source line it names, so that line's text is embedded in the
+runtime report carries the source line it names; that line's text is embedded in the
 built binary. `core.test`'s `failAt` — which the `Text.replace`/`repeat` contract checks
 report through — prints the frame `core.test` composes in Quilon: a `path:line:col:`
 position line, the message, and a caret run.
@@ -586,8 +586,8 @@ text, interpolate: `` "`n`x" ``.
 More than one member of an overload set matches a call's argument types. Two members with
 the very same parameter types are rejected up front, as a
 [duplicate definition](#qn310--duplicate-definition) — this is the narrower case a call site
-still finds ambiguous: a member taking a trailing `site :: Site` the compiler fills in
-automatically, alongside one that does not, both accept a call that omits it.
+finds ambiguous: a member taking a trailing `site :: Site` the compiler fills in
+automatically, alongside one without it, both accept a call that omits it.
 
 ```quilon ignore
 f = (n :: Num) -> Num => < n >
@@ -678,8 +678,8 @@ Move the `Site` parameter last: `check = (n :: Num, site :: Site) -> $ => < $ >`
 
 A call reaches an overload set — two or more same-named definitions — every member of
 which is defined below the call. A name with only ONE definition below the call is instead
-[undefined](#qn300--undefined-name): names resolve top to bottom, and there is no set yet
-to name specially.
+[undefined](#qn300--undefined-name): names resolve top to bottom, and a set forms at its
+second member.
 
 ```quilon ignore
 h = () -> Text => < g(1) >
@@ -747,7 +747,7 @@ Name one of the type's variants; the message lists them.
 ### QN326 — constructor pattern on a non-sum value
 
 A constructor pattern matches a value of a type with no variants, or one whose type is
-still open.
+open at the match.
 
 ```quilon ignore
 ^ = () -> Num => < 5 ? | Ok(x) => x | _ => 0 >

@@ -54,7 +54,7 @@ code **below it** — like every other name, since the language has no hoisting.
 Two spellings stay bare:
 
 - `@` leaf IO primitives (`@sleep`, `@readStdin`, `@tcpRequest`): importing their module
-  is still required, but the `@` name is global — the sigil already marks it.
+  is required, and the `@` name is global — the sigil marks it.
 - The compiler's own surface — `assert`/`expect` and the matchers — which belongs to no
   module and needs no import.
 

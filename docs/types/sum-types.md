@@ -58,7 +58,7 @@ Rect(6, 7).area()                ~ 42
 (See `examples/sum_methods.qn`.)
 
 ## `Result` is a normal sum type
-`Result` is just a predefined sum type — there is no special case:
+`Result` is a predefined sum type, declared as any other:
 ```quilon ignore
 Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
@@ -85,8 +85,8 @@ carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes throu
 `(r :: Result)` parameter or return. This is what lets the `isOk()` / `isNotOk()`
 [matchers](../corelib/test/README.md#the-matchers) read a `Result` of any shape, including the
 composite-payload results of `getEnv` / `getOpt` (see `examples/cli.qn`). Extracting a
-payload still needs its concrete type in scope at the match site (there are no generics),
-but *matching by variant* (`Ok` vs `NotOk`) works on any `Result` anywhere.
+payload needs its concrete type in scope at the match site, and *matching by variant*
+(`Ok` / `NotOk`) works on any `Result` anywhere.
 
 A constructor pattern's argument must be **irrefutable** — a binding (`Ok(x)`) or the
 wildcard (`Ok(_)`). A literal or nested constructor there (`Ok(1)`, `Ok(Ok(x))`) is a
