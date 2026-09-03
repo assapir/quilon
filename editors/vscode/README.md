@@ -25,8 +25,22 @@ compiles to native code via LLVM. Files use the `.qn` extension.
   - **Capitalized identifiers** are highlighted as types / sum-type constructors
     (`Ok`, `NotOk`, `Color`, `Circle`); **lowercase** names followed by `(` as function calls.
 - **Bracket matching & auto-closing** for `< >`, `{ }`, `[ ]`, `( )`, and `"`.
-- **Inline diagnostics** — type/parse/lex errors from the compiler appear as
-  editor squiggles (see [Diagnostics](#diagnostics)).
+- **Language server integration** — the extension spawns `quilon lsp` (the
+  compiler's own language server) and receives from it (see
+  [The language server](#the-language-server)):
+  - **Inline diagnostics** — type/parse/lex errors as editor squiggles, live
+    against the buffer as you type (no save needed).
+  - **Go to definition** — on functions, variables, parameters, and names an
+    import supplies (jumping into the imported file).
+  - **Hover** — the inferred type of the expression under the cursor.
+  - **Semantic tokens** — block `< >` delimiters colored apart from the `<` / `>`
+    comparison operators, plus declared type, function, and parameter names.
+  - **Test CodeLens** — **▶ Run suite** / **▶ Run case** actions above each
+    `describe` and `it` block, running just that suite or case.
+- **Test Explorer** — the "Testing" view lists every `describe`/`it` in an open `.qn`
+  file, built from the language server's `quilon/testItems`; a ▶ Run there runs the
+  selection through `quilon test --reporter json` and reports pass/fail per case (see
+  [Test Explorer](#test-explorer)).
 - **Editor tasks & commands** to run the compiler on the active file.
 - **CodeLens** — **▶ Run** and **▶ Debug** actions appear above each `^`
   entry-point definition (see [Running the compiler](#running-the-compiler-from-the-editor)).
@@ -86,15 +100,22 @@ touches `editors/vscode/**` (see [Publishing](#publishing)).
 
 ### Tests & manual verification
 
-Unit tests (`pnpm test`) cover four things, all kept free of any `vscode`
-import so they run under plain Node:
+Unit tests (`pnpm test`) cover the extension's pure logic, all kept free of any
+`vscode` import so they run under plain Node:
 
-- the diagnostic-output parser (`src/diagnostics.ts` ↔ `src/diagnostics.test.ts`);
 - compiler resolution (`src/compilerCommand.ts` ↔ `src/compilerCommand.test.ts`) —
   the search order above, over an injected view of a make-believe machine
-  (`PATH`, install directories, open folders, `PATHEXT` on Windows);
+  (`PATH`, install directories, open folders, `PATHEXT` on Windows), and the
+  `quilon lsp` invocation the language client spawns;
 - the entry-point detector behind the CodeLens (`src/entryPoints.ts` ↔
   `src/entryPoints.test.ts`);
+- the debug build/launch helpers (`src/debugConfig.ts` ↔ `src/debugConfig.test.ts`) —
+  the `build --debug` argv, the resolved CodeLLDB configuration, and the in-flight-build
+  guard;
+- the Test Explorer's tree-building and NDJSON parsing (`src/testRunner.ts` ↔
+  `src/testRunner.test.ts`) — nesting a flat `quilon/testItems` list by its `/`-joined
+  paths, the `quilon test --reporter json --only …` argv, and parsing `--reporter json`
+  events (including malformed/truncated lines, which must not throw);
 - **grammar tokenization** (`src/grammar.test.ts`) — it loads the real
   `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
   (`=>`, `->`, `:=`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
@@ -103,17 +124,21 @@ import so they run under plain Node:
   re-implementation of TextMate's ordered first-match-wins rule (the behaviour
   the operator ordering relies on), so no native engine is needed.
 
-To verify the **inline diagnostics** end-to-end manually:
+To verify the **language server** end-to-end manually:
 
 1. Have a working compiler — installed (`cargo install --path .`), built in the
    open checkout, or named by `quilon.command` (e.g. `"cargo run --"`).
 2. Launch the Extension Development Host (`F5`) and open a `.qn` file with a
-   type error (e.g. `examples/type_error.qn`) — a red squiggle should appear at
-   the reported span, with the message in the Problems panel.
-3. Fix the error and save — the squiggle clears.
-4. Point `quilon.command` at a non-existent binary and reopen a `.qn` file — a
-   single warning notification appears (it does not repeat), naming that setting
-   and offering **Open Settings**.
+   type error (e.g. `examples/type_error.qn`) — a red squiggle appears at the
+   reported span, with the message in the Problems panel.
+3. Fix the error — the squiggle clears as you type, no save needed.
+4. Hover an expression (its inferred type appears), Ctrl/Cmd-click a name (its
+   definition opens), and open a test file (Run lenses appear above each
+   `describe` and `it`).
+5. Open the "Testing" view — the file's suites and cases appear, nested; run one
+   and watch it turn green or red as `quilon test --reporter json` reports it.
+6. Point `quilon.command` at a non-existent binary and reload — a warning
+   notification appears, naming that setting and offering **Open Settings**.
 
 To verify **`$` highlighting**, open `examples/unit.qn`: both the `-> $` return
 type and the `$` value are colored like the built-in types (`Num`/`Text`/`Bool`).
@@ -152,11 +177,10 @@ doesn't, so it searches too):
 "quilon.command": "cargo run --"
 ```
 
-Every feature that runs the compiler — diagnostics, Check, Run, and the debug
-build — uses the one resolution, so they never disagree about which compiler
-this workspace has. If none can be spawned, the notification says where it
-looked and offers to open the setting; installing one afterwards is picked up on
-the next check or debug, with no reload.
+Every feature that runs the compiler — the language server, Check, Run, the
+test lenses, and the debug build — uses the one resolution, so they never
+disagree about which compiler this workspace has. If none can be spawned, the
+notification says where it looked and offers to open the setting.
 
 The bundled `.vscode/tasks.json` also provides **quilon: check current file**
 and **quilon: run current file** tasks (`Terminal → Run Task…`).
@@ -172,20 +196,67 @@ actions:
   under CodeLLDB, so breakpoints set in the `.qn` source are hit (see
   [Debugging](#debugging)).
 
-Both act on the file containing the lens.
+Both act on the file containing the lens. Test files get their own lenses —
+**▶ Run suite** / **▶ Run case** above each `describe` and `it` — from
+[the language server](#the-language-server).
 
-## Diagnostics
+## The language server
 
-- **Inline diagnostics (squiggles).** When you open or save a `.qn` file, the
-  extension runs `<quilon.command> check <file>` in the background and surfaces
-  any compile errors as editor squiggles in the Problems panel. The compiler
-  reports errors as `path:line:col: error: <message>` with a caret underline;
-  the extension parses those, converts the 1-based line/column to a VS Code
-  range (using the caret run for the span width, falling back to the token at
-  the column), and publishes them against the file. Diagnostics clear when the
-  file checks clean. If the configured command can't be found, the extension
-  warns **once** (set `quilon.command`, e.g. to `cargo run --`) and stays quiet
-  thereafter.
+On activation the extension spawns the compiler's own language server —
+`<quilon.command> lsp` — and connects to it over stdio with
+[`vscode-languageclient`](https://www.npmjs.com/package/vscode-languageclient).
+The server runs the real compiler front end (lex → parse → resolve imports →
+type-check) over the editor's buffer on every change, so everything it reports
+is the compiler's own verdict on the text as it stands — unsaved edits
+included. It provides:
+
+- **Diagnostics** — published on open and on every change; they clear when the
+  buffer checks clean. In a test file, the test bodies are checked too (they
+  are what `quilon test` runs).
+- **Go to definition** — resolves through the compiler's scopes: parameters,
+  block locals, pattern bindings, top-level functions, and names an `<<` import
+  supplies (the jump lands in the imported file).
+- **Hover** — the inferred type of the smallest expression under the cursor,
+  from the type checker's own table.
+- **Semantic tokens** — block `< >` delimiters versus `<` / `>` comparisons,
+  plus declared type / function / parameter names.
+- **Test CodeLens** — a **▶ Run suite** / **▶ Run case** lens above every
+  `describe` and `it`, invoking the extension's `quilon.runTests` command with the
+  block's own `/`-joined path, which runs `quilon test <file> --only <path>` in the
+  "Quilon" terminal — a suite lens runs just that suite, a case lens just that case.
+- **`quilon/testItems`** — the same test tree the lenses read, as one flat list (each
+  entry's path, name, kind, and range), which the Test Explorer builds its tree from
+  instead of re-parsing the file itself.
+
+If the server cannot be spawned, a warning notification names the
+`quilon.command` setting and offers **Open Settings**.
+
+See [the language server's reference page](../../docs/tooling/language-server.md)
+for the protocol surface and for wiring other editors.
+
+## Test Explorer
+
+The "Testing" view (the flask icon in the Activity Bar) lists every `describe`/`it`
+found in an open `.qn` file, one node per suite and case, nested the way they're
+written. The tree is built from `quilon/testItems` — the same data the CodeLens read —
+and refreshes when a `.qn` document opens, is saved, or is edited (debounced).
+
+Selecting **▶ Run** on a node runs `quilon test <file> --reporter json`, adding
+`--only <path>` for each selected suite or case (a whole-file run when the file's own
+root node is selected); several selected files run in parallel, each its own process.
+The run's NDJSON events are parsed back into the view: each case turns green or red as
+its result arrives, and a failing case's message and `file:line` appear inline —
+Ctrl/Cmd-click the location to jump there, the same as any other test failure VS Code
+reports. **Run All** (▶ at the top of the view) runs every known file's suites.
+
+There is no Debug profile here: `quilon test` runs only under the compiler's in-process
+JIT, and the extension's only debug path ([below](#debugging)) launches a NATIVE
+`quilon build --debug` binary under CodeLLDB — there is no JIT process for a debugger to
+attach to, so a test-specific Debug profile would have nothing to build. Set a
+breakpoint inside a case's own logic (a helper function it calls, say) and use
+**▶ Debug** on the file's `^` instead when you need to step through it; the case's
+`test.it`/`expect` framing itself won't be included, since building the file for debug
+erases its test blocks the same way `quilon build` always does.
 
 ## Debugging
 
@@ -198,8 +269,7 @@ The `quilon` debug type does two things when a session starts:
    which emits DWARF line info into the native binary.
 2. Launches that binary under CodeLLDB (`type: "lldb"`).
 
-Because the binary's DWARF line table references the `.qn` source, breakpoints
-you set in the source and single-stepping both work. Start a session with the
+Breakpoints you set in the source and single-stepping both work. Start a session with the
 **▶ Debug** CodeLens above `^`, the **Quilon: Debug Current File** command, or a
 `launch.json` entry:
 
@@ -220,7 +290,7 @@ struct), and a `[]T` expands to an indexed list of its elements, each keeping it
 own type — so a `[][]Text` expands to a list of inner `[]Text` arrays, each of
 its own `Text` values. Long arrays cap the default expansion and note the
 remaining count in the summary (an explicit `array[i]` past the cap still works).
-Records and sum types currently fall back to lldb's default struct rendering.
+Records and sum types fall back to lldb's default struct rendering.
 
 ## Publishing
 
@@ -259,7 +329,7 @@ workflow succeeds for forks/contributors without credentials:
 - **VS Code Marketplace** — set a `VSCE_PAT` repository secret (a
   [Personal Access Token](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token)
   for your Azure DevOps publisher). The `publisher` field in `package.json` is
-  currently the placeholder `quilon`; replace it with your **real, registered**
+  the placeholder `quilon`; replace it with your **real, registered**
   Marketplace publisher id before the first publish, since the PAT must belong
   to that publisher.
 - **Open VSX** — set an `OVSX_PAT` repository secret

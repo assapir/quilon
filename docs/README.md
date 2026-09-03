@@ -66,5 +66,5 @@ No word is reserved either, so `if = 5` or a function named `while` is perfectly
 - [Corelib](corelib/README.md): the standard library, module by module
 - [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md)
 - [Memory](memory.md)
-- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md)
+- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md) · [language server](tooling/language-server.md)
 - Status: [feature matrix](status/feature-matrix.md) · [known limitations](status/limitations.md) · [compiler architecture](status/architecture.md) · [ABI and calling convention](status/abi.md)

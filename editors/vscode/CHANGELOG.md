@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The extension is a language client.** It spawns the compiler's own language server
+  (`quilon lsp`, located with the same resolution every other feature uses) and receives
+  from it: live diagnostics against the unsaved buffer, go to definition (imports
+  included), hover with the inferred type, semantic tokens (block `< >` delimiters
+  colored apart from the `<` / `>` comparison operators), and a **▶ Run suite** /
+  **▶ Run case** CodeLens above every `describe` and `it` block. The lenses invoke the
+  new `quilon.runTests` command, which runs `quilon test` on the file in the "Quilon"
+  terminal.
+- **Test Explorer.** The "Testing" view lists every `describe`/`it` in an open `.qn`
+  file, nested, from the language server's new `quilon/testItems` request. Its Run
+  profile executes the selection with `quilon test --reporter json`, adding
+  `--only <path>` per selected suite or case, and turns each case green or red as the
+  run's NDJSON events arrive — a failing case's message and `file:line` appear inline,
+  and the tree refreshes as `.qn` documents open, save, or change. No Debug profile:
+  `quilon test` runs only under the JIT, and the extension's debug path builds and
+  debugs a native binary, so there is nothing for a test-specific debugger to attach to.
+- **The ▶ Run suite / ▶ Run case CodeLens now scope to just that block.** Each lens
+  carries its own `/`-joined path, and `quilon.runTests` passes it as `--only`, so
+  running a suite or case no longer re-runs the whole file.
+
+### Changed
+
+- **Diagnostics come from the language server, not from a `quilon check` subprocess.**
+  The shell-out path (run `check` on save, parse the rustc-style report) is gone;
+  squiggles now update as you type. The minimum VS Code version rises to 1.91, which the
+  language client library requires.
+
 ### Fixed
 
 - **A debug session no longer fails with `could not run "quilon"` when the compiler is

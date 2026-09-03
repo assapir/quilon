@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   type CompilerProbe,
+  languageServerInvocation,
   missingCompilerMessage,
   resolveCompilerCommand,
   shellCommand,
@@ -178,4 +179,22 @@ test("shellCommand: joins the invocation and quotes only what has whitespace", (
     shellCommand({ exe: "cargo", baseArgs: ["run", "--quiet", "--"], origin: "cargo" }),
     "cargo run --quiet --",
   );
+});
+
+test("the language server invocation appends the lsp subcommand to a bare binary", () => {
+  const invocation = languageServerInvocation({
+    exe: "/usr/bin/quilon",
+    baseArgs: [],
+    origin: "path",
+  });
+  assert.deepEqual(invocation, { command: "/usr/bin/quilon", args: ["lsp"] });
+});
+
+test("the language server invocation keeps a cargo invocation's base arguments first", () => {
+  const invocation = languageServerInvocation({
+    exe: "cargo",
+    baseArgs: ["run", "--quiet", "--"],
+    origin: "cargo",
+  });
+  assert.deepEqual(invocation, { command: "cargo", args: ["run", "--quiet", "--", "lsp"] });
 });

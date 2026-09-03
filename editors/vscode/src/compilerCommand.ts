@@ -202,6 +202,17 @@ export function missingCompilerMessage(resolved: ResolvedCompiler): string {
 }
 
 /**
+ * The invocation that starts the language server: the resolved compiler with
+ * the `lsp` subcommand appended after its base arguments.
+ */
+export function languageServerInvocation(resolved: ResolvedCompiler): {
+  command: string;
+  args: string[];
+} {
+  return { command: resolved.exe, args: [...resolved.baseArgs, "lsp"] };
+}
+
+/**
  * A resolved invocation as one shell command line, for the commands that type
  * into the integrated terminal. Only whitespace needs quoting: everything here
  * is either a path we found or the user's own setting.

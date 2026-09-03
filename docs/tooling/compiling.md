@@ -16,6 +16,7 @@ quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
 quilon test    suite.qn --reporter json          # one JSON event per line, for a tool
 quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeatable)
+quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
 `quilon --version` (or `-V`) prints the compiler version and its release codename.
