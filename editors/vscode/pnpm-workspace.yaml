@@ -11,8 +11,28 @@ allowBuilds:
   "@vscode/vsce-sign": false
   keytar: false
 
+minimumReleaseAgeExclude:
+  - '@rolldown/binding-android-arm-eabi@1.2.7'
+  - '@rolldown/binding-android-arm64@1.2.7'
+  - '@rolldown/binding-darwin-arm64@1.2.7'
+  - '@rolldown/binding-darwin-x64@1.2.7'
+  - '@rolldown/binding-freebsd-x64@1.2.7'
+  - '@rolldown/binding-linux-arm-gnueabihf@1.2.7'
+  - '@rolldown/binding-linux-arm64-gnu@1.2.7'
+  - '@rolldown/binding-linux-arm64-musl@1.2.7'
+  - '@rolldown/binding-linux-ppc64-gnu@1.2.7'
+  - '@rolldown/binding-linux-s390x-gnu@1.2.7'
+  - '@rolldown/binding-linux-x64-gnu@1.2.7'
+  - '@rolldown/binding-linux-x64-musl@1.2.7'
+  - '@rolldown/binding-openharmony-arm64@1.2.7'
+  - '@rolldown/binding-win32-arm64-msvc@1.2.7'
+  - '@rolldown/binding-win32-x64-msvc@1.2.7'
+  - rolldown@1.2.7
+
 # Hoist dependencies flat into node_modules (instead of pnpm's default
-# symlinked-store layout) so @vscode/vsce can walk a conventional dependency
-# tree when packaging the runtime dependencies (vscode-languageclient) into the
-# .vsix. pnpm 10+ reads this setting from here, not from .npmrc.
+# symlinked-store layout) so tools that expect a conventional
+# node_modules/<package> layout (rolldown resolving vscode-languageclient at
+# bundle time, the extension host resolving it when running unbundled under
+# `watch`/F5) find it without extra resolver configuration. pnpm 10+ reads
+# this setting from here, not from .npmrc.
 nodeLinker: hoisted

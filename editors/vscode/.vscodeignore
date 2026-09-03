@@ -1,10 +1,13 @@
 .vscode/**
 .gitignore
 .vscodeignore
+node_modules/**
 src/**
 **/*.ts
-**/*.map
-out/**/*.test.js
+out/**
+!out/extension.js
+!out/extension.js.map
+rolldown.config.mjs
 tsconfig.json
 .oxlintrc.json
 .oxfmtrc.json

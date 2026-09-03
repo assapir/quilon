@@ -87,13 +87,21 @@ The extension is TypeScript (strict). It is linted with **oxlint** and formatted
 with **oxfmt** (the [Oxc](https://oxc.rs) toolchain) — not ESLint/Prettier:
 
 ```bash
-pnpm run compile    # tsc: type-check + emit out/extension.js
+pnpm run compile    # tsc type-checks src/, then rolldown bundles src/extension.ts -> out/extension.js
 pnpm test           # compile, then run the unit tests (node --test)
 pnpm run lint       # oxlint (fails on any finding)
 pnpm run lint:fix   # oxlint --fix (auto-fix what it can)
 pnpm run fmt        # oxfmt --write (format in place)
 pnpm run fmt:check  # oxfmt --check (verify formatting; CI gate)
 ```
+
+`pnpm run compile` type-checks every file under `src/` with `tsc` (also emitting the
+per-file `out/*.js` the unit tests run against), then bundles the extension's
+entry point with [rolldown](https://rolldown.rs) — `rolldown.config.mjs` — into a
+single `out/extension.js`, `vscode` left external since the extension host
+provides it. `pnpm run watch` keeps using plain `tsc -watch` for fast
+iteration in the Extension Development Host; run `pnpm run compile` before
+packaging to refresh the bundle.
 
 CI runs `lint`, `fmt:check`, `compile`, `test`, and `package` on every PR that
 touches `editors/vscode/**` (see [Publishing](#publishing)).
@@ -299,8 +307,10 @@ CI/CD for this extension lives in
 
 - **PR gate (`validate`).** Every pull request and `main` push that touches
   `editors/vscode/**` validates the manifest/grammar/config JSON, type-checks
-  and compiles the TypeScript (`pnpm run compile`), and runs
-  `pnpm exec vsce package` to prove the extension still builds into a `.vsix`.
+  and bundles the TypeScript (`pnpm run compile`), and runs
+  `pnpm exec vsce package` to prove the extension still builds into a `.vsix` —
+  then asserts the `.vsix` stays under 40 files, keeping the bundle from
+  regressing back to shipping `node_modules` unbundled.
 - **Release (`publish`).** Pushing a tag matching `vscode-v*` packages the
   `.vsix`, attaches it to a GitHub Release for that tag, and — *if the
   maintainer secrets are set* — publishes to the VS Code Marketplace and
