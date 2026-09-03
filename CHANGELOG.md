@@ -7,7 +7,7 @@ All notable changes to Quilon are documented here.
 ### Added
 
 - **`quilon test --binary <out>` — a native, debuggable test executable.** Builds a suite
-  into a native executable at `out` instead of running it, always with DWARF debug info, so
+  into a native executable at `out`, without running it, always with DWARF debug info, so
   a debugger (`gdb`/`lldb`) can step through a case. `--only`, given alongside `--binary`,
   is baked into the executable — the build drops every `describe`/`it` the selection
   excludes before code generation, so `out` alone reproduces the filtered run with nothing

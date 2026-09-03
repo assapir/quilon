@@ -14,7 +14,7 @@ quilon compile program.qn   # emit LLVM IR → program.ll (for inspection)
 quilon test    [path]       # run the test suites under a file or directory (default: .)
 quilon test    suite.qn --reporter json          # one JSON event per line, for a tool
 quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeatable)
-quilon test    suite.qn --binary out             # build a debuggable executable instead of running
+quilon test    suite.qn --binary out             # build a debuggable executable, without running
 quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
@@ -65,7 +65,7 @@ quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ```
 
 `quilon test <file> --binary <out>` builds the suite into a **native, debuggable
-executable** at `<out>` instead of running it — always with DWARF debug info, so a debugger
+executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
 (`gdb`/`lldb`) can step through a case. `<file>` names one suite; a directory (the default
 `.` included) is a diagnostic error, since a build has one entry point. `--only`, given
 alongside `--binary`, is baked into the executable: the build drops every `describe`/`it`

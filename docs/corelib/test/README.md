@@ -151,7 +151,7 @@ Suites run one process each; a failing suite leaves the others running. A suite 
 | `--reporter human` | The report above: the case tree on stdout, then the summary line. The default. |
 | `--reporter json` | One JSON object per event on stdout, one object per line — [the events below](#the-json-events). |
 | `--only <path>` | Run the suite or case at `path` and pass over the rest. Repeatable; each occurrence adds a path. Given with one suite file. |
-| `--binary <out>` | Build the suite into a native, debuggable executable at `out` instead of running it. See [Building a debuggable test binary](#building-a-debuggable-test-binary). |
+| `--binary <out>` | Build the suite into a native, debuggable executable at `out`, without running it. See [Building a debuggable test binary](#building-a-debuggable-test-binary). |
 
 ### Paths
 
@@ -174,7 +174,7 @@ error on stderr that lists the file's paths, and the run exits 1.
 
 ### Building a debuggable test binary
 
-`--binary <out>` builds the suite into a native executable at `out` instead of running it,
+`--binary <out>` builds the suite into a native executable at `out`, without running it,
 always with DWARF debug info, so a debugger (`gdb`/`lldb`) can step through a case — see
 [Compiling & running](../../tooling/compiling.md) for the full command and its output.
 Combined with `--only`, the excluded `describe`/`it` blocks are dropped before code
