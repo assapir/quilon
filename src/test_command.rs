@@ -19,6 +19,7 @@ pub use quilon_rt::test_registry::Reporter;
 use quilon_rt::test_registry::{selects, set_reporter, set_selection};
 
 use crate::ast::{self, Expression, Statement, TEST_BLOCK_MARKER, TEST_CASE_MARKER};
+use crate::build::{self, DebugSource};
 use crate::diagnostic::{Code, Diagnostic};
 use crate::driver::{self, TestBlocks};
 use crate::jit;
@@ -244,6 +245,176 @@ fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
         status.paint("2", &format_duration(status.elapsed()))
     ));
     passed
+}
+
+/// Build the single suite at `root` into a native, debuggable executable at `out` instead of
+/// running it — always with DWARF debug info (the `quilon build --debug` path), so a
+/// debugger can step through a case. `true` on a successful build.
+///
+/// `root` must be one suite file: a directory (the default `.` included) cannot name the
+/// one entry point a build produces. `only`, when given, is checked against the suite's
+/// paths exactly as [`compile_and_run`] checks it, then baked in by pruning every
+/// `describe`/`it` it excludes from the program before code generation — the produced
+/// binary carries no code for what was excluded and needs no selection at run time to
+/// honour it, so running it plain reproduces the filtered run.
+pub fn build_binary(root: &Path, only: &[String], out: &Path, status: &Status) -> bool {
+    if !root.exists() {
+        report(
+            Code::SourceNotReadable,
+            format!("no such file or directory: {}", root.display()),
+            status,
+        );
+        return false;
+    }
+    if root.is_dir() {
+        status.clear();
+        eprintln!(
+            "`--binary` builds one suite file; give the file rather than {}",
+            root.display()
+        );
+        return false;
+    }
+    if discover(root).is_empty() {
+        report(
+            Code::SourceNotReadable,
+            format!(
+                "no tests found in {} — a test file imports `core.test` and has top-level \
+                 `test.{}` blocks",
+                root.display(),
+                ast::display_name(TEST_BLOCK_MARKER)
+            ),
+            status,
+        );
+        return false;
+    }
+
+    status.compiling(&root.display().to_string());
+    let mut checked = match driver::front_end_with(root, TestBlocks::Run) {
+        Ok(checked) => checked,
+        Err(error) => {
+            status.report(&error.diagnostic, &error.sources);
+            return false;
+        }
+    };
+
+    if !only.is_empty() {
+        let available = available_paths(&checked.program);
+        let unknown = only
+            .iter()
+            .find(|selected| !available.iter().any(|path| selects(selected, path)));
+        if let Some(unknown) = unknown {
+            status.clear();
+            eprintln!(
+                "no suite or case `{unknown}` in {}; its paths are:\n  {}",
+                root.display(),
+                available.join("\n  ")
+            );
+            return false;
+        }
+        prune_unselected(&mut checked.program, only);
+    }
+
+    let debug_source = DebugSource { file: root };
+    match build::build_native(
+        &checked.program,
+        checked.types,
+        checked.defer,
+        checked.sources,
+        out,
+        "clang",
+        Some(&debug_source),
+        status,
+    ) {
+        Ok(()) => {
+            status.done(
+                &format!("{} → {}", root.display(), out.display()),
+                quips::pick(quips::SUCCESS),
+            );
+            true
+        }
+        Err(error) => {
+            report(Code::BuildFailed, error, status);
+            false
+        }
+    }
+}
+
+/// Whether some path in `only` names `path` itself or an ancestor suite of it — the same
+/// test the runtime applies in `__test_case_selected`/`__test_suite_selected`
+/// (`quilon-rt::test_registry`), replicated here so a `--binary` build can drop what a
+/// selection excludes at compile time instead of asking the runtime to skip it.
+fn covered(path: &str, only: &[String]) -> bool {
+    only.iter().any(|selected| selects(selected, path))
+}
+
+/// Whether some path in `only` lies under the suite at `path` — the suite has to stay (and
+/// be entered) to reach it, even though `path` itself was not named.
+fn nests_a_selection(path: &str, only: &[String]) -> bool {
+    only.iter().any(|selected| selects(path, selected))
+}
+
+/// Drop every `describe`/`it` in the synthesized entry's body that `only` excludes, pruning
+/// the body of every `describe` that survives. `only` must not be empty — an empty
+/// selection runs everything, so there is nothing to prune.
+fn prune_unselected(program: &mut ast::Program, only: &[String]) {
+    for item in &mut program.items {
+        if let ast::Item::FunctionDeclaration(entry) = item
+            && entry.name == "^"
+        {
+            prune_block(&mut entry.body, "", only);
+        }
+    }
+}
+
+/// Prune every `describe`/`it` statement directly inside `expression` — a synthesized
+/// entry's top-level `Block`, or a `describe`'s `Lambda` body.
+fn prune_block(expression: &mut Expression, prefix: &str, only: &[String]) {
+    match expression {
+        Expression::Block { statements, .. } => {
+            statements.retain_mut(|statement| match statement {
+                Statement::Expression(expression) => prune_call(expression, prefix, only),
+                _ => true,
+            });
+        }
+        Expression::Lambda { body, .. } => prune_block(body, prefix, only),
+        _ => {}
+    }
+}
+
+/// Prune one statement of a `describe`/`it` body: `false` drops it — a case `only` excludes,
+/// or a suite carrying no selected case — and `true` keeps it, pruning a kept suite's own
+/// body in turn. Anything besides a `describe`/`it` call (the summary call that closes the
+/// synthesized entry) is kept untouched.
+fn prune_call(expression: &mut Expression, prefix: &str, only: &[String]) -> bool {
+    let Expression::Call {
+        function,
+        arguments,
+        ..
+    } = expression
+    else {
+        return true;
+    };
+    let Expression::Identifier { name, .. } = function.as_ref() else {
+        return true;
+    };
+    if name != TEST_BLOCK_MARKER && name != TEST_CASE_MARKER {
+        return true;
+    }
+    let [Expression::String { value, .. }, body] = arguments.as_mut_slice() else {
+        return true;
+    };
+    let path = match prefix.is_empty() {
+        true => value.clone(),
+        false => format!("{prefix}/{value}"),
+    };
+    if name == TEST_CASE_MARKER {
+        return covered(&path, only);
+    }
+    let keep = covered(&path, only) || nests_a_selection(&path, only);
+    if keep {
+        prune_block(body, &path, only);
+    }
+    keep
 }
 
 /// Every suite and case path in `program`, in source order — each `describe`/`it` call
