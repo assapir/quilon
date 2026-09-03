@@ -13,33 +13,30 @@ The infix `<-` operator builds an **inclusive** `[]Num`:
 4 <- 1          ~ [4, 3, 2, 1]   (descends when the left end is larger)
 5 <- 5          ~ [5]            (single point)
 ```
-It is pure **array sugar**: there is no distinct `Range` type. The result *is* a
-`[]Num`, so it composes with `.size`, indexing `[i]`, and the [array methods](../collections/arrays.md#array-methods):
+It is **array sugar**: the result *is* a `[]Num`, and it composes with `.size`, indexing
+`[i]`, and the [array methods](../collections/arrays.md#array-methods):
 ```quilon
 r = 2 <- 5      ~ [2, 3, 4, 5]
 n = r.size      ~ 4   (inclusive count = |hi - lo| + 1)
 first = r[0]    ~ 2
 r.each(x => io.print(x))   ~ a range iterates with `.each` like any array
 ```
-Both ends are full `Num` expressions — they may be dynamic, not just literals. The
-direction (ascending vs descending) is decided at runtime. (See `examples/ranges.qn`.)
+Both ends are full `Num` expressions, literal or computed. The direction (ascending or
+descending) is decided at runtime. (See `examples/ranges.qn`.)
 
-**Performance note — no semantic difference.** A range consumed **directly** by an
+**Allocation.** A range consumed **directly** by an
 [array method](../collections/arrays.md#array-methods) — the receiver is the range
-expression itself, as in `(1 <- n).each(...)` — is **not materialized**: the method's
-loop iterates the endpoints instead, so `.each` and `.reduce` allocate nothing and
-`.map`/`.filter` allocate only their result. That makes "do this N times" scale to any
-`n`: `(1 <- 100000000).each(...)` runs as a counter, not an 800 MB array. Any other
+expression itself, as in `(1 <- n).each(...)` — iterates its endpoints: `.each` and
+`.reduce` allocate nothing, and `.map`/`.filter` allocate their result. "Do this N times"
+scales to any `n`: `(1 <- 100000000).each(...)` runs as a counter. Every other
 consumption — indexing `[i]`, `.size`, binding the range to a name, passing it to a
-function — builds the `[]Num` exactly as described above. The results are identical
-either way; only the allocation differs. (See `examples/do_n_times.qn`.)
+function — builds the `[]Num`. The results are identical on both paths. (See
+`examples/do_n_times.qn`.)
 
-### Endpoints must be whole numbers
-A range counts from one end to the other, so each end must be a **whole number** — and one a
-`Num` holds exactly, so at most 2^53 in magnitude (the
-[exact-integer limit](../types/README.md#the-exact-integer-limit)). Anything else is an
-**error**, never a truncation — on every path, [materialized or
-not](../status/limitations.md):
+### Endpoints are whole numbers
+Each end is a **whole number** that a `Num` holds exactly — at most 2^53 in magnitude (the
+[exact-integer limit](../types/README.md#the-exact-integer-limit)). Any other endpoint is
+an **error** on every path, iterated or built:
 
 ```quilon ignore
 1.5 <- 3.9        ~ error: a range endpoint must be a whole number (got 1.5)
@@ -49,9 +46,9 @@ not](../status/limitations.md):
 ~        9007199254740992 in magnitude (got 100000000000000000)
 ```
 
-What the compiler can evaluate it rejects at compile time; anything computed is rejected
-when the range runs, framed at the range expression and exiting 1 — the same fail-loud
-contract a bad [`array[i]`](../collections/arrays.md) has.
+An endpoint the compiler evaluates is rejected at compile time; a computed one is rejected
+when the range runs, framed at the range expression and exiting 1 — the contract of a bad
+[`array[i]`](../collections/arrays.md).
 
 ## Spread in literals
 The **prefix** `<-` splices a source's contents into an array or record literal:
@@ -62,16 +59,15 @@ The **prefix** `<-` splices a source's contents into an array or record literal:
   copies `xs`.
 - **Record functional-update** `{<-p, x = 9}` builds a new record copying every field of
   `p`, then applying the overrides. Later entries override earlier ones (left-to-right),
-  and an entry naming a field not in `p` **adds** it. If `p` is a **named** record and the
-  result reproduces that type's fields exactly (only overriding existing fields, adding
-  nothing), the result keeps the **named type and its methods**; otherwise it is an
-  anonymous record.
+  and an entry naming a field absent from `p` **adds** it. When `p` is a **named** record
+  and the result reproduces that type's fields exactly (overriding existing fields only),
+  the result keeps the **named type and its methods**; otherwise it is an anonymous record.
 - **Naming the type you are building** — `Vec {<-p, x = 9}` — is the same update as a
-  constructor. The stated target constrains the source: it must be **already that type** or
-  an **anonymous record of exactly its shape** (same fields and types, nothing extra). A
-  different named type is never accepted, however similar — `Point` and `Other` stay
-  distinct. An anonymous record cannot fill a type declaring **methods**. Every declared
-  field must end up provided, by the spread or an override.
+  constructor. The stated target constrains the source: it is **already that type** or
+  an **anonymous record of exactly its shape** (the same fields and types). Two named
+  types stay distinct however similar — `Point` and `Other`. A type declaring **methods**
+  is filled from a value of that type. Every declared field ends up provided, by the
+  spread or an override.
 
 ```quilon
 xs = [1, 2, 3]
@@ -86,7 +82,7 @@ c = Vec { <-a, x = 5 }   ~ the same update, naming the type being built
 
 **Range vs. spread.** `<-` is both the infix inclusive range (`lo <- hi`) and the prefix
 spread. **Position** tells them apart: as the first token of a `[ ]` element or `{ }`
-field it is a spread; after a complete expression it is the range. So:
+field it is a spread; after a complete expression it is the range:
 
 - `[1 <- 4]` is a **one-element** array whose sole element is the range `[1,2,3,4]`
   (the `<-` follows the complete expression `1`).

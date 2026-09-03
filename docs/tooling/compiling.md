@@ -4,9 +4,7 @@ title: "Compiling & running"
 
 # Compiling & running
 
-Source files are **`.qn`**, and the compiler rejects a source named anything else. (Quilon
-used `.ql` until 0.9.1; it is CodeQL's extension, so GitHub attributed Quilon programs to
-CodeQL. Rename a `.ql` file to `.qn` — nothing else about it changes.)
+Source files are **`.qn`**; the compiler rejects a source with any other extension.
 
 ```bash
 quilon check   program.qn   # typecheck only — no code runs
@@ -24,8 +22,8 @@ quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeat
 
 ## Status output
 
-Every command reports its progress on **stderr**, apart from diagnostics and the program's
-own output; stdout carries only what a command is actually asked to produce (a
+Every command reports its status on **stderr**, beside diagnostics; stdout carries the
+program's own output and what a command is asked to produce (a
 [test run's report](../corelib/test/README.md), IR, a rendered explanation). On an
 **interactive terminal**, `check`, `build`, and `compile` show the stages (lexing, parsing,
 resolving, checking, generating, linking) as one live line that collapses, on success, into
@@ -35,32 +33,29 @@ a single closing line — the file, the elapsed time, and a quip:
 ✓ examples/hello_world.qn (9ms) — no keywords were harmed
 ```
 
-That live line is the ONLY place a stage ever appears: it draws over itself and clears
-before the closing line prints, so scrollback never carries one. Off a terminal — a pipe, a
-redirected log, or a CI run (detected from the terminal check alone, or from `CI` set in the
-environment) — stage progress is silent altogether, and stderr is the closing line alone.
-`quilon run` prints nothing of its own beyond the program's output; a failure is reported
-the same way everywhere.
+The live line draws over itself and clears before the closing line prints; the closing
+line is what scrollback keeps. Off a terminal — a pipe, a redirected log, or a CI run (a
+terminal check, or `CI` set in the environment) — stderr carries the closing line alone.
+`quilon run` writes the program's output; a failure is reported the same way everywhere.
 
-- `--quiet` (`-q`, before or after the subcommand) prints no status at all. Diagnostics
-  still print.
-- `NO_COLOR` set to a non-empty value, or `TERM=dumb`, keeps every line plain; so does a
-  redirected stderr.
-- `QUILON_QUIP_SEED=<n>` pins which quip each line carries, so a run is reproducible end
+- `--quiet` (`-q`, before or after the subcommand) silences status lines. Diagnostics
+  print.
+- `NO_COLOR` set to a non-empty value, `TERM=dumb`, or a redirected stderr keeps every line
+  plain.
+- `QUILON_QUIP_SEED=<n>` pins which quip each line carries, making a run reproducible end
   to end. `quilon test`'s closing line and the multi-suite tally carry one too.
 
-`quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
-any case failed. It runs a file's top-level `describe` blocks, which every other command
-erases — so tests may sit in the file they test, its `^` included, and still cost a release
-build nothing. It never shows per-stage compile progress for a suite, even on a terminal —
-a suite's own file heading and case tree, from
-[the test harness](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter), are
-the progress that matters; on an interactive terminal a single transient "compiling `file`"
-line stands in while a suite's front end runs, clearing before its case tree prints.
-`--reporter json` prints one JSON object per event on stdout and nothing else — no status
-line, no quip, no color, ever, even on a terminal — for a tool reading the stream.
+`quilon test` runs directly, like `quilon run`, and exits non-zero when any case failed. It
+runs a file's top-level `describe` blocks, which every other command erases — tests may sit
+in the file they test, its `^` included. A suite's progress is its file heading and case
+tree, from
+[the test harness](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter); on
+an interactive terminal a single transient "compiling `file`" line stands in while a suite's
+front end runs, clearing before its case tree prints. `--reporter json` prints one JSON
+object per event on stdout and stays silent otherwise — a plain stream for a tool, on a
+terminal too.
 
-`quilon build` produces a **self-contained** native executable — it runs on a machine with nothing else installed:
+`quilon build` produces a **self-contained** native executable that runs on a machine with the operating system alone:
 ```bash
 quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
@@ -76,7 +71,7 @@ llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
-Debug info is opt-in: without `--debug` the binary carries none. It covers line tables,
+Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. Each Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`,

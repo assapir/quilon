@@ -8,8 +8,8 @@ sidebar:
 # `core.test` — the test harness, assertions and checks
 
 **Assertions** (`assert` / `expect`) make a program verify itself as it runs — what every
-example in `examples/` does. They are **compiler-provided**: no import needed,
-`core.test` included. The **harness** that groups checks into named cases
+example in `examples/` does. They are **compiler-provided** and available in every program
+without an import. The **harness** that groups checks into named cases
 (`test.describe` / `test.it`) and the report it prints come from the module — reached
 through its `test` binding, like every [qualified import](../../modules/README.md) — along
 with `test.failAt`, [the run's recorded state, and the case lifecycle](#what-the-run-records).
@@ -26,16 +26,16 @@ assert(2 + 2, equals(4))
 expect(response, isOk())
 ```
 
-Two entry points, one vocabulary. They differ only in what a FAILURE does:
+Two entry points, one vocabulary. They differ in what a FAILURE does:
 
 | Function | On failure |
 |----------|-----------|
-| `assert(actual, matcher) -> $` | Report at the call site and **exit 101** (the Rust-panic convention). For examples and ordinary code. |
+| `assert(actual, matcher) -> $` | Report at the call site and **exit 101**. For examples and ordinary code. |
 | `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
 
-A holding assertion does nothing. A failure reports in the standard
-[error frame](../../tooling/errors.md) at **your** call site — the line the assertion
-is written on, including inside a helper rather than `^`:
+A holding assertion has no effect. A failure reports in the standard
+[error frame](../../tooling/errors.md) at the assertion's own call site — the line the
+assertion is written on, inside a helper as much as inside `^`:
 
 ```text
 error[QN500]: assertion failed: expected 41, got 42
@@ -49,9 +49,9 @@ error[QN500]: assertion failed: expected 41, got 42
 
 | Matcher | Holds when |
 |---------|-----------|
-| `equals(expected)` | `actual == expected`, through the [`==` member](../../functions/overloading.md) — so `Num`/`Text`/`Bool` and any user record or sum that declares one. |
-| `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (again through the element type's `==`). |
-| `not(matcher)` | The matcher it wraps does not hold. Composes around any of them. |
+| `equals(expected)` | `actual == expected`, through the [`==` member](../../functions/overloading.md): `Num`/`Text`/`Bool`, and any record or sum that declares one. |
+| `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (through the element type's `==`). |
+| `not(matcher)` | The wrapped matcher fails to hold. Composes around any matcher. |
 | `isOk()` / `isNotOk()` | A [`Result`](../../types/sum-types.md#result-is-a-normal-sum-type) is `Ok` / `NotOk`. |
 
 ```quilon
@@ -64,14 +64,12 @@ assert([10, 20].at(9), isNotOk())    ~ NotOk out of bounds
 
 Both values in a report are
 [rendered](../../types/text.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
-directly, records, sum types and arrays through their `` ` `` operator, and a `Text` is
-quoted, so a trailing space or an empty string is visible. A matcher applied to a type it
-cannot read — `equals` on a type with no `==` member, `contains` on a `Num`, `isOk` on a sum
-with no such variant — is a compile error naming what is missing.
+directly, records, sum types and arrays through their `` ` `` operator — and a `Text` is
+quoted, so a trailing space or an empty string is visible. Applying a matcher to a type it
+reads nothing from — `equals` on a type without a `==` member, `contains` on a `Num`, `isOk`
+on a sum without that variant — is a compile error naming the missing member.
 
-The matchers are compiler-provided, not written in `.qn`: a matcher holds a value of the type
-under test, which without generics would need one matcher type per type. You can still
-compose the provided ones; a genuinely new matcher kind waits for generics. Until then,
+The matchers are compiler-provided. They compose with one another, and
 [`failAt`](#building-a-check-of-your-own) builds a check of your own.
 
 ### Building a check of your own
@@ -91,7 +89,7 @@ assertEven = (n :: Num, site :: Site) -> $ => <
 ## Suites, groups and cases
 
 A **suite** is any `.qn` file with top-level `test.describe(…)` blocks — a file of nothing but
-tests, or the module or program they test ([below](#tests-beside-the-code-costing-a-release-build-nothing)),
+tests, or the module or program they test ([below](#tests-beside-the-code)),
 with whatever fixtures the cases need. `quilon test` synthesizes the entry point that runs
 each block in order; every other command leaves the blocks out of the program. A case checks
 itself with `expect`.
@@ -131,20 +129,18 @@ Text
 | `test.describe(name :: Text, body :: () -> $) -> $` | A group of cases. Nestable — the report indents by depth. `body` runs immediately. |
 | `test.it(name :: Text, body :: () -> $) -> $` | One case, reported once `body` has run, `✓` or `✗`. |
 
-The compiler recognizes a top-level `test.describe(…)` call **by name** — there is no attribute
-or `cfg`. The report takes one of two forms, chosen with
-[`--reporter`](#selecting-cases-and-choosing-the-reporter).
+The compiler recognizes a top-level `test.describe(…)` call **by name**. The report takes one
+of two forms, chosen with [`--reporter`](#selecting-cases-and-choosing-the-reporter).
 
-The **exit code** is 0 only when every case in every suite passed, so `quilon test` drops
-straight into CI. A suite that fails to compile — or to parse — counts as a failed suite.
+The **exit code** is 0 when every case in every suite passed. A suite that fails to compile
+— or to parse — counts as a failed suite.
 
 The case tree and the summary go to **stdout**; a failing assertion's
 [error frame](../../tooling/errors.md) goes to **stderr**, like every other compiler
-diagnostic, so each stream reads on its own when they are captured separately.
+diagnostic.
 
-Suites run one process each, so a failure in one does not stop the others. A suite that
-imports no harness at all is a compile error at its first `test.describe`, naming the import that
-fixes it — never a silent run with no output.
+Suites run one process each; a failing suite leaves the others running. A suite without
+`<< core.test` is a compile error at its first `test.describe`, naming the import.
 
 ## Selecting cases and choosing the reporter
 
@@ -196,11 +192,11 @@ stable.
 {"event":"summary","passed":1,"failed":1}
 ```
 
-## A failing case does not stop the run
+## A failing case and the run
 
-The first failing `expect` in a case **skips the rest of that case** — the assertions after it
-do not run, and their subjects are never evaluated — and the suite carries on with the next
-case. Every case is therefore reported, the way it went, and the summary is a real tally:
+The first failing `expect` in a case **ends that case**: the assertions after it, and their
+subjects, are left unevaluated, and the suite continues with the next case. Every case is
+reported the way it went, and the summary counts every case:
 
 ```
 arithmetic
@@ -211,51 +207,39 @@ arithmetic
 2 passed, 1 failed
 ```
 
-`assert` inside a case is still fatal, and ends the run where it failed. Use it for a
-precondition a case cannot meaningfully continue past.
+`assert` inside a case is fatal and ends the run where it failed; it suits a precondition
+the rest of the case depends on.
 
 ## `expect` is for cases
 
 `expect` marks the running **case** failed, and `test.it` is what closes a case and tallies
-it — so an `expect` belongs inside a `test.it`, inside a `test.describe`. Anywhere else it
-is a **compile error** pointing at `assert`:
+it. An `expect` belongs inside a `test.it`, inside a `test.describe`; anywhere else it is a
+**compile error** pointing at `assert`. The rule is lexical: a top-level helper a case calls
+uses `assert`.
 
-- outside a `test.describe` block there is no run to record with, the blocks being stripped
-  from `run`, `compile`, and `build`;
-- inside a `test.describe` but outside a `test.it` there is no case to mark, so the failure would be
-  printed and never counted.
-
-The rule is lexical, so a top-level helper a case calls uses `assert`, not `expect`.
-
-## Tests beside the code, costing a release build nothing
+## Tests beside the code
 
 Tests may sit in the same file as the code they test — beside its `>>` exports, beside its `^`,
-or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker; there is no `cfg`
-or attribute:
+or both, as in `examples/tests_alongside_code.qn`. `describe` is the marker:
 
 - `check`, `compile`, `build`, `run`: every top-level `test.describe(…)` is **erased** before the
-  checker sees it, so no test code of yours is checked or emitted. A file whose blocks are all
-  it has is no program at all — `compile`, `build`, and `run` pass over it in silence rather
-  than reporting a missing entry point.
-- `quilon test`: the blocks are **compiled and run**, under the entry point it synthesizes. A
-  file's own `^` is not the test run's, so it is ignored rather than called.
+  checker sees it. A file whose blocks are all it has is passed over by `compile`, `build`, and
+  `run` in silence.
+- `quilon test`: the blocks are **compiled and run**, under the entry point it synthesizes. The
+  file's own `^` is ignored.
 
-The `<< core.test` the blocks need takes no marker of its own. Erasing them leaves nothing in
-the file naming `describe` or `it`, and a function nothing reaches is not emitted, so the
-harness is shaken out of the build along with the blocks it served. The shaking is over
-EMISSION, not scope: an imported module is still resolved and type-checked, and the names it
-exports still occupy the importer's scope, so a program cannot define a `describe` of its own
-beside `<< core.test`.
+The `<< core.test` the blocks need takes no marker of its own. A function nothing reaches is
+left out of the build, so the harness is emitted with the blocks it serves and with nothing
+else. The shaking is over EMISSION: an imported module is resolved and type-checked, and the
+names it exports occupy the importer's scope, so a `describe` of the program's own beside
+`<< core.test` is a duplicate definition.
 
-Never type-checking them cuts both ways: **a type error inside a `describe` block is invisible
-to `check`, `compile`, `build`, and `run`** — they erase the block before the checker sees it
-and succeed. Only `quilon test` compiles the blocks. **Run `quilon test` in CI**, or broken
-test code passes unnoticed.
+`check`, `compile`, `build`, and `run` erase a `describe` block before the checker sees it, so
+a type error inside one is reported by `quilon test` alone.
 
 ## What the run records
 
-A case may ask about the run it is in, through the same functions the harness itself uses —
-never a runtime primitive:
+A case may ask about the run it is in, through the same functions the harness itself uses:
 
 | Function | Yields |
 |----------|--------|
@@ -269,7 +253,7 @@ and the case lifecycle `describe` and `it` drive:
 |----------|--------|
 | `test.enterSuite(name :: Text) -> Num` | Open the group `name` and report it; yields the depth it sits at. |
 | `test.leaveSuite() -> Num` | Close the group just entered; yields the depth that remains. |
-| `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Ask **before** closing it — closing clears the mark. |
+| `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Closing the case clears the mark. |
 | `test.finishCase(name :: Text) -> Num` | Close the case `name`, tallying it passed or failed and reporting it; yields the depth it sits at. |
 
 `test.reportSummary() -> Num` ends the run: the entry point `quilon test` synthesizes calls it
@@ -277,6 +261,3 @@ last, and its result is the run's status — 0 passes the suite, anything else f
 
 Each of these reports its event through the compiler, which renders it per the chosen
 [reporter](#selecting-cases-and-choosing-the-reporter).
-
-A suite that imports no harness at all is a compile error at its first `test.describe`, naming the
-import that fixes it — never a silent run with no output.
