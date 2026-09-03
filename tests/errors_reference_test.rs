@@ -28,11 +28,13 @@ const DIRECT_ONLY: &[Code] = &[Code::SourceNotReadable, Code::NotAQuilonSource];
 /// observe it.
 const CLI_ONLY: &[Code] = &[Code::NoEntryPoint];
 
-/// [`Code::NestingTooDeep`] alone: its example nests over the parser's 128-level guard, which
-/// still recurses one native stack frame per level before it trips — well inside a spawned
-/// process's default stack, but past a `cargo test` thread's smaller one. Run as the real
-/// `quilon` binary, the way `tests/parse_depth_test.rs` runs every one of its deep-nesting
-/// cases, instead of in-process like the rest of this file's front-end examples.
+/// [`Code::NestingTooDeep`] alone: the reference keeps its example elided
+/// (`((((((… 200 levels …))))))`) for a human to read, so this code's own real 200-level
+/// source is generated in Rust instead of read from the fence (see
+/// `qn101_nesting_too_deep_example_raises_its_own_code`) — and run as the real `quilon`
+/// binary, the way `tests/parse_depth_test.rs` runs every one of its deep-nesting cases,
+/// since the recursive-descent parser still spends one native stack frame per level before
+/// its guard trips, past a `cargo test` thread's smaller default stack.
 const SUBPROCESS_ONLY: &[Code] = &[Code::NestingTooDeep];
 
 /// Codes with no path a real program reaches today, each with why — checked against the
@@ -169,9 +171,19 @@ fn write_siblings(dir: &Path, siblings: &[(String, String)]) {
 /// Run `source` through the real front end (written to `<dir>/root.qn` — on disk, since a
 /// multi-file example's sibling may import it back, as an import cycle's does) and return
 /// the code it failed with, if any.
+///
+/// A real `.qn` file ends with a newline; the markdown fence a doc example comes from does
+/// not necessarily preserve one on its last line (QN003's example is exactly a string left
+/// open at that line — the lexer's own rule is "reaches a newline before the closing quote",
+/// not raw end-of-file, see `src/lexer/token.rs`), so one is added here rather than asking
+/// the doc to carry a trailing blank line for it.
 fn front_end_code(dir: &Path, source: &str) -> Option<Code> {
     let root = dir.join("root.qn");
-    std::fs::write(&root, source).expect("write root example file");
+    let mut source = source.to_string();
+    if !source.ends_with('\n') {
+        source.push('\n');
+    }
+    std::fs::write(&root, &source).expect("write root example file");
     driver::front_end(&root).err().map(|e| e.diagnostic.code)
 }
 
@@ -334,14 +346,15 @@ fn qn401_native_build_failure_raises_its_own_code() {
     );
 }
 
-/// QN101: nested past the parser's depth guard, run as the real binary (see
-/// [`SUBPROCESS_ONLY`]) rather than in-process, where a `cargo test` thread's smaller
-/// default stack overflows before the guard trips.
+/// QN101: nested past the parser's depth guard. The reference's own example is elided for
+/// a human to read (see [`SUBPROCESS_ONLY`]), so the real nested source is built here —
+/// 200 levels, the same margin `tests/parse_depth_test.rs` uses over the 128-level guard —
+/// and run as the real binary rather than in-process.
 #[test]
 fn qn101_nesting_too_deep_example_raises_its_own_code() {
-    let example =
-        example_for(Code::NestingTooDeep).expect("QN101's reference section has an example");
-    let program = write_program("QN101", &example.source);
+    let n = 200;
+    let source = format!("^ = () -> Num => < {}1{} >\n", "(".repeat(n), ")".repeat(n));
+    let program = write_program("QN101", &source);
     let output = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["check", program.to_str().unwrap()])
         .output()

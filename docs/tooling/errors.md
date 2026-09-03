@@ -181,7 +181,6 @@ A `"` opens a string that reaches the end of its line with no closing `"`.
 
 ```quilon ignore
 greeting = "hello
-
 ```
 
 Close the string on the same line: `greeting = "hello"`.
@@ -219,7 +218,7 @@ An expression nests more than 128 levels of parentheses, literals, blocks, eleme
 constructor patterns, or prefix operators.
 
 ```quilon ignore
-^ = () -> Num => < ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) >
+^ = () -> Num => < ((((((… 200 levels …)))))) >
 ```
 
 Split the expression into named bindings.
