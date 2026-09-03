@@ -297,7 +297,7 @@ Declare it with `=`: `+ = (other :: Point) -> Point => < … >`.
 ### QN109 — lowercase sum-type variant
 
 A variant of a sum type starts with a lowercase letter. (The first two variants decide
-that a `Name = A / B / …` line is a sum-type declaration rather than division — see
+that a `Name = A / B / …` line is a sum-type declaration — see
 [the disambiguation rule](../types/sum-types.md) — so this fires from the third variant on;
 a lowercase first or second variant instead reads as dividing undefined names, an
 [undefined name](#qn300--undefined-name) error.)
@@ -439,8 +439,7 @@ A file has top-level `test.describe` blocks and `quilon test` finds the harness'
 function out of scope. Recognizing a call as a test block already requires `<< core.test`
 above it — an unimported `test.describe` reads as an ordinary qualified reference and is
 [QN106](#qn106--qualified-name-through-a-missing-import) instead — so this is the
-defensive backstop for `core.test` itself failing to define its summary function, not a
-mistake a program with the import in place can make.
+backstop for `core.test` itself failing to define its summary function.
 
 ```text
 error[QN208]: no test harness in scope: `core.test.reportSummary` is undefined

@@ -6,21 +6,19 @@ title: "Closures and tail recursion"
 
 ## Tail self-recursion runs in constant stack (guaranteed)
 
-A self-call is in **tail position** when it is the function's whole result, with nothing
-left to do to it. When a function returns such a call, the compiler **guarantees** the
-call does not grow the stack. So a tail-recursive function runs in **constant stack** and
-will not overflow, however deep the recursion:
+A self-call is in **tail position** when it is the function's whole result. When a
+function returns such a call, the compiler **guarantees** constant stack: a tail-recursive
+function runs in **constant stack** at any depth:
 ```quilon
 count = (n :: Num, acc :: Num) -> Num => <
   n == 0 ? acc : count(n - 1, acc + n)   ~ the self-call IS the `:` branch → tail position
 >
 ```
 Tail position flows through the constructs that yield a value directly: `?`/`|` match
-arms, `if`/ternary branches, and the tail of a `< >` block. A self-call
-**not** in tail position stays ordinary recursion (e.g. `n * fact(n - 1)`, whose result
-is multiplied first). So does a tail call to a *different* function — general/mutual tail
-calls are a later follow-up. There is no surface syntax for it: nothing is written to ask
-for the guarantee.
+arms, ternary branches, and the tail of a `< >` block. A self-call outside tail position
+is ordinary recursion (e.g. `n * fact(n - 1)`, whose result is multiplied first), and so
+is a tail call to a *different* function. The guarantee applies as written, with no
+marker.
 (See `examples/tail_recursion.qn`, which recurses 1,000,000 deep.)
 
 ## Closures — capture by `=` (value) vs `:=` (reference)
@@ -96,6 +94,7 @@ its parameter types from it (`(x) => x + n` above writes no annotation — the r
 returned closure is an ordinary function value: bind it, call it, pass it on to another
 function, or return it from another closure.
 
-What is handed back must be a closure value — a lambda literal, a named closure binding,
-or a function-typed parameter. A bare **top-level function name** is not a value yet (see
-[Known limitations](../status/limitations.md)). (See `examples/closures.qn`.)
+What is handed back is a closure value — a lambda literal, a named closure binding,
+or a function-typed parameter. A **top-level function** is handed back through a lambda
+that calls it (see [Known limitations](../status/limitations.md)). (See
+`examples/closures.qn`.)

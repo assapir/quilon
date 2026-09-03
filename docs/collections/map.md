@@ -9,8 +9,7 @@ sidebar:
 A built-in, no-import type. See the [Language reference](README.md#maps) and `examples/maps.qn`.
 
 A `Map` is written `[|K => V|]` (`=>` reads "maps to"). `Map` is a **built-in parametric
-collection** — like `[]T`, not a user-defined generic — written with a **pipe fence**
-`[| … |]`.
+collection**, like `[]T`, written with a **pipe fence** `[| … |]`.
 
 ```quilon
 ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41|]   ~ a Map
@@ -19,7 +18,7 @@ empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 
 **Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or a
 **user type that opts in** (see below). A map is **immutable / persistent**: every mutator
-(`set`) returns a **new** map and never touches the receiver.
+(`set`) returns a **new** map, leaving the receiver as it was.
 
 ## User-defined key types
 
@@ -44,9 +43,8 @@ Point = {
 grid :: [|Point => Text|] = [|Point { x = 0, y = 0 } => "origin"|]
 ```
 
-**Iteration order is UNSPECIFIED** — conceptually a map is unordered, so never rely on the
-order of `keys`/`values`/`each`. (It is *not* insertion order. It may look stable
-run-to-run; that is not a contract.)
+**Iteration order is UNSPECIFIED** — a map is unordered, and the order of
+`keys`/`values`/`each` is an implementation detail that may change between runs.
 
 **Access is via `.get`, which returns a `Result`** — `Ok(value)` when the key is present,
 `NotOk` when it is absent — so a caller must handle the missing case. There is **no bracket

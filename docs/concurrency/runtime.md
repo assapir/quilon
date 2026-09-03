@@ -51,7 +51,7 @@ sequenceDiagram
 
 ## Walkthrough
 
-- **Parking is a userspace context switch, not an OS wait.** When `inner.read`
+- **Parking is a userspace context switch.** When `inner.read`
   returns `WouldBlock`, `io_loop` arms read interest with `reregister_readiness`
   (a cheap, non-blocking `epoll_ctl`) and then calls `park_on_readiness`, which
   suspends the fiber back to the scheduler via a `corosensei` stack switch. The
@@ -70,4 +70,4 @@ sequenceDiagram
   collection `push_fiber_roots` pushes every *parked* fiber's range with
   `GC_push_all_eager`, while the *running* fiber is covered by
   `GC_set_stackbottom` — so a collection triggered by another fiber's allocation
-  never frees a socket-parked fiber's live objects.
+  keeps a socket-parked fiber's live objects.

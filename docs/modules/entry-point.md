@@ -26,9 +26,9 @@ startup:
 
 `quilon run <file> [args...]` and a native build agree on `args`. Under `run`, the
 program sees `argv = [<file>, <args...>]`: the `quilon`/`run` CLI prefix is stripped and
-the `.qn` path becomes `argv[0]`. So `quilon run f.qn a b c` gives the same `args.size`
-and trailing arguments as a native `./f a b c` — `argv[0]` is the `.qn` path rather than
-the compiled binary's path, but everything the program indexes past it matches. An
+the `.qn` path becomes `argv[0]`. `quilon run f.qn a b c` gives the same `args.size`
+and trailing arguments as a native `./f a b c`; `argv[0]` is the `.qn` path under `run`
+and the binary's path in a native run. An
 argument or environment entry containing a NUL byte is refused by `run`, exactly as the
 operating system refuses to start a native binary with one. Any other `^` signature (e.g.
 a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported

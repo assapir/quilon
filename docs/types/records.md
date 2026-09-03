@@ -40,8 +40,8 @@ assignments is a record literal. A block containing only method definitions
 (`name = => …`, `name = (params) -> R => …`) with no `::` field is a **compile error**:
 add a `::` field to declare a type, or use plain values to write a record literal.
 
-A method declared with `:=` instead of `=` is a **setter** — it may mutate its
-receiver — and calling one requires a mutable (`:=`) receiver. Records have reference
+A method declared with `:=` is a **setter** — it may mutate its receiver — and calling one
+requires a mutable (`:=`) receiver. Records have reference
 semantics, and the binding operator governs the value itself: an `=`-bound record is
 immutable through every alias
 (see [Mutation](../mutation.md), including [deep
@@ -65,4 +65,4 @@ bump(c, 5)     ~ error: no function `bump` in scope
 double(5)      ~ 10
 ```
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
-`Text`'s `split`, and `split("a,b", ",")` reaches nothing.
+`Text`'s `split`, and `split("a,b", ",")` is an undefined name.
