@@ -14,7 +14,12 @@ All notable changes to Quilon are documented here.
   further to pass at launch. Lays the CLI groundwork for the VS Code extension's upcoming
   per-case Run/Debug CodeLens (#271). See `docs/tooling/compiling.md` and
   `docs/corelib/test/README.md`.
-
+- **The language server finds references and renames.** `textDocument/references` and
+  `textDocument/rename` join go-to-definition, both document-scoped: a parameter, a
+  block-local, a pattern binding, or a top-level function or type (every member of an
+  overload set) resolves to its declaration and every use. Rename requires a single bare
+  identifier as the new name and refuses a target declared in another file, pointing there
+  instead. See `docs/tooling/language-server.md`.
 - **Static methods: a method whose body never reads `it` may be called on the bare TYPE
   NAME** (`Point.origin()`), not just on a value — the natural spelling for a constructor
   (`Request.get(url)`). This settles #259's design call: a method called on a type name
@@ -25,6 +30,10 @@ All notable changes to Quilon are documented here.
   an ordinary value, exactly as before. See `docs/types/records.md#static-methods`.
 
 ### Fixed
+
+- **A parameter's declaration span covers its name, not just its type annotation.** Go to
+  definition on a parameter used to land on its `:: Type` annotation; it now lands on the
+  parameter itself.
 
 - **A method parameter annotated with a user record or sum type now works end to end.**
   The checker compared the call site's UNRESOLVED annotation (`Named { fields: [] }`, the
