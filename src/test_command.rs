@@ -60,12 +60,7 @@ pub fn run(root: &Path, options: &Options) -> usize {
     let status = status_for(options);
     // A path that is not there is a failure, not an empty run: a mistyped path in a CI
     // invocation must not report success.
-    if !root.exists() {
-        report(
-            Code::SourceNotReadable,
-            format!("no such file or directory: {}", root.display()),
-            &status,
-        );
+    if !require_existing(root, &status) {
         return 1;
     }
     if !options.only.is_empty() && root.is_dir() {
@@ -119,6 +114,48 @@ pub fn run(root: &Path, options: &Options) -> usize {
 /// Print a diagnostic with no source location, the way every report is printed.
 fn report(code: Code, message: String, status: &Status) {
     status.report(&Diagnostic::new(code, message), &SourceMap::default());
+}
+
+/// Whether `root` exists — reporting "no such file or directory" and returning `false` if
+/// not. A mistyped path must fail rather than silently finding nothing.
+fn require_existing(root: &Path, status: &Status) -> bool {
+    if root.exists() {
+        return true;
+    }
+    report(
+        Code::SourceNotReadable,
+        format!("no such file or directory: {}", root.display()),
+        status,
+    );
+    false
+}
+
+/// Whether `only` names a path `program` does not have. When it does, the mismatch and the
+/// suite's actual paths are reported on stderr. An empty `only` selects everything and is
+/// never rejected.
+fn reject_unknown_selection(
+    program: &ast::Program,
+    only: &[String],
+    suite: &Path,
+    status: &Status,
+) -> bool {
+    if only.is_empty() {
+        return false;
+    }
+    let available = available_paths(program);
+    let Some(unknown) = only
+        .iter()
+        .find(|selected| !available.iter().any(|path| selects(selected, path)))
+    else {
+        return false;
+    };
+    status.clear();
+    eprintln!(
+        "no suite or case `{unknown}` in {}; its paths are:\n  {}",
+        suite.display(),
+        available.join("\n  ")
+    );
+    true
 }
 
 /// Run one suite by re-invoking this binary on it, its output going straight to our own
@@ -194,21 +231,8 @@ fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
         }
     };
 
-    if !options.only.is_empty() {
-        let available = available_paths(&checked.program);
-        let unknown = options
-            .only
-            .iter()
-            .find(|selected| !available.iter().any(|path| selects(selected, path)));
-        if let Some(unknown) = unknown {
-            status.clear();
-            eprintln!(
-                "no suite or case `{unknown}` in {}; its paths are:\n  {}",
-                suite.display(),
-                available.join("\n  ")
-            );
-            return false;
-        }
+    if reject_unknown_selection(&checked.program, &options.only, suite, status) {
+        return false;
     }
     set_reporter(options.reporter);
     set_selection(options.only.clone());
@@ -258,12 +282,7 @@ fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
 /// binary carries no code for what was excluded and needs no selection at run time to
 /// honour it, so running it plain reproduces the filtered run.
 pub fn build_binary(root: &Path, only: &[String], out: &Path, status: &Status) -> bool {
-    if !root.exists() {
-        report(
-            Code::SourceNotReadable,
-            format!("no such file or directory: {}", root.display()),
-            status,
-        );
+    if !require_existing(root, status) {
         return false;
     }
     if root.is_dir() {
@@ -297,20 +316,10 @@ pub fn build_binary(root: &Path, only: &[String], out: &Path, status: &Status) -
         }
     };
 
+    if reject_unknown_selection(&checked.program, only, root, status) {
+        return false;
+    }
     if !only.is_empty() {
-        let available = available_paths(&checked.program);
-        let unknown = only
-            .iter()
-            .find(|selected| !available.iter().any(|path| selects(selected, path)));
-        if let Some(unknown) = unknown {
-            status.clear();
-            eprintln!(
-                "no suite or case `{unknown}` in {}; its paths are:\n  {}",
-                root.display(),
-                available.join("\n  ")
-            );
-            return false;
-        }
         prune_unselected(&mut checked.program, only);
     }
 
