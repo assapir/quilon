@@ -4,7 +4,7 @@ title: "Quilon Language Reference"
 
 # Quilon Language Reference
 
-**Version:** 0.9.3 — "Hegemon" (stable basics — the core is solid and verified end-to-end, but the language is **not** yet feature-complete; see [Known limitations](status/limitations.md)).
+**Version:** 0.9.3 — "Hegemon" (stable basics — the core is verified end-to-end; the deferred parts are listed under [Known limitations](status/limitations.md)).
 
 Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example in this reference has a passing end-to-end test. Each `examples/*.qn` program is **self-asserting**: it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
 
@@ -12,15 +12,15 @@ Quilon is a statically-typed, **symbol-based** language (no control-flow keyword
 
 Quilon's identity, and the rules that guide its design:
 
-- **No keywords.** Every construct is punctuation, not words — *nothing was removed from the language; the words were.* Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. Not one word is reserved: `if`, `while`, `for` and the rest are ordinary identifiers you may bind.
-- **Symbols mirror notation that already exists.** A symbol reuses a notation the world already has rather than inventing one: `/` separates sum-type alternatives the way you already write "red / green / blue".
-- **The playful choice wins.** On a genuine toss-up, the more delightful option is picked — `^` for the entry point, `$` for Unit. Syntax is allowed a sense of humor.
-- **Deliberate simplicity.** The smallest system that works: no generics (ad-hoc overloading is the only polymorphism), no `while`, no interfaces, a single `Num` type. Features are omitted on purpose.
-- **Fail loud, never silent.** Invalid inputs and meaningless operations must *fail* — never silently no-op, clamp, or return a magic sentinel. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](tooling/errors.md). (Hence `Text.indexOf → Ok(Num)/NotOk` rather than a `-1` sentinel, and `Text.replace`'s count/empty-argument checks failing rather than clamping.)
-- **No magic.** No hidden coercions, no implicit dispatch. Overloads are exact-typed; operators mean what they say.
-- **Immutable by default.** `=` binds immutably, `:=` binds mutably — for variables, for record bindings, and for methods: a method declared `name := …` may mutate its receiver, and one declared `name = …` is checked to make sure it does not.
-- **Errors are values.** Fallible operations return `Ok` / `NotOk` (a normal sum type) — no exceptions, no sentinels.
-- **Library APIs hide internals.** A library never makes the caller do its own conversion/desugaring (`print(x)`, never `print(show(x))`).
+- **No keywords.** Every construct is punctuation. Branching is `?` / `|`, the entry point is `^`, import/export are `<<` / `>>`, mutability is `:=`, sum-type alternatives are `/`. Every word is an ordinary identifier: `if`, `while`, `for` and the rest may be bound.
+- **Symbols mirror notation that already exists.** A symbol reuses a notation the world already has: `/` separates sum-type alternatives the way "red / green / blue" is written.
+- **The playful choice wins.** On a toss-up, the more delightful option is picked — `^` for the entry point, `$` for Unit.
+- **Deliberate simplicity.** The smallest system that works: ad-hoc overloading is the polymorphism, iteration is array methods and recursion, and `Num` is the one number type.
+- **Fail loud.** An invalid input or a meaningless operation *fails*. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](tooling/errors.md). `Text.indexOf` yields `Ok(Num)`/`NotOk`, and `Text.replace`'s count and empty-argument checks fail.
+- **No magic.** Overloads are exact-typed and operators mean what they say; a value converts through an explicit operation.
+- **Immutable by default.** `=` binds immutably, `:=` binds mutably — for variables, for record bindings, and for methods: a method declared `name := …` may mutate its receiver, and one declared `name = …` is verified non-mutating.
+- **Errors are values.** A fallible operation returns `Ok` / `NotOk`, a normal sum type.
+- **Library APIs hide internals.** A library performs its own conversion and desugaring (`print(x)`).
 
 ## Symbols
 
@@ -48,12 +48,12 @@ Quilon's identity, and the rules that guide its design:
 | `` ` `` (in a string) | [Interpolation](types/text.md#string-interpolation-and-the-render-operator-) hole · `` `` `` = one literal backtick | `` "hi `user.name`" `` |
 | `` ` `` (as a name) | The overloadable **render** operator — a type's `Text` rendering | `` ` = () -> Text => "..." `` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
-| `@` (name prefix) | A [leaf IO primitive](concurrency/README.md) (corelib-only; user code calls, never declares) | `@sleep(1)` |
+| `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and called from user code | `@sleep(1)` |
 | `~` | Comment (to end of line) | `~ a note` |
 
-There are **no keywords**: `if`/`return` etc. are all expressed with symbols, and there
-are no loop constructs at all — iteration is via [array methods and recursion](expressions/iteration.md).
-No word is reserved either, so `if = 5` or a function named `while` is perfectly legal.
+There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is
+[array methods and recursion](expressions/iteration.md). Every word is free to bind:
+`if = 5` and a function named `while` are legal.
 
 ## Contents
 
@@ -66,7 +66,7 @@ No word is reserved either, so `if = 5` or a function named `while` is perfectly
 - [Corelib](corelib/README.md): the standard library, module by module
 - [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md)
 - [Memory](memory.md)
-- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md)
+- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md) · [language server](tooling/language-server.md)
 - Status: [feature matrix](status/feature-matrix.md) · [known limitations](status/limitations.md) · [compiler architecture](status/architecture.md) · [ABI and calling convention](status/abi.md)
 
 ## Writing style

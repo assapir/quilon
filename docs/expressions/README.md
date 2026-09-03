@@ -6,36 +6,34 @@ sidebar:
 
 # Expressions
 
-- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](../functions/overloading.md): `Num + Num` adds, `Text + Text` concatenates, and on arrays it concatenates / appends / prepends (`[]T + []T`, `[]T + T`, `T + []T`, all yielding a new `[]T` — see [Array concatenation](../collections/arrays.md#array-concatenation--)). `%` is the f64 remainder and works on fractional operands too (`7.5 % 2` → `1.5`); the result takes the **dividend's** sign (`-7 % 3` → `-1`, `7 % -3` → `1`), like C `fmod` / Rust `%`.
-- **Comparison:** `== != < <= > >=`; all return `Bool`. Equality (`==`/`!=`) is over `Num`, `Text` and `Bool`; ordering (`< <= > >=`) is over `Num` and (lexicographically) `Text`. Each is a [user-overloadable operator](../functions/overloading.md#operator-overloading), and comparing two different types is a no-matching-overload error — there is no coercion.
+- **Arithmetic:** `+ - * / %` (and `-x`). `+` is an [overload set](../functions/overloading.md): `Num + Num` adds, `Text + Text` concatenates, and on arrays it concatenates / appends / prepends (`[]T + []T`, `[]T + T`, `T + []T`, all yielding a new `[]T` — see [Array concatenation](../collections/arrays.md#array-concatenation--)). `%` is the f64 remainder, defined on fractional operands too (`7.5 % 2` → `1.5`); the result takes the **dividend's** sign (`-7 % 3` → `-1`, `7 % -3` → `1`).
+- **Comparison:** `== != < <= > >=`; all return `Bool`. Equality (`==`/`!=`) is over `Num`, `Text` and `Bool`; ordering (`< <= > >=`) is over `Num` and (lexicographically) `Text`. Each is a [user-overloadable operator](../functions/overloading.md#operator-overloading). Comparing two different types is a no-matching-overload error.
 - **Logical:** `&& || !` (short-circuit).
 
-> **`<` and `>` vs. `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
-> after a complete operand is always less-than (a block can't start mid-expression). A `>`
-> **closes a block by default**; it is **greater-than only when an operand follows it on
-> the same line** — an identifier, a literal, `(`, `[`, `{`, or a prefix `-`/`!`. So `a > b`,
-> `f(x > y)`, `a > -b` and `"b" > "a"` are comparisons, while a `>` before a `)`, `]`, `}`,
-> `,`, a `~` comment, or the end of the line closes its block — which is what lets a
-> block-bodied lambda sit inside a call on one line:
+> **`<` and `>` and `< >` blocks.** `<` and `>` double as the block delimiters. A `<`
+> after a complete operand is less-than. A `>` **closes a block by default**; it is
+> **greater-than when an operand follows it on the same line** — an identifier, a literal,
+> `(`, `[`, `{`, or a prefix `-`/`!`. `a > b`, `f(x > y)`, `a > -b` and `"b" > "a"` are
+> comparisons; a `>` before a `)`, `]`, `}`, `,`, a `~` comment, or the end of the line
+> closes its block. A block-bodied lambda sits inside a call on one line:
 > ```quilon ignore
 > xs.each(x => <
 >   total := total + x
 > >)
 > ```
-> Two rules follow: don't end a line with a comparison `>` (the right operand must be on
-> that line), and separate two adjacent closers with a space — `> >`, since `>>` is the
-> export marker. `<=`/`>=`/`>>` are distinct tokens and unaffected.
+> The right operand of a comparison `>` is on the same line as the `>`. Two adjacent
+> closers are separated by a space — `> >` — `>>` being the export marker. `<=`/`>=`/`>>`
+> are distinct tokens.
 
-> **Statement boundaries — line-first `(` / `[` / `{`.** Quilon has no statement separator.
-> The grammar is newline-insensitive but for two rules: the `>` rule above, and this
-> one — a `(`, `[`, or `{` that is the **first token on its line** begins a new statement
-> rather than continuing the previous expression as a call, index, or constructor.
-> A call, index, or constructor must open on the **same line** as the expression it applies
-> to; once opened it may span lines. A continuation line may still start with `.` or
-> an operator.
+> **Statement boundaries — line-first `(` / `[` / `{`.** A newline ends a statement. The
+> grammar reads across newlines except for two rules: the `>` rule above, and this one —
+> a `(`, `[`, or `{` that is the **first token on its line** begins a new statement.
+> A call, index, or constructor opens on the **same line** as the expression it applies
+> to; once opened it may span lines. A continuation line may start with `.` or an
+> operator.
 > ```quilon ignore
 > ~ (statements inside a `< >` block / `^` body)
-> ~ OK — these all continue the expression:
+> ~ each of these continues the expression:
 > sum = add(40,
 >   2)                                  ~ `(` opened on add's line; args may span lines
 > total = nums.map(n => n * 2)
@@ -43,30 +41,27 @@ sidebar:
 > p = Point {
 >   x = 1, y = 2 }                      ~ `{` opened on Point's line; body may span lines
 >
-> ~ OK — a line-first `(`, `[`, or `{` is a NEW statement:
+> ~ a line-first `(`, `[`, or `{` is a NEW statement:
 > x = f()
-> (1 + 2)                               ~ not the call `f()(1 + 2)`
+> (1 + 2)                               ~ a statement of its own, separate from `f()`
 > b = a
-> [3, 4].each(n => io.print(n))            ~ not the index `a[3, 4]`
+> [3, 4].each(n => io.print(n))            ~ a statement of its own, separate from `a`
 > e = origin
-> { x = 9, y = 9 }                      ~ not the constructor `origin { x = 9, y = 9 }`
+> { x = 9, y = 9 }                      ~ a statement of its own, separate from `origin`
 >
-> ~ DON'T — a call may not open its argument list on the next line:
+> ~ a call opens its argument list on the callee's line:
 > x = f
-> (10)                                  ~ NOT the call `f(10)`: `(10)` is a new statement
+> (10)                                  ~ `(10)` is a new statement; `f` is bound as a value
 > ```
 > (See `examples/statements.qn`.)
 - **Ternary:** `cond ? then : else`.
 - **Blocks:** `< stmt… last >` evaluate to their last statement — an expression's own
-  type, or `$` (Unit) when the last statement is a declaration (`=`/`:=`) rather than an
-  expression, since the effect ran but there's nothing to hand back. A block goes in
-  **body** position — a function's, a lambda's, or a method's — not in operand position,
-  so a block is never the left or right side of an operator. A function's and a method's
-  body is **always** a block, even for a single expression
-  (`double = (x :: Num) => < x * 2 >`); only a **lambda** may write a bare expression
-  instead, so a callback still fits on one line (`xs.map(x => x * 2)`). An **empty**
-  block — no statements at all — is a compile error: there is nothing that ran and nothing
-  to evaluate to.
+  type, or `$` (Unit) when the last statement is a declaration (`=`/`:=`). A block goes in
+  **body** position — a function's, a lambda's, or a method's; operand positions take
+  expressions. A function's and a method's body is **always** a block, for a single
+  expression too (`double = (x :: Num) => < x * 2 >`); a **lambda** may write a bare
+  expression (`xs.map(x => x * 2)`). An **empty** block — no statements at all — is a
+  compile error.
 ```quilon
 total = () -> Num => <
   x = 10
@@ -93,7 +88,6 @@ non-associative (`1 <- 2 <- 3` is a parse error).
 | | `-x` `!x` (prefix) |
 | more priority | `.field` · `.method(…)` · `f(…)` · `xs[i]` |
 
-So `1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is
-`(1 < 2) == true`. Parenthesize anything else. `>` appears in the table in its operator
-reading; whether a given `>` gets that reading at all is settled first, in the lexer — see
-the [`>` rule](#expressions).
+`1 <- 2 + 2` is `1 <- 4`, and `1 < 2 == true` is `(1 < 2) == true`. Parentheses settle
+every other grouping. `>` appears in the table in its operator reading; the lexer settles
+first whether a given `>` takes that reading — see the [`>` rule](#expressions).

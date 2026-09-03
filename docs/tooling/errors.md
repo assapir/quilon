@@ -40,10 +40,10 @@ span marks every line it covers.
 
 Runtime failures use the same frame at the expression responsible: a failing
 [assertion](../corelib/test/README.md) at its own call site, a fail-loud check (a bad
-`array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-must-be-whole-numbers)
+`array[i]`, a computed [range endpoint](../expressions/ranges-and-spread.md#endpoints-are-whole-numbers)
 that is a fraction) at the expression that broke the contract. A [failed or unrepresentable
 allocation](../memory.md) has no expression to point at and prints its first line alone. A
-runtime report carries the source line it names, so that line's text is embedded in the
+runtime report carries the source line it names; that line's text is embedded in the
 built binary. `core.test`'s `failAt` — which the `Text.replace`/`repeat` contract checks
 report through — prints the frame `core.test` composes in Quilon: a `path:line:col:`
 position line, the message, and a caret run.
@@ -297,7 +297,7 @@ Declare it with `=`: `+ = (other :: Point) -> Point => < … >`.
 ### QN109 — lowercase sum-type variant
 
 A variant of a sum type starts with a lowercase letter. (The first two variants decide
-that a `Name = A / B / …` line is a sum-type declaration rather than division — see
+that a `Name = A / B / …` line is a sum-type declaration — see
 [the disambiguation rule](../types/sum-types.md) — so this fires from the third variant on;
 a lowercase first or second variant instead reads as dividing undefined names, an
 [undefined name](#qn300--undefined-name) error.)
@@ -439,8 +439,7 @@ A file has top-level `test.describe` blocks and `quilon test` finds the harness'
 function out of scope. Recognizing a call as a test block already requires `<< core.test`
 above it — an unimported `test.describe` reads as an ordinary qualified reference and is
 [QN106](#qn106--qualified-name-through-a-missing-import) instead — so this is the
-defensive backstop for `core.test` itself failing to define its summary function, not a
-mistake a program with the import in place can make.
+backstop for `core.test` itself failing to define its summary function.
 
 ```text
 error[QN208]: no test harness in scope: `core.test.reportSummary` is undefined
@@ -587,8 +586,8 @@ text, interpolate: `` "`n`x" ``.
 More than one member of an overload set matches a call's argument types. Two members with
 the very same parameter types are rejected up front, as a
 [duplicate definition](#qn310--duplicate-definition) — this is the narrower case a call site
-still finds ambiguous: a member taking a trailing `site :: Site` the compiler fills in
-automatically, alongside one that does not, both accept a call that omits it.
+finds ambiguous: a member taking a trailing `site :: Site` the compiler fills in
+automatically, alongside one without it, both accept a call that omits it.
 
 ```quilon ignore
 f = (n :: Num) -> Num => < n >
@@ -679,8 +678,8 @@ Move the `Site` parameter last: `check = (n :: Num, site :: Site) -> $ => < $ >`
 
 A call reaches an overload set — two or more same-named definitions — every member of
 which is defined below the call. A name with only ONE definition below the call is instead
-[undefined](#qn300--undefined-name): names resolve top to bottom, and there is no set yet
-to name specially.
+[undefined](#qn300--undefined-name): names resolve top to bottom, and a set forms at its
+second member.
 
 ```quilon ignore
 h = () -> Text => < g(1) >
@@ -748,7 +747,7 @@ Name one of the type's variants; the message lists them.
 ### QN326 — constructor pattern on a non-sum value
 
 A constructor pattern matches a value of a type with no variants, or one whose type is
-still open.
+open at the match.
 
 ```quilon ignore
 ^ = () -> Num => < 5 ? | Ok(x) => x | _ => 0 >
@@ -847,7 +846,7 @@ Pass the matcher's arguments: `equals(1)`.
 
 ### QN335 — matcher on a type outside its reach
 
-A matcher meets a type it has no way to inspect: `equals` on a type with no `==`,
+A matcher meets a type outside its reach: `equals` on a type without a `==` member,
 `contains` on anything but `Text` or an array, `isOk`/`isNotOk` on anything but a `Result`.
 
 ```quilon ignore

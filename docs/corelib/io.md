@@ -20,12 +20,12 @@ Import with `<< core.io`. See the [corelib index](README.md) and `examples/io.qn
 `io.print`, `io.eprint`, and `io.write` take **anything renderable**: the compiler resolves
 the [`` ` `` render member](../types/text.md#string-interpolation-and-the-render-operator-)
 on the argument's type, calls it, and writes the resulting `Text`. A type becomes printable
-by defining that member — nothing extends `print`. A **function** value is the one thing
-with no rendering, and printing one names the missing member.
+by defining that member. Every value renders except a **function** value; printing one is
+a compile error naming the missing member.
 
-The module's names are reached only through its binding, and its
+The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare
-`print` or `write` — at any signature — is simply an unrelated function beside `io.print`.
+`print` or `write` — at any signature — is an unrelated function beside `io.print`.
 (`@readStdin`, like every `@` primitive, keeps its bare name once the module is imported.)
 
 ```quilon
@@ -37,5 +37,5 @@ The module's names are reached only through its binding, and its
   0
 >
 ```
-There is no `println` — `print` owns the newline; `write` is the raw form. (See
-`examples/io.qn`, and `examples/printing.qn` for printing a type of your own.)
+`print` writes the newline; `write` is the raw form. (See `examples/io.qn`, and
+`examples/printing.qn` for printing a user type.)

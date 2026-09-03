@@ -23,5 +23,5 @@ signatures, behavior, and a small example per function.
 `Text` and the operators are built-ins and need **no** import. (Behind the scenes the
 composable `Text` methods — `split`/`trim`/`contains`/`replace`/`replaceAll`/`repeat` —
 are Quilon themselves, in the compiler-internal `core.text` module it merges in
-automatically wherever one is used — a module no program can import, exporting nothing;
-only the grapheme primitives are native. See [`Text`](../types/text.md).) The [concurrency model](../concurrency/README.md) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.
+automatically wherever one is used — a module reached through member syntax alone; the
+grapheme primitives are native. See [`Text`](../types/text.md).) The [concurrency model](../concurrency/README.md) that governs the `@` leaf primitives (`@readStdin`, `@sleep`) is language semantics — see that section.

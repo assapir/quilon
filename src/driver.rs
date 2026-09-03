@@ -129,6 +129,34 @@ pub fn front_end_reporting(
         )
     })?;
 
+    front_end_source_reporting(file, source, tests, status)
+}
+
+/// [`front_end_with`] over source text supplied by the caller instead of read from disk —
+/// what the language server runs against an editor buffer that is ahead of the file.
+/// `file` still names the buffer: imports resolve relative to its directory, and
+/// diagnostics report its path.
+///
+/// Always silent: an LSP answer must not carry stage/quip text meant for a terminal onto
+/// the protocol's own stdio, so this never takes a `status` — [`front_end_source_reporting`]
+/// is where a caller that DOES want progress (there is none yet) would hook in.
+pub fn front_end_source(
+    file: &Path,
+    source: String,
+    tests: TestBlocks,
+) -> Result<Checked, FrontEndError> {
+    front_end_source_reporting(file, source, tests, &Status::silent())
+}
+
+/// [`front_end_source`] / the tail of [`front_end_reporting`] once source text is in hand:
+/// lex, parse, resolve `<<` imports, and type-check, announcing each stage through `status`.
+fn front_end_source_reporting(
+    file: &Path,
+    source: String,
+    tests: TestBlocks,
+    status: &Status,
+) -> Result<Checked, FrontEndError> {
+    let path = file.display().to_string();
     status.stage(Stage::Lexing);
     let tokens = lexer::Lexer::tokenize(&source).map_err(|e| {
         FrontEndError::in_root(&path, &source, Diagnostic::at(e.code, &e.span, e.message))

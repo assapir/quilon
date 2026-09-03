@@ -26,14 +26,14 @@ startup:
 
 `quilon run <file> [args...]` and a native build agree on `args`. Under `run`, the
 program sees `argv = [<file>, <args...>]`: the `quilon`/`run` CLI prefix is stripped and
-the `.qn` path becomes `argv[0]`. So `quilon run f.qn a b c` gives the same `args.size`
-and trailing arguments as a native `./f a b c` — `argv[0]` is the `.qn` path rather than
-the compiled binary's path, but everything the program indexes past it matches. An
+the `.qn` path becomes `argv[0]`. `quilon run f.qn a b c` gives the same `args.size`
+and trailing arguments as a native `./f a b c`; `argv[0]` is the `.qn` path under `run`
+and the binary's path in a native run. An
 argument or environment entry containing a NUL byte is refused by `run`, exactly as the
 operating system refuses to start a native binary with one. Any other `^` signature (e.g.
 a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported
 by `check` as well as `run`/`build`.
 
-**Exit code:** if `^`'s body evaluates to a `Num`, that value is the exit code. If the body is **not** a `Num` (e.g. a side-effecting block), the program exits **0** — so an effect-only `main` needs no trailing `0`. (This implicit-0 applies only to `^`; ordinary functions always return their last expression's value.)
+**Exit code:** when `^`'s body evaluates to a `Num`, that value is the exit code. A body of any other type (e.g. a side-effecting block) exits **0**; an effect-only `main` ends without a trailing `0`. (The implicit 0 applies to `^`; an ordinary function returns its last expression's value.)
 
 (See `examples/hello_world.qn` and `examples/args.qn`.)

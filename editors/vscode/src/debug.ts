@@ -62,7 +62,7 @@ function resolveSourceFile(config: vscode.DebugConfiguration): string | undefine
  * own error (a save failure is not a build failure) and returns whether the file
  * is on disk and ready to build.
  */
-async function saveIfDirty(file: string): Promise<boolean> {
+export async function saveIfDirty(file: string): Promise<boolean> {
   const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === file);
   if (!open?.isDirty) {
     return true;
