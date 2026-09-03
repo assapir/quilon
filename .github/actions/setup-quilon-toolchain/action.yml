@@ -1,0 +1,144 @@
+name: Set up Quilon toolchain
+description: >
+  Install the Rust toolchain, LLVM 22 from one of several sources, and
+  (optionally) restore the cargo cache. Run this after actions/checkout.
+
+inputs:
+  llvm-source:
+    description: >
+      Where to get LLVM 22 from: apt, pacman, brew, or the upstream macOS
+      static package (macos-static). For pacman, the caller must install
+      LLVM itself, before checkout (see the note below) -- this input still
+      being 'pacman' just skips the other sources' install steps.
+    required: true
+  cache-key-prefix:
+    description: >
+      Prefix for the cargo cache key (e.g. a job name or matrix key). Omit
+      to skip the cargo cache entirely (release builds don't use one).
+    required: false
+    default: ""
+  rustup-components:
+    description: Comma-separated rustup components, e.g. "rustfmt, clippy".
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.rustup-components }}
+
+    # pacman: a git-less container makes actions/checkout fetch a tarball
+    # instead of cloning, which drops the submodule -- so that install has
+    # to run before checkout, in the calling workflow, not here.
+
+    - name: Install LLVM 22 (apt)
+      if: inputs.llvm-source == 'apt'
+      shell: bash
+      run: |
+        set -euxo pipefail
+        sudo apt-get update
+        sudo apt-get install -y gcc clang
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 22
+        sudo apt-get install -y llvm-22-dev libpolly-22-dev
+        sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
+        echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+    - name: Install LLVM 22 (brew)
+      if: inputs.llvm-source == 'brew'
+      shell: bash
+      run: |
+        set -euxo pipefail
+        brew update
+        brew install llvm@22
+        echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+    - name: Restore cached LLVM 22.1.8 static package (macOS)
+      if: inputs.llvm-source == 'macos-static'
+      id: llvm-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/llvm
+        key: llvm-macos-static-22.1.8
+
+    # Homebrew's llvm@22 is built LLVM_LINK_LLVM_DYLIB=ON and ships no static
+    # LLVM, so a binary linked against it needs that exact formula installed
+    # to start. This is the upstream release's static build instead.
+    - name: Download LLVM 22.1.8 static package (macOS)
+      if: inputs.llvm-source == 'macos-static' && steps.llvm-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euxo pipefail
+        release=22.1.8
+        package="LLVM-${release}-macOS-ARM64"
+        mkdir -p "${{ runner.temp }}/llvm"
+        # Only what llvm-sys reads -- the archives, the headers, and llvm-config.
+        curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${release}/${package}.tar.xz" \
+          | tar -xf - -C "${{ runner.temp }}/llvm" \
+            "${package}/bin/llvm-config" "${package}/include" "${package}/lib"
+        prefix="${{ runner.temp }}/llvm/${package}"
+        "$prefix/bin/llvm-config" --version
+        mode="$("$prefix/bin/llvm-config" --shared-mode)"
+        if [ "$mode" != static ]; then
+          echo "::error::LLVM at $prefix links $mode, not static"
+          exit 1
+        fi
+        # --system-libs names zstd; the runner's default library search picks up
+        # Homebrew's dylib for it unless a static archive outranks it, so copy one
+        # onto the -L path llvm-sys already adds (which is checked first) rather
+        # than trust the recorded entry to be the static one.
+        brew list zstd >/dev/null 2>&1 || brew install zstd
+        zstd_prefix="$(brew --prefix zstd)"
+        if [ -f "$zstd_prefix/lib/libzstd.a" ]; then
+          cp "$zstd_prefix/lib/libzstd.a" "$prefix/lib/libzstd.a"
+        else
+          echo "::error::No static libzstd.a at $zstd_prefix/lib; the link would depend on Homebrew's zstd"
+          exit 1
+        fi
+        for lib in $("$prefix/bin/llvm-config" --system-libs); do
+          case "$lib" in
+            /*)
+              test -f "$lib" && continue
+              echo "::error::LLVM links $lib, which is not installed here"
+              exit 1
+              ;;
+          esac
+        done
+        # This package ships its own libc++ and libunwind (dylib and static
+        # archive both) on the same -L path llvm-sys adds for the LLVM archives;
+        # either shadows the SDK's, its libunwind dylib has no rpath so the
+        # binary cannot load it, and the static libc++ alone is missing the
+        # ABI/exception symbols normally paired with it. Drop every file from
+        # both families so -lc++/-lunwind fall through to the SDK's complete
+        # ones. libLTO.dylib stays -- the link step needs it.
+        rm -f "$prefix"/lib/libc++* "$prefix"/lib/libunwind*
+
+    - name: Export LLVM 22.1.8 env (macOS)
+      if: inputs.llvm-source == 'macos-static'
+      shell: bash
+      run: |
+        set -euo pipefail
+        prefix="${{ runner.temp }}/llvm/LLVM-22.1.8-macOS-ARM64"
+        {
+          echo "LLVM_SYS_221_PREFIX=$prefix"
+          # Apple's ld reads LTO bitcode through libLTO.dylib; the one Xcode
+          # ships is an older LLVM than 22 and rejects this package's bitcode
+          # archive members. Point it at the matching reader instead.
+          echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,-lto_library,$prefix/lib/libLTO.dylib"
+        } >> "$GITHUB_ENV"
+
+    - name: Cache cargo
+      if: inputs.cache-key-prefix != ''
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ inputs.cache-key-prefix }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-

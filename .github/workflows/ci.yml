@@ -26,32 +26,12 @@ jobs:
         with:
           submodules: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
         with:
-          components: rustfmt, clippy
-
-      - name: Install LLVM 22
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gcc clang
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev libpolly-22-dev
-          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
-
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            gate-cargo-
+          llvm-source: apt
+          cache-key-prefix: gate
+          rustup-components: rustfmt, clippy
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -99,40 +79,11 @@ jobs:
         with:
           submodules: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install LLVM 22 and system dependencies (apt)
-        if: matrix.pkg == 'apt'
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gcc clang
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev libpolly-22-dev
-          sudo ln -sf /usr/lib/llvm-22/bin/llc /usr/local/bin/llc
-          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
-
-      - name: Install LLVM 22 (brew)
-        if: matrix.pkg == 'brew'
-        run: |
-          set -euxo pipefail
-          brew update
-          brew install llvm@22
-          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
-
-      - name: Cache cargo
-        uses: actions/cache@v6
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.key }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.key }}-cargo-
+          llvm-source: ${{ matrix.pkg }}
+          cache-key-prefix: ${{ matrix.key }}
 
       - name: Build
         run: cargo build --workspace --all-targets --verbose
@@ -192,3 +143,32 @@ jobs:
         with:
           path: bench-series.tsv
           key: bench-series-${{ matrix.key }}-${{ github.ref_name }}-${{ github.sha }}
+
+  # Mirrors release.yml's macos job for a single `--release --bin quilon` link,
+  # so a PR catches a release-link regression without running LTO over ~54
+  # test/bench binaries the way build-and-test's full `--all-targets` would.
+  # Waits on build-and-test (all legs, macOS included) rather than just gate,
+  # so a broken macOS test run blocks this instead of racing it.
+  macos-release-link:
+    name: macos-release-link
+    needs: build-and-test
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Set up Quilon toolchain
+        uses: ./.github/actions/setup-quilon-toolchain
+        with:
+          llvm-source: macos-static
+
+      - name: Build release
+        run: cargo build --release --bin quilon
+
+      - name: Verify the asset is self-contained
+        uses: ./.github/actions/verify-self-contained-asset
+        with:
+          binary-path: target/release/quilon
