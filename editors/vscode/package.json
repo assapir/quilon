@@ -51,7 +51,7 @@
     "@vscode/vsce": "^3.9.2",
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
-    "rolldown": "^1.2.7",
+    "rolldown": "^1.2.6",
     "typescript": "^7.0.2"
   },
   "contributes": {
