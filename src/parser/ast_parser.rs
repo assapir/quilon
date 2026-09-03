@@ -5,6 +5,7 @@ use crate::ast::{
     MethodDeclaration, ModulePath, Parameter, Program, TypeDeclaration, TypeDefinition,
     UnaryOperator, VariableDeclaration,
 };
+use crate::diagnostic::Code;
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span, StrChunk, Token, TokenKind};
 
 // The parser's rules live in child modules — one per part of the grammar — as further
@@ -76,8 +77,27 @@ const MAX_PARAMETERS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
+    pub code: Code,
     pub message: String,
     pub span: Span,
+    /// The idiomatic fix, when there is one to show.
+    pub help: Option<String>,
+}
+
+impl ParseError {
+    pub fn new(code: Code, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            span,
+            help: None,
+        }
+    }
+
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
 }
 
 impl std::fmt::Display for ParseError {
@@ -120,12 +140,12 @@ impl<'a> Parser<'a> {
         f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
         if self.depth >= MAX_NESTING_DEPTH {
-            return Err(ParseError {
-                message: format!(
-                    "expression nesting too deep (exceeded the maximum depth of {MAX_NESTING_DEPTH}); simplify or split this deeply nested expression"
-                ),
-                span: self.current_span(),
-            });
+            return Err(ParseError::new(
+                Code::NestingTooDeep,
+                self.current_span(),
+                format!("expression nesting too deep: more than {MAX_NESTING_DEPTH} levels"),
+            )
+            .help("split the expression into named bindings"));
         }
         self.depth += 1;
         let result = f(self);
@@ -179,10 +199,15 @@ impl<'a> Parser<'a> {
             self.advance();
             Ok(())
         } else {
-            Err(ParseError {
-                message: format!("Expected {:?}, got {:?}", kind, self.peek().kind),
-                span: self.peek().span.clone(),
-            })
+            Err(ParseError::new(
+                Code::UnexpectedToken,
+                self.peek().span.clone(),
+                format!(
+                    "expected {}, found {}",
+                    kind.describe(),
+                    self.peek().kind.describe()
+                ),
+            ))
         }
     }
 
@@ -196,10 +221,11 @@ impl<'a> Parser<'a> {
             self.advance();
             Ok("^".to_string())
         } else {
-            Err(ParseError {
-                message: format!("Expected identifier, got {:?}", self.peek().kind),
-                span: self.peek().span.clone(),
-            })
+            Err(ParseError::new(
+                Code::UnexpectedToken,
+                self.peek().span.clone(),
+                format!("expected a name, found {}", self.peek().kind.describe()),
+            ))
         }
     }
 

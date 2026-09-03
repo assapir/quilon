@@ -19,13 +19,47 @@ quilon test    suite.qn --only "Suite/case name" # run one suite or case (repeat
 quilon lsp                  # serve the Language Server Protocol over stdin/stdout (see language-server.md)
 ```
 
-`quilon --version` (or `-V`) prints the compiler version.
+`quilon --version` (or `-V`) prints the compiler version and its release codename.
+`quilon explain QN311` prints the reference section for an error code (see
+[Error messages](errors.md)).
+
+## Status output
+
+Every command reports its progress on **stderr**, apart from diagnostics and the program's
+own output; stdout carries only what a command is actually asked to produce (a
+[test run's report](../corelib/test/README.md), IR, a rendered explanation). On an
+**interactive terminal**, `check`, `build`, and `compile` show the stages (lexing, parsing,
+resolving, checking, generating, linking) as one live line that collapses, on success, into
+a single closing line — the file, the elapsed time, and a quip:
+
+```text
+✓ examples/hello_world.qn (9ms) — no keywords were harmed
+```
+
+That live line is the ONLY place a stage ever appears: it draws over itself and clears
+before the closing line prints, so scrollback never carries one. Off a terminal — a pipe, a
+redirected log, or a CI run (detected from the terminal check alone, or from `CI` set in the
+environment) — stage progress is silent altogether, and stderr is the closing line alone.
+`quilon run` prints nothing of its own beyond the program's output; a failure is reported
+the same way everywhere.
+
+- `--quiet` (`-q`, before or after the subcommand) prints no status at all. Diagnostics
+  still print.
+- `NO_COLOR` set to a non-empty value, or `TERM=dumb`, keeps every line plain; so does a
+  redirected stderr.
+- `QUILON_QUIP_SEED=<n>` pins which quip each line carries, so a run is reproducible end
+  to end. `quilon test`'s closing line and the multi-suite tally carry one too.
 
 `quilon test` runs directly (like `quilon run`, no binary produced), and exits non-zero if
 any case failed. It runs a file's top-level `describe` blocks, which every other command
 erases — so tests may sit in the file they test, its `^` included, and still cost a release
-build nothing. `--reporter json` and `--only` are described with
-[the test harness](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter).
+build nothing. It never shows per-stage compile progress for a suite, even on a terminal —
+a suite's own file heading and case tree, from
+[the test harness](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter), are
+the progress that matters; on an interactive terminal a single transient "compiling `file`"
+line stands in while a suite's front end runs, clearing before its case tree prints.
+`--reporter json` prints one JSON object per event on stdout and nothing else — no status
+line, no quip, no color, ever, even on a terminal — for a tool reading the stream.
 
 `quilon build` produces a **self-contained** native executable — it runs on a machine with nothing else installed:
 ```bash

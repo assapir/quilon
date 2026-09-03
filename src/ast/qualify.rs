@@ -24,18 +24,21 @@ use crate::ast::nodes::{
     Expression, InterpolationPart, Item, MethodDeclaration, Parameter, Pattern, Program, RECEIVER,
     Statement, Type, TypeDefinition,
 };
+use crate::diagnostic::Code;
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 /// A resolution failure, located at the reference or declaration that caused it.
 #[derive(Debug)]
 pub struct QualifyError {
+    pub code: Code,
     pub span: Span,
     pub message: String,
 }
 
-fn err<T>(span: &Span, message: String) -> Result<T, QualifyError> {
+fn err<T>(span: &Span, code: Code, message: String) -> Result<T, QualifyError> {
     Err(QualifyError {
+        code,
         span: span.clone(),
         message,
     })
@@ -77,6 +80,7 @@ impl ModuleScope {
                 if canonical == alias || existing.iter().any(|c| c == alias) {
                     return err(
                         span,
+                        Code::ModuleNameCollision,
                         format!(
                             "two imported modules are both named `{alias}`, and a module \
                              imported by file path has no longer name to fall back on; \
@@ -119,6 +123,7 @@ impl ModuleScope {
                         many.iter().map(|c| format!("`{c}.{member}`")).collect();
                     return err(
                         span,
+                        Code::AmbiguousModulePrefix,
                         format!(
                             "`{prefix}` is ambiguous — more than one imported module binds \
                              it; write the full path: {}",
@@ -130,14 +135,22 @@ impl ModuleScope {
         } else if self.exports.contains_key(prefix) {
             prefix
         } else {
-            return err(span, format!("`{prefix}` is not an imported module"));
+            return err(
+                span,
+                Code::NotAnImportedModule,
+                format!("`{prefix}` is not an imported module"),
+            );
         };
         let exported = self
             .exports
             .get(canonical)
             .is_some_and(|names| names.contains(member));
         if !exported {
-            return err(span, format!("`{member}` is not exported by `{canonical}`"));
+            return err(
+                span,
+                Code::NotExported,
+                format!("`{member}` is not exported by `{canonical}`"),
+            );
         }
         Ok(format!("{canonical}.{member}"))
     }
@@ -230,7 +243,11 @@ pub fn resolve_program(program: &mut Program, scope: &ModuleScope) -> Result<(),
 /// Reject a top-level item whose name an import claims.
 fn check_claim(item: &Item, scope: &ModuleScope) -> Result<(), QualifyError> {
     match scope.claimed_by(item.name()) {
-        Some(spelling) => err(item.span(), claim_message(item.name(), spelling)),
+        Some(spelling) => err(
+            item.span(),
+            Code::NameClaimedByImport,
+            claim_message(item.name(), spelling),
+        ),
         None => Ok(()),
     }
 }
@@ -264,7 +281,11 @@ impl Walker<'_> {
     /// import claims.
     fn declare(&mut self, name: &str, span: &Span) -> Result<(), QualifyError> {
         if let Some(spelling) = self.scope.claimed_by(name) {
-            return err(span, claim_message(name, spelling));
+            return err(
+                span,
+                Code::NameClaimedByImport,
+                claim_message(name, spelling),
+            );
         }
         if let Some(frame) = self.locals.last_mut() {
             frame.insert(name.to_string());
@@ -290,6 +311,7 @@ impl Walker<'_> {
         if let Some(spelling) = self.scope.claimed_by(name) {
             return err(
                 span,
+                Code::ModuleIsNotAValue,
                 format!(
                     "`{name}` names the imported module `{spelling}`, not a value — \
                      reach its exports as `{name}.<name>`"

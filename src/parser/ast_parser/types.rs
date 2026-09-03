@@ -123,10 +123,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(crate::ast::Type::named_ref(name))
             }
-            _ => Err(ParseError {
-                message: format!("Expected type, got {:?}", token.kind),
-                span: token.span.clone(),
-            }),
+            _ => Err(ParseError::new(
+                Code::UnexpectedToken,
+                token.span.clone(),
+                format!("expected a type, found {}", token.kind.describe()),
+            )),
         }
     }
 

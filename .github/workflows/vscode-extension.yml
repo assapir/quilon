@@ -53,24 +53,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Install pnpm before setup-node so `cache: pnpm` can find it. The pnpm
-      # version comes from the `packageManager` field in the extension's
-      # package.json; this repo has no root package.json, so point the action
-      # at it explicitly (action-setup defaults to the repo-root cwd).
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.10
+      - name: Set up pnpm and Node
+        uses: ./.github/actions/setup-node-pnpm
         with:
-          package_json_file: editors/vscode/package.json
-
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          working-directory: editors/vscode
 
       - name: Validate JSON (manifest, language config, grammar)
         run: |
@@ -121,24 +107,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Install pnpm before setup-node so `cache: pnpm` can find it. The pnpm
-      # version comes from the `packageManager` field in the extension's
-      # package.json; this repo has no root package.json, so point the action
-      # at it explicitly (action-setup defaults to the repo-root cwd).
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.10
+      - name: Set up pnpm and Node
+        uses: ./.github/actions/setup-node-pnpm
         with:
-          package_json_file: editors/vscode/package.json
-
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          working-directory: editors/vscode
 
       # `vsce package` compiles first via the `vscode:prepublish` hook
       # (`pnpm run compile`), so no separate compile step is needed here.

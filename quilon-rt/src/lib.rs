@@ -44,8 +44,7 @@ pub mod mem;
 pub mod net;
 pub mod process;
 pub mod reactor;
-// Only the `QlSite` type is public (re-exported below); the formatter is the runtime's own.
-mod report;
+pub mod report;
 pub mod scheduler;
 pub mod test_registry;
 pub mod text;

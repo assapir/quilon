@@ -1,13 +1,19 @@
-use quilon::{ast, build, codegen, driver, jit, test_command};
+use quilon::diagnostic::{Code, Diagnostic, codes};
+use quilon::source_map::SourceMap;
+use quilon::status::{Stage, Status};
+use quilon::{build, codegen, driver, jit, quips, test_command};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "quilon")]
 #[command(about = "Quilon - A fast, statically-typed web programming language", long_about = None)]
-#[command(version)]
+#[command(arg_required_else_help = true)]
 struct Cli {
+    /// Print no status — diagnostics still print
+    #[arg(short, long, global = true)]
+    quiet: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -67,18 +73,49 @@ enum Commands {
     },
     /// Serve the Language Server Protocol over stdio (for editors)
     Lsp,
+    /// Explain an error code (`quilon explain QN301`)
+    Explain {
+        /// The code, as a report prints it
+        code: String,
+    },
+}
+
+/// The release codenames, matched against the package version.
+const CODENAMES: &str = include_str!("../release-codenames.tsv");
+
+/// `0.9.3 "Hegemon"` — the version with its codename, when the release table names one —
+/// and, on a line of its own so the first line stays parseable, a quip.
+fn version() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let codename = CODENAMES
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .find(|(pattern, _)| match pattern.strip_suffix('*') {
+            Some(prefix) => version.starts_with(prefix),
+            None => *pattern == version,
+        })
+        .map(|(_, name)| name.trim());
+    let named = match codename {
+        Some(name) => format!("{version} \"{name}\""),
+        None => version.to_string(),
+    };
+    format!("{named}\n{}", quips::pick(quips::BANNER))
+}
+
+/// Print `diagnostic` the way every report is printed, and exit 1.
+fn fail(diagnostic: &Diagnostic, sources: &SourceMap, status: &Status) -> ! {
+    status.report(diagnostic, sources);
+    std::process::exit(1)
 }
 
 /// Run the shared front-end (read → lex → parse → resolve imports → type-check),
 /// printing the diagnostic and exiting on any failure. The result carries the type
 /// table the check produced, which codegen consumes instead of checking again.
-fn checked(file: &Path) -> driver::Checked {
-    match driver::front_end(file) {
+fn checked(file: &Path, status: &Status) -> driver::Checked {
+    match driver::front_end_reporting(file, driver::TestBlocks::Erase, status) {
         Ok(checked) => checked,
-        Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
+        Err(error) => fail(&error.diagnostic, &error.sources, status),
     }
 }
 
@@ -86,32 +123,45 @@ fn checked(file: &Path) -> driver::Checked {
 /// program. Erasing its blocks leaves nothing to run, so `run`, `compile`, and `build`
 /// pass over it rather than reporting a missing `^`; `quilon test` is what runs it. Call it
 /// before printing anything, so the skip is silent.
-fn checked_program_to_emit(file: &Path) -> driver::Checked {
-    let checked = checked(file);
+fn checked_program_to_emit(file: &Path, status: &Status) -> driver::Checked {
+    let checked = checked(file, status);
     if checked.tests_only {
         std::process::exit(0);
+    }
+    if !driver::has_entry_point(&checked.program) {
+        let diagnostic = Diagnostic::new(
+            Code::NoEntryPoint,
+            format!("`{}` defines no `^` entry point", file.display()),
+        )
+        .help("a program starts at `^`: `^ = () -> Num => < 0 >`");
+        fail(&diagnostic, &checked.sources, status);
     }
     checked
 }
 
-/// Exit with the standard diagnostic unless `program` defines the `^` entry point
-/// required to build an executable (compile/run, but not check).
-fn require_entry_point(program: &ast::Program) {
-    if !driver::has_entry_point(program) {
-        eprintln!("❌ Error: No entry point found!");
-        eprintln!("   Programs must define a ^ function as the entry point.");
-        eprintln!("   Example: ^ = () -> Num => 0");
-        std::process::exit(1);
-    }
+/// A failure after the front end — code generation, the link, the JIT — which has no
+/// source location of its own.
+fn fail_late(code: Code, message: String, status: &Status) -> ! {
+    fail(
+        &Diagnostic::new(code, message),
+        &SourceMap::default(),
+        status,
+    )
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let command = Cli::command()
+        .version(&*version().leak())
+        .after_help(quips::pick(quips::BANNER));
+    let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
+    let status = match cli.command {
+        Commands::Run { .. } => Status::transient(cli.quiet),
+        _ => Status::for_command(cli.quiet),
+    };
 
     match cli.command {
         Commands::Run { file, args } => {
-            let checked = checked_program_to_emit(&file);
-            require_entry_point(&checked.program);
+            let checked = checked_program_to_emit(&file, &status);
 
             // Mirror the argv a native build receives: `argv[0]` is the program
             // (here, the `.qn` file path as typed), followed by the user's
@@ -123,8 +173,10 @@ fn main() {
             argv.push(file.to_string_lossy().into_owned());
             argv.extend(args);
 
-            // JIT-compile and execute in-process; the entry point's value
-            // becomes the program's exit code.
+            // The program's own output stands alone: the spinner is gone before it runs,
+            // and nothing is said after it.
+            status.stage(Stage::Generating);
+            status.clear();
             match jit::run_program(
                 &checked.program,
                 checked.types,
@@ -133,20 +185,14 @@ fn main() {
                 &argv,
             ) {
                 Ok(code) => std::process::exit(code),
-                Err(e) => {
-                    eprintln!("❌ Runtime error: {}", e);
-                    std::process::exit(1);
-                }
+                Err(e) => fail_late(Code::CodegenFailed, e, &status),
             }
         }
         Commands::Compile { file, output } => {
-            let checked = checked_program_to_emit(&file);
-            eprintln!("🔨 Compiling: {}", file.display());
+            let checked = checked_program_to_emit(&file, &status);
             let program = checked.program;
-            eprintln!("✅ Type checking passed!");
-            require_entry_point(&program);
 
-            // Generate LLVM IR
+            status.stage(Stage::Generating);
             use inkwell::context::Context;
             let context = Context::create();
             let mut generator = codegen::CodeGenerator::new(&context, "main");
@@ -158,33 +204,26 @@ fn main() {
 
             let ir = match generator.generate(&program) {
                 Ok(ir) => ir,
-                Err(e) => {
-                    eprintln!("❌ Code generation error: {}", e);
-                    std::process::exit(1);
-                }
+                Err(e) => fail_late(Code::CodegenFailed, e, &status),
             };
 
-            // Determine output path
             let output_path = output.unwrap_or_else(|| {
                 let mut path = file.clone();
                 path.set_extension("ll");
                 path
             });
 
-            // Write IR to file
-            match std::fs::write(&output_path, ir) {
-                Ok(()) => {
-                    eprintln!("✅ LLVM IR written to: {}", output_path.display());
-                    eprintln!(
-                        "💡 To build a native executable directly, run: quilon build {}",
-                        file.display()
-                    );
-                }
-                Err(e) => {
-                    eprintln!("❌ Error writing output: {}", e);
-                    std::process::exit(1);
-                }
+            if let Err(e) = std::fs::write(&output_path, ir) {
+                fail_late(
+                    Code::BuildFailed,
+                    format!("cannot write `{}`: {e}", output_path.display()),
+                    &status,
+                );
             }
+            status.done(
+                &format!("{} → {}", file.display(), output_path.display()),
+                quips::pick(quips::SUCCESS),
+            );
         }
         Commands::Build {
             file,
@@ -194,19 +233,17 @@ fn main() {
         } => {
             // The source text and every file's path come from the source map the build already
             // carries; a `--debug` build additionally needs the root file's path (below).
-            let checked = checked_program_to_emit(&file);
-            eprintln!("🔨 Building: {}", file.display());
+            let checked = checked_program_to_emit(&file, &status);
             let sources = checked.sources;
             let defer = checked.defer;
             let program = checked.program;
-            require_entry_point(&program);
 
             // Default the output to the source name without its `.qn` extension.
             let out = output.unwrap_or_else(|| file.with_extension(""));
 
             let debug_source = debug.then(|| build::DebugSource { file: &file });
 
-            match build::build_native(
+            if let Err(e) = build::build_native(
                 &program,
                 checked.types,
                 defer,
@@ -214,23 +251,18 @@ fn main() {
                 &out,
                 &linker,
                 debug_source.as_ref(),
+                &status,
             ) {
-                Ok(()) => eprintln!("✅ Built native executable: {}", out.display()),
-                Err(e) => {
-                    eprintln!("❌ Build error: {}", e);
-                    std::process::exit(1);
-                }
+                fail_late(Code::BuildFailed, e, &status);
             }
+            status.done(
+                &format!("{} → {}", file.display(), out.display()),
+                quips::pick(quips::SUCCESS),
+            );
         }
         Commands::Check { file } => {
-            eprintln!("🔍 Checking: {}", file.display());
-
-            let program = checked(&file).program;
-            eprintln!("✅ Type checking passed!");
-            eprintln!(
-                "📋 Program contains {} top-level item(s)",
-                program.items.len()
-            );
+            checked(&file, &status);
+            status.done(&file.display().to_string(), quips::pick(quips::SUCCESS));
         }
         Commands::Test {
             path,
@@ -241,7 +273,14 @@ fn main() {
                 "json" => test_command::Reporter::Json,
                 _ => test_command::Reporter::Human,
             };
-            let failed = test_command::run(&path, &test_command::Options { reporter, only });
+            let failed = test_command::run(
+                &path,
+                &test_command::Options {
+                    reporter,
+                    only,
+                    quiet: cli.quiet,
+                },
+            );
             std::process::exit(i32::from(failed > 0));
         }
         Commands::Lsp => {
@@ -250,27 +289,72 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Explain { code } => {
+            let Some(code) = Code::parse(&code) else {
+                eprintln!(
+                    "no error code `{code}` — codes run QN000 to {}",
+                    codes::ALL[codes::ALL.len() - 1]
+                );
+                std::process::exit(2);
+            };
+            match codes::explain(code) {
+                Some(section) => println!("{section}"),
+                None => {
+                    eprintln!("{code} ({}) has no explanation yet", code.title());
+                    std::process::exit(2);
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
-    use clap::{CommandFactory, error::ErrorKind};
+    use super::*;
+    use clap::error::ErrorKind;
 
     #[test]
-    fn version_flags_print_the_package_version() {
+    fn version_flags_print_the_package_version_and_codename() {
         for flag in ["--version", "-V"] {
             let error = Cli::command()
+                .version(&*version().leak())
                 .try_get_matches_from(["quilon", flag])
                 .expect_err("the version flags should exit before requiring a subcommand");
 
             assert_eq!(error.kind(), ErrorKind::DisplayVersion);
             assert_eq!(error.exit_code(), 0);
-            assert_eq!(
-                error.to_string(),
-                format!("quilon {}\n", env!("CARGO_PKG_VERSION"))
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("quilon {}", env!("CARGO_PKG_VERSION"))),
+                "{error}"
             );
         }
+    }
+
+    #[test]
+    fn the_codename_comes_from_the_release_table() {
+        let expected = CODENAMES
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find(|(pattern, _)| *pattern == env!("CARGO_PKG_VERSION"))
+            .map(|(_, name)| name.trim());
+        if let Some(name) = expected {
+            assert_eq!(
+                version().lines().next(),
+                Some(format!("{} \"{name}\"", env!("CARGO_PKG_VERSION")).as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn no_arguments_shows_the_help() {
+        let error = Cli::command()
+            .try_get_matches_from(["quilon"])
+            .expect_err("no subcommand is a help exit");
+        assert_eq!(
+            error.kind(),
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 }

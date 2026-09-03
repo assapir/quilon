@@ -1,0 +1,65 @@
+name: Verify self-contained asset
+description: >
+  Confirm a built quilon binary carries no runtime dependency on LLVM (or,
+  on macOS, any non-system library), smoke-test it, and record the result
+  in the job summary.
+
+inputs:
+  binary-path:
+    description: Path to the binary to verify (relative to the working directory).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify the asset is self-contained (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        bin="${{ inputs.binary-path }}"
+        file "$bin"
+        ldd "$bin"
+        "./$bin" check examples/hello_world.qn
+        if ldd "$bin" | grep -qi 'llvm'; then
+          echo "::error::$bin names an LLVM library: it would not start without LLVM installed"
+          exit 1
+        fi
+        {
+          echo "### \`$bin\`"
+          echo
+          echo '```'
+          file "$bin"
+          ldd "$bin"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Verify the asset is self-contained (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        bin="${{ inputs.binary-path }}"
+        file "$bin"
+        otool -L "$bin"
+        "./$bin" check examples/hello_world.qn
+        # Only macOS system libraries may appear: an @rpath entry, a Homebrew
+        # prefix, or the LLVM package's own libc++/libLLVM is a dependency the
+        # asset promises it does not have.
+        otool -L "$bin" | tail -n +2 | while read -r lib _; do
+          case "$lib" in
+            /usr/lib/*|/System/Library/*) ;;
+            *)
+              echo "::error::$bin names a non-system library: $lib"
+              exit 1
+              ;;
+          esac
+        done
+        {
+          echo "### \`$bin\`"
+          echo
+          echo '```'
+          file "$bin"
+          otool -L "$bin"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

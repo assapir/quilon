@@ -27,10 +27,11 @@ impl<'a> Parser<'a> {
         }
 
         if arms.is_empty() {
-            return Err(ParseError {
-                message: "Match expression must have at least one arm".to_string(),
-                span: self.span(start, start),
-            });
+            return Err(ParseError::new(
+                Code::EmptyMatch,
+                self.span(start, start),
+                "a match needs at least one `|` arm",
+            ));
         }
 
         let end = arms.last().unwrap().span.end;
@@ -111,10 +112,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Pattern::Wildcard { span })
             }
-            _ => Err(ParseError {
-                message: format!("Expected pattern, got {:?}", token.kind),
-                span: token.span.clone(),
-            }),
+            _ => Err(ParseError::new(
+                Code::UnexpectedToken,
+                token.span.clone(),
+                format!("expected a pattern, found {}", token.kind.describe()),
+            )),
         }
     }
 }

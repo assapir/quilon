@@ -238,7 +238,7 @@ fn a_field_write_through_a_call_result_aliasing_an_immutable_argument_is_rejecte
         "T = { v :: Num }\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).v := 5\n  t.v\n>",
     );
     assert!(
-        error.contains("immutable 't'"),
+        error.contains("`t`, which is bound with `=`"),
         "expected the call-rooted write to name 't', got: {error}"
     );
 }
@@ -249,7 +249,7 @@ fn a_setter_call_through_a_call_result_aliasing_an_immutable_argument_is_rejecte
         "T = {\n  v :: Num\n  bump := () -> $ => < it.v := 99 >\n}\nid = (p :: T) -> T => < p >\n^ = () -> Num => <\n  t = T { v = 1 }\n  id(t).bump()\n  t.v\n>",
     );
     assert!(
-        error.contains("immutable 't'"),
+        error.contains("`t`, which is bound with `=`"),
         "expected the call-rooted setter call to name 't', got: {error}"
     );
 }

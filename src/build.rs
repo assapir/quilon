@@ -20,6 +20,7 @@ use inkwell::targets::{
 use crate::ast::Program;
 use crate::codegen::CodeGenerator;
 use crate::source_map::SourceMap;
+use crate::status::{Stage, Status};
 use crate::typechecker::TypeTable;
 use std::rc::Rc;
 
@@ -308,7 +309,9 @@ fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bo
 }
 
 /// Build `program` into a native executable at `out`, linking with `linker`
-/// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC.
+/// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC. The two stages
+/// — code generation, then the link — are announced through `status`.
+#[allow(clippy::too_many_arguments)] // one call site, the CLI, which passes what it was given
 pub fn build_native(
     program: &Program,
     types: TypeTable,
@@ -317,11 +320,14 @@ pub fn build_native(
     out: &Path,
     linker: &str,
     debug: Option<&DebugSource<'_>>,
+    status: &Status,
 ) -> Result<(), String> {
     with_staged_object(|obj| {
+        status.stage(Stage::Generating);
         emit_object(program, types, defer, sources, obj, debug)?;
         let rt_lib = runtime_lib_path()?;
 
+        status.stage(Stage::Linking);
         let mut command = Command::new(linker);
         command.arg(obj);
         append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));

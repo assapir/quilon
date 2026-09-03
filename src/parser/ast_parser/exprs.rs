@@ -451,9 +451,12 @@ impl<'a> Parser<'a> {
     /// stops a hole's nodes from colliding with an unrelated node near the file start.
     pub(super) fn parse_hole(&self, src: &str, abs: usize) -> Result<Expression, ParseError> {
         let shift = |s: &Span| Span::in_file(s.start + abs as u32, s.end + abs as u32, self.file);
-        let mut tokens = Lexer::tokenize_in_file(src, self.file).map_err(|e| ParseError {
-            message: format!("in interpolation hole: {}", e.message),
-            span: shift(&e.span),
+        let mut tokens = Lexer::tokenize_in_file(src, self.file).map_err(|e| {
+            ParseError::new(
+                e.code,
+                shift(&e.span),
+                format!("in interpolation hole: {}", e.message),
+            )
         })?;
         for t in &mut tokens {
             t.span = shift(&t.span);
@@ -465,10 +468,11 @@ impl<'a> Parser<'a> {
         parser.module_paths = self.module_paths.clone();
         let expression = parser.parse_expression()?;
         if !parser.is_at_end() {
-            return Err(ParseError {
-                message: "interpolation hole must be a single expression".to_string(),
-                span: parser.current_span(),
-            });
+            return Err(ParseError::new(
+                Code::InterpolationHole,
+                parser.current_span(),
+                "an interpolation hole holds a single expression",
+            ));
         }
         Ok(expression)
     }
@@ -515,13 +519,14 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let ident = self.peek();
                 if ident.kind != TokenKind::Ident {
-                    return Err(ParseError {
-                        message: format!(
-                            "Expected a primitive name after `@`, got {:?}",
-                            ident.kind
+                    return Err(ParseError::new(
+                        Code::UnexpectedToken,
+                        ident.span.clone(),
+                        format!(
+                            "expected a primitive name after `@`, found {}",
+                            ident.kind.describe()
                         ),
-                        span: ident.span.clone(),
-                    });
+                    ));
                 }
                 let name = format!("@{}", ident.text);
                 let span = self.span(at_span.start, ident.span.end);
@@ -599,10 +604,11 @@ impl<'a> Parser<'a> {
                     "starts_operand accepts {:?}, which the operand grammar rejects",
                     token.kind
                 );
-                Err(ParseError {
-                    message: format!("Unexpected token: {:?}", token.kind),
-                    span: token.span.clone(),
-                })
+                Err(ParseError::new(
+                    Code::UnexpectedToken,
+                    token.span.clone(),
+                    format!("expected an expression, found {}", token.kind.describe()),
+                ))
             }
         }
     }
@@ -650,14 +656,15 @@ impl<'a> Parser<'a> {
             if !self.check(&TokenKind::ParenClose) {
                 loop {
                     if parameters.len() == MAX_PARAMETERS {
-                        return Err(ParseError {
-                            message: format!(
-                                "a function takes at most {MAX_PARAMETERS} parameters — group \
-                                 them into a record type and take that record as one parameter \
-                                 instead"
-                            ),
-                            span: self.current_span(),
-                        });
+                        return Err(ParseError::new(
+                            Code::TooManyParameters,
+                            self.current_span(),
+                            format!("a function takes at most {MAX_PARAMETERS} parameters"),
+                        )
+                        .help(
+                            "group them into a record type and take that record as one \
+                             parameter",
+                        ));
                     }
                     let parameter_name = self.expect_ident()?;
                     let parameter_type = if self.check(&TokenKind::TypeAnnotation) {

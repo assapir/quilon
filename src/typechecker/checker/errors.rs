@@ -1,10 +1,165 @@
-//! How a type error reports itself: the source span it points at, and the message the
-//! CLI renders. The `TypeError` enum itself lives in `super`, beside the checker that
-//! raises it.
+//! How a type error reports itself: the source span it points at, its code, the message
+//! the CLI renders, and the labels and help that go with it. The `TypeError` enum itself
+//! lives in `super`, beside the checker that raises it.
 
 use super::*;
+use crate::diagnostic::{Code, Diagnostic};
 
 impl TypeError {
+    /// The registry code this error reports under.
+    pub fn code(&self) -> Code {
+        match self {
+            TypeError::UndefinedVariable { .. } => Code::UndefinedVariable,
+            TypeError::TypeMismatch { .. } => Code::TypeMismatch,
+            TypeError::NotAFunction { .. } => Code::NotAFunction,
+            TypeError::WrongNumberOfArguments { .. } => Code::WrongNumberOfArguments,
+            TypeError::ImmutableAssignment { .. } => Code::ImmutableAssignment,
+            TypeError::ImmutableFieldWrite { .. } => Code::ImmutableFieldWrite,
+            TypeError::MutableAliasOfImmutable { .. } => Code::MutableAliasOfImmutable,
+            TypeError::ImmutableAliasOfMutable { .. } => Code::ImmutableAliasOfMutable,
+            TypeError::MutatingMethodOnImmutable { .. } => Code::MutatingMethodOnImmutable,
+            TypeError::MutatingMethodDeclaredImmutable { .. } => {
+                Code::MutatingMethodDeclaredImmutable
+            }
+            TypeError::DuplicateDefinition { .. } => Code::DuplicateDefinition,
+            TypeError::NoMatchingOverload { .. } => Code::NoMatchingOverload,
+            TypeError::AmbiguousOverload { .. } => Code::AmbiguousOverload,
+            TypeError::OverloadMissingAnnotation { .. } => Code::OverloadMissingAnnotation,
+            TypeError::UnannotatedParameter { .. } => Code::UnannotatedParameter,
+            TypeError::SignatureArity { .. } => Code::SignatureArity,
+            TypeError::UninferableLambdaParameter { .. } => Code::UninferableLambdaParameter,
+            TypeError::RecursiveFunctionNeedsReturnType { .. } => {
+                Code::RecursiveFunctionNeedsReturnType
+            }
+            TypeError::SiteIsImmutable { .. } => Code::SiteIsImmutable,
+            TypeError::MisplacedSiteParameter { .. } => Code::MisplacedSiteParameter,
+            TypeError::OverloadCallBeforeDefinition { .. } => Code::OverloadCallBeforeDefinition,
+            TypeError::UnannotatedOverloadCall { .. }
+            | TypeError::UnannotatedOverloadMember { .. } => Code::UnannotatedOverloadMember,
+            TypeError::ComparisonOverloadNotBool { .. } => Code::ComparisonOverloadNotBool,
+            TypeError::RefutableConstructorArg { .. } => Code::RefutableConstructorArg,
+            TypeError::NonExhaustiveMatch { .. } => Code::NonExhaustiveMatch,
+            TypeError::UnknownConstructor { .. } => Code::UnknownConstructor,
+            TypeError::ConstructorPatternOnNonSum { .. } => Code::ConstructorPatternOnNonSum,
+            TypeError::InvalidEntryPointSignature { .. } => Code::InvalidEntryPointSignature,
+            TypeError::InvalidBuiltinArgument { .. } => Code::InvalidBuiltinArgument,
+            TypeError::ComputedGlobalBinding { .. } => Code::ComputedGlobalBinding,
+            TypeError::OperatorMustBeMember { .. } => Code::OperatorMustBeMember,
+            TypeError::OperatorMemberArity { .. } => Code::OperatorMemberArity,
+            TypeError::AssertionNeedsMatcher { .. } => Code::AssertionNeedsMatcher,
+            TypeError::ExpectOutsideTest { .. } => Code::ExpectOutsideTest,
+            TypeError::MatcherArity { .. } => Code::MatcherArity,
+            TypeError::MatcherTypeUnsupported { .. } => Code::MatcherTypeUnsupported,
+            TypeError::UnknownMember { .. } => Code::UnknownMember,
+            TypeError::MethodCalledAsFunction { .. } => Code::MethodCalledAsFunction,
+            TypeError::NotRenderable { .. } => Code::NotRenderable,
+        }
+    }
+
+    /// The error as a diagnostic: its code, message and span, plus the labels and help
+    /// the variant has to offer.
+    pub fn diagnostic(&self) -> Diagnostic {
+        let diagnostic = Diagnostic::at(self.code(), self.span(), self.to_string());
+        match self {
+            TypeError::NoMatchingOverload {
+                name,
+                arg_types,
+                arg_spans,
+                candidates,
+                ..
+            } => {
+                let mut diagnostic = Diagnostic::new(self.code(), self.to_string());
+                // Each operand labelled with its type, when the spans are the operands'
+                // own (an operator's are; a call's arguments too).
+                if arg_spans.len() == arg_types.len() && !arg_spans.is_empty() {
+                    for (span, ty) in arg_spans.iter().zip(arg_types) {
+                        diagnostic = diagnostic.label(span, Some(type_label(ty)));
+                    }
+                } else {
+                    diagnostic = diagnostic.label(self.span(), None);
+                }
+                let help = match (name.as_str(), arg_types.as_slice()) {
+                    ("+", [Type::Num, Type::Text]) | ("+", [Type::Text, Type::Num]) => {
+                        "to join a number and text, interpolate: \"`n`x\"".to_string()
+                    }
+                    _ => format!("the members of `{name}` are {}", fmt_candidates(candidates)),
+                };
+                diagnostic.help(help)
+            }
+            TypeError::OverloadCallBeforeDefinition { name, .. } => diagnostic.help(format!(
+                "names resolve top to bottom: move the definition of `{name}` above this call"
+            )),
+            TypeError::ImmutableAssignment { name, .. }
+            | TypeError::ImmutableFieldWrite { name, .. } => {
+                diagnostic.help(format!("bind it with `:=` to allow writes: `{name} := …`"))
+            }
+            TypeError::MutatingMethodOnImmutable { receiver, .. } => {
+                diagnostic.help(format!("bind it with `:=`: `{receiver} := …`"))
+            }
+            TypeError::MutatingMethodDeclaredImmutable { method, .. } => {
+                diagnostic.help(format!("declare it with `:=`: `{method} := …`"))
+            }
+            TypeError::RecursiveFunctionNeedsReturnType { function, .. } => diagnostic.help(
+                format!("annotate the return type: `{function} = (…) -> T => < … >`"),
+            ),
+            TypeError::NonExhaustiveMatch { missing, .. } => match missing.is_empty() {
+                true => diagnostic.help("add a `_` arm for the values no arm lists"),
+                false => diagnostic.help(format!(
+                    "add an arm for {}, or a `_` arm",
+                    fmt_name_list(missing)
+                )),
+            },
+            TypeError::UnknownMember {
+                member,
+                in_scope,
+                receiver,
+                more_arguments,
+                ..
+            } => {
+                let shown = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
+                };
+                match output_builtin_module(member) {
+                    Some(module) => diagnostic.help(format!(
+                        "call it as `{}.{member}({shown}{rest})` under `<< {module}`",
+                        crate::ast::display_name(module)
+                    )),
+                    None if *in_scope => {
+                        diagnostic.help(format!("call it as `{member}({shown}{rest})`"))
+                    }
+                    None => diagnostic,
+                }
+            }
+            TypeError::MethodCalledAsFunction {
+                member,
+                receiver,
+                more_arguments,
+                ..
+            } => {
+                let receiver = receiver.as_deref().unwrap_or("receiver");
+                let rest = match more_arguments {
+                    true => "...",
+                    false => "",
+                };
+                diagnostic.help(format!("call it as `{receiver}.{member}({rest})`"))
+            }
+            TypeError::ExpectOutsideTest { .. } => diagnostic.help(format!(
+                "use `{}`, which reports and exits, outside a test case",
+                crate::ast::ASSERT
+            )),
+            TypeError::ComputedGlobalBinding { .. } => {
+                diagnostic.help("move the computation into `^` or the function that uses it")
+            }
+            TypeError::OperatorMustBeMember { operator, .. } => diagnostic.help(format!(
+                "define it inside the type's `{{ }}`, where `it` is the left operand: \
+                 `{operator} = (other) => < … >`"
+            )),
+            _ => diagnostic,
+        }
+    }
+
     /// The source span this error refers to, for diagnostic rendering.
     pub fn span(&self) -> &Span {
         match self {
@@ -56,7 +211,7 @@ impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             TypeError::UndefinedVariable { name, .. } => {
-                write!(f, "Undefined variable '{}'", name)
+                write!(f, "`{name}` is not defined")
             }
             TypeError::AssertionNeedsMatcher { name, .. } => {
                 write!(
@@ -108,26 +263,30 @@ impl std::fmt::Display for TypeError {
                 }
             }
             TypeError::TypeMismatch { expected, got, .. } => {
-                write!(f, "Type mismatch: expected {:?}, got {:?}", expected, got)
+                write!(
+                    f,
+                    "type mismatch: expected {}, got {}",
+                    type_label(expected),
+                    type_label(got)
+                )
             }
             TypeError::NotAFunction { got, .. } => {
-                write!(f, "Not a function: got {:?}", got)
+                write!(f, "{} is not a function", type_label(got))
             }
             TypeError::WrongNumberOfArguments { expected, got, .. } => {
                 write!(
                     f,
-                    "Wrong number of arguments: expected {}, got {}",
+                    "wrong number of arguments: expected {}, got {}",
                     expected, got
                 )
             }
             TypeError::ImmutableAssignment { name, .. } => {
-                write!(f, "Cannot assign to immutable variable '{}'", name)
+                write!(f, "cannot assign to `{name}`, which is bound with `=`")
             }
             TypeError::ImmutableFieldWrite { name, .. } => {
                 write!(
                     f,
-                    "Cannot write to a field of immutable '{}'; bind it with ':=' to allow in-place mutation",
-                    name
+                    "cannot write to a field of `{name}`, which is bound with `=`"
                 )
             }
             TypeError::MutableAliasOfImmutable {
@@ -174,8 +333,7 @@ impl std::fmt::Display for TypeError {
             } => {
                 write!(
                     f,
-                    "Method '{}.{}' mutates 'it' but is declared with '='; declare it with ':=' to allow in-place mutation",
-                    type_name, method
+                    "method `{type_name}.{method}` mutates `it` but is declared with `=`"
                 )?;
                 if *lambda_parameter_shadows_receiver {
                     write!(
@@ -192,25 +350,20 @@ impl std::fmt::Display for TypeError {
             } => {
                 write!(
                     f,
-                    "Cannot call mutating method '{}' on immutable '{}'; bind it with ':=' to allow in-place mutation",
-                    method, receiver
+                    "cannot call mutating method `{method}` on `{receiver}`, which is bound \
+                     with `=`"
                 )
             }
             TypeError::DuplicateDefinition { name, .. } => {
-                write!(f, "Duplicate definition of '{}'", name)
+                write!(f, "duplicate definition of `{name}`")
             }
             TypeError::NoMatchingOverload {
-                name,
-                arg_types,
-                candidates,
-                ..
+                name, arg_types, ..
             } => {
                 write!(
                     f,
-                    "No overload of '{}' matches argument types ({}). Candidates: {}",
-                    name,
+                    "no overload of `{name}` takes ({})",
                     fmt_type_list(arg_types),
-                    fmt_candidates(candidates),
                 )
             }
             TypeError::AmbiguousOverload {
@@ -302,11 +455,7 @@ impl std::fmt::Display for TypeError {
                 )
             }
             TypeError::OverloadCallBeforeDefinition { name, .. } => {
-                write!(
-                    f,
-                    "cannot call '{}' before its definition — Quilon resolves names top to bottom; move the definition above this call",
-                    name
-                )
+                write!(f, "`{name}` is called before its definition")
             }
             TypeError::UnannotatedOverloadCall {
                 name, parameters, ..
@@ -350,14 +499,12 @@ impl std::fmt::Display for TypeError {
             } => match missing.is_empty() {
                 true => write!(
                     f,
-                    "this match on {} is not exhaustive — add a '_' arm for the values no arm \
-                     lists",
+                    "this match on {} is not exhaustive",
                     type_label(scrutinee)
                 ),
                 false => write!(
                     f,
-                    "this match on {} is not exhaustive — no arm covers {}. Add the missing \
-                     arms, or a '_' arm",
+                    "this match on {} is not exhaustive — no arm covers {}",
                     type_label(scrutinee),
                     fmt_name_list(missing)
                 ),
@@ -409,7 +556,8 @@ impl std::fmt::Display for TypeError {
             TypeError::OperatorMustBeMember { operator, .. } => {
                 write!(
                     f,
-                    "operator '{operator}' cannot be defined at the top level — define it as a member of the record or sum type it operates on, where 'it' is the left operand (e.g. inside the type's '{{ }}')",
+                    "operator `{operator}` cannot be defined at the top level — an operator \
+                     is a member of the record or sum type it operates on",
                 )
             }
             TypeError::NotRenderable { name, got, .. } => {
@@ -429,40 +577,23 @@ impl std::fmt::Display for TypeError {
                 type_name,
                 member,
                 in_scope,
-                receiver,
-                more_arguments,
                 ..
             } => {
-                write!(f, "'{type_name}' has no member '{member}'")?;
-                let shown = receiver.as_deref().unwrap_or("receiver");
-                let rest = match more_arguments {
-                    true => ", ...",
-                    false => "",
-                };
+                write!(f, "{type_name} has no member `{member}`")?;
                 // An output built-in is the likely intent behind `c.print()`; say where it
-                // lives and how to reach it, both read off the builtin's own full name.
-                if let Some((module, _)) = crate::ast::RENDERABLE_BUILTINS
-                    .iter()
-                    .find(|builtin| crate::ast::display_name(builtin.name) == member)
-                    .and_then(|builtin| builtin.name.rsplit_once('.'))
-                {
-                    let binding = crate::ast::display_name(module);
-                    return write!(
+                // lives. There being a function of that name is worth a word too: the
+                // member form only looks on the type, so the function never answers it.
+                if let Some(module) = output_builtin_module(member) {
+                    return write!(f, " — a value prints through `{module}`'s `{member}`");
+                }
+                if *in_scope {
+                    write!(
                         f,
-                        ". A value prints through `{module}`'s '{member}' — call it as \
-                         '{binding}.{member}({shown}{rest})' (under `<< {module}`)"
-                    );
+                        " — there is a `{member}` in scope, but `.{member}(...)` only looks \
+                         on {type_name}"
+                    )?;
                 }
-                if !in_scope {
-                    return Ok(());
-                }
-                // There IS a function of that name, so say why it did not answer the call —
-                // in terms of what was written, and with the call that would reach it.
-                write!(
-                    f,
-                    ". There is a '{member}' in scope, but '{shown}.{member}(...)' only \
-                     looks on {type_name} — call it as '{member}({shown}{rest})'"
-                )
+                Ok(())
             }
             TypeError::MethodCalledAsFunction {
                 type_name,
@@ -472,28 +603,36 @@ impl std::fmt::Display for TypeError {
                 ..
             } => {
                 let receiver = receiver.as_deref().unwrap_or("receiver");
-                let (rest, rest_only) = match more_arguments {
-                    true => (", ...", "..."),
-                    false => ("", ""),
+                let rest = match more_arguments {
+                    true => ", ...",
+                    false => "",
                 };
                 write!(
                     f,
-                    "no function '{member}' in scope — '{member}' is a member of \
-                     {type_name}, which '{member}({receiver}{rest})' does not look on. \
-                     Call it as '{receiver}.{member}({rest_only})'",
+                    "no function `{member}` in scope — `{member}` is a member of \
+                     {type_name}, which `{member}({receiver}{rest})` does not look on",
                 )
             }
             TypeError::ComputedGlobalBinding { name, .. } => {
                 write!(
                     f,
-                    "top-level '{name}' has to be computed, and nothing runs before '^' to \
-                     compute it. A top-level binding may hold a Num, Bool or $ literal, or a \
-                     function; anything else (a call, an operator, an array, a record, Text) \
-                     belongs inside a function — move it into '^' or the function that uses it."
+                    "top-level `{name}` has to be computed, and nothing runs before `^` to \
+                     compute it — a top-level binding holds a Num, Bool or $ literal, or a \
+                     function"
                 )
             }
         }
     }
+}
+
+/// The module an output built-in (`print`/`eprint`/`write`) named `member` lives in — the
+/// likely intent behind `value.print()`.
+fn output_builtin_module(member: &str) -> Option<&'static str> {
+    crate::ast::RENDERABLE_BUILTINS
+        .iter()
+        .find(|builtin| crate::ast::display_name(builtin.name) == member)
+        .and_then(|builtin| builtin.name.rsplit_once('.'))
+        .map(|(module, _)| module)
 }
 
 /// Render a comma-separated quoted name list (`'Red', 'Green'`), for the variants a

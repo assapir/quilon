@@ -14,8 +14,7 @@ mod common;
 use common::assert_exit;
 
 /// The text every rejection must carry.
-const LIMIT_MESSAGE: &str = "a function takes at most 10 parameters — group them into a record type and take that \
-     record as one parameter instead";
+const LIMIT_MESSAGE: &str = "a function takes at most 10 parameters";
 
 /// `wide = (p1 :: Num, …, pN :: Num) -> Num => p1 == 0 ? 7 : wide(0, …, 0)`, a function of
 /// `parameters` annotated parameters that calls itself, plus an entry point calling it with
@@ -135,7 +134,7 @@ fn a_stray_token_in_a_parameter_list_is_reported_where_it_is() {
     let tokens = Lexer::tokenize(source).expect("lexing failed");
     let error = parser::parse(&tokens).expect_err("expected a parse error");
     assert!(
-        error.message.contains("Expected type"),
+        error.message.contains("expected a type"),
         "expected the type position to be blamed, got: {}",
         error.message
     );

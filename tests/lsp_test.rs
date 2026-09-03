@@ -42,13 +42,13 @@ fn check_error(path: &Path, text: &str) -> quilon::driver::FrontEndError {
 fn a_type_error_carries_its_span_and_message() {
     let text = "^ = () -> Num => < 1 + true >\n";
     let error = check_error(Path::new("buffer.qn"), text);
-    let span = error.span().expect("a located error");
+    let span = error.diagnostic.primary_span().expect("a located error");
     assert_eq!(span.file, ROOT_FILE);
     assert_eq!(span.start, offset_of(text, "1 + true", 0));
     assert!(
-        error.message().contains("+"),
+        error.diagnostic.message.contains("+"),
         "unexpected message: {}",
-        error.message()
+        error.diagnostic.message
     );
 }
 
@@ -64,7 +64,7 @@ fn a_test_suite_is_checked_with_its_blocks_compiled() {
     // server checks them, where `quilon check` would erase them.
     let text = "<< core.test\n\ntest.describe(\"math\", () => <\n  test.it(\"adds\", () => <\n    expect(1 + true, equals(2))\n  >)\n>)\n";
     let error = check_error(Path::new("suite.qn"), text);
-    let span = error.span().expect("a located error");
+    let span = error.diagnostic.primary_span().expect("a located error");
     assert_eq!(span.start, offset_of(text, "1 + true", 0));
 
     // The same suite with the operands fixed checks clean.
@@ -257,46 +257,50 @@ fn a_program_without_test_blocks_has_no_lenses() {
 }
 
 // --- The protocol loop, end to end ------------------------------------------
+//
+// Shared helpers below, then: one full session over an in-memory connection (initialize,
+// open a document with a type error, read the published diagnostic, fix the document, read
+// the all-clear, ask for hover, semantic tokens, code lenses, and the testItems request,
+// then shut down), and a focused session asserting the structured-diagnostic mapping.
+//
+// Shared by every test below that drives the server as a real LSP client would, rather
+// than calling `analysis` directly: a request/notification pair, receiving the next
+// message with a timeout, and unwrapping a response or a publishDiagnostics notification.
 
-/// One full session over an in-memory connection: initialize, open a document with a type
-/// error, read the published diagnostic, fix the document, read the all-clear, ask for
-/// hover, semantic tokens and code lenses, and shut down.
-#[test]
-fn a_protocol_session_answers_over_an_in_memory_connection() {
-    use lsp_server::{Connection, Message, Notification, Request};
-    use serde_json::{Value, json};
-    use std::time::Duration;
+fn lsp_request(id: i32, method: &str, params: serde_json::Value) -> lsp_server::Message {
+    lsp_server::Message::Request(lsp_server::Request {
+        id: id.into(),
+        method: method.to_string(),
+        params,
+    })
+}
 
-    let (client, server) = Connection::memory();
-    let served = std::thread::spawn(move || quilon::lsp::serve(server));
+fn lsp_notification(method: &str, params: serde_json::Value) -> lsp_server::Message {
+    lsp_server::Message::Notification(lsp_server::Notification {
+        method: method.to_string(),
+        params,
+    })
+}
 
-    let request = |id: i32, method: &str, params: Value| {
-        Message::Request(Request {
-            id: id.into(),
-            method: method.to_string(),
-            params,
-        })
-    };
-    let notification = |method: &str, params: Value| {
-        Message::Notification(Notification {
-            method: method.to_string(),
-            params,
-        })
-    };
-    let receive = || {
-        client
-            .receiver
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the server answers within the timeout")
-    };
-    let response_of = |message: Message| match message {
-        Message::Response(response) => response
+fn lsp_receive(client: &lsp_server::Connection) -> lsp_server::Message {
+    client
+        .receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the server answers within the timeout")
+}
+
+fn lsp_response(message: lsp_server::Message) -> serde_json::Value {
+    match message {
+        lsp_server::Message::Response(response) => response
             .response_result
             .unwrap_or_else(|error| panic!("error response: {error:?}")),
         other => panic!("expected a response, got {other:?}"),
-    };
-    let diagnostics_of = |message: Message| match message {
-        Message::Notification(published) => {
+    }
+}
+
+fn lsp_diagnostics_of(message: lsp_server::Message) -> Vec<serde_json::Value> {
+    match message {
+        lsp_server::Message::Notification(published) => {
             assert_eq!(published.method, "textDocument/publishDiagnostics");
             published.params["diagnostics"]
                 .as_array()
@@ -304,13 +308,24 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
                 .clone()
         }
         other => panic!("expected publishDiagnostics, got {other:?}"),
-    };
+    }
+}
 
+/// A fresh server, initialized and ready for requests/notifications, plus the join handle
+/// to await once the caller shuts it down.
+fn started_session() -> (lsp_server::Connection, std::thread::JoinHandle<()>) {
+    let (client, server) = lsp_server::Connection::memory();
+    let served =
+        std::thread::spawn(move || quilon::lsp::serve(server).expect("server exits cleanly"));
     client
         .sender
-        .send(request(1, "initialize", json!({ "capabilities": {} })))
+        .send(lsp_request(
+            0,
+            "initialize",
+            serde_json::json!({ "capabilities": {} }),
+        ))
         .unwrap();
-    let initialized = response_of(receive());
+    let initialized = lsp_response(lsp_receive(&client));
     assert!(
         initialized["capabilities"]["hoverProvider"]
             .as_bool()
@@ -318,21 +333,29 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     );
     client
         .sender
-        .send(notification("initialized", json!({})))
+        .send(lsp_notification("initialized", serde_json::json!({})))
         .unwrap();
+    (client, served)
+}
+
+#[test]
+fn a_protocol_session_answers_over_an_in_memory_connection() {
+    use serde_json::{Value, json};
+
+    let (client, served) = started_session();
 
     // Open a document with a type error: one diagnostic, on the offending line.
     let uri = "file:///buffer.qn";
     let broken = "^ = () -> Num => < 1 + true >\n";
     client
         .sender
-        .send(notification(
+        .send(lsp_notification(
             "textDocument/didOpen",
             json!({ "textDocument": {
                 "uri": uri, "languageId": "quilon", "version": 1, "text": broken } }),
         ))
         .unwrap();
-    let diagnostics = diagnostics_of(receive());
+    let diagnostics = lsp_diagnostics_of(lsp_receive(&client));
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
     assert_eq!(
@@ -344,37 +367,37 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     let fixed = "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < double(4) >\n";
     client
         .sender
-        .send(notification(
+        .send(lsp_notification(
             "textDocument/didChange",
             json!({ "textDocument": { "uri": uri, "version": 2 },
                 "contentChanges": [ { "text": fixed } ] }),
         ))
         .unwrap();
-    assert!(diagnostics_of(receive()).is_empty());
+    assert!(lsp_diagnostics_of(lsp_receive(&client)).is_empty());
 
     // Hover over the `x` in the body: its inferred type.
     client
         .sender
-        .send(request(
+        .send(lsp_request(
             2,
             "textDocument/hover",
             json!({ "textDocument": { "uri": uri },
                 "position": { "line": 0, "character": fixed.find("x * 2").unwrap() } }),
         ))
         .unwrap();
-    let hover = response_of(receive());
+    let hover = lsp_response(lsp_receive(&client));
     assert_eq!(hover["contents"]["value"], "Num");
 
     // Semantic tokens exist (the delimiter/operator classification at least).
     client
         .sender
-        .send(request(
+        .send(lsp_request(
             3,
             "textDocument/semanticTokens/full",
             json!({ "textDocument": { "uri": uri } }),
         ))
         .unwrap();
-    let tokens = response_of(receive());
+    let tokens = lsp_response(lsp_receive(&client));
     assert!(!tokens["data"].as_array().expect("token data").is_empty());
 
     // A test suite document gets a code lens per suite and case, carrying the
@@ -383,22 +406,22 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     let suite = "<< core.test\n\ntest.describe(\"s\", () => <\n  test.it(\"c\", () => <\n    expect(1, equals(1))\n  >)\n>)\n";
     client
         .sender
-        .send(notification(
+        .send(lsp_notification(
             "textDocument/didOpen",
             json!({ "textDocument": {
                 "uri": suite_uri, "languageId": "quilon", "version": 1, "text": suite } }),
         ))
         .unwrap();
-    diagnostics_of(receive());
+    lsp_diagnostics_of(lsp_receive(&client));
     client
         .sender
-        .send(request(
+        .send(lsp_request(
             4,
             "textDocument/codeLens",
             json!({ "textDocument": { "uri": suite_uri } }),
         ))
         .unwrap();
-    let lenses = response_of(receive());
+    let lenses = lsp_response(lsp_receive(&client));
     let lenses = lenses.as_array().expect("a lens array");
     assert_eq!(lenses.len(), 2);
     assert_eq!(lenses[0]["command"]["command"], "quilon.runTests");
@@ -413,13 +436,13 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     // carrying the `/`-joined path `quilon test --only` expects.
     client
         .sender
-        .send(request(
+        .send(lsp_request(
             5,
             "quilon/testItems",
             json!({ "textDocument": { "uri": suite_uri } }),
         ))
         .unwrap();
-    let items = response_of(receive());
+    let items = lsp_response(lsp_receive(&client));
     let items = items.as_array().expect("a test item array");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["kind"], "suite");
@@ -431,17 +454,85 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
 
     client
         .sender
-        .send(request(6, "shutdown", Value::Null))
+        .send(lsp_request(6, "shutdown", Value::Null))
         .unwrap();
-    response_of(receive());
+    lsp_response(lsp_receive(&client));
     client
         .sender
-        .send(notification("exit", Value::Null))
+        .send(lsp_notification("exit", Value::Null))
         .unwrap();
-    served
-        .join()
-        .expect("the server thread joins")
-        .expect("the server exits cleanly");
+    served.join().expect("the server thread joins");
+}
+
+/// A `Num + Text` overload mismatch — `Code::NoMatchingOverload` (`QN311`) — carries the
+/// code in `Diagnostic.code`, its own message (with the operator's dedicated help text
+/// appended) as the message, and each operand's type as a separate `relatedInformation`
+/// entry at that operand's own location.
+#[test]
+fn a_num_plus_text_diagnostic_carries_its_code_and_related_operand_labels() {
+    use serde_json::json;
+
+    let (client, served) = started_session();
+
+    let uri = "file:///overload.qn";
+    let text = "^ = () -> Num => < 1 + \"x\" >\n";
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    let diagnostics = lsp_diagnostics_of(lsp_receive(&client));
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+
+    assert_eq!(diagnostic["code"], "QN311");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("no overload of `+`"),
+        "unexpected message: {diagnostic}"
+    );
+    // The operator's dedicated help for exactly this mismatch, appended to the message.
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("interpolate"),
+        "unexpected message: {diagnostic}"
+    );
+    // The range opens at the primary label — the left (`Num`) operand.
+    assert_eq!(
+        diagnostic["range"]["start"]["character"],
+        text.find('1').unwrap()
+    );
+
+    // The right (`Text`) operand is the one remaining label, as related information at its
+    // own location in this same document.
+    let related = diagnostic["relatedInformation"]
+        .as_array()
+        .expect("related info");
+    assert_eq!(related.len(), 1);
+    assert_eq!(related[0]["message"], "Text");
+    assert_eq!(related[0]["location"]["uri"], uri);
+    assert_eq!(
+        related[0]["location"]["range"]["start"]["character"],
+        text.find("\"x\"").unwrap()
+    );
+
+    client
+        .sender
+        .send(lsp_request(1, "shutdown", serde_json::Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", serde_json::Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
 }
 
 // --- The parse helper -------------------------------------------------------

@@ -124,6 +124,8 @@ pub enum TypeError {
     NoMatchingOverload {
         name: String,
         arg_types: Vec<Type>,
+        /// Where each argument is, so the report can label each with its type.
+        arg_spans: Vec<Span>,
         candidates: Vec<Vec<Type>>,
         span: Span,
     },

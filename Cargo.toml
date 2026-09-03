@@ -47,6 +47,14 @@ serde_json = "1.0.151"
 # characters — `Text` itself stays logical order end to end (see docs/types/text.md).
 unicode-bidi = "0.3.18"
 
+# Diagnostic rendering: every located error is a `miette::Diagnostic` (code, message,
+# labelled spans, help), drawn by its graphical handler — colored on a terminal, plain
+# otherwise. `fancy-no-backtrace` is the graphical handler without the panic hook.
+miette = { version = "7.6", features = ["fancy-no-backtrace"] }
+
+# Live stage progress (lexing → parsing → checking → …) on a terminal.
+indicatif = "0.18"
+
 [dev-dependencies]
 # `wait4`, for the exact peak RSS the kernel recorded for a benchmarked child process.
 # Already in the dependency graph; this only makes it directly visible to the benches.

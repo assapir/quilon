@@ -347,7 +347,7 @@ fn the_render_member_cannot_be_declared_mutating() {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let err = parser::parse(&tokens).expect_err("`:=` on the render member must be rejected");
     assert!(
-        err.message.contains("cannot be declared with ':='"),
+        err.message.contains("cannot be declared with `:=`"),
         "expected the render-member rule, got: {}",
         err.message
     );
@@ -383,11 +383,11 @@ fn a_field_write_on_a_sum_reports_the_missing_field_not_setter_advice() {
         .expect_err("a field write on a sum must be rejected")
         .to_string();
     assert!(
-        !message.contains("declare it with ':='"),
+        !message.contains("declare it with `:=`"),
         "a sum field write must not be answered with setter advice, got: {message}"
     );
     assert!(
-        message.contains("Type mismatch"),
+        message.contains("type mismatch"),
         "expected the field/type complaint, got: {message}"
     );
 }
@@ -403,10 +403,12 @@ fn an_immutable_method_that_mutates_names_the_binding_operator_to_change() {
     let err = checker
         .check_program(&program)
         .expect_err("an `=` method that mutates `it` must be rejected");
-    let message = err.to_string();
+    let report = err
+        .diagnostic()
+        .render(&quilon::source_map::SourceMap::default(), false);
     assert!(
-        message.contains("'T.bump'") && message.contains("declare it with ':='"),
-        "the diagnostic must name the method and the fix, got: {message}"
+        report.contains("`T.bump`") && report.contains("help: declare it with `:=`"),
+        "the diagnostic must name the method and the fix, got: {report}"
     );
 }
 
@@ -516,13 +518,13 @@ fn a_member_call_never_falls_back_to_a_top_level_function() {
         "Counter = {\n  value :: Num\n}\nbump = (n :: Num) -> Num => < n * 100 >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.bump(3)\n>",
     );
     assert!(
-        message.contains("'Counter' has no member 'bump'"),
+        message.contains("Counter has no member `bump`"),
         "the diagnostic must name the receiver's type and the member, got: {message}"
     );
     // And it spells out the call that DOES reach that function, with the receiver the
     // reader wrote and an ellipsis for the arguments they passed.
     assert!(
-        message.contains("call it as 'bump(c, ...)'"),
+        message.contains("help: call it as `bump(c, ...)`"),
         "the advice must spell out the plain call, got: {message}"
     );
 }
@@ -535,7 +537,7 @@ fn a_member_call_on_a_built_in_type_never_reaches_a_top_level_function() {
         "double = (x :: Num) -> Num => < x * 2 >\n^ = () -> Num => < (5).double() >",
     );
     assert!(
-        message.contains("'Num' has no member 'double'"),
+        message.contains("Num has no member `double`"),
         "the diagnostic must name the receiver's type and the member, got: {message}"
     );
 }
@@ -558,12 +560,12 @@ fn the_free_form_of_a_method_call_does_not_reach_the_method() {
         "Counter = {\n  value :: Num,\n  bump = (n :: Num) -> Num => < it.value + n >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
     );
     assert!(
-        message.contains("no function 'bump' in scope"),
+        message.contains("no function `bump` in scope"),
         "the diagnostic must name the function that is missing, got: {message}"
     );
     // And it spells out the call that DOES reach the method, with the receiver written.
     assert!(
-        message.contains("Call it as 'c.bump(...)'"),
+        message.contains("help: call it as `c.bump(...)`"),
         "the advice must spell out the member call, got: {message}"
     );
 }
@@ -576,7 +578,7 @@ fn a_built_in_method_does_not_answer_the_free_form() {
         "^ = () -> Num => <\n  parts :: []Text = split(\"a,b\", \",\")\n  parts.size\n>",
     );
     assert!(
-        message.contains("no function 'split' in scope"),
+        message.contains("no function `split` in scope"),
         "the diagnostic must name the function that is missing, got: {message}"
     );
 }
@@ -666,8 +668,8 @@ fn a_member_call_never_reaches_an_output_built_in() {
         "<< core.io\nCounter = {\n  value :: Num,\n  ` = () -> Text => < \"Counter(`it.value`)\" >\n}\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  c.print()\n  0\n>",
     );
     assert!(
-        message.contains("'Counter' has no member 'print'")
-            && message.contains("call it as 'io.print(c)'"),
+        message.contains("Counter has no member `print`")
+            && message.contains("help: call it as `io.print(c)` under `<< core.io`"),
         "expected the diagnostic to name the member and point at the built-in, got: {message}"
     );
 }
@@ -681,7 +683,7 @@ fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
         "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => < n <= 0 ? it.value : it.down(n - 1) >\n}\n^ = () -> Num => < 0 >",
     );
     assert!(
-        message.contains("'Counter' has no member 'down'") && !message.contains("call it as"),
+        message.contains("Counter has no member `down`") && !message.contains("call it as"),
         "expected the bare diagnostic with no call-it-as advice, got: {message}"
     );
 }
@@ -1472,9 +1474,11 @@ fn two_adjacent_closers_name_the_missing_space() {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let err = parser::parse(&tokens).expect_err("`>>` as two closers must be rejected");
     assert!(
-        err.message.contains("separate them with a space"),
-        "expected the adjacent-closer hint, got: {}",
-        err.message
+        err.help
+            .as_deref()
+            .is_some_and(|help| help.contains("separate them with a space")),
+        "expected the adjacent-closer hint, got: {:?}",
+        err.help
     );
 
     // With the space, the same program parses.

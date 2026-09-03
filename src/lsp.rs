@@ -24,17 +24,20 @@ use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    CodeLens, CodeLensOptions, Command, Diagnostic, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability, Location,
-    MarkedString, OneOf, Position, PublishDiagnosticsParams, Range, SemanticToken,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensParams, SemanticTokensServerCapabilities,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    CodeLens, CodeLensOptions, Command, Diagnostic, DiagnosticRelatedInformation,
+    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, GotoDefinitionParams, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, Location, MarkedString, NumberOrString, OneOf, Position,
+    PublishDiagnosticsParams, Range, SemanticToken, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
+    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 
+use crate::diagnostic::Label;
+use crate::driver::FrontEndError;
 use crate::lexer::{ROOT_FILE, Span};
-use crate::source_map::DocumentPositions;
+use crate::source_map::{DocumentPositions, SourceMap};
 use analysis::{SemanticTokenKind, TestLensKind};
 
 /// The semantic token types the server reports, in legend order. Block delimiters are
@@ -176,32 +179,7 @@ impl LanguageServer {
         };
         let diagnostics = match analysis::check_text(&path, text) {
             Ok(_) => Vec::new(),
-            Err(error) => {
-                let positions = DocumentPositions::new(text);
-                let (range, message) = match error.span() {
-                    // An error in the open document points at its own span.
-                    Some(span) if span.file == ROOT_FILE => {
-                        (range_of(&positions, span), error.message().to_string())
-                    }
-                    // An error elsewhere (an imported module, or no location at all)
-                    // lands at the top of the document, carrying the rendered position.
-                    _ => {
-                        let location = error.to_string().lines().next().unwrap_or("").to_string();
-                        let message = match location.is_empty() {
-                            true => error.message().to_string(),
-                            false => format!("{} {}", location, error.message()),
-                        };
-                        (Range::default(), message)
-                    }
-                };
-                vec![Diagnostic {
-                    range,
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("quilon".to_string()),
-                    message,
-                    ..Default::default()
-                }]
-            }
+            Err(error) => vec![lsp_diagnostic(&error, uri, text)],
         };
         publish(uri.clone(), diagnostics)
     }
@@ -294,7 +272,7 @@ impl LanguageServer {
                 uri: uri.clone(),
                 range: range_of(&positions, &span),
             }),
-            false => location_in_other_file(&checked, &span),
+            false => location_in_other_file(&checked.sources, &span),
         };
         match location {
             Some(location) => Response::new_ok(id, location),
@@ -446,15 +424,89 @@ fn file_uri(path: &Path) -> Option<Uri> {
 /// A protocol `Location` for a span in one of the program's OTHER files (an imported
 /// module). `None` when that file is not a real file on disk — a bundled built-in module
 /// has no file to open.
-fn location_in_other_file(checked: &crate::driver::Checked, span: &Span) -> Option<Location> {
-    let resolved = checked.sources.locate(span)?;
+fn location_in_other_file(sources: &SourceMap, span: &Span) -> Option<Location> {
+    let resolved = sources.locate(span)?;
     let path = std::fs::canonicalize(&resolved.path).ok()?;
     let uri = file_uri(&path)?;
-    let text = checked.sources.get_text(span.file)?;
+    let text = sources.get_text(span.file)?;
     let positions = DocumentPositions::new(text);
     Some(Location {
         uri,
         range: range_of(&positions, span),
+    })
+}
+
+/// The protocol `Diagnostic` for a front-end failure: the registry code (`QN311`, …) in
+/// `code`, the diagnostic's own message — its `help:` text appended, when it has one — as
+/// `message`, its primary span as the range when that span is in the open document, and
+/// every OTHER labelled span (in this document, or resolved into an imported one) as
+/// `relatedInformation`. A primary span OUTSIDE the open document (an imported module, or
+/// no span at all — a read/import failure) leaves the range at the document's very start
+/// and instead carries ALL of its labels as related information: nothing in the open
+/// document is "the" place to underline.
+fn lsp_diagnostic(error: &FrontEndError, uri: &Uri, text: &str) -> Diagnostic {
+    let diagnostic = &error.diagnostic;
+    let positions = DocumentPositions::new(text);
+    let primary_in_document =
+        matches!(diagnostic.primary_span(), Some(span) if span.file == ROOT_FILE);
+    let range = match (primary_in_document, diagnostic.primary_span()) {
+        (true, Some(span)) => range_of(&positions, span),
+        _ => Range::default(),
+    };
+
+    let mut message = diagnostic.message.clone();
+    if let Some(help) = &diagnostic.help {
+        message.push_str(&format!("\nhelp: {help}"));
+    }
+
+    let related_information: Vec<_> = diagnostic
+        .labels
+        .iter()
+        // The label the range already points at (the primary one, first by construction)
+        // needs no separate entry; every other label becomes related information.
+        .skip(usize::from(primary_in_document))
+        .filter_map(|label| {
+            related_information(&error.sources, uri, &positions, label, &diagnostic.message)
+        })
+        .collect();
+
+    Diagnostic {
+        range,
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String(diagnostic.code.to_string())),
+        source: Some("quilon".to_string()),
+        message,
+        related_information: (!related_information.is_empty()).then_some(related_information),
+        ..Default::default()
+    }
+}
+
+/// One label as `DiagnosticRelatedInformation`: its own location (in the open document, or
+/// resolved into an imported file through `sources`), with the label's own word ("Num",
+/// "Text", …) as the message, falling back to `fallback_message` (the diagnostic's own
+/// message) when the label carries no word of its own. `None` when the span names no real,
+/// locatable file (a synthesized span, or a bundled built-in module with no file to point
+/// at).
+fn related_information(
+    sources: &SourceMap,
+    uri: &Uri,
+    positions: &DocumentPositions,
+    label: &Label,
+    fallback_message: &str,
+) -> Option<DiagnosticRelatedInformation> {
+    let location = match label.span.file == ROOT_FILE {
+        true => Location {
+            uri: uri.clone(),
+            range: range_of(positions, &label.span),
+        },
+        false => location_in_other_file(sources, &label.span)?,
+    };
+    Some(DiagnosticRelatedInformation {
+        location,
+        message: label
+            .text
+            .clone()
+            .unwrap_or_else(|| fallback_message.to_string()),
     })
 }
 
