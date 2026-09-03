@@ -1,0 +1,12 @@
+extends: existence
+message: "State what Quilon does, not what it isn't or how another design does it: '%s'."
+level: error
+ignorecase: true
+tokens:
+  - rather than
+  - instead of
+  - unlike
+  - as opposed to
+  - like [A-Z]\w+ does
+  - the way \w+ does
+  - \b(rust|java|python|swift|javascript|typescript|c\+\+|haskell|elm|zig)\b

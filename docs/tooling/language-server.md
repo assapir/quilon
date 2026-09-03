@@ -34,14 +34,14 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
 - **Code lens**: one lens above every `describe` (**▶ Run suite**) and every `it`
   (**▶ Run case**). The lens carries the client-side command `quilon.runTests` with two
   arguments — the file's path and the block's own `/`-joined path — so the command can run
-  `quilon test <file> --only <path>` and scope to just that suite or case.
+  `quilon test <file> --only <path>` and scope to that suite or case.
 - **`quilon/testItems`** (custom request, `{ textDocument: { uri } }` → an array) answers
   the same test tree as the code lenses, flat: one entry per suite and case, in document
   order, each an object with `path` (the names from the outermost `describe` down, joined
   by `/` — the path [`quilon test --only`](../corelib/test/README.md#paths) expects),
   `name` (the suite's or case's own description), `kind` (`"suite"` or `"case"`), and
   `range` (its `describe(...)`/`it(...)` call, in protocol positions). A client building a
-  test explorer reads this instead of re-deriving the tree from the lenses.
+  test explorer reads this request for its tree.
 
 Positions on the wire are the protocol's: zero-based lines and UTF-16 code-unit columns.
 The server converts them to and from the compiler's byte spans.

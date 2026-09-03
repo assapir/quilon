@@ -1,0 +1,16 @@
+# Accepted exceptions to the Quilon writing-style rules (.vale/styles/Quilon/).
+#
+# One term or regex per line, case-insensitive. A line here is exempted from
+# every Quilon.* rule everywhere `Vocab = Quilon` applies (see .vale.ini) --
+# it is not scoped to a single rule or a single line.
+#
+# Add an entry here only for a term that legitimately contains a flagged
+# word as a fixed piece of vocabulary (e.g. a proper noun or an idiom that
+# reads as positive, ISO-style prose despite matching a rule's pattern).
+# For a one-off exception -- a single sentence that needs a flagged word
+# and nothing else on the page does -- prefer Vale's inline markup instead
+# of widening this file:
+#
+#   <!-- vale Quilon.Hedging = NO -->
+#   ...the one sentence that needs it...
+#   <!-- vale Quilon.Hedging = YES -->
