@@ -1,0 +1,14 @@
+extends: existence
+message: "State the behavior that exists."
+level: warning
+ignorecase: true
+tokens:
+  - does not
+  - doesn't
+  - is not
+  - isn't
+  - cannot
+  - can't
+  - never
+  - there is no
+  - no way to

@@ -39,6 +39,22 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Install Vale
+        run: |
+          set -euxo pipefail
+          release=3.20.0
+          mkdir -p "${{ runner.temp }}/vale-bin"
+          curl -fsSL "https://github.com/errata-ai/vale/releases/download/v${release}/vale_${release}_Linux_64-bit.tar.gz" \
+            | tar -xzf - -C "${{ runner.temp }}/vale-bin" vale
+          echo "${{ runner.temp }}/vale-bin" >> "$GITHUB_PATH"
+          "${{ runner.temp }}/vale-bin/vale" --version
+
+      # Enforces docs/README.md#writing-style (ISO technical-writing style: the
+      # rules live in .vale/styles/Quilon/). Errors fail the build; the
+      # NegatedBehavior rule is warning-level and prints without failing.
+      - name: Docs style (Vale)
+        run: vale --minAlertLevel=error docs editors/vscode/README.md
+
   build-and-test:
     name: build-and-test (${{ matrix.key }})
     needs: gate

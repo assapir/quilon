@@ -68,3 +68,28 @@ No word is reserved either, so `if = 5` or a function named `while` is perfectly
 - [Memory](memory.md)
 - Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md)
 - Status: [feature matrix](status/feature-matrix.md) · [known limitations](status/limitations.md) · [compiler architecture](status/architecture.md) · [ABI and calling convention](status/abi.md)
+
+## Writing style
+
+This reference states what Quilon **is** — positive, normative facts about current
+behavior. No rationale for a design (`because…`, `the point is…`), no comparison
+with other languages (`unlike Rust…`, `rather than a for loop…`), no history
+(`used to…`, `no longer…`, `still…`), and no hedging (`just`, `simply`, `note
+that…`). A statement of what the language does not do belongs only where it
+defines behavior (e.g. "there are no keywords").
+
+[Vale](https://vale.sh) enforces this over `docs/**/*.md` and
+`editors/vscode/README.md` (`docs/ORCHESTRATION.md`, `docs/ROADMAP.md`, and
+`docs/status/**` are planning/status pages and carry decisions and gaps by
+nature, so they're exempt) — run it locally with:
+
+```bash
+vale docs
+```
+
+The rules live in `.vale/styles/Quilon/`, one file per category. A term that's
+a legitimate exception (a fixed piece of vocabulary, not a violation) goes in
+`.vale/styles/config/vocabularies/Quilon/accept.txt`; a one-off exception for a
+single sentence uses Vale's inline markup instead (`<!-- vale Quilon.Hedging =
+NO -->` … `<!-- vale Quilon.Hedging = YES -->`) — see the comment at the top of
+`accept.txt` for both.
