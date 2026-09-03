@@ -128,6 +128,7 @@ statements, `[]T` element types, constructor patterns, or chained prefix operato
 | QN337 | method called as a function |
 | QN338 | value with no rendering |
 | QN339 | no `^` entry point |
+| QN340 | static call on a method that reads its receiver |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -901,6 +902,20 @@ double = (x :: Num) -> Num => < x * 2 >
 ```
 
 Define the entry point: `^ = () -> Num => < 0 >`.
+
+### QN340 — static call on a method that reads its receiver
+
+A method called on the bare TYPE NAME (`Point.origin()`, not a value) reads the receiver
+`it` in its body — there is no value to bind it to. Only a STATIC method — one that never
+reads `it`, the natural spelling for a constructor (`Request.get(url)`) — may be called
+this way.
+
+```quilon ignore
+Point = { x :: Num, distance = () -> Num => < it.x > }
+^ = () -> Num => < Point.distance() >
+```
+
+Call it on a value instead: `p.distance()`.
 
 ## Code generation and build
 

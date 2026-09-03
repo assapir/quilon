@@ -327,6 +327,16 @@ pub enum TypeError {
         got: Box<Type>,
         span: Span,
     },
+    /// A method called on the bare TYPE NAME (`Point.origin()`, not a value) whose body
+    /// reads the receiver `it` — there is no value to bind it to. Only a STATIC method (one
+    /// that never reads `it` — the natural spelling for a constructor, `Request.get(url)`)
+    /// may be called this way; this is what a checker/codegen agreement over #259's design
+    /// call (support static calls) requires rejecting.
+    StaticCallNeedsReceiverValue {
+        method: String,
+        type_name: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual
@@ -508,6 +518,11 @@ pub struct TypeChecker {
     // Methods declared with `:=` ("setters"): they may mutate their receiver in place,
     // so calling one requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
+    // Methods whose body never reads the receiver `it` — STATIC-eligible, so they may be
+    // called on the bare TYPE NAME (`Point.origin()`) as well as on a value. A method
+    // absent here needs an actual receiver value; calling it on the type name is
+    // `StaticCallNeedsReceiverValue`.
+    static_methods: std::collections::HashSet<(String, String)>,
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expression` and returned by `check_program`.
     type_table: TypeTable,
@@ -569,6 +584,7 @@ impl TypeChecker {
             methods: std::collections::HashMap::new(),
             sum_types: std::collections::HashMap::new(),
             setter_methods: std::collections::HashSet::new(),
+            static_methods: std::collections::HashSet::new(),
             type_table: TypeTable::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),

@@ -21,6 +21,15 @@ Greeter = {
 bump = (by :: Num) -> Num => < by * 100 >
 bump = (counter :: Counter, by :: Num) -> Num => < counter.value * by >
 
+~ A method whose body never reads `it` — STATIC — may be called on the bare TYPE NAME
+~ instead of on a value: the natural spelling for a constructor.
+Point = {
+  x :: Num,
+  y :: Num,
+  origin = () -> Point => < Point { x = 0, y = 0 } >,
+  at = (x :: Num, y :: Num) -> Point => < Point { x = x, y = y } >
+}
+
 ^ = () -> $ => <
   c :: Counter = Counter { value = 30 }
   assert(c.bump(5), equals(35))     ~ Counter's method: it.value + 5
@@ -30,4 +39,9 @@ bump = (counter :: Counter, by :: Num) -> Num => < counter.value * by >
   g :: Greeter = Greeter { label = "front desk" }
   assert(g.greet("Alice"), equals("Hello, Alice"))
   assert(g.label, equals("front desk"))
+
+  origin :: Point = Point.origin()
+  assert(origin.x, equals(0))
+  p :: Point = Point.at(3, 4)
+  assert(p.x + p.y, equals(7))
 >
