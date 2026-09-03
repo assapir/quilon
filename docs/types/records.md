@@ -64,8 +64,8 @@ The same holds for the methods reserved on the built-in types: `"a,b".split(",")
 `Text`'s `split`, and `split("a,b", ",")` is an undefined name.
 
 ### Static methods
-A method whose body never reads `it` is **static**: it may be called on the TYPE NAME
-itself, with no receiver value — the natural spelling for a constructor.
+A method whose body never reads `it` is **static**: it may be called on the type name
+itself — the natural spelling for a constructor.
 ```quilon
 Point = {
   x :: Num,
