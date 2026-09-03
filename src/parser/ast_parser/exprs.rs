@@ -666,18 +666,7 @@ impl<'a> Parser<'a> {
                              parameter",
                         ));
                     }
-                    let parameter_name = self.expect_ident()?;
-                    let parameter_type = if self.check(&TokenKind::TypeAnnotation) {
-                        self.advance();
-                        Some(self.parse_type()?)
-                    } else {
-                        None
-                    };
-                    parameters.push(Parameter {
-                        name: parameter_name,
-                        type_annotation: parameter_type,
-                        span: self.previous_span(),
-                    });
+                    parameters.push(self.parse_parameter()?);
                     if !self.check(&TokenKind::Comma) {
                         break;
                     }
@@ -686,20 +675,27 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::ParenClose)?;
         } else if self.check(&TokenKind::Ident) {
-            let parameter_name = self.expect_ident()?;
-            let parameter_type = if self.check(&TokenKind::TypeAnnotation) {
-                self.advance();
-                Some(self.parse_type()?)
-            } else {
-                None
-            };
-            parameters.push(Parameter {
-                name: parameter_name,
-                type_annotation: parameter_type,
-                span: self.previous_span(),
-            });
+            parameters.push(self.parse_parameter()?);
         }
         Ok(parameters)
+    }
+
+    /// One `name` / `name :: Type` parameter, its span covering the name through the type
+    /// annotation (or just the name, when untyped) — not the annotation alone.
+    fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
+        let start = self.current_span();
+        let name = self.expect_ident()?;
+        let type_annotation = if self.check(&TokenKind::TypeAnnotation) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        Ok(Parameter {
+            name,
+            type_annotation,
+            span: self.span(start.start, self.previous_span().end),
+        })
     }
 
     /// The `{ … }` field list shared by an anonymous record literal and a named
