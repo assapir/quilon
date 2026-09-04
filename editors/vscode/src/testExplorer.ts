@@ -3,18 +3,21 @@
 // CodeLens read), with a Run profile that spawns `quilon test <file> --reporter json
 // [--only <path>]` and parses the NDJSON event stream back into pass/fail results.
 //
-// No Debug profile: `quilon test` runs only under the in-process JIT (see
-// `src/test_command.rs`'s module docs), and the extension's only debug path
-// (`debugConfig.ts`) launches a `quilon build --debug` NATIVE binary under CodeLLDB — there
-// is no way to attach a debugger to a JIT test run, so a Debug profile here would have
-// nothing to build. `docs/tooling/language-server.md` and the extension README say so.
+// Its Debug profile builds each selected item into a native, debuggable executable
+// (`quilon test <file> [--only <path>] --binary <tmpbin>`, `--binary` carrying debug info
+// implicitly — see `src/test_command.rs`) and launches it under CodeLLDB, one session per
+// selected item, sequentially: `debug.ts`'s `buildDebuggable` is the same build-and-launch
+// step the 🐞 Debug suite / 🐞 Debug case CodeLens use. Unlike Run, a debug session reports
+// no pass/fail here — the point is to step through it — so a debugged item is only marked
+// started, not passed or failed.
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { type LanguageClient } from "vscode-languageclient/node";
 import { type ResolvedCompiler } from "./compilerCommand";
-import { saveIfDirty } from "./debug";
+import { buildDebuggable, saveIfDirty } from "./debug";
+import { tempBinaryPath, testBuildArgs } from "./debugConfig";
 import {
   buildTestTree,
   parseReporterLine,
@@ -68,6 +71,12 @@ export function registerTestExplorer(
       "Run",
       vscode.TestRunProfileKind.Run,
       (request, token) => void runHandler(controller, resolveCompiler, request, token),
+      true,
+    ),
+    controller.createRunProfile(
+      "Debug",
+      vscode.TestRunProfileKind.Debug,
+      (request, token) => void debugHandler(controller, resolveCompiler, context, request, token),
       true,
     ),
   );
@@ -172,6 +181,98 @@ async function runHandler(
     [...groups.values()].map((group) => runFile(run, group, resolveCompiler, token)),
   );
   run.end();
+}
+
+/**
+ * The Debug profile: one `quilon test --binary` build and CodeLLDB session per selected
+ * item, in turn — a suite or case item builds with `--only <path>`, a file-root item (no
+ * path of its own) builds the whole file. Sequential, unlike Run's parallel-per-file
+ * spawns, so debug sessions never pile up on top of each other; each item is marked started
+ * before its session launches but carries no pass/fail verdict, since stepping through it
+ * by hand is the point.
+ */
+async function debugHandler(
+  controller: vscode.TestController,
+  resolveCompiler: () => ResolvedCompiler,
+  context: vscode.ExtensionContext,
+  request: vscode.TestRunRequest,
+  token: vscode.CancellationToken,
+): Promise<void> {
+  const run = controller.createTestRun(request);
+  const excluded = new Set(request.exclude ?? []);
+  const selected = (request.include ?? collectTopLevel(controller)).filter(
+    (item) => !excluded.has(item),
+  );
+
+  // Chained rather than a `for`-`await` loop, so each session's build-and-launch only
+  // starts once the previous one has ended (a plain loop with an internal `await` reads the
+  // same but is indistinguishable from an accidentally-serialized parallel task).
+  await selected.reduce(async (previous, item) => {
+    await previous;
+    if (token.isCancellationRequested || !item.uri) {
+      return;
+    }
+    run.started(item);
+    await debugOneItem(context, resolveCompiler, item.uri.fsPath, testPaths.get(item));
+  }, Promise.resolve());
+  run.end();
+}
+
+/**
+ * Build one suite/case (or the whole file, when `testPath` is `undefined` — a file-root
+ * item) for debug and run it under CodeLLDB, awaiting the session's end before returning so
+ * the caller's sequential loop doesn't start the next one on top of it.
+ */
+async function debugOneItem(
+  context: vscode.ExtensionContext,
+  resolveCompiler: () => ResolvedCompiler,
+  file: string,
+  testPath: string | undefined,
+): Promise<void> {
+  const document = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === file);
+  if (document) {
+    await saveIfDirty(file);
+  }
+
+  const compiler = resolveCompiler();
+  const output = tempBinaryPath(file);
+  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+  const cwd = folder?.uri.fsPath;
+  const sessionName = testPath ?? path.basename(file);
+
+  const config = await buildDebuggable(
+    context,
+    compiler,
+    testBuildArgs(compiler.baseArgs, file, testPath, output),
+    output,
+    cwd,
+    `Quilon: building ${path.basename(file)} for debug…`,
+    `Quilon: Debug ${sessionName}`,
+  );
+  if (!config) {
+    return;
+  }
+
+  // Subscribed BEFORE starting the session: a session with no breakpoint hit can run to
+  // completion and terminate before an `await`ed `startDebugging` even resolves, and a
+  // subscription installed only after that would miss the termination event and hang here
+  // forever.
+  let subscription: vscode.Disposable | undefined;
+  const ended = new Promise<void>((resolve) => {
+    subscription = vscode.debug.onDidTerminateDebugSession((session) => {
+      if (session.configuration.program === output) {
+        subscription?.dispose();
+        resolve();
+      }
+    });
+  });
+
+  const started = await vscode.debug.startDebugging(folder, config);
+  if (!started) {
+    subscription?.dispose();
+    return;
+  }
+  await ended;
 }
 
 function collectTopLevel(controller: vscode.TestController): vscode.TestItem[] {

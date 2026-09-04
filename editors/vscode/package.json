@@ -95,6 +95,10 @@
       {
         "command": "quilon.runTests",
         "title": "Quilon: Run Tests in Current File"
+      },
+      {
+        "command": "quilon.debugTests",
+        "title": "Quilon: Debug Tests in Current File"
       }
     ],
     "taskDefinitions": [

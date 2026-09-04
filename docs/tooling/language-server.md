@@ -40,10 +40,12 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
     comparison operator as an operator token;
   - an identifier matching one of the file's declared type names, function names, or
     parameter names as a type, function, or parameter token.
-- **Code lens**: one lens above every `describe` (**▶ Run suite**) and every `it`
-  (**▶ Run case**). The lens carries the client-side command `quilon.runTests` with two
-  arguments — the file's path and the block's own `/`-joined path — so the command can run
-  `quilon test <file> --only <path>` and scope to that suite or case.
+- **Code lens**: two lenses above every `describe` (**▶ Run suite** / **🐞 Debug suite**)
+  and every `it` (**▶ Run case** / **🐞 Debug case**). Both carry the same two arguments —
+  the file's path and the block's own `/`-joined path — through a client-side command:
+  `quilon.runTests` runs `quilon test <file> --only <path>` in place, scoped to that suite
+  or case; `quilon.debugTests` builds `quilon test <file> --only <path> --binary <out>` and
+  launches the result under a debugger instead.
 - **`quilon/testItems`** (custom request, `{ textDocument: { uri } }` → an array) answers
   the same test tree as the code lenses, flat: one entry per suite and case, in document
   order, each an object with `path` (the names from the outermost `describe` down, joined

@@ -7,6 +7,12 @@
 // CodeLLDB (`type: "lldb"`) launch of that binary. Breakpoints set in the `.qn`
 // source are hit through the DWARF line table the `--debug` build emits.
 //
+// The `quilon.debugTests` command (the language server's 🐞 Debug suite / 🐞 Debug case
+// lenses) and the Test Explorer's Debug profile (`testExplorer.ts`) build a suite the same
+// way but with `quilon test <file> --only <path> --binary <tmpbin>` instead — a `--binary`
+// build carries debug info implicitly. Both paths share `buildDebuggable` below: build,
+// surface a failure the same way, resolve the CodeLLDB launch of the result.
+//
 // Value rendering (Text as a string, `[]T` as an indexed list) is provided by
 // the lldb formatter we import against the compiler's DWARF types — see
 // `formatters/quilon.py`.
@@ -22,6 +28,7 @@ import {
   firstNonEmptyLine,
   InFlightBuilds,
   tempBinaryPath,
+  testBuildArgs,
   toLldbConfiguration,
 } from "./debugConfig";
 import { forgetResolvedCompiler, resolvedQuilonCompiler, showMissingCompiler } from "./extension";
@@ -85,15 +92,14 @@ class CompilerMissing extends Error {
   }
 }
 
-/** Build `file` into `output` with DWARF line info; reject with the compiler's message on failure. */
-function buildDebugBinary(
+/** Run the compiler with `args`; reject with `CompilerMissing` when it can't be spawned at
+ * all, or with its first stderr line on any other failure. */
+function runCompiler(
   compiler: ResolvedCompiler,
-  file: string,
-  output: string,
+  args: string[],
   cwd: string | undefined,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const args = buildArgs(compiler.baseArgs, file, output);
     execFile(compiler.exe, args, { cwd }, (error, _stdout, stderr) => {
       if (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -106,6 +112,69 @@ function buildDebugBinary(
       resolve();
     });
   });
+}
+
+/**
+ * Build a debuggable native executable by running `<compiler> buildArgv`, surfacing any
+ * failure the way every Quilon debug entry point does — a missing-CodeLLDB notice before
+ * anything is built, a progress notification while the build runs, a missing-compiler
+ * notice, or the compiler's own first error line — then resolve the CodeLLDB
+ * (`type: "lldb"`) launch of `output`. `undefined` on any failure, already reported to the
+ * user.
+ *
+ * Shared by the `quilon` debug-configuration provider below (`quilon build --debug`) and the
+ * test Debug lenses/profile (`quilon test --binary`, in `extension.ts` and
+ * `testExplorer.ts`), which differ only in the argv that produces the binary and in what
+ * they do with the resolved configuration — the provider returns it for VS Code to launch,
+ * a direct command starts the session itself. The CodeLLDB check lives here rather than in
+ * each caller so every path fails fast, before spending a build, on the one setup problem
+ * they all share.
+ */
+export async function buildDebuggable(
+  context: vscode.ExtensionContext,
+  compiler: ResolvedCompiler,
+  buildArgv: string[],
+  output: string,
+  cwd: string | undefined,
+  progressTitle: string,
+  sessionName: string,
+  programArgs: string[] = [],
+): Promise<vscode.DebugConfiguration | undefined> {
+  if (!vscode.extensions.getExtension(CODELLDB_ID)) {
+    void vscode.window.showErrorMessage(
+      "Quilon debugging needs the CodeLLDB extension (vadimcn.vscode-lldb). Install it and try again.",
+    );
+    return undefined;
+  }
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: progressTitle,
+        cancellable: false,
+      },
+      () => runCompiler(compiler, buildArgv, cwd),
+    );
+  } catch (error) {
+    // A compiler we couldn't spawn is a setup problem, not a build failure: say how to fix
+    // it, and re-resolve in case one is installed meanwhile.
+    if (error instanceof CompilerMissing) {
+      forgetResolvedCompiler();
+      showMissingCompiler(error.compiler, "cannot debug — ");
+    } else {
+      void vscode.window.showErrorMessage(
+        `Quilon: debug build failed: ${(error as Error).message}`,
+      );
+    }
+    return undefined;
+  }
+  return toLldbConfiguration({
+    name: sessionName,
+    program: output,
+    args: programArgs,
+    cwd,
+    formatterPath: formatterPath(context),
+  }) as vscode.DebugConfiguration;
 }
 
 /**
@@ -133,13 +202,6 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
       config = { ...config, type, request, name };
     }
 
-    if (!vscode.extensions.getExtension(CODELLDB_ID)) {
-      void vscode.window.showErrorMessage(
-        "Quilon debugging needs the CodeLLDB extension (vadimcn.vscode-lldb). Install it and try again.",
-      );
-      return undefined;
-    }
-
     const file = resolveSourceFile(config);
     if (!file || !/\.qn$/i.test(file)) {
       void vscode.window.showErrorMessage("Quilon: no active .qn file to debug.");
@@ -165,39 +227,19 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
         folder?.uri.fsPath ??
         vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file))?.uri.fsPath;
       const output = tempBinaryPath(file);
-
       const compiler = resolvedQuilonCompiler();
-      try {
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `Quilon: building ${base} for debug…`,
-            cancellable: false,
-          },
-          () => buildDebugBinary(compiler, file, output, cwd),
-        );
-      } catch (error) {
-        // A compiler we couldn't spawn is a setup problem, not a build failure:
-        // say how to fix it, and re-resolve in case one is installed meanwhile.
-        if (error instanceof CompilerMissing) {
-          forgetResolvedCompiler();
-          showMissingCompiler(error.compiler, "cannot debug — ");
-        } else {
-          void vscode.window.showErrorMessage(
-            `Quilon: debug build failed: ${(error as Error).message}`,
-          );
-        }
-        return undefined;
-      }
-
       const programArgs = Array.isArray(config.args) ? (config.args as string[]) : [];
-      return toLldbConfiguration({
-        name: typeof config.name === "string" ? config.name : "Quilon Debug",
-        program: output,
-        args: programArgs,
+
+      return await buildDebuggable(
+        this.context,
+        compiler,
+        buildArgs(compiler.baseArgs, file, output),
+        output,
         cwd,
-        formatterPath: formatterPath(this.context),
-      }) as vscode.DebugConfiguration;
+        `Quilon: building ${base} for debug…`,
+        typeof config.name === "string" ? config.name : "Quilon Debug",
+        programArgs,
+      );
     } finally {
       this.inFlight.release(file);
     }
@@ -213,6 +255,42 @@ function defaultDebugConfiguration(): vscode.DebugConfiguration {
     program: "${file}",
     args: [],
   };
+}
+
+/**
+ * Build one test suite or case into a debuggable native executable (`quilon test <file>
+ * --only <testPath> --binary <out>`) and launch it under CodeLLDB — the `quilon.debugTests`
+ * command the language server's 🐞 Debug suite / 🐞 Debug case lenses invoke, with the same
+ * `[filePath, testPath]` arguments the ▶ Run suite / ▶ Run case lenses' `quilon.runTests`
+ * takes.
+ */
+async function debugTests(
+  context: vscode.ExtensionContext,
+  file: string,
+  testPath: string,
+): Promise<void> {
+  if (!(await saveIfDirty(file))) {
+    return;
+  }
+
+  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+  const cwd = folder?.uri.fsPath ?? path.dirname(file);
+  const output = tempBinaryPath(file);
+  const compiler = resolvedQuilonCompiler();
+  const base = path.basename(file);
+
+  const config = await buildDebuggable(
+    context,
+    compiler,
+    testBuildArgs(compiler.baseArgs, file, testPath, output),
+    output,
+    cwd,
+    `Quilon: building ${base} for debug…`,
+    `Quilon: Debug ${testPath}`,
+  );
+  if (config) {
+    await vscode.debug.startDebugging(folder, config);
+  }
 }
 
 /** Whether `program` is one of the temp debug binaries we built, so it's safe to delete. */
@@ -244,6 +322,12 @@ export function registerDebug(context: vscode.ExtensionContext): void {
       const doc = vscode.window.activeTextEditor?.document;
       const folder = doc ? vscode.workspace.getWorkspaceFolder(doc.uri) : undefined;
       void vscode.debug.startDebugging(folder, defaultDebugConfiguration());
+    }),
+    vscode.commands.registerCommand("quilon.debugTests", (filePath?: string, testPath?: string) => {
+      if (typeof filePath !== "string" || typeof testPath !== "string") {
+        return;
+      }
+      void debugTests(context, filePath, testPath);
     }),
   );
 }

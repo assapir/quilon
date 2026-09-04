@@ -67,6 +67,28 @@ export function buildArgs(baseArgs: string[], file: string, output: string): str
 }
 
 /**
+ * The compiler argv that builds the suite at `file` into a native, debuggable executable at
+ * `output` — `quilon test <file> [--only <testPath>] --binary <output>`. A `--binary` build
+ * carries DWARF debug info implicitly (see `src/test_command.rs::build_binary`), unlike a
+ * plain `quilon build`, which needs `--debug` spelled out. `testPath` is the suite's or
+ * case's own `/`-joined path (from a test lens or a Test Explorer item); omitted, the whole
+ * file's suites build in.
+ */
+export function testBuildArgs(
+  baseArgs: string[],
+  file: string,
+  testPath: string | undefined,
+  output: string,
+): string[] {
+  const args = [...baseArgs, "test", file];
+  if (testPath !== undefined) {
+    args.push("--only", testPath);
+  }
+  args.push("--binary", output);
+  return args;
+}
+
+/**
  * A collision-resistant temp path for the debug executable. The name embeds the
  * source's base name (so it is recognizable in the debugger UI) plus the process
  * id and a caller-supplied uniquifier. `tmpDir` is injectable for tests.
