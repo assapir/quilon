@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected — one session at a time for several selected items, each ending before the next
   starts. A debugged item is marked started; its outcome is whatever you observe while
   stepping through it.
+- **Stepping into corelib code shows real source, not disassembly.** Every debug session
+  now asks the language server's `quilon/corelibDir` request for the directory it wrote the
+  embedded corelib modules into, and adds a CodeLLDB `sourceMap` entry that redirects a
+  stepped-into corelib function's DWARF path there — so, say, `body()` on an
+  `http.Response` opens `corelib/http.qn` instead of falling back to disassembly. A
+  language server that can't answer the request (not running, or too old) costs only
+  corelib source; the session still starts.
+- **Hovering a matcher inside `assert`/`expect` shows its signature.** `isOk()`,
+  `equals(...)`, `contains(...)`, and a nested `not(...)` used to show `$` (the enclosing
+  `assert`/`expect` call's own type); hover now shows the matcher's own signature and the
+  type it applies to, e.g. `equals(Num)  matcher over Num` or
+  `not(equals(Num))  matcher over Num`.
+- **`[|`/`|]` map and set literal fences are their own punctuation scope.** Previously `[`
+  was unscoped and `|` colored as the match operator, so the two halves of `[|"a" => 1|]`'s
+  fence read as unrelated; both `[|` and `|]` now scope as one punctuation token each,
+  alongside the existing block-delimiter scopes.
 
 ### Changed
 

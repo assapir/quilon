@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { type LanguageClient } from "vscode-languageclient/node";
 import { type ResolvedCompiler } from "./compilerCommand";
 import {
   buildArgs,
@@ -44,6 +45,25 @@ const CODELLDB_ID = "vadimcn.vscode-lldb";
 function formatterPath(context: vscode.ExtensionContext): string | undefined {
   const p = path.join(context.extensionPath, "formatters", "quilon.py");
   return fs.existsSync(p) ? p : undefined;
+}
+
+/**
+ * Ask the running language client for the directory it materialized the embedded corelib
+ * modules into (`quilon/corelibDir`), for the CodeLLDB `sourceMap` that lets stepping into
+ * corelib code show real source (see `corelibSourceMap` in `debugConfig.ts`). `undefined` on
+ * any failure — no client running, the server doesn't answer the request, or the write
+ * failed on its end — which just costs corelib source, not the debug session: the caller
+ * starts it regardless.
+ */
+async function requestCorelibDir(client: LanguageClient | undefined): Promise<string | undefined> {
+  if (!client) {
+    return undefined;
+  }
+  try {
+    return await client.sendRequest<string>("quilon/corelibDir");
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -115,6 +135,24 @@ function runCompiler(
 }
 
 /**
+ * The optional trailing inputs to {@link buildDebuggable}, grouped so a caller that only
+ * needs some of them (or none) doesn't have to fill in the others positionally.
+ */
+export interface DebuggableOptions {
+  /** Arguments forwarded to the program (its `^` `args`). Defaults to none. */
+  programArgs?: string[];
+  /**
+   * The `.qn` source being debugged. Together with `getClient`, lets this ask
+   * `quilon/corelibDir` and add the resulting `sourceMap`, so stepping into a corelib
+   * function shows real source; omitted (or the request failing), the session still starts
+   * without it.
+   */
+  sourceFile?: string;
+  /** Reads the running language client, when up — see `sourceFile`. */
+  getClient?: () => LanguageClient | undefined;
+}
+
+/**
  * Build a debuggable native executable by running `<compiler> buildArgv`, surfacing any
  * failure the way every Quilon debug entry point does — a missing-CodeLLDB notice before
  * anything is built, a progress notification while the build runs, a missing-compiler
@@ -138,14 +176,20 @@ export async function buildDebuggable(
   cwd: string | undefined,
   progressTitle: string,
   sessionName: string,
-  programArgs: string[] = [],
+  options: DebuggableOptions = {},
 ): Promise<vscode.DebugConfiguration | undefined> {
+  const { programArgs = [], sourceFile, getClient } = options;
   if (!vscode.extensions.getExtension(CODELLDB_ID)) {
     void vscode.window.showErrorMessage(
       "Quilon debugging needs the CodeLLDB extension (vadimcn.vscode-lldb). Install it and try again.",
     );
     return undefined;
   }
+  // Started alongside the build, not after it: `requestCorelibDir` never throws (it catches
+  // its own failure), so it's safe to leave running even on a build failure below, and
+  // overlapping the two hides the LSP round trip behind the (usually longer) build instead
+  // of adding to it.
+  const corelibDirPromise = requestCorelibDir(getClient?.());
   try {
     await vscode.window.withProgress(
       {
@@ -168,12 +212,15 @@ export async function buildDebuggable(
     }
     return undefined;
   }
+  const corelibDir = await corelibDirPromise;
   return toLldbConfiguration({
     name: sessionName,
     program: output,
     args: programArgs,
     cwd,
     formatterPath: formatterPath(context),
+    sourceFile,
+    corelibDir,
   }) as vscode.DebugConfiguration;
 }
 
@@ -185,7 +232,10 @@ export async function buildDebuggable(
 class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
   private readonly inFlight = new InFlightBuilds();
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly getClient: () => LanguageClient | undefined,
+  ) {}
 
   provideDebugConfigurations(): vscode.DebugConfiguration[] {
     return [defaultDebugConfiguration()];
@@ -238,7 +288,7 @@ class QuilonDebugConfigurationProvider implements vscode.DebugConfigurationProvi
         cwd,
         `Quilon: building ${base} for debug…`,
         typeof config.name === "string" ? config.name : "Quilon Debug",
-        programArgs,
+        { programArgs, sourceFile: file, getClient: this.getClient },
       );
     } finally {
       this.inFlight.release(file);
@@ -266,6 +316,7 @@ function defaultDebugConfiguration(): vscode.DebugConfiguration {
  */
 async function debugTests(
   context: vscode.ExtensionContext,
+  getClient: () => LanguageClient | undefined,
   file: string,
   testPath: string,
 ): Promise<void> {
@@ -287,6 +338,7 @@ async function debugTests(
     cwd,
     `Quilon: building ${base} for debug…`,
     `Quilon: Debug ${testPath}`,
+    { sourceFile: file, getClient },
   );
   if (config) {
     await vscode.debug.startDebugging(folder, config);
@@ -302,12 +354,20 @@ function isOurTempBinary(program: unknown): program is string {
   );
 }
 
-/** Register the debug provider and the `quilon.debug` command (used by the CodeLens). */
-export function registerDebug(context: vscode.ExtensionContext): void {
+/**
+ * Register the debug provider and the `quilon.debug` command (used by the CodeLens).
+ * `getClient` reads the running language client lazily — it starts asynchronously and may
+ * restart later — so `quilon/corelibDir` (the corelib source map) always asks whichever
+ * client is up when a debug session actually starts.
+ */
+export function registerDebug(
+  context: vscode.ExtensionContext,
+  getClient: () => LanguageClient | undefined,
+): void {
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider(
       "quilon",
-      new QuilonDebugConfigurationProvider(context),
+      new QuilonDebugConfigurationProvider(context, getClient),
     ),
     // Delete the temp binary once its session ends, so builds don't pile up.
     vscode.debug.onDidTerminateDebugSession((session) => {
@@ -327,7 +387,7 @@ export function registerDebug(context: vscode.ExtensionContext): void {
       if (typeof filePath !== "string" || typeof testPath !== "string") {
         return;
       }
-      void debugTests(context, filePath, testPath);
+      void debugTests(context, getClient, filePath, testPath);
     }),
   );
 }

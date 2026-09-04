@@ -132,6 +132,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN338 | value with no rendering |
 | QN339 | no `^` entry point |
 | QN340 | static call on a method that reads its receiver |
+| QN341 | store into a mutable container aliasing an immutable value |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -932,6 +933,26 @@ Point = { x :: Num, distance = () -> Num => < it.x > }
 ```
 
 Call it on a value instead: `p.distance()`.
+
+### QN341 — store into a mutable container aliasing an immutable value
+
+A field write, or a setter-call argument the setter stores into `it`, stores a value that
+aliases an `=` binding or a parameter into a `:=`-reachable container. This is QN306's own
+rule, applied at the store as well as the binding: a value bound with `=` stays immutable
+through every alias, so a store cannot make it reachable through a `:=` binding either.
+
+```quilon ignore
+Counter = { value :: Num }
+Box = { item :: Counter }
+^ = () -> Num => <
+  c = Counter { value = 30 }
+  b := Box { item = Counter { value = 1 } }
+  b.item := c
+  c.value
+>
+```
+
+Store a fresh value: `b.item := Counter { value = c.value }`.
 
 ## Code generation and build
 

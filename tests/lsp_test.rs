@@ -81,7 +81,12 @@ fn hover_reports_the_smallest_covering_expressions_type() {
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
 
     // On the parameter reference `x` in the body: its own type, not the product's.
-    let (label, span) = hover_at(&checked.types, offset_of(text, "x * 2", 0)).expect("a hover");
+    let (label, span) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "x * 2", 0),
+    )
+    .expect("a hover");
     assert_eq!(label, "Num");
     assert_eq!(
         (span.start, span.end),
@@ -91,8 +96,78 @@ fn hover_reports_the_smallest_covering_expressions_type() {
     // On a `Text` literal.
     let text = "^ = () -> Num => < s = \"hi\"\n0 >\n";
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
-    let (label, _) = hover_at(&checked.types, offset_of(text, "\"hi\"", 1)).expect("a hover");
+    let (label, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "\"hi\"", 1),
+    )
+    .expect("a hover");
     assert_eq!(label, "Text");
+}
+
+#[test]
+fn hover_over_a_matcher_shows_its_signature_and_the_type_it_applies_to() {
+    // `isOk()` — a matcher with no argument, applied to a `Result`.
+    let text = "^ = () -> Num => < assert([10, 20].at(0), isOk())\n0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, span) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "isOk()", 1),
+    )
+    .expect("a hover");
+    assert_eq!(label, "isOk()  matcher over Result");
+    assert_eq!(
+        (span.start, span.end),
+        (offset_of(text, "isOk()", 0), offset_of(text, "isOk()", 6))
+    );
+
+    // `equals(...)` — a matcher over the argument's own inferred type.
+    let text = "^ = () -> Num => < assert(1 + 1, equals(2))\n0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "equals(2)", 1),
+    )
+    .expect("a hover");
+    assert_eq!(label, "equals(Num)  matcher over Num");
+
+    // A nested `not(...)`: hovering the inner matcher answers with just its own signature;
+    // hovering the outer wraps it.
+    let text = "^ = () -> Num => < assert(1 + 1, not(equals(2)))\n0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (inner, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "equals(2)", 1),
+    )
+    .expect("a hover");
+    assert_eq!(inner, "equals(Num)  matcher over Num");
+    let (outer, outer_span) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "not(equals(2))", 1),
+    )
+    .expect("a hover");
+    assert_eq!(outer, "not(equals(Num))  matcher over Num");
+    assert_eq!(
+        (outer_span.start, outer_span.end),
+        (
+            offset_of(text, "not(equals(2))", 0),
+            offset_of(text, "not(equals(2))", "not(equals(2))".len() as u32)
+        )
+    );
+
+    // Hovering an argument INSIDE a matcher still answers with the argument's own type,
+    // not the enclosing matcher's signature.
+    let (argument, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "2))", 0),
+    )
+    .expect("a hover");
+    assert_eq!(argument, "Num");
 }
 
 // --- Go-to-definition -------------------------------------------------------
@@ -648,6 +723,36 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
         }
         other => panic!("expected a response, got {other:?}"),
     }
+
+    // `quilon/corelibDir` takes no params and answers the directory it materialized the
+    // embedded corelib into — the compiler's own `core.io` (say) module's source is a real
+    // file there, laid out the same way a `--debug` build's DWARF names it.
+    //
+    // Point the server's cache resolution (`cache_dir` in `src/build.rs`) at a scratch
+    // directory for this one request, rather than let it write into the developer's real
+    // per-user cache — no other test in this binary reads or sets `XDG_CACHE_HOME`, so
+    // scoping the mutation to this window is safe.
+    let scratch_cache = temporary_directory("corelibdir_cache");
+    unsafe { std::env::set_var("XDG_CACHE_HOME", &scratch_cache) };
+    client
+        .sender
+        .send(lsp_request(10, "quilon/corelibDir", Value::Null))
+        .unwrap();
+    let dir = lsp_response(lsp_receive(&client));
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    let dir = dir.as_str().expect("a directory path string");
+    assert!(
+        Path::new(dir).starts_with(&scratch_cache),
+        "expected the scratch XDG_CACHE_HOME to be honored: {dir}"
+    );
+    // `core.io` maps to `corelib/io.qn` — same layout a `--debug` build's DWARF names it
+    // (see `dwarf_file_location` in `src/codegen/debug.rs`).
+    let io_path = std::path::Path::new(dir).join("corelib").join("io.qn");
+    assert_eq!(
+        std::fs::read_to_string(&io_path).expect("core.io was written"),
+        include_str!("../corelib/io.qn"),
+    );
+    std::fs::remove_dir_all(&scratch_cache).ok();
 
     client
         .sender

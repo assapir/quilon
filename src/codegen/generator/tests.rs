@@ -1,7 +1,7 @@
 use super::*;
 use crate::lexer::Lexer;
 use crate::parser::parse;
-use crate::typechecker::TypeChecker;
+use crate::typechecker::{TypeChecker, TypeTable};
 
 /// Type-check `code`, then generate it with the checker's type-oracle wired in — the
 /// path every real compilation takes. Codegen reads a function/block's type from the
@@ -17,6 +17,22 @@ fn generate_checked(code: &str) -> Result<String, String> {
     let mut codegen = CodeGenerator::new(&context, "test");
     codegen.set_type_table(types);
     codegen.generate(&program)
+}
+
+/// A hand-built oracle entry for every `pattern` substring's byte range in `code`, typed
+/// `[]Num` — for a test that asks codegen a question WITHOUT running the type checker
+/// (so a checker rejection elsewhere in the program cannot pre-empt what codegen itself
+/// is being asked), but still needs an array literal's element type recorded (codegen
+/// treats a missing oracle entry for an array literal as a compiler bug, never a guess).
+fn num_array_oracle(code: &str, pattern: &str) -> TypeTable {
+    let element_type = Type::Array(Box::new(Type::Num));
+    code.match_indices(pattern)
+        .map(|(start, matched)| {
+            let start = start as u32;
+            let span = Span::in_root(start, start + matched.len() as u32);
+            (span, element_type.clone())
+        })
+        .collect()
 }
 
 #[test]
@@ -229,6 +245,7 @@ fn comparing_arrays_is_not_lowered_as_a_text_comparison() {
     let code = "same = () -> Bool => < a = [1, 2] b = [1, 2] a == b >";
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
+    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
 
     let result = codegen.generate(&program);
     let error = result.expect_err("array comparison has no lowering");
@@ -248,6 +265,7 @@ fn comparing_a_text_against_an_array_is_not_lowered_as_a_text_comparison() {
     let code = r#"same = () -> Bool => < a = "x" b = [1, 2] a == b >"#;
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
+    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
 
     let error = codegen
         .generate(&program)

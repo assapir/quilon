@@ -108,8 +108,10 @@ fn env_non_empty(key: &str) -> Option<String> {
 }
 
 /// Per-user cache directory: `$XDG_CACHE_HOME/quilon`, else `~/.cache/quilon`,
-/// else the temp-dir fallback.
-fn cache_dir() -> PathBuf {
+/// else the temp-dir fallback. Shared with the language server (`quilon/corelibDir`, in
+/// `src/lsp.rs`), which materializes the embedded corelib under a subdirectory of it —
+/// rather than duplicating the resolution logic.
+pub(crate) fn cache_dir() -> PathBuf {
     if let Some(xdg) = env_non_empty("XDG_CACHE_HOME") {
         return PathBuf::from(xdg).join("quilon");
     }

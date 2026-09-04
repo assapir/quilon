@@ -13,6 +13,7 @@
     { "include": "#builtin-types" },
     { "include": "#type-names" },
     { "include": "#function-calls" },
+    { "include": "#collection-fences" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -102,6 +103,19 @@
       "captures": {
         "1": { "name": "entity.name.function.quilon" }
       }
+    },
+    "collection-fences": {
+      "comment": "The `[| … |]` fence around a map/set literal (`[|\"a\" => 1|]`, `[|1, 2|]`). `[` on its own is unscoped and `|` is the match operator (scoped in #operators), so without this rule the two halves of the fence would color differently; scoping `[|`/`|]` as one punctuation token each, in the same family as the block-delimiter scopes, keeps the fence visually one thing. Listed before #operators so `|` inside the fence tokenizes as part of it rather than as the match operator, and `||` (logical-and's sibling) is unaffected — this only matches the two-character `[|`/`|]` pairs.",
+      "patterns": [
+        {
+          "name": "punctuation.definition.collection.begin.quilon",
+          "match": "\\[\\|"
+        },
+        {
+          "name": "punctuation.definition.collection.end.quilon",
+          "match": "\\|\\]"
+        }
+      ]
     },
     "operators": {
       "comment": "TextMate applies, at each position, the FIRST pattern in this list that matches there — ties at the same start position are NOT broken by length. So every multi-character operator MUST be listed before the single-character rules, and before any single-char operator that is a prefix of it (e.g. `||` before `|`, `<=` before `<`, `=>`/`==` before `=`). That ordering is what keeps a two-char operator from being split into its first character + the rest. Each multi-char operator is its own scope.",

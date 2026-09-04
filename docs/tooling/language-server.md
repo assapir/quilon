@@ -35,6 +35,10 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   file answers with a message naming that file, so the rename happens there instead.
 - **Hover** yields the inferred type of the smallest expression covering the cursor, from
   the type checker's table: `Num`, `[]Text`, `(Num) -> Num`, a record or sum type's name.
+  Over a matcher inside `assert`/`expect` — `equals(...)`, `contains(...)`, `not(...)`,
+  `isOk()`, `isNotOk()` — it yields the matcher's own signature and the type it applies to
+  instead: `isOk()  matcher over Result`, `equals(Num)  matcher over Num`,
+  `not(equals(Num))  matcher over Num`.
 - **Completion** (triggered on `.`, and answered on every request regardless of what
   triggered it) offers, depending on where the cursor sits:
   - **A bare name.** Locals and parameters of the enclosing blocks (only bindings ABOVE
@@ -77,6 +81,14 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   `name` (the suite's or case's own description), `kind` (`"suite"` or `"case"`), and
   `range` (its `describe(...)`/`it(...)` call, in protocol positions). A client building a
   test explorer reads this request for its tree.
+- **`quilon/corelibDir`** (custom request, no params → a string) writes every embedded
+  corelib module (`core.io`, `core.test`, …) to `<cache dir>/corelib-<compiler version>/`,
+  in the same layout a `--debug` build's DWARF names them (`corelib/http.qn`, nested
+  segments as directories — see [Compiling & running](compiling.md)), and
+  answers with that directory's absolute path. The corelib is embedded in the compiler and
+  exists on no disk otherwise, so a debugger stepping into one of its functions has nothing
+  to open without this — a client adds the directory to its debugger's source map. Writes
+  are idempotent (a file already holding the exact bytes is left alone).
 
 Positions on the wire are the protocol's: zero-based lines and UTF-16 code-unit columns.
 The server converts them to and from the compiler's byte spans.

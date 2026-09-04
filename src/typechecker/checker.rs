@@ -76,6 +76,15 @@ pub enum TypeError {
         aliased: String,
         span: Span,
     },
+    /// A field write, or a setter-call argument the setter stores into `it`, whose value
+    /// aliases an `=` binding or a parameter — storing it where a `:=` binding already
+    /// reaches would make the frozen value writable through that binding. The same rule
+    /// as `MutableAliasOfImmutable`, checked at the store instead of the bind.
+    MutableStoreOfImmutable {
+        aliased: String,
+        parameter: bool,
+        span: Span,
+    },
     /// Calling a mutating (setter) method on an immutable (`=`-bound) receiver.
     MutatingMethodOnImmutable {
         method: String,
@@ -477,6 +486,15 @@ type MethodDef = (Vec<Parameter>, Type, Expression);
 /// AST-agnostic key. See the consumer-side wrapper `codegen::TypeOracle`.
 pub type TypeTable = std::collections::HashMap<Span, Type>;
 
+/// A side-table alongside the type oracle, for the ONE shape it cannot represent: a matcher
+/// call (`isOk()`, `equals(Num)`, `not(equals(Num))`) inside `assert`/`expect`. Checking a
+/// matcher never calls `infer_expression` on the matcher call itself (see
+/// `checker::assertions`), so it has no entry in [`TypeTable`] — hover on one falls through
+/// to the enclosing `assert(...)` call, showing `$`. This table gives it its own, fully
+/// rendered hover line: `equals(Num)  matcher over Num`. Keyed by the matcher call's span,
+/// populated by `check_matcher`.
+pub type MatcherHoverTable = std::collections::HashMap<Span, String>;
+
 /// One member of an overload set: an exact parameter-type list and the result type.
 /// Both named functions and operators (keyed by their symbol, e.g. `"+"`) live in the
 /// same registry, and the compiler-lowered defaults (`+` on Num/Text, the comparisons,
@@ -526,6 +544,9 @@ pub struct TypeChecker {
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expression` and returned by `check_program`.
     type_table: TypeTable,
+    // The matcher hover side-table (see `MatcherHoverTable`), populated by `check_matcher`
+    // and taken by `take_matcher_hovers` — a language server reads it after `check_program`.
+    matcher_hovers: MatcherHoverTable,
     // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
     // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use
     // resolves to the one whose parameter types EXACTLY match the argument types (no
@@ -554,6 +575,18 @@ pub struct TypeChecker {
     // arms', computed in `check_match` WHILE each arm's pattern bindings are still in
     // scope (a later walk could no longer resolve them).
     match_aliasing: std::collections::HashMap<Span, ValueAliasing>,
+    // A lambda's own classified result aliasing (its captures, and which of its own
+    // parameters it may return), keyed by its BODY's span — computed once, while its
+    // scope is still pushed, the same way a named function's is; looked up wherever a
+    // lambda value is called without going through a named binding (an immediately
+    // invoked lambda, or a higher-order built-in's callback argument).
+    lambda_result_aliasing: std::collections::HashMap<Span, ResultAliasing>,
+    // Which of a setter's own explicit parameters (slot 1 = the first explicit
+    // parameter, the receiver being slot 0) its body stores directly into a field of
+    // `it`, keyed like `setter_methods`. A setter absent here, or missing a slot, never
+    // stores that argument — passing an `=`-bound value there is unrestricted.
+    setter_stored_parameters:
+        std::collections::HashMap<(String, String), std::collections::HashSet<usize>>,
     // Aliasing bookkeeping: each function/method/lambda body gets a fresh declaration id
     // (`declaration_counter` is the source; ids grow inward, so a nested declaration's id
     // is always greater than its encloser's). `current_declaration` is the body being
@@ -586,11 +619,14 @@ impl TypeChecker {
             setter_methods: std::collections::HashSet::new(),
             static_methods: std::collections::HashSet::new(),
             type_table: TypeTable::new(),
+            matcher_hovers: MatcherHoverTable::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
             method_result_aliasing: std::collections::HashMap::new(),
             match_aliasing: std::collections::HashMap::new(),
+            lambda_result_aliasing: std::collections::HashMap::new(),
+            setter_stored_parameters: std::collections::HashMap::new(),
             declaration_counter: 0,
             current_declaration: 0,
             test_depth: 0,
