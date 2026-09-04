@@ -24,6 +24,38 @@ impl TypeChecker {
         Ok(Type::Text)
     }
 
+    /// Type-check `arr[i] := v`: the element type must accept `v`, the index is checked
+    /// exactly like a read (bounds/negative/NaN, via the `Index` inference `target`
+    /// resolves through), and the array's root binding must be mutable (`:=`-bound) — an
+    /// element write through an immutable (`=`) array is a compile error. Kept separate
+    /// from `infer_expression_inner` so its locals do not enlarge that hot, deeply-recursive
+    /// frame (see `check_interpolation`, same reasoning).
+    fn check_index_assign(
+        &mut self,
+        target: &Expression,
+        value: &Expression,
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let elem_type = self.infer_expression(target)?;
+
+        if let Expression::Index {
+            expression: base, ..
+        } = target
+            && let Some(name) = self.immutable_write_witness(base)
+        {
+            return Err(TypeError::ImmutableFieldWrite {
+                name,
+                span: span.clone(),
+            });
+        }
+
+        let value_type = self.infer_expression(value)?;
+        self.check_type_compatibility(&elem_type, &value_type, span)?;
+
+        // An element write is an effect; its value is the unit type `$`.
+        Ok(Type::Unit)
+    }
+
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
     /// keyed by the expression's source span. This is the public inference entry point;
     /// the per-node logic lives in `infer_expression_inner`. The recorded side-table is what
@@ -330,6 +362,12 @@ impl TypeChecker {
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
             }
+
+            Expression::IndexAssign {
+                target,
+                value,
+                span,
+            } => self.check_index_assign(target, value, span),
 
             Expression::Index {
                 expression,

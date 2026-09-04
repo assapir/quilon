@@ -12,17 +12,26 @@ first = nums[0]        ~ → 1
 ```
 (See `examples/arrays.qn`.)
 
-An array is **immutable**: every operation returns a new array. A `:=` binding may be
-rebound to a different array — that changes the binding.
+A `:=`-bound array supports an in-place element write, `arr[i] := value` (the analog of
+`obj.field := value` for a record; see [mutation](../mutation.md)). On an `=`-bound array
+it is a compile error. Every other operation (`+`, the array methods) builds a **new**
+array, leaving its operand(s) as they were. A `:=` binding may also be rebound to a
+different array — that changes the binding.
+
+```quilon
+nums := [1, 2, 3, 4, 5]
+nums[0] := 10          ~ [10, 2, 3, 4, 5]
+```
 
 An **empty** array literal `[]` takes its element type from context: a type annotation on
 the binding, a call argument's declared parameter type, or a function's declared return
 type. With none of those available, it is a compile error.
 
-Indexing is **checked**. An out-of-bounds, negative, or NaN index is a runtime error naming
-the read that failed ([shape](../tooling/errors.md)), with exit status 1. A **fractional**
-in-range index truncates toward zero: `nums[1.7]` reads `nums[1]`, so index arithmetic
-like `size / 2` indexes directly. For an index that may be out of range,
+Indexing is **checked**, for a read (`arr[i]`) and an element write (`arr[i] := value`)
+alike. An out-of-bounds, negative, or NaN index is a runtime error naming the read/write
+that failed ([shape](../tooling/errors.md)), with exit status 1. A **fractional** in-range
+index truncates toward zero: `nums[1.7]` reads `nums[1]`, so index arithmetic like
+`size / 2` indexes directly. For an index that may be out of range,
 [`at(n)`](#array-methods) is the `Ok`/`NotOk` form — see the computed-index case at the
 end of `examples/array_methods.qn`.
 

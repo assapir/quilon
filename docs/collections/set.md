@@ -20,9 +20,10 @@ none   :: [|Num|] = [||]                                  ~ empty set
 **Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or
 a **user type that opts in** — a record or sum defining both a `%` hash hook
 (`% = () -> Num => < … >`, `it` the value) and an `==` member; both are required, and `%`/`==`
-agree (see [Map](map.md#user-defined-key-types)). Duplicates collapse. A set is
-**immutable / persistent**: every mutator (`add`, the set operators) returns a **new** set,
-leaving the receiver as it was.
+agree (see [Map](map.md#user-defined-key-types)). Duplicates collapse. `add` and `remove` are
+**setters**: they mutate a `:=`-bound set in place and return `it`, so calls chain like
+`each` (see [mutation](../mutation.md)). Calling either on an `=`-bound set is a compile
+error. The set operators `+`/`-`/`+-` stay non-mutating and build a **new** set.
 
 **Iteration order is UNSPECIFIED** — a set is unordered, and the order of `items`/`each`
 is an implementation detail that may change between runs.
@@ -34,8 +35,8 @@ the receiver is a Set):
 | Set method | Result | Notes |
 |------------|--------|-------|
 | `has(x)` | `Bool` | membership |
-| `add(x)` | new `[\|T\|]` | a fresh set with `x` added (persistent) |
-| `remove(x)` | new `[\|T\|]` | a fresh set without `x` (persistent); removing an absent element is a no-op |
+| `add(x)` | **the receiver set** | adds `x` in place; requires a `:=`-bound receiver |
+| `remove(x)` | **the receiver set** | removes `x` in place; requires a `:=`-bound receiver; removing an absent element is a no-op |
 | `items()` | `[]T` | the elements as an array (order unspecified) |
 | `each(x => …)` | **the receiver set** | runs the body per element for effect, then returns the set (chains) |
 

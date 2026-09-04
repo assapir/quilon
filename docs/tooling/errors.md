@@ -96,7 +96,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN302 | call on a data value |
 | QN303 | wrong number of arguments |
 | QN304 | assignment to an immutable binding |
-| QN305 | field write through an immutable binding |
+| QN305 | write through an immutable binding |
 | QN306 | `:=` binding aliasing an immutable value |
 | QN307 | `=` binding aliasing a mutable value |
 | QN308 | mutating method on an immutable receiver |
@@ -516,16 +516,17 @@ A binding made with `=` is reassigned.
 
 Bind it with `:=` to allow writes: `n := 1`.
 
-### QN305 — field write through an immutable binding
+### QN305 — write through an immutable binding
 
-A field is written through a binding made with `=`.
+A record field or array element is written through a binding made with `=`.
 
 ```quilon ignore
 Point = { x :: Num }
 ^ = () -> Num => < p = Point { x = 1 }  p.x := 2 >
 ```
 
-Bind the record with `:=`: `p := Point { x = 1 }`.
+Bind the record with `:=`: `p := Point { x = 1 }`. The same applies to an array element
+write (`arr[i] := v`) on an `=`-bound array.
 
 ### QN306 — `:=` binding aliasing an immutable value
 
@@ -555,7 +556,8 @@ Bind with `:=`, or build a fresh value.
 
 ### QN308 — mutating method on an immutable receiver
 
-A `:=` method is called on a receiver bound with `=`.
+A `:=` method is called on a receiver bound with `=`. The same applies to a built-in
+`Map`/`Set` mutator (`set`/`remove` on a `Map`, `add`/`remove` on a `Set`).
 
 ```quilon ignore
 Counter = { n :: Num, bump := () -> $ => < it.n := it.n + 1 > }

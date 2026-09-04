@@ -21,6 +21,26 @@ struct QlSet {
 }
 
 unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
+    let header = alloc_slots::<QlSet>(1);
+    unsafe {
+        std::ptr::write(
+            header,
+            QlSet {
+                table,
+                snapshot_a: std::ptr::null(),
+                snapshot_b: std::ptr::null(),
+                len: 0,
+            },
+        );
+        refresh_snapshot(header);
+    }
+    header
+}
+
+/// Rebuild `header`'s ordered snapshot arrays and `len` from its current `table`. Called
+/// after every in-place mutation (`__set_add`/`__set_remove`).
+unsafe fn refresh_snapshot(header: *mut QlSet) {
+    let table = unsafe { &(*header).table };
     let n = table.len();
     let snapshot_a = alloc_slots::<u64>(n);
     let snapshot_b = alloc_slots::<u64>(n);
@@ -30,19 +50,11 @@ unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
             *snapshot_b.add(i) = key.b;
         }
     }
-    let header = alloc_slots::<QlSet>(1);
     unsafe {
-        std::ptr::write(
-            header,
-            QlSet {
-                table,
-                snapshot_a,
-                snapshot_b,
-                len: n as i64,
-            },
-        )
-    };
-    header
+        (*header).snapshot_a = snapshot_a;
+        (*header).snapshot_b = snapshot_b;
+        (*header).len = n as i64;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -50,6 +62,8 @@ pub extern "C" fn __set_new() -> *mut c_void {
     unsafe { build_set(HashSet::with_hasher(FixedState)) as *mut c_void }
 }
 
+/// Insert `key` into `set` IN PLACE and return the same header: `add` is a mutator (see
+/// the module docs), not a constructor.
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_add(
     set: *const c_void,
@@ -59,14 +73,17 @@ pub extern "C" fn __set_add(
     hash_fn: *const c_void,
     eq_fn: *const c_void,
 ) -> *mut c_void {
-    let set = set as *const QlSet;
-    let mut table = unsafe { (*set).table.clone() };
+    let header = set as *mut QlSet;
     let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
-    debug_check_user_key(table.iter(), &key);
-    table.insert(key);
-    unsafe { build_set(table) as *mut c_void }
+    unsafe {
+        debug_check_user_key((*header).table.iter(), &key);
+        (*header).table.insert(key);
+        refresh_snapshot(header);
+    }
+    header as *mut c_void
 }
 
+/// Remove `key` from `set` IN PLACE and return the same header (absent element: no-op).
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_remove(
     set: *const c_void,
@@ -76,10 +93,14 @@ pub extern "C" fn __set_remove(
     hash_fn: *const c_void,
     eq_fn: *const c_void,
 ) -> *mut c_void {
-    let set = set as *const QlSet;
-    let mut table = unsafe { (*set).table.clone() };
-    table.remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
-    unsafe { build_set(table) as *mut c_void }
+    let header = set as *mut QlSet;
+    unsafe {
+        (*header)
+            .table
+            .remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
+        refresh_snapshot(header);
+    }
+    header as *mut c_void
 }
 
 #[unsafe(no_mangle)]

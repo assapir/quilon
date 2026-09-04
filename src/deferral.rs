@@ -138,7 +138,8 @@ impl Taint {
                 self.strict(expression, env);
                 false
             }
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. }
+            | Expression::IndexAssign { target, value, .. } => {
                 self.strict(target, env);
                 self.strict(value, env);
                 false

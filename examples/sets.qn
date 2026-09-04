@@ -2,8 +2,10 @@
 ~   Set: has / add / remove / items / size / each ; `+` union, `-` difference, `+-`/`-+` intersect.
 ~ Elements are Num/Text/Bool, or a user type that defines both a `%` hash hook (unary,
 ~   `it` the value, returning a Num) and an `==` equality — see the `Point` set below.
-~ Sets are IMMUTABLE — every mutator returns a NEW set. Iteration order is UNSPECIFIED
-~   (reproducible run-to-run via a fixed-seed hasher, but never rely on it).
+~ `add`/`remove` are setters: they mutate a `:=`-bound set in place and return `it`, so
+~   calls chain — a `:=` receiver is required. The set operators (`+`/`-`/`+-`/`-+`) stay
+~   non-mutating and build a new set. Iteration order is UNSPECIFIED (reproducible
+~   run-to-run via a fixed-seed hasher, but never rely on it).
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
 
@@ -14,7 +16,7 @@ Point = {
 }
 
 ^ = () -> $ => <
-  primes :: [|Num|] = [|2, 3, 5, 7|]
+  primes :: [|Num|] := [|2, 3, 5, 7|]
   evens :: [|Num|] = [|2, 4, 6, 8|]
 
   ~ Duplicates collapse; membership and size are built in.
@@ -23,27 +25,25 @@ Point = {
   assert(primes.has(7), equals(true))
   assert(!primes.has(4), equals(true))
 
-  ~ add is persistent, like map.set.
-  more :: [|Num|] = primes.add(11)
-  assert(primes.size, equals(4))
-  assert(more.size, equals(5))
+  ~ `add` mutates `primes` in place and returns it, so calls chain.
+  assert(primes.add(11).size, equals(5))
+  assert(primes.has(11), equals(true))
 
-  ~ remove is persistent, like add: a NEW set without the element.
-  fewer :: [|Num|] = primes.remove(2)
-  assert(primes.size, equals(4))
-  assert(fewer.size, equals(3))
-  assert(!fewer.has(2), equals(true))
-  ~ removing an absent element is a no-op (still a fresh, equal-size set).
+  ~ Set algebra builds a NEW set, leaving both operands as they were.
+  assert((primes + evens).size, equals(8))   ~ {2,3,5,7,11,4,6,8}
+  assert((primes - evens).size, equals(4))   ~ {3,5,7,11}
+  assert((primes +- evens).size, equals(1))  ~ {2}
+  assert((primes -+ evens).size, equals(1))  ~ same operator, other spelling
+  assert(primes.size, equals(5))             ~ the operands are untouched
+
+  ~ `remove` mutates in place too, and chains the same way.
+  assert(primes.remove(2).size, equals(4))
+  assert(!primes.has(2), equals(true))
+  ~ removing an absent element is a no-op (still the same, unchanged-size set).
   assert(primes.remove(42).size, equals(4))
 
   ~ items is a plain array of the elements.
   assert(primes.items().size, equals(4))
-
-  ~ Set algebra: `+` union, `-` difference, `+-`/`-+` (symmetric) intersection.
-  assert((primes + evens).size, equals(7))   ~ {2,3,5,7,4,6,8}
-  assert((primes - evens).size, equals(3))   ~ {3,5,7}
-  assert((primes +- evens).size, equals(1))  ~ {2}
-  assert((primes -+ evens).size, equals(1))  ~ same operator, other spelling
 
   ~ each over a set, chaining on the returned receiver.
   count := 0

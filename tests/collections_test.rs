@@ -60,39 +60,40 @@ fn map_get_notok_absent() {
     );
 }
 
-/// `.set` returns a NEW map; the receiver is unchanged (persistent/immutable).
+/// `.set` mutates the receiver in place and returns it: the write shows up through the
+/// SAME binding.
 #[test]
-fn map_set_is_persistent() {
+fn map_set_mutates_in_place() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m2 :: [|Text => Num|] = m.set(\"a\", 5)\n  (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0) * 10 + (m2.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
-        15,
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1|]\n  m.set(\"a\", 5)\n  m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0\n>",
+        5,
     );
 }
 
-/// `.set` of a new key grows the map (a fresh map of size+1).
+/// `.set` of a new key grows the map (size+1), and its return chains (it is the mutated
+/// receiver).
 #[test]
 fn map_set_new_key_grows() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m.set(\"b\", 2).size\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1|]\n  m.set(\"b\", 2).size\n>",
         2,
     );
 }
 
-/// `.remove` returns a NEW map without the key; the receiver is unchanged (persistent).
+/// `.remove` mutates the receiver in place, dropping the key.
 #[test]
-fn map_remove_is_persistent() {
+fn map_remove_mutates_in_place() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"b\" => 2|]\n  m2 :: [|Text => Num|] = m.remove(\"a\")\n  m.size * 10 + m2.size\n>",
-        // original keeps 2 entries, m2 drops to 1 -> 21
-        21,
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1, \"b\" => 2|]\n  m.remove(\"a\")\n  m.size\n>",
+        1,
     );
 }
 
-/// `.remove` of an absent key is a no-op that still returns a NEW (equal-size) map.
+/// `.remove` of an absent key is a no-op that still returns the (unchanged-size) receiver.
 #[test]
 fn map_remove_absent_key_is_noop() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"b\" => 2|]\n  m.remove(\"z\").size\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1, \"b\" => 2|]\n  m.remove(\"z\").size\n>",
         2,
     );
 }
@@ -101,7 +102,7 @@ fn map_remove_absent_key_is_noop() {
 #[test]
 fn map_remove_then_get_is_notok() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1|]\n  m.remove(\"a\").get(\"a\") ?\n    | Ok(v)    => v\n    | NotOk(_) => 42\n>",
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1|]\n  m.remove(\"a\").get(\"a\") ?\n    | Ok(v)    => v\n    | NotOk(_) => 42\n>",
         42,
     );
 }
@@ -169,7 +170,7 @@ fn map_negative_zero_key_unifies_with_positive_zero() {
 #[test]
 fn map_nan_key_is_findable_and_dedupes() {
     assert_exit(
-        "^ = () -> Num => <\n  nan :: Num = 0.0 / 0.0\n  m :: [|Num => Num|] = [|nan => 9|]\n  m2 :: [|Num => Num|] = m.set(0.0 / 0.0, 3)\n  m2.size * 10 + (m2.get(0.0 / 0.0) ? | Ok(v) => v | NotOk(_) => 0)\n>",
+        "^ = () -> Num => <\n  nan :: Num = 0.0 / 0.0\n  m :: [|Num => Num|] := [|nan => 9|]\n  m.set(0.0 / 0.0, 3)\n  m.size * 10 + (m.get(0.0 / 0.0) ? | Ok(v) => v | NotOk(_) => 0)\n>",
         // the second NaN key overwrites the first -> size 1 -> 10 + 3
         13,
     );
@@ -185,30 +186,31 @@ fn set_literal_has_and_size() {
     );
 }
 
-/// `.add` returns a NEW set (persistent); the receiver is unchanged.
+/// `.add` mutates the receiver in place and returns it: the write shows up through the
+/// SAME binding.
 #[test]
-fn set_add_is_persistent() {
+fn set_add_mutates_in_place() {
     assert_exit(
-        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  s2 :: [|Num|] = s.add(3)\n  s.size * 10 + s2.size\n>",
-        23,
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2|]\n  s.add(3)\n  s.size\n>",
+        3,
     );
 }
 
-/// `.remove` returns a NEW set without the element; the receiver is unchanged.
+/// `.remove` mutates the receiver in place, dropping the element.
 #[test]
-fn set_remove_is_persistent() {
+fn set_remove_mutates_in_place() {
     assert_exit(
-        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2, 3|]\n  s2 :: [|Num|] = s.remove(2)\n  s.size * 10 + s2.size\n>",
-        // original keeps 3, s2 drops to 2 -> 32
-        32,
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2, 3|]\n  s.remove(2)\n  s.size\n>",
+        2,
     );
 }
 
-/// `.remove` of an absent element is a no-op that still returns a NEW (equal-size) set.
+/// `.remove` of an absent element is a no-op that still returns the (unchanged-size)
+/// receiver.
 #[test]
 fn set_remove_absent_element_is_noop() {
     assert_exit(
-        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2, 3|]\n  s.remove(9).size\n>",
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2, 3|]\n  s.remove(9).size\n>",
         3,
     );
 }
@@ -217,7 +219,7 @@ fn set_remove_absent_element_is_noop() {
 #[test]
 fn set_remove_then_has_is_false() {
     assert_exit(
-        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  s.remove(1).has(1) ? 5 : 0\n>",
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2|]\n  s.remove(1).has(1) ? 5 : 0\n>",
         0,
     );
 }
@@ -337,9 +339,9 @@ fn map_user_record_key() {
     );
 }
 
-/// A user-record key survives a persistent `.set` (new key grows) and `.remove`.
+/// A user-record key survives an in-place `.set` (new key grows) and `.remove`.
 #[test]
-fn map_user_record_key_set_and_remove() {
+fn map_user_record_key_set_and_remove_mutate_in_place() {
     assert_exit(
         r#"Point = {
   x :: Num, y :: Num,
@@ -347,18 +349,20 @@ fn map_user_record_key_set_and_remove() {
   % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
-  m :: [|Point => Num|] = [|Point { x = 1, y = 2 } => 10|]
-  grown :: [|Point => Num|] = m.set(Point { x = 5, y = 6 }, 30)
-  gone :: [|Point => Num|] = m.remove(Point { x = 1, y = 2 })
-  grown.size * 100 + gone.size * 10 + (gone.has(Point { x = 1, y = 2 }) ? 1 : 0)
+  m :: [|Point => Num|] := [|Point { x = 1, y = 2 } => 10|]
+  sizeAfterSet :: Num = m.set(Point { x = 5, y = 6 }, 30).size
+  m.remove(Point { x = 1, y = 2 })
+  sizeAfterRemove :: Num = m.size
+  hasOld :: Bool = m.has(Point { x = 1, y = 2 })
+  sizeAfterSet * 100 + sizeAfterRemove * 10 + (hasOld ? 1 : 0)
 >"#,
-        200,
+        210,
     );
 }
 
-/// A Set of a user record type deduplicates and removes by `%`/`==`.
+/// A Set of a user record type deduplicates, and `.remove` mutates it in place by `%`/`==`.
 #[test]
-fn set_user_record_key_dedup_and_remove() {
+fn set_user_record_key_dedup_and_remove_mutates_in_place() {
     assert_exit(
         r#"Point = {
   x :: Num, y :: Num,
@@ -366,9 +370,12 @@ fn set_user_record_key_dedup_and_remove() {
   % = () -> Num => < it.x * 31 + it.y >
 }
 ^ = () -> Num => <
-  s :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
-  s2 :: [|Point|] = s.remove(Point { x = 1, y = 1 })
-  s.size * 100 + s2.size * 10 + (s2.has(Point { x = 2, y = 2 }) ? 1 : 0)
+  s :: [|Point|] := [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
+  sizeBeforeRemove :: Num = s.size
+  s.remove(Point { x = 1, y = 1 })
+  sizeAfterRemove :: Num = s.size
+  hasOther :: Bool = s.has(Point { x = 2, y = 2 })
+  sizeBeforeRemove * 100 + sizeAfterRemove * 10 + (hasOther ? 1 : 0)
 >"#,
         211,
     );

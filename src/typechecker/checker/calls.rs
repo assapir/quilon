@@ -274,101 +274,10 @@ impl TypeChecker {
         if member_call
             && let Expression::Identifier { name, .. } = function
             && let Some(first_arg_type) = &first_ty
+            && let Some(result) =
+                self.check_declared_method_call(name, arguments, first_arg_type, span)
         {
-            // A record or a sum both carry methods, identified by their type name.
-            if let Type::Named {
-                name: type_name, ..
-            }
-            | Type::Sum {
-                name: type_name, ..
-            } = first_arg_type
-            {
-                // Look up method in the type's method list. Only the signature is taken —
-                // cloning the whole entry would deep-copy the method's body at every call.
-                if let Some((method_parameters, method_return_type)) = self
-                    .methods
-                    .get(&(type_name.clone(), name.clone()))
-                    .map(|(parameters, return_type, _body)| {
-                        (parameters.clone(), return_type.clone())
-                    })
-                {
-                    // A receiver expression that is literally the bare TYPE NAME
-                    // (`Point.origin()`) rather than a value — the type's own env binding
-                    // (registered so a self-referential annotation/constructor resolves,
-                    // see `check_type_declaration`) makes `Point` infer as `Type::Named`
-                    // exactly like a real instance would, so this is the only way to tell
-                    // the two apart. Legal only when the member never reads `it` (a STATIC
-                    // method — the natural spelling for a constructor); codegen agrees,
-                    // passing no real receiver value for one (`is_static_type_receiver`).
-                    let type_name_receiver = matches!(
-                        &arguments[0],
-                        Expression::Identifier { name: receiver_name, .. }
-                            if receiver_name == type_name
-                    );
-                    if type_name_receiver
-                        && !self
-                            .static_methods
-                            .contains(&(type_name.clone(), name.clone()))
-                    {
-                        return Err(TypeError::StaticCallNeedsReceiverValue {
-                            method: name.clone(),
-                            type_name: type_name.clone(),
-                            span: span.clone(),
-                        });
-                    }
-
-                    // A mutating (setter) method requires a receiver that aliases no `=`
-                    // binding and no parameter — a `:=` binding, a fresh value, or a
-                    // setter's own `it` (mutable at every call site) all pass, however
-                    // the receiver expression reaches them. Meaningless for a type-name
-                    // receiver (nothing to write through), so skipped there.
-                    if !type_name_receiver
-                        && self
-                            .setter_methods
-                            .contains(&(type_name.clone(), name.clone()))
-                        && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
-                    {
-                        return Err(TypeError::MutatingMethodOnImmutable {
-                            method: name.clone(),
-                            receiver: recv_name,
-                            span: span.clone(),
-                        });
-                    }
-
-                    // Method parameters don't include the implicit receiver
-                    // But arguments[0] is the receiver, so we need arguments[1..] to match method_parameters
-                    let call_args = &arguments[1..];
-
-                    if method_parameters.len() != call_args.len() {
-                        return Err(TypeError::WrongNumberOfArguments {
-                            expected: method_parameters.len(),
-                            got: call_args.len(),
-                            span: span.clone(),
-                        });
-                    }
-
-                    // Every method parameter is annotated — `check_type_methods` rejects an
-                    // unannotated one before the method is ever registered here.
-                    //
-                    // Resolved here exactly as at the definition site (`check_type_methods`):
-                    // an unresolved user-type annotation (`Type::named_ref`, empty field
-                    // list) never matches the resolved type an argument infers to, even for
-                    // the very same type — see the `named_ref` doc comment. Codegen carries
-                    // the matching fix (`generate_method` now tracks a method parameter's
-                    // named-type fields the same way a top-level function's does).
-                    for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
-                        let raw_type = parameter.type_annotation.clone().expect(
-                            "method parameters are annotated: checked in check_type_methods",
-                        );
-                        let parameter_type = self.resolve_type(&raw_type);
-                        let arg_type =
-                            self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
-                        self.check_type_compatibility(&parameter_type, &arg_type, span)?;
-                    }
-
-                    return Ok(method_return_type);
-                }
-            }
+            return result;
         }
 
         // Everything below resolves the name in the TOP-LEVEL namespace — a user function,
@@ -486,6 +395,135 @@ impl TypeChecker {
         }
     }
 
+    /// A method the receiver's type (`first_arg_type`) declares — a record or sum's own
+    /// member, identified by its type name. `None` means nothing here applies (the type
+    /// isn't `Named`/`Sum`, or it declares no such method), so the caller falls through to
+    /// the top-level namespace; `Some` is the call's outcome either way (an error or the
+    /// method's return type). Kept out of `check_call`'s own frame (see
+    /// `check_interpolation`'s doc comment): this was the largest block inlined there, in
+    /// the same hot, deeply-recursive function a nested call chain runs through once per
+    /// level of nesting.
+    fn check_declared_method_call(
+        &mut self,
+        name: &str,
+        arguments: &[Expression],
+        first_arg_type: &Type,
+        span: &Span,
+    ) -> Option<Result<Type, TypeError>> {
+        // A record or a sum both carry methods, identified by their type name.
+        let (Type::Named {
+            name: type_name, ..
+        }
+        | Type::Sum {
+            name: type_name, ..
+        }) = first_arg_type
+        else {
+            return None;
+        };
+
+        // Look up method in the type's method list. Only the signature is taken —
+        // cloning the whole entry would deep-copy the method's body at every call.
+        let (method_parameters, method_return_type) = self
+            .methods
+            .get(&(type_name.clone(), name.to_string()))
+            .map(|(parameters, return_type, _body)| (parameters.clone(), return_type.clone()))?;
+
+        // A receiver expression that is literally the bare TYPE NAME (`Point.origin()`)
+        // rather than a value — the type's own env binding (registered so a
+        // self-referential annotation/constructor resolves, see `check_type_declaration`)
+        // makes `Point` infer as `Type::Named` exactly like a real instance would, so this
+        // is the only way to tell the two apart. Legal only when the member never reads
+        // `it` (a STATIC method — the natural spelling for a constructor); codegen agrees,
+        // passing no real receiver value for one (`is_static_type_receiver`).
+        let type_name_receiver = matches!(
+            &arguments[0],
+            Expression::Identifier { name: receiver_name, .. }
+                if receiver_name == type_name
+        );
+        if type_name_receiver
+            && !self
+                .static_methods
+                .contains(&(type_name.clone(), name.to_string()))
+        {
+            return Some(Err(TypeError::StaticCallNeedsReceiverValue {
+                method: name.to_string(),
+                type_name: type_name.clone(),
+                span: span.clone(),
+            }));
+        }
+
+        // A mutating (setter) method requires a receiver that aliases no `=` binding and
+        // no parameter, however the receiver expression reaches them. Meaningless for a
+        // type-name receiver (nothing to write through), so skipped there.
+        if !type_name_receiver
+            && self
+                .setter_methods
+                .contains(&(type_name.clone(), name.to_string()))
+            && let Err(error) = self.require_mutable_receiver(&arguments[0], name, span)
+        {
+            return Some(Err(error));
+        }
+
+        // Method parameters don't include the implicit receiver, so `arguments[1..]`
+        // matches `method_parameters`.
+        let call_args = &arguments[1..];
+        if method_parameters.len() != call_args.len() {
+            return Some(Err(TypeError::WrongNumberOfArguments {
+                expected: method_parameters.len(),
+                got: call_args.len(),
+                span: span.clone(),
+            }));
+        }
+
+        // Every method parameter is annotated — `check_type_methods` rejects an
+        // unannotated one before the method is ever registered here.
+        //
+        // Resolved here exactly as at the definition site (`check_type_methods`): an
+        // unresolved user-type annotation (`Type::named_ref`, empty field list) never
+        // matches the resolved type an argument infers to, even for the very same type —
+        // see the `named_ref` doc comment. Codegen carries the matching fix
+        // (`generate_method` now tracks a method parameter's named-type fields the same
+        // way a top-level function's does).
+        for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
+            let raw_type = parameter
+                .type_annotation
+                .clone()
+                .expect("method parameters are annotated: checked in check_type_methods");
+            let parameter_type = self.resolve_type(&raw_type);
+            let arg_type = match self.infer_argument(arg, LambdaTarget::Declared(&parameter_type)) {
+                Ok(ty) => ty,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Err(error) = self.check_type_compatibility(&parameter_type, &arg_type, span) {
+                return Some(Err(error));
+            }
+        }
+
+        Some(Ok(method_return_type))
+    }
+
+    /// A mutating (setter) call requires a receiver that aliases no `=` binding and no
+    /// parameter — a `:=` binding, a fresh value, or a setter's own `it` (mutable at every
+    /// call site) all pass, however the receiver expression reaches them. Shared by a
+    /// user record's `:=`-declared methods and the built-in `Map`/`Set` mutators
+    /// (`set`/`remove`/`add`) — one gate for every form of "this call writes through its
+    /// receiver".
+    fn require_mutable_receiver(
+        &self,
+        receiver: &Expression,
+        method: &str,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if let Some(recv_name) = self.immutable_write_witness(receiver) {
+            return Err(TypeError::MutatingMethodOnImmutable {
+                method: method.to_string(),
+                receiver: recv_name,
+                span: span.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Type-check a built-in array method call. `arguments[0]` is the receiver array (already
     /// known to be `Array(_)`); the remaining arguments are the method's own arguments,
     /// typically a lambda whose parameters bind to the element (or accumulator) type:
@@ -563,8 +601,8 @@ impl TypeChecker {
     /// known to be `Map(K, V)`); the remaining arguments are the method's own arguments.
     ///   - `get(k :: K)`        -> `Result` (`Ok(V)` / `NotOk`) — the safe lookup
     ///   - `has(k :: K)`        -> `Bool`
-    ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (a NEW map; the receiver is unchanged)
-    ///   - `remove(k :: K)`     -> `Map(K, V)` (a NEW map without `k`; the receiver is unchanged)
+    ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (mutates the receiver in place, returns `it`)
+    ///   - `remove(k :: K)`     -> `Map(K, V)` (mutates the receiver in place, returns `it`)
     ///   - `keys()`             -> `[]K`
     ///   - `values()`           -> `[]V`
     ///   - `each(f: (K, V) => _)` -> the receiver map (so `.each` chains)
@@ -576,6 +614,12 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `set`/`remove` mutate the receiver in place, so — exactly like a record's `:=`
+        // setter methods — they require a `:=` receiver.
+        if matches!(method, "set" | "remove") {
+            self.require_mutable_receiver(&arguments[0], method, span)?;
+        }
+
         let method_args = &arguments[1..];
         let map_type = Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()));
 
@@ -629,7 +673,8 @@ impl TypeChecker {
     /// Type-check a built-in `Set` method call. `arguments[0]` is the receiver set (already
     /// known to be `Set(T)`); the remaining arguments are the method's own arguments.
     ///   - `has(x :: T)`   -> `Bool`
-    ///   - `add(x :: T)`   -> `Set(T)` (a NEW set; the receiver is unchanged)
+    ///   - `add(x :: T)`   -> `Set(T)` (mutates the receiver in place, returns `it`)
+    ///   - `remove(x :: T)` -> `Set(T)` (mutates the receiver in place, returns `it`)
     ///   - `items()`       -> `[]T`
     ///   - `each(f: T => _)` -> the receiver set (so `.each` chains)
     pub(super) fn check_set_method(
@@ -639,6 +684,12 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `add`/`remove` mutate the receiver in place, so — exactly like a record's `:=`
+        // setter methods — they require a `:=` receiver.
+        if matches!(method, "add" | "remove") {
+            self.require_mutable_receiver(&arguments[0], method, span)?;
+        }
+
         let method_args = &arguments[1..];
         let set_type = Type::Set(Box::new(elem_type.clone()));
 

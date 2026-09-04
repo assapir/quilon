@@ -255,6 +255,63 @@ fn run_setter_with_block_body_writes_multiple_fields() {
     );
 }
 
+// --- In-place collection mutation: Map/Set setters and the array element write. ---
+
+#[test]
+fn run_map_set_mutates_in_place_and_chains() {
+    // `set` mutates a `:=`-bound map in place and returns `it`, so a second call chains
+    // straight off the first's return.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1|]\n  m.set(\"a\", 5).set(\"b\", 2)\n  (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0) + (m.get(\"b\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
+        7,
+    );
+}
+
+#[test]
+fn run_map_remove_mutates_in_place() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1, \"b\" => 2|]\n  m.remove(\"a\")\n  m.size\n>",
+        1,
+    );
+}
+
+#[test]
+fn run_set_add_mutates_in_place_and_chains() {
+    // `add` mutates a `:=`-bound set in place and returns `it`, so `.has` reads straight
+    // off the return.
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2|]\n  s.add(3).has(3) ? s.size : 0\n>",
+        3,
+    );
+}
+
+#[test]
+fn run_set_remove_mutates_in_place() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2, 3|]\n  s.remove(2)\n  s.size\n>",
+        2,
+    );
+}
+
+#[test]
+fn run_array_element_write_mutates_in_place() {
+    // `arr[i] := v` mutates a `:=`-bound array's existing backing memory in place.
+    assert_exit(
+        "^ = () -> Num => <\n  nums :: []Num := [1, 2, 3]\n  nums[1] := 20\n  nums[0] + nums[1] + nums[2]\n>",
+        24,
+    );
+}
+
+#[test]
+fn run_path_write_through_a_record_field_mutates_the_field_map() {
+    // `rec.field.set(...)` — a setter call reached through a field path — is checked
+    // against the value the path reaches: `a` is `:=`-bound, so `a.balances` is too.
+    assert_exit(
+        "Account = { balances :: [|Text => Num|] }\n^ = () -> Num => <\n  a := Account { balances = [|\"usd\" => 10|] }\n  a.balances.set(\"usd\", 99)\n  a.balances.get(\"usd\") ? | Ok(v) => v | NotOk(_) => 0\n>",
+        99,
+    );
+}
+
 #[test]
 fn field_write_on_immutable_instance_is_a_type_error() {
     // `c` is bound with `=` (immutable); a direct field write `c.value := …`
@@ -322,6 +379,62 @@ fn a_method_is_a_setter_because_it_is_declared_one_not_because_it_writes() {
     // suite would fail if registration quietly went back to inspecting bodies.
     let src = "T = {\n  v :: Num,\n  bump := () -> Num => < it.v >\n}\n^ = () -> Num => <\n  t = T { v = 0 }\n  t.bump()\n>";
     assert_type_error(src);
+}
+
+// --- The `:=`-receiver requirement extends to the built-in collection setters and the
+// array element write. ---
+
+#[test]
+fn map_set_on_immutable_map_is_a_type_error() {
+    let src = "^ = () -> Num => <\n  m = [|\"a\" => 1|]\n  m.set(\"a\", 2)\n  0\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn map_remove_on_immutable_map_is_a_type_error() {
+    let src = "^ = () -> Num => <\n  m = [|\"a\" => 1|]\n  m.remove(\"a\")\n  0\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn set_add_on_immutable_set_is_a_type_error() {
+    let src = "^ = () -> Num => <\n  s = [|1, 2|]\n  s.add(3)\n  0\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn set_remove_on_immutable_set_is_a_type_error() {
+    let src = "^ = () -> Num => <\n  s = [|1, 2|]\n  s.remove(1)\n  0\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn array_element_write_on_immutable_array_is_a_type_error() {
+    let src = "^ = () -> Num => <\n  nums = [1, 2, 3]\n  nums[0] := 9\n  nums[0]\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_writing_an_array_element_through_it_is_rejected() {
+    // `it.items[i] := …` mutates `it` through an array field exactly as `it.field := …`
+    // does — a method that writes it cannot be declared `=`.
+    let src = "T = {\n  items :: []Num,\n  first = () -> Num => <\n    it.items[0] := 99\n    it.items[0]\n  >\n}\n^ = () -> Num => <\n  t := T { items = [1, 2] }\n  t.first()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn an_immutable_method_calling_a_map_setter_through_it_is_rejected() {
+    // `it.counts.set(...)` mutates `it` through a Map field: `it` is immutable inside an
+    // `=` method, so the write is rejected the same way a field write through `it` is.
+    let src = "T = {\n  counts :: [|Text => Num|],\n  bump = () -> Num => <\n    it.counts.set(\"a\", 1)\n    0\n  >\n}\n^ = () -> Num => <\n  t := T { counts = [|=>|] }\n  t.bump()\n>";
+    assert_type_error(src);
+}
+
+#[test]
+fn a_mutating_method_writing_an_array_element_through_it_runs_on_a_mutable_receiver() {
+    // The declared-`:=` counterpart: on a `:=` receiver the same write is legal and runs.
+    let src = "T = {\n  items :: []Num,\n  first := () -> Num => <\n    it.items[0] := 99\n    it.items[0]\n  >\n}\n^ = () -> Num => <\n  t := T { items = [1, 2] }\n  t.first()\n>";
+    assert_exit(src, 99);
 }
 
 #[test]

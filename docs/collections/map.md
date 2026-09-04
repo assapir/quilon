@@ -17,8 +17,9 @@ empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 ```
 
 **Keys** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or a
-**user type that opts in** (see below). A map is **immutable / persistent**: every mutator
-(`set`) returns a **new** map, leaving the receiver as it was.
+**user type that opts in** (see below). `set` and `remove` are **setters**: they mutate a
+`:=`-bound map in place and return `it`, so calls chain like `each` (see
+[mutation](../mutation.md)). Calling either on an `=`-bound map is a compile error.
 
 ## User-defined key types
 
@@ -58,8 +59,8 @@ the receiver is a Map):
 |------------|--------|-------|
 | `get(k)` | `Ok(v)` / `NotOk` | the safe, `Result`-returning lookup (the only way to read a value) |
 | `has(k)` | `Bool` | membership |
-| `set(k, v)` | new `[\|K => V\|]` | a fresh map with `k` bound to `v` (persistent) |
-| `remove(k)` | new `[\|K => V\|]` | a fresh map without `k` (persistent); removing an absent key is a no-op |
+| `set(k, v)` | **the receiver map** | binds `k` to `v` in place; requires a `:=`-bound receiver |
+| `remove(k)` | **the receiver map** | removes `k` in place; requires a `:=`-bound receiver; removing an absent key is a no-op |
 | `keys()` | `[]K` | the keys as an array (order unspecified) |
 | `values()` | `[]V` | the values as an array (same order as `keys()`) |
 | `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains) |

@@ -59,7 +59,8 @@ pub fn try_for_each_subexpression<B>(
         | Expression::Lambda {
             body: expression, ..
         } => try_for_each_subexpression(expression, f)?,
-        Expression::FieldAssign { target, value, .. } => {
+        Expression::FieldAssign { target, value, .. }
+        | Expression::IndexAssign { target, value, .. } => {
             try_for_each_subexpression(target, f)?;
             try_for_each_subexpression(value, f)?;
         }

@@ -4,7 +4,8 @@
 ~   and `NotOk` when it is absent — there is no bracket indexing on a map.
 ~ Keys are Num/Text/Bool, or a user type that defines both a `%` hash hook (unary,
 ~   `it` the value, returning a Num) and an `==` equality — see the `Point` map below.
-~ Maps are IMMUTABLE — every mutator returns a NEW map. Iteration order is UNSPECIFIED
+~ `set`/`remove` are setters: they mutate a `:=`-bound map in place and return `it`, so
+~   calls chain — a `:=` receiver is required. Iteration order is UNSPECIFIED
 ~   (reproducible run-to-run via a fixed-seed hasher, but never rely on it).
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
@@ -16,7 +17,7 @@ Point = {
 }
 
 ^ = () -> $ => <
-  ages :: [|Text => Num|] = [|"ada" => 36, "alan" => 41, "grace" => 45|]
+  ages :: [|Text => Num|] := [|"ada" => 36, "alan" => 41, "grace" => 45|]
 
   assert(ages.size, equals(3))
   assert(ages.has("grace"), equals(true))
@@ -30,30 +31,27 @@ Point = {
     | NotOk(_) => 0
   assert(found, equals(41))
 
-  ~ `set` is persistent: it returns a NEW map, leaving the original untouched.
-  older :: [|Text => Num|] = ages.set("ada", 37)
-  assert(older.get("nobody"), isNotOk())
-  assert(older.size, equals(3))
-  originalAge :: Num = ages.get("ada") ?
+  ~ `set` mutates `ages` in place and returns it, so the entry count read off the
+  ~   return is the receiver's own.
+  assert(ages.set("ada", 37).size, equals(3))
+  updatedAge :: Num = ages.get("ada") ?
     | Ok(v)    => v
     | NotOk(_) => 0
-  updatedAge :: Num = older.get("ada") ?
-    | Ok(v)    => v
-    | NotOk(_) => 0
-  assert(originalAge, equals(36))
   assert(updatedAge, equals(37))
 
-  ~ remove is persistent too: a NEW map without the key, receiver untouched.
-  fewer :: [|Text => Num|] = ages.remove("ada")
-  assert(ages.size, equals(3))
-  assert(fewer.size, equals(2))
-  assert(fewer.get("ada"), isNotOk())
-  ~ removing an absent key is a no-op (still a fresh, equal-size map).
+  ~ `set`'s return value is the receiver, so calls chain: read `.size` right off it.
+  assert(ages.set("carol", 50).size, equals(4))
+  assert(ages.size, equals(4))
+
+  ~ `remove` mutates in place too, and chains the same way.
+  assert(ages.remove("carol").size, equals(3))
+  assert(ages.get("carol"), isNotOk())
+  ~ removing an absent key is a no-op (still the same, unchanged-size map).
   assert(ages.remove("nobody").size, equals(3))
 
   ~ keys / values are plain arrays (order unspecified), so array methods compose.
   total :: Num = ages.values().reduce(0, (acc, x) => acc + x)
-  assert(total, equals(122))
+  assert(total, equals(123))
   assert(ages.keys().size, equals(3))
 
   ~ each visits every entry for effect and returns the receiver (so it chains).
@@ -61,10 +59,10 @@ Point = {
   ages.each((name, age) => <
     sum := sum + age
   >)
-  assert(sum, equals(122))
+  assert(sum, equals(123))
 
   ~ A Map keyed by a user record type hashes and compares keys through `%`/`==`.
-  grid :: [|Point => Text|] = [|
+  grid :: [|Point => Text|] := [|
     Point { x = 0, y = 0 } => "origin",
     Point { x = 1, y = 2 } => "here"
   |]
@@ -76,8 +74,7 @@ Point = {
   label :: Text = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
   assert(label, equals("here"))
 
-  ~ Mutators return a NEW collection (the receiver is immutable).
-  bigger :: [|Point => Text|] = grid.set(Point { x = 3, y = 4 }, "new")
-  assert(bigger.size, equals(3))
-  assert(grid.size, equals(2))
+  ~ `set` mutates `grid` in place, so the receiver itself grows.
+  grid.set(Point { x = 3, y = 4 }, "new")
+  assert(grid.size, equals(3))
 >

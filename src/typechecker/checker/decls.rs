@@ -591,7 +591,7 @@ impl TypeChecker {
     /// the caller's walk visits separately?
     fn node_mutates_receiver(&self, type_name: &str, expression: &Expression) -> bool {
         match expression {
-            Expression::FieldAssign { target, .. } => {
+            Expression::FieldAssign { target, .. } | Expression::IndexAssign { target, .. } => {
                 Self::field_path_root_name(target).as_deref() == Some(crate::ast::RECEIVER)
             }
             // `it.setter(...)` desugars to `setter(it, ...)`: a sibling setter applied to
@@ -612,11 +612,14 @@ impl TypeChecker {
         }
     }
 
-    /// The name of the variable at the root of a field-access path, if any:
-    /// `a.b.c` -> `Some("a")`. Returns `None` if the root isn't a plain ident.
+    /// The name of the variable at the root of a field-access/index path, if any:
+    /// `a.b.c` -> `Some("a")`, `a.b[i]` -> `Some("a")`. Returns `None` if the root isn't a
+    /// plain ident.
     pub(super) fn field_path_root_name(target: &Expression) -> Option<String> {
         match target {
-            Expression::FieldAccess { expression, .. } => Self::field_path_root_name(expression),
+            Expression::FieldAccess { expression, .. } | Expression::Index { expression, .. } => {
+                Self::field_path_root_name(expression)
+            }
             Expression::Identifier { name, .. } => Some(name.clone()),
             _ => None,
         }

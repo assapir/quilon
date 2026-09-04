@@ -850,6 +850,16 @@ pub enum Expression {
         span: Span,
     },
 
+    // In-place array element write: `arr[i] := value`. `target` is an `Index`; it
+    // mutates the existing array memory in place rather than re-binding a name. Only
+    // allowed when `arr`'s binding is mutable (`:=`); the type checker enforces this,
+    // and the index is checked exactly like a read.
+    IndexAssign {
+        target: Box<Expression>,
+        value: Box<Expression>,
+        span: Span,
+    },
+
     // Array literal
     Array {
         elements: Vec<Expression>,
@@ -924,6 +934,7 @@ impl Expression {
             Expression::FieldAccess { span, .. } => span,
             Expression::FieldAssign { span, .. } => span,
             Expression::Index { span, .. } => span,
+            Expression::IndexAssign { span, .. } => span,
             Expression::Array { span, .. } => span,
             Expression::MapLiteral { span, .. } => span,
             Expression::SetLiteral { span, .. } => span,

@@ -105,9 +105,9 @@ compile error at the binding. A setter's `it` is mutable, its aliases included.
 locals — `:=` locals included — end at the return, and each call site binds the result
 with either operator.
 
-**Write sites.** A field write and a setter call are checked against the value their
-path reaches, however it is reached — a field read, an element read, or a call result
-(`same(t).v := 5` on `=`-bound `t` is a compile error naming `t`).
+**Write sites.** A field write, an array element write, and a setter call are checked
+against the value their path reaches, however it is reached — a field read, an element
+read, or a call result (`same(t).v := 5` on `=`-bound `t` is a compile error naming `t`).
 
 (See `examples/deep_immutability.qn`.)
 
@@ -115,6 +115,20 @@ path reaches, however it is reached — a field read, an element read, or a call
 methods, and operator members on either kind (`` ` ``, `==`, `+`, …), are `=` and
 non-mutating; `:=` on one is a compile error. A sum keeps its data in variant payloads,
 whose match bindings are immutable, and an operator or render member yields a value.
+
+**Built-in collection setters.** `Map`'s `set`/`remove` and `Set`'s `add`/`remove` are
+setters too: they mutate a `:=`-bound receiver in place and return `it`, exactly like a
+record setter, and a `:=` receiver is required the same way. An array's element write,
+`arr[i] := value`, is the array analog of a record field write — an in-place write on a
+`:=`-bound array, and the existing immutable-binding error on an `=`-bound one.
+
+```quilon
+ages := [|"ada" => 36|]
+ages.set("alan", 41)          ~ mutates `ages` in place, returns it
+
+nums := [1, 2, 3]
+nums[0] := 10                 ~ mutates `nums` in place
+```
 
 ```quilon ignore
 Shape = Circle(Num) / Rect(Num, Num) {

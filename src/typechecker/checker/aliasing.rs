@@ -75,15 +75,16 @@ pub struct ResultAliasing {
 }
 
 /// Whether values of `ty` are shared by reference AND writable through an alias — the
-/// types the deep-immutability gates apply to. A record (named or anonymous) is; a
-/// container is exactly when what it holds is (an array of `Num` copies freely — nothing
-/// reached through it can be written — while an array of records shares its elements). A
-/// sum is when any variant payload is. Scalars copy.
+/// types the deep-immutability gates apply to. A record (named or anonymous) is. So is
+/// every array/`Map`/`Set`, regardless of what it holds: `arr[i] := v`, `m.set(...)`, and
+/// `s.add(...)` all mutate the underlying storage in place, so two bindings of the same
+/// array/map/set alias each other's writes even when the element type is a plain `Num`. A
+/// sum is when any variant payload is. Scalars (`Num`/`Bool`/`Text`) copy.
 pub(super) fn is_reference_type(ty: &Type) -> bool {
     match ty {
-        Type::Named { .. } | Type::Record(_) => true,
-        Type::Array(element) | Type::Set(element) => is_reference_type(element),
-        Type::Map(key, value) => is_reference_type(key) || is_reference_type(value),
+        Type::Named { .. } | Type::Record(_) | Type::Array(_) | Type::Set(_) | Type::Map(_, _) => {
+            true
+        }
         Type::Sum { variants, .. } => variants
             .iter()
             .any(|variant| variant.fields.iter().any(is_reference_type)),
@@ -416,16 +417,15 @@ impl TypeChecker {
 /// Which argument slots (0 = the receiver) a built-in collection method's result may
 /// alias. `each` returns its receiver; `filter` shares the kept elements, and `map`'s
 /// lambda may hand elements through (`xs.map(x => x)`); `at`/`find` wrap an element;
-/// `reduce` may return its initial value; a map/set update shares the receiver's entries
-/// and the added one. Consulted only for reference-typed results, so the
-/// scalar-returning methods — and every `map` producing scalars — never reach it.
+/// `reduce` may return its initial value. `Map`/`Set`'s `set`/`remove`/`add` mutate the
+/// receiver in place and return it — literally the same value, so slot 0 only, exactly
+/// like `each`. Consulted only for reference-typed results, so the scalar-returning
+/// methods — and every `map` producing scalars — never reach it.
 fn builtin_collection_method_slots(name: &str) -> &'static [usize] {
     match name {
         "each" | "filter" | "map" | "at" | "find" | "remove" | "keys" | "values" | "items"
-        | "get" => &[0],
+        | "get" | "set" | "add" => &[0],
         "reduce" => &[1],
-        "set" => &[0, 2],
-        "add" => &[0, 1],
         _ => &[],
     }
 }

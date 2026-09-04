@@ -991,6 +991,94 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to and index bounds"))
     }
 
+    /// Bounds-checked pointer to `array[index]`'s element storage, plus its value-repr LLVM
+    /// type — the shared primitive behind reading an element (`generate_index`) and writing
+    /// one in place (`generate_index_assign`). `index_node` is the whole `Index` expression:
+    /// its oracle-recorded type is the element type, and its span names the read/write that
+    /// failed on an out-of-bounds, negative, or NaN index.
+    pub(super) fn checked_element_pointer(
+        &mut self,
+        index_node: &Expression,
+        array_val: BasicValueEnum<'ctx>,
+        index_val: BasicValueEnum<'ctx>,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let BasicValueEnum::StructValue(_) = array_val else {
+            return Err("Can only index into arrays".to_string());
+        };
+        let data_ptr = self.array_data_field(array_val)?;
+        let size = self.array_size_field(array_val)?;
+
+        let BasicValueEnum::FloatValue(idx_f) = index_val else {
+            return Err("Index must be a number".to_string());
+        };
+
+        // CHECKED indexing (fail loud, never silent): an out-of-bounds, negative, or NaN
+        // index is a clear runtime error (stderr + exit 1), never a raw read/write. The
+        // check runs on the f64 BEFORE `fptosi` — converting an invalid index is poison. A
+        // fractional in-range index truncates toward zero (documented).
+        let in_bounds = self.index_in_bounds(idx_f, size)?;
+        let function = self
+            .current_function
+            .ok_or_else(|| "Index expression outside of function".to_string())?;
+        let fail_bb = self.context.append_basic_block(function, "idx_fail");
+        let ok_bb = self.context.append_basic_block(function, "idx_ok");
+        self.builder
+            .build_conditional_branch(in_bounds, ok_bb, fail_bb)
+            .map_err(ctx("Failed to branch on index bounds"))?;
+
+        self.builder.position_at_end(fail_bb);
+        let fail_fn = self.get_intrinsic("__index_fail")?;
+        // Where the program wrote `arr[i]`/`arr[i] := …`, so the report points at the
+        // offending read/write rather than leaving the reader to guess which one it was.
+        let site = self.site_value(index_node.span())?;
+        self.builder
+            .build_call(fail_fn, &[idx_f.into(), size.into(), site.into()], "")
+            .map_err(ctx("Failed to call __index_fail"))?;
+        self.builder
+            .build_unreachable()
+            .map_err(ctx("Failed to build unreachable"))?;
+
+        self.builder.position_at_end(ok_bb);
+        let index_i64 = self
+            .builder
+            .build_float_to_signed_int(idx_f, self.context.i64_type(), "index_i64")
+            .map_err(ctx("Failed to convert index"))?;
+
+        // Element LLVM type comes from the type oracle (the index expression's type IS
+        // the element type), NOT from a hardcoded `f64` — so `Text`/array/record elements
+        // load/store correctly.
+        let elem_llvm = self.oracle_value_type(index_node)?;
+
+        // Use GEP (indexing by element type) to get the element pointer.
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_llvm, data_ptr, &[index_i64], "elem_ptr")
+                .map_err(ctx("Failed to build GEP"))?
+        };
+        Ok((elem_ptr, elem_llvm))
+    }
+
+    /// `arr[i] := value` — store into the bounds-checked element pointer, mutating the
+    /// array's existing backing memory in place (the analog of `obj.field := value` for a
+    /// record). `target` is the whole `Index` expression (`arr[i]`); `array`/`index_expression`
+    /// are its parts.
+    pub(super) fn generate_index_assign(
+        &mut self,
+        target: &Expression,
+        array: &Expression,
+        index_expression: &Expression,
+        value: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let array_val = self.generate_expression(array)?;
+        let index_val = self.generate_expression(index_expression)?;
+        let (elem_ptr, _elem_llvm) = self.checked_element_pointer(target, array_val, index_val)?;
+        let new_value = self.generate_expression(value)?;
+        self.builder
+            .build_store(elem_ptr, new_value)
+            .map_err(ctx("Failed to store element"))?;
+        Ok(self.unit_value().into())
+    }
+
     /// `arr.at(n)` — `Ok(arr[n])` if `0 <= n < size`, else `NotOk($)` (safe index).
     pub(super) fn array_at(
         &mut self,

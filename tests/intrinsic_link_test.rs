@@ -117,24 +117,25 @@ const EVERY_INTRINSIC: &str = r#"
   ~ The `contains` MATCHER (not the method) is what reaches __text_contains.
   assert("haystack", contains("stack"))
 
-  ~ Map intrinsics: new/set/get/has/len, and keys/values/each iteration.
-  counts :: [|Text => Num|] = [|"a" => 1, "b" => 2|]
+  ~ Map intrinsics: new/set/get/has/len, and keys/values/each iteration. `set`/`remove`
+  ~ mutate in place.
+  counts :: [|Text => Num|] := [|"a" => 1, "b" => 2|]
   assert(counts.has("b"), equals(true))
   assert(counts.size, equals(2))
-  grown :: [|Text => Num|] = counts.set("c", 3)
-  assert(grown.keys().size, equals(3))
-  assert(grown.values().size, equals(3))
-  assert(grown.remove("c").size, equals(2))
+  assert(counts.set("c", 3).keys().size, equals(3))
+  assert(counts.values().size, equals(3))
+  assert(counts.remove("c").size, equals(2))
   assert(counts.get("a"), isOk())
   counts.each((k, v) => v)
 
   ~ Set intrinsics: new/add/has/len, items/each iteration, and the algebra operators.
-  odds :: [|Num|] = [|1, 3, 5|]
+  ~ `add`/`remove` mutate in place.
+  odds :: [|Num|] := [|1, 3, 5|]
   evens :: [|Num|] = [|3, 4, 5|]
   odds.each(x => x)
   assert(odds.has(1), equals(true))
   assert(odds.add(7).size, equals(4))
-  assert(odds.remove(1).size, equals(2))
+  assert(odds.remove(1).size, equals(3))
   assert(odds.items().size, equals(3))
   assert((odds + evens).size, equals(4))
   assert((odds - evens).size, equals(1))
