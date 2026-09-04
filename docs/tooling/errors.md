@@ -937,8 +937,8 @@ Call it on a value instead: `p.distance()`.
 ### QN341 — store into a mutable container aliasing an immutable value
 
 A field write, or a setter-call argument the setter stores into `it`, stores a value that
-aliases an `=` binding or a parameter into a `:=`-reachable container. The same rule as
-QN306, checked at the store instead of the binding: a value bound with `=` stays immutable
+aliases an `=` binding or a parameter into a `:=`-reachable container. This is QN306's own
+rule, applied at the store as well as the binding: a value bound with `=` stays immutable
 through every alias, so a store cannot make it reachable through a `:=` binding either.
 
 ```quilon ignore

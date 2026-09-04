@@ -117,7 +117,7 @@ locals — `:=` locals included — end at the return, and each call site binds 
 with either operator. A lambda or a higher-order call (`map`, `reduce`, an immediately
 invoked lambda) follows the same rule as a named function: its result is fresh only when
 its body builds one, and aliases whatever the body's value aliases otherwise. A closure
-that returns a value it CAPTURED, rather than one it built, is not fresh — every call
+that returns a value it CAPTURED — not one it built — is not fresh: every call
 returns the same value, so the result carries the capture's binding:
 
 ```quilon ignore
