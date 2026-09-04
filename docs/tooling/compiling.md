@@ -64,6 +64,13 @@ quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
 
+Add `--faster` to optimize the emitted object at LLVM's O3 (`OptimizationLevel::Aggressive`)
+instead of the default, unoptimized build:
+```bash
+quilon build program.qn --faster -o program
+```
+`quilon run` (the JIT) is unaffected — it always runs unoptimized.
+
 `quilon test <file> --binary <out>` builds the suite into a **native, debuggable
 executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
 (`gdb`/`lldb`) can step through a case. `<file>` names one suite; a directory (the default
@@ -88,6 +95,10 @@ llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
+`--faster` and `--debug` combine (`-O3 -g`, in `cc` terms): DWARF still comes out —
+line tables survive — but the optimizer may inline away or otherwise not preserve
+some locals for inspection.
+
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own

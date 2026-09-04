@@ -37,6 +37,9 @@ pub struct DebugSource<'a> {
 /// `TargetMachine`. Uses PIC relocation so string/data relocations link cleanly
 /// into a (default) PIE executable. When `debug` is `Some`, DWARF line-number info
 /// is emitted (the `--debug` build mode); otherwise the object carries no debug info.
+/// `faster` selects `OptimizationLevel::Aggressive` (O3) instead of the default
+/// `None`, and combines freely with `debug`: DWARF still comes out, though the
+/// optimizer may inline away or dead-code some locals a debugger could otherwise show.
 fn emit_object(
     program: &Program,
     types: TypeTable,
@@ -44,6 +47,7 @@ fn emit_object(
     sources: Rc<SourceMap>,
     obj_path: &Path,
     debug: Option<&DebugSource<'_>>,
+    faster: bool,
 ) -> Result<(), String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
@@ -69,12 +73,16 @@ fn emit_object(
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
+    let optimization = match faster {
+        true => OptimizationLevel::Aggressive,
+        false => OptimizationLevel::None,
+    };
     let machine = target
         .create_target_machine(
             &triple,
             &cpu,
             &features,
-            OptimizationLevel::None,
+            optimization,
             RelocMode::PIC,
             CodeModel::Default,
         )
@@ -310,7 +318,8 @@ fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bo
 
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC. The two stages
-/// — code generation, then the link — are announced through `status`.
+/// — code generation, then the link — are announced through `status`. `faster` selects
+/// LLVM's O3 object codegen (see [`emit_object`]) instead of the unoptimized default.
 #[allow(clippy::too_many_arguments)] // one call site, the CLI, which passes what it was given
 pub fn build_native(
     program: &Program,
@@ -320,11 +329,12 @@ pub fn build_native(
     out: &Path,
     linker: &str,
     debug: Option<&DebugSource<'_>>,
+    faster: bool,
     status: &Status,
 ) -> Result<(), String> {
     with_staged_object(|obj| {
         status.stage(Stage::Generating);
-        emit_object(program, types, defer, sources, obj, debug)?;
+        emit_object(program, types, defer, sources, obj, debug, faster)?;
         let rt_lib = runtime_lib_path()?;
 
         status.stage(Stage::Linking);

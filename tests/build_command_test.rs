@@ -258,6 +258,43 @@ fn documented_build_flow_produces_running_binary() {
     }
 }
 
+/// `--faster` selects LLVM's O3 object codegen. Self-tail-call lowering happens in
+/// codegen's own IR construction, not as an LLVM optimization pass, so
+/// `tail_recursion.qn`'s 1,000,000-deep self-recursion is the sharpest check that O3
+/// hasn't disturbed it: a regression there stack-overflows instead of merely running slow.
+#[test]
+fn faster_build_produces_running_binary() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping --faster build gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("tail_recursion.qn");
+    let out: PathBuf = std::env::temp_dir().join(format!("quilon_faster_{}", std::process::id()));
+
+    let mut cmd = Command::new(quilon);
+    cmd.args(["build", example.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--faster", "-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build --faster");
+    assert!(
+        build.status.success(),
+        "`quilon build --faster` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run produced binary");
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "an O3 build of tail_recursion.qn produced the wrong exit code"
+    );
+}
+
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no
 /// `libquilon_rt.a` next to it, no build tree on disk. `quilon build` must still
 /// work, by decompressing the runtime archive embedded in the binary itself into
