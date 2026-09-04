@@ -74,6 +74,10 @@ Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
 *usable* at the match site: `Ok("x") ? Ok(s) => s.size` binds `s : Text`, and passing
 `s` to an [overload set](../functions/overloading.md) dispatches to the `Text` member.
+`Ok` and `NotOk` each carry their own concrete type at a given position, and the two
+may differ: `Ok(Text) / NotOk(Num)` is a normal `Result` (the `getOpt` shape below is
+one example). Within one variant, every value carries the same concrete type at a
+given position.
 An **array literal of `Result`s** unifies each variant's payload type across every
 element: `[Ok("a"), NotOk("b")]` carries a `Text` payload for BOTH `Ok` and `NotOk`,
 however the elements are ordered, so a later `.map`/match on any element binds its
