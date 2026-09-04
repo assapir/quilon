@@ -364,57 +364,43 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// The expression a body evaluates to: a block's is its tail statement, so that is the
-    /// one carrying the body's type.
-    fn body_value(body: &Expression) -> &Expression {
-        match body {
-            Expression::Block { statements, .. } => match statements.last() {
-                Some(crate::ast::Statement::Expression(tail)) => Self::body_value(tail),
-                _ => body,
-            },
-            _ => body,
-        }
-    }
-
-    /// The default return TYPE codegen assigns a function with the given (possibly
-    /// missing) return annotation and body: the annotation if present, else `$` (Unit)
-    /// for a Unit-tailed body, else `Num`. Codegen lacks the checker's full inference, so
-    /// this picks the LLVM-level return type for an unannotated function/lambda/method.
-    /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
+    /// The return TYPE codegen assigns a function with the given (possibly missing) return
+    /// annotation and body: the annotation if present, else the checker's recorded type for
+    /// the body. (The entry point `^` is handled separately — it always returns an f64 exit
+    /// code.)
     pub(super) fn default_return_type(
         &self,
         return_type: Option<&Type>,
         body: &Expression,
-    ) -> Type {
-        // The oracle records types by span, and a block has none of its own — so ask about
-        // the expression the body evaluates to. Every function body is a block, so without
-        // this an unannotated `make = () => < Ok("hello") >` lowers its return to the `Num`
-        // fallback and the payload a downstream match binds is the wrong shape.
-        let body = Self::body_value(body);
+    ) -> Result<Type, String> {
+        // The checker records a block's OWN span with its resolved type (the same type its
+        // tail carries), so the oracle answers directly for `body` — a function body is
+        // always a block, and a lambda's bare-expression body is looked up the same way.
         match return_type {
             // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
             // slots are type variables the language can't otherwise name — is refined to
             // the body's concrete type from the oracle, so the LLVM return matches the
             // value the body actually produces (`Ok("x")` => `{ i8, Text }`, not the
             // generic `{ i8, double }`). Mirrors the checker refining a generic return.
-            Some(t) if t.contains_generic() => self
+            Some(t) if t.contains_generic() => Ok(self
                 .oracle
                 .expression_type(body)
                 .cloned()
-                .unwrap_or_else(|| t.clone()),
+                .unwrap_or_else(|| t.clone())),
             // A concrete annotation is authoritative.
-            Some(t) => t.clone(),
-            None if self.expression_is_unit(body) => Type::Unit,
+            Some(t) => Ok(t.clone()),
             // Unannotated: the oracle holds the checker's inferred body type (concrete,
-            // including a specialized Result payload such as `Result[Ok(Text)]`), so a
-            // function returning `Ok("x")` lowers its return to the payload's real shape
-            // and a downstream match binds it usably. Fall back to `Num` for the IR-only
-            // codegen tests that run without a type-check pass.
-            None => self
-                .oracle
-                .expression_type(body)
-                .cloned()
-                .unwrap_or(Type::Num),
+            // including a specialized Result payload such as `Result[Ok(Text)]`, and `$`
+            // for a block whose last statement is a declaration), so a function returning
+            // `Ok("x")` lowers its return to the payload's real shape and a downstream
+            // match binds it usably. A missing entry means this body never went through
+            // the checker — a compiler bug, not something to guess past.
+            None => self.oracle.expression_type(body).cloned().ok_or_else(|| {
+                format!(
+                    "no type recorded for an unannotated function body at {:?} — it was not type-checked",
+                    body.span()
+                )
+            }),
         }
     }
 
@@ -431,7 +417,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .iter()
             .map(|p| self.boundary_type(&self.parameter_type(p)))
             .collect::<Result<Vec<_>, _>>()?;
-        let ret = self.default_return_type(return_type, body);
+        let ret = self.default_return_type(return_type, body)?;
         Ok((parameter_types, self.boundary_type(&ret)?))
     }
 
