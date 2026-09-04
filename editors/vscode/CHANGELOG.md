@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedded corelib modules into, and adds a CodeLLDB `sourceMap` entry that redirects a
   stepped-into corelib function's DWARF path there — so, say, `body()` on an
   `http.Response` opens `corelib/http.qn` instead of falling back to disassembly. A
-  language server that can't answer the request (not running, or too old) just costs
+  language server that can't answer the request (not running, or too old) costs only
   corelib source; the session still starts.
 - **Hovering a matcher inside `assert`/`expect` shows its signature.** `isOk()`,
   `equals(...)`, `contains(...)`, and a nested `not(...)` used to show `$` (the enclosing

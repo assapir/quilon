@@ -312,8 +312,8 @@ Before launching, the extension asks the running language server for
 that same layout — and adds a CodeLLDB `sourceMap` entry that redirects the DWARF path
 there, so stepping into `body()` on an `http.Response` (say) shows the real
 `corelib/http.qn` source instead of disassembly. When the request fails (no language
-server running, or an older one without it), the session still starts — just without
-corelib source.
+server running, or an older one without it), the session still starts, without corelib
+source.
 
 ## Publishing
 
