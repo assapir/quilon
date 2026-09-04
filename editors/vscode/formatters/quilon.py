@@ -90,6 +90,13 @@ def render_summary(valobj, _internal_dict):
         if addr in (None, lldb.LLDB_INVALID_ADDRESS):
             return ""
         symbol = render_thunk_symbol(type_name)
+        target = raw.GetTarget()
+        if not target.IsValid() or target.FindFunctions(symbol).GetSize() == 0:
+            # No thunk under this name — a non-Quilon type this broad registration also
+            # matched, or a `--debug` build from before this symbol existed. Skip evaluating
+            # an expression that can only fail, which every OTHER runtime/C value lldb shows
+            # in the same session would otherwise pay on every display refresh.
+            return ""
         expr = "(const char*)%s((const void*)0x%xULL)" % (symbol, addr)
         options = lldb.SBExpressionOptions()
         options.SetTimeoutInMicroSeconds(RENDER_TIMEOUT_MICROS)

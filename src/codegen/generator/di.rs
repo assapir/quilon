@@ -106,29 +106,26 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Scalars carry no structure to cache and `create_basic_type` already dedups by
         // (name, size, encoding) — so return them directly, skipping the key allocation and
         // cache/recursion bookkeeping that only the composites below need.
+        // A bare scalar never gets a render thunk queued: lldb shows its OWN native value
+        // alongside any registered summary rather than replacing it (confirmed live), so
+        // the lldb formatter never calls a scalar's thunk — one would be dead code, never
+        // reachable from a live debugger. A scalar NESTED inside a composite (`[]Num`,
+        // `Map[Text, Num]`) is unaffected: the composite's OWN thunk renders it inline via
+        // `render_value`, with no separate thunk call of its own.
         match ty {
-            Type::Num => {
-                self.enqueue_render_thunk(ty);
-                return Some(debug.num_type());
-            }
-            Type::Bool => {
-                self.enqueue_render_thunk(ty);
-                return Some(debug.bool_type());
-            }
-            Type::Unit => {
-                self.enqueue_render_thunk(ty);
-                return Some(debug.unit_type());
-            }
+            Type::Num => return Some(debug.num_type()),
+            Type::Bool => return Some(debug.bool_type()),
+            Type::Unit => return Some(debug.unit_type()),
             Type::Generic { .. } | Type::Function { .. } => return Some(debug.opaque_pointer()),
             _ => {}
         }
         let key = self.di_type_key(ty);
-        // Every type that reaches here (Text, an array, a record, a sum, a Map/Set — but not
-        // a scalar, handled above, or the opaque Function/Generic case, excluded by
-        // `enqueue_render_thunk` itself) gets a render thunk queued, whether this call is a
-        // cache hit or a fresh build — including a type reached only NESTED (an array
-        // element, a record field, a Map/Set's key/value) via this same function's own
-        // recursion in `build_di_type`, not just one reaching `declare_variable` directly.
+        // Every type that reaches here (Text, an array, a record, a sum, a Map/Set — every
+        // scalar and the opaque Function/Generic case returned above already) gets a
+        // render thunk queued, whether this call is a cache hit or a fresh build —
+        // including a type reached only NESTED (an array element, a record field, a
+        // Map/Set's key/value) via this same function's own recursion in `build_di_type`,
+        // not just one reaching `declare_variable` directly.
         self.enqueue_render_thunk(ty);
         if let Some(t) = debug.cached_type(&key) {
             return Some(t);
@@ -203,17 +200,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// The debug-info DISPLAY name for `ty` — what `DW_AT_name` records: `"Num"`, `"[]Num"`,
+    /// The debug-info DISPLAY name for `ty` — what `DW_AT_name` records: `"[]Num"`,
     /// `"Point"`, `"Result"`, `"Map[Text, Num]"`, `"Set[Num]"`. Distinct from [`di_type_key`]
     /// (a cache key, free to use a different format) only for `Map`/`Set`, which get a
     /// readable `Ctor[Args]` name instead of the key's `map$K$V` shape — every other case
-    /// already uses the display form as its key, so this simply mirrors that. Used both to
-    /// build a composite's own `DW_AT_name` ([`build_di_type`]'s `Map`/`Set` arm) and,
-    /// recursively, to build ITS nested elements' names — a `Num` inside a `Map[Text, Num]`
-    /// contributes the literal substring `"Num"` here, regardless of what a live debugger
-    /// happens to display for a STANDALONE `Num` variable (see
-    /// [`render_thunk_debug_name`] for that divergent case): a composite's `DW_AT_name` is
-    /// an opaque string a debugger never reinterprets, so nesting stays purely textual.
+    /// already uses the display form as its key, so this simply mirrors that. Also
+    /// [`render_thunk_symbol`]'s input for a composite: a debugger shows a
+    /// `DW_TAG_structure_type`'s own name faithfully (confirmed live), so this is also what
+    /// the lldb formatter reads back to derive the same thunk symbol. Never called for a
+    /// bare scalar (`Num`/`Bool`/`Unit`) — those get no render thunk at all (see
+    /// [`di_type`]) — so this never has to answer for lldb's OWN canonicalized scalar
+    /// display names (an `f64` reads back as `"double"`, not `"Num"`, confirmed live); a
+    /// scalar NESTED inside a composite still contributes its ordinary Quilon name here,
+    /// since a composite's `DW_AT_name` is an opaque string a debugger never reinterprets.
     pub(super) fn di_debug_name(&self, ty: &Type) -> String {
         match ty {
             Type::Map(k, v) => format!("Map[{}, {}]", self.di_debug_name(k), self.di_debug_name(v)),
@@ -221,32 +220,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Array(elem) => format!("[]{}", self.di_debug_name(elem)),
             Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
             _ => self.di_type_key(ty),
-        }
-    }
-
-    /// What a debugger ACTUALLY reads back as `ty`'s type name — the string
-    /// [`render_thunk_symbol`] derives a thunk's symbol from on BOTH sides (this Rust-side
-    /// emission, and `editors/vscode/formatters/quilon.py`'s `sanitize_debug_type_name`
-    /// reading a live value's `SBType.GetName()`). [`di_debug_name`] for every composite
-    /// (`Text`, an array, a record, a sum, a Map/Set): a debugger shows a
-    /// `DW_TAG_structure_type`'s own name faithfully, confirmed against a real lldb session.
-    ///
-    /// For a bare SCALAR (`Num`/`Bool`/`Unit`) this instead returns lldb's OWN canonicalized
-    /// name, which does NOT match the `DW_AT_name` `debug.rs`'s `num_type`/`bool_type`/
-    /// `unit_type` give the DWARF entry (`"Num"`/`"Bool"`/`"$"`): lldb's DWARF importer
-    /// derives a `DW_TAG_base_type`'s displayed name from its `(encoding, size)` pair alone,
-    /// ignoring whatever name the DWARF gives it — confirmed live, an `f64`/`DW_ATE_float`
-    /// reads back as `"double"`, an `i1`/`DW_ATE_boolean` as `"bool"`, an `i8`/
-    /// `DW_ATE_unsigned` as `"unsigned char"`. This divergence applies ONLY at the top
-    /// level: a scalar NESTED inside a composite's own name (`di_debug_name`'s `Map`/`Set`/
-    /// `Array` recursion) still contributes its ordinary Quilon name — that name is an
-    /// opaque substring of the composite's `DW_AT_name`, which lldb never reinterprets.
-    pub(super) fn render_thunk_debug_name(&self, ty: &Type) -> String {
-        match ty {
-            Type::Num => "double".to_string(),
-            Type::Bool => "bool".to_string(),
-            Type::Unit => "unsigned char".to_string(),
-            _ => self.di_debug_name(ty),
         }
     }
 
@@ -387,18 +360,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Queue `ty` for a `--debug` render thunk, at most once per structural key (see
-    /// [`di_type_key`]). Called from `di_type` itself — cheap and `&self` (a `RefCell`
-    /// dedupe set + a pending-list push), so it runs equally for a type reaching
-    /// [`declare_variable`] directly and one reached only NESTED, through `di_type`'s own
-    /// recursion while building a composite (an array element, a record field, a Map/Set's
-    /// key/value). [`drain_pending_render_thunks`] later emits the actual IR, which needs
-    /// `&mut self`. Skips `Function`/`Generic`: neither has a concrete static rendering (a
-    /// function value isn't renderable at all; a surviving `Generic` payload has no fixed
-    /// type), matching `di_type`'s own early opaque-pointer return for them.
+    /// [`di_type_key`]). Called only from `di_type`'s composite path — never for a bare
+    /// scalar or the opaque `Function`/`Generic` case, both of which return earlier in
+    /// `di_type` — cheap and `&self` (a `RefCell` dedupe set + a pending-list push), so it
+    /// runs equally for a type reaching [`declare_variable`] directly and one reached only
+    /// NESTED, through `di_type`'s own recursion while building a composite (an array
+    /// element, a record field, a Map/Set's key/value). [`drain_pending_render_thunks`]
+    /// later emits the actual IR, which needs `&mut self`.
     fn enqueue_render_thunk(&self, ty: &Type) {
-        if matches!(ty, Type::Function { .. } | Type::Generic { .. }) {
-            return;
-        }
         let key = self.di_type_key(ty);
         if self.di_render_thunks.borrow_mut().insert(key) {
             self.di_pending_thunks.borrow_mut().push(ty.clone());
@@ -432,7 +401,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `{ptr, i64}` ABI a Quilon caller uses). Exported (external linkage) under its
     /// `render_thunk_symbol` name so `nm`/a debugger can find it by symbol.
     fn emit_render_thunk(&mut self, ty: &Type) -> Result<(), String> {
-        let symbol = crate::codegen::debug::render_thunk_symbol(&self.render_thunk_debug_name(ty));
+        let symbol = crate::codegen::debug::render_thunk_symbol(&self.di_debug_name(ty));
         if self.module.get_function(&symbol).is_some() {
             return Ok(());
         }

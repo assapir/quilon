@@ -527,14 +527,26 @@ fn defined_symbols(path: &Path) -> std::collections::HashSet<String> {
     String::from_utf8_lossy(&listing.stdout)
         .lines()
         .filter_map(|line| line.split_whitespace().last())
-        .map(str::to_string)
+        .map(|name| {
+            // Mach-O prefixes every C symbol with a leading `_` (so our own
+            // `__qn_render$Text` links as `___qn_render$Text`); ELF does not. Strip
+            // exactly one so callers can match a symbol name the same way on every OS.
+            if cfg!(target_os = "macos") {
+                name.strip_prefix('_').unwrap_or(name).to_string()
+            } else {
+                name.to_string()
+            }
+        })
         .collect()
 }
 
 /// Every DWARF-typed local a `--debug` build declares also gets an exported
 /// `__qn_render$<type>` thunk (`di.rs::emit_render_thunk`) — the symbol the lldb formatter
-/// calls to render that value. Covers every representation kind: scalars, `Text`, an array,
-/// a record, a sum, and (the marquee case) a Map and a Set, whose DWARF type is now a NAMED
+/// calls to render that value — EXCEPT a bare scalar (`Num`/`Bool`/`Unit`), which gets none:
+/// lldb shows a scalar's OWN native value alongside any registered summary rather than
+/// replacing it (confirmed live), so the lldb formatter never calls a scalar's thunk and
+/// one would be dead code. Covers every OTHER representation kind: `Text`, an array, a
+/// record, a sum, and (the marquee case) a Map and a Set, whose DWARF type is now a NAMED
 /// `Map[K, V]`/`Set[T]` rather than an anonymous opaque pointer.
 #[test]
 fn debug_build_emits_a_render_thunk_symbol_per_declared_type() {
@@ -588,11 +600,6 @@ Color = Red / Green / Blue
 
     let symbols = defined_symbols(&bin);
     let expected = [
-        // A `Num`/`Bool` local's thunk symbol is keyed by lldb's OWN canonicalized type
-        // name ("double"/"bool"), not the Quilon type name — see
-        // `di.rs::render_thunk_debug_name`, confirmed against a real lldb session.
-        "__qn_render$double",
-        "__qn_render$bool",
         "__qn_render$Text",
         "__qn_render$$Num",  // []Num
         "__qn_render$Point", // record
@@ -604,6 +611,19 @@ Color = Red / Green / Blue
         assert!(
             symbols.contains(symbol),
             "expected the render thunk `{symbol}` in the binary's defined symbols"
+        );
+    }
+    // `n :: Num` / `b :: Bool` get NO thunk at all — one would never be called (see this
+    // test's doc comment) and so would be dead code in every `--debug` binary.
+    for symbol in [
+        "__qn_render$Num",
+        "__qn_render$double",
+        "__qn_render$Bool",
+        "__qn_render$bool",
+    ] {
+        assert!(
+            !symbols.contains(symbol),
+            "a bare scalar should get no render thunk at all, but found `{symbol}`"
         );
     }
 
