@@ -262,7 +262,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(method) = method_callee {
             let arg_values: Vec<BasicValueEnum> = arguments
                 .iter()
-                .map(|arg| self.generate_expression(arg))
+                .enumerate()
+                .map(|(i, arg)| {
+                    // Slot 0 is the receiver. A bare TYPE NAME receiver has no value —
+                    // the checker verified the callee never reads `it`, so a placeholder
+                    // of the receiver's LLVM parameter type is never actually read.
+                    if i == 0 && self.is_static_type_receiver(arg) {
+                        let type_name = self.receiver_type_name(arg).ok_or_else(|| {
+                            format!("static call receiver has no known type: {arg:?}")
+                        })?;
+                        let receiver_llvm = self.boundary_type(&Type::named_ref(type_name))?;
+                        Ok(receiver_llvm.const_zero())
+                    } else {
+                        self.generate_expression(arg)
+                    }
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             return self.emit_call(method, &arg_values);
         }
@@ -612,6 +626,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Some(type_name);
         }
         None
+    }
+
+    /// Whether `receiver` is a bare TYPE NAME used as a call receiver (`Point.origin()`)
+    /// rather than a value: an identifier that names a declared record/sum type, with no
+    /// local, parameter, or global binding of that same name to shadow it. The checker
+    /// permits this only for a STATIC method (one that never reads `it`), so there is no
+    /// receiver VALUE to evaluate — `generate_call` passes a placeholder instead of calling
+    /// `generate_expression` on `receiver`, which would fail with "Undefined variable"
+    /// (nothing is ever bound to a type's own name at the LLVM level).
+    pub(super) fn is_static_type_receiver(&self, receiver: &Expression) -> bool {
+        let Expression::Identifier { name, .. } = receiver else {
+            return false;
+        };
+        if self.variables.contains_key(name) || self.module.get_global(name).is_some() {
+            return false;
+        }
+        self.named_type_fields.contains_key(name) || self.sum_layouts.contains_key(name)
     }
 
     /// Build a direct call to an already-emitted function by symbol, given the

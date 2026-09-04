@@ -452,6 +452,29 @@ fn unannotated_method_parameter_is_rejected() {
 }
 
 #[test]
+fn static_call_on_a_method_that_reads_the_receiver_is_rejected() {
+    // #259 part 1: a method called on the bare TYPE NAME (`Point.distance()`, not a
+    // value) is legal only when the member never reads `it` (a STATIC method — the
+    // natural spelling for a constructor). `distance` reads `it.x`, so this must be
+    // rejected rather than pass the checker and crash at run time with "Undefined
+    // variable: Point" (there is no value bound to a type's own name to pass as `it`).
+    let src = "Point = { x :: Num, distance = () -> Num => < it.x > }\n^ = () -> Num => < Point.distance() >";
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let mut checker = TypeChecker::new();
+    let err = checker
+        .check_program(&program)
+        .expect_err("a static call on a receiver-reading method must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("`distance`")
+            && message.contains("`Point.distance()`")
+            && message.contains("`it`"),
+        "the diagnostic must name the method, the call, and why (`it`), got: {message}"
+    );
+}
+
+#[test]
 fn setter_call_result_is_unit_not_num() {
     // A setter's body is a field write, which yields `$` (Unit) — so an unannotated
     // setter's result type is Unit, not Num. Using it in a Num position (`+ 1`) must
@@ -1738,6 +1761,90 @@ fn run_method_returning_a_fresh_value_of_its_own_type() {
         ^ = () -> Num => < p = Point { x = 5 }  p.twin().x >
     "#;
     assert_exit(src, 5);
+}
+
+/// Regression (#259 part 1): a STATIC method (one whose body never reads `it`) called on
+/// the bare TYPE NAME — the natural spelling for a constructor (`Request.get(url)`).
+/// `origin` returns a fresh `Point` and takes an argument, exercising both the checker's
+/// type-name-receiver detection and codegen's placeholder-receiver call. 3 + 4 = 7.
+#[test]
+fn run_static_method_called_on_the_type_name_constructs_a_value() {
+    let src = r#"
+        Point = {
+          x :: Num,
+          y :: Num,
+          at = (n :: Num) -> Point => < Point { x = n, y = n + 1 } >
+        }
+        ^ = () -> Num => < p = Point.at(3)  p.x + p.y >
+    "#;
+    assert_exit(src, 7);
+}
+
+/// AOT counterpart: the static call must produce the same result through `quilon build`.
+#[test]
+fn aot_static_method_called_on_the_type_name_constructs_a_value() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native static-method check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Point = {
+          x :: Num,
+          y :: Num,
+          at = (n :: Num) -> Point => < Point { x = n, y = n + 1 } >
+        }
+        ^ = () -> Num => < p = Point.at(3)  p.x + p.y >
+    "#;
+    let (code, _) = build_and_run_native("static_method_ctor", src);
+    assert_eq!(code, 7, "a native build must exit 7 on the same program");
+}
+
+/// A SUM type's trailing `{ }` methods block may declare a static member too — the same
+/// static-eligibility rule (never reads `it`) applies regardless of whether the receiver
+/// type is a record or a sum. `"a shape"`.size = 7.
+#[test]
+fn run_static_method_on_a_sum_types_trailing_methods_block() {
+    let src = r#"
+        Shape = Circle(Num) / Square(Num) {
+          describe = () -> Text => < "a shape" >
+        }
+        ^ = () -> Num => < Shape.describe().size >
+    "#;
+    assert_exit(src, 7);
+}
+
+/// A static call reached through a MODULE BINDING: `<< "point_lib.qn"` binds `point_lib`,
+/// and after import qualification the type's own name is `point_lib.Point` — the checker's
+/// and codegen's type-name-receiver detection must still line up on the QUALIFIED name,
+/// not just a bare local type. `point_lib.Point.origin()` builds `{x=0,y=0}`; 0 + 0 = 0.
+#[test]
+fn run_static_method_called_through_a_module_binding() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let src = r#"
+        << "point_lib.qn"
+        ^ = () -> Num => <
+          p = point_lib.Point.origin()
+          p.x + p.y
+        >
+    "#;
+    assert_exit_linked_from(src, &fixtures, 0);
+}
+
+/// A static-eligible method (one that never reads `it`) is unaffected when called on an
+/// ordinary VALUE instead of the type name — static-eligibility only gates the type-name
+/// receiver shape, never restricts the value-receiver form. `q.origin()` on an existing
+/// `Point` still builds a fresh `{x=0,y=0}`.
+#[test]
+fn run_static_eligible_method_called_on_a_value_is_unaffected() {
+    let src = r#"
+        Point = { x :: Num, y :: Num, origin = () -> Point => < Point { x = 0, y = 0 } > }
+        ^ = () -> Num => <
+          p = Point { x = 1, y = 2 }
+          q = p.origin()
+          q.x + q.y
+        >
+    "#;
+    assert_exit(src, 0);
 }
 
 /// Regression (#257): a type declared INSIDE a block (nested in `^`'s body, not at the

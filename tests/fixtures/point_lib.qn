@@ -1,0 +1,9 @@
+~ Test fixture: an exported record type with a STATIC method (never reads `it`), reached
+~ through the import's binding — `point_lib.Point.origin()` — the module-qualified spelling
+~ of the static-call form.
+
+>> Point = {
+  x :: Num,
+  y :: Num,
+  origin = () -> Point => < Point { x = 0, y = 0 } >
+}

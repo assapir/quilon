@@ -83,6 +83,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 |------|--------|
 | Authoritative types in codegen (retire the lossy `infer_type`; use the type-oracle) — generally useful, **kept** | 🔨 (the type-oracle ships and is threaded through codegen; some `infer_type` callers remain) |
 | Monomorphization + defunctionalization (function values statically visible) — **deprioritized**: it served the auto-data-parallelism goal (M5), now dropped | 💤 |
+| **Static methods (#259, locked):** a member whose body never reads `it` is **static** and callable on the type name (`Point.origin()`), including through a module binding (`http.Request.get(url)`) — it stays callable on a value too. A type-name call to a member that DOES read `it` is a compile error (`QN340`). See [`types/records.md#static-methods`](types/records.md#static-methods). | ✅ |
 
 ### M5 — Implicit parallelism (CPU) 💤 Deprioritized
 

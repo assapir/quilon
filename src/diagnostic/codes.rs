@@ -110,6 +110,7 @@ codes! {
     MethodCalledAsFunction = 337 => "method called as a function",
     NotRenderable = 338 => "value with no rendering",
     NoEntryPoint = 339 => "no `^` entry point",
+    StaticCallNeedsReceiverValue = 340 => "static call on a method that reads its receiver",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

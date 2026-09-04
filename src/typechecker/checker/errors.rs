@@ -53,6 +53,7 @@ impl TypeError {
             TypeError::UnknownMember { .. } => Code::UnknownMember,
             TypeError::MethodCalledAsFunction { .. } => Code::MethodCalledAsFunction,
             TypeError::NotRenderable { .. } => Code::NotRenderable,
+            TypeError::StaticCallNeedsReceiverValue { .. } => Code::StaticCallNeedsReceiverValue,
         }
     }
 
@@ -156,6 +157,9 @@ impl TypeError {
                 "define it inside the type's `{{ }}`, where `it` is the left operand: \
                  `{operator} = (other) => < … >`"
             )),
+            TypeError::StaticCallNeedsReceiverValue { method, .. } => {
+                diagnostic.help(format!("call it on a value: `x.{method}()`"))
+            }
             _ => diagnostic,
         }
     }
@@ -202,7 +206,8 @@ impl TypeError {
             | TypeError::MatcherTypeUnsupported { span, .. }
             | TypeError::UnknownMember { span, .. }
             | TypeError::MethodCalledAsFunction { span, .. }
-            | TypeError::NotRenderable { span, .. } => span,
+            | TypeError::NotRenderable { span, .. }
+            | TypeError::StaticCallNeedsReceiverValue { span, .. } => span,
         }
     }
 }
@@ -619,6 +624,15 @@ impl std::fmt::Display for TypeError {
                     "top-level `{name}` has to be computed, and nothing runs before `^` to \
                      compute it — a top-level binding holds a Num, Bool or $ literal, or a \
                      function"
+                )
+            }
+            TypeError::StaticCallNeedsReceiverValue {
+                method, type_name, ..
+            } => {
+                write!(
+                    f,
+                    "`{method}` reads `it`, so `{type_name}.{method}()` needs a value of \
+                     {type_name} — there is none"
                 )
             }
         }

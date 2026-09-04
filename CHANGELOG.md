@@ -22,6 +22,14 @@ All notable changes to Quilon are documented here.
   instead. See `docs/tooling/language-server.md`.
 - `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
   code, and the summary table matches the registry.
+- **Static methods: a method whose body never reads `it` may be called on the bare TYPE
+  NAME** (`Point.origin()`), not just on a value — the natural spelling for a constructor
+  (`Request.get(url)`). This settles #259's design call: a method called on a type name
+  used to pass the checker (the type's own name resolves as if it were a value of its own
+  type) and crash at run time with `Undefined variable: Point` — there was never an actual
+  receiver value to pass. Calling a method that DOES read `it` on a bare type name is now
+  a compile error (`QN340`) instead; a method that reads `it` is unaffected when called on
+  an ordinary value, exactly as before. See `docs/types/records.md#static-methods`.
 
 ### Fixed
 

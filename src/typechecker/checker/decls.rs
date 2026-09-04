@@ -507,6 +507,17 @@ impl TypeChecker {
                 );
             }
 
+            // A method whose body never reads `it` needs no receiver VALUE at all — it may
+            // be called on the bare type name (`Point.origin()`), the natural spelling for
+            // a constructor. Operator members are excluded: they dispatch through the
+            // overload set on `it` <op> `other`, never through a type-name receiver.
+            if !crate::ast::is_operator_symbol(&method.name)
+                && !body_references_receiver(&method.body)
+            {
+                self.static_methods
+                    .insert((type_name.to_string(), method.name.clone()));
+            }
+
             self.methods.insert(
                 (type_name.to_string(), method.name.clone()),
                 (
@@ -1111,6 +1122,23 @@ impl TypeChecker {
             return_type: Box::new(ret),
         })
     }
+}
+
+/// Whether `body` reads the receiver `it` anywhere — a member call desugars `it.foo()`
+/// into a `Call` whose first argument is the identifier `it`, so this plain identifier
+/// search already covers a sibling call on the receiver too. Over-approximates like
+/// [`body_has_lambda_parameter_named_receiver`]'s sibling checks: a lambda parameter that
+/// shadows `it` still counts as a reference here, which only ever says "not static" more
+/// often than strictly necessary — never the other way, which is the direction that would
+/// let a wrongly-allowed static call reach a real `it` read.
+pub(super) fn body_references_receiver(body: &Expression) -> bool {
+    try_for_each_subexpression(body, &mut |e| match e {
+        Expression::Identifier { name, .. } if name == crate::ast::RECEIVER => {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
 }
 
 /// Whether `body` contains a lambda with a parameter named `it`. `it` is an ordinary

@@ -292,13 +292,40 @@ impl TypeChecker {
                         (parameters.clone(), return_type.clone())
                     })
                 {
+                    // A receiver expression that is literally the bare TYPE NAME
+                    // (`Point.origin()`) rather than a value — the type's own env binding
+                    // (registered so a self-referential annotation/constructor resolves,
+                    // see `check_type_declaration`) makes `Point` infer as `Type::Named`
+                    // exactly like a real instance would, so this is the only way to tell
+                    // the two apart. Legal only when the member never reads `it` (a STATIC
+                    // method — the natural spelling for a constructor); codegen agrees,
+                    // passing no real receiver value for one (`is_static_type_receiver`).
+                    let type_name_receiver = matches!(
+                        &arguments[0],
+                        Expression::Identifier { name: receiver_name, .. }
+                            if receiver_name == type_name
+                    );
+                    if type_name_receiver
+                        && !self
+                            .static_methods
+                            .contains(&(type_name.clone(), name.clone()))
+                    {
+                        return Err(TypeError::StaticCallNeedsReceiverValue {
+                            method: name.clone(),
+                            type_name: type_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+
                     // A mutating (setter) method requires a receiver that aliases no `=`
                     // binding and no parameter — a `:=` binding, a fresh value, or a
                     // setter's own `it` (mutable at every call site) all pass, however
-                    // the receiver expression reaches them.
-                    if self
-                        .setter_methods
-                        .contains(&(type_name.clone(), name.clone()))
+                    // the receiver expression reaches them. Meaningless for a type-name
+                    // receiver (nothing to write through), so skipped there.
+                    if !type_name_receiver
+                        && self
+                            .setter_methods
+                            .contains(&(type_name.clone(), name.clone()))
                         && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
                     {
                         return Err(TypeError::MutatingMethodOnImmutable {

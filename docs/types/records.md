@@ -62,3 +62,24 @@ double(5)      ~ 10
 ```
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
 `Text`'s `split`, and `split("a,b", ",")` is an undefined name.
+
+### Static methods
+A method whose body never reads `it` is **static**: it may be called on the type name
+itself — the natural spelling for a constructor.
+```quilon
+Point = {
+  x :: Num,
+  y :: Num,
+  origin = () -> Point => < Point { x = 0, y = 0 } >,
+  distance = () -> Num => < it.x >   ~ reads `it`: called on a value
+}
+
+^ = () -> Num => <
+  p = Point.origin()  ~ ok: `origin` never reads `it`
+  p.distance()         ~ ok: called on a value, `it` is bound
+>
+```
+A static method is also callable on a value, the same way as any other method.
+```quilon ignore
+Point.distance()        ~ error QN340: `distance` needs a value of Point
+```
