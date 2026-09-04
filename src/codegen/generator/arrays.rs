@@ -56,11 +56,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Element type from the type oracle — the checker's UNIFIED element type across
         // every element (e.g. a sum whose variants specialize different payloads per
         // element), not the first element's own value type, which a later element may
-        // have specialized further. Falls back to the first element's type when the
-        // oracle has no entry (IR-only codegen tests that skip the type-check pass).
+        // have specialized further. A missing oracle entry is a compiler bug: every
+        // checked program records one, so this only fires for a program the checker
+        // never ran over.
         let elem_type = match self.oracle.expression_type(array_expression) {
             Some(Type::Array(elem)) => self.value_repr_type(elem)?,
-            _ => values[0].get_type(),
+            _ => {
+                return Err(format!(
+                    "internal error: no oracle element type recorded for array literal at {:?}",
+                    array_expression.span()
+                ));
+            }
         };
 
         // Lay the elements into a GC-allocated buffer via the shared array builder — the

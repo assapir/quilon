@@ -1,6 +1,23 @@
 use super::*;
 use crate::lexer::Lexer;
 use crate::parser::parse;
+use crate::typechecker::{TypeChecker, TypeTable};
+
+/// A hand-built oracle entry for every `pattern` substring's byte range in `code`, typed
+/// `[]Num` — for a test that asks codegen a question WITHOUT running the type checker
+/// (so a checker rejection elsewhere in the program cannot pre-empt what codegen itself
+/// is being asked), but still needs an array literal's element type recorded (codegen
+/// treats a missing oracle entry for an array literal as a compiler bug, never a guess).
+fn num_array_oracle(code: &str, pattern: &str) -> TypeTable {
+    let element_type = Type::Array(Box::new(Type::Num));
+    code.match_indices(pattern)
+        .map(|(start, matched)| {
+            let start = start as u32;
+            let span = Span::in_root(start, start + matched.len() as u32);
+            (span, element_type.clone())
+        })
+        .collect()
+}
 
 #[test]
 fn test_simple_number() {
@@ -64,6 +81,13 @@ fn test_array() {
     let code = "sum = x :: Num => < arr = [x, x, x] x >";
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
+    // The array literal's element type comes from the checker's type-oracle, so this
+    // test must run the checker first (an array literal with no oracle entry is a
+    // hard codegen error, not a fallback).
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .unwrap_or_else(|e| panic!("type check failed: {:?}", e));
+    codegen.set_type_table(types);
 
     let result = codegen.generate(&program);
     if let Err(e) = &result {
@@ -254,6 +278,7 @@ fn comparing_arrays_is_not_lowered_as_a_text_comparison() {
     let code = "same = () -> Bool => < a = [1, 2] b = [1, 2] a == b >";
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
+    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
 
     let result = codegen.generate(&program);
     let error = result.expect_err("array comparison has no lowering");
@@ -273,6 +298,7 @@ fn comparing_a_text_against_an_array_is_not_lowered_as_a_text_comparison() {
     let code = r#"same = () -> Bool => < a = "x" b = [1, 2] a == b >"#;
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
+    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
 
     let error = codegen
         .generate(&program)
