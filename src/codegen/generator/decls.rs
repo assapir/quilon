@@ -58,9 +58,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let pt = self.boundary_type(&self.parameter_type(p))?;
                 parameter_types.push(pt.into());
             }
-            // Unannotated return type defaults to Num, except a setter body whose
-            // tail is an in-place field write (`it.field := v`) yields `$` (i8).
-            let inferred_ret = self.default_return_type(method.return_type.as_ref(), &method.body);
+            // Unannotated return type takes the checker's recorded type for the body
+            // (e.g. `$` for a setter whose tail is an in-place field write).
+            let inferred_ret =
+                self.default_return_type(method.return_type.as_ref(), &method.body)?;
             let return_type = self.boundary_type(&inferred_ret)?;
             let fn_type = return_type.fn_type(&parameter_types, false);
             let method_fn = self.module.add_function(&mangled, fn_type, None);
@@ -498,12 +499,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_type = if declaration.name == "^" {
             self.context.f64_type().into()
         } else {
-            // An unannotated body defaults to `Num`, except a Unit (`$`) tail — e.g.
-            // `log = m => print(m)` — which must be `i8`, not f64, or `build_return`
-            // would emit `ret i8` into an f64 function and fail module verification.
-            // The same boundary rule applies: an array return crosses as the value struct.
+            // An unannotated body takes the checker's recorded type — e.g. `$` (i8) for
+            // `log = m => print(m)`, not the historical `Num`/f64 guess, which would emit
+            // `ret i8` into an f64 function and fail module verification. The same
+            // boundary rule applies: an array return crosses as the value struct.
             let inferred =
-                self.default_return_type(declaration.declared_return_type(), &declaration.body);
+                self.default_return_type(declaration.declared_return_type(), &declaration.body)?;
             self.boundary_type(&inferred)?
         };
 

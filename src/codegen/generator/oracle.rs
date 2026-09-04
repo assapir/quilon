@@ -26,31 +26,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.context.i8_type().const_int(0, false)
     }
 
-    /// Whether `expression`'s value has type Unit (`$`). Codegen lacks the checker's full
-    /// inference, so for an *unannotated* function we look at the body's tail to pick
-    /// the LLVM return type: a Unit tail must be `i8`, not the `Num`/f64 default. The
-    /// only Unit-producing expressions are the `$` literal and `print`/`eprint` calls
-    /// (which return `$`); a block/ternary is Unit when its tail is. Other unannotated
-    /// non-Num bodies (Text, Bool, ...) keep the pre-existing `Num`-default behavior.
-    pub(super) fn expression_is_unit(&self, expression: &Expression) -> bool {
-        match expression {
-            Expression::Unit { .. } => true,
-            // An in-place field write `obj.field := v` is an effect; it yields `$`.
-            Expression::FieldAssign { .. } => true,
-            Expression::Call { function, .. } => {
-                matches!(function.as_ref(), Expression::Identifier { name, .. } if name == "core.io.print" || name == "core.io.eprint")
-            }
-            Expression::Block { statements, .. } => match statements.last() {
-                Some(crate::ast::Statement::Expression(tail)) => self.expression_is_unit(tail),
-                _ => false,
-            },
-            Expression::If { then, else_, .. } => {
-                self.expression_is_unit(then) && self.expression_is_unit(else_)
-            }
-            _ => false,
-        }
-    }
-
     /// The **value representation** of a Quilon type — the LLVM type that a value of
     /// `ty` is materialized as by `generate_expression` and stored inline inside a composite.
     /// Read sites that GEP/load an element/field/match-result must size it with THIS

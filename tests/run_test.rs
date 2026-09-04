@@ -764,6 +764,80 @@ log = (m :: Num) => < io.print(m) >
     );
 }
 
+// A function/method body whose last statement is a declaration
+// (`=`/`:=`) has no expression tail to type from — `docs/expressions/README.md` § Blocks
+// says the block itself evaluates to `$`. Codegen must take that from the checker's
+// type-oracle (the body's recorded type) rather than guessing from the tail's syntax,
+// both for the LLVM return type and for the block's own emitted value.
+
+#[test]
+fn run_entry_unit_ending_in_declaration() {
+    // The entry point itself: body ending in a declaration, non-Num, so it implicitly
+    // exits 0 — this form already worked before the fix; kept as a baseline.
+    assert_exit("^ = () -> $ => < x = 1 >", 0);
+}
+
+#[test]
+fn run_function_annotated_unit_ending_in_declaration() {
+    assert_exit(
+        "f = () -> $ => < x = 1 >\n^ = () -> Num => <\n  f()\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn aot_function_annotated_unit_ending_in_declaration() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native block-Unit check: clang is not on PATH");
+        return;
+    }
+    let src = "f = () -> $ => < x = 1 >\n^ = () -> Num => <\n  f()\n  0\n>";
+    let (code, _) = build_and_run_native("unit_block_declaration_tail", src);
+    assert_eq!(code, 0, "a native build must exit 0 on the same program");
+}
+
+#[test]
+fn run_function_inferred_unit_ending_in_declaration() {
+    // An UNANNOTATED function whose body ends in a declaration infers `$` from the
+    // checker's recorded body type, not `Num`.
+    assert_exit("g = () => < x = 1 >\n^ = () -> Num => <\n  g()\n  0\n>", 0);
+}
+
+#[test]
+fn run_function_unit_ending_in_mutable_declaration() {
+    // `:=` as a function body's last statement types as `$`, same as `=`.
+    assert_exit(
+        "f = () -> $ => < x := 1 >\n^ = () -> Num => <\n  f()\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn run_local_function_unit_ending_in_declaration() {
+    // A function declared INSIDE another function's body (here `^`'s) is lowered the
+    // same way as a top-level one.
+    assert_exit(
+        "^ = () -> Num => <\n  local = () -> $ => < x = 1 >\n  local()\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn run_record_method_unit_ending_in_declaration() {
+    assert_exit(
+        "T = {\n  v :: Num,\n  m = () -> $ => < x = 1 >\n}\n^ = () -> Num => <\n  t = T { v = 1 }\n  t.m()\n  0\n>",
+        0,
+    );
+}
+
+#[test]
+fn run_sum_method_unit_ending_in_declaration() {
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num) {\n  m = () -> $ => < x = 1 >\n}\n^ = () -> Num => <\n  s = Circle(1)\n  s.m()\n  0\n>",
+        0,
+    );
+}
+
 #[test]
 fn unit_is_incompatible_with_num() {
     // `$` has type Unit, which is not Num — annotating a Num return with a `$`
