@@ -356,15 +356,19 @@ impl TypeChecker {
                     // the very same type — see the `named_ref` doc comment. Codegen carries
                     // the matching fix (`generate_method` now tracks a method parameter's
                     // named-type fields the same way a top-level function's does).
-                    for (parameter, arg) in method_parameters.iter().zip(call_args.iter()) {
-                        let raw_type = parameter.type_annotation.clone().expect(
-                            "method parameters are annotated: checked in check_type_methods",
-                        );
-                        let parameter_type = self.resolve_type(&raw_type);
-                        let arg_type =
-                            self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
-                        self.check_type_compatibility(&parameter_type, &arg_type, span)?;
-                    }
+                    //
+                    // Its own function rather than inlined here: `check_call` recurses once
+                    // per level of a nested call chain (`deeply_nested_calls_check_in_
+                    // linear_time`), so extra locals living in ITS frame cost every level —
+                    // this branch is never even taken for a plain (non-member) call, but an
+                    // unoptimized build still reserves the space.
+                    self.check_method_call_arguments(
+                        type_name,
+                        name,
+                        &method_parameters,
+                        call_args,
+                        span,
+                    )?;
 
                     return Ok(method_return_type);
                 }
@@ -486,6 +490,50 @@ impl TypeChecker {
         }
     }
 
+    /// Type-check a method call's explicit arguments against its parameters, and — for a
+    /// setter whose body stores one of them into a field of `it`
+    /// (`setter_stored_parameter_slots`, computed at the setter's own definition) —
+    /// require that argument to be `:=`-reachable, the same store-crosses-the-line rule a
+    /// direct field write already enforces.
+    fn check_method_call_arguments(
+        &mut self,
+        type_name: &str,
+        method_name: &str,
+        method_parameters: &[Parameter],
+        call_args: &[Expression],
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let stored_parameter_slots = self
+            .setter_stored_parameters
+            .get(&(type_name.to_string(), method_name.to_string()))
+            .cloned();
+        for (slot, (parameter, arg)) in method_parameters.iter().zip(call_args.iter()).enumerate() {
+            let raw_type = parameter
+                .type_annotation
+                .clone()
+                .expect("method parameters are annotated: checked in check_type_methods");
+            let parameter_type = self.resolve_type(&raw_type);
+            let arg_type = self.infer_argument(arg, LambdaTarget::Declared(&parameter_type))?;
+            self.check_type_compatibility(&parameter_type, &arg_type, span)?;
+
+            // Slot 0 is the receiver, so the i-th explicit parameter is slot i+1 —
+            // matching the numbering `setter_stored_parameter_slots` recorded at the
+            // definition.
+            if stored_parameter_slots
+                .as_ref()
+                .is_some_and(|slots| slots.contains(&(slot + 1)))
+                && let Some((witness, is_parameter)) = self.value_aliasing(arg).immutable_witness()
+            {
+                return Err(TypeError::MutableStoreOfImmutable {
+                    aliased: witness.to_string(),
+                    parameter: is_parameter,
+                    span: span.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Type-check a built-in array method call. `arguments[0]` is the receiver array (already
     /// known to be `Array(_)`); the remaining arguments are the method's own arguments,
     /// typically a lambda whose parameters bind to the element (or accumulator) type:
@@ -521,7 +569,14 @@ impl TypeChecker {
 
         match method {
             "map" => {
-                let ret = self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
+                // `map`'s result threads the callback's return value through, so its
+                // captures are classified (`callback_argument_slot` consults them).
+                let ret = self.check_lambda_arg_classifying_captures(
+                    &method_args[0],
+                    &[elem_type],
+                    span,
+                    true,
+                )?;
                 Ok(Type::Array(Box::new(ret)))
             }
             "filter" => {
@@ -532,8 +587,13 @@ impl TypeChecker {
             }
             "reduce" => {
                 let init_type = self.infer_expression(&method_args[0])?;
-                let ret =
-                    self.check_lambda_arg(&method_args[1], &[init_type.clone(), elem_type], span)?;
+                // Same as `map`: `reduce`'s result may be the callback's own return value.
+                let ret = self.check_lambda_arg_classifying_captures(
+                    &method_args[1],
+                    &[init_type.clone(), elem_type],
+                    span,
+                    true,
+                )?;
                 // The accumulator/result type is the init's type; the reducer must agree.
                 self.check_type_compatibility(&init_type, &ret, span)?;
                 Ok(init_type)
@@ -827,6 +887,22 @@ impl TypeChecker {
         parameter_types: &[Type],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        self.check_lambda_arg_classifying_captures(arg, parameter_types, span, false)
+    }
+
+    /// [`Self::check_lambda_arg`], additionally classifying the callback's own captures
+    /// when `classify_captures` is set — needed only for `map`/`reduce`, the two built-ins
+    /// whose result threads the callback's return value through (see
+    /// `callback_argument_slot`); every other array/map/set method never consults the
+    /// classification, so skipping it there saves a body walk and a `HashMap` insert per
+    /// callback that would go unread.
+    fn check_lambda_arg_classifying_captures(
+        &mut self,
+        arg: &Expression,
+        parameter_types: &[Type],
+        span: &Span,
+        classify_captures: bool,
+    ) -> Result<Type, TypeError> {
         let Expression::Lambda {
             parameters, body, ..
         } = arg
@@ -862,6 +938,17 @@ impl TypeChecker {
             )?;
         }
         let body_type = self.infer_expression(body);
+
+        // Classify the callback's own captures the same way `check_lambda_against` does
+        // for every other lambda — this path is the array methods' OWN, bespoke lambda
+        // check, bypassing that one, so without this a `map`/`reduce` callback that
+        // returns a capture regardless of its element/accumulator would type-check as
+        // fresh (`call_result_aliasing` folds it in via `callable_result_aliasing`,
+        // keyed by this same body span).
+        if classify_captures && let Ok(ok_type) = &body_type {
+            self.record_lambda_result_aliasing(body, ok_type);
+        }
+
         self.env.pop_scope();
         self.leave_declaration(enclosing_declaration);
         let body_type = body_type?;

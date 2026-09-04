@@ -255,7 +255,16 @@ impl TypeChecker {
         member_call: bool,
     ) -> ValueAliasing {
         let Expression::Identifier { name, .. } = function else {
-            return self.every_argument_aliasing(arguments);
+            // The callee is an expression rather than a plain name — most notably an
+            // immediately invoked lambda (`(() => c)()`). Its classified CAPTURES
+            // (resolved the same way a named function's are, see `callable_result_aliasing`)
+            // are folded in on top of the conservative "every argument" aliasing below —
+            // which already covers a returned PARAMETER (an argument slot is always one of
+            // "every argument"), so only `.fixed` is needed here, not the slot
+            // substitution `apply_result_aliasing` would repeat.
+            let mut out = self.callable_result_aliasing(function).fixed;
+            out.merge(self.every_argument_aliasing(arguments));
+            return out;
         };
 
         if member_call {
@@ -282,7 +291,19 @@ impl TypeChecker {
                         fixed: ValueAliasing::default(),
                         argument_slots: builtin_collection_method_slots(name).to_vec(),
                     };
-                    self.apply_result_aliasing(&result_aliasing, &borrowed)
+                    let mut out = self.apply_result_aliasing(&result_aliasing, &borrowed);
+                    // `map` and `reduce` thread their callback's RETURN value into the
+                    // built-in's own result, so a callback that captures and returns an
+                    // outer value regardless of its input leaks that capture the same way
+                    // returning a receiver element does. `each`/`filter`/`find`/`at` don't
+                    // — their result comes from the receiver's own elements, the callback's
+                    // return discarded or used only as a predicate — so they need no fold.
+                    if let Some(callback) =
+                        callback_argument_slot(name).and_then(|slot| arguments.get(slot))
+                    {
+                        out.merge(self.callable_result_aliasing(callback).fixed);
+                    }
+                    out
                 }
                 // `Text` methods return fresh values.
                 Some(Type::Text) => ValueAliasing::default(),
@@ -326,6 +347,108 @@ impl TypeChecker {
             }
             None => self.every_argument_aliasing(arguments),
         }
+    }
+
+    /// What CALLING a function-typed `expression` may alias — a lambda literal's own
+    /// classified captures, a name bound to a classified function or closure, either
+    /// branch of an `If` (mirroring `value_aliasing`'s own handling of one), a block's
+    /// tail, or a call whose own result is itself a closure (a function returning one,
+    /// resolved through that function's classification, substituted against the call's
+    /// OWN arguments exactly as a reference-typed result would be). `Expression::Lambda`
+    /// aside, only forms the two issues' repros need are covered — an expression this
+    /// cannot see through answers fresh, same as `value_aliasing`'s own gaps elsewhere.
+    ///
+    /// Used wherever a function value is called without going through `check_call`'s named
+    /// path: an immediately invoked lambda, and a higher-order built-in's callback
+    /// argument.
+    pub(super) fn callable_result_aliasing(&self, expression: &Expression) -> ResultAliasing {
+        match expression {
+            Expression::Lambda { body, .. } => self
+                .lambda_result_aliasing
+                .get(body.span())
+                .cloned()
+                .unwrap_or_default(),
+            Expression::Identifier { name, .. } => self
+                .env
+                .lookup(name)
+                .and_then(|symbol| symbol.result_aliasing.clone())
+                .unwrap_or_default(),
+            Expression::Block { statements, .. } => match statements.last() {
+                Some(crate::ast::Statement::Expression(tail)) => {
+                    self.callable_result_aliasing(tail)
+                }
+                _ => ResultAliasing::default(),
+            },
+            Expression::If { then, else_, .. } => {
+                let mut result = self.callable_result_aliasing(then);
+                let other = self.callable_result_aliasing(else_);
+                result.fixed.merge(other.fixed);
+                result.argument_slots.extend(other.argument_slots);
+                result
+            }
+            // A call whose own result is itself a closure (a function returning one) is
+            // resolved through what CALLING its callee returns, substituted against THIS
+            // call's own arguments — the same substitution `apply_result_aliasing` does
+            // for a reference-typed result, one layer in. Without it, a curried function
+            // returning a closure over one of ITS OWN parameters (`mk = (v :: T) -> () ->
+            // T => < () -> T => < v > >`) would report every call's result as aliasing
+            // `mk`'s parameter unconditionally, rather than whatever `mk` was actually
+            // called with.
+            Expression::Call {
+                function,
+                arguments,
+                ..
+            } => {
+                let callee_result_aliasing = self.callable_result_aliasing(function);
+                let borrowed: Vec<&Expression> = arguments.iter().collect();
+                ResultAliasing {
+                    fixed: self.apply_result_aliasing(&callee_result_aliasing, &borrowed),
+                    argument_slots: Vec::new(),
+                }
+            }
+            _ => ResultAliasing::default(),
+        }
+    }
+
+    /// Re-bucket a returned closure's classification — computed one declaration deeper,
+    /// at the lambda literal itself — as THIS declaration's own: a reference to this
+    /// declaration's own parameter, forwarded there as a `fixed.parameters` entry (an
+    /// outer declaration's parameter, from the inner lambda's point of view), becomes
+    /// this declaration's own argument slot, substituted at each of ITS OWN call sites —
+    /// exactly as a directly-returned parameter already is
+    /// (`declaration_result_aliasing`'s `Equal` case). The duplicate `fixed.mutable`/
+    /// `fixed.immutable` entry `value_aliasing` also records for every parameter
+    /// reference is dropped for the same (declaration, name), so a resolved parameter
+    /// does not ALSO linger as a permanent witness alongside its real, per-call one.
+    pub(super) fn reclassify_returned_closure(&self, inner: ResultAliasing) -> ResultAliasing {
+        let current = self.current_declaration;
+        let mut result = ResultAliasing::default();
+        let mut resolved: Vec<(u64, String)> = Vec::new();
+        for (declaration, slot, name) in inner.fixed.parameters {
+            match declaration.cmp(&current) {
+                std::cmp::Ordering::Equal => {
+                    result.argument_slots.push(slot);
+                    resolved.push((declaration, name));
+                }
+                std::cmp::Ordering::Less => {
+                    result.fixed.parameters.push((declaration, slot, name));
+                }
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+        result.fixed.mutable = inner
+            .fixed
+            .mutable
+            .into_iter()
+            .filter(|entry| !resolved.contains(entry))
+            .collect();
+        result.fixed.immutable = inner
+            .fixed
+            .immutable
+            .into_iter()
+            .filter(|entry| !resolved.contains(entry))
+            .collect();
+        result
     }
 
     /// A user operator member's classified result aliasing for these operands, where the
@@ -390,6 +513,19 @@ impl TypeChecker {
         result
     }
 
+    /// Classify a lambda's own captures — via [`Self::declaration_result_aliasing`] — and
+    /// cache them keyed by the BODY's span, for [`Self::callable_result_aliasing`] to find
+    /// later at a call site the lambda itself never sees (an immediately invoked lambda, or
+    /// a higher-order built-in's callback argument). Run while the lambda's scope is still
+    /// pushed and BEFORE it pops, the same window `declaration_result_aliasing` needs.
+    pub(super) fn record_lambda_result_aliasing(&mut self, body: &Expression, body_type: &Type) {
+        let captured_aliasing = self.declaration_result_aliasing(body, body_type);
+        if captured_aliasing != ResultAliasing::default() {
+            self.lambda_result_aliasing
+                .insert(body.span().clone(), captured_aliasing);
+        }
+    }
+
     /// The name to blame when writing through `receiver` would break an `=` guarantee:
     /// the immutable binding or parameter its value may alias. `None` means the write is
     /// allowed — the value is fresh, or reached only through `:=` bindings.
@@ -427,5 +563,18 @@ fn builtin_collection_method_slots(name: &str) -> &'static [usize] {
         "set" => &[0, 2],
         "add" => &[0, 1],
         _ => &[],
+    }
+}
+
+/// The argument index (0 = the receiver) of `map`'s and `reduce`'s callback — the only
+/// two built-in collection methods whose RESULT threads the callback's return value
+/// through, so a captured value the callback returns regardless of its own arguments
+/// leaks into the call's result there. `each`'s and `filter`'s callbacks run for effect
+/// or as a predicate; their return value never reaches the result.
+fn callback_argument_slot(name: &str) -> Option<usize> {
+    match name {
+        "map" => Some(1),
+        "reduce" => Some(2),
+        _ => None,
     }
 }

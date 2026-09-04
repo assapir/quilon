@@ -327,6 +327,39 @@ impl TypeChecker {
                 let value_type = self.infer_expression(value)?;
                 self.check_type_compatibility(&field_type, &value_type, span)?;
 
+                // A store across the line is a compile error at the store, in both
+                // directions: the write above already refuses ANY write into an
+                // `=`-reachable target — that is the first direction. This is the other —
+                // storing a value that aliases an `=` binding or a parameter into a
+                // container confirmed `:=`-reachable (a MUTABLE witness; a merely fresh
+                // target has no known line to cross) would make the frozen value writable
+                // through that mutable side.
+                //
+                // A write reaching the receiver `it` is excluded — however it is reached,
+                // an element read (`it.items[i].x := v`) included, which is why this
+                // reads the resolved MUTABLE WITNESS rather than walking the target's own
+                // path (`field_path_root_name` only sees a chain of plain field
+                // accesses). Inside a SETTER, `it` is always this mutable, so a parameter
+                // stored there is exactly the deferred case
+                // `setter_stored_parameter_slots` classifies at the definition and
+                // `check_call` checks against the concrete argument at each call site —
+                // rejecting it here too, before any caller is known, would make storing a
+                // parameter into `it` an error unconditionally.
+                if let Expression::FieldAccess {
+                    expression: base, ..
+                } = target.as_ref()
+                    && let Some(mutable_witness) = self.value_aliasing(base).mutable_witness()
+                    && mutable_witness != crate::ast::RECEIVER
+                    && let Some((witness, parameter)) =
+                        self.value_aliasing(value).immutable_witness()
+                {
+                    return Err(TypeError::MutableStoreOfImmutable {
+                        aliased: witness.to_string(),
+                        parameter,
+                        span: span.clone(),
+                    });
+                }
+
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
             }

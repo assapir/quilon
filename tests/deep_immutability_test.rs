@@ -349,3 +349,223 @@ fn reassigning_a_mutable_binding_to_a_frozen_value_is_rejected() {
         "expected the reassignment to name 't', got: {error}"
     );
 }
+
+// --- Route 7: a store into an existing container, in both directions (#326). ---
+
+#[test]
+fn a_field_write_storing_an_immutable_record_into_a_mutable_container_is_rejected() {
+    // `b.item := c` reaches `c`'s frozen value through every later `b.item := ` write —
+    // the same crossing `Box { item = c }` in a `:=` binding is rejected for, checked at
+    // the store instead of the binding.
+    let error = type_error_message(
+        "T = { value :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  c = T { value = 30 }\n  b := Box { item = T { value = 1 } }\n  b.item := c\n  c.value\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the field-write store to name 'c' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn a_setter_storing_an_immutable_argument_into_the_receiver_is_rejected() {
+    // `put` stores its parameter into `it.item`; the receiver `b` is `:=`-bound, so
+    // `b.put(c)` is the same store as the direct field write, one call deeper.
+    let error = type_error_message(
+        "T = { value :: Num }\nBox = { item :: T, put := (k :: T) => < it.item := k > }\n^ = () -> Num => <\n  c = T { value = 30 }\n  b := Box { item = T { value = 1 } }\n  b.put(c)\n  c.value\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the setter-argument store to name 'c' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn run_a_field_write_storing_a_fresh_value_stays_legal() {
+    assert_exit(
+        "T = { value :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  b := Box { item = T { value = 1 } }\n  b.item := T { value = 5 }\n  b.item.value\n>",
+        5,
+    );
+}
+
+#[test]
+fn run_a_setter_storing_a_fresh_argument_stays_legal() {
+    assert_exit(
+        "T = { value :: Num }\nBox = { item :: T, put := (k :: T) => < it.item := k > }\n^ = () -> Num => <\n  b := Box { item = T { value = 1 } }\n  b.put(T { value = 5 })\n  b.item.value\n>",
+        5,
+    );
+}
+
+#[test]
+fn run_a_setter_reading_only_a_scalar_field_of_its_parameter_accepts_an_immutable_argument() {
+    // `put` never stores `k` ITSELF into `it` — only `k.value`, a `Num` copy — so the
+    // store rule has nothing to say about `k`'s own binding: an `=`-bound argument is
+    // legal, precisely because `setter_stored_parameter_slots` tracks only the
+    // parameters a setter's body actually stores by reference.
+    assert_exit(
+        "T = { value :: Num }\nBox = { item :: T, put := (k :: T) => < it.item.value := k.value > }\n^ = () -> Num => <\n  k = T { value = 9 }\n  b := Box { item = T { value = 1 } }\n  b.put(k)\n  b.item.value\n>",
+        9,
+    );
+}
+
+// --- Route 8: lambdas, higher-order calls, and closures returning a capture (#327). ---
+
+#[test]
+fn a_map_callback_returning_a_captured_immutable_value_is_rejected() {
+    // The callback ignores its element and always returns `c`: `map`'s result carries
+    // `c`'s aliasing exactly as a named function returning its captured local would.
+    let error = type_error_message(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  arr := [T { value = 0 }]\n  arr := arr.map(k => c)\n  c.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the map-callback result to name 'c', got: {error}"
+    );
+}
+
+#[test]
+fn a_reduce_callback_returning_a_captured_immutable_value_is_rejected() {
+    let error = type_error_message(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  x := [1].reduce(T { value = 0 }, (acc, n) => c)\n  c.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the reduce-callback result to name 'c', got: {error}"
+    );
+}
+
+#[test]
+fn an_immediately_invoked_lambda_returning_a_captured_immutable_value_is_rejected() {
+    let error = type_error_message(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  x := (() -> T => < c >)()\n  c.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the immediately-invoked lambda's result to name 'c', got: {error}"
+    );
+}
+
+#[test]
+fn a_closure_returned_from_a_function_that_captured_its_own_local_is_rejected() {
+    // `mk` returns a closure holding its own `=` local `c`: every call to that closure
+    // returns the SAME value, so it is not fresh — `f = mk()` then `x := f()` launders
+    // `c` exactly as `x := mk()()` would.
+    let error = type_error_message(
+        "T = { value :: Num }\nmk = () -> () -> T => <\n  c = T { value = 30 }\n  () -> T => < c >\n>\n^ = () -> Num => <\n  f = mk()\n  x := f()\n  f().value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the returned closure's result to name 'c', got: {error}"
+    );
+}
+
+#[test]
+fn run_a_map_callback_building_a_fresh_value_stays_legal() {
+    assert_exit(
+        "T = { value :: Num }\n^ = () -> Num => <\n  arr := [T { value = 0 }]\n  arr := arr.map(k => T { value = 1 })\n  arr[0].value\n>",
+        1,
+    );
+}
+
+#[test]
+fn run_a_closure_returning_a_fresh_value_binds_mutably() {
+    assert_exit(
+        "T = { value :: Num }\ncapture = () -> T => < T { value = 7 } >\n^ = () -> Num => <\n  x := capture()\n  x.value\n>",
+        7,
+    );
+}
+
+#[test]
+fn run_an_immediately_invoked_lambda_returning_a_fresh_value_binds_mutably() {
+    assert_exit(
+        "T = { value :: Num }\n^ = () -> Num => <\n  x := (() -> T => < T { value = 9 } >)()\n  x.value\n>",
+        9,
+    );
+}
+
+// --- Route 9: a store reaching `it` through an element read, not just a field chain. ---
+
+#[test]
+fn run_a_setter_storing_a_fresh_value_through_an_indexed_receiver_path_stays_legal() {
+    // `it.items[i].sub := v` reaches the receiver through an `Index` hop, not a plain
+    // field chain — the store's own gate must still see it as reaching `it` (deferred to
+    // the call-site check below), rather than rejecting it unconditionally at the
+    // setter's definition, which the naive field-path walk did.
+    assert_exit(
+        "Inner = { n :: Num }\nT = { sub :: Inner }\nBox = { items :: []T, put := (i :: Num, v :: Inner) => < it.items[i].sub := v > }\n^ = () -> Num => <\n  b := Box { items = [T { sub = Inner { n = 1 } }] }\n  b.put(0, Inner { n = 9 })\n  b.items[0].sub.n\n>",
+        9,
+    );
+}
+
+#[test]
+fn a_setter_storing_an_immutable_argument_through_an_indexed_receiver_path_is_rejected() {
+    let error = type_error_message(
+        "Inner = { n :: Num }\nT = { sub :: Inner }\nBox = { items :: []T, put := (i :: Num, v :: Inner) => < it.items[i].sub := v > }\n^ = () -> Num => <\n  c = Inner { n = 30 }\n  b := Box { items = [T { sub = Inner { n = 1 } }] }\n  b.put(0, c)\n  c.n\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the indexed-receiver store to name 'c' under QN341, got: {error}"
+    );
+}
+
+// --- Route 10: reassigning a `:=` closure binding reclassifies it, not just the first time. ---
+
+#[test]
+fn reassigning_a_closure_binding_to_one_returning_a_fresh_value_drops_the_earlier_capture() {
+    // `f` first holds a closure returning its captured `=` local `c`; reassigning it to
+    // one that builds a fresh value must reclassify `f`, not leave the earlier,
+    // non-default classification stale on the same symbol.
+    assert_type_checks(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  capture = () -> T => < c >\n  fresh = () -> T => < T { value = 1 } >\n  f := capture\n  f := fresh\n  x := f()\n  x.value\n>",
+    );
+}
+
+#[test]
+fn reassigning_a_closure_binding_to_one_returning_a_capture_is_still_rejected() {
+    let error = type_error_message(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  capture = () -> T => < c >\n  fresh = () -> T => < T { value = 1 } >\n  f := fresh\n  f := capture\n  x := f()\n  x.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the reassigned closure's result to name 'c', got: {error}"
+    );
+}
+
+// --- Route 11: a curried function's returned closure over its OWN parameter. ---
+
+#[test]
+fn run_a_curried_functions_returned_closure_over_a_fresh_argument_stays_legal() {
+    // `mk` returns a closure over its OWN parameter `v`, not a captured local — calling
+    // `mk(x)()` must inherit `x`'s mutability at the call site, the same way a directly
+    // returned parameter already does, rather than treating `v` as a permanent witness.
+    assert_type_checks(
+        "T = { value :: Num }\nmk = (v :: T) -> () -> T => <\n  () -> T => < v >\n>\n^ = () -> Num => <\n  x := T { value = 5 }\n  y := mk(x)()\n  y.value\n>",
+    );
+}
+
+#[test]
+fn a_curried_functions_returned_closure_over_an_immutable_argument_is_rejected() {
+    let error = type_error_message(
+        "T = { value :: Num }\nmk = (v :: T) -> () -> T => <\n  () -> T => < v >\n>\n^ = () -> Num => <\n  x = T { value = 5 }\n  y := mk(x)()\n  y.value\n>",
+    );
+    assert!(
+        error.contains("'x' is immutable"),
+        "expected the curried closure's result to name 'x', got: {error}"
+    );
+}
+
+// --- Route 12: a closure chosen between branches. ---
+
+#[test]
+fn a_branch_selected_closure_that_may_return_a_capture_is_rejected() {
+    // `f` may hold either closure depending on `cond`; a call through it must be
+    // rejected whenever EITHER branch could return a captured `=` local, the same way
+    // `value_aliasing`'s own `If` handling merges both branches for a reference-typed
+    // result.
+    let error = type_error_message(
+        "T = { value :: Num }\n^ = () -> Num => <\n  c = T { value = 30 }\n  capture = () -> T => < c >\n  fresh = () -> T => < T { value = 1 } >\n  cond = 1 == 1\n  f := cond ? capture : fresh\n  x := f()\n  x.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the branch-selected closure's result to name 'c', got: {error}"
+    );
+}
