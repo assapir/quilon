@@ -397,6 +397,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Under `--debug`: this arm's own lexical scope, mirroring `generate_match` — a
             // pattern binding is visible only inside this arm's disjoint control-flow path.
             let saved_arm_scope = self.begin_di_lexical_block(arm.pattern.span());
+            // Refresh the current location to the new scope right away — see the matching
+            // comment in `generate_variable_declaration` for why an unaddressed scope is
+            // dropped along with whatever it declares.
+            self.set_debug_loc(arm.pattern.span());
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
             let tail_result = self.generate_tail_expression(&arm.body)?;
             self.end_di_scope(saved_arm_scope);

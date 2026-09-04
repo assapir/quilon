@@ -201,39 +201,9 @@ fn subprograms(dump: &str) -> Vec<(String, String, bool)> {
     out
 }
 
-/// The double-quoted value `llvm-dwarfdump` prints for attribute `attr` on `line`
-/// (e.g. `DW_AT_name\t("^")` yields `^`), or `None` if the attribute or its quoted value is
-/// absent. The one place the dump's `attr\t("value")` shape is parsed.
-fn quoted_attr(line: &str, attr: &str) -> Option<String> {
-    let rest = line.split(attr).nth(1)?;
-    let open = rest.find('"')?;
-    let close = rest[open + 1..].find('"')?;
-    Some(rest[open + 1..open + 1 + close].to_string())
-}
-
-/// The quoted DWARF type name `llvm-dwarfdump` prints on the `DW_AT_type` line of the
-/// variable/parameter named `var` (e.g. `Num`, `Text`, `[]Num`, `Point *`). `None` if the
-/// variable or its type is absent. Used to assert each Quilon type gets a DISTINCT entry.
-fn di_var_type(dump: &str, var: &str) -> Option<String> {
-    let name_line = format!("DW_AT_name\t(\"{var}\")");
-    let lines: Vec<&str> = dump.lines().collect();
-    let at = lines.iter().position(|l| l.contains(&name_line))?;
-    // The `DW_AT_type` for this DIE is one of the next few attribute lines.
-    for line in lines.iter().skip(at + 1).take(6) {
-        if line.contains("DW_TAG_") {
-            break; // ran into the next DIE without finding a type
-        }
-        if let Some(ty) = quoted_attr(line, "DW_AT_type") {
-            return Some(ty);
-        }
-    }
-    None
-}
-
 /// The unquoted parenthesized value `llvm-dwarfdump` prints for attribute `attr` on `line`
-/// (e.g. `DW_AT_decl_line\t(4)` yields `"4"`, `DW_AT_low_pc\t(0x1234)` yields `"0x1234"`), or
-/// `None` if `line` doesn't carry that attribute. Unlike [`quoted_attr`], for a bare (not
-/// `"`-quoted) value.
+/// (e.g. `DW_AT_decl_line\t(4)` yields `"4"`, `DW_AT_name\t("^")` yields `"\"^\""`), or `None`
+/// if `line` doesn't carry that attribute.
 fn paren_attr<'a>(line: &'a str, attr: &str) -> Option<&'a str> {
     let rest = line.split(attr).nth(1)?;
     let open = rest.find('(')?;
@@ -241,22 +211,52 @@ fn paren_attr<'a>(line: &'a str, attr: &str) -> Option<&'a str> {
     Some(rest[open + 1..open + 1 + close].trim())
 }
 
-/// The `DW_AT_decl_line` `llvm-dwarfdump` prints on the DIE of the variable/parameter named
-/// `var` (e.g. `4`), or `None` if the variable or its decl line is absent. Used to confirm a
-/// binding is attributed to its own source line.
-fn di_var_decl_line(dump: &str, var: &str) -> Option<u32> {
+/// The double-quoted substring within `s` (e.g. `0x0000012d "Text"` yields `Text`, `"^"`
+/// yields `^`), or `None` if `s` carries no `"`-quoted value.
+fn unquote(s: &str) -> Option<String> {
+    let open = s.find('"')?;
+    let close = s[open + 1..].find('"')?;
+    Some(s[open + 1..open + 1 + close].to_string())
+}
+
+/// The double-quoted value `llvm-dwarfdump` prints for attribute `attr` on `line`
+/// (e.g. `DW_AT_name\t("^")` yields `^`), or `None` if the attribute or its quoted value is
+/// absent.
+fn quoted_attr(line: &str, attr: &str) -> Option<String> {
+    unquote(paren_attr(line, attr)?)
+}
+
+/// Attribute `attr`'s raw [`paren_attr`] value on the DIE of the variable/parameter named
+/// `var`: the first of the up-to-6 attribute lines following its `DW_AT_name` line that
+/// carries `attr`, stopping at the next DIE (`DW_TAG_`). `None` if `var` or that attribute is
+/// absent. The one scan [`di_var_type`] and [`di_var_decl_line`] build on.
+fn die_attr<'a>(dump: &'a str, var: &str, attr: &str) -> Option<&'a str> {
     let name_line = format!("DW_AT_name\t(\"{var}\")");
     let lines: Vec<&str> = dump.lines().collect();
     let at = lines.iter().position(|l| l.contains(&name_line))?;
     for line in lines.iter().skip(at + 1).take(6) {
         if line.contains("DW_TAG_") {
-            break; // ran into the next DIE without finding a decl line
+            break; // ran into the next DIE without finding the attribute
         }
-        if let Some(n) = paren_attr(line, "DW_AT_decl_line").and_then(|v| v.parse().ok()) {
-            return Some(n);
+        if let Some(v) = paren_attr(line, attr) {
+            return Some(v);
         }
     }
     None
+}
+
+/// The quoted DWARF type name `llvm-dwarfdump` prints on the `DW_AT_type` line of the
+/// variable/parameter named `var` (e.g. `Num`, `Text`, `[]Num`, `Point *`). `None` if the
+/// variable or its type is absent. Used to assert each Quilon type gets a DISTINCT entry.
+fn di_var_type(dump: &str, var: &str) -> Option<String> {
+    unquote(die_attr(dump, var, "DW_AT_type")?)
+}
+
+/// The `DW_AT_decl_line` `llvm-dwarfdump` prints on the DIE of the variable/parameter named
+/// `var` (e.g. `4`), or `None` if the variable or its decl line is absent. Used to confirm a
+/// binding is attributed to its own source line.
+fn di_var_decl_line(dump: &str, var: &str) -> Option<u32> {
+    die_attr(dump, var, "DW_AT_decl_line")?.parse().ok()
 }
 
 /// The `DW_AT_low_pc` of the `DW_TAG_lexical_block` that most closely encloses the
@@ -911,6 +911,86 @@ User = { name :: Text, age :: Num }
         p_scope > u_scope,
         "`p`'s lexical block (0x{p_scope:x}) should start strictly after `u`'s (0x{u_scope:x}), \
          so a debugger paused before `p`'s binding does not list it yet, got:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A binding as the LAST statement of a block has no further codegen of its own to carry its
+/// new nested scope: LLVM drops a lexical block with no instruction attributed to it, along
+/// with the `DW_TAG_variable`s inside it, rather than keeping it empty. `last` here has
+/// nothing textually after it in `f`'s body, so without refreshing the builder's current
+/// debug location right after opening the new scope (`generate_variable_declaration` calling
+/// `set_debug_loc` immediately after `begin_di_lexical_block`), the enclosing function's `ret`
+/// would silently inherit `doubled`'s scope and `last` would vanish from the DWARF entirely.
+#[test]
+fn debug_build_declares_a_trailing_binding_with_nothing_after_it() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping trailing-binding debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping trailing-binding debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+f = (n :: Num) -> $ => <
+  doubled :: Num = n * 2
+  last :: Num = doubled + 1
+>
+
+^ = () -> Num => <
+  f(3)
+  7
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgtrailing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("trailing.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("trailing");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(7), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+
+    let doubled_ty = di_var_type(&out, "doubled").expect("`doubled` variable with a type");
+    assert_eq!(doubled_ty, "Num");
+    let last_ty = di_var_type(&out, "last").unwrap_or_else(|| {
+        panic!("expected a `last` DW_TAG_variable even as the block's last binding, got:\n{out}")
+    });
+    assert_eq!(last_ty, "Num");
+
+    let doubled_scope = enclosing_block_low_pc(&out, "doubled")
+        .expect("`doubled` should have an enclosing lexical block");
+    let last_scope = enclosing_block_low_pc(&out, "last")
+        .expect("`last` should have an enclosing lexical block");
+    assert!(
+        last_scope > doubled_scope,
+        "`last`'s lexical block (0x{last_scope:x}) should start strictly after `doubled`'s \
+         (0x{doubled_scope:x}), got:\n{out}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -77,6 +77,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             // match or enclosing block — mirroring the fact that each arm is a disjoint
             // control-flow path with its own `arm_blocks[i]` basic block.
             let saved_arm_scope = self.begin_di_lexical_block(arm.pattern.span());
+            // Refresh the current location to the new scope right away — see the matching
+            // comment in `generate_variable_declaration` for why an unaddressed scope is
+            // dropped along with whatever it declares.
+            self.set_debug_loc(arm.pattern.span());
 
             // Bind pattern variables
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;

@@ -348,6 +348,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // ends. The value just computed above is unaffected — it was emitted under the
             // OUTER scope, before the variable existed.
             self.begin_di_lexical_block(&declaration.span);
+            // Refresh the builder's current location to the new scope right away: an LLVM
+            // lexical block with no instruction attributed to it gets dropped (variable and
+            // all) rather than kept empty, and a binding as a block's LAST statement has no
+            // further codegen of its own to carry the new scope otherwise — the caller's
+            // next instruction (e.g. the function's `ret`) would silently inherit whatever
+            // scope was current before this binding, orphaning both the block and the local.
+            self.set_debug_loc(&declaration.span);
             // The binding's Quilon type is the one just recorded in `var_types` — borrow it
             // rather than keeping a separate clone alive across the whole binding.
             if let Some(qty) = self.var_types.get(&declaration.name) {
