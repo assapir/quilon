@@ -17,6 +17,7 @@ impl TypeError {
             TypeError::ImmutableFieldWrite { .. } => Code::ImmutableFieldWrite,
             TypeError::MutableAliasOfImmutable { .. } => Code::MutableAliasOfImmutable,
             TypeError::ImmutableAliasOfMutable { .. } => Code::ImmutableAliasOfMutable,
+            TypeError::MutableStoreOfImmutable { .. } => Code::MutableStoreOfImmutable,
             TypeError::MutatingMethodOnImmutable { .. } => Code::MutatingMethodOnImmutable,
             TypeError::MutatingMethodDeclaredImmutable { .. } => {
                 Code::MutatingMethodDeclaredImmutable
@@ -175,6 +176,7 @@ impl TypeError {
             | TypeError::ImmutableFieldWrite { span, .. }
             | TypeError::MutableAliasOfImmutable { span, .. }
             | TypeError::ImmutableAliasOfMutable { span, .. }
+            | TypeError::MutableStoreOfImmutable { span, .. }
             | TypeError::MutatingMethodOnImmutable { span, .. }
             | TypeError::MutatingMethodDeclaredImmutable { span, .. }
             | TypeError::DuplicateDefinition { span, .. }
@@ -330,6 +332,24 @@ impl std::fmt::Display for TypeError {
                      fresh value",
                 )
             }
+            TypeError::MutableStoreOfImmutable {
+                aliased, parameter, ..
+            } => match parameter {
+                false => write!(
+                    f,
+                    "cannot store this value where a ':=' binding already reaches it: it \
+                     is '{aliased}''s, and '{aliased}' is immutable — a value bound with \
+                     '=' stays immutable through every alias. Store a fresh value, or a \
+                     value reached only through ':=' bindings",
+                ),
+                true => write!(
+                    f,
+                    "cannot store this value where a ':=' binding already reaches it: it \
+                     is parameter '{aliased}''s, whose argument belongs to the caller and \
+                     may be '='-bound. Store a fresh value, or a value reached only \
+                     through ':=' bindings",
+                ),
+            },
             TypeError::MutatingMethodDeclaredImmutable {
                 type_name,
                 method,

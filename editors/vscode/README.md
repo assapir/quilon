@@ -311,6 +311,17 @@ shows a scalar's natural value alongside any summary rather than replacing it, s
 render there would only ever look redundant). See `docs/tooling/compiling.md#value-display`
 for the full design.
 
+**Stepping into corelib code.** The corelib (`core.io`, `core.test`, …) is embedded in the
+compiler and exists on no disk, but a `--debug` build's DWARF still attributes a corelib
+function to a real-looking path (`corelib/http.qn`, relative to the compile directory).
+Before launching, the extension asks the running language server for
+`quilon/corelibDir` — which writes the embedded corelib out to a real cache directory in
+that same layout — and adds a CodeLLDB `sourceMap` entry that redirects the DWARF path
+there, so stepping into `body()` on an `http.Response` (say) shows the real
+`corelib/http.qn` source instead of disassembly. When the request fails (no language
+server running, or an older one without it), the session still starts, without corelib
+source.
+
 ## Publishing
 
 CI/CD for this extension lives in

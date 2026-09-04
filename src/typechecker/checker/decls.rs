@@ -94,6 +94,14 @@ impl TypeChecker {
         Ok(std::mem::take(&mut self.type_table))
     }
 
+    /// Take the matcher hover side-table (see [`MatcherHoverTable`]) built alongside the
+    /// type oracle. Call after `check_program` succeeds — a language server's hover reads
+    /// it beside `types` to answer a matcher span with its signature rather than the
+    /// enclosing `assert`/`expect` call's `$`.
+    pub fn take_matcher_hovers(&mut self) -> MatcherHoverTable {
+        std::mem::take(&mut self.matcher_hovers)
+    }
+
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`, or
     /// `(args :: []Text, env :: [|Text => Text|])`.
@@ -487,6 +495,22 @@ impl TypeChecker {
             // call's result inherit the receiver's mutability at each call site.
             let result_aliasing =
                 self.declaration_result_aliasing(&method.body, &resolved_return_type);
+
+            // Which of a SETTER's own explicit parameters its body stores directly into a
+            // field of `it` — computed here, still inside the body's scope, so a stored
+            // parameter's own aliasing resolves. A setter call then requires exactly those
+            // arguments to be `:=`-reachable (see `check_call`), the same store-crosses-
+            // the-line rule a direct field write already enforces.
+            if is_setter {
+                let stored_parameter_slots = self.setter_stored_parameter_slots(&method.body);
+                if !stored_parameter_slots.is_empty() {
+                    self.setter_stored_parameters.insert(
+                        (type_name.to_string(), method.name.clone()),
+                        stored_parameter_slots,
+                    );
+                }
+            }
+
             self.env.pop_scope();
             self.leave_declaration(enclosing_declaration);
 
@@ -622,6 +646,77 @@ impl TypeChecker {
         }
     }
 
+    /// Which of a setter's own explicit parameters (slot 1 = the first explicit
+    /// parameter, the receiver being slot 0) its body stores directly into a field of
+    /// `it` — every `it.path := value` in the body where `value`'s aliasing includes one
+    /// of the setter's own parameters. Run while the method's scope is still pushed, the
+    /// same window `declaration_result_aliasing` runs in, so a stored parameter's own
+    /// aliasing (through a local, a container, or as itself) resolves.
+    fn setter_stored_parameter_slots(&self, body: &Expression) -> std::collections::HashSet<usize> {
+        let mut slots = std::collections::HashSet::new();
+        let _ = try_for_each_subexpression(body, &mut |expression| {
+            match expression {
+                // A write reaches `it` however its target got there — a plain field chain
+                // (`it.item := …`) or one hopping through an element read
+                // (`it.items[i].sub := …`) — so this reads the target's resolved MUTABLE
+                // WITNESS rather than walking its own path (`field_path_root_name` only
+                // sees a chain of plain field accesses, missing an `Index` hop).
+                Expression::FieldAssign { target, value, .. } => {
+                    if let Expression::FieldAccess {
+                        expression: base, ..
+                    } = target.as_ref()
+                        && self.value_aliasing(base).reaches_setter_receiver
+                    {
+                        self.record_stored_slot(value, &mut slots);
+                    }
+                }
+                // A call to a stored-slot setter on an `it`-reachable receiver
+                // (`it.inner.set(k)`) is the same store one call deeper: whichever of
+                // ITS parameters `set` itself stores into `it` (already classified —
+                // `set` type-checked before this setter, either an earlier-declared
+                // type or an earlier sibling method; a later sibling calling forward is
+                // already `UnknownMember` before this walk ever runs) makes the
+                // MATCHING ARGUMENT here reach `it` too.
+                Expression::Call {
+                    function,
+                    arguments,
+                    member_call: true,
+                    ..
+                } => {
+                    if let Expression::Identifier { name: method, .. } = function.as_ref()
+                        && let Some(receiver) = arguments.first()
+                        && self.value_aliasing(receiver).reaches_setter_receiver
+                        && let Some(Type::Named {
+                            name: type_name, ..
+                        }) = self.type_table.get(receiver.span())
+                        && let Some(nested_stored_slots) = self
+                            .setter_stored_parameters
+                            .get(&(type_name.clone(), method.clone()))
+                    {
+                        for (slot, argument) in arguments[1..].iter().enumerate() {
+                            if nested_stored_slots.contains(&(slot + 1)) {
+                                self.record_stored_slot(argument, &mut slots);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::<()>::Continue(())
+        });
+        slots
+    }
+
+    /// Which of THIS setter's own parameters `value`'s aliasing includes, recorded into
+    /// `slots` — shared by a direct field write and a nested stored-slot setter call.
+    fn record_stored_slot(&self, value: &Expression, slots: &mut std::collections::HashSet<usize>) {
+        for (declaration, slot, _) in self.value_aliasing(value).parameters {
+            if declaration == self.current_declaration {
+                slots.insert(slot);
+            }
+        }
+    }
+
     pub(super) fn check_variable_declaration(
         &mut self,
         declaration: &VariableDeclaration,
@@ -691,12 +786,13 @@ impl TypeChecker {
             });
         }
 
+        let bound_value_is_callable = matches!(final_type, Type::Function { .. });
+
         if declaration.mutable {
             // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
             if let Some(existing_type) = self.env.get_type(&declaration.name) {
                 // Reassignment: the new value must match the binding's type.
                 self.check_type_compatibility(&existing_type, &final_type, &declaration.span)?;
-                Ok(())
             } else {
                 self.env.define_binding(
                     declaration.name.clone(),
@@ -705,7 +801,7 @@ impl TypeChecker {
                     self.current_declaration,
                     value_aliasing,
                     declaration.span.clone(),
-                )
+                )?;
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.
@@ -716,8 +812,24 @@ impl TypeChecker {
                 self.current_declaration,
                 value_aliasing,
                 declaration.span.clone(),
-            )
+            )?;
         }
+
+        // A binding whose value is itself callable (a closure) carries what CALLING it
+        // later returns, classified from the bound expression the same way a named
+        // function's own declaration is (`callable_result_aliasing`) — so `f = mk()`
+        // then `x := f()` rejects `x` exactly as `x := mk()()` would, when the closure
+        // `mk` returns one of `mk`'s own captured `=` locals. Set unconditionally
+        // (mirroring `check_function_declaration`'s own unconditional set below) rather
+        // than only when non-default: a `:=` REASSIGNMENT reuses the same symbol, so
+        // skipping a fresh, default classification here would leave an earlier
+        // assignment's non-default one stale on it.
+        if bound_value_is_callable {
+            let callable = self.callable_result_aliasing(&declaration.value);
+            self.env.set_result_aliasing(&declaration.name, callable);
+        }
+
+        Ok(())
     }
 
     /// Reject a `Site` parameter that nothing could ever fill in, reported at the offending
@@ -948,8 +1060,24 @@ impl TypeChecker {
 
         // Classify the result's aliasing while the parameters are still in scope: a
         // function returning a parameter (however wrapped) makes each call's result
-        // inherit that argument's mutability at the call site.
-        let result_aliasing = self.declaration_result_aliasing(&declaration.body, &body_type);
+        // inherit that argument's mutability at the call site. A function returning a
+        // CLOSURE (a function-typed body — `mk`, say, returning a lambda that captured
+        // one of `mk`'s own `=` locals, or even one of `mk`'s OWN parameters) is
+        // classified the other way: not what the returned closure VALUE aliases
+        // (nothing — a function value isn't reference-typed), but what CALLING it later
+        // aliases — computed one declaration deeper, at the returned lambda itself
+        // (`callable_result_aliasing`), then re-bucketed as THIS declaration's own
+        // (`reclassify_returned_closure`) exactly the way a directly-returned value's
+        // aliasing already is, so a captured PARAMETER of `mk` becomes an argument slot
+        // substituted at each of `mk`'s own call sites rather than a permanent witness.
+        // Carried on this function's own binding so a caller who calls the result
+        // inherits it (see `check_variable_declaration`).
+        let result_aliasing = match &body_type {
+            Type::Function { .. } => {
+                self.reclassify_returned_closure(self.callable_result_aliasing(&declaration.body))
+            }
+            _ => self.declaration_result_aliasing(&declaration.body, &body_type),
+        };
 
         self.env.pop_scope();
         self.leave_declaration(enclosing_declaration);
@@ -1104,6 +1232,13 @@ impl TypeChecker {
             }
             _ => self.infer_expression(body)?,
         };
+
+        // Classify the lambda's own captures while its scope is still pushed, exactly as
+        // a named function's result is (`check_function_declaration`) — looked up later
+        // wherever the lambda is called without going through a named binding
+        // (`callable_result_aliasing`).
+        self.record_lambda_result_aliasing(body, &body_type);
+
         self.env.pop_scope();
         self.leave_declaration(enclosing_declaration);
 

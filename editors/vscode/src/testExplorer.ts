@@ -76,7 +76,8 @@ export function registerTestExplorer(
     controller.createRunProfile(
       "Debug",
       vscode.TestRunProfileKind.Debug,
-      (request, token) => void debugHandler(controller, resolveCompiler, context, request, token),
+      (request, token) =>
+        void debugHandler(controller, resolveCompiler, context, getClient, request, token),
       true,
     ),
   );
@@ -195,6 +196,7 @@ async function debugHandler(
   controller: vscode.TestController,
   resolveCompiler: () => ResolvedCompiler,
   context: vscode.ExtensionContext,
+  getClient: () => LanguageClient | undefined,
   request: vscode.TestRunRequest,
   token: vscode.CancellationToken,
 ): Promise<void> {
@@ -213,7 +215,7 @@ async function debugHandler(
       return;
     }
     run.started(item);
-    await debugOneItem(context, resolveCompiler, item.uri.fsPath, testPaths.get(item));
+    await debugOneItem(context, resolveCompiler, getClient, item.uri.fsPath, testPaths.get(item));
   }, Promise.resolve());
   run.end();
 }
@@ -226,6 +228,7 @@ async function debugHandler(
 async function debugOneItem(
   context: vscode.ExtensionContext,
   resolveCompiler: () => ResolvedCompiler,
+  getClient: () => LanguageClient | undefined,
   file: string,
   testPath: string | undefined,
 ): Promise<void> {
@@ -248,6 +251,7 @@ async function debugOneItem(
     cwd,
     `Quilon: building ${path.basename(file)} for debug…`,
     `Quilon: Debug ${sessionName}`,
+    { sourceFile: file, getClient },
   );
   if (!config) {
     return;

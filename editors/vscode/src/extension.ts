@@ -235,7 +235,9 @@ class EntryPointCodeLensProvider implements vscode.CodeLensProvider {
 export function activate(context: vscode.ExtensionContext): void {
   // Debug integration (CodeLLDB): the `quilon.debug` command and the `quilon`
   // debug-configuration provider that builds with `--debug` and launches lldb.
-  registerDebug(context);
+  // `() => client` is read lazily — the client starts asynchronously below and may
+  // restart later — so a debug session always asks whichever client is up.
+  registerDebug(context, () => client);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("quilon.check", () => runOnActiveFile("check")),

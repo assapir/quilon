@@ -158,7 +158,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Text => debug.text_type(),
             Type::Array(elem) => {
                 let elem_ty = self.di_type(elem).unwrap_or_else(|| debug.num_type());
-                debug.array_type(key, elem_ty)
+                // NOT `key` (`di_type_key`, which prefixes a nested Named/Sum element with
+                // `named$`/`sum$` — e.g. `"[]named$Point"`): the render thunk (and the lldb
+                // formatter reading a live `DW_AT_name` back) both derive the thunk symbol
+                // from `di_debug_name`, so the array's OWN `DW_AT_name` has to be built from
+                // that same function or the two would disagree for an array of a user
+                // record/sum. `di_debug_name` already matches `key` for every scalar/Text
+                // element (its fallback is `di_type_key` itself), so this only changes an
+                // array of a NAMED/Sum element's displayed name — for the readable "[]Point"
+                // (matching Map/Set's own naming) rather than the cache-key shape.
+                debug.array_type(&self.di_debug_name(ty), elem_ty)
             }
             Type::Record(fields) => {
                 let members = self.di_record_members(debug, fields);

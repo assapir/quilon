@@ -91,12 +91,25 @@ gdb ./program                              # break/step by .qn line, print local
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
-lexical scopes. Each Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`,
-arrays (`[]T`), records, sum types, and Map/Set (named `Map[K, V]`/`Set[T]`) — so a debugger
-tells them apart.
-Line info is multi-file: a function from an imported module (`<<`) — corelib included — is
-attributed to its OWN source, so a debugger steps into it. The entry frame reads `^`. A
-debugger steps over the leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
+lexical scopes. A `?`/`|` match arm's bound pattern — including a constructor's payload
+(`| Ok(page) => page`) — is emitted the same way, typed from its concrete resolved type. Each
+Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`, arrays (`[]T`), records, sum
+types, and Map/Set (named `Map[K, V]`/`Set[T]`) — so a debugger tells them apart.
+Each `=`/`:=` binding also opens its own nested lexical scope covering the rest of its
+enclosing block, so a debugger's Locals listing (or a hover) at a given line shows exactly
+the bindings already made by that line. Line info is multi-file: a
+function from an imported module (`<<`) — corelib included — is attributed to its OWN
+source, so a debugger steps into it. The entry frame reads `^`. A debugger steps over the
+leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
+
+The [built-in modules](../modules/README.md) (`core.io`, `core.test`, …) are embedded in
+the compiler and exist on no disk, but their DWARF still names a real-looking path —
+`corelib/http.qn`, relative to the compile directory — for a debugger to resolve a stepped-
+into corelib function against. The [language server](language-server.md)'s
+`quilon/corelibDir` request writes the embedded corelib out to a real directory in exactly
+that layout and answers with its path, so a client can point its debugger's source map at
+it; the [Visual Studio Code extension](https://github.com/assapir/quilon/tree/main/editors/vscode)
+does this automatically for every debug session it starts.
 
 ### Value display
 

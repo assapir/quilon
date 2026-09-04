@@ -180,3 +180,24 @@ Tag = {
     assert_eq!(stdout, "[ok]\n7");
     assert_eq!(code, 1, "one byte written");
 }
+
+/// An array literal mixing `Ok`/`NotOk` unifies each variant's payload type across every
+/// element (not just the first), so a `.map` extracting the payload prints the real
+/// values instead of an empty/garbage `NotOk` payload.
+#[test]
+fn printing_a_mapped_array_of_results_reads_every_variants_unified_payload() {
+    let run = run_program_named(
+        "array_result_unification.qn",
+        r#"
+<< core.io
+
+^ = () -> Num => <
+  rs = [Ok("a"), NotOk("b")]
+  io.print(rs.map(r => r ? | Ok(t) => t | NotOk(e) => e))
+  0
+>
+"#,
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    assert_eq!(run.stdout, "[a, b]\n");
+}

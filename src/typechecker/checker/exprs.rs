@@ -327,6 +327,36 @@ impl TypeChecker {
                 let value_type = self.infer_expression(value)?;
                 self.check_type_compatibility(&field_type, &value_type, span)?;
 
+                // A store across the line is a compile error at the store, in both
+                // directions: the write above already refuses ANY write into an
+                // `=`-reachable target — that is the first direction. This is the other —
+                // storing a value that aliases an `=` binding or a parameter into a
+                // container confirmed `:=`-reachable (a MUTABLE witness; a merely fresh
+                // target has no known line to cross) would make the frozen value writable
+                // through that mutable side.
+                //
+                // A write reaching the receiver `it` is excluded — however it is reached,
+                // an element read (`it.items[i].x := v`) included, which is why this
+                // reads the resolved MUTABLE witness rather than walking the target's own
+                // path (`field_path_root_name` only sees a chain of plain field
+                // accesses). Inside a SETTER, `it` is always this mutable, so a parameter
+                // stored there is exactly the deferred case
+                // `setter_stored_parameter_slots` classifies at the definition and
+                // `check_call` checks against the concrete argument at each call site —
+                // rejecting it here too, before any caller is known, would make storing a
+                // parameter into `it` an error unconditionally.
+                if let Expression::FieldAccess {
+                    expression: base, ..
+                } = target.as_ref()
+                {
+                    let base_aliasing = self.value_aliasing(base);
+                    if base_aliasing.mutable_witness().is_some()
+                        && !base_aliasing.reaches_setter_receiver
+                    {
+                        self.check_store_not_crossing(value, span)?;
+                    }
+                }
+
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
             }
@@ -363,58 +393,7 @@ impl TypeChecker {
                 }
             }
 
-            Expression::Array { elements, span } => {
-                if elements.is_empty() {
-                    // An empty `[]` has no element type of its own; a caller wanting one
-                    // inferred from context goes through `infer_expression_expecting`
-                    // instead, which reaches here only when that context didn't apply.
-                    return Err(TypeError::InvalidBuiltinArgument {
-                        message: "empty array literal `[]` has no element type: annotate \
-                                  the binding (`:: []T`), or use it where an expected \
-                                  array type is already known — a call argument's \
-                                  parameter type, or a function's declared return type"
-                            .to_string(),
-                        span: span.clone(),
-                    });
-                }
-
-                // The element type each element contributes: a plain element contributes
-                // its own type; a `<-source` spread contributes the ELEMENT type of the
-                // source array (which must itself be an array). All contributions must be
-                // mutually compatible, and the result is `[]elem`.
-                let mut elem_type: Option<Type> = None;
-                for elem in elements {
-                    let contributed = if let Expression::Spread {
-                        expression: src, ..
-                    } = elem
-                    {
-                        // Record the spread node's type (= the source array's type).
-                        let src_type = self.infer_expression(elem)?;
-                        match src_type {
-                            Type::Array(inner) => (*inner).clone(),
-                            other => {
-                                return Err(TypeError::TypeMismatch {
-                                    expected: Box::new(Type::Array(Box::new(Type::Num))),
-                                    got: Box::new(other),
-                                    span: src.span().clone(),
-                                });
-                            }
-                        }
-                    } else {
-                        self.infer_expression(elem)?
-                    };
-                    match &elem_type {
-                        None => elem_type = Some(contributed),
-                        Some(first) => self.check_type_compatibility(first, &contributed, span)?,
-                    }
-                }
-
-                // `elements` is non-empty (checked above), so the loop ran at least once
-                // and set `elem_type`.
-                Ok(Type::Array(Box::new(
-                    elem_type.expect("non-empty elements"),
-                )))
-            }
+            Expression::Array { elements, span } => self.infer_array_literal(elements, span),
 
             Expression::MapLiteral { entries, span } => self.infer_map_literal(entries, span),
 
@@ -686,6 +665,71 @@ impl TypeChecker {
         })
     }
 
+    /// Infer an array literal `[e1, e2, ...]` as `[]elem`. A plain element contributes its
+    /// own type; a `<-source` spread contributes the ELEMENT type of the source array
+    /// (which must itself be an array). Every contribution is merged into one running
+    /// element type — the same merge a match's arms and a ternary's branches use — so a
+    /// sum element specialized by a LATER element (e.g. `[Ok("a"), NotOk("b")]`, whose
+    /// `NotOk` only specializes on the second element) still carries every variant's
+    /// concrete payload. An empty `[]` has no element type of its own — a caller wanting
+    /// one inferred from context goes through `infer_expression_expecting` instead, which
+    /// reaches here only when that context didn't apply.
+    pub(super) fn infer_array_literal(
+        &mut self,
+        elements: &[Expression],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        if elements.is_empty() {
+            return Err(TypeError::InvalidBuiltinArgument {
+                message: "empty array literal `[]` has no element type: annotate the \
+                          binding (`:: []T`), or use it where an expected array type is \
+                          already known — a call argument's parameter type, or a \
+                          function's declared return type"
+                    .to_string(),
+                span: span.clone(),
+            });
+        }
+
+        let mut elem_type: Option<Type> = None;
+        for elem in elements {
+            let contributed = if let Expression::Spread {
+                expression: src, ..
+            } = elem
+            {
+                // Record the spread node's type (= the source array's type).
+                let src_type = self.infer_expression(elem)?;
+                match src_type {
+                    Type::Array(inner) => (*inner).clone(),
+                    other => {
+                        return Err(TypeError::TypeMismatch {
+                            expected: Box::new(Type::Array(Box::new(Type::Num))),
+                            got: Box::new(other),
+                            span: src.span().clone(),
+                        });
+                    }
+                }
+            } else {
+                self.infer_expression(elem)?
+            };
+            match elem_type.take() {
+                None => elem_type = Some(contributed),
+                // The common case (every element already the same type) needs no merge —
+                // `merge_types` would just clone its way back to an equal result.
+                Some(running) if running == contributed => elem_type = Some(running),
+                Some(running) => {
+                    self.check_type_compatibility(&running, &contributed, span)?;
+                    elem_type = Some(Self::merge_types(running, &contributed));
+                }
+            }
+        }
+
+        // `elements` is non-empty (checked above), so the loop ran at least once and set
+        // `elem_type`.
+        Ok(Type::Array(Box::new(
+            elem_type.expect("non-empty elements"),
+        )))
+    }
+
     /// Infer a map literal `[|k1 => v1, ...|]` as `Map(K, V)`. Every key must share one
     /// hashable type `K`; every value one type `V`. An empty `[|=>|]` has no key/value type
     /// of its own — a caller wanting one inferred from context (a binding annotation, a
@@ -795,18 +839,34 @@ impl TypeChecker {
         if operator == BinaryOperator::Add
             && (matches!(left_type, Type::Array(_)) || matches!(right_type, Type::Array(_)))
         {
+            // The array's element type, merged with `other` — the same two-step a match's
+            // arms, a ternary's branches, and an array literal's elements use: check the
+            // two are actually compatible (`types_match` above only gated which of the
+            // three forms applies, by NAME for a sum — it does not itself verify a sum's
+            // field types agree), then merge so a sum element specialized differently on
+            // each side (e.g. `[Ok("a")] + [NotOk("b")]`) still records every variant's
+            // concrete payload. The common case (both sides already the same type) needs
+            // no compatibility check or merge.
+            let merge_array_element =
+                |this: &Self, elem: Type, other: &Type| -> Result<Type, TypeError> {
+                    if elem == *other {
+                        return Ok(Type::Array(Box::new(elem)));
+                    }
+                    this.check_type_compatibility(&elem, other, span)?;
+                    Ok(Type::Array(Box::new(Self::merge_types(elem, other))))
+                };
             match (&left_type, &right_type) {
                 // concat: `[]T + []T` — same element type on both sides.
                 (Type::Array(l_elem), Type::Array(r_elem)) if types_match(l_elem, r_elem) => {
-                    return Ok(left_type.clone());
+                    return merge_array_element(self, (**l_elem).clone(), r_elem);
                 }
                 // append: `[]T + T` — right is a single element of the left array's type.
                 (Type::Array(l_elem), r) if types_match(l_elem, r) => {
-                    return Ok(left_type.clone());
+                    return merge_array_element(self, (**l_elem).clone(), r);
                 }
                 // prepend: `T + []T` — left is a single element of the right array's type.
                 (l, Type::Array(r_elem)) if types_match(r_elem, l) => {
-                    return Ok(right_type.clone());
+                    return merge_array_element(self, l.clone(), r_elem);
                 }
                 _ => {}
             }
