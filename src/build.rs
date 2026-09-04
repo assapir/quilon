@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
@@ -37,9 +38,12 @@ pub struct DebugSource<'a> {
 /// `TargetMachine`. Uses PIC relocation so string/data relocations link cleanly
 /// into a (default) PIE executable. When `debug` is `Some`, DWARF line-number info
 /// is emitted (the `--debug` build mode); otherwise the object carries no debug info.
-/// `faster` selects `OptimizationLevel::Aggressive` (O3) instead of the default
-/// `None`, and combines freely with `debug`: DWARF still comes out, though the
-/// optimizer may inline away or dead-code some locals a debugger could otherwise show.
+/// `faster` runs the LLVM O3 pass pipeline (inlining, `mem2reg`, LICM, loop
+/// optimizations, …) over the module before it is emitted, on top of `OptimizationLevel::Aggressive`
+/// backend codegen — the target-machine level alone only tunes instruction selection, not the
+/// IR-level middle-end passes that do the real work. Combines freely with `debug`: DWARF
+/// still comes out, though the optimizer may inline away or dead-code some locals a
+/// debugger could otherwise show.
 fn emit_object(
     program: &Program,
     types: TypeTable,
@@ -73,9 +77,10 @@ fn emit_object(
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
-    let optimization = match faster {
-        true => OptimizationLevel::Aggressive,
-        false => OptimizationLevel::None,
+    let optimization = if faster {
+        OptimizationLevel::Aggressive
+    } else {
+        OptimizationLevel::None
     };
     let machine = target
         .create_target_machine(
@@ -87,6 +92,15 @@ fn emit_object(
             CodeModel::Default,
         )
         .ok_or_else(|| "Failed to create target machine".to_string())?;
+
+    // The target machine's own optimization level only tunes backend codegen (instruction
+    // selection, scheduling). The actual O3 work — inlining, mem2reg, LICM, loop
+    // optimizations — is the middle-end pass pipeline, run explicitly here.
+    if faster {
+        module
+            .run_passes("default<O3>", &machine, PassBuilderOptions::create())
+            .map_err(|e| format!("Failed to run the O3 optimization pipeline: {e}"))?;
+    }
 
     machine
         .write_to_file(module, FileType::Object, obj_path)

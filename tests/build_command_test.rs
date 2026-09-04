@@ -295,6 +295,70 @@ fn faster_build_produces_running_binary() {
     );
 }
 
+/// `--faster` must not be a no-op: the target machine's own optimization level only tunes
+/// backend codegen, so the real O3 work is the middle-end pass pipeline (inlining, `mem2reg`,
+/// dead-code elimination, …) run explicitly over the module. A program with an obvious
+/// inlining/elimination opportunity — a small pure helper folded through `map`/`filter`/`reduce`
+/// over a large range — makes an O3 build byte-for-byte DIFFERENT from a default build of the
+/// same source; two builds at the SAME level are deterministic and byte-identical, so this
+/// catches a regression to a target-machine-level-only "optimization" that changes nothing.
+#[test]
+fn faster_build_changes_the_emitted_binary() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping --faster no-op gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+
+    let src = "\
+double = (x :: Num) -> Num => < x * 2 >
+^ = () -> Num => <
+  xs = 1 <- 500000
+  total = xs.map(x => double(x)).filter(x => x > 100).reduce(0, (a, x) => a + x)
+  total > 0 ? 0 : 1
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_faster_noop_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let plain = dir.join("plain");
+    let faster = dir.join("faster");
+
+    for (out, extra_args) in [(&plain, [].as_slice()), (&faster, ["--faster"].as_slice())] {
+        let mut cmd = Command::new(quilon);
+        cmd.args(["build", ql.to_str().unwrap()])
+            .args(["--linker", linker])
+            .args(extra_args)
+            .args(["-o", out.to_str().unwrap()]);
+        let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+        assert!(
+            build.status.success(),
+            "`quilon build` failed (faster={}): {}",
+            !extra_args.is_empty(),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let run = run_allowing_busy_executable(&mut Command::new(out)).expect("run built binary");
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "wrong exit code (faster={})",
+            !extra_args.is_empty()
+        );
+    }
+
+    let plain_bytes = std::fs::read(&plain).expect("read plain binary");
+    let faster_bytes = std::fs::read(&faster).expect("read --faster binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_ne!(
+        plain_bytes, faster_bytes,
+        "`--faster` produced a byte-identical binary — the O3 pass pipeline did not run"
+    );
+}
+
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no
 /// `libquilon_rt.a` next to it, no build tree on disk. `quilon build` must still
 /// work, by decompressing the runtime archive embedded in the binary itself into

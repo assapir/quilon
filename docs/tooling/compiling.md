@@ -65,11 +65,11 @@ quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ```
 
 The default build is unoptimized. Add `--faster` to optimize the emitted object at
-LLVM's O3 (`OptimizationLevel::Aggressive`):
+LLVM's O3:
 ```bash
 quilon build program.qn --faster -o program
 ```
-`quilon run` (the JIT) always runs at `OptimizationLevel::None`.
+`quilon run` (the JIT) always runs unoptimized.
 
 `quilon test <file> --binary <out>` builds the suite into a **native, debuggable
 executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
