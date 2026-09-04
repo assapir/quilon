@@ -394,8 +394,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.branch_to_arm(matches, arm_blocks[i], next_block)?;
 
             self.builder.position_at_end(arm_blocks[i]);
+            // Under `--debug`: this arm's own lexical scope, mirroring `generate_match` — a
+            // pattern binding is visible only inside this arm's disjoint control-flow path.
+            let saved_arm_scope = self.begin_di_lexical_block(arm.pattern.span());
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
-            if let Some(arm_val) = self.generate_tail_expression(&arm.body)? {
+            let tail_result = self.generate_tail_expression(&arm.body)?;
+            self.end_di_scope(saved_arm_scope);
+            if let Some(arm_val) = tail_result {
                 any_value_arm = true;
                 self.builder
                     .build_store(result_alloca, arm_val)

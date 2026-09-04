@@ -72,10 +72,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Generate arm body
             self.builder.position_at_end(arm_blocks[i]);
 
+            // Under `--debug`: this arm's own lexical scope, so a pattern binding (e.g. the
+            // `page` in `| Ok(page) => page`) is visible only inside this arm, not the whole
+            // match or enclosing block — mirroring the fact that each arm is a disjoint
+            // control-flow path with its own `arm_blocks[i]` basic block.
+            let saved_arm_scope = self.begin_di_lexical_block(arm.pattern.span());
+
             // Bind pattern variables
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
             let arm_val = self.generate_expression(&arm.body)?;
+            self.end_di_scope(saved_arm_scope);
             self.builder
                 .build_store(result_alloca, arm_val)
                 .map_err(ctx("Failed to store result"))?;
@@ -267,7 +274,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         scrutinee: &Expression,
     ) -> Result<(), String> {
         match pattern {
-            Pattern::Identifier { name, .. } => {
+            Pattern::Identifier { name, span } => {
                 // Bind the value to the identifier
                 let alloca = self.create_entry_block_alloca(name, value.get_type())?;
                 self.builder
@@ -275,6 +282,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to store pattern binding"))?;
                 self.variables
                     .insert(name.clone(), (alloca, value.get_type()));
+                // Under `--debug`: an identifier pattern renames the whole scrutinee, so its
+                // oracle type IS this binding's type. Skip declaring when the oracle has no
+                // entry (IR-only tests) rather than guess `Num`.
+                if let Some(qty) = self.oracle.expression_type(scrutinee) {
+                    self.declare_variable(name, alloca, qty, span, None);
+                }
                 Ok(())
             }
 
@@ -332,6 +345,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 // A named-record payload binds by pointer (the record ABI);
                                 // track it so field reads / method calls on the binding resolve.
                                 self.track_named_record_binding(arg_name, ty);
+                                self.declare_variable(arg_name, alloca, ty, arg.span(), None);
                             }
                         }
                     }

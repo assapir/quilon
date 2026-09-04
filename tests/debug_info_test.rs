@@ -230,6 +230,56 @@ fn di_var_type(dump: &str, var: &str) -> Option<String> {
     None
 }
 
+/// The unquoted parenthesized value `llvm-dwarfdump` prints for attribute `attr` on `line`
+/// (e.g. `DW_AT_decl_line\t(4)` yields `"4"`, `DW_AT_low_pc\t(0x1234)` yields `"0x1234"`), or
+/// `None` if `line` doesn't carry that attribute. Unlike [`quoted_attr`], for a bare (not
+/// `"`-quoted) value.
+fn paren_attr<'a>(line: &'a str, attr: &str) -> Option<&'a str> {
+    let rest = line.split(attr).nth(1)?;
+    let open = rest.find('(')?;
+    let close = rest[open + 1..].find(')')?;
+    Some(rest[open + 1..open + 1 + close].trim())
+}
+
+/// The `DW_AT_decl_line` `llvm-dwarfdump` prints on the DIE of the variable/parameter named
+/// `var` (e.g. `4`), or `None` if the variable or its decl line is absent. Used to confirm a
+/// binding is attributed to its own source line.
+fn di_var_decl_line(dump: &str, var: &str) -> Option<u32> {
+    let name_line = format!("DW_AT_name\t(\"{var}\")");
+    let lines: Vec<&str> = dump.lines().collect();
+    let at = lines.iter().position(|l| l.contains(&name_line))?;
+    for line in lines.iter().skip(at + 1).take(6) {
+        if line.contains("DW_TAG_") {
+            break; // ran into the next DIE without finding a decl line
+        }
+        if let Some(n) = paren_attr(line, "DW_AT_decl_line").and_then(|v| v.parse().ok()) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// The `DW_AT_low_pc` of the `DW_TAG_lexical_block` that most closely encloses the
+/// variable/parameter named `var`: the nearest `DW_TAG_lexical_block` line preceding its
+/// `DW_AT_name` line (dwarfdump prints a DIE's own attributes — including a lexical block's
+/// `DW_AT_low_pc` — before any of its children, so this is that block's own attribute, not a
+/// sibling's). `None` if `var` or an enclosing block with a `DW_AT_low_pc` is absent. Used to
+/// confirm a later binding's scope starts strictly after an earlier binding's code.
+fn enclosing_block_low_pc(dump: &str, var: &str) -> Option<u64> {
+    let name_line = format!("DW_AT_name\t(\"{var}\")");
+    let lines: Vec<&str> = dump.lines().collect();
+    let at = lines.iter().position(|l| l.contains(&name_line))?;
+    let block_at = lines[..at]
+        .iter()
+        .rposition(|l| l.contains("DW_TAG_lexical_block"))?;
+    for line in lines.iter().skip(block_at + 1).take(3) {
+        if let Some(hex) = paren_attr(line, "DW_AT_low_pc") {
+            return u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok();
+        }
+    }
+    None
+}
+
 #[test]
 fn debug_build_emits_distinct_typed_local_variables() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
@@ -718,4 +768,150 @@ fn a_relative_source_path_is_recorded_absolutely() {
         Path::new(directory).ends_with("examples"),
         "the DIFile directory must still name the source's own directory, got {directory:?}"
     );
+}
+
+/// A match arm's constructor payload binding (`Ok(page) => page`) must get its own
+/// `DW_TAG_variable`, typed from its concrete oracle type (not the `Result`'s generic
+/// payload), attributed to its own source line. The bug this guards: `bind_pattern` stored
+/// the payload's alloca but never called `declare_variable`, so `page` was missing from a
+/// debugger's Locals/hover entirely.
+#[test]
+fn debug_build_declares_a_match_payload_binding() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping match-payload debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping match-payload debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    // `page`'s pattern sits on line 4 (`| Ok(page) => page`), inside an arm of the `label`
+    // match on line 3.
+    let src = "\
+^ = () -> Num => <
+  outcome :: Result = Ok(\"hello\")
+  label :: Text = outcome ?
+    | Ok(page) => page
+    | NotOk(e) => \"fallback\"
+  label.size
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgpayload_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("payload.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("payload");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    // "hello".size == 5 — debug info must not change behavior.
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(5), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+
+    let page_ty = di_var_type(&out, "page")
+        .unwrap_or_else(|| panic!("expected a `page` DW_TAG_variable, got:\n{out}"));
+    assert_eq!(
+        page_ty, "Text",
+        "`Ok(page)` should bind `page` as the concrete `Text` payload type, not the generic \
+         `Result` payload"
+    );
+    let page_line =
+        di_var_decl_line(&out, "page").expect("`page` variable should carry a decl line");
+    assert_eq!(
+        page_line, 4,
+        "`page` should be attributed to its own arm's source line"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two sequential `::` bindings in the same block. Before the fix, `=`/`:=` locals all shared
+/// ONE lexical scope covering the whole enclosing block, so a debugger paused on the block's
+/// first instruction listed every local (including not-yet-bound ones, holding uninitialized
+/// garbage). Now each binding opens a fresh nested `DW_TAG_lexical_block` starting at its own
+/// binding, so a later binding's scope begins strictly after the earlier binding's own code.
+#[test]
+fn debug_build_scopes_a_later_binding_past_the_earlier_ones_code() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping scope-nesting debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping scope-nesting debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+User = { name :: Text, age :: Num }
+
+^ = () -> Num => <
+  u :: User = User { name = \"Ada\", age = 36 }
+  p :: Text = u.name
+  p.size
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgnest_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("nest.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("nest");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    // "Ada".size == 3 — debug info must not change behavior.
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(3), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+
+    let u_scope =
+        enclosing_block_low_pc(&out, "u").expect("`u` should have an enclosing lexical block");
+    let p_scope =
+        enclosing_block_low_pc(&out, "p").expect("`p` should have an enclosing lexical block");
+    assert!(
+        p_scope > u_scope,
+        "`p`'s lexical block (0x{p_scope:x}) should start strictly after `u`'s (0x{u_scope:x}), \
+         so a debugger paused before `p`'s binding does not list it yet, got:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
