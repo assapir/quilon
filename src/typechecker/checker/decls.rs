@@ -94,6 +94,14 @@ impl TypeChecker {
         Ok(std::mem::take(&mut self.type_table))
     }
 
+    /// Take the matcher hover side-table (see [`MatcherHoverTable`]) built alongside the
+    /// type oracle. Call after `check_program` succeeds — a language server's hover reads
+    /// it beside `types` to answer a matcher span with its signature rather than the
+    /// enclosing `assert`/`expect` call's `$`.
+    pub fn take_matcher_hovers(&mut self) -> MatcherHoverTable {
+        std::mem::take(&mut self.matcher_hovers)
+    }
+
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`, or
     /// `(args :: []Text, env :: [|Text => Text|])`.

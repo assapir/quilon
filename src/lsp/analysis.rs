@@ -16,7 +16,7 @@ use crate::ast::nodes::{
 use crate::driver::{self, Checked, FrontEndError, TestBlocks};
 use crate::lexer::{Lexer, ROOT_FILE, Span, Token, TokenKind};
 use crate::parser;
-use crate::typechecker::TypeTable;
+use crate::typechecker::{MatcherHoverTable, TypeTable};
 
 /// Run the compiler front end over `text` as the content of the document at `path`.
 ///
@@ -405,14 +405,40 @@ pub fn is_identifier(text: &str) -> bool {
 
 // --- Hover ------------------------------------------------------------------
 
-/// The inferred type of the smallest expression covering byte `offset` in the root
-/// document, as its display label, together with that expression's span.
-pub fn hover_at(types: &TypeTable, offset: u32) -> Option<(String, Span)> {
-    types
+/// The hover text and span of the smallest span covering byte `offset` in the root
+/// document, drawn from whichever of `types` (the type oracle) or `matchers` (the matcher
+/// hover side-table) offers the narrower one. A matcher call inside `assert`/`expect`
+/// (`isOk()`, `equals(Num)`, `not(equals(Num))`) has no entry in `types` at all — checking
+/// one never infers a type for the call itself, only for its argument — so `matchers`
+/// supplies it there; but an argument expression INSIDE a matcher call (`equals(5)`'s `5`)
+/// still has its own, smaller `types` entry, and comparing the two spans (rather than
+/// preferring one table outright) is what lets hovering that argument answer with its own
+/// type instead of the enclosing matcher's signature. A `not(...)`'s nested matcher and its
+/// own outer span both come from `matchers`, and the narrower of the two wins the same way.
+pub fn hover_at(
+    types: &TypeTable,
+    matchers: &MatcherHoverTable,
+    offset: u32,
+) -> Option<(String, Span)> {
+    let width = |span: &Span| (span.end - span.start, span.start);
+
+    // `matchers` chained first: `min_by_key` keeps the FIRST minimum on a tie, so a matcher's
+    // span wins a same-width tie against a `types` entry (the two never actually tie in
+    // practice — a matcher call's span always strictly contains its own argument's span —
+    // but the order still documents which one is meant to win).
+    let from_matchers = matchers
         .iter()
-        .filter(|(span, _)| span.file == ROOT_FILE && span.start <= offset && offset < span.end)
-        .min_by_key(|(span, _)| (span.end - span.start, span.start))
-        .map(|(span, ty)| (type_label(ty), span.clone()))
+        .filter(|(span, _)| covers(span, offset))
+        .map(|(span, label)| (span.clone(), label.clone()));
+    let from_types = types
+        .iter()
+        .filter(|(span, _)| covers(span, offset))
+        .map(|(span, ty)| (span.clone(), type_label(ty)));
+
+    let (span, label) = from_matchers
+        .chain(from_types)
+        .min_by_key(|(span, _)| width(span))?;
+    Some((label, span))
 }
 
 // --- Semantic tokens --------------------------------------------------------

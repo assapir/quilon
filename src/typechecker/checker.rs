@@ -477,6 +477,15 @@ type MethodDef = (Vec<Parameter>, Type, Expression);
 /// AST-agnostic key. See the consumer-side wrapper `codegen::TypeOracle`.
 pub type TypeTable = std::collections::HashMap<Span, Type>;
 
+/// A side-table alongside the type oracle, for the ONE shape it cannot represent: a matcher
+/// call (`isOk()`, `equals(Num)`, `not(equals(Num))`) inside `assert`/`expect`. Checking a
+/// matcher never calls `infer_expression` on the matcher call itself (see
+/// `checker::assertions`), so it has no entry in [`TypeTable`] — hover on one falls through
+/// to the enclosing `assert(...)` call, showing `$`. This table gives it its own, fully
+/// rendered hover line: `equals(Num)  matcher over Num`. Keyed by the matcher call's span,
+/// populated by `check_matcher`.
+pub type MatcherHoverTable = std::collections::HashMap<Span, String>;
+
 /// One member of an overload set: an exact parameter-type list and the result type.
 /// Both named functions and operators (keyed by their symbol, e.g. `"+"`) live in the
 /// same registry, and the compiler-lowered defaults (`+` on Num/Text, the comparisons,
@@ -526,6 +535,9 @@ pub struct TypeChecker {
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expression` and returned by `check_program`.
     type_table: TypeTable,
+    // The matcher hover side-table (see `MatcherHoverTable`), populated by `check_matcher`
+    // and taken by `take_matcher_hovers` — a language server reads it after `check_program`.
+    matcher_hovers: MatcherHoverTable,
     // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
     // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use
     // resolves to the one whose parameter types EXACTLY match the argument types (no
@@ -586,6 +598,7 @@ impl TypeChecker {
             setter_methods: std::collections::HashSet::new(),
             static_methods: std::collections::HashSet::new(),
             type_table: TypeTable::new(),
+            matcher_hovers: MatcherHoverTable::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,

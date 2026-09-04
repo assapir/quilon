@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
   buildArgs,
+  corelibSourceMap,
   firstNonEmptyLine,
   InFlightBuilds,
   splitCommand,
@@ -157,4 +158,58 @@ test("toLldbConfiguration: defaults missing args and cwd", () => {
   const config = toLldbConfiguration({ name: "n", program: "/tmp/app" });
   assert.deepEqual(config.args, []);
   assert.equal(config.cwd, "${workspaceFolder}");
+});
+
+test("toLldbConfiguration: no sourceMap when corelibDir is missing", () => {
+  const config = toLldbConfiguration({
+    name: "n",
+    program: "/tmp/app",
+    sourceFile: "/w/examples/hello.qn",
+  });
+  assert.equal(config.sourceMap, undefined);
+});
+
+test("toLldbConfiguration: no sourceMap when sourceFile is missing", () => {
+  const config = toLldbConfiguration({
+    name: "n",
+    program: "/tmp/app",
+    corelibDir: "/home/user/.cache/quilon/corelib-0.10.0",
+  });
+  assert.equal(config.sourceMap, undefined);
+});
+
+test("toLldbConfiguration: adds the corelib sourceMap when both are given", () => {
+  const config = toLldbConfiguration({
+    name: "n",
+    program: "/tmp/app",
+    sourceFile: "/w/examples/hello.qn",
+    corelibDir: "/home/user/.cache/quilon/corelib-0.10.0",
+  });
+  assert.deepEqual(config.sourceMap, {
+    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+  });
+});
+
+// --- corelibSourceMap ---------------------------------------------------------
+//
+// The "from" half is the debugged FILE's own directory + `corelib` — where DWARF (per
+// `dwarf_file_location` in `src/codegen/debug.rs`) attributes a corelib function's source,
+// resolved against the compile unit's `DW_AT_comp_dir` — not the corelib module's own real
+// location, which doesn't exist on disk at all.
+
+test("corelibSourceMap: maps <source dir>/corelib to <corelibDir>/corelib", () => {
+  const map = corelibSourceMap(
+    "/w/examples/http_get.qn",
+    "/home/user/.cache/quilon/corelib-0.10.0",
+  );
+  assert.deepEqual(map, {
+    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+  });
+});
+
+test("corelibSourceMap: a different source directory maps its own corelib prefix", () => {
+  const map = corelibSourceMap("/w/tests/suite.qn", "/home/user/.cache/quilon/corelib-0.10.0");
+  assert.deepEqual(map, {
+    "/w/tests/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+  });
 });
