@@ -210,3 +210,36 @@ test("numbers still tokenize", () => {
   const token = uniqueToken("x = 3.14", "3.14");
   assert.equal(token.scope, "constant.numeric.quilon");
 });
+
+// --- Map/set literal fence `[| … |]` -----------------------------------------
+//
+// `[` alone is unscoped and `|` alone is the match operator, so without a
+// dedicated rule the two halves of a `[|`/`|]` fence would be colored
+// differently even though they read as one delimiter pair.
+
+test("[| and |] are each a single collection-fence token", () => {
+  const line = '[|"a" => 1|]';
+  const open = uniqueToken(line, "[|");
+  assert.equal(open.scope, "punctuation.definition.collection.begin.quilon");
+  const close = uniqueToken(line, "|]");
+  assert.equal(close.scope, "punctuation.definition.collection.end.quilon");
+});
+
+test("a set literal's [| and |] fence tokenizes the same way", () => {
+  const line = "[|1, 2|]";
+  const open = uniqueToken(line, "[|");
+  assert.equal(open.scope, "punctuation.definition.collection.begin.quilon");
+  const close = uniqueToken(line, "|]");
+  assert.equal(close.scope, "punctuation.definition.collection.end.quilon");
+});
+
+test("|| still tokenizes as the logical operator, not two fence halves", () => {
+  const token = uniqueToken("a || b", "||");
+  assert.equal(token.scope, "keyword.operator.logical.quilon");
+  const tokens = grammar.tokenizeLine("a || b");
+  assert.equal(
+    tokens.filter((t) => t.scope?.startsWith("punctuation.definition.collection")).length,
+    0,
+    "|| must not be scoped as a collection fence",
+  );
+});

@@ -409,46 +409,50 @@ const CORE_NET: &str = include_str!("../corelib/net.qn");
 const CORE_HTTP: &str = include_str!("../corelib/http.qn");
 const CORE_INFO: &str = include_str!("../corelib/info.qn");
 
-/// Every bundled corelib source — the ONE trusted origin allowed to declare `@` leaf IO
-/// primitives.
-const CORELIB_SOURCES: &[&str] = &[
-    CORE_IO, CORE_TEXT, CORE_TEST, CORE_CLI, CORE_TIME, CORE_NET, CORE_HTTP, CORE_INFO,
+/// Every bundled corelib module, dotted name paired with its source — the ONE place that
+/// pairing is written down. `builtin_source` and `is_corelib_source` (below) both derive
+/// from it, and so does the language server's `quilon/corelibDir` request (`src/lsp.rs`),
+/// which writes each of these sources to disk under its `dwarf_file_location`-equivalent
+/// path so a debugger stepping into corelib code has something to open — all three cannot
+/// drift apart from each other.
+pub(crate) const CORELIB_MODULES: &[(&str, &str)] = &[
+    ("core.io", CORE_IO),
+    // core.text — the self-hosted composable Text methods (`split`/`trim`/`contains`/
+    // `replace`/`replaceAll`/`repeat`), written in Quilon over the native grapheme
+    // primitives. No program imports it by name: [`link`] merges it implicitly into any
+    // program that calls one of those methods, so `Text` still needs no import.
+    ("core.text", CORE_TEXT),
+    // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
+    // a check of your own, the run's recorded state, and the case lifecycle. Depends
+    // transitively on core.io (it prints, and `failAt` renders its frame via `io.eprint`).
+    ("core.test", CORE_TEST),
+    // core.cli — thin, pure-Quilon helpers over the `^` entry point's
+    // `args :: []Text` and `env :: [|Text => Text|]`.
+    ("core.cli", CORE_CLI),
+    // core.time — time-related built-ins: the deferring `@sleep` leaf primitive and
+    // `time.now`, both compiler-lowered (their bodies are inert placeholders).
+    ("core.time", CORE_TIME),
+    // core.net — the request-exchange socket primitive (`@tcpRequest`), the foundation the
+    // HTTP client sits on. Like `@sleep`/`@readStdin` it is compiler-lowered (its body is
+    // inert), so the import merges the primitive's signature and declares intent, nothing
+    // more.
+    ("core.net", CORE_NET),
+    // core.http — a minimal HTTP client written entirely in Quilon over core.net's
+    // `@tcpRequest`. It declares no leaf IO primitives of its own; it is bundled so
+    // `<< core.http` resolves and so the module is trusted when checked directly.
+    ("core.http", CORE_HTTP),
+    // core.info — compile-time facts about the build: target CPU, target OS, and the
+    // compiler's version. Like `now`, the members are compiler-provided and the module
+    // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
+    ("core.info", CORE_INFO),
 ];
 
 /// Map a built-in dotted module name to its bundled source.
 fn builtin_source(name: &str) -> Option<&'static str> {
-    match name {
-        "core.io" => Some(CORE_IO),
-        // core.text — the self-hosted composable Text methods (`split`/`trim`/`contains`/
-        // `replace`/`replaceAll`/`repeat`), written in Quilon over the native grapheme
-        // primitives. No program imports it by name: [`link`] merges it implicitly into any
-        // program that calls one of those methods, so `Text` still needs no import.
-        "core.text" => Some(CORE_TEXT),
-        // core.test — the test harness: `describe`/`it`, the report they print, `failAt` for
-        // a check of your own, the run's recorded state, and the case lifecycle. Depends
-        // transitively on core.io (it prints, and `failAt` renders its frame via `io.eprint`).
-        "core.test" => Some(CORE_TEST),
-        // core.cli — thin, pure-Quilon helpers over the `^` entry point's
-        // `args :: []Text` and `env :: [|Text => Text|]`.
-        "core.cli" => Some(CORE_CLI),
-        // core.time — time-related built-ins: the deferring `@sleep` leaf primitive and
-        // `time.now`, both compiler-lowered (their bodies are inert placeholders).
-        "core.time" => Some(CORE_TIME),
-        // core.net — the request-exchange socket primitive (`@tcpRequest`), the foundation the
-        // HTTP client sits on. Like `@sleep`/`@readStdin` it is compiler-lowered (its body is
-        // inert), so the import merges the primitive's signature and declares intent, nothing
-        // more.
-        "core.net" => Some(CORE_NET),
-        // core.http — a minimal HTTP client written entirely in Quilon over core.net's
-        // `@tcpRequest`. It declares no leaf IO primitives of its own; it is bundled so
-        // `<< core.http` resolves and so the module is trusted when checked directly.
-        "core.http" => Some(CORE_HTTP),
-        // core.info — compile-time facts about the build: target CPU, target OS, and the
-        // compiler's version. Like `now`, the members are compiler-provided and the module
-        // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
-        "core.info" => Some(CORE_INFO),
-        _ => None,
-    }
+    CORELIB_MODULES
+        .iter()
+        .find(|(module, _)| *module == name)
+        .map(|(_, source)| *source)
 }
 
 /// Whether `source` is verbatim one of the bundled corelib modules. The corelib is the one
@@ -457,7 +461,7 @@ fn builtin_source(name: &str) -> Option<&'static str> {
 /// an `@` declaration in ordinary user code. Matching by content, not path, identifies the
 /// real corelib no matter where it is checked from and never mistakes user code for it.
 pub fn is_corelib_source(source: &str) -> bool {
-    CORELIB_SOURCES.contains(&source)
+    CORELIB_MODULES.iter().any(|(_, s)| *s == source)
 }
 
 fn item_is_exported(item: &Item) -> bool {

@@ -35,14 +35,19 @@ impl TypeChecker {
         Ok(Type::Unit)
     }
 
-    /// Check one matcher against the type of the value it will be applied to. `not(matcher)`
-    /// recurses on the same type, so a negation composes with any matcher.
+    /// Check one matcher against the type of the value it will be applied to, and record its
+    /// hover line into the matcher side-table (see [`super::MatcherHoverTable`]) — the type
+    /// oracle never sees a matcher call's own span (checking one never calls
+    /// `infer_expression` on it), so this is a hover's only source for it. Returns the
+    /// matcher's own rendered signature (`"equals(Num)"`, `"isOk()"`), which `not(matcher)`
+    /// wraps into its own (`"not(equals(Num))"`) — the same recursion that lets a negation
+    /// compose with any matcher also builds the nested hover text.
     fn check_matcher(
         &mut self,
         assertion: &str,
         actual_type: &Type,
         matcher: &Expression,
-    ) -> Result<(), TypeError> {
+    ) -> Result<String, TypeError> {
         let Expression::Call {
             function,
             arguments,
@@ -76,14 +81,15 @@ impl TypeChecker {
                 span: span.clone(),
             });
         }
-        match name.as_str() {
+        let signature = match name.as_str() {
             // Compared through `==`, so a user record or sum works exactly as far as its own
             // `==` member does.
             "equals" => {
                 let expected_type = self.infer_expression(&arguments[0])?;
                 self.check_type_compatibility(actual_type, &expected_type, span)?;
                 self.require_one_representation(actual_type, &expected_type, span)?;
-                self.require_equality(name, actual_type, span)
+                self.require_equality(name, actual_type, span)?;
+                format!("equals({})", type_label(&expected_type))
             }
             // A `Text` part of a `Text`, or one element of an array.
             "contains" => {
@@ -91,21 +97,27 @@ impl TypeChecker {
                 match actual_type {
                     Type::Text => {
                         self.check_type_compatibility(&Type::Text, &part_type, span)?;
-                        self.require_one_representation(&Type::Text, &part_type, span)
+                        self.require_one_representation(&Type::Text, &part_type, span)?;
                     }
                     Type::Array(element) => {
                         self.check_type_compatibility(element, &part_type, span)?;
                         self.require_one_representation(element, &part_type, span)?;
-                        self.require_equality(name, element, span)
+                        self.require_equality(name, element, span)?;
                     }
-                    other => Err(TypeError::MatcherTypeUnsupported {
-                        matcher: name.clone(),
-                        ty: Box::new(other.clone()),
-                        span: span.clone(),
-                    }),
+                    other => {
+                        return Err(TypeError::MatcherTypeUnsupported {
+                            matcher: name.clone(),
+                            ty: Box::new(other.clone()),
+                            span: span.clone(),
+                        });
+                    }
                 }
+                format!("contains({})", type_label(&part_type))
             }
-            "not" => self.check_matcher(assertion, actual_type, &arguments[0]),
+            "not" => {
+                let inner = self.check_matcher(assertion, actual_type, &arguments[0])?;
+                format!("not({inner})")
+            }
             // A `Result` — or any sum carrying the variant being asked about.
             matcher_name => {
                 let asked_about = crate::ast::matcher_variant(matcher_name).ok_or_else(|| {
@@ -116,18 +128,23 @@ impl TypeChecker {
                 })?;
                 match actual_type {
                     Type::Sum { variants, .. }
-                        if variants.iter().any(|variant| variant.name == asked_about) =>
-                    {
-                        Ok(())
+                        if variants.iter().any(|variant| variant.name == asked_about) => {}
+                    other => {
+                        return Err(TypeError::MatcherTypeUnsupported {
+                            matcher: name.clone(),
+                            ty: Box::new(other.clone()),
+                            span: span.clone(),
+                        });
                     }
-                    other => Err(TypeError::MatcherTypeUnsupported {
-                        matcher: name.clone(),
-                        ty: Box::new(other.clone()),
-                        span: span.clone(),
-                    }),
                 }
+                format!("{matcher_name}()")
             }
-        }
+        };
+        self.matcher_hovers.insert(
+            span.clone(),
+            format!("{signature}  matcher over {}", type_label(actual_type)),
+        );
+        Ok(signature)
     }
 
     /// The two sides of a comparison must share one runtime REPRESENTATION. A `Generic` — a

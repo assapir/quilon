@@ -102,4 +102,13 @@ function from an imported module (`<<`) — corelib included — is attributed t
 source, so a debugger steps into it. The entry frame reads `^`. A debugger steps over the
 leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
 
+The [built-in modules](../modules/README.md) (`core.io`, `core.test`, …) are embedded in
+the compiler and exist on no disk, but their DWARF still names a real-looking path —
+`corelib/http.qn`, relative to the compile directory — for a debugger to resolve a stepped-
+into corelib function against. The [language server](language-server.md)'s
+`quilon/corelibDir` request writes the embedded corelib out to a real directory in exactly
+that layout and answers with its path, so a client can point its debugger's source map at
+it; the [Visual Studio Code extension](https://github.com/assapir/quilon/tree/main/editors/vscode)
+does this automatically for every debug session it starts.
+
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)

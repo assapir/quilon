@@ -59,6 +59,11 @@ pub struct Checked {
     pub program: ast::Program,
     /// Every expression's inferred type, keyed by source position.
     pub types: typechecker::TypeTable,
+    /// Hover text for a matcher call inside `assert`/`expect` (`isOk()`, `equals(Num)`,
+    /// `not(equals(Num))`), keyed by the matcher call's own span — the ONE shape `types`
+    /// cannot answer, since checking a matcher never infers a type for the call itself. See
+    /// [`typechecker::MatcherHoverTable`].
+    pub matcher_hovers: typechecker::MatcherHoverTable,
     /// Every file the program was assembled from — the source read from `file` plus each
     /// resolved `<<` module — so any span (in the user's file or in an imported one) maps
     /// back to a path, line, and column. Shared (`Rc`) because codegen keeps it for the
@@ -233,7 +238,8 @@ fn front_end_source_reporting(
     }
 
     status.stage(Stage::Checking);
-    let types = match typechecker::TypeChecker::new().check_program(&program) {
+    let mut checker = typechecker::TypeChecker::new();
+    let types = match checker.check_program(&program) {
         Ok(types) => types,
         Err(error) => {
             return Err(FrontEndError {
@@ -242,6 +248,7 @@ fn front_end_source_reporting(
             });
         }
     };
+    let matcher_hovers = checker.take_matcher_hovers();
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
@@ -252,6 +259,7 @@ fn front_end_source_reporting(
     Ok(Checked {
         program,
         types,
+        matcher_hovers,
         sources: Rc::new(sources),
         defer,
         tests_only,
