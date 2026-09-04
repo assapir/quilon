@@ -97,7 +97,7 @@ Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`, arrays (`[]T`)
 sum types — so a debugger tells them apart.
 Each `=`/`:=` binding also opens its own nested lexical scope covering the rest of its
 enclosing block, so a debugger's Locals listing (or a hover) at a given line shows exactly
-the bindings already made by that line — never one not yet bound. Line info is multi-file: a
+the bindings already made by that line. Line info is multi-file: a
 function from an imported module (`<<`) — corelib included — is attributed to its OWN
 source, so a debugger steps into it. The entry frame reads `^`. A debugger steps over the
 leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
