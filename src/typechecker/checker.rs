@@ -76,6 +76,15 @@ pub enum TypeError {
         aliased: String,
         span: Span,
     },
+    /// A field write, or a setter-call argument the setter stores into `it`, whose value
+    /// aliases an `=` binding or a parameter — storing it where a `:=` binding already
+    /// reaches would make the frozen value writable through that binding. The same rule
+    /// as `MutableAliasOfImmutable`, checked at the store instead of the bind.
+    MutableStoreOfImmutable {
+        aliased: String,
+        parameter: bool,
+        span: Span,
+    },
     /// Calling a mutating (setter) method on an immutable (`=`-bound) receiver.
     MutatingMethodOnImmutable {
         method: String,
@@ -554,6 +563,18 @@ pub struct TypeChecker {
     // arms', computed in `check_match` WHILE each arm's pattern bindings are still in
     // scope (a later walk could no longer resolve them).
     match_aliasing: std::collections::HashMap<Span, ValueAliasing>,
+    // A lambda's own classified result aliasing (its captures, and which of its own
+    // parameters it may return), keyed by its BODY's span — computed once, while its
+    // scope is still pushed, the same way a named function's is; looked up wherever a
+    // lambda value is called without going through a named binding (an immediately
+    // invoked lambda, or a higher-order built-in's callback argument).
+    lambda_result_aliasing: std::collections::HashMap<Span, ResultAliasing>,
+    // Which of a setter's own explicit parameters (slot 1 = the first explicit
+    // parameter, the receiver being slot 0) its body stores directly into a field of
+    // `it`, keyed like `setter_methods`. A setter absent here, or missing a slot, never
+    // stores that argument — passing an `=`-bound value there is unrestricted.
+    setter_stored_parameters:
+        std::collections::HashMap<(String, String), std::collections::HashSet<usize>>,
     // Aliasing bookkeeping: each function/method/lambda body gets a fresh declaration id
     // (`declaration_counter` is the source; ids grow inward, so a nested declaration's id
     // is always greater than its encloser's). `current_declaration` is the body being
@@ -591,6 +612,8 @@ impl TypeChecker {
             unannotated_overload_member: None,
             method_result_aliasing: std::collections::HashMap::new(),
             match_aliasing: std::collections::HashMap::new(),
+            lambda_result_aliasing: std::collections::HashMap::new(),
+            setter_stored_parameters: std::collections::HashMap::new(),
             declaration_counter: 0,
             current_declaration: 0,
             test_depth: 0,
