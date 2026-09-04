@@ -50,13 +50,10 @@ enum Commands {
         #[arg(long, default_value = "clang")]
         linker: String,
         /// Emit DWARF line-number debug info (source-level debugging: gdb/lldb line
-        /// stepping, backtraces referencing `.qn` lines). Combines with `--faster`.
+        /// stepping, backtraces referencing `.qn` lines). Unoptimized, so a debugger
+        /// sees every local and steps every line.
         #[arg(short = 'g', long)]
         debug: bool,
-        /// Optimize the executable (LLVM's O3) instead of the default, unoptimized
-        /// build — for when 0.9 "stable basics" needs to actually move.
-        #[arg(long)]
-        faster: bool,
     },
     /// Check a Quilon program for errors without running
     Check {
@@ -239,7 +236,6 @@ fn main() {
             output,
             linker,
             debug,
-            faster,
         } => {
             // The source text and every file's path come from the source map the build already
             // carries; a `--debug` build additionally needs the root file's path (below).
@@ -261,14 +257,12 @@ fn main() {
                 &out,
                 &linker,
                 debug_source.as_ref(),
-                faster,
                 &status,
             ) {
                 fail_late(Code::BuildFailed, e, &status);
             }
-            let note = if faster { " — went faster" } else { "" };
             status.done(
-                &format!("{} → {}{note}", file.display(), out.display()),
+                &format!("{} → {}", file.display(), out.display()),
                 quips::pick(quips::SUCCESS),
             );
         }

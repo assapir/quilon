@@ -37,13 +37,13 @@ pub struct DebugSource<'a> {
 /// Emit a native object file for `program` at `obj_path` using LLVM's
 /// `TargetMachine`. Uses PIC relocation so string/data relocations link cleanly
 /// into a (default) PIE executable. When `debug` is `Some`, DWARF line-number info
-/// is emitted (the `--debug` build mode); otherwise the object carries no debug info.
-/// `faster` runs the LLVM O3 pass pipeline (inlining, `mem2reg`, LICM, loop
-/// optimizations, …) over the module before it is emitted, on top of `OptimizationLevel::Aggressive`
-/// backend codegen — the target-machine level alone only tunes instruction selection, not the
-/// IR-level middle-end passes that do the real work. Combines freely with `debug`: DWARF
-/// still comes out, though the optimizer may inline away or dead-code some locals a
-/// debugger could otherwise show.
+/// is emitted (the `--debug` build mode) and the object is left unoptimized — a
+/// debugger needs to see every local and step every line, which the optimizer would
+/// otherwise inline, reorder, or eliminate. Otherwise the build is optimized: LLVM's
+/// O3 pass pipeline (inlining, `mem2reg`, LICM, loop optimizations, …) runs over the
+/// module before it is emitted, alongside `OptimizationLevel::Aggressive` backend
+/// codegen — the target-machine level alone only tunes instruction selection, not
+/// the IR-level middle-end passes that do the actual optimization work.
 fn emit_object(
     program: &Program,
     types: TypeTable,
@@ -51,8 +51,8 @@ fn emit_object(
     sources: Rc<SourceMap>,
     obj_path: &Path,
     debug: Option<&DebugSource<'_>>,
-    faster: bool,
 ) -> Result<(), String> {
+    let optimize = debug.is_none();
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
 
@@ -77,7 +77,7 @@ fn emit_object(
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
-    let optimization = if faster {
+    let optimization = if optimize {
         OptimizationLevel::Aggressive
     } else {
         OptimizationLevel::None
@@ -96,7 +96,7 @@ fn emit_object(
     // The target machine's own optimization level only tunes backend codegen (instruction
     // selection, scheduling). The actual O3 work — inlining, mem2reg, LICM, loop
     // optimizations — is the middle-end pass pipeline, run explicitly here.
-    if faster {
+    if optimize {
         module
             .run_passes("default<O3>", &machine, PassBuilderOptions::create())
             .map_err(|e| format!("Failed to run the O3 optimization pipeline: {e}"))?;
@@ -332,8 +332,8 @@ fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bo
 
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC. The two stages
-/// — code generation, then the link — are announced through `status`. `faster` selects
-/// LLVM's O3 object codegen (see [`emit_object`]) instead of the unoptimized default.
+/// — code generation, then the link — are announced through `status`. Optimized (LLVM O3)
+/// unless `debug` is `Some` (see [`emit_object`]).
 #[allow(clippy::too_many_arguments)] // one call site, the CLI, which passes what it was given
 pub fn build_native(
     program: &Program,
@@ -343,12 +343,11 @@ pub fn build_native(
     out: &Path,
     linker: &str,
     debug: Option<&DebugSource<'_>>,
-    faster: bool,
     status: &Status,
 ) -> Result<(), String> {
     with_staged_object(|obj| {
         status.stage(Stage::Generating);
-        emit_object(program, types, defer, sources, obj, debug, faster)?;
+        emit_object(program, types, defer, sources, obj, debug)?;
         let rt_lib = runtime_lib_path()?;
 
         status.stage(Stage::Linking);

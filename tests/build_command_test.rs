@@ -258,14 +258,16 @@ fn documented_build_flow_produces_running_binary() {
     }
 }
 
-/// `--faster` selects LLVM's O3 object codegen. Self-tail-call lowering happens in
-/// codegen's own IR construction, not as an LLVM optimization pass, so
+/// A default `quilon build` now runs LLVM's O3 pipeline. Self-tail-call lowering happens
+/// in codegen's own IR construction, not as an LLVM optimization pass, so
 /// `tail_recursion.qn`'s 1,000,000-deep self-recursion is the sharpest check that O3
 /// hasn't disturbed it: a regression there stack-overflows instead of merely running slow.
 #[test]
-fn faster_build_produces_running_binary() {
+fn default_build_runs_the_tail_recursion_example() {
     let Some(linker) = available_linker() else {
-        eprintln!("skipping --faster build gate: need a linker (`clang` or `gcc`) on PATH");
+        eprintln!(
+            "skipping default-build tail-recursion gate: need a linker (`clang` or `gcc`) on PATH"
+        );
         return;
     };
 
@@ -273,16 +275,16 @@ fn faster_build_produces_running_binary() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("tail_recursion.qn");
-    let out: PathBuf = std::env::temp_dir().join(format!("quilon_faster_{}", std::process::id()));
+    let out: PathBuf = std::env::temp_dir().join(format!("quilon_o3_tco_{}", std::process::id()));
 
     let mut cmd = Command::new(quilon);
     cmd.args(["build", example.to_str().unwrap()])
         .args(["--linker", linker])
-        .args(["--faster", "-o", out.to_str().unwrap()]);
-    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build --faster");
+        .args(["-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
     assert!(
         build.status.success(),
-        "`quilon build --faster` failed: {}",
+        "`quilon build` failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
 
@@ -295,17 +297,17 @@ fn faster_build_produces_running_binary() {
     );
 }
 
-/// `--faster` must not be a no-op: the target machine's own optimization level only tunes
-/// backend codegen, so the real O3 work is the middle-end pass pipeline (inlining, `mem2reg`,
-/// dead-code elimination, …) run explicitly over the module. A program with an obvious
-/// inlining/elimination opportunity — a small pure helper folded through `map`/`filter`/`reduce`
-/// over a large range — makes an O3 build byte-for-byte DIFFERENT from a default build of the
-/// same source; two builds at the SAME level are deterministic and byte-identical, so this
-/// catches a regression to a target-machine-level-only "optimization" that changes nothing.
+/// A default build is optimized (O3); `--debug` is unoptimized with DWARF — the two codegen
+/// paths in `emit_object` must actually diverge. Building the same source once with no flags
+/// and once with `--debug` must not produce byte-identical output; this proves only that the
+/// two paths are not silently collapsed into one, not which pipeline ran or how much they
+/// differ.
 #[test]
-fn faster_build_changes_the_emitted_binary() {
+fn default_build_differs_from_a_debug_build_of_the_same_source() {
     let Some(linker) = available_linker() else {
-        eprintln!("skipping --faster no-op gate: need a linker (`clang` or `gcc`) on PATH");
+        eprintln!(
+            "skipping optimized/debug divergence gate: need a linker (`clang` or `gcc`) on PATH"
+        );
         return;
     };
 
@@ -317,16 +319,19 @@ double = (x :: Num) -> Num => < x * 2 >
   total > 0 ? 0 : 1
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_faster_noop_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("quilon_optdbg_diff_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let ql = dir.join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let plain = dir.join("plain");
-    let faster = dir.join("faster");
+    let optimized = dir.join("optimized");
+    let debug = dir.join("debug");
 
-    for (out, extra_args) in [(&plain, [].as_slice()), (&faster, ["--faster"].as_slice())] {
+    for (out, extra_args) in [
+        (&optimized, [].as_slice()),
+        (&debug, ["--debug"].as_slice()),
+    ] {
         let mut cmd = Command::new(quilon);
         cmd.args(["build", ql.to_str().unwrap()])
             .args(["--linker", linker])
@@ -335,7 +340,7 @@ double = (x :: Num) -> Num => < x * 2 >
         let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
         assert!(
             build.status.success(),
-            "`quilon build` failed (faster={}): {}",
+            "`quilon build` failed (debug={}): {}",
             !extra_args.is_empty(),
             String::from_utf8_lossy(&build.stderr)
         );
@@ -344,18 +349,18 @@ double = (x :: Num) -> Num => < x * 2 >
         assert_eq!(
             run.status.code(),
             Some(0),
-            "wrong exit code (faster={})",
+            "wrong exit code (debug={})",
             !extra_args.is_empty()
         );
     }
 
-    let plain_bytes = std::fs::read(&plain).expect("read plain binary");
-    let faster_bytes = std::fs::read(&faster).expect("read --faster binary");
+    let optimized_bytes = std::fs::read(&optimized).expect("read optimized binary");
+    let debug_bytes = std::fs::read(&debug).expect("read --debug binary");
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_ne!(
-        plain_bytes, faster_bytes,
-        "`--faster` produced a byte-identical binary — the O3 pass pipeline did not run"
+        optimized_bytes, debug_bytes,
+        "a default build and a --debug build produced byte-identical output"
     );
 }
 

@@ -57,17 +57,12 @@ front end runs, clearing before its case tree prints. `--reporter json` prints o
 object per event on stdout and stays silent otherwise — a plain stream for a tool, on a
 terminal too.
 
-`quilon build` produces a **self-contained** native executable that runs on a machine with the operating system alone:
+`quilon build` produces a **self-contained**, **optimized** (LLVM O3) native executable
+that runs on a machine with the operating system alone:
 ```bash
 quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
-```
-
-The default build is unoptimized. Add `--faster` to optimize the emitted object at
-LLVM's O3:
-```bash
-quilon build program.qn --faster -o program
 ```
 `quilon run` (the JIT) always runs unoptimized.
 
@@ -95,9 +90,8 @@ llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
-`--faster` and `--debug` combine (`-O3 -g`, in `cc` terms): DWARF still comes out —
-line tables survive — but the optimizer may inline away or otherwise not preserve
-some locals for inspection.
+A `--debug` build is unoptimized (O0 plus `-g`, in `cc` terms), so a debugger sees
+every local and steps every line.
 
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and

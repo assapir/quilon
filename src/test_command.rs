@@ -332,7 +332,6 @@ pub fn build_binary(root: &Path, only: &[String], out: &Path, status: &Status) -
         out,
         "clang",
         Some(&debug_source),
-        false,
         status,
     ) {
         Ok(()) => {

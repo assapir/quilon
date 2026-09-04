@@ -166,65 +166,6 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `--faster` and `--debug` combine (`-O3 -g`): the DWARF line table must still name the
-/// `.qn` source even though the object is now LLVM-O3-optimized.
-#[test]
-fn debug_and_faster_combine_and_still_carry_dwarf_line_info() {
-    let quilon = env!("CARGO_BIN_EXE_quilon");
-
-    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
-        eprintln!("skipping --debug --faster test: need a linker (`clang` or `gcc`) on PATH");
-        return;
-    };
-    if !tool_available("llvm-dwarfdump") {
-        eprintln!("skipping --debug --faster test: `llvm-dwarfdump` not on PATH");
-        return;
-    }
-    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
-
-    let src = "\nfactorial = (n :: Num) -> Num => < n <= 1 ? 1 : n * factorial(n - 1) >\n^ = () -> Num => < factorial(5) >\n";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgfaster_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
-    std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("prog");
-
-    let build = Command::new(quilon)
-        .args(["build", ql.to_str().unwrap()])
-        .args(["--linker", linker])
-        .args(["--debug", "--faster", "-o", bin.to_str().unwrap()])
-        .output()
-        .expect("run quilon build --debug --faster");
-    assert!(
-        build.status.success(),
-        "`quilon build --debug --faster --linker {linker}` failed: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    // Behavior is unchanged by O3 + debug info: `factorial(5)` == 120.
-    let run = Command::new(&bin).status().expect("run built binary");
-    assert_eq!(
-        run.code(),
-        Some(120),
-        "an O3 + debug build changed program behavior"
-    );
-
-    // `.debug_line`: the line-number program must still name the `.qn` source file.
-    let line = Command::new("llvm-dwarfdump")
-        .arg("--debug-line")
-        .arg(&bin)
-        .output()
-        .expect("run llvm-dwarfdump --debug-line");
-    assert!(line.status.success(), "llvm-dwarfdump --debug-line failed");
-    let line_out = String::from_utf8_lossy(&line.stdout);
-    assert!(
-        line_out.contains("prog.qn"),
-        "expected the `.qn` file in the DWARF line table under --faster --debug, got:\n{line_out}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// The own attributes of every `DW_TAG_subprogram` in `dump`, as `(name, decl_file,
 /// artificial)`. A subprogram's own `DW_AT_name`/`DW_AT_decl_file`/`DW_AT_artificial` all
 /// precede its first child DIE, so reading each subprogram block only up to the next
