@@ -785,12 +785,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Under `--debug`, a `{ }` block introduces a nested lexical scope so its locals nest
         // under a `DW_TAG_lexical_block` rather than the function directly (a no-op otherwise).
         let saved_scope = self.begin_di_lexical_block(span);
-        let mut result = self.context.f64_type().const_float(0.0).into();
+        // A block whose last statement is a declaration evaluates to `$` (Unit) — see
+        // `docs/expressions/README.md` § Blocks. Default to that value and only overwrite
+        // it when a later statement is an expression, so it stands as the block's result
+        // exactly when the tail is a declaration (matching the checker's inferred type).
+        let mut result: BasicValueEnum = self.unit_value().into();
 
         for (index, statement) in statements.iter().enumerate() {
             match statement {
                 crate::ast::Statement::Item(item) => {
                     self.generate_item(item)?;
+                    result = self.unit_value().into();
                 }
                 crate::ast::Statement::Expression(expression) => {
                     // A non-final statement's value is discarded, so a `(lo <- hi).each(f)`

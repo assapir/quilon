@@ -85,11 +85,6 @@ struct Capture<'ctx> {
     slot: PointerValue<'ctx>,
     value_ty: BasicTypeEnum<'ctx>,
     by_ref: bool,
-    /// If the captured value is itself a closure, its recorded signature
-    /// (parameter types, return type) so the lifted body can re-register it and call it. A
-    /// closure value is an opaque `{ ptr, ptr }` struct that does not encode its callee
-    /// signature, and the lifted body starts with a cleared `closure_sigs`.
-    closure_sig: Option<ClosureSig<'ctx>>,
 }
 
 /// The per-function emission state: every map keyed by a *variable* name, valid only
@@ -104,7 +99,6 @@ struct FrameState<'ctx> {
     record_types: HashMap<String, Vec<String>>,
     var_named_types: HashMap<String, String>,
     var_types: HashMap<String, Type>,
-    closure_sigs: HashMap<String, ClosureSig<'ctx>>,
     boxed_vars: std::collections::HashSet<String>,
 }
 
@@ -152,12 +146,6 @@ pub struct CodeGenerator<'ctx> {
     // Monotonic counter for naming the lifted top-level function of each lambda
     // (`__lambda_0`, `__lambda_1`, …). Lambdas have no source name of their own.
     lambda_counter: usize,
-    // Signature of each local variable currently bound to a closure value:
-    // (source-parameter LLVM types, return LLVM type). A closure value is an opaque
-    // `{ ptr fn, ptr env }` struct that does not encode its callee signature, so calling
-    // one needs the signature recovered here (recorded when the lambda is bound). The
-    // trailing env-pointer parameter is implicit and not stored. Cleared per function.
-    closure_sigs: HashMap<String, ClosureSig<'ctx>>,
     // The type oracle: authoritative inferred types for every expression, keyed by span,
     // produced by the type checker (see `TypeOracle`). Codegen consults it at READ sites
     // (array index, record-field access, match-arm result) to recover the *declared*
@@ -355,7 +343,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             current_function: None,
             boxed_vars: std::collections::HashSet::new(),
             lambda_counter: 0,
-            closure_sigs: HashMap::new(),
             oracle: TypeOracle::default(),
             defer: crate::deferral::DeferInfo::default(),
             aot: false,
@@ -943,7 +930,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             record_types: std::mem::take(&mut self.record_types),
             var_named_types: std::mem::take(&mut self.var_named_types),
             var_types: std::mem::take(&mut self.var_types),
-            closure_sigs: std::mem::take(&mut self.closure_sigs),
             boxed_vars: std::mem::take(&mut self.boxed_vars),
         }
     }
@@ -954,7 +940,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.record_types = frame.record_types;
         self.var_named_types = frame.var_named_types;
         self.var_types = frame.var_types;
-        self.closure_sigs = frame.closure_sigs;
         self.boxed_vars = frame.boxed_vars;
     }
 }

@@ -3,6 +3,22 @@ use crate::lexer::Lexer;
 use crate::parser::parse;
 use crate::typechecker::{TypeChecker, TypeTable};
 
+/// Type-check `code`, then generate it with the checker's type-oracle wired in — the
+/// path every real compilation takes. Codegen reads a function/block's type from the
+/// oracle rather than re-deriving it, so a test exercising that (return types, a block
+/// ending in a declaration) must run the checker first, exactly like `quilon run` does.
+fn generate_checked(code: &str) -> Result<String, String> {
+    let tokens = Lexer::tokenize(code).unwrap();
+    let program = parse(&tokens).unwrap();
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .unwrap_or_else(|e| panic!("type check failed: {:?}", e));
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+    codegen.set_type_table(types);
+    codegen.generate(&program)
+}
+
 /// A hand-built oracle entry for every `pattern` substring's byte range in `code`, typed
 /// `[]Num` — for a test that asks codegen a question WITHOUT running the type checker
 /// (so a checker rejection elsewhere in the program cannot pre-empt what codegen itself
@@ -54,14 +70,8 @@ fn test_simple_function() {
 
 #[test]
 fn test_local_variable() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     let code = "double = x :: Num => < y = x + x y >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     assert!(result.is_ok());
 
     let ir = result.unwrap();
@@ -74,22 +84,9 @@ fn test_local_variable() {
 
 #[test]
 fn test_array() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // Test array in a function body - return the first element as a number
     let code = "sum = x :: Num => < arr = [x, x, x] x >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-    // The array literal's element type comes from the checker's type-oracle, so this
-    // test must run the checker first (an array literal with no oracle entry is a
-    // hard codegen error, not a fallback).
-    let types = TypeChecker::new()
-        .check_program(&program)
-        .unwrap_or_else(|e| panic!("type check failed: {:?}", e));
-    codegen.set_type_table(types);
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }
@@ -103,18 +100,12 @@ fn test_array() {
 
 #[test]
 fn test_function_call() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // Test calling a function
     let code = "
         add = (a :: Num, b :: Num) => < a + b >
         main = => < add(3, 4) >
     ";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }
@@ -129,15 +120,9 @@ fn test_function_call() {
 
 #[test]
 fn test_record() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // Test record creation
     let code = "make_point = (x :: Num, y :: Num) => < p = {x = x, y = y} x >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }
@@ -151,15 +136,9 @@ fn test_record() {
 
 #[test]
 fn test_field_access() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // Test field access
     let code = "get_x = (a :: Num, b :: Num) => < p = {x = a, y = b} p.x >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }
@@ -173,9 +152,6 @@ fn test_field_access() {
 
 #[test]
 fn test_method_codegen_and_dispatch() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // A named record with a method; the entry point constructs an instance and calls it.
     // All fields are Num so the field layout/access is exact.
     let code = "Point = {
@@ -188,10 +164,7 @@ fn test_method_codegen_and_dispatch() {
   p = Point { x = 3, y = 4 }
   p.sum()
 >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }
@@ -207,9 +180,6 @@ fn test_method_codegen_and_dispatch() {
 
 #[test]
 fn test_method_calls_sibling_method() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     // `doubled` calls the sibling method `sum` via `it.sum()` — exercises the signature
     // pre-pass (forward reference) and `it`-based dispatch.
     let code = "Point = {
@@ -223,10 +193,7 @@ fn test_method_calls_sibling_method() {
   p = Point { x = 10, y = 5 }
   p.doubled()
 >";
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked(code);
     if let Err(e) = &result {
         println!("Error: {}", e);
     }

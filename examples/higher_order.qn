@@ -23,6 +23,9 @@ run = (action :: () -> $) -> $ => <
   action()
 >
 
+~ Returns a closure over `n` — used below to build an ARRAY of closures.
+adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >
+
 ^ = () -> $ => <
   ~ `apply`'s `(Num) -> Num` parameter is what types `n`.
   assert(apply(10, (n) => n + 1), equals(11))
@@ -48,4 +51,12 @@ run = (action :: () -> $) -> $ => <
   >
   run(tick)
   assert(total, equals(10))
+
+  ~ An array of closures, called through a LAMBDA PARAMETER inside `.map`: each `f`
+  ~ is bound from an array element, not from a name or a top-level declaration, and
+  ~ still dispatches as a closure call.
+  fs = [adder(1), adder(2)]
+  results = fs.map(f => f(10))
+  assert(results[0], equals(11))
+  assert(results[1], equals(12))
 >

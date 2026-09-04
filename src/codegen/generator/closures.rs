@@ -9,19 +9,13 @@ use super::*;
 impl<'ctx> CodeGenerator<'ctx> {
     /// Bind a capturing nested function as a local closure value: lower it via the lambda
     /// machinery (capturing enclosing locals per the `=`/`:=` rule) and store the
-    /// resulting `{ ptr fn, ptr env }` in a local slot, recording its signature so
-    /// `name(args)` resolves to an indirect closure call.
+    /// resulting `{ ptr fn, ptr env }` in a local slot. `name(args)` then resolves to an
+    /// indirect closure call from the checker's recorded `Type::Function` for that
+    /// identifier — nothing further is recorded here.
     pub(super) fn generate_local_closure(
         &mut self,
         declaration: &FunctionDeclaration,
     ) -> Result<(), String> {
-        let sig = self.closure_signature(
-            &declaration.parameters,
-            declaration.declared_return_type(),
-            &declaration.body,
-        )?;
-        self.closure_sigs.insert(declaration.name.clone(), sig);
-
         let closure = self.generate_lambda(
             &declaration.parameters,
             declaration.declared_return_type(),
@@ -364,57 +358,43 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// The expression a body evaluates to: a block's is its tail statement, so that is the
-    /// one carrying the body's type.
-    fn body_value(body: &Expression) -> &Expression {
-        match body {
-            Expression::Block { statements, .. } => match statements.last() {
-                Some(crate::ast::Statement::Expression(tail)) => Self::body_value(tail),
-                _ => body,
-            },
-            _ => body,
-        }
-    }
-
-    /// The default return TYPE codegen assigns a function with the given (possibly
-    /// missing) return annotation and body: the annotation if present, else `$` (Unit)
-    /// for a Unit-tailed body, else `Num`. Codegen lacks the checker's full inference, so
-    /// this picks the LLVM-level return type for an unannotated function/lambda/method.
-    /// (The entry point `^` is handled separately — it always returns an f64 exit code.)
+    /// The return TYPE codegen assigns a function with the given (possibly missing) return
+    /// annotation and body: the annotation if present, else the checker's recorded type for
+    /// the body. (The entry point `^` is handled separately — it always returns an f64 exit
+    /// code.)
     pub(super) fn default_return_type(
         &self,
         return_type: Option<&Type>,
         body: &Expression,
-    ) -> Type {
-        // The oracle records types by span, and a block has none of its own — so ask about
-        // the expression the body evaluates to. Every function body is a block, so without
-        // this an unannotated `make = () => < Ok("hello") >` lowers its return to the `Num`
-        // fallback and the payload a downstream match binds is the wrong shape.
-        let body = Self::body_value(body);
+    ) -> Result<Type, String> {
+        // The checker records a block's OWN span with its resolved type (the same type its
+        // tail carries), so the oracle answers directly for `body` — a function body is
+        // always a block, and a lambda's bare-expression body is looked up the same way.
         match return_type {
             // A GENERIC annotation — only `-> Result`, whose `Ok(T)`/`NotOk(E)` payload
             // slots are type variables the language can't otherwise name — is refined to
             // the body's concrete type from the oracle, so the LLVM return matches the
             // value the body actually produces (`Ok("x")` => `{ i8, Text }`, not the
             // generic `{ i8, double }`). Mirrors the checker refining a generic return.
-            Some(t) if t.contains_generic() => self
+            Some(t) if t.contains_generic() => Ok(self
                 .oracle
                 .expression_type(body)
                 .cloned()
-                .unwrap_or_else(|| t.clone()),
+                .unwrap_or_else(|| t.clone())),
             // A concrete annotation is authoritative.
-            Some(t) => t.clone(),
-            None if self.expression_is_unit(body) => Type::Unit,
+            Some(t) => Ok(t.clone()),
             // Unannotated: the oracle holds the checker's inferred body type (concrete,
-            // including a specialized Result payload such as `Result[Ok(Text)]`), so a
-            // function returning `Ok("x")` lowers its return to the payload's real shape
-            // and a downstream match binds it usably. Fall back to `Num` for the IR-only
-            // codegen tests that run without a type-check pass.
-            None => self
-                .oracle
-                .expression_type(body)
-                .cloned()
-                .unwrap_or(Type::Num),
+            // including a specialized Result payload such as `Result[Ok(Text)]`, and `$`
+            // for a block whose last statement is a declaration), so a function returning
+            // `Ok("x")` lowers its return to the payload's real shape and a downstream
+            // match binds it usably. A missing entry means this body never went through
+            // the checker — a compiler bug, not something to guess past.
+            None => self.oracle.expression_type(body).cloned().ok_or_else(|| {
+                format!(
+                    "no type recorded for an unannotated function body at {:?} — it was not type-checked",
+                    body.span()
+                )
+            }),
         }
     }
 
@@ -431,7 +411,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .iter()
             .map(|p| self.boundary_type(&self.parameter_type(p)))
             .collect::<Result<Vec<_>, _>>()?;
-        let ret = self.default_return_type(return_type, body);
+        let ret = self.default_return_type(return_type, body)?;
         Ok((parameter_types, self.boundary_type(&ret)?))
     }
 
@@ -465,13 +445,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (it has module scope) and needs no capture.
             if let Some((slot, value_ty)) = self.variables.get(&name).copied() {
                 let by_ref = self.boxed_vars.contains(&name);
-                let closure_sig = self.closure_sigs.get(&name).cloned();
                 captures.push(Capture {
                     name,
                     slot,
                     value_ty,
                     by_ref,
-                    closure_sig,
                 });
             }
         }
@@ -610,7 +588,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to store parameter"))?;
             self.variables.insert(parameter.name.clone(), (alloca, pty));
             let qty = self.parameter_type(parameter);
-            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,
@@ -668,12 +645,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         None,
                     );
                 }
-                // If the captured value is itself a closure, re-register its signature so
-                // a `name(args)` inside this lifted body resolves to an indirect call (the
-                // lifted body began with a cleared `closure_sigs`).
-                if let Some(sig) = &cap.closure_sig {
-                    self.closure_sigs.insert(cap.name.clone(), sig.clone());
-                }
             }
         }
 
@@ -698,37 +669,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
-    /// Call a closure value held in local variable `var_name`: load its
-    /// `{ ptr fn, ptr env }` struct from the slot and call through it. `parameter_tys`
-    /// / `ret_ty` are the closure's recorded signature (excluding the implicit env parameter).
-    pub(super) fn generate_closure_call(
-        &mut self,
-        var_name: &str,
-        parameter_tys: &[BasicTypeEnum<'ctx>],
-        ret_ty: BasicTypeEnum<'ctx>,
-        args: &[Expression],
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        if args.len() != parameter_tys.len() {
-            return Err(format!(
-                "closure `{}` expects {} argument(s), got {}",
-                var_name,
-                parameter_tys.len(),
-                args.len()
-            ));
-        }
-        let closure_ty = self.closure_struct_type();
-        let (slot, _) = *self.variables.get(var_name).expect("closure var bound");
-        let closure_val = self
-            .builder
-            .build_load(closure_ty, slot, var_name)
-            .map_err(ctx("Failed to load closure"))?
-            .into_struct_value();
-        self.call_closure_value(closure_val, parameter_tys, ret_ty, args)
-    }
-
-    /// Call a function-valued EXPRESSION — `adder(5)(2)`, or any callee that is not a
-    /// bare name: generate it to a closure `{ ptr fn, ptr env }` value and call through
-    /// it, recovering the callee signature from the oracle's type for the expression.
+    /// Call a function-valued EXPRESSION — a local variable holding a closure, a call on
+    /// a call (`adder(5)(2)`), or any other callee that is not a plain top-level function
+    /// name: generate it to a closure `{ ptr fn, ptr env }` value and call through it,
+    /// recovering the callee signature from the oracle's recorded type for the expression.
     pub(super) fn generate_closure_value_call(
         &mut self,
         function: &Expression,

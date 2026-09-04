@@ -29,7 +29,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // stored as a zero of the slot type so the value still matches the slot/return shape
         // (e.g. `Ok($)` packs a zeroed slot) — the bits are never read.
         let i8_type = self.context.i8_type();
-        let f64_type = self.context.f64_type();
         let registered_layout = self.sum_layouts.get(type_name).cloned();
 
         let tag_val = i8_type.const_int(tag as u64, false);
@@ -51,11 +50,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // With a registered layout (user type), the slot type is fixed by position.
             // Without one, the slot follows the value's own type so a Text/Bool payload
-            // keeps its real representation — except a `$` (Unit) value, which is
-            // zero-sized and defaults to the canonical `double` slot.
+            // keeps its real representation — `payload_slot_type` already widens a `$`
+            // (Unit) value's `i8` to the canonical `double` slot, same as any other
+            // non-Bool integer.
             let slot_ty = match registered_layout.as_ref().and_then(|l| l.get(pos).copied()) {
                 Some(ty) => ty,
-                None if self.expression_is_unit(arg) => f64_type.into(),
                 None => self.payload_slot_type(arg_val),
             };
             payload_vals.push(self.coerce_payload(arg_val, slot_ty)?);
