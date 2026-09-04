@@ -350,7 +350,7 @@ fn reassigning_a_mutable_binding_to_a_frozen_value_is_rejected() {
     );
 }
 
-// --- Route 7: a store into an existing container, in both directions (#326). ---
+// --- Route 7: a store into an existing container, in both directions. ---
 
 #[test]
 fn a_field_write_storing_an_immutable_record_into_a_mutable_container_is_rejected() {
@@ -407,7 +407,7 @@ fn run_a_setter_reading_only_a_scalar_field_of_its_parameter_accepts_an_immutabl
     );
 }
 
-// --- Route 8: lambdas, higher-order calls, and closures returning a capture (#327). ---
+// --- Route 8: lambdas, higher-order calls, and closures returning a capture. ---
 
 #[test]
 fn a_map_callback_returning_a_captured_immutable_value_is_rejected() {
@@ -567,5 +567,84 @@ fn a_branch_selected_closure_that_may_return_a_capture_is_rejected() {
     assert!(
         error.contains("'c' is immutable"),
         "expected the branch-selected closure's result to name 'c', got: {error}"
+    );
+}
+
+// --- Route 13: a setter forwarding its own parameter to a NESTED setter on `it`. ---
+
+#[test]
+fn run_a_setter_forwarding_a_fresh_argument_to_a_nested_setter_stays_legal() {
+    // `put` forwards its parameter `k` to `it.inner.set(k)`, a setter that itself
+    // stores its parameter into `it`. `k` is `put`'s own parameter — unknown at `put`'s
+    // definition — so the store check defers to `put`'s own callers instead of
+    // rejecting it unconditionally, the same way a direct `it.field := k` write would.
+    assert_exit(
+        "Counter = { value :: Num }\nInner = { item :: Counter, set := (k :: Counter) => < it.item := k > }\nBox = { inner :: Inner, put := (k :: Counter) => < it.inner.set(k) > }\n^ = () -> Num => <\n  b := Box { inner = Inner { item = Counter { value = 1 } } }\n  b.put(Counter { value = 5 })\n  b.inner.item.value\n>",
+        5,
+    );
+}
+
+#[test]
+fn a_setter_forwarding_an_immutable_argument_to_a_nested_setter_is_rejected() {
+    // The deferred check lands on `put`'s OWN callers: passing an `=`-bound value into
+    // `put` reaches `it.item` two calls deep, exactly as if `put` had written it there
+    // directly.
+    let error = type_error_message(
+        "Counter = { value :: Num }\nInner = { item :: Counter, set := (k :: Counter) => < it.item := k > }\nBox = { inner :: Inner, put := (k :: Counter) => < it.inner.set(k) > }\n^ = () -> Num => <\n  c = Counter { value = 30 }\n  b := Box { inner = Inner { item = Counter { value = 1 } } }\n  b.put(c)\n  b.inner.item.value := 9\n  c.value\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the forwarded-argument store to name 'c' under QN341, got: {error}"
+    );
+}
+
+// --- Route 14: `it` is an ordinary identifier — a `:=` local named `it` is not the receiver. ---
+
+#[test]
+fn a_field_write_through_a_plain_local_named_it_is_still_checked() {
+    // `it` is not a keyword: a `:=` local outside any method that happens to be named
+    // `it` is an ordinary mutable binding, not a setter's receiver — the store check
+    // must not defer to it as though it were.
+    let error = type_error_message(
+        "T = { value :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  c = T { value = 30 }\n  it := Box { item = T { value = 1 } }\n  it.item := c\n  c.value\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the plain-local field write to name 'c' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn a_setter_call_through_a_plain_local_named_it_is_still_checked() {
+    let error = type_error_message(
+        "T = { value :: Num }\nBox = { item :: T, put := (k :: T) => < it.item := k > }\n^ = () -> Num => <\n  c = T { value = 30 }\n  it := Box { item = T { value = 1 } }\n  it.put(c)\n  c.value\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'c' is immutable"),
+        "expected the plain-local setter call to name 'c' under QN341, got: {error}"
+    );
+}
+
+// --- Route 15: a closure three levels deep, returning a captured value. ---
+
+#[test]
+fn a_closure_three_levels_deep_returning_a_captured_value_is_rejected() {
+    // `mk`'s own body is a lambda returning another lambda, which in turn returns the
+    // captured local `c` — one syntactic level past the two-level case already covered
+    // above, classified through the same rule at each level.
+    let error = type_error_message(
+        "T = { value :: Num }\nmk = () -> () -> () -> T => <\n  c = T { value = 30 }\n  () -> () -> T => <\n    () -> T => < c >\n  >\n>\n^ = () -> Num => <\n  x := mk()()()\n  x.value\n>",
+    );
+    assert!(
+        error.contains("'c' is immutable"),
+        "expected the three-level closure's result to name 'c', got: {error}"
+    );
+}
+
+#[test]
+fn run_a_closure_three_levels_deep_returning_a_fresh_value_binds_mutably() {
+    assert_exit(
+        "T = { value :: Num }\nmk = () -> () -> () -> T => <\n  () -> () -> T => <\n    () -> T => < T { value = 9 } >\n  >\n>\n^ = () -> Num => <\n  x := mk()()()\n  x.value\n>",
+        9,
     );
 }

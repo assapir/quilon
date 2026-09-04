@@ -32,6 +32,11 @@ pub struct ValueAliasing {
     /// `:=` binding there, and a result built from it inherits the argument's mutability
     /// at each call site.
     pub(super) parameters: Vec<(u64, usize, String)>,
+    /// Whether this value's aliasing reaches the ENCLOSING setter's own receiver `it` —
+    /// a flag, not a name lookup, because `it` is an ordinary identifier (not a
+    /// keyword): a `:=` local that happens to be named `it` is an ordinary mutable
+    /// binding, not the receiver, however its name reads.
+    pub(super) reaches_setter_receiver: bool,
 }
 
 impl ValueAliasing {
@@ -39,6 +44,7 @@ impl ValueAliasing {
         self.mutable.extend(other.mutable);
         self.immutable.extend(other.immutable);
         self.parameters.extend(other.parameters);
+        self.reaches_setter_receiver |= other.reaches_setter_receiver;
     }
 
     /// A binding whose immutability forbids reaching this value through `:=` — a
@@ -115,6 +121,7 @@ impl TypeChecker {
                     // gate enforces it), and outlives the call — never dropped by the
                     // return filter, which is why it is owned by the enclosing declaration.
                     out.mutable.push((symbol.owner, name.clone()));
+                    out.reaches_setter_receiver = true;
                     return out;
                 }
                 out = symbol.value_aliasing.clone();
@@ -513,13 +520,25 @@ impl TypeChecker {
         result
     }
 
-    /// Classify a lambda's own captures — via [`Self::declaration_result_aliasing`] — and
-    /// cache them keyed by the BODY's span, for [`Self::callable_result_aliasing`] to find
-    /// later at a call site the lambda itself never sees (an immediately invoked lambda, or
-    /// a higher-order built-in's callback argument). Run while the lambda's scope is still
-    /// pushed and BEFORE it pops, the same window `declaration_result_aliasing` needs.
+    /// Classify a lambda's own captures and cache them keyed by the BODY's span, for
+    /// [`Self::callable_result_aliasing`] to find later at a call site the lambda itself
+    /// never sees (an immediately invoked lambda, or a higher-order built-in's callback
+    /// argument). Run while the lambda's scope is still pushed and BEFORE it pops, the
+    /// same window `declaration_result_aliasing` needs.
+    ///
+    /// A lambda whose OWN body is itself a closure (`() -> () -> T => < () -> T => < c > >`,
+    /// three levels of nesting) is classified the same way `check_function_declaration`
+    /// classifies a function returning one: through what CALLING the returned closure
+    /// aliases, re-bucketed as this lambda's own — `declaration_result_aliasing` alone
+    /// would see a `Type::Function` body and answer fresh, the same gap a closure-
+    /// returning named function has without that branch.
     pub(super) fn record_lambda_result_aliasing(&mut self, body: &Expression, body_type: &Type) {
-        let captured_aliasing = self.declaration_result_aliasing(body, body_type);
+        let captured_aliasing = match body_type {
+            Type::Function { .. } => {
+                self.reclassify_returned_closure(self.callable_result_aliasing(body))
+            }
+            _ => self.declaration_result_aliasing(body, body_type),
+        };
         if captured_aliasing != ResultAliasing::default() {
             self.lambda_result_aliasing
                 .insert(body.span().clone(), captured_aliasing);
@@ -533,6 +552,25 @@ impl TypeChecker {
         self.value_aliasing(receiver)
             .immutable_witness()
             .map(|(name, _)| name.to_string())
+    }
+
+    /// A store across the line is a compile error at the store: `value` may not alias an
+    /// `=` binding or a parameter once it is confirmed reaching a `:=`-reachable
+    /// container — the shared check behind a field write's stored value and a setter
+    /// argument the setter stores into `it`.
+    pub(super) fn check_store_not_crossing(
+        &self,
+        value: &Expression,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if let Some((witness, parameter)) = self.value_aliasing(value).immutable_witness() {
+            return Err(TypeError::MutableStoreOfImmutable {
+                aliased: witness.to_string(),
+                parameter,
+                span: span.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Enter a new declaration (function, method, or lambda) for aliasing bookkeeping;

@@ -647,26 +647,66 @@ impl TypeChecker {
     fn setter_stored_parameter_slots(&self, body: &Expression) -> std::collections::HashSet<usize> {
         let mut slots = std::collections::HashSet::new();
         let _ = try_for_each_subexpression(body, &mut |expression| {
-            // A write reaches `it` however its target got there — a plain field chain
-            // (`it.item := …`) or one hopping through an element read
-            // (`it.items[i].sub := …`) — so this reads the target's resolved MUTABLE
-            // WITNESS rather than walking its own path (`field_path_root_name` only sees
-            // a chain of plain field accesses, missing an `Index` hop).
-            if let Expression::FieldAssign { target, value, .. } = expression
-                && let Expression::FieldAccess {
-                    expression: base, ..
-                } = target.as_ref()
-                && self.value_aliasing(base).mutable_witness() == Some(crate::ast::RECEIVER)
-            {
-                for (declaration, slot, _) in self.value_aliasing(value).parameters {
-                    if declaration == self.current_declaration {
-                        slots.insert(slot);
+            match expression {
+                // A write reaches `it` however its target got there — a plain field chain
+                // (`it.item := …`) or one hopping through an element read
+                // (`it.items[i].sub := …`) — so this reads the target's resolved MUTABLE
+                // WITNESS rather than walking its own path (`field_path_root_name` only
+                // sees a chain of plain field accesses, missing an `Index` hop).
+                Expression::FieldAssign { target, value, .. } => {
+                    if let Expression::FieldAccess {
+                        expression: base, ..
+                    } = target.as_ref()
+                        && self.value_aliasing(base).reaches_setter_receiver
+                    {
+                        self.record_stored_slot(value, &mut slots);
                     }
                 }
+                // A call to a stored-slot setter on an `it`-reachable receiver
+                // (`it.inner.set(k)`) is the same store one call deeper: whichever of
+                // ITS parameters `set` itself stores into `it` (already classified —
+                // `set` type-checked before this setter, either an earlier-declared
+                // type or an earlier sibling method; a later sibling calling forward is
+                // already `UnknownMember` before this walk ever runs) makes the
+                // MATCHING ARGUMENT here reach `it` too.
+                Expression::Call {
+                    function,
+                    arguments,
+                    member_call: true,
+                    ..
+                } => {
+                    if let Expression::Identifier { name: method, .. } = function.as_ref()
+                        && let Some(receiver) = arguments.first()
+                        && self.value_aliasing(receiver).reaches_setter_receiver
+                        && let Some(Type::Named {
+                            name: type_name, ..
+                        }) = self.type_table.get(receiver.span())
+                        && let Some(nested_stored_slots) = self
+                            .setter_stored_parameters
+                            .get(&(type_name.clone(), method.clone()))
+                    {
+                        for (slot, argument) in arguments[1..].iter().enumerate() {
+                            if nested_stored_slots.contains(&(slot + 1)) {
+                                self.record_stored_slot(argument, &mut slots);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
             ControlFlow::<()>::Continue(())
         });
         slots
+    }
+
+    /// Which of THIS setter's own parameters `value`'s aliasing includes, recorded into
+    /// `slots` — shared by a direct field write and a nested stored-slot setter call.
+    fn record_stored_slot(&self, value: &Expression, slots: &mut std::collections::HashSet<usize>) {
+        for (declaration, slot, _) in self.value_aliasing(value).parameters {
+            if declaration == self.current_declaration {
+                slots.insert(slot);
+            }
+        }
     }
 
     pub(super) fn check_variable_declaration(

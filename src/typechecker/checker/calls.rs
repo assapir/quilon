@@ -367,6 +367,7 @@ impl TypeChecker {
                         name,
                         &method_parameters,
                         call_args,
+                        &arguments[0],
                         span,
                     )?;
 
@@ -501,12 +502,23 @@ impl TypeChecker {
         method_name: &str,
         method_parameters: &[Parameter],
         call_args: &[Expression],
+        receiver: &Expression,
         span: &Span,
     ) -> Result<(), TypeError> {
-        let stored_parameter_slots = self
-            .setter_stored_parameters
-            .get(&(type_name.to_string(), method_name.to_string()))
-            .cloned();
+        // A receiver reaching THIS setter's own `it` defers the whole store check to the
+        // enclosing setter's own callers, exactly like a direct `it.field := parameter`
+        // write does: `it` is always mutable regardless of caller, so checking a stored
+        // argument against it here would reject a parameter unconditionally.
+        // `setter_stored_parameter_slots` walks this same call and records the matching
+        // parameter as the ENCLOSING setter's own stored slot, so the check still runs —
+        // one call further out, against the caller's real argument.
+        let stored_parameter_slots = if self.value_aliasing(receiver).reaches_setter_receiver {
+            None
+        } else {
+            self.setter_stored_parameters
+                .get(&(type_name.to_string(), method_name.to_string()))
+                .cloned()
+        };
         for (slot, (parameter, arg)) in method_parameters.iter().zip(call_args.iter()).enumerate() {
             let raw_type = parameter
                 .type_annotation
@@ -522,13 +534,8 @@ impl TypeChecker {
             if stored_parameter_slots
                 .as_ref()
                 .is_some_and(|slots| slots.contains(&(slot + 1)))
-                && let Some((witness, is_parameter)) = self.value_aliasing(arg).immutable_witness()
             {
-                return Err(TypeError::MutableStoreOfImmutable {
-                    aliased: witness.to_string(),
-                    parameter: is_parameter,
-                    span: span.clone(),
-                });
+                self.check_store_not_crossing(arg, span)?;
             }
         }
         Ok(())

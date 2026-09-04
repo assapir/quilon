@@ -337,7 +337,7 @@ impl TypeChecker {
                 //
                 // A write reaching the receiver `it` is excluded — however it is reached,
                 // an element read (`it.items[i].x := v`) included, which is why this
-                // reads the resolved MUTABLE WITNESS rather than walking the target's own
+                // reads the resolved MUTABLE witness rather than walking the target's own
                 // path (`field_path_root_name` only sees a chain of plain field
                 // accesses). Inside a SETTER, `it` is always this mutable, so a parameter
                 // stored there is exactly the deferred case
@@ -348,16 +348,13 @@ impl TypeChecker {
                 if let Expression::FieldAccess {
                     expression: base, ..
                 } = target.as_ref()
-                    && let Some(mutable_witness) = self.value_aliasing(base).mutable_witness()
-                    && mutable_witness != crate::ast::RECEIVER
-                    && let Some((witness, parameter)) =
-                        self.value_aliasing(value).immutable_witness()
                 {
-                    return Err(TypeError::MutableStoreOfImmutable {
-                        aliased: witness.to_string(),
-                        parameter,
-                        span: span.clone(),
-                    });
+                    let base_aliasing = self.value_aliasing(base);
+                    if base_aliasing.mutable_witness().is_some()
+                        && !base_aliasing.reaches_setter_receiver
+                    {
+                        self.check_store_not_crossing(value, span)?;
+                    }
                 }
 
                 // A field write is an effect; its value is the unit type `$`.
