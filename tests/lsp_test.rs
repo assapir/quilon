@@ -1,12 +1,13 @@
 //! The language server's per-capability analysis, driven directly: diagnostics, hover,
-//! go-to-definition (including across an import), semantic tokens, and test lenses.
+//! go-to-definition (including across an import), completion, semantic tokens, and test
+//! lenses.
 
 use std::path::{Path, PathBuf};
 
 use quilon::lexer::ROOT_FILE;
 use quilon::lsp::analysis::{
-    self, SemanticTokenKind, TestLensKind, check_text, definition_at, hover_at, is_identifier,
-    references_at, semantic_tokens, test_lenses,
+    self, CompletionKind, SemanticTokenKind, TestLensKind, check_text, completions_at,
+    definition_at, hover_at, is_identifier, references_at, semantic_tokens, test_lenses,
 };
 
 /// A unique temporary directory for a test that needs real files (import resolution).
@@ -448,6 +449,10 @@ fn started_session() -> (lsp_server::Connection, std::thread::JoinHandle<()>) {
             .as_bool()
             .unwrap_or(false)
     );
+    assert_eq!(
+        initialized["capabilities"]["completionProvider"]["triggerCharacters"],
+        serde_json::json!(["."])
+    );
     client
         .sender
         .send(lsp_notification("initialized", serde_json::json!({})))
@@ -797,6 +802,252 @@ fn a_num_plus_text_diagnostic_carries_its_code_and_related_operand_labels() {
         .send(lsp_notification("exit", serde_json::Value::Null))
         .unwrap();
     served.join().expect("the server thread joins");
+}
+
+// --- Completion ---------------------------------------------------------------
+//
+// Every case below inserts the marker `HERE` right where the cursor sits — a bare word
+// (case 1) or the start of a member name (cases 2/3) actually being typed, so `HERE`'s
+// own end is the byte offset a client's completion request would carry, and the
+// document with `HERE` in it is exactly the (unparseable, mid-edit) buffer
+// `completions_at` has to work from.
+
+/// Case 1: locals and parameters of the enclosing scopes, top-level functions/types
+/// defined above the cursor (never the enclosing `^` itself), a sum type's constructors,
+/// and an import's binding.
+#[test]
+fn completions_in_scope_list_locals_top_level_names_sum_constructors_and_imports() {
+    let text = "double = (x :: Num) -> Num => < x * 2 >\n\
+Color = Red / Green / Blue\n\
+<< core.io\n\n\
+^ = () -> Num => <\n  y = 3\n  HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+
+    assert!(labels.contains("y"), "a local above the cursor: {labels:?}");
+    assert!(
+        labels.contains("double"),
+        "a top-level function above the cursor: {labels:?}"
+    );
+    assert!(
+        labels.contains("Color"),
+        "a top-level type above the cursor: {labels:?}"
+    );
+    assert!(labels.contains("Red") && labels.contains("Green") && labels.contains("Blue"));
+    assert!(
+        labels.contains("io"),
+        "the import's own binding: {labels:?}"
+    );
+    assert!(
+        !labels.contains("^"),
+        "the enclosing definition is excluded from its own body: {labels:?}"
+    );
+
+    let y = items.iter().find(|item| item.label == "y").unwrap();
+    assert_eq!(y.kind, CompletionKind::Variable);
+    let double = items.iter().find(|item| item.label == "double").unwrap();
+    assert_eq!(double.kind, CompletionKind::Function);
+    assert_eq!(double.detail.as_deref(), Some("(Num) -> Num"));
+    let red = items.iter().find(|item| item.label == "Red").unwrap();
+    assert_eq!(red.kind, CompletionKind::EnumMember);
+    let io = items.iter().find(|item| item.label == "io").unwrap();
+    assert_eq!(io.kind, CompletionKind::Module);
+}
+
+/// Case 2: after a bare import binding (`http.`), the module's own exports — including a
+/// sum's variants, reached the same qualified way `http.Get` is written in code.
+#[test]
+fn completions_after_an_import_binding_list_the_modules_exports() {
+    let text = "<< core.http\n\n^ = () -> Num => <\n  http.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+
+    for expected in [
+        "Body", "Method", "Response", "Request", "Get", "Post", "Delete",
+    ] {
+        assert!(
+            labels.contains(expected),
+            "missing `{expected}`: {labels:?}"
+        );
+    }
+
+    let response = items.iter().find(|item| item.label == "Response").unwrap();
+    assert_eq!(response.kind, CompletionKind::Class);
+    let get = items.iter().find(|item| item.label == "Get").unwrap();
+    assert_eq!(get.kind, CompletionKind::EnumMember);
+    assert_eq!(get.detail.as_deref(), Some("Method"));
+}
+
+/// Case 3, a user record: after `.` on an expression of a user-declared record type, its
+/// fields and methods — never the record's own name (that would be case 1).
+#[test]
+fn completions_after_an_expression_list_the_receivers_record_members() {
+    let text = "Point = {\n  x :: Num,\n  y :: Num,\n\n  sum = () -> Num => < it.x + it.y >\n}\n\n\
+^ = () -> Num => <\n  p = Point { x = 1, y = 2 }\n  p.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, std::collections::HashSet::from(["x", "y", "sum"]));
+
+    let x = items.iter().find(|item| item.label == "x").unwrap();
+    assert_eq!(x.kind, CompletionKind::Field);
+    assert_eq!(x.detail.as_deref(), Some("Num"));
+    let sum = items.iter().find(|item| item.label == "sum").unwrap();
+    assert_eq!(sum.kind, CompletionKind::Method);
+    assert_eq!(sum.detail.as_deref(), Some("() -> Num"));
+}
+
+/// Case 3, `Text`: the native primitives, the composable `corelib/text.qn` methods, and
+/// the `size`/`length` fields — all reserved on a `Text` receiver.
+#[test]
+fn completions_after_a_text_expression_list_its_built_in_members() {
+    let text = "^ = () -> Num => <\n  s = \"hi\"\n  s.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    for expected in ["trim", "split", "contains", "size", "length"] {
+        assert!(
+            labels.contains(expected),
+            "missing `{expected}`: {labels:?}"
+        );
+    }
+    let split = items.iter().find(|item| item.label == "split").unwrap();
+    assert_eq!(split.kind, CompletionKind::Method);
+    assert_eq!(split.detail.as_deref(), Some("(Text) -> []Text"));
+    let size = items.iter().find(|item| item.label == "size").unwrap();
+    assert_eq!(size.kind, CompletionKind::Field);
+    assert_eq!(size.detail.as_deref(), Some("Num"));
+}
+
+/// Case 3 on a corelib record reached through an import: `http.Response`'s own fields and
+/// methods, exactly as any other record's.
+#[test]
+fn completions_on_a_corelib_response_list_its_fields_and_methods() {
+    let text = "<< core.http\n\n^ = () -> Num => <\n  \
+response = http.Response { raw = \"HTTP/1.1 200 OK\\r\\n\\r\\n\" }\n  response.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    for expected in ["raw", "status", "header", "body"] {
+        assert!(
+            labels.contains(expected),
+            "missing `{expected}`: {labels:?}"
+        );
+    }
+    let raw = items.iter().find(|item| item.label == "raw").unwrap();
+    assert_eq!(raw.kind, CompletionKind::Field);
+    let header = items.iter().find(|item| item.label == "header").unwrap();
+    assert_eq!(header.kind, CompletionKind::Method);
+    assert_eq!(header.detail.as_deref(), Some("(Text) -> Result"));
+}
+
+/// A `textDocument/completion` request over the protocol, on a document that could never
+/// check clean AS SENT (`response.` has no member yet): the server still answers the
+/// receiver's members.
+#[test]
+fn completion_over_the_protocol_lists_an_expressions_members() {
+    use serde_json::{Value, json};
+
+    let (client, served) = started_session();
+
+    let uri = "file:///completion.qn";
+    let text = "<< core.http\n\n^ = () -> Num => <\n  \
+response = http.Response { raw = \"HTTP/1.1 200 OK\\r\\n\\r\\n\" }\n  response.\n  0\n>\n";
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    lsp_diagnostics_of(lsp_receive(&client));
+
+    let line = text
+        .lines()
+        .position(|line| line.contains("response."))
+        .expect("the member access is on some line");
+    let character = text.lines().nth(line).unwrap().find("response.").unwrap() as u32
+        + "response.".len() as u32;
+    client
+        .sender
+        .send(lsp_request(
+            1,
+            "textDocument/completion",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character } }),
+        ))
+        .unwrap();
+    let completions = lsp_response(lsp_receive(&client));
+    let items = completions.as_array().expect("a completion array");
+    let labels: Vec<&str> = items
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect();
+    assert!(labels.contains(&"status"), "unexpected labels: {labels:?}");
+    assert!(labels.contains(&"raw"), "unexpected labels: {labels:?}");
+    let status = items.iter().find(|item| item["label"] == "status").unwrap();
+    assert_eq!(status["kind"], 2, "2 is the protocol's Method kind");
+
+    client
+        .sender
+        .send(lsp_request(2, "shutdown", Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
+}
+
+/// Case 3 when the receiver sits inside a larger expression that does not itself
+/// type-check with the receiver's bare type (`1 + s` is `Num + Text`, a real mismatch —
+/// exactly what typing `.someMethod()` would have fixed): completion still isolates the
+/// receiver from the surrounding `1 +` and answers `Text`'s members.
+#[test]
+fn completions_on_a_receiver_inside_a_mismatched_expression_still_resolve() {
+    let text = "^ = () -> Num => <\n  s = \"hi\"\n  n = 1 + s.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert!(labels.contains("trim"), "unexpected labels: {labels:?}");
+    assert!(labels.contains("size"), "unexpected labels: {labels:?}");
+}
+
+/// The same isolation, with the receiver as a call argument (`double(s.)` — `s` is `Text`,
+/// `double` wants a `Num`).
+#[test]
+fn completions_on_a_receiver_inside_a_mismatched_call_argument_still_resolve() {
+    let text = "double = (x :: Num) -> Num => < x * 2 >\n\
+^ = () -> Num => <\n  s = \"hi\"\n  double(s.HERE)\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert!(labels.contains("trim"), "unexpected labels: {labels:?}");
+}
+
+/// Case 3 on a type declared LOCALLY inside a block (not just at the top level): its
+/// methods are offered, not just its fields.
+#[test]
+fn completions_on_a_block_local_records_receiver_list_its_methods_too() {
+    let text = "^ = () -> Num => <\n  \
+Point = { x :: Num, sum = () -> Num => < it.x > }\n  \
+p = Point { x = 1 }\n  p.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, std::collections::HashSet::from(["x", "sum"]));
 }
 
 // --- The parse helper -------------------------------------------------------

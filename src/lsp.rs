@@ -7,13 +7,16 @@
 //! buffer as the editor last sent it, saved or not.
 //!
 //! Capabilities: publish diagnostics on open/change, go-to-definition, find references,
-//! rename, hover (the expression's inferred type), semantic tokens (block `< >` delimiters
-//! versus comparison operators, plus declared type/function/parameter names), and a Run and
-//! a Debug code lens on every test suite and case. Both carry the block's own `/`-joined
-//! path as their client-side command's argument — `quilon.runTests` or `quilon.debugTests`
-//! — so running and debugging are the editor's job. The custom `quilon/testItems` request
-//! answers the same test tree as a flat list, each entry carrying that same path, for a
-//! client building a test explorer rather than a lens.
+//! rename, hover (the expression's inferred type), completion (triggered on `.`; see
+//! [`analysis::completions_at`] for the three cases and the strategy that makes them work
+//! on the normally-unparseable document a completion request arrives with), semantic
+//! tokens (block `< >` delimiters versus comparison operators, plus declared
+//! type/function/parameter names), and a Run and a Debug code lens on every test suite and
+//! case. Both carry the block's own `/`-joined path as their client-side command's
+//! argument — `quilon.runTests` or `quilon.debugTests` — so running and debugging are the
+//! editor's job. The custom `quilon/testItems` request answers the same test tree as a
+//! flat list, each entry carrying that same path, for a client building a test explorer
+//! rather than a lens.
 //!
 //! Find references and rename share one table: [`analysis::Resolver`] walks the
 //! import-linked program once, resolving every identifier to the declaration it binds.
@@ -31,15 +34,15 @@ use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    CodeLens, CodeLensOptions, Command, Diagnostic, DiagnosticRelatedInformation,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, Location, MarkedString, NumberOrString, OneOf, Position,
-    PublishDiagnosticsParams, Range, ReferenceParams, RenameParams, SemanticToken,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensParams, SemanticTokensServerCapabilities,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
-    WorkspaceEdit,
+    CodeLens, CodeLensOptions, Command, CompletionItem, CompletionItemKind, CompletionOptions,
+    CompletionParams, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    GotoDefinitionParams, Hover, HoverContents, HoverParams, HoverProviderCapability, Location,
+    MarkedString, NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range,
+    ReferenceParams, RenameParams, SemanticToken, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
+    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Uri, WorkspaceEdit,
 };
 
 use crate::diagnostic::Label;
@@ -71,6 +74,19 @@ fn legend_index(kind: SemanticTokenKind) -> u32 {
     }
 }
 
+/// The protocol's `CompletionItemKind` for one classified completion candidate.
+fn completion_item_kind(kind: analysis::CompletionKind) -> CompletionItemKind {
+    match kind {
+        analysis::CompletionKind::Variable => CompletionItemKind::VARIABLE,
+        analysis::CompletionKind::Function => CompletionItemKind::FUNCTION,
+        analysis::CompletionKind::Field => CompletionItemKind::FIELD,
+        analysis::CompletionKind::Method => CompletionItemKind::METHOD,
+        analysis::CompletionKind::Class => CompletionItemKind::CLASS,
+        analysis::CompletionKind::Module => CompletionItemKind::MODULE,
+        analysis::CompletionKind::EnumMember => CompletionItemKind::ENUM_MEMBER,
+    }
+}
+
 /// The client-side command a test's Run lens invokes, with the document's path and the
 /// block's own `/`-joined path as its two arguments. The Visual Studio Code extension
 /// contributes it; any other client may too.
@@ -99,6 +115,10 @@ pub fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error + S
         references_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_string()]),
+            ..Default::default()
+        }),
         code_lens_provider: Some(CodeLensOptions {
             resolve_provider: Some(false),
         }),
@@ -210,6 +230,10 @@ impl LanguageServer {
                 Ok(params) => self.hover(id, params),
                 Err(error) => invalid_params(id, error),
             },
+            "textDocument/completion" => match serde_json::from_value(request.params) {
+                Ok(params) => self.completion(id, params),
+                Err(error) => invalid_params(id, error),
+            },
             "textDocument/definition" => match serde_json::from_value(request.params) {
                 Ok(params) => self.definition(id, params),
                 Err(error) => invalid_params(id, error),
@@ -266,6 +290,33 @@ impl LanguageServer {
             ),
             None => Response::new_ok(id, serde_json::Value::Null),
         }
+    }
+
+    /// Completion works on the buffer AS TYPED — normally not the clean document
+    /// [`Self::checked_document`] requires (`response.` has no member yet), which is
+    /// exactly why [`analysis::completions_at`] takes the raw text and cursor and re-derives
+    /// something checkable itself. No diagnostics, no dependence on the document's own
+    /// parse succeeding.
+    fn completion(&self, id: RequestId, params: CompletionParams) -> Response {
+        let position_params = params.text_document_position;
+        let Some((path, text)) = self.document(&position_params.text_document.uri) else {
+            return Response::new_ok(id, serde_json::Value::Null);
+        };
+        let positions = DocumentPositions::new(text);
+        let offset = positions.byte_offset(
+            position_params.position.line,
+            position_params.position.character,
+        ) as u32;
+        let items: Vec<CompletionItem> = analysis::completions_at(&path, text, offset)
+            .into_iter()
+            .map(|item| CompletionItem {
+                label: item.label,
+                kind: Some(completion_item_kind(item.kind)),
+                detail: item.detail,
+                ..Default::default()
+            })
+            .collect();
+        Response::new_ok(id, items)
     }
 
     fn definition(&self, id: RequestId, params: GotoDefinitionParams) -> Response {
