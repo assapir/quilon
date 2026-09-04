@@ -9,19 +9,13 @@ use super::*;
 impl<'ctx> CodeGenerator<'ctx> {
     /// Bind a capturing nested function as a local closure value: lower it via the lambda
     /// machinery (capturing enclosing locals per the `=`/`:=` rule) and store the
-    /// resulting `{ ptr fn, ptr env }` in a local slot, recording its signature so
-    /// `name(args)` resolves to an indirect closure call.
+    /// resulting `{ ptr fn, ptr env }` in a local slot. `name(args)` then resolves to an
+    /// indirect closure call from the checker's recorded `Type::Function` for that
+    /// identifier — nothing further is recorded here.
     pub(super) fn generate_local_closure(
         &mut self,
         declaration: &FunctionDeclaration,
     ) -> Result<(), String> {
-        let sig = self.closure_signature(
-            &declaration.parameters,
-            declaration.declared_return_type(),
-            &declaration.body,
-        )?;
-        self.closure_sigs.insert(declaration.name.clone(), sig);
-
         let closure = self.generate_lambda(
             &declaration.parameters,
             declaration.declared_return_type(),
@@ -451,13 +445,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (it has module scope) and needs no capture.
             if let Some((slot, value_ty)) = self.variables.get(&name).copied() {
                 let by_ref = self.boxed_vars.contains(&name);
-                let closure_sig = self.closure_sigs.get(&name).cloned();
                 captures.push(Capture {
                     name,
                     slot,
                     value_ty,
                     by_ref,
-                    closure_sig,
                 });
             }
         }
@@ -596,7 +588,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to store parameter"))?;
             self.variables.insert(parameter.name.clone(), (alloca, pty));
             let qty = self.parameter_type(parameter);
-            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,
@@ -654,12 +645,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         None,
                     );
                 }
-                // If the captured value is itself a closure, re-register its signature so
-                // a `name(args)` inside this lifted body resolves to an indirect call (the
-                // lifted body began with a cleared `closure_sigs`).
-                if let Some(sig) = &cap.closure_sig {
-                    self.closure_sigs.insert(cap.name.clone(), sig.clone());
-                }
             }
         }
 
@@ -684,37 +669,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
-    /// Call a closure value held in local variable `var_name`: load its
-    /// `{ ptr fn, ptr env }` struct from the slot and call through it. `parameter_tys`
-    /// / `ret_ty` are the closure's recorded signature (excluding the implicit env parameter).
-    pub(super) fn generate_closure_call(
-        &mut self,
-        var_name: &str,
-        parameter_tys: &[BasicTypeEnum<'ctx>],
-        ret_ty: BasicTypeEnum<'ctx>,
-        args: &[Expression],
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        if args.len() != parameter_tys.len() {
-            return Err(format!(
-                "closure `{}` expects {} argument(s), got {}",
-                var_name,
-                parameter_tys.len(),
-                args.len()
-            ));
-        }
-        let closure_ty = self.closure_struct_type();
-        let (slot, _) = *self.variables.get(var_name).expect("closure var bound");
-        let closure_val = self
-            .builder
-            .build_load(closure_ty, slot, var_name)
-            .map_err(ctx("Failed to load closure"))?
-            .into_struct_value();
-        self.call_closure_value(closure_val, parameter_tys, ret_ty, args)
-    }
-
-    /// Call a function-valued EXPRESSION — `adder(5)(2)`, or any callee that is not a
-    /// bare name: generate it to a closure `{ ptr fn, ptr env }` value and call through
-    /// it, recovering the callee signature from the oracle's type for the expression.
+    /// Call a function-valued EXPRESSION — a local variable holding a closure, a call on
+    /// a call (`adder(5)(2)`), or any other callee that is not a plain top-level function
+    /// name: generate it to a closure `{ ptr fn, ptr env }` value and call through it,
+    /// recovering the callee signature from the oracle's recorded type for the expression.
     pub(super) fn generate_closure_value_call(
         &mut self,
         function: &Expression,
