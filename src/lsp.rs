@@ -7,13 +7,18 @@
 //! buffer as the editor last sent it, saved or not.
 //!
 //! Capabilities: publish diagnostics on open/change, go-to-definition, find references,
-//! rename, hover (the expression's inferred type), semantic tokens (block `< >` delimiters
-//! versus comparison operators, plus declared type/function/parameter names), and a Run and
-//! a Debug code lens on every test suite and case. Both carry the block's own `/`-joined
-//! path as their client-side command's argument — `quilon.runTests` or `quilon.debugTests`
-//! — so running and debugging are the editor's job. The custom `quilon/testItems` request
-//! answers the same test tree as a flat list, each entry carrying that same path, for a
-//! client building a test explorer rather than a lens.
+//! rename, hover (the expression's inferred type, or — for a matcher inside
+//! `assert`/`expect` — its signature and the type it applies to), semantic tokens (block
+//! `< >` delimiters versus comparison operators, plus declared type/function/parameter
+//! names), and a Run and a Debug code lens on every test suite and case. Both carry the
+//! block's own `/`-joined path as their client-side command's argument —
+//! `quilon.runTests` or `quilon.debugTests` — so running and debugging are the editor's
+//! job. The custom `quilon/testItems` request answers the same test tree as a flat list,
+//! each entry carrying that same path, for a client building a test explorer rather than a
+//! lens. The custom `quilon/corelibDir` request materializes the embedded corelib modules
+//! (which exist on no disk — see [`crate::modules`]) under the compiler's cache directory
+//! and answers with that directory, so a client can point a debugger's source map at real
+//! files when a `--debug` build's DWARF attributes a step to `corelib/*.qn`.
 //!
 //! Find references and rename share one table: [`analysis::Resolver`] walks the
 //! import-linked program once, resolving every identifier to the declaration it binds.
@@ -238,6 +243,12 @@ impl LanguageServer {
                     "expected { textDocument: { uri } }".to_string(),
                 ),
             },
+            "quilon/corelibDir" => match corelib_cache_dir() {
+                Ok(dir) => Response::new_ok(id, dir.display().to_string()),
+                Err(message) => {
+                    Response::new_err(id, lsp_server::ErrorCode::InternalError as i32, message)
+                }
+            },
             _ => Response::new_err(
                 id,
                 lsp_server::ErrorCode::MethodNotFound as i32,
@@ -253,7 +264,7 @@ impl LanguageServer {
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        match analysis::hover_at(&checked.types, offset) {
+        match analysis::hover_at(&checked.types, &checked.matcher_hovers, offset) {
             Some((label, span)) => Response::new_ok(
                 id,
                 Hover {
@@ -506,6 +517,54 @@ impl LanguageServer {
     }
 }
 
+/// Materialize every embedded corelib module (see [`crate::modules::CORELIB_MODULES`]) under
+/// `<cache_dir>/corelib-<compiler version>/`, laid out exactly as
+/// [`crate::codegen::debug::corelib_relative_path`] maps a dotted module name (`corelib/http.qn`,
+/// nested segments as directories) — the SAME mapping a `--debug` build's DWARF uses to name a
+/// corelib function's file, so a debugger pointed at this directory (via a `sourceMap`) finds
+/// real source where the compiled binary says to look. Idempotent: a file already holding the
+/// exact bytes is left alone, so answering this request on every debug launch does not rewrite
+/// the whole corelib each time. Versioned by the compiler's own package version, so a newer
+/// compiler (a corelib source that may have changed) never reuses an older one's cache.
+/// Returns the cache directory's absolute path on success.
+fn corelib_cache_dir() -> Result<PathBuf, String> {
+    let root = crate::build::cache_dir().join(format!("corelib-{}", env!("CARGO_PKG_VERSION")));
+    materialize_corelib(&root)?;
+    Ok(root)
+}
+
+/// The write loop behind [`corelib_cache_dir`], taking the destination `root` directly so a
+/// test can point it at a scratch directory instead of the real per-user cache.
+///
+/// Each write is staged into a process-unique temp file in the same directory and renamed
+/// over the destination — the same atomic-write shape `extract_archive_into` (`src/build.rs`)
+/// uses for the runtime archive — so a second `quilon lsp` process (two workspace folders open
+/// at once) answering `quilon/corelibDir` over the same `corelib-<version>/` directory, or
+/// CodeLLDB opening a file through the source map while this runs, never observes a
+/// partially written `.qn` source.
+fn materialize_corelib(root: &Path) -> Result<(), String> {
+    for (name, source) in crate::modules::CORELIB_MODULES {
+        let path = root.join(crate::codegen::debug::corelib_relative_path(name));
+        let parent = path.parent().unwrap_or(root);
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        let up_to_date = std::fs::read(&path).is_ok_and(|existing| existing == source.as_bytes());
+        if up_to_date {
+            continue;
+        }
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+        let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, source)
+            .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &path)
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
+            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// The `textDocument.uri` out of a request's raw params — `{ textDocument: { uri } }`,
 /// the shape every request naming one document (but nothing else) shares. `quilon/testItems`
 /// is the only caller; it needs no dedicated params type for that one field.
@@ -677,5 +736,55 @@ mod tests {
     fn a_non_file_uri_names_no_path() {
         let uri: Uri = "untitled:Untitled-1".parse().unwrap();
         assert_eq!(file_path(&uri), None);
+    }
+
+    /// A unique scratch directory under the system temp dir, for a test that writes real
+    /// files — never the per-user cache `corelib_cache_dir` itself resolves to.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "quilon_lsp_corelib_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn materialize_corelib_writes_every_module_at_its_dwarf_relative_path() {
+        let root = scratch_dir("layout");
+        materialize_corelib(&root).expect("writes cleanly");
+        for (name, source) in crate::modules::CORELIB_MODULES {
+            let path = root.join(crate::codegen::debug::corelib_relative_path(name));
+            let written = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{} was not written: {e}", path.display()));
+            assert_eq!(written, *source, "{} has the wrong content", path.display());
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn materialize_corelib_leaves_an_up_to_date_file_untouched() {
+        let root = scratch_dir("idempotent");
+        materialize_corelib(&root).expect("first write");
+        let path = root.join(crate::codegen::debug::corelib_relative_path("core.io"));
+        let before = std::fs::metadata(&path)
+            .expect("written once")
+            .modified()
+            .ok();
+
+        // A second call over the same, unchanged sources must not rewrite the file — if it
+        // did, a fast-changing mtime would show it (best-effort: some filesystems coarsen
+        // mtime resolution, so this only asserts what a coarse clock can still catch).
+        materialize_corelib(&root).expect("second, idempotent write");
+        let after = std::fs::metadata(&path)
+            .expect("still there")
+            .modified()
+            .ok();
+        if let (Some(before), Some(after)) = (before, after) {
+            assert_eq!(before, after, "an up-to-date file was rewritten");
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 }

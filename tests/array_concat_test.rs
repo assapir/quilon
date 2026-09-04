@@ -169,3 +169,54 @@ fn append_wrong_element_type_is_type_error() {
 fn prepend_wrong_element_type_is_type_error() {
     assert_type_error("^ = () -> Num => <\n  a = [1, 2]\n  c = \"x\" + a\n  0\n>");
 }
+
+// ---------------------------------------------------------------------------
+// concat/append unify a sum element's payload type across both operands
+// ---------------------------------------------------------------------------
+
+/// Concatenating two `Result` arrays that each specialize a DIFFERENT variant's payload
+/// must unify the result's element type over both, not just the left operand's — the
+/// same unification an array literal applies across its own elements.
+/// "a".size + "bb".size = 1 + 2 = 3.
+#[test]
+fn concat_unifies_result_payload_specialized_on_either_side() {
+    let src = r#"
+        ^ = () -> Num => <
+          a = [Ok("a")]
+          b = [NotOk("bb")]
+          c = a + b
+          c.map(r => r ? | Ok(t) => t | NotOk(e) => e).reduce(0, (acc, x) => acc + x.size)
+        >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// Appending a single `Result` element unifies the array's element type with that
+/// element's own specialization the same way concat does.
+#[test]
+fn append_unifies_result_payload_specialized_on_the_appended_element() {
+    let src = r#"
+        ^ = () -> Num => <
+          a = [Ok("a")]
+          c = a + NotOk("bb")
+          c.map(r => r ? | Ok(t) => t | NotOk(e) => e).reduce(0, (acc, x) => acc + x.size)
+        >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// Concatenating two `Result` arrays whose SAME variant carries a DIFFERENT concrete
+/// payload type (`Ok(Num)` on the left, `Ok(Text)` on the right) is a real conflict, not
+/// a specialization to merge — the same invariant an array literal enforces
+/// (`reject_array_literal_mixing_concrete_types_within_the_same_variant` above).
+#[test]
+fn reject_concat_mixing_concrete_types_within_the_same_variant() {
+    assert_type_error("^ = () -> Num => <\n  a = [Ok(1)]\n  b = [Ok(\"x\")]\n  c = a + b\n  0\n>");
+}
+
+/// Appending a single element whose variant conflicts with the array's own specialization
+/// is the same conflict as the concat case, one operand short of an array.
+#[test]
+fn reject_append_mixing_concrete_types_within_the_same_variant() {
+    assert_type_error("^ = () -> Num => <\n  a = [Ok(1)]\n  c = a + Ok(\"x\")\n  0\n>");
+}

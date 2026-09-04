@@ -53,8 +53,21 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|e| self.generate_expression(e))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Get element type from first element.
-        let elem_type = values[0].get_type();
+        // Element type from the type oracle — the checker's UNIFIED element type across
+        // every element (e.g. a sum whose variants specialize different payloads per
+        // element), not the first element's own value type, which a later element may
+        // have specialized further. A missing oracle entry is a compiler bug: every
+        // checked program records one, so this only fires for a program the checker
+        // never ran over.
+        let elem_type = match self.oracle.expression_type(array_expression) {
+            Some(Type::Array(elem)) => self.value_repr_type(elem)?,
+            _ => {
+                return Err(format!(
+                    "internal error: no oracle element type recorded for array literal at {:?}",
+                    array_expression.span()
+                ));
+            }
+        };
 
         // Lay the elements into a GC-allocated buffer via the shared array builder — the
         // SAME mechanism used by `+` concatenation and `<-` spread. Heap (not stack)
@@ -830,7 +843,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let init_val = self.generate_expression(init)?;
-        let acc_qty = self.infer_type(init);
+        let acc_qty = self
+            .oracle
+            .expression_type(init)
+            .ok_or_else(|| {
+                format!(
+                    "internal error: no oracle type recorded for `reduce` initial value at {:?}",
+                    init.span()
+                )
+            })?
+            .clone();
         let acc_ptr = self.create_entry_block_alloca("reduce_acc", init_val.get_type())?;
         self.builder
             .build_store(acc_ptr, init_val)

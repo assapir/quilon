@@ -57,12 +57,14 @@ front end runs, clearing before its case tree prints. `--reporter json` prints o
 object per event on stdout and stays silent otherwise — a plain stream for a tool, on a
 terminal too.
 
-`quilon build` produces a **self-contained** native executable that runs on a machine with the operating system alone:
+`quilon build` produces a **self-contained**, **optimized** (LLVM O3) native executable
+that runs on a machine with the operating system alone:
 ```bash
 quilon build program.qn -o program       # default linker: clang
 quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
+`quilon run` (the JIT) always runs unoptimized.
 
 `quilon test <file> --binary <out>` builds the suite into a **native, debuggable
 executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
@@ -88,13 +90,30 @@ llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
+A `--debug` build is unoptimized (O0 plus `-g`, in `cc` terms), so a debugger sees
+every local and steps every line.
+
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
-lexical scopes. Each Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`,
-arrays (`[]T`), records, and sum types — so a debugger tells them apart.
-Line info is multi-file: a function from an imported module (`<<`) — corelib included — is
-attributed to its OWN source, so a debugger steps into it. The entry frame reads `^`. A
-debugger steps over the leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
+lexical scopes. A `?`/`|` match arm's bound pattern — including a constructor's payload
+(`| Ok(page) => page`) — is emitted the same way, typed from its concrete resolved type. Each
+Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`, arrays (`[]T`), records, and
+sum types — so a debugger tells them apart.
+Each `=`/`:=` binding also opens its own nested lexical scope covering the rest of its
+enclosing block, so a debugger's Locals listing (or a hover) at a given line shows exactly
+the bindings already made by that line. Line info is multi-file: a
+function from an imported module (`<<`) — corelib included — is attributed to its OWN
+source, so a debugger steps into it. The entry frame reads `^`. A debugger steps over the
+leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
+
+The [built-in modules](../modules/README.md) (`core.io`, `core.test`, …) are embedded in
+the compiler and exist on no disk, but their DWARF still names a real-looking path —
+`corelib/http.qn`, relative to the compile directory — for a debugger to resolve a stepped-
+into corelib function against. The [language server](language-server.md)'s
+`quilon/corelibDir` request writes the embedded corelib out to a real directory in exactly
+that layout and answers with its path, so a client can point its debugger's source map at
+it; the [Visual Studio Code extension](https://github.com/assapir/quilon/tree/main/editors/vscode)
+does this automatically for every debug session it starts.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)
