@@ -764,8 +764,8 @@ log = (m :: Num) => < io.print(m) >
     );
 }
 
-// Regression (#329): a function/method body whose last statement is a declaration
-// (`=`/`=:`) has no expression tail to type from — `docs/expressions/README.md` § Blocks
+// A function/method body whose last statement is a declaration
+// (`=`/`:=`) has no expression tail to type from — `docs/expressions/README.md` § Blocks
 // says the block itself evaluates to `$`. Codegen must take that from the checker's
 // type-oracle (the body's recorded type) rather than guessing from the tail's syntax,
 // both for the LLVM return type and for the block's own emitted value.
