@@ -92,9 +92,39 @@ Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. Each Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`,
-arrays (`[]T`), records, and sum types — so a debugger tells them apart.
+arrays (`[]T`), records, sum types, and Map/Set (named `Map[K, V]`/`Set[T]`) — so a debugger
+tells them apart.
 Line info is multi-file: a function from an imported module (`<<`) — corelib included — is
 attributed to its OWN source, so a debugger steps into it. The entry frame reads `^`. A
 debugger steps over the leaf `@` primitives and the built-ins (`io.print`/`time.now`/…).
+
+### Value display
+
+A `--debug` build also emits, per DWARF-typed local/parameter, one exported render thunk
+(`__qn_render$<type>`) that renders the value through the SAME `` ` `` path
+[`io.print`/interpolation](../types/text.md) use, so a debugger shows exactly what
+`` `value` `` would: a user override (`User(Ada, 36)`), the default record render (`Point`),
+an array (`[1, 2, 3]`), a sum's variant name (`Ok`), and a Map/Set's entries
+(`[|ada => 36|]`, `[|1, 2|]`).
+
+The VS Code extension's Quilon debug configuration loads
+`editors/vscode/formatters/quilon.py` into CodeLLDB (via its `initCommands`), which
+registers a summary provider calling the matching thunk for every Quilon value. It works
+the same way in a plain `lldb` session:
+```bash
+quilon build program.qn --debug -o program
+lldb ./program
+(lldb) command script import editors/vscode/formatters/quilon.py
+(lldb) breakpoint set -f program.qn -l 5
+(lldb) run
+(lldb) frame variable
+```
+**This runs code in the stopped program**: every display calls the value's own `` ` `` —
+a user override included — inside the debuggee. A record still expands into its own
+fields (the DWARF struct); a Map/Set shows only the rendered summary, with no children.
+
+A bare `Num`/`Bool`/`$` local shows lldb's own native value (`7`, `true`) alone: lldb
+places a scalar's natural value and any added summary side by side, so a composite's own
+type gets the render as its ONE display and a scalar keeps its native one.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)

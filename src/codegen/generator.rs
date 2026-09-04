@@ -225,6 +225,15 @@ pub struct CodeGenerator<'ctx> {
     // Structural type keys currently being lowered to DWARF, so a (hypothetically) recursive
     // record/sum breaks the cycle with an opaque pointer instead of recursing forever.
     di_building: RefCell<HashSet<String>>,
+    // Structural type keys (see `di_type_key`) already enqueued for a `--debug` render thunk
+    // (`__qn_render$...`), so each type is queued (and later emitted) exactly once — see
+    // `di_pending_thunks` and `di.rs::enqueue_render_thunk`/`drain_pending_render_thunks`.
+    di_render_thunks: RefCell<HashSet<String>>,
+    // Types enqueued for a `--debug` render thunk by `di_type`'s OWN `&self` recursive type
+    // building — so a type reached only nested (an array element, a record field, a Map/Set's
+    // key/value) is queued too, not just one directly reaching `declare_variable`. Drained
+    // (emitting the actual IR, which needs `&mut self`) once, near the end of `generate`.
+    di_pending_thunks: RefCell<Vec<Type>>,
     // Every source file the program was assembled from, keyed by the `FileId` its spans
     // carry. Read when filling in a `Site` argument at a call site, which needs the call's
     // path, line, column, and the text of its line. Empty for the IR-only codegen tests
@@ -359,6 +368,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             record_field_types: HashMap::new(),
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
+            di_render_thunks: RefCell::new(HashSet::new()),
+            di_pending_thunks: RefCell::new(Vec::new()),
             sources: Rc::new(crate::source_map::SourceMap::default()),
             site_globals: HashMap::new(),
             text_constants: HashMap::new(),
@@ -650,6 +661,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .unwrap_or_default();
             self.generate_main_wrapper(&entry_parameters)?;
         }
+
+        // Emit every `--debug` render thunk `di_type` enqueued while building DWARF types
+        // for the code just generated — after every function body, so a type reached only
+        // NESTED (an array element, a record field, a Map/Set's key/value) gets a thunk too.
+        // A no-op when debug info is off (nothing was ever enqueued).
+        self.drain_pending_render_thunks();
 
         // Embed the provenance watermark as an `!llvm.ident` entry (harmless for the JIT
         // path, which produces no artifact to carry it).

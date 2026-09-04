@@ -327,6 +327,24 @@ impl<'ctx> DebugInfo<'ctx> {
             .as_type()
     }
 
+    /// A Map/Set value: a pointer-sized runtime handle, NAMED for its element types (e.g.
+    /// `"Map[Text, Num]"`, `"Set[Num]"`) so a debugger — and the `__qn_render$...` thunk a
+    /// `--debug` build emits per type — can tell one from another despite every Map/Set
+    /// sharing the same opaque-pointer shape. `name` is [`render_thunk_symbol`]'s input on
+    /// the formatter side, so it must be exactly what a debugger reads back as the value's
+    /// type name.
+    ///
+    /// A zero-member NAMED struct, exactly [`record_type`]'s own shape with no fields —
+    /// deliberately NOT a named [`basic_type`]: lldb's DWARF importer canonicalizes a base
+    /// type's displayed name from its `(encoding, size)` pair (confirmed against a real lldb
+    /// session — an 8-bit `DW_ATE_unsigned` placeholder there showed as `"unsigned char"`
+    /// regardless of the `DW_AT_name` given it), while it shows a `DW_TAG_structure_type`'s
+    /// own name faithfully — the same reason [`record_type`] names the struct a record
+    /// pointer points to rather than the pointer wrapper itself.
+    pub fn collection_type(&self, name: &str) -> DIType<'ctx> {
+        self.record_type(name, &[])
+    }
+
     /// `Text` — a `{ ptr data, i64 byte_len }` struct over a UTF-8 byte buffer.
     /// Distinct from an array by name (`Text`) and by its `data` pointee (`char`, not `T`).
     pub fn text_type(&self) -> DIType<'ctx> {
@@ -592,4 +610,74 @@ fn line_starts(source: &str) -> Vec<usize> {
         }
     }
     starts
+}
+
+/// Sanitize a DWARF type's display name (`DW_AT_name`, e.g. `"Map[Text, Num]"`, `"[]Num"`,
+/// `"Point"`, `"$"`) into the suffix a `--debug` render-thunk symbol carries. Alphanumerics,
+/// `_`, and `$` pass through unchanged; `[` and `,` each become their own `$` separator (so
+/// repeated `[`s — a nested `[][]Text` array — each contribute a separator instead of
+/// collapsing into one and colliding with a single-level `[]Text`); every other character
+/// (`]`, spaces, the `.` in a qualified name) is dropped.
+///
+/// This is the ONE transform shared by codegen (which has the `Type` and builds the DWARF
+/// name itself) and `editors/vscode/formatters/quilon.py`'s `sanitize_debug_type_name` (which
+/// only ever sees the `DW_AT_name` string a debugger reads back) — a debugger has no other
+/// way to find a value's render thunk, so the two must derive the exact same symbol from the
+/// exact same name. Keep them in lockstep; the example table in both test suites is the
+/// contract.
+pub fn sanitize_debug_type_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            out.push(c);
+        } else if c == '[' || c == ',' {
+            out.push('$');
+        }
+    }
+    out
+}
+
+/// The C-ABI render-thunk symbol codegen emits (and the lldb formatter calls) for a type
+/// whose DWARF display name is `debug_name` — e.g. `"Map[Text, Num]"` -> `"__qn_render$Map$Text$Num"`.
+pub fn render_thunk_symbol(debug_name: &str) -> String {
+    format!("__qn_render${}", sanitize_debug_type_name(debug_name))
+}
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+
+    /// The shared example table `editors/vscode/formatters/test_quilon.py` tests the SAME
+    /// pairs against — see `sanitize_debug_type_name`'s doc comment.
+    const EXAMPLES: &[(&str, &str)] = &[
+        ("Num", "__qn_render$Num"),
+        ("Bool", "__qn_render$Bool"),
+        ("Text", "__qn_render$Text"),
+        ("$", "__qn_render$$"),
+        ("[]Num", "__qn_render$$Num"),
+        ("[][]Text", "__qn_render$$$Text"),
+        ("Point", "__qn_render$Point"),
+        ("Result", "__qn_render$Result"),
+        ("Map[Text, Num]", "__qn_render$Map$Text$Num"),
+        ("Set[Num]", "__qn_render$Set$Num"),
+    ];
+
+    #[test]
+    fn render_thunk_symbols_match_the_shared_example_table() {
+        for (debug_name, expected) in EXAMPLES {
+            assert_eq!(
+                render_thunk_symbol(debug_name),
+                *expected,
+                "for {debug_name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_and_a_doubly_nested_array_do_not_collide() {
+        assert_ne!(
+            render_thunk_symbol("[]Text"),
+            render_thunk_symbol("[][]Text")
+        );
+    }
 }

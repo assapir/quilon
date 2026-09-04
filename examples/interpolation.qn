@@ -50,5 +50,18 @@ Color = Red / Green / Blue
   big :: []Num = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   assert("`big`", equals("[1 <- 12]"))
 
+  ~ A Map renders its entries `[|k => v, ...|]`, a Set its elements `[|e, ...|]` — each
+  ~ through its own `` ` ``. Iteration order is unspecified, so only a single-entry
+  ~ collection renders deterministically here.
+  ages :: [|Text => Num|] = [|"ada" => 36|]
+  assert("`ages`", equals("[|ada => 36|]"))
+  emptyMap :: [|Text => Num|] = [|=>|]
+  assert("`emptyMap`", equals("[|=>|]"))
+
+  primes :: [|Num|] = [|2|]
+  assert("`primes`", equals("[|2|]"))
+  emptySet :: [|Num|] = [||]
+  assert("`emptySet`", equals("[||]"))
+
   $
 >

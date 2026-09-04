@@ -295,14 +295,21 @@ Breakpoints you set in the source and single-stepping both work. Start a session
 }
 ```
 
-**Value inspection.** The lldb formatter the session loads
-(`formatters/quilon.py`) renders Quilon values against the distinct DWARF types
-the compiler emits: a `Text` shows as its string (not a `{data, byte_len}`
-struct), and a `[]T` expands to an indexed list of its elements, each keeping its
-own type — so a `[][]Text` expands to a list of inner `[]Text` arrays, each of
-its own `Text` values. Long arrays cap the default expansion and note the
-remaining count in the summary (an explicit `array[i]` past the cap still works).
-Records and sum types fall back to lldb's default struct rendering.
+**Value inspection.** Every Quilon value shows exactly what `` `value` ``/`io.print` would
+produce — a user override (`User(Ada, 36)`), the default record render (`Point`), an array
+(`[1, 2, 3]`), a sum's variant name (`Ok`), and a Map/Set's entries
+(`[|ada => 36|]`, `[|1, 2|]`). The lldb formatter the session loads (`formatters/quilon.py`)
+does this by calling the `--debug` build's own exported render thunk for the value's type,
+IN THE STOPPED PROGRAM — a user override runs as part of the display. A `Text` still shows
+as its string (not a `{data, byte_len}` struct) and a `[]T` still expands to an indexed list
+of its elements, each keeping its own type — so a `[][]Text` expands to a list of inner
+`[]Text` arrays, each of its own `Text` values. Long arrays cap the default expansion and
+note the remaining count in the summary (an explicit `array[i]` past the cap still works).
+Records still expand into their own fields; a Map/Set carries no children, only its
+rendered summary. A bare `Num`/`Bool`/`$` shows lldb's own native value instead (lldb
+shows a scalar's natural value alongside any summary rather than replacing it, so a
+render there would only ever look redundant). See `docs/tooling/compiling.md#value-display`
+for the full design.
 
 ## Publishing
 

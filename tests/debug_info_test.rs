@@ -460,6 +460,185 @@ Color = Red / Green / Blue
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The symbols a binary DEFINES, as `nm` reports them (mirrors `intrinsic_link_test.rs`'s
+/// own helper of the same shape).
+fn defined_symbols(path: &Path) -> std::collections::HashSet<String> {
+    let listing = Command::new("nm")
+        .arg("--defined-only")
+        .arg(path)
+        .output()
+        .unwrap_or_else(|e| panic!("running nm on {}: {e}", path.display()));
+    assert!(
+        listing.status.success(),
+        "nm could not read {}:\n{}",
+        path.display(),
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every DWARF-typed local a `--debug` build declares also gets an exported
+/// `__qn_render$<type>` thunk (`di.rs::emit_render_thunk`) — the symbol the lldb formatter
+/// calls to render that value. Covers every representation kind: scalars, `Text`, an array,
+/// a record, a sum, and (the marquee case) a Map and a Set, whose DWARF type is now a NAMED
+/// `Map[K, V]`/`Set[T]` rather than an anonymous opaque pointer.
+#[test]
+fn debug_build_emits_a_render_thunk_symbol_per_declared_type() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping render-thunk test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("nm") {
+        eprintln!("skipping render-thunk test: `nm` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+Point = { x :: Num, y :: Num }
+Color = Red / Green / Blue
+
+^ = () -> Num => <
+  n :: Num = 3
+  b :: Bool = true
+  t :: Text = \"hi\"
+  nums :: []Num = [1, 2, 3]
+  p :: Point = Point { x = 1, y = 2 }
+  c :: Color = Green
+  m :: [|Text => Num|] = [|\"a\" => 1|]
+  s :: [|Num|] = [|1|]
+  0
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgthunks_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("thunks.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("thunks");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(0), "debug build changed program behavior");
+
+    let symbols = defined_symbols(&bin);
+    let expected = [
+        // A `Num`/`Bool` local's thunk symbol is keyed by lldb's OWN canonicalized type
+        // name ("double"/"bool"), not the Quilon type name — see
+        // `di.rs::render_thunk_debug_name`, confirmed against a real lldb session.
+        "__qn_render$double",
+        "__qn_render$bool",
+        "__qn_render$Text",
+        "__qn_render$$Num",  // []Num
+        "__qn_render$Point", // record
+        "__qn_render$Color", // sum
+        "__qn_render$Map$Text$Num",
+        "__qn_render$Set$Num",
+    ];
+    for symbol in expected {
+        assert!(
+            symbols.contains(symbol),
+            "expected the render thunk `{symbol}` in the binary's defined symbols"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Map/Set value carries a NAMED DWARF type (`Map[Text, Num]`/`Set[Num]`) rather than an
+/// anonymous opaque pointer — the name is what the render thunk (and the lldb formatter's
+/// symbol derivation) key off, and it lets `llvm-dwarfdump`/a debugger tell one Map/Set
+/// apart from another.
+#[test]
+fn debug_build_names_map_and_set_dwarf_types() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping map/set debug-type test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping map/set debug-type test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+^ = () -> Num => <
+  m :: [|Text => Num|] = [|\"a\" => 1|]
+  s :: [|Num|] = [|1|]
+  0
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgmapset_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("mapset.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("mapset");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(0), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let out = String::from_utf8_lossy(&info.stdout);
+
+    // A record's own pointer-to-struct DWARF type is checked elsewhere with `contains`
+    // (`debug_build_emits_distinct_typed_local_variables`, for `p_ty`) rather than an exact
+    // match, since a named pointer type's `DW_AT_type` text is a `llvm-dwarfdump` rendering
+    // detail; Map/Set (also a named pointer) follow the same precedent here.
+    let m_ty = di_var_type(&out, "m").expect("`m` variable with a type");
+    let s_ty = di_var_type(&out, "s").expect("`s` variable with a type");
+    assert!(
+        m_ty.contains("Map[Text, Num]"),
+        "`m :: [|Text => Num|]` should carry a named `Map[Text, Num]` DWARF type, got {m_ty:?}"
+    );
+    assert!(
+        s_ty.contains("Set[Num]"),
+        "`s :: [|Num|]` should carry a named `Set[Num]` DWARF type, got {s_ty:?}"
+    );
+    assert!(
+        out.contains("DW_AT_name\t(\"Map[Text, Num]\")"),
+        "expected a named `Map[Text, Num]` DWARF type, got:\n{out}"
+    );
+    assert!(
+        out.contains("DW_AT_name\t(\"Set[Num]\")"),
+        "expected a named `Set[Num]` DWARF type, got:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn non_debug_build_has_no_ql_debug_info() {
     let quilon = env!("CARGO_BIN_EXE_quilon");

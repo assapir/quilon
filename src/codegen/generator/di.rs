@@ -107,15 +107,29 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (name, size, encoding) — so return them directly, skipping the key allocation and
         // cache/recursion bookkeeping that only the composites below need.
         match ty {
-            Type::Num => return Some(debug.num_type()),
-            Type::Bool => return Some(debug.bool_type()),
-            Type::Unit => return Some(debug.unit_type()),
+            Type::Num => {
+                self.enqueue_render_thunk(ty);
+                return Some(debug.num_type());
+            }
+            Type::Bool => {
+                self.enqueue_render_thunk(ty);
+                return Some(debug.bool_type());
+            }
+            Type::Unit => {
+                self.enqueue_render_thunk(ty);
+                return Some(debug.unit_type());
+            }
             Type::Generic { .. } | Type::Function { .. } => return Some(debug.opaque_pointer()),
-            // Maps and Sets are opaque runtime pointers with no DWARF-visible structure.
-            Type::Map(_, _) | Type::Set(_) => return Some(debug.opaque_pointer()),
             _ => {}
         }
         let key = self.di_type_key(ty);
+        // Every type that reaches here (Text, an array, a record, a sum, a Map/Set — but not
+        // a scalar, handled above, or the opaque Function/Generic case, excluded by
+        // `enqueue_render_thunk` itself) gets a render thunk queued, whether this call is a
+        // cache hit or a fresh build — including a type reached only NESTED (an array
+        // element, a record field, a Map/Set's key/value) via this same function's own
+        // recursion in `build_di_type`, not just one reaching `declare_variable` directly.
+        self.enqueue_render_thunk(ty);
         if let Some(t) = debug.cached_type(&key) {
             return Some(t);
         }
@@ -168,8 +182,62 @@ impl<'ctx> CodeGenerator<'ctx> {
                 debug.record_type(name, &members)
             }
             Type::Sum { name, variants } => self.di_sum_type(debug, name, variants),
+            // A Map/Set value is a pointer-sized runtime handle, named for its element
+            // types (`"Map[Text, Num]"`, `"Set[Num]"`) rather than left an anonymous
+            // opaque pointer — that name is what the `--debug` render thunk and the lldb
+            // formatter derive the value's `` ` `` rendering from. Deliberately NOT `key`
+            // (the cache key, `"map$Text$Num"`): the display name and the cache key are
+            // free to differ, and here they must — a debugger reads only `DW_AT_name`.
+            Type::Map(_, _) | Type::Set(_) => debug.collection_type(&self.di_debug_name(ty)),
             // Scalars / opaque types are resolved in `di_type` before reaching here.
             _ => debug.opaque_pointer(),
+        }
+    }
+
+    /// The debug-info DISPLAY name for `ty` — what `DW_AT_name` records: `"Num"`, `"[]Num"`,
+    /// `"Point"`, `"Result"`, `"Map[Text, Num]"`, `"Set[Num]"`. Distinct from [`di_type_key`]
+    /// (a cache key, free to use a different format) only for `Map`/`Set`, which get a
+    /// readable `Ctor[Args]` name instead of the key's `map$K$V` shape — every other case
+    /// already uses the display form as its key, so this simply mirrors that. Used both to
+    /// build a composite's own `DW_AT_name` ([`build_di_type`]'s `Map`/`Set` arm) and,
+    /// recursively, to build ITS nested elements' names — a `Num` inside a `Map[Text, Num]`
+    /// contributes the literal substring `"Num"` here, regardless of what a live debugger
+    /// happens to display for a STANDALONE `Num` variable (see
+    /// [`render_thunk_debug_name`] for that divergent case): a composite's `DW_AT_name` is
+    /// an opaque string a debugger never reinterprets, so nesting stays purely textual.
+    pub(super) fn di_debug_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::Map(k, v) => format!("Map[{}, {}]", self.di_debug_name(k), self.di_debug_name(v)),
+            Type::Set(elem) => format!("Set[{}]", self.di_debug_name(elem)),
+            Type::Array(elem) => format!("[]{}", self.di_debug_name(elem)),
+            Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
+            _ => self.di_type_key(ty),
+        }
+    }
+
+    /// What a debugger ACTUALLY reads back as `ty`'s type name — the string
+    /// [`render_thunk_symbol`] derives a thunk's symbol from on BOTH sides (this Rust-side
+    /// emission, and `editors/vscode/formatters/quilon.py`'s `sanitize_debug_type_name`
+    /// reading a live value's `SBType.GetName()`). [`di_debug_name`] for every composite
+    /// (`Text`, an array, a record, a sum, a Map/Set): a debugger shows a
+    /// `DW_TAG_structure_type`'s own name faithfully, confirmed against a real lldb session.
+    ///
+    /// For a bare SCALAR (`Num`/`Bool`/`Unit`) this instead returns lldb's OWN canonicalized
+    /// name, which does NOT match the `DW_AT_name` `debug.rs`'s `num_type`/`bool_type`/
+    /// `unit_type` give the DWARF entry (`"Num"`/`"Bool"`/`"$"`): lldb's DWARF importer
+    /// derives a `DW_TAG_base_type`'s displayed name from its `(encoding, size)` pair alone,
+    /// ignoring whatever name the DWARF gives it — confirmed live, an `f64`/`DW_ATE_float`
+    /// reads back as `"double"`, an `i1`/`DW_ATE_boolean` as `"bool"`, an `i8`/
+    /// `DW_ATE_unsigned` as `"unsigned char"`. This divergence applies ONLY at the top
+    /// level: a scalar NESTED inside a composite's own name (`di_debug_name`'s `Map`/`Set`/
+    /// `Array` recursion) still contributes its ordinary Quilon name — that name is an
+    /// opaque substring of the composite's `DW_AT_name`, which lldb never reinterprets.
+    pub(super) fn render_thunk_debug_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::Num => "double".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Unit => "unsigned char".to_string(),
+            _ => self.di_debug_name(ty),
         }
     }
 
@@ -281,7 +349,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Emit a `DILocalVariable` + `llvm.dbg.declare` for a parameter or `=`/`:=` local named
     /// `name`, stored at `slot`, of Quilon type `qty`, declared at `span`. `arg_no` is the
     /// 1-based parameter index for a parameter, or `None` for a local. A no-op unless debug
-    /// info is on and a function scope is active — so call sites stay guard-free.
+    /// info is on and a function scope is active — so call sites stay guard-free. `di_type`
+    /// (called below) queues `qty`'s `--debug` render thunk as a side effect; see
+    /// [`enqueue_render_thunk`]/[`drain_pending_render_thunks`].
     pub(super) fn declare_variable(
         &self,
         name: &str,
@@ -305,5 +375,100 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let loc = debug.location(self.context, span, scope);
         debug.declare(slot, var, loc, block);
+    }
+
+    /// Queue `ty` for a `--debug` render thunk, at most once per structural key (see
+    /// [`di_type_key`]). Called from `di_type` itself — cheap and `&self` (a `RefCell`
+    /// dedupe set + a pending-list push), so it runs equally for a type reaching
+    /// [`declare_variable`] directly and one reached only NESTED, through `di_type`'s own
+    /// recursion while building a composite (an array element, a record field, a Map/Set's
+    /// key/value). [`drain_pending_render_thunks`] later emits the actual IR, which needs
+    /// `&mut self`. Skips `Function`/`Generic`: neither has a concrete static rendering (a
+    /// function value isn't renderable at all; a surviving `Generic` payload has no fixed
+    /// type), matching `di_type`'s own early opaque-pointer return for them.
+    fn enqueue_render_thunk(&self, ty: &Type) {
+        if matches!(ty, Type::Function { .. } | Type::Generic { .. }) {
+            return;
+        }
+        let key = self.di_type_key(ty);
+        if self.di_render_thunks.borrow_mut().insert(key) {
+            self.di_pending_thunks.borrow_mut().push(ty.clone());
+        }
+    }
+
+    /// Emit every render thunk [`enqueue_render_thunk`] queued while generating the program
+    /// — called once, near the end of [`super::CodeGenerator::generate`], after every
+    /// function body (so every `di_type` call that will ever run already has). A no-op when
+    /// debug info is off: nothing is ever queued then. Emission failures are logged and
+    /// swallowed — a `--debug` build should not fail over a debugger convenience.
+    pub(super) fn drain_pending_render_thunks(&mut self) {
+        loop {
+            // Popped into an owned value in its own statement, so the `RefCell` borrow ends
+            // before `emit_render_thunk` (which needs `&mut self`) runs.
+            let next = self.di_pending_thunks.borrow_mut().pop();
+            let Some(ty) = next else { break };
+            if let Err(e) = self.emit_render_thunk(&ty) {
+                let key = self.di_type_key(&ty);
+                eprintln!("warning: quilon --debug: failed to emit render thunk for {key}: {e}");
+            }
+        }
+    }
+
+    /// Emit the thunk `drain_pending_render_thunks` gates: `const char*
+    /// __qn_render$<name>(const void* slot)`. Loads the value at `slot` (the variable's own
+    /// storage — the alloca `llvm.dbg.declare` points at) with `ty`'s value representation,
+    /// renders it through the SAME path `io.print`/interpolation use ([`render_value`]), and
+    /// returns a NUL-terminated GC copy of the rendered bytes via the `__render_c_string`
+    /// runtime helper (a debugger evaluates a C-ABI call and expects a C string back, not the
+    /// `{ptr, i64}` ABI a Quilon caller uses). Exported (external linkage) under its
+    /// `render_thunk_symbol` name so `nm`/a debugger can find it by symbol.
+    fn emit_render_thunk(&mut self, ty: &Type) -> Result<(), String> {
+        let symbol = crate::codegen::debug::render_thunk_symbol(&self.render_thunk_debug_name(ty));
+        if self.module.get_function(&symbol).is_some() {
+            return Ok(());
+        }
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        let value_llvm = self.value_repr_type(ty)?;
+
+        // Emitting a fresh function mid-stream: save and restore the enclosing builder
+        // position, current function, and debug location so the surrounding emission
+        // resumes intact (mirrors `emit_key_trampolines` in `collections.rs`).
+        let saved_block = self.builder.get_insert_block();
+        let saved_function = self.current_function;
+        let saved_loc = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+
+        let thunk = self
+            .module
+            .add_function(&symbol, ptr.fn_type(&[ptr.into()], false), None);
+        thunk.set_linkage(inkwell::module::Linkage::External);
+        self.current_function = Some(thunk);
+        let entry = self.context.append_basic_block(thunk, "entry");
+        self.builder.position_at_end(entry);
+        let slot = thunk.get_nth_param(0).unwrap().into_pointer_value();
+        let value = self
+            .builder
+            .build_load(value_llvm, slot, "render_slot")
+            .map_err(ctx("Failed to load render-thunk slot"))?;
+        let text = self.render_value(ty, value)?;
+        let (data, len) = self.split_text(text.into_struct_value(), "render_thunk")?;
+        let c_string_fn = self.get_intrinsic("__render_c_string")?;
+        let call = self
+            .builder
+            .build_call(c_string_fn, &[data.into(), len.into()], "render_c_str")
+            .map_err(ctx("Failed to call __render_c_string"))?;
+        let out_ptr = Self::call_result_to_basic(call)?.into_pointer_value();
+        self.builder
+            .build_return(Some(&out_ptr))
+            .map_err(ctx("Failed to return from render thunk"))?;
+
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Ok(())
     }
 }
