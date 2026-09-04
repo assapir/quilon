@@ -1103,6 +1103,122 @@ Bad = Wrap(Point) / Plain(Num)
     assert_type_error(src);
 }
 
+/// An array literal unifies the SAME variant's payload type across every element, not
+/// just the first: `NotOk`'s payload is generic until the second element specializes it
+/// to `Text`, and the unified element type must carry that specialization so a later
+/// match on any element reads the real payload. "a".size + "bb".size = 1 + 2 = 3.
+#[test]
+fn run_array_of_results_unifies_ok_then_notok_text_payload() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok("a"), NotOk("bb")]
+          rs.map(r => r ? | Ok(t) => t | NotOk(e) => e).reduce(0, (a, x) => a + x.size)
+        >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// The reversed element order: `NotOk` specializes first, `Ok` second. Unification must
+/// not depend on which variant appears first.
+#[test]
+fn run_array_of_results_unifies_notok_then_ok_text_payload() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [NotOk("bb"), Ok("a")]
+          rs.map(r => r ? | Ok(t) => t | NotOk(e) => e).reduce(0, (a, x) => a + x.size)
+        >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// Indexing a single element out of the unified array and matching it directly (no
+/// `.map`) reads the same unified payload type. "bb".size = 2.
+#[test]
+fn run_indexed_element_of_unified_result_array_reads_specialized_payload() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok("a"), NotOk("bb")]
+          rs[1] ? | Ok(t) => t.size | NotOk(e) => e.size
+        >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// `Bool` payloads unify across variants the same way `Text` does. `Ok(true)` maps to
+/// `true`, `NotOk(false)` maps to `false`; one of the two mapped values is `true`.
+#[test]
+fn run_array_of_results_unifies_bool_payload_across_variants() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok(true), NotOk(false)]
+          rs.map(r => r ? | Ok(b) => b | NotOk(b) => b).reduce(0, (a, x) => x ? a + 1 : a)
+        >
+    "#;
+    assert_exit(src, 1);
+}
+
+/// `.each` reads every element's unified payload too, not just `.map`'s inline lambda —
+/// the unification lives on the array's element type, not on any one consumer.
+/// "a".size + "bb".size = 1 + 2 = 3.
+#[test]
+fn run_each_over_unified_result_array_reads_every_variants_payload() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok("a"), NotOk("bb")]
+          total := 0
+          rs.each(r => < total := total + (r ? | Ok(t) => t.size | NotOk(e) => e.size) >)
+          total
+        >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// `Result`'s two variants may carry DIFFERENT concrete payload types — this is the
+/// documented shape of `core.cli`'s `getOpt` (`Ok([]Text) / NotOk(Text)`), not a
+/// restriction unification adds. An array literal mixing `Ok(Text)` and `NotOk(Num)`
+/// keeps each variant's own concrete type. "hi".size + 3 = 2 + 3 = 5.
+#[test]
+fn run_array_literal_keeps_different_concrete_types_across_result_variants() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok("hi"), NotOk(3)]
+          (rs[0] ? | Ok(t) => t.size | NotOk(n) => n)
+            + (rs[1] ? | Ok(t) => t.size | NotOk(n) => n)
+        >
+    "#;
+    assert_exit(src, 5);
+}
+
+/// Within the SAME variant, every element must still agree on a concrete payload type —
+/// unification merges compatible types, it does not paper over a real conflict.
+#[test]
+fn reject_array_literal_mixing_concrete_types_within_the_same_variant() {
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok(1), Ok("a")]
+          0
+        >
+    "#;
+    assert_type_error(src);
+}
+
+/// AOT: the array-literal unification fix is not JIT-only.
+#[test]
+fn aot_array_of_results_unifies_variant_payloads() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native array-unification check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        ^ = () -> Num => <
+          rs = [Ok("a"), NotOk("bb")]
+          rs.map(r => r ? | Ok(t) => t | NotOk(e) => e).reduce(0, (a, x) => a + x.size)
+        >
+    "#;
+    let (code, _) = build_and_run_native("array_result_unification", src);
+    assert_eq!(code, 3, "a native build must exit 3 on the same program");
+}
+
 #[test]
 fn reject_nested_sum_as_sum_payload() {
     // A named composite payload must be a RECORD. Nesting another SUM as a payload is not
