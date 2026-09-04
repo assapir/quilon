@@ -489,3 +489,39 @@ fn unit_returning_closure_called_for_effect() {
         2,
     );
 }
+
+#[test]
+fn closure_out_of_an_array_called_through_a_map_lambda_parameter() {
+    // A lambda parameter bound from an ARRAY ELEMENT (not a name), holding a closure,
+    // called inside the lambda body: adder(1)(10) + adder(2)(10) = 11 + 12 = 23.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >\n\
+         ^ = () -> Num => <\n  fs = [adder(1), adder(2)]\n  \
+         fs.map(f => f(10)).reduce(0, (a :: Num, b :: Num) => a + b)\n>",
+        23,
+    );
+}
+
+#[test]
+fn closure_out_of_an_array_called_inside_each() {
+    // Same shape as `.map`, through `.each`: the lambda parameter is a closure taken out
+    // of the array, and each call adds to a `:=` cell captured by reference.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >\n\
+         ^ = () -> Num => <\n  fs = [adder(1), adder(2)]\n  total := 0\n  \
+         fs.each(f => < total := total + f(10) >)\n  total\n>",
+        23,
+    );
+}
+
+#[test]
+fn nested_lambda_calls_the_outer_lambdas_array_sourced_closure_parameter() {
+    // The OUTER `.map` lambda's parameter `f` is a closure taken out of the array; the
+    // INNER `.map` lambda (a further level of nesting) calls it. 11 + 12 = 23.
+    assert_exit(
+        "adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >\n\
+         ^ = () -> Num => <\n  fs = [adder(1), adder(2)]\n  \
+         results = fs.map(f => [10].map(x => f(x)))\n  results[0][0] + results[1][0]\n>",
+        23,
+    );
+}
