@@ -207,7 +207,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .insert(parameter.name.clone(), fields.clone());
                 }
             }
-            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,
@@ -273,30 +272,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.var_named_types
                 .insert(declaration.name.clone(), type_name.clone());
         }
-        // Binding a function literal: remember its signature so a later `name(args)` can
-        // recover the callee type for the indirect closure call (the closure value itself
-        // does not encode it).
-        if let Expression::Lambda {
-            parameters,
-            return_type,
-            body,
-            ..
-        } = &declaration.value
-        {
-            let sig = self.closure_signature(parameters, return_type.as_ref(), body)?;
-            self.closure_sigs.insert(declaration.name.clone(), sig);
-        }
-
-        // Remember the binding's Quilon type for overloaded-call argument mangling.
+        // Remember the binding's Quilon type for overloaded-call argument mangling. A
+        // function-typed value — a lambda literal, a returned closure (`add5 =
+        // adder(5)`), a captured/aliased closure — needs no separate bookkeeping for
+        // `name(args)` to dispatch as an indirect call: the checker already recorded this
+        // binding's type as `Type::Function` in the oracle, keyed by the CALL's own
+        // identifier expression, which is what codegen reads at the call site.
         let inferred_qty = self.infer_type(&declaration.value);
-        // Any OTHER function-typed value — a returned closure (`add5 = adder(5)`), an
-        // alias of a closure binding — is a `{ ptr fn, ptr env }` pair too; record its
-        // signature the same way a function-typed parameter's is, so `add5(2)` dispatches
-        // through the indirect closure-call path. (A lambda value took the more precise
-        // lambda route above.)
-        if !matches!(declaration.value, Expression::Lambda { .. }) {
-            self.register_function_typed_parameter(&declaration.name, &inferred_qty)?;
-        }
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
         self.track_named_record_binding(&declaration.name, &inferred_qty);
@@ -437,33 +419,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.emit_module_function(declaration)
     }
 
-    /// Record a function-typed parameter's closure signature. Such a parameter arrives as a
-    /// `{ ptr fn, ptr env }` closure value (its slot holds that struct), so a call to it in
-    /// the body must dispatch through the indirect closure-call path — the env pointer is
-    /// appended implicitly at the call site — exactly like a local closure binding. Every
-    /// parameter-binding site (top-level functions, methods, and lifted closures) calls this
-    /// so the three stay in lockstep. A non-function parameter is left untouched.
-    pub(super) fn register_function_typed_parameter(
-        &mut self,
-        name: &str,
-        qty: &Type,
-    ) -> Result<(), String> {
-        if let Type::Function {
-            parameters,
-            return_type,
-        } = qty
-        {
-            let parameter_tys = parameters
-                .iter()
-                .map(|t| self.boundary_type(t))
-                .collect::<Result<Vec<_>, _>>()?;
-            let ret_ty = self.boundary_type(return_type)?;
-            self.closure_sigs
-                .insert(name.to_string(), (parameter_tys, ret_ty));
-        }
-        Ok(())
-    }
-
     /// Declare `declaration`'s LLVM function — signature and symbol, no body. What the
     /// pre-declaration pass in [`CodeGenerator::generate`] runs over every reachable
     /// top-level function, so a body emitted earlier in item order can call one emitted
@@ -536,8 +491,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Emit `declaration` as a top-level/module function (internal linkage). Clears and
-    /// repopulates the per-function emission state (`variables`, `closure_sigs`,
-    /// `boxed_vars`, `var_types`); the entry point `^` gets the special f64-return /
+    /// repopulates the per-function emission state (`variables`, `boxed_vars`,
+    /// `var_types`); the entry point `^` gets the special f64-return /
     /// implicit-0 treatment. Used for true top-level functions and for non-capturing
     /// nested functions (which can recurse, unlike a closure value).
     pub(super) fn emit_module_function(
@@ -589,7 +544,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .insert(parameter.name.clone(), fields.clone());
                 }
             }
-            self.register_function_typed_parameter(&parameter.name, &qty)?;
             self.declare_variable(
                 &parameter.name,
                 alloca,

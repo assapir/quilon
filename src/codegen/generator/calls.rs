@@ -292,14 +292,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // A local variable bound to a closure value: call it indirectly, passing the
-        // captured environment as the trailing argument. Recognized by the variable's
-        // recorded closure signature (see `closure_sigs`). Checked before overload
+        // captured environment as the trailing argument. Recognized by the checker's
+        // recorded type for this identifier — a `Type::Function` — which needs no
+        // codegen-local bookkeeping: a lambda parameter (bound from an array element,
+        // say) carries it exactly like a named closure binding. Checked before overload
         // dispatch — a local closure binding shadows any same-named top-level function.
-        if let Some((parameter_tys, ret_ty)) =
-            self.closure_sigs.get(function_name.as_str()).cloned()
-            && self.variables.contains_key(function_name.as_str())
+        if self.variables.contains_key(function_name.as_str())
+            && matches!(
+                self.oracle.expression_type(function),
+                Some(Type::Function { .. })
+            )
         {
-            return self.generate_closure_call(function_name, &parameter_tys, ret_ty, arguments);
+            return self.generate_closure_value_call(function, arguments);
         }
 
         // Overloaded function call: dispatch to the per-signature mangled symbol chosen
@@ -584,7 +588,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Convert a call site's result to a `BasicValueEnum`, erroring if the callee returns
     /// a non-basic (e.g. void) value. Shared by the direct (`generate_call`) and indirect
-    /// closure (`generate_closure_call`) call paths so both handle return kinds identically.
+    /// closure (`generate_closure_value_call`) call paths so both handle return kinds
+    /// identically.
     pub(super) fn call_result_to_basic(
         call: inkwell::values::CallSiteValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
