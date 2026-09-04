@@ -8,15 +8,13 @@
 //!
 //! Capabilities: publish diagnostics on open/change, go-to-definition, find references,
 //! rename, hover (the expression's inferred type), completion (triggered on `.`; see
-//! [`analysis::completions_at`] for the three cases and the strategy that makes them work
-//! on the normally-unparseable document a completion request arrives with), semantic
-//! tokens (block `< >` delimiters versus comparison operators, plus declared
-//! type/function/parameter names), and a Run and a Debug code lens on every test suite and
-//! case. Both carry the block's own `/`-joined path as their client-side command's
-//! argument — `quilon.runTests` or `quilon.debugTests` — so running and debugging are the
-//! editor's job. The custom `quilon/testItems` request answers the same test tree as a
-//! flat list, each entry carrying that same path, for a client building a test explorer
-//! rather than a lens.
+//! [`analysis::completions_at`]), semantic tokens (block `< >` delimiters versus
+//! comparison operators, plus declared type/function/parameter names), and a Run and a
+//! Debug code lens on every test suite and case. Both carry the block's own `/`-joined
+//! path as their client-side command's argument — `quilon.runTests` or
+//! `quilon.debugTests` — so running and debugging are the editor's job. The custom
+//! `quilon/testItems` request answers the same test tree as a flat list, each entry
+//! carrying that same path, for a client building a test explorer rather than a lens.
 //!
 //! Find references and rename share one table: [`analysis::Resolver`] walks the
 //! import-linked program once, resolving every identifier to the declaration it binds.
@@ -292,11 +290,8 @@ impl LanguageServer {
         }
     }
 
-    /// Completion works on the buffer AS TYPED — normally not the clean document
-    /// [`Self::checked_document`] requires (`response.` has no member yet), which is
-    /// exactly why [`analysis::completions_at`] takes the raw text and cursor and re-derives
-    /// something checkable itself. No diagnostics, no dependence on the document's own
-    /// parse succeeding.
+    /// Works on the buffer as typed, unlike [`Self::checked_document`]'s callers:
+    /// [`analysis::completions_at`] re-derives a checkable document itself.
     fn completion(&self, id: RequestId, params: CompletionParams) -> Response {
         let position_params = params.text_document_position;
         let Some((path, text)) = self.document(&position_params.text_document.uri) else {

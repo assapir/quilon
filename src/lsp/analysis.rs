@@ -797,8 +797,7 @@ fn walk_expressions<'a>(expression: &'a Expression, visit: &mut impl FnMut(&'a E
 
 // --- Completion ---------------------------------------------------------------
 
-/// What a completion candidate is, in the language's own vocabulary — the server maps each
-/// variant onto the protocol's `CompletionItemKind`.
+/// Maps onto the protocol's `CompletionItemKind` in `src/lsp.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {
     Variable,
@@ -821,24 +820,11 @@ pub struct CompletionItem {
 
 /// Complete at byte offset `offset` in `text`, the buffer at `path`.
 ///
-/// **The document at the cursor is normally unparseable**: `response.` has no member yet,
-/// and a bare name mid-typed is a dangling identifier a fresh parse chokes on. Rather than
-/// keep a second, stale copy of the last-clean document around — this server otherwise
-/// holds none (see the module doc comment) — every request re-derives a parseable,
-/// checkable document from the CURRENT buffer by deleting just the incomplete token at the
-/// cursor: the trailing `.member` being typed, or the bare word being typed. With that
-/// gone, what is left is the document as it stood one token ago, which parses (and
-/// type-checks) like any other snapshot. The trade-off: a completion request whose cursor
-/// sits inside an expression that is ALREADY broken for an unrelated reason (a stray
-/// paren earlier in the file, say) still answers empty — there is no fallback to a cached
-/// good version, so the one thing standing between a keystroke and a correct completion
-/// list is that this document, missing its very last token, parses.
-///
-/// A member access after a bare import binding (`http.`) is resolved without checking the
-/// rest of the document at all: the binding names a module, not a value, so it is not
-/// something the type checker could ever assign a type to. Only the one import is
-/// resolved (via [`crate::modules::link`]), so this case works even while the rest of the
-/// buffer does not parse.
+/// The document at the cursor is normally unparseable (`response.` has no member yet), so
+/// every request deletes just the incomplete token at the cursor — the trailing `.member`
+/// or the bare word being typed — before parsing: what's left parses like the document one
+/// token earlier. A completion request whose cursor sits in an expression broken for an
+/// unrelated reason answers empty regardless.
 pub fn completions_at(path: &Path, text: &str, offset: u32) -> Vec<CompletionItem> {
     let offset = offset as usize;
     match dot_before_cursor(text, offset) {
@@ -890,11 +876,8 @@ fn bare_identifier_ending_at(text: &str, dot: usize) -> Option<&str> {
     Some(&text[start..dot])
 }
 
-/// Case 1: names in scope at `offset` — locals and parameters of the enclosing blocks
-/// (only bindings ABOVE `offset`; Quilon has no hoisting), top-level functions and types
-/// defined above `offset` (the definition enclosing `offset` itself excepted), every sum
-/// type's constructors defined above `offset`, and every `<<` import's binding. Purely
-/// syntactic — no type-check, so this works on a document [`check_text`] would reject.
+/// Case 1: names in scope at `offset`. Purely syntactic — no type-check — so this works
+/// on a document [`check_text`] would reject.
 fn scope_completions_at(text: &str, offset: usize) -> Vec<CompletionItem> {
     let word_start = word_start_before(text, offset);
     let stripped = without(text, word_start, offset);
@@ -937,12 +920,7 @@ fn module_path_label(path: &ModulePath) -> String {
     }
 }
 
-/// Walk `items` (a program's top level, or a block's) up to `offset`: every item that
-/// ends before it binds its name into the innermost open scope (and, for a sum type, its
-/// constructors into `sums`); the one item COVERING `offset`, if any, is descended into
-/// instead of bound — its own name is not a completion candidate inside its own body,
-/// though a sum type covering `offset` still contributes its constructors (used from its
-/// own methods routinely).
+/// Walk a program's top-level items up to `offset` (see [`item_step`]).
 fn walk_items(
     items: &[Item],
     offset: u32,
@@ -956,13 +934,9 @@ fn walk_items(
     }
 }
 
-/// One item's contribution to a positioned search over a list of items in document
-/// order: bind it into scope (visible to what follows) when it ends before `offset`,
-/// descend into it and stop when it covers `offset`, or stop right away — nothing here or
-/// later is visible yet — when it starts after `offset`. Returns whether the caller's loop
-/// should stop. Shared by [`walk_items`] (the program's top level) and [`scope_walk`]'s
-/// `Block` arm (a block's own statements) — the two places a list of items is walked this
-/// way, so the same three-way branch is not repeated for each.
+/// One item's contribution to a positioned search over a list of items in document order.
+/// Returns whether the caller's loop should stop. Shared by [`walk_items`] and
+/// [`scope_walk`]'s `Block` arm — the two places a list of items is walked this way.
 fn item_step(
     item: &Item,
     offset: u32,
@@ -1036,9 +1010,6 @@ fn bind_parameter(parameter: &Parameter, scopes: &mut [HashMap<String, Completio
     }
 }
 
-/// Descend into the item COVERING `offset` (see [`walk_items`]): a function's body with
-/// its parameters bound, a method's body with its parameters AND its implicit `it`
-/// receiver bound, or a top-level binding's own initializer.
 fn descend_item_body(
     item: &Item,
     offset: u32,
@@ -1081,11 +1052,9 @@ fn descend_item_body(
     }
 }
 
-/// The single expression-tree descent every completion position search shares: find the
-/// child (if any) whose span covers `offset`, recurse into it, and along the way push a
+/// Find the child (if any) whose span covers `offset`, recurse, and along the way push a
 /// new scope for a `Block`'s statements, a `Lambda`'s parameters, or a matched `Match`
-/// arm's pattern bindings — the same binding forms [`Resolver`] walks, restated as a
-/// positioned search instead of a whole-program one.
+/// arm's pattern bindings.
 fn scope_walk(
     expression: &Expression,
     offset: u32,
@@ -1144,11 +1113,8 @@ fn scope_walk(
                 }
             }
         }
-        // Every other composite form: descend into whichever immediate child's span
-        // covers `offset` (there is at most one — spans nest, never overlap); a leaf
-        // covers no one. `expression_children` is the ONE list of "what are this node's
-        // children" — [`expression_statement_span`] answers a different question over
-        // the same shape and shares it, rather than re-enumerating every variant again.
+        // Every other composite form has at most one child covering `offset` (spans nest,
+        // never overlap); [`expression_statement_span`] shares this same child list.
         other => {
             for child in expression_children(other) {
                 if covers(child.span(), offset) {
@@ -1160,13 +1126,10 @@ fn scope_walk(
     }
 }
 
-/// The immediate child expressions of `expression`, for every "pass-through" form — one
-/// that introduces no binding or statement boundary of its own, so a positioned search
-/// just needs to find which child covers the position and recurse. `Block`, `Lambda`, and
-/// `Match` each DO introduce one (a new scope, or in `Match`'s case a choice of arm) and so
-/// are never passed here — [`scope_walk`] and [`expression_statement_span`] special-case
-/// those three themselves and share this list for everything else, rather than each
-/// re-deriving "what are this node's children" independently.
+/// The immediate children of every "pass-through" expression form — one that introduces
+/// no binding or statement boundary of its own. `Block`/`Lambda`/`Match` each DO introduce
+/// one, so [`scope_walk`] and [`expression_statement_span`] special-case those three
+/// themselves and share this list for everything else.
 fn expression_children(expression: &Expression) -> Vec<&Expression> {
     match expression {
         Expression::Call {
@@ -1240,9 +1203,8 @@ fn bind_pattern(pattern: &Pattern, scopes: &mut [HashMap<String, CompletionItem>
     }
 }
 
-/// A top-level function's (or a module member function's) call signature, in Quilon
-/// spelling — `declared_return_type`/`parameter_type` read both annotation forms
-/// (per-parameter, or a whole-signature `::`) the same way a call site does.
+/// A function's call signature, in Quilon spelling. `declared_return_type`/
+/// `parameter_type` read both annotation forms (per-parameter, or a whole-signature `::`).
 fn function_signature_label(declaration: &FunctionDeclaration) -> String {
     let parameters: Vec<String> = (0..declaration.parameters.len())
         .map(|index| {
@@ -1259,23 +1221,13 @@ fn function_signature_label(declaration: &FunctionDeclaration) -> String {
     format!("({}) -> {ret}", parameters.join(", "))
 }
 
-/// Case 2/3: complete after a `.` at byte `dot` (the cursor itself at `offset`, possibly
-/// past a partial member name already typed). Deletes the `.` and whatever partial member
-/// name follows it, leaving just the receiver expression — which, once checked, is either
-/// a bare import binding (case 2: the module's own exports) or an ordinary expression
-/// (case 3: its checked type's members).
-///
-/// Case 3 always isolates the receiver from whatever STATEMENT it sits in before
+/// Case 2/3: complete after a `.` at byte `dot`, deleting it and any partial member name
+/// already typed. Case 3 isolates the receiver from its enclosing STATEMENT before
 /// checking — cutting everything else that statement covers, both before the receiver
-/// (`1 + `) and after it (a call's closing `)`) — rather than trying the merely
-/// `.member`-stripped document first: isolating is a no-op exactly when the receiver is
-/// already the whole statement (`response.` on its own line strips to `response`, and
-/// isolation finds nothing else to cut), so it subsumes that simpler case rather than
-/// needing to sit beside it as a second attempt. What isolation earns back on top: the
-/// receiver's surrounding expression may have an OTHER part that does not fit with the
-/// receiver alone (`1 + s.` strips to `1 + s`, a genuine `Num + Text` mismatch — exactly
-/// what typing a `Text` method call was about to fix) and would otherwise fail the whole
-/// document's check for a reason that has nothing to do with the receiver's own type.
+/// (`1 + `) and after it (a call's closing `)`) — so a genuine mismatch elsewhere in the
+/// statement (`1 + s.` strips to `1 + s`, `Num + Text`) doesn't blank the result. This is a
+/// no-op when the receiver is already the whole statement, so it needs no separate
+/// simpler-case attempt.
 fn member_completions(path: &Path, text: &str, dot: usize, offset: usize) -> Vec<CompletionItem> {
     let stripped = without(text, dot, offset);
     let Some(program) = parse_text(&stripped) else {
@@ -1318,10 +1270,9 @@ fn member_completions(path: &Path, text: &str, dot: usize, offset: usize) -> Vec
     type_member_completions(&checked.program, &checked.types, ty)
 }
 
-/// The type of the smallest expression ending exactly at byte `end` in `types` — the
-/// receiver a `.member` access left behind once stripped (see [`member_completions`]).
-/// Skips back over spaces/tabs between the receiver and the `.`, so a deliberately spaced
-/// member access (`response .body`) still resolves.
+/// The type of the smallest expression ending exactly at byte `end` in `types`. Skips
+/// back over spaces/tabs first, so a deliberately spaced member access (`response .body`)
+/// still resolves.
 fn type_ending_at<'a>(types: &'a TypeTable, text: &str, end: usize) -> Option<&'a Type> {
     let bytes = text.as_bytes();
     let mut end = end;
@@ -1336,12 +1287,9 @@ fn type_ending_at<'a>(types: &'a TypeTable, text: &str, end: usize) -> Option<&'
         .map(|(_, ty)| ty)
 }
 
-/// Case 2: the exported members of the module `import` binds, reached the way `http.` in
-/// user code would reach them — resolved by loading that ONE import in isolation
-/// ([`crate::modules::link`]), so this works regardless of whether the rest of the
-/// document parses or checks. A bare import binding is not a checkable expression (it is a
-/// qualifier, not a value), so there is no "receiver type" to read here the way case 3
-/// does.
+/// Case 2: `import`'s exported members, resolved by loading it in isolation
+/// ([`crate::modules::link`]) — a bare import binding is a qualifier, not a checkable
+/// expression, so this never touches the rest of the document.
 fn module_completions(path: &Path, import: &Import) -> Vec<CompletionItem> {
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let synthetic = Program {
@@ -1395,9 +1343,7 @@ fn module_sum_variant_items(
         .collect()
 }
 
-/// The canonical name an import's items are qualified under — `core.http` for
-/// `<< core.http`, or the file's own stem for `<< "lib/math.qn"` (matching
-/// `src/modules.rs`'s own choice of canonical name for each import form).
+/// Matches `src/modules.rs`'s own choice of canonical name per import form.
 fn canonical_prefix(path: &ModulePath) -> Option<String> {
     match path {
         ModulePath::BuiltinDotted(parts) => Some(parts.join(".")),
@@ -1425,10 +1371,7 @@ fn module_completion_item(item: &Item, short: &str) -> CompletionItem {
     }
 }
 
-/// Case 3: the members of `ty` reached through `.` — record fields plus record/sum
-/// methods (looked up by name in the already-linked `program`, the same declaration the
-/// checker resolved `ty` against), or the fixed built-in members of `Text`/an
-/// array/a `Map`/a `Set`.
+/// Case 3: the members of `ty` reached through `.`.
 fn type_member_completions(program: &Program, types: &TypeTable, ty: &Type) -> Vec<CompletionItem> {
     match ty {
         Type::Record(fields) => fields
@@ -1460,11 +1403,8 @@ fn type_member_completions(program: &Program, types: &TypeTable, ty: &Type) -> V
     }
 }
 
-/// The named methods a user-declared record or sum offers through `.` — found by
-/// `type_name`'s own declaration in `program` (record and sum share
-/// [`TypeDefinition::methods`]). Filters out operator and render (`` ` ``) members:
-/// [`is_identifier`] is exactly the "spelled with a plain name" test dot-completion wants,
-/// since neither is ever typed after a `.`.
+/// Filters out operator and render (`` ` ``) members via [`is_identifier`] — neither is
+/// ever typed after a `.`.
 fn user_method_completions(
     program: &Program,
     types: &TypeTable,
@@ -1486,11 +1426,7 @@ fn user_method_completions(
         .collect()
 }
 
-/// The bodies (or method bodies) a top-level or block-local item carries — the ONE place
-/// every walk over "everywhere an expression can hide" starts from, whether it is looking
-/// for a nested type declaration ([`find_type_declaration`]), an expression ending at a
-/// position ([`expression_ending_at`]), or the statement enclosing one
-/// ([`statement_span_at`]).
+/// The bodies (or method bodies) an item carries.
 fn item_bodies(item: &Item) -> Vec<&Expression> {
     match item {
         Item::FunctionDeclaration(declaration) => vec![&declaration.body],
@@ -1505,8 +1441,7 @@ fn item_bodies(item: &Item) -> Vec<&Expression> {
 }
 
 /// `type_name`'s own [`TypeDeclaration`], searched top-level first, then anywhere nested
-/// inside a block (a type may be declared locally, not just at the top level — see
-/// `docs/status/feature-matrix.md`'s "nested types" entry).
+/// inside a block (a type may be declared locally too).
 fn find_type_declaration<'a>(program: &'a Program, type_name: &str) -> Option<&'a TypeDeclaration> {
     for item in &program.items {
         if let Item::TypeDeclaration(declaration) = item
@@ -1561,10 +1496,8 @@ fn find_type_declaration_in_expression<'a>(
     found
 }
 
-/// A syntax-only analogue of [`type_ending_at`]: the smallest expression's span, anywhere
-/// in `program`, ending exactly at byte `end`. Used by [`member_completions`]'s fallback,
-/// when the document does not check clean even once — so there is no [`TypeTable`] to read
-/// a span out of yet.
+/// A syntax-only analogue of [`type_ending_at`], for before the document has checked at
+/// all (there is no [`TypeTable`] yet to read a span out of).
 fn expression_ending_at(program: &Program, end: u32) -> Option<Span> {
     let mut best: Option<Span> = None;
     let mut consider = |expression: &Expression| {
@@ -1588,21 +1521,15 @@ fn expression_ending_at(program: &Program, end: u32) -> Option<Span> {
     best
 }
 
-/// [`covers`], but INCLUSIVE of a span's own end — what every position search below needs,
-/// since `offset` here is always the byte right after a receiver [`member_completions`]
-/// deliberately cut its trailing `.member` off at, which is to say exactly the end of the
-/// receiver's (and its enclosing statement's) own span. `covers` alone — built for "is the
-/// cursor somewhere inside this token," a strictly interior position — would call that
-/// "past" the span and never find it.
+/// [`covers`], but INCLUSIVE of a span's own end: `offset` here is always the byte right
+/// after a receiver's trailing `.member` was cut off, i.e. exactly the receiver's own end,
+/// which strict `covers` would call past the span.
 fn ends_at_or_covers(span: &Span, offset: u32) -> bool {
     span.file == ROOT_FILE && span.start <= offset && offset <= span.end
 }
 
 /// The span of the smallest STATEMENT — a block's own statement, or a top-level item's
-/// whole declaration — covering byte `offset`. [`member_completions`]'s fallback isolates
-/// a member access's receiver by cutting everything ELSE this span covers (both before
-/// AND after the receiver — a call argument's enclosing `f(` … `)` needs both ends
-/// trimmed, not just the prefix), so the statement becomes just the receiver on its own.
+/// whole declaration — covering byte `offset`.
 fn statement_span_at(program: &Program, offset: u32) -> Option<Span> {
     program
         .items
@@ -1621,10 +1548,8 @@ fn item_statement_span(item: &Item, offset: u32) -> Span {
         .unwrap_or_else(|| item.span().clone())
 }
 
-/// `Some(span)` when `offset` is inside a `Block` nested somewhere in `expression` — that
-/// block's own covering statement's span; `None` when `expression` carries no block at all
-/// covering `offset` (nothing to isolate FROM there — e.g. a top-level binding's plain
-/// value, or a receiver that is already its own top-level statement).
+/// `Some(span)` when `offset` is inside a `Block` nested somewhere in `expression`; `None`
+/// when it carries no block at all covering `offset`.
 fn expression_statement_span(expression: &Expression, offset: u32) -> Option<Span> {
     if !ends_at_or_covers(expression.span(), offset) {
         return None;
@@ -1656,9 +1581,6 @@ fn expression_statement_span(expression: &Expression, offset: u32) -> Option<Spa
                 .find(|arm| ends_at_or_covers(&arm.span, offset))
                 .and_then(|arm| expression_statement_span(&arm.body, offset))
         }),
-        // Every other composite form: the same child list [`scope_walk`] uses (via
-        // `expression_children`), just answering "does the enclosing statement continue
-        // into a nested block down this child" instead of "which child holds the cursor."
         other => expression_children(other)
             .into_iter()
             .find(|child| ends_at_or_covers(child.span(), offset))
@@ -1666,10 +1588,8 @@ fn expression_statement_span(expression: &Expression, offset: u32) -> Option<Spa
     }
 }
 
-/// A method's call signature (its implicit `it` receiver left out, like a member call's
-/// own argument list): each parameter's annotation, and the return type — the annotation
-/// when the method states one, else the body's own inferred type (a self-typed return,
-/// e.g. a method returning `it`) read back from `types`.
+/// A method's call signature. The return type is the annotation when present, else the
+/// body's own inferred type (a self-typed return, e.g. a method returning `it`).
 fn method_signature_label(method: &MethodDeclaration, types: &TypeTable) -> String {
     let parameters: Vec<String> = method
         .parameters
@@ -1691,9 +1611,7 @@ fn method_signature_label(method: &MethodDeclaration, types: &TypeTable) -> Stri
     format!("({}) -> {ret}", parameters.join(", "))
 }
 
-/// `Result` with `Ok(elem)` / `NotOk` — mirrors the type checker's own (private)
-/// `result_of`, so a built-in method returning `Result` shows the same spelling hover
-/// would.
+/// Mirrors the type checker's own (private) `result_of` in `src/typechecker/checker/sums.rs`.
 fn result_of(elem: Type) -> Type {
     Type::Sum {
         name: "Result".to_string(),
@@ -1717,8 +1635,6 @@ fn function_type(parameters: Vec<Type>, return_type: Type) -> Type {
     }
 }
 
-/// [`CompletionKind::Method`] items from a `(name, parameters, return type)` table — the
-/// shape every built-in collection's method list reduces to.
 fn method_items(table: Vec<(&str, Vec<Type>, Type)>) -> Vec<CompletionItem> {
     table
         .into_iter()
@@ -1746,14 +1662,18 @@ fn field_item(name: &str, ty: Type) -> CompletionItem {
     }
 }
 
-/// `Text`'s built-in members: the native primitives and the composable methods
-/// `corelib/text.qn` implements over them — mirrors
-/// `TypeChecker::check_text_method`'s table (see `docs/types/text.md`, the one other place
-/// these signatures are written out) — plus its two built-in fields, `size` (byte length)
-/// and `length` (grapheme count).
+/// Mirrors `TypeChecker::check_text_method`'s table in `src/typechecker/checker/calls.rs`
+/// (see also `docs/types/text.md`).
 fn text_method_completions() -> Vec<CompletionItem> {
+    let mut items = method_items(text_method_table());
+    items.push(field_item("size", Type::Num));
+    items.push(field_item("length", Type::Num));
+    items
+}
+
+fn text_method_table() -> Vec<(&'static str, Vec<Type>, Type)> {
     use Type::{Bool, Num, Text};
-    let mut items = method_items(vec![
+    vec![
         ("trim", vec![], Text),
         ("trimStart", vec![], Text),
         ("trimEnd", vec![], Text),
@@ -1768,20 +1688,21 @@ fn text_method_completions() -> Vec<CompletionItem> {
         ("repeat", vec![Num], Text),
         ("replaceAll", vec![Text, Text], Text),
         ("replace", vec![Text, Text, Num], Text),
-    ]);
+    ]
+}
+
+/// Mirrors `TypeChecker::check_array_method`'s signatures. `map`/`reduce`'s own result
+/// type is generic, spelled with a placeholder name (`R`, `A`).
+fn array_method_completions(elem: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(array_method_table(elem));
     items.push(field_item("size", Type::Num));
-    items.push(field_item("length", Type::Num));
     items
 }
 
-/// An array's built-in methods (mirrors `TypeChecker::check_array_method`'s signatures)
-/// plus its `size` field. `map`/`reduce`'s own result type is generic (unconstrained by
-/// the receiver's element type alone), spelled with a placeholder name — `R`, `A` — the
-/// same way any other unresolved type name renders.
-fn array_method_completions(elem: &Type) -> Vec<CompletionItem> {
+fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
     let r = Type::named_ref("R");
     let a = Type::named_ref("A");
-    let mut items = method_items(vec![
+    vec![
         (
             "map",
             vec![function_type(vec![elem.clone()], r.clone())],
@@ -1811,16 +1732,19 @@ fn array_method_completions(elem: &Type) -> Vec<CompletionItem> {
             result_of(elem.clone()),
         ),
         ("at", vec![Type::Num], result_of(elem.clone())),
-    ]);
+    ]
+}
+
+/// Mirrors `TypeChecker::check_map_method`'s signatures.
+fn map_method_completions(key: &Type, value: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(map_method_table(key, value));
     items.push(field_item("size", Type::Num));
     items
 }
 
-/// A `Map`'s built-in methods (mirrors `TypeChecker::check_map_method`'s signatures) plus
-/// its `size` field.
-fn map_method_completions(key: &Type, value: &Type) -> Vec<CompletionItem> {
+fn map_method_table(key: &Type, value: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
     let map_type = Type::Map(Box::new(key.clone()), Box::new(value.clone()));
-    let mut items = method_items(vec![
+    vec![
         ("get", vec![key.clone()], result_of(value.clone())),
         ("has", vec![key.clone()], Type::Bool),
         ("set", vec![key.clone(), value.clone()], map_type.clone()),
@@ -1832,16 +1756,19 @@ fn map_method_completions(key: &Type, value: &Type) -> Vec<CompletionItem> {
             vec![function_type(vec![key.clone(), value.clone()], Type::Unit)],
             map_type,
         ),
-    ]);
+    ]
+}
+
+/// Mirrors `TypeChecker::check_set_method`'s signatures.
+fn set_method_completions(elem: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(set_method_table(elem));
     items.push(field_item("size", Type::Num));
     items
 }
 
-/// A `Set`'s built-in methods (mirrors `TypeChecker::check_set_method`'s signatures) plus
-/// its `size` field.
-fn set_method_completions(elem: &Type) -> Vec<CompletionItem> {
+fn set_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
     let set_type = Type::Set(Box::new(elem.clone()));
-    let mut items = method_items(vec![
+    vec![
         ("has", vec![elem.clone()], Type::Bool),
         ("add", vec![elem.clone()], set_type.clone()),
         ("remove", vec![elem.clone()], set_type.clone()),
@@ -1851,7 +1778,120 @@ fn set_method_completions(elem: &Type) -> Vec<CompletionItem> {
             vec![function_type(vec![elem.clone()], Type::Unit)],
             set_type,
         ),
-    ]);
-    items.push(field_item("size", Type::Num));
-    items
+    ]
+}
+
+#[cfg(test)]
+mod builtin_table_tests {
+    //! Guards `text_method_table`/`array_method_table`/`map_method_table`/
+    //! `set_method_table` against drifting from the checker's own signatures
+    //! (`src/typechecker/checker/calls.rs`): for every entry, synthesize a call, check it,
+    //! and compare the checker's own inferred type against the table's declared one.
+
+    use super::*;
+
+    fn literal_for(ty: &Type) -> String {
+        match ty {
+            Type::Num => "0".to_string(),
+            Type::Text => "\"a\"".to_string(),
+            Type::Bool => "true".to_string(),
+            Type::Unit => "$".to_string(),
+            Type::Function {
+                parameters,
+                return_type,
+            } => {
+                let names: Vec<String> = (0..parameters.len()).map(|i| format!("p{i}")).collect();
+                format!("({}) => {}", names.join(", "), literal_for(return_type))
+            }
+            other => panic!("no literal synthesizer in this guard test for {other:?}"),
+        }
+    }
+
+    /// `replace`/`replaceAll`/`repeat` reject some otherwise well-typed literals at
+    /// compile time (an empty `from`, a non-positive `repeat` count, …) — these three
+    /// need arguments chosen to satisfy that, not just their parameter types.
+    fn arguments_for(name: &str, parameters: &[Type]) -> Vec<String> {
+        match name {
+            "replace" => vec!["\"a\"".to_string(), "\"z\"".to_string(), "1".to_string()],
+            "replaceAll" => vec!["\"a\"".to_string(), "\"z\"".to_string()],
+            "repeat" => vec!["2".to_string()],
+            _ => parameters.iter().map(literal_for).collect(),
+        }
+    }
+
+    /// `ty` with every `Type::Named` called `name` replaced by `with` — substitutes a
+    /// table's generic placeholder (`map`'s `R`, `reduce`'s `A`) with a concrete type
+    /// this test can actually check a call against.
+    fn substitute(ty: &Type, name: &str, with: &Type) -> Type {
+        match ty {
+            Type::Named { name: n, .. } if n == name => with.clone(),
+            Type::Array(elem) => Type::Array(Box::new(substitute(elem, name, with))),
+            Type::Function {
+                parameters,
+                return_type,
+            } => Type::Function {
+                parameters: parameters
+                    .iter()
+                    .map(|p| substitute(p, name, with))
+                    .collect(),
+                return_type: Box::new(substitute(return_type, name, with)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    fn assert_table_matches_checker(
+        receiver: &str,
+        prelude: &str,
+        table: Vec<(&str, Vec<Type>, Type)>,
+    ) {
+        for (name, parameters, ret) in table {
+            let concrete =
+                |ty: &Type| substitute(&substitute(ty, "R", &Type::Num), "A", &Type::Num);
+            let parameters: Vec<Type> = parameters.iter().map(concrete).collect();
+            let ret = concrete(&ret);
+            let call = format!(
+                "{receiver}.{name}({})",
+                arguments_for(name, &parameters).join(", ")
+            );
+            let text = format!("^ = () -> Num => <\n  {prelude}\n  {call}\n  0\n>\n");
+            let checked = check_text(Path::new("guard.qn"), &text)
+                .unwrap_or_else(|error| panic!("`{call}` must check clean: {error:?}"));
+            let start = text.find(&call).expect("the call is in its own text") as u32;
+            let span = Span::in_root(start, start + call.len() as u32);
+            let inferred = checked
+                .types
+                .get(&span)
+                .unwrap_or_else(|| panic!("no recorded type for `{call}`"));
+            assert_eq!(
+                type_label(inferred),
+                type_label(&ret),
+                "`{name}`'s table return type disagrees with the checker"
+            );
+        }
+    }
+
+    #[test]
+    fn text_method_table_matches_the_checker() {
+        assert_table_matches_checker("s", "s = \"aaa\"", text_method_table());
+    }
+
+    #[test]
+    fn array_method_table_matches_the_checker() {
+        assert_table_matches_checker("xs", "xs = [0]", array_method_table(&Type::Num));
+    }
+
+    #[test]
+    fn map_method_table_matches_the_checker() {
+        assert_table_matches_checker(
+            "m",
+            "m = [|\"a\" => 0|]",
+            map_method_table(&Type::Text, &Type::Num),
+        );
+    }
+
+    #[test]
+    fn set_method_table_matches_the_checker() {
+        assert_table_matches_checker("xs", "xs = [|0|]", set_method_table(&Type::Num));
+    }
 }

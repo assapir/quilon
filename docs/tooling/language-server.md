@@ -52,9 +52,9 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   Each item carries a protocol `kind` (variable, function, field, method, class, module,
   or enum member) and a `detail` string with the type or signature, in the same spelling
   hover uses. A completion request's document is normally unparseable at the cursor
-  (`response.` has no member yet); rather than keep a second, cached copy of the
-  last-clean document around, the server re-derives a checkable document from the CURRENT
-  buffer by deleting just the incomplete token at the cursor — the trailing `.member`
+  (`response.` has no member yet). The server holds no cached copy of any earlier,
+  cleanly-parsing version of the document: it re-derives a checkable document from the
+  CURRENT buffer by deleting the incomplete token at the cursor — the trailing `.member`
   being typed, or the bare word being typed. What is left parses (and, but for the module
   case, checks) like any other snapshot, one token earlier. The one trade-off: a cursor
   inside an expression that is ALREADY broken for an unrelated reason (a stray paren
