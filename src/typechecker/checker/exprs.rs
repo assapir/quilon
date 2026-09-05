@@ -538,8 +538,9 @@ impl TypeChecker {
                                     .iter()
                                     .find(|(f, _)| f == field_name)
                                     .map(|(_, t)| t.clone())
-                                    .ok_or_else(|| TypeError::UndefinedVariable {
-                                        name: format!("field {} in type {}", field_name, type_name),
+                                    .ok_or_else(|| TypeError::UnknownConstructorField {
+                                        type_name: type_name.clone(),
+                                        field: field_name.clone(),
                                         span: span.clone(),
                                     })?;
 
@@ -557,11 +558,9 @@ impl TypeChecker {
                             // Check all fields are provided
                             for (field_name, _) in type_fields.iter() {
                                 if !provided_fields.contains(field_name) {
-                                    return Err(TypeError::UndefinedVariable {
-                                        name: format!(
-                                            "Missing field {} in constructor for {}",
-                                            field_name, type_name
-                                        ),
+                                    return Err(TypeError::MissingConstructorField {
+                                        type_name: type_name.clone(),
+                                        field: field_name.clone(),
                                         span: span.clone(),
                                     });
                                 }

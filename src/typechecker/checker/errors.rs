@@ -55,6 +55,8 @@ impl TypeError {
             TypeError::MethodCalledAsFunction { .. } => Code::MethodCalledAsFunction,
             TypeError::NotRenderable { .. } => Code::NotRenderable,
             TypeError::StaticCallNeedsReceiverValue { .. } => Code::StaticCallNeedsReceiverValue,
+            TypeError::MissingConstructorField { .. } => Code::MissingConstructorField,
+            TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
         }
     }
@@ -172,6 +174,12 @@ impl TypeError {
             TypeError::StaticCallNeedsReceiverValue { method, .. } => {
                 diagnostic.help(format!("call it on a value: `x.{method}()`"))
             }
+            TypeError::MissingConstructorField {
+                type_name, field, ..
+            } => diagnostic.help(format!("add `{field} = …` to the `{type_name} {{ }}`")),
+            TypeError::UnknownConstructorField { field, .. } => {
+                diagnostic.help(format!("remove `{field}`, or fix its name"))
+            }
             TypeError::ReservedName { name, .. } => diagnostic.help(format!(
                 "pick another name; a record field or method may still be called `{name}`"
             )),
@@ -224,6 +232,8 @@ impl TypeError {
             | TypeError::MethodCalledAsFunction { span, .. }
             | TypeError::NotRenderable { span, .. }
             | TypeError::StaticCallNeedsReceiverValue { span, .. }
+            | TypeError::MissingConstructorField { span, .. }
+            | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. } => span,
         }
     }
@@ -666,6 +676,16 @@ impl std::fmt::Display for TypeError {
                     "`{method}` reads `it`, so `{type_name}.{method}()` needs a value of \
                      {type_name} — there is none"
                 )
+            }
+            TypeError::MissingConstructorField {
+                type_name, field, ..
+            } => {
+                write!(f, "`{type_name} {{ }}` is missing field `{field}`")
+            }
+            TypeError::UnknownConstructorField {
+                type_name, field, ..
+            } => {
+                write!(f, "{type_name} has no field `{field}`")
             }
             TypeError::ReservedName {
                 name, reserved_for, ..

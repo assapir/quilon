@@ -112,6 +112,8 @@ codes! {
     NoEntryPoint = 339 => "no `^` entry point",
     StaticCallNeedsReceiverValue = 340 => "static call on a method that reads its receiver",
     MutableStoreOfImmutable = 341 => "store into a mutable container aliasing an immutable value",
+    MissingConstructorField = 342 => "missing constructor field",
+    UnknownConstructorField = 343 => "unknown constructor field",
     ReservedName = 344 => "reserved name",
 
     // Family 4 — codegen and build
