@@ -4,6 +4,20 @@ use quilon::lexer::Lexer;
 use quilon::parser::parse;
 use quilon::typechecker::TypeChecker;
 
+/// Type-check `source`, then generate it with the checker's type-oracle wired in — the
+/// path every real compilation takes.
+fn generate_checked(source: &str) -> Result<String, String> {
+    let tokens = Lexer::tokenize(source).unwrap();
+    let program = parse(&tokens).unwrap();
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .expect("type check failed");
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
+    generator.generate(&program)
+}
+
 #[test]
 fn test_ok_constructor_codegen() {
     let source = r#"
@@ -13,15 +27,7 @@ fn test_ok_constructor_codegen() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    // Generate LLVM IR
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
+    let result = generate_checked(source);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 
     let ir = result.unwrap();
@@ -40,15 +46,7 @@ fn test_notok_constructor_codegen() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    // Generate LLVM IR
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
+    let result = generate_checked(source);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 
     let ir = result.unwrap();
@@ -67,15 +65,7 @@ fn test_both_constructors_codegen() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    // Generate LLVM IR
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
+    let result = generate_checked(source);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 
     let ir = result.unwrap();
@@ -95,18 +85,7 @@ fn test_function_returning_result() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(
-        checker.check_program(&program).is_ok(),
-        "Type check failed: {:?}",
-        checker.check_program(&program).err()
-    );
-
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
+    let result = generate_checked(source);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 
     let ir = result.unwrap();
@@ -127,14 +106,7 @@ fn test_text_payload_not_corrupted() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
+    let result = generate_checked(source);
     assert!(result.is_ok(), "Codegen failed: {:?}", result.err());
 
     let ir = result.unwrap();
@@ -153,16 +125,7 @@ fn test_string_in_constructor() {
         >
     "#;
 
-    let tokens = Lexer::tokenize(source).unwrap();
-    let program = parse(&tokens).unwrap();
-    let mut checker = TypeChecker::new();
-    assert!(checker.check_program(&program).is_ok());
-
-    // Generate LLVM IR
-    let context = Context::create();
-    let mut generator = CodeGenerator::new(&context, "test");
-    let result = generator.generate(&program);
-    // String handling might not be fully implemented, but codegen should not crash
-    // For now, just verify it doesn't panic
-    let _ = result;
+    // String handling might not be fully implemented, but codegen should not crash.
+    // For now, just verify it doesn't panic.
+    let _ = generate_checked(source);
 }

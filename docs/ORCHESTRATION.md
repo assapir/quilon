@@ -119,5 +119,7 @@ Whole-program compilation (modules merged into one program). Conservative Boehm 
 `quilon-rt/vendor/bdwgc` submodule and statically linked. A new
 language feature typically touches lexer → parser → AST → checker → codegen, in that order, with
 tests following `tokenize → parse → check → generate → run`. The checker records each expression's
-type into a side-table (the **type-oracle**) that codegen consumes — prefer extending that over
-re-inferring types in codegen.
+type into a side-table (the **type-oracle**) that codegen reads for everything it doesn't already
+carry from a checked signature or declaration; codegen never re-derives a type itself, and a
+missing oracle entry is a compiler bug, reported with the expression's span, not a fallback guess —
+extend the oracle instead of adding inference to codegen.

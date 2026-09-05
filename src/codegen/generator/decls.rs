@@ -279,7 +279,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `name(args)` to dispatch as an indirect call: the checker already recorded this
         // binding's type as `Type::Function` in the oracle, keyed by the CALL's own
         // identifier expression, which is what codegen reads at the call site.
-        let inferred_qty = self.infer_type(&declaration.value);
+        let inferred_qty =
+            self.oracle_type(&declaration.value, "a variable declaration's value")?;
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
         self.track_named_record_binding(&declaration.name, &inferred_qty);
@@ -562,7 +563,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // then rewrites the parameter slots and `br`s back here. The parameter allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(declaration, &symbol) {
+        let body_value = if self.body_has_self_tail_call(declaration, &symbol)? {
             let parameter_slots: Vec<PointerValue<'ctx>> = declaration
                 .parameters
                 .iter()

@@ -386,7 +386,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inline lowering below; they are not entered in `self.overloads`.
         let sym = operator.symbol();
         if self.overloads.contains_key(sym) {
-            let arg_types = [self.infer_type(left), self.infer_type(right)];
+            let arg_types = [
+                self.oracle_type(left, "a binary operator's left operand")?,
+                self.oracle_type(right, "a binary operator's right operand")?,
+            ];
             if let Some(symbol) = self.resolve_overload_symbol(sym, &arg_types) {
                 let l = self.generate_expression(left)?;
                 let r = self.generate_expression(right)?;

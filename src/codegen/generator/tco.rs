@@ -31,7 +31,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &self,
         declaration: &FunctionDeclaration,
         self_symbol: &str,
-    ) -> bool {
+    ) -> Result<bool, String> {
         self.expression_has_self_tail_call(
             &declaration.body,
             self_symbol,
@@ -46,23 +46,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         expression: &Expression,
         self_symbol: &str,
         arity: usize,
-    ) -> bool {
+    ) -> Result<bool, String> {
         match expression {
             Expression::Call { .. } => self.is_self_tail_call(expression, self_symbol, arity),
             Expression::Block { statements, .. } => match statements.last() {
                 Some(crate::ast::Statement::Expression(tail)) => {
                     self.expression_has_self_tail_call(tail, self_symbol, arity)
                 }
-                _ => false,
+                _ => Ok(false),
             },
             Expression::If { then, else_, .. } => {
-                self.expression_has_self_tail_call(then, self_symbol, arity)
-                    || self.expression_has_self_tail_call(else_, self_symbol, arity)
+                Ok(
+                    self.expression_has_self_tail_call(then, self_symbol, arity)?
+                        || self.expression_has_self_tail_call(else_, self_symbol, arity)?,
+                )
             }
-            Expression::Match { arms, .. } => arms
-                .iter()
-                .any(|arm| self.expression_has_self_tail_call(&arm.body, self_symbol, arity)),
-            _ => false,
+            Expression::Match { arms, .. } => {
+                for arm in arms {
+                    if self.expression_has_self_tail_call(&arm.body, self_symbol, arity)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
         }
     }
 
@@ -77,7 +84,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         expression: &Expression,
         self_symbol: &str,
         arity: usize,
-    ) -> bool {
+    ) -> Result<bool, String> {
         let Expression::Call {
             function,
             arguments,
@@ -85,10 +92,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             ..
         } = expression
         else {
-            return false;
+            return Ok(false);
         };
         let Expression::Identifier { name, .. } = function.as_ref() else {
-            return false;
+            return Ok(false);
         };
         // A self-call may leave off a trailing `Site` for the compiler to fill in, and it is
         // still the same call — so its arity matches one short of the parameter slots. This
@@ -97,17 +104,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // silently starts overflowing the stack.
         if arguments.len() != arity
             && !(arguments.len() + 1 == arity
-                && self.fills_call_site(name, arguments, *member_call))
+                && self.fills_call_site(name, arguments, *member_call)?)
         {
-            return false;
+            return Ok(false);
         }
         // A name shadowed by a sum-type constructor, or a call that lowers to a runtime
         // intrinsic instead of a Quilon function, is not a self-call — the same question
         // call lowering asks, so the two cannot disagree (see `intrinsic_lowering`).
         if self.sum_variants.contains_key(name.as_str())
-            || self.intrinsic_lowering(name, arguments).is_some()
+            || self.intrinsic_lowering(name, arguments)?.is_some()
         {
-            return false;
+            return Ok(false);
         }
         // A method on the receiver's type claims the name first, exactly as in call
         // lowering — so a function calling `recv.name(...)` on a type whose method shares
@@ -118,17 +125,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // symbol, and it is still not this function: `t.contains(s)` inside a
             // top-level `contains` is `Text`'s, so taking it for recursion compiled the
             // call into this function's own loop back-edge.
-            None if *member_call => return false,
+            None if *member_call => return Ok(false),
             None if self.overloads.contains_key(name.as_str()) => {
-                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
+                let arg_types = self.oracle_argument_types(arguments)?;
                 match self.resolve_overload_symbol(name, &arg_types) {
                     Some(s) => s,
-                    None => return false,
+                    None => return Ok(false),
                 }
             }
             None => name.clone(),
         };
-        symbol == self_symbol
+        Ok(symbol == self_symbol)
     }
 
     /// Emit `expression` in tail position under an active [`Tco`] context. Returns `Some(value)`
@@ -160,7 +167,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 arguments, span, ..
             } => {
                 let self_symbol = self.tco.as_ref().unwrap().self_symbol.clone();
-                if self.is_self_tail_call(expression, &self_symbol, arity) {
+                if self.is_self_tail_call(expression, &self_symbol, arity)? {
                     // A self-call that omitted its trailing `Site` gets one filled in for
                     // the loop's parameter slot, exactly as an ordinary call would.
                     let site = match arguments.len() < arity {
