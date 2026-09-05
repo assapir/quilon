@@ -7,7 +7,8 @@
 //! type, to prove the general mechanism subsumes the old special case.
 
 mod common;
-use common::{assert_exit, assert_type_error};
+use common::{assert_exit, assert_type_error, assert_type_error_code};
+use quilon::diagnostic::codes::Code;
 
 #[test]
 fn nullary_enum_matched_exhaustively() {
@@ -169,6 +170,29 @@ fn heterogeneous_payload_position_is_rejected() {
 fn duplicate_variant_names_are_rejected() {
     // Variant (constructor) names must be unique per scope — `Red` twice fails.
     assert_type_error("A = Red / Green\nB = Red / Blue");
+}
+
+#[test]
+fn num_redeclared_as_a_sum_type_is_rejected() {
+    // A built-in type's name is reserved: a type declared under it is refused as such,
+    // not as a duplicate of some binding.
+    assert_type_error_code("Num = Foo / Bar", Code::ReservedName);
+}
+
+#[test]
+fn bool_redeclared_as_a_sum_type_is_rejected() {
+    assert_type_error_code("Bool = Yes / No", Code::ReservedName);
+}
+
+#[test]
+fn text_redeclared_as_a_record_type_is_rejected() {
+    assert_type_error_code("Text = { x :: Num }", Code::ReservedName);
+}
+
+#[test]
+fn result_and_site_redeclared_are_reserved_not_duplicates() {
+    assert_type_error_code("Result = A / B", Code::ReservedName);
+    assert_type_error_code("Site = A / B", Code::ReservedName);
 }
 
 #[test]

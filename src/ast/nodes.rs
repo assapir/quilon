@@ -472,8 +472,8 @@ pub const ASSERT: &str = "assert";
 pub const EXPECT: &str = "expect";
 
 /// The matchers the compiler provides, in the only position they mean anything: the second
-/// argument of an [`ASSERT`]/[`EXPECT`] call. Elsewhere these are ordinary names, free for a
-/// program to use.
+/// argument of an [`ASSERT`]/[`EXPECT`] call. Like every name in [`reserved_for`], a program
+/// may not bind one; a member (a record field or method) may still carry the name.
 ///
 /// Compiler-provided rather than written in `.qn` because a matcher holds a value of the type
 /// under test, which without generics would need one matcher type per value type. `not` takes
@@ -503,6 +503,50 @@ pub fn is_run_test_case(name: &str) -> bool {
     name == RUN_TEST_CASE
 }
 
+/// The built-in type names, as written in an annotation.
+pub const NUM_TYPE_NAME: &str = "Num";
+pub const BOOL_TYPE_NAME: &str = "Bool";
+pub const TEXT_TYPE_NAME: &str = "Text";
+pub const RESULT_TYPE_NAME: &str = "Result";
+pub const MAP_TYPE_NAME: &str = "Map";
+pub const SET_TYPE_NAME: &str = "Set";
+pub const BUILTIN_TYPE_NAMES: &[&str] = &[
+    NUM_TYPE_NAME,
+    BOOL_TYPE_NAME,
+    TEXT_TYPE_NAME,
+    RESULT_TYPE_NAME,
+    SITE_TYPE_NAME,
+    MAP_TYPE_NAME,
+    SET_TYPE_NAME,
+];
+
+/// The two constructors of the built-in [`RESULT_TYPE_NAME`] sum.
+pub const OK: &str = "Ok";
+pub const NOT_OK: &str = "NotOk";
+pub const RESULT_CONSTRUCTORS: &[&str] = &[OK, NOT_OK];
+
+/// What `name` is reserved for, or `None` when a program may bind it. The one registry of
+/// the names a program may not bind — as a type, a `=`/`:=` binding, a function, a
+/// parameter, a lambda parameter, or a pattern binding — built from the constants each
+/// name is otherwise known by, so it can never disagree with them. A member (a record
+/// field or method) is not a binding and may carry any of these names: `Text`'s own
+/// `.contains` does. The returned phrase completes "reserved for …" in the diagnostic.
+pub fn reserved_for(name: &str) -> Option<&'static str> {
+    if BUILTIN_TYPE_NAMES.contains(&name) {
+        Some("a built-in type")
+    } else if RESULT_CONSTRUCTORS.contains(&name) {
+        Some("a constructor of `Result`")
+    } else if name == RECEIVER {
+        Some("the receiver")
+    } else if is_assertion(name) {
+        Some("an assertion")
+    } else if is_matcher(name) {
+        Some("a matcher")
+    } else {
+        None
+    }
+}
+
 /// The sum variant `isOk()` / `isNotOk()` asks about, or `None` for a matcher that reads no
 /// variant. Shared by the checker (which requires the value's type to carry that variant) and
 /// codegen (which compares against its tag), so the two can never disagree — and named
@@ -510,8 +554,8 @@ pub fn is_run_test_case(name: &str) -> bool {
 /// `NotOk`.
 pub fn matcher_variant(matcher: &str) -> Option<&'static str> {
     match matcher {
-        "isOk" => Some("Ok"),
-        "isNotOk" => Some("NotOk"),
+        "isOk" => Some(OK),
+        "isNotOk" => Some(NOT_OK),
         _ => None,
     }
 }
@@ -1160,9 +1204,9 @@ pub struct SumVariant {
 /// `<unknown>`.
 pub fn type_label(ty: &Type) -> String {
     match ty {
-        Type::Num => "Num".to_string(),
-        Type::Text => "Text".to_string(),
-        Type::Bool => "Bool".to_string(),
+        Type::Num => NUM_TYPE_NAME.to_string(),
+        Type::Text => TEXT_TYPE_NAME.to_string(),
+        Type::Bool => BOOL_TYPE_NAME.to_string(),
         Type::Unit => "$".to_string(),
         Type::Array(elem) => format!("[]{}", type_label(elem)),
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),

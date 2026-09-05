@@ -619,11 +619,11 @@ fn a_method_and_a_top_level_function_of_one_name_each_answer_their_own_form() {
 
 #[test]
 fn a_tail_call_to_a_built_in_method_of_the_same_name_is_not_recursion() {
-    // The tail `t.contains(s)` inside a top-level `contains` is `Text`'s built-in, which
-    // declares no method symbol of its own — taking that miss for a self-call compiled it
-    // into this function's loop back-edge and the program hung.
+    // The tail `t.trim()` inside a top-level `trim` is `Text`'s built-in, which declares
+    // no method symbol of its own — taking that miss for a self-call compiled it into this
+    // function's loop back-edge and the program hung.
     assert_exit(
-        "contains = (t :: Text, s :: Text) -> Bool => < t.contains(s) >\n^ = () -> Num => < contains(\"hello\", \"ell\") ? 7 : 3 >",
+        "trim = (t :: Text) -> Text => < t.trim() >\n^ = () -> Num => < trim(\"  hello \").size == 5 ? 7 : 3 >",
         7,
     );
 }
@@ -1364,15 +1364,15 @@ fn run_ok_text_payload_constructs_and_dispatches() {
 fn result_any_payload_crosses_a_generic_parameter() {
     // The uniform Result layout (`{ i8 tag, {ptr,i64} slot }`) lets a Result carrying ANY
     // payload — Num, Text, []Text, a Num NotOk — pass through a generic `(r :: Result)`
-    // parameter that only matches by TAG. `isOk` returns 1 for Ok, 0 for NotOk; summing the
+    // parameter that only matches by TAG. `okTag` returns 1 for Ok, 0 for NotOk; summing the
     // four calls yields 3 (three Ok, one NotOk).
     assert_exit(
-        "isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
+        "okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
-         \x20 a = isOk(Ok(42))\n\
-         \x20 b = isOk(Ok(\"hi\"))\n\
-         \x20 c = isOk(Ok([\"x\", \"y\"]))\n\
-         \x20 d = isOk(NotOk(7))\n\
+         \x20 a = okTag(Ok(42))\n\
+         \x20 b = okTag(Ok(\"hi\"))\n\
+         \x20 c = okTag(Ok([\"x\", \"y\"]))\n\
+         \x20 d = okTag(NotOk(7))\n\
          \x20 a + b + c + d\n\
          >",
         3,
@@ -1417,12 +1417,12 @@ fn result_bool_payload_round_trips() {
 fn result_user_sum_payload_boxes_crosses_and_extracts() {
     // A payload wider than the uniform `{ptr,i64}` slot — a user sum value `Circle(5)` — is
     // BOXED into the slot, so `Ok(Circle(5))` still crosses a generic `(r :: Result)` parameter
-    // (isOk), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
+    // (okTag), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
     assert_exit(
         "Shape = Circle(Num) / Rect(Num, Num)\n\
-         isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
+         okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
-         \x20 a = isOk(Ok(Circle(5)))\n\
+         \x20 a = okTag(Ok(Circle(5)))\n\
          \x20 area = Ok(Rect(3, 4)) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(w, h) => w * h) | NotOk(_) => 0\n\
          \x20 a + area\n\
          >",
@@ -1435,9 +1435,9 @@ fn result_nested_result_payload_boxes_and_extracts() {
     // A nested `Result` payload (also wider than the slot) boxes and unboxes: `Ok(Ok(7))`
     // crosses a generic parameter and the inner Num is extracted through both layers.
     assert_exit(
-        "isOk = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
+        "okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
-         \x20 a = isOk(Ok(Ok(7)))\n\
+         \x20 a = okTag(Ok(Ok(7)))\n\
          \x20 inner = Ok(Ok(7)) ? | Ok(ir) => (ir ? | Ok(x) => x | NotOk(_) => 0) | NotOk(_) => 0\n\
          \x20 a + inner\n\
          >",

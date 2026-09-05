@@ -12,6 +12,7 @@ impl Environment {
     pub fn new() -> Self {
         Environment {
             scopes: vec![HashMap::new()],
+            enforce_reserved_names: true,
         }
     }
 
@@ -72,8 +73,8 @@ impl Environment {
         )
     }
 
-    /// Define a parameter (or an `=` method's receiver, slot 0): its value belongs to
-    /// the caller, recorded as its own argument slot under `declaration`.
+    /// Define a parameter: its value belongs to the caller, recorded as its own argument
+    /// slot under `declaration`.
     pub(super) fn define_parameter(
         &mut self,
         name: String,
@@ -82,28 +83,57 @@ impl Environment {
         slot: usize,
         span: Span,
     ) -> Result<(), TypeError> {
-        let value_aliasing = ValueAliasing {
-            parameters: vec![(declaration, slot, name.clone())],
-            ..ValueAliasing::default()
-        };
-        self.define_symbol(
-            name,
-            Symbol {
-                type_,
-                mutable: false,
-                owner: declaration,
-                value_aliasing,
-                result_aliasing: None,
-                setter_receiver: false,
-                constant: false,
+        let symbol = Self::parameter_symbol(&name, type_, declaration, slot);
+        self.define_symbol(name, symbol, span)
+    }
+
+    /// Define an `=` method's receiver `it` — parameter slot 0. The checker's own binding
+    /// of a reserved name, so it skips the reserved-name check a user's parameter gets.
+    pub(super) fn define_receiver(
+        &mut self,
+        type_: Type,
+        declaration: u64,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let symbol = Self::parameter_symbol(crate::ast::RECEIVER, type_, declaration, 0);
+        self.insert_symbol(crate::ast::RECEIVER.to_string(), symbol, span)
+    }
+
+    fn parameter_symbol(name: &str, type_: Type, declaration: u64, slot: usize) -> Symbol {
+        Symbol {
+            type_,
+            mutable: false,
+            owner: declaration,
+            value_aliasing: ValueAliasing {
+                parameters: vec![(declaration, slot, name.to_string())],
+                ..ValueAliasing::default()
             },
-            span,
-        )
+            result_aliasing: None,
+            setter_receiver: false,
+            constant: false,
+        }
+    }
+
+    /// Register one of the checker's own built-in types (`Result`, `Site`) under its
+    /// reserved name — the one registration the reserved-name check does not apply to.
+    pub(super) fn define_builtin(&mut self, name: &str, type_: Type) {
+        let symbol = Symbol {
+            type_,
+            mutable: false,
+            owner: 0,
+            value_aliasing: ValueAliasing::default(),
+            result_aliasing: None,
+            setter_receiver: false,
+            constant: false,
+        };
+        let root = self.scopes.first_mut().expect("the root scope exists");
+        root.insert(name.to_string(), symbol);
     }
 
     /// Define a setter's receiver `it`: immutable as a NAME (no rebinding), but its value
     /// is mutable at every call site. `owner` is the ENCLOSING declaration, so the
     /// receiver — which outlives the setter's own frame — survives the return filter.
+    /// The checker's own binding of a reserved name, so no reserved-name check.
     pub(super) fn define_setter_receiver(
         &mut self,
         name: String,
@@ -111,7 +141,7 @@ impl Environment {
         owner: u64,
         span: Span,
     ) -> Result<(), TypeError> {
-        self.define_symbol(
+        self.insert_symbol(
             name,
             Symbol {
                 type_,
@@ -152,7 +182,18 @@ impl Environment {
         )
     }
 
+    /// Bind a user-written name: refused when the language reserves it (see
+    /// `ast::reserved_for`), then when the current scope already holds it.
     fn define_symbol(&mut self, name: String, symbol: Symbol, span: Span) -> Result<(), TypeError> {
+        if self.enforce_reserved_names
+            && let Some(error) = TypeError::reserved_name(&name, &span)
+        {
+            return Err(error);
+        }
+        self.insert_symbol(name, symbol, span)
+    }
+
+    fn insert_symbol(&mut self, name: String, symbol: Symbol, span: Span) -> Result<(), TypeError> {
         let current_scope = self.scopes.last_mut().unwrap();
 
         if current_scope.contains_key(&name) {

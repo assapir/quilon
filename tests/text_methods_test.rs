@@ -422,9 +422,11 @@ fn split_results_concatenate_via_array_plus() {
 
 #[test]
 fn text_method_wins_over_user_overload_on_text_receiver() {
-    // A user `contains` on Num coexists; the Text receiver still resolves the built-in.
+    // A user `trim` on Num coexists; the Text receiver still resolves the built-in.
+    // (`contains` itself is a reserved name — the matcher — so a Text method name that is
+    // not one stands in.)
     assert_exit(
-        "contains = (n :: Num) -> Bool => < n > 0 >\n^ = () -> Num => <\n  a = \"Hello\".contains(\"ell\") ? 1 : 0\n  b = contains(5) ? 1 : 0\n  a * 10 + b\n>",
+        "trim = (n :: Num) -> Bool => < n > 0 >\n^ = () -> Num => <\n  a = \"  Hello \".trim().size == 5 ? 1 : 0\n  b = trim(5) ? 1 : 0\n  a * 10 + b\n>",
         11,
     );
 }

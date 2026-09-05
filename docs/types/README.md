@@ -6,6 +6,10 @@ sidebar:
 
 # Types
 
+The built-in type names — `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set` — are
+[reserved](../tooling/errors.md#qn344--reserved-name): a program names them in annotations
+and declares its own types under other names.
+
 ## `Num`
 All numbers — integers and floats are one unified type: an IEEE-754 double (64-bit float).
 ```quilon
