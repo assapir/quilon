@@ -64,6 +64,46 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A capture-free nested function ending in a `?` match, followed by one that DOES capture
+/// an enclosing local (mirrors `corelib/cli.qn`'s `getOpt`). Guards against the builder's
+/// debug location leaking from the first function's last scope into the second's closure
+/// environment allocation, which the verifier rejects.
+#[test]
+fn debug_codegen_verifies_module_for_sibling_nested_functions() {
+    let src = "\
+<< core.io
+
+outer = (name :: Text) -> Num => <
+  wanted :: Text = \"--\" + name
+  optKey = (tok :: Text) -> Text => < tok.indexOf(\"=\") ? | Ok(p) => tok.slice(0, p) | NotOk(_) => tok >
+  matches = (tok :: Text) -> Bool => < optKey(tok) == name || optKey(tok) == wanted >
+  matches(\"--x=1\") ? 1 : 0
+>
+
+^ = () -> Num => < outer(\"x\") >
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgnested_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("nested.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let checked = front_end(&ql).unwrap_or_else(|e| panic!("front end failed: {e}"));
+
+    let context = Context::create();
+    let mut generator = CodeGenerator::new(&context, "main");
+    generator.set_type_table(checked.types);
+    generator.set_defer_info(checked.defer);
+    generator.enable_debug(&ql, &checked.sources);
+    generator.set_source_map(checked.sources);
+
+    // `generate` runs `module.verify()` internally, so an Err here IS the verifier failure.
+    generator.generate(&checked.program).unwrap_or_else(|e| {
+        panic!("debug codegen of sibling nested functions failed to verify: {e}")
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A function VALUE — a closure passed as an argument — has no precise DWARF type, so it is
 /// described as an opaque pointer. LLVM rejects a basic type with an empty name, and the
 /// pointee's name was empty, which made every `-g` build of a program holding a function
