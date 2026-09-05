@@ -52,6 +52,11 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **An overloaded static method is callable on the type name.** Two or more same-named
+  methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
+  rejected as needing a receiver value. A static call now resolves the specific member
+  by argument type first, the same way a value-receiver call does. Closes #371.
+
 - **A parameter's declaration span covers its name, not just its type annotation.** Go to
   definition on a parameter used to land on its `:: Type` annotation; it now lands on the
   parameter itself.
