@@ -23,7 +23,7 @@ empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 
 A map literal names each literal key once: `[|"a" => 1, "a" => 2|]` is a duplicate
 definition. Only the literal token is compared — two computed keys that happen to be
-equal are a `set` of the second, and the later entry wins.
+equal are unaffected: the later entry wins, as a `set` of the same key would.
 
 ## User-defined key types
 
