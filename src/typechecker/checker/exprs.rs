@@ -488,6 +488,11 @@ impl TypeChecker {
 
                             // Type-check each field
                             let mut provided_fields = std::collections::HashSet::new();
+                            // Field names written as a direct `name = value` entry — as
+                            // opposed to one a `<-source` spread fills in, which a later
+                            // literal may legitimately override. A SECOND literal naming
+                            // the same field is a duplicate.
+                            let mut literal_field_names = std::collections::HashSet::new();
 
                             for (field_name, field_expression) in fields {
                                 // A `<-source` entry fills every declared field at once.
@@ -531,6 +536,12 @@ impl TypeChecker {
                                     continue;
                                 }
 
+                                if !literal_field_names.insert(field_name.clone()) {
+                                    return Err(TypeError::DuplicateDefinition {
+                                        name: field_name.clone(),
+                                        span: span.clone(),
+                                    });
+                                }
                                 provided_fields.insert(field_name.clone());
 
                                 // Find the expected type for this field
@@ -613,6 +624,10 @@ impl TypeChecker {
         // The named type of the FIRST named-record spread source, if any (holds its
         // declared fields + methods) — the candidate the result may keep.
         let mut named_identity: Option<Type> = None;
+        // Field names written as a direct `name = value` entry — as opposed to one a
+        // `<-source` spread brought in, which a later literal may legitimately overwrite
+        // (functional update). A SECOND literal naming the same field is a duplicate.
+        let mut literal_field_names = std::collections::HashSet::new();
 
         for (name, value) in fields {
             if let Expression::Spread {
@@ -643,6 +658,12 @@ impl TypeChecker {
                     }
                 }
             } else {
+                if !literal_field_names.insert(name.clone()) {
+                    return Err(TypeError::DuplicateDefinition {
+                        name: name.clone(),
+                        span: value.span().clone(),
+                    });
+                }
                 let value_type = self.infer_expression(value)?;
                 match merged.iter_mut().find(|(n, _)| *n == *name) {
                     Some(slot) => slot.1 = value_type,
@@ -810,7 +831,22 @@ impl TypeChecker {
         }
         let mut key_type: Option<Type> = None;
         let mut value_type: Option<Type> = None;
+        // Two entries naming the SAME LITERAL key (`"a" => 1, "a" => 2`) is a mistake, not
+        // a legitimate "later wins" — a computed key (`k => 1, k => 2`) is unaffected,
+        // since only the literal TOKEN is compared, never an expression's evaluated value.
+        let mut seen_literal_keys: Vec<&Expression> = Vec::new();
         for (key, value) in entries {
+            if seen_literal_keys
+                .iter()
+                .any(|previous| same_literal_key(previous, key))
+            {
+                return Err(TypeError::DuplicateDefinition {
+                    name: literal_key_label(key),
+                    span: key.span().clone(),
+                });
+            }
+            seen_literal_keys.push(key);
+
             let k = self.infer_expression(key)?;
             self.check_key_type(&k, key.span())?;
             let v = self.infer_expression(value)?;
@@ -1024,4 +1060,27 @@ fn checked_range_type(
         })?;
     }
     Ok(Type::Array(Box::new(Type::Num)))
+}
+
+/// Whether `a` and `b` are the same LITERAL map key — the same literal token, never an
+/// evaluated value: a `Num`/`Text`/`Bool` literal compares equal to another of the same
+/// kind and value; anything else (a computed key, or two different literal kinds) is
+/// never considered the same key, however it would evaluate.
+fn same_literal_key(a: &Expression, b: &Expression) -> bool {
+    match (a, b) {
+        (Expression::Number { value: a, .. }, Expression::Number { value: b, .. }) => a == b,
+        (Expression::String { value: a, .. }, Expression::String { value: b, .. }) => a == b,
+        (Expression::Bool { value: a, .. }, Expression::Bool { value: b, .. }) => a == b,
+        _ => false,
+    }
+}
+
+/// A duplicate literal key's own text, for the diagnostic's `name`.
+fn literal_key_label(key: &Expression) -> String {
+    match key {
+        Expression::Number { value, .. } => value.to_string(),
+        Expression::String { value, .. } => value.clone(),
+        Expression::Bool { value, .. } => value.to_string(),
+        _ => String::new(),
+    }
 }

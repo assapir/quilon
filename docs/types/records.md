@@ -63,6 +63,14 @@ double(5)      ~ 10
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
 `Text`'s `split`, and `split("a,b", ",")` is an undefined name.
 
+Every field and method name on a type is distinct — a field declared twice, or a field and
+a method sharing a name, is a duplicate definition. Two or more methods sharing a name
+form an [overload set](../functions/overloading.md#method-overloading), each member fully
+annotated and dispatched by exact argument type; two members with the same signature are
+a duplicate definition. A constructor or record literal names each field once — a `<-source`
+spread fills fields, and a later literal may override one of them, but the same field
+written twice as a literal is a duplicate.
+
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the type name
 itself — the natural spelling for a constructor.

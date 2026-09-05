@@ -169,13 +169,12 @@ fn record_update_overrides_one_field() {
     );
 }
 
-/// A later entry overrides an earlier one (left-to-right): the last write of `x` wins.
+/// Two LITERAL entries naming the same field is a duplicate, rejected at compile time —
+/// regardless of a spread also being present (a spread-filled field a literal overrides
+/// once is fine; see `record_update_override_after_spread_wins`).
 #[test]
-fn record_update_later_wins() {
-    assert_exit(
-        "^ = () -> Num => <\n  p = { x = 1 }\n  q = { <-p, x = 5, x = 8 }\n  q.x\n>",
-        8,
-    );
+fn record_literal_rejects_the_same_field_named_twice() {
+    assert_type_error("^ = () -> Num => <\n  p = { x = 1 }\n  q = { <-p, x = 5, x = 8 }\n  q.x\n>");
 }
 
 /// Precedence follows SOURCE ORDER, not override-vs-spread: an explicit field written

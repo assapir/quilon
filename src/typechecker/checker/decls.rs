@@ -318,6 +318,23 @@ impl TypeChecker {
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
+                // A declared field name must be unique, and distinct from every method
+                // name — `it.a` would otherwise read one of two conflicting members with
+                // no way to say which. Two methods sharing a name are a separate case,
+                // handled below in `check_type_methods`, as either a duplicate signature
+                // or a legitimate overload set.
+                let mut seen_field_names = std::collections::HashSet::new();
+                for (field_name, _) in fields {
+                    if !seen_field_names.insert(field_name.as_str())
+                        || methods.iter().any(|method| &method.name == field_name)
+                    {
+                        return Err(TypeError::DuplicateDefinition {
+                            name: field_name.clone(),
+                            span: declaration.span.clone(),
+                        });
+                    }
+                }
+
                 // The declaration itself, built once: every method's `it` binding and the
                 // registered type are the same record, so they share one copy of it. Each
                 // field's annotation is resolved (like a parameter's) so a field typed as a
@@ -376,6 +393,18 @@ impl TypeChecker {
         for method in methods {
             if crate::ast::is_operator_symbol(&method.name) {
                 self.register_operator_member(self_type, method)?;
+            }
+        }
+
+        // How many times each non-operator name appears in this type's own method list —
+        // 2+ makes the name an overload set, dispatched by exact argument type the same
+        // way an operator member's already is. A single method under a name keeps
+        // today's inferred-return-type, non-overload path unchanged.
+        let mut method_name_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for method in methods {
+            if !crate::ast::is_operator_symbol(&method.name) {
+                *method_name_counts.entry(method.name.as_str()).or_insert(0) += 1;
             }
         }
 
@@ -458,6 +487,30 @@ impl TypeChecker {
             // otherwise-uninferable empty collection literal in the body can take its
             // element type from it (see `infer_expression_expecting`).
             let annotated_return_type = method.return_type.as_ref().map(|t| self.resolve_type(t));
+
+            // Two or more methods sharing a name on the same type form an overload set,
+            // dispatched by exact argument type — the rule an operator member already
+            // follows (`register_operator_member`), reusing the same registration tail
+            // (exact-duplicate-signature rejection, the unannotated-return-type report,
+            // and the shared `overloads` table `check_call` dispatches every member
+            // through). Registered under a name qualified by its type, so it cannot
+            // collide with an unrelated top-level overload set, and before the body is
+            // checked, so a self-call and a call to an earlier sibling member both
+            // resolve. A single method under a name is unaffected.
+            if method_name_counts
+                .get(method.name.as_str())
+                .copied()
+                .unwrap_or(0)
+                > 1
+            {
+                self.finish_overload_registration(
+                    &format!("{type_name}.{}", method.name),
+                    &method.span,
+                    resolved_parameter_types.clone(),
+                    annotated_return_type.clone(),
+                )?;
+            }
+
             let body_type =
                 self.infer_expression_expecting(&method.body, annotated_return_type.as_ref())?;
             let resolved_return_type = if let Some(resolved) = annotated_return_type {

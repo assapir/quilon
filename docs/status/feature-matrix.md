@@ -17,7 +17,7 @@ sidebar:
 | `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`at`/`graphemes`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | `Text = []Grapheme` model: `at`/`graphemes` grapheme access, and the composable methods self-hosted in Quilon (`corelib/text.qn`) over the native primitive floor | ✅ |
 | Ad-hoc overloading: same-named typed definitions, exact-type dispatch | ✅ |
-| Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads | ✅ |
+| Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads; 2+ same-named methods on one type form an overload set | ✅ |
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]`, in-place element write `arr[i] := v` on a `:=`-bound array | ✅ |

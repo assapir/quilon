@@ -295,7 +295,7 @@ impl TypeChecker {
     /// matching and conditionals, so it must return `Bool`; arithmetic operators are
     /// unconstrained. An unannotated return is left to the missing-annotation report. A
     /// duplicate signature would make every call to the name ambiguous.
-    fn finish_overload_registration(
+    pub(super) fn finish_overload_registration(
         &mut self,
         name: &str,
         span: &Span,

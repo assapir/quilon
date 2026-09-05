@@ -32,6 +32,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.render_overrides.insert(type_name.clone());
         }
 
+        // 2+ methods sharing a name form an overload set (mirrors the type checker's
+        // `check_type_methods`) — each member then needs its OWN per-signature symbol
+        // rather than the plain `{Type}_{method}` a single definition is emitted under.
+        let mut method_name_counts: HashMap<&str, usize> = HashMap::new();
+        for method in methods {
+            if !crate::ast::is_operator_symbol(&method.name) {
+                *method_name_counts.entry(method.name.as_str()).or_insert(0) += 1;
+            }
+        }
+
         // Parameter 0 of a receiver-dispatched method is the receiver `it`: a pointer for
         // a record, the value struct for a sum. The shared boundary rule handles both
         // (a bare `Named` name that is a registered sum lowers to the sum struct).
@@ -44,7 +54,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             if crate::ast::is_operator_symbol(&method.name) {
                 continue;
             }
-            let mangled = method_symbol(type_name, &method.name);
+            let overloaded = is_overloaded(&method_name_counts, method);
+            let mangled = self.method_mangled_symbol(type_name, method, overloaded);
             self.declared_methods
                 .entry(method.name.clone())
                 .or_default()
@@ -58,11 +69,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let pt = self.boundary_type(&self.parameter_type(p))?;
                 parameter_types.push(pt.into());
             }
-            // Unannotated return type takes the checker's recorded type for the body
-            // (e.g. `$` for a setter whose tail is an in-place field write).
-            let inferred_ret =
-                self.default_return_type(method.return_type.as_ref(), &method.body)?;
-            let return_type = self.boundary_type(&inferred_ret)?;
+            // An overload member's return type is annotated — the type checker requires
+            // it (`UnannotatedOverloadMember`) before a program with 2+ same-named
+            // methods ever reaches codegen; only a single (non-overloaded) definition
+            // may leave it to the checker's recorded body type (e.g. `$` for a setter
+            // whose tail is an in-place field write).
+            let return_type = if overloaded {
+                self.boundary_type(
+                    method
+                        .return_type
+                        .as_ref()
+                        .expect("an overload member's return type is annotated"),
+                )?
+            } else {
+                let inferred_ret =
+                    self.default_return_type(method.return_type.as_ref(), &method.body)?;
+                self.boundary_type(&inferred_ret)?
+            };
             let fn_type = return_type.fn_type(&parameter_types, false);
             let method_fn = self.module.add_function(&mangled, fn_type, None);
             // Internal linkage: method symbols are module-private (see generate_function_declaration).
@@ -79,7 +102,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if crate::ast::is_operator_symbol(&method.name) {
                     self.emit_operator_member(type_name, method)?;
                 } else {
-                    self.generate_method(type_name, &field_names, method)?;
+                    let overloaded = is_overloaded(&method_name_counts, method);
+                    let mangled = self.method_mangled_symbol(type_name, method, overloaded);
+                    self.generate_method(&mangled, type_name, &field_names, method)?;
                 }
             }
             Ok(())
@@ -87,6 +112,26 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         self.resume_enclosing_function(suspended);
         result
+    }
+
+    /// The LLVM symbol a named (non-operator) method is emitted under: the plain
+    /// `"{TypeName}_{method}"` `method_symbol` for a single definition, or — when
+    /// `overloaded` (2+ methods share the name) — a per-signature symbol mangled from the
+    /// method's OWN declared parameter types (excluding the receiver, which the qualified
+    /// name's type prefix already identifies), the same way a top-level overload member's
+    /// symbol is mangled from its parameters.
+    fn method_mangled_symbol(
+        &self,
+        type_name: &str,
+        method: &MethodDeclaration,
+        overloaded: bool,
+    ) -> String {
+        if overloaded {
+            let parameters = self.parameter_types(&method.parameters);
+            mangle_overload(&format!("{type_name}.{}", method.name), &parameters)
+        } else {
+            method_symbol(type_name, &method.name)
+        }
     }
 
     /// Lower an operator member to its overload function: a function with the receiver `it`
@@ -117,18 +162,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.emit_module_function(&declaration)
     }
 
-    /// Emit the body of a single method as the pre-declared `"{TypeName}_{method}"` function,
-    /// with `it` bound to the receiver pointer so `it.field` / sibling-method calls resolve.
+    /// Emit the body of a single method as its pre-declared function (`mangled` — the
+    /// plain `"{TypeName}_{method}"` symbol for a single definition, or a per-signature
+    /// symbol when 2+ methods share the name — see [`Self::method_mangled_symbol`]), with
+    /// `it` bound to the receiver pointer so `it.field` / sibling-method calls resolve.
     pub(super) fn generate_method(
         &mut self,
+        mangled: &str,
         type_name: &str,
         field_names: &[String],
         method: &MethodDeclaration,
     ) -> Result<(), String> {
-        let mangled = method_symbol(type_name, &method.name);
         let function = self
             .module
-            .get_function(&mangled)
+            .get_function(mangled)
             .ok_or_else(|| format!("Method function not declared: {}", mangled))?;
         self.current_function = Some(function);
         // Rendering the receiver `it` wholesale inside the type's own `` ` `` override must
@@ -610,4 +657,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.end_di_scope(saved_scope);
         Ok(())
     }
+}
+
+/// Whether `method` is a member of an overload set: 2+ methods on its type share its name
+/// (`counts` — one entry per non-operator method name, see `generate_type_declaration`).
+fn is_overloaded(counts: &HashMap<&str, usize>, method: &MethodDeclaration) -> bool {
+    counts.get(method.name.as_str()).copied().unwrap_or(0) > 1
 }

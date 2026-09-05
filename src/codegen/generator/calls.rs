@@ -123,9 +123,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let declaring = self.declared_methods.get(name)?;
         let type_name = self.receiver_type_name(arguments.first()?)?;
-        declaring
-            .contains(type_name)
-            .then(|| method_symbol(type_name, name))
+        if !declaring.contains(type_name) {
+            return None;
+        }
+        // 2+ methods sharing this name on this type form an overload set (see the type
+        // checker's `check_type_methods`), registered under a name qualified by its type.
+        // Dispatch by exact argument type through the same mechanism a top-level overload
+        // call uses, ahead of the plain single-signature symbol below.
+        let qualified_name = format!("{type_name}.{name}");
+        if self.overloads.contains_key(&qualified_name) {
+            let arg_types: Vec<Type> = arguments[1..].iter().map(|a| self.infer_type(a)).collect();
+            return self.resolve_overload_symbol(&qualified_name, &arg_types);
+        }
+        Some(method_symbol(type_name, name))
     }
 
     /// Lower a call. `member_call` marks the `recv.name(args)` form, which resolves against
