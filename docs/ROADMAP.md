@@ -119,7 +119,8 @@ and specified in full in [#120]. Built smallest-first:
 | `quilon test` — in-language test framework ([`describe`/`it`](corelib/test/README.md), the blocks erased from every other command and the harness they need tree-shaken out with them), over the `assert`/`expect` matcher assertions | ✅ |
 | Corelib | 🔨 (`core.io`/`core.test`/`core.cli`/`core.time`/`core.net` ship, plus the internal `core.text` behind the built-in Text methods; grows with the language) |
 | Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types, multi-file — steps into corelib; entry frame reads `^`) |
-| Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
+| Optimization levels — `quilon build` debug vs release (O3) | ✅ (`build` optimizes at O3; `--debug` is unoptimized with DWARF) |
+| Immutability-driven optimization — `=` methods and parameters carry LLVM `memory(read)`/`noalias` attributes; purity as a checker fact for concurrency | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 
 ### M8 — Web: a native HTTP server on the runtime ⬜

@@ -80,6 +80,17 @@ open = Box { item = m }   ~ error: `m` is mutable
 x := frozenBox.item       ~ error: what a frozen container holds is frozen
 ```
 
+A field write and a setter call are stores, checked the same way: writing into a
+`:=`-reachable container, or calling a setter with an argument its body stores into
+`it`, is a compile error when the value stored is `=`-bound.
+
+```quilon ignore
+Box = { item :: Counter, put := (k :: Counter) => < it.item := k > }
+mutableBox.item := t   ~ error: `t` is immutable
+mutableBox.put(t)      ~ error: `put` stores `k` into `it.item`, and `t` is immutable
+mutableBox.put(Counter { value = t.value })   ~ legal: a fresh value
+```
+
 **Escaping results.** A method may return `it`, or a value holding it. The method stays
 callable on every receiver, and the call's **result inherits the receiver's mutability**
 at each call site: immutable on an `=` receiver, mutable on a `:=` receiver. A function
@@ -103,7 +114,18 @@ compile error at the binding. A setter's `it` is mutable, its aliases included.
 
 **Fresh values.** A value built inside a function and returned is fresh: the function's
 locals — `:=` locals included — end at the return, and each call site binds the result
-with either operator.
+with either operator. A lambda or a higher-order call (`map`, `reduce`, an immediately
+invoked lambda) follows the same rule as a named function: its result is fresh only when
+its body builds one, and aliases whatever the body's value aliases otherwise. A closure
+that returns a value it captured returns that same value on every call, so the result
+carries the capture's binding:
+
+```quilon ignore
+c = Counter { value = 1 }
+capture = () -> Counter => < c >
+x := capture()             ~ error: `c` is immutable
+arr := [c].map(k => c)     ~ error: `c` is immutable, returned by the lambda regardless of `k`
+```
 
 **Write sites.** A field write and a setter call are checked against the value their
 path reaches, however it is reached — a field read, an element read, or a call result

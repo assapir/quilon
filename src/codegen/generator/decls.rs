@@ -341,6 +341,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to build store"))?;
             self.variables
                 .insert(declaration.name.clone(), (slot, var_type));
+            // Under `--debug`: narrow the scope from here on, so a debugger paused earlier
+            // in the enclosing block does not list this local before it is bound. Everything
+            // the rest of the block emits — including this variable's own `dbg.declare` —
+            // moves into a fresh nested `DW_TAG_lexical_block` starting at the binding;
+            // `generate_block`'s `end_di_scope` restores the enclosing scope once the block
+            // ends. The value just computed above is unaffected — it was emitted under the
+            // OUTER scope, before the variable existed.
+            self.begin_di_lexical_block(&declaration.span);
+            // Refresh the builder's current location to the new scope right away: an LLVM
+            // lexical block with no instruction attributed to it gets dropped (variable and
+            // all) rather than kept empty, and a binding as a block's LAST statement has no
+            // further codegen of its own to carry the new scope otherwise — the caller's
+            // next instruction (e.g. the function's `ret`) would silently inherit whatever
+            // scope was current before this binding, orphaning both the block and the local.
+            self.set_debug_loc(&declaration.span);
             // The binding's Quilon type is the one just recorded in `var_types` — borrow it
             // rather than keeping a separate clone alive across the whole binding.
             if let Some(qty) = self.var_types.get(&declaration.name) {

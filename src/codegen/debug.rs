@@ -563,23 +563,45 @@ fn split_source_path(path: &Path) -> (String, String) {
 ///
 /// A real file path (`.qn` on disk, e.g. a `<< "lib/util.qn"` import or the root file) goes
 /// through [`split_source_path`]. A bundled built-in module is named by its dotted module path
-/// (`core.test`) rather than a file path; the segments after `core` are its path under
-/// `corelib/`, so `core.test` maps to `corelib/test.qn` and a nested `core.a.b` would map to
-/// `corelib/a/b.qn` — which is what lets a debugger open the right file when a step lands in
-/// a corelib function in the in-repo dev flow.
+/// (`core.test`), which [`corelib_relative_path`] maps to its `corelib/`-relative `.qn` path —
+/// which is what lets a debugger open the right file when a step lands in a corelib function
+/// in the in-repo dev flow. That path is relative (unlike a real source file's, made absolute
+/// by `split_source_path`): DWARF resolves it against the compile unit's `DW_AT_comp_dir`,
+/// which is why the language server's `quilon/corelibDir` request (`src/lsp.rs`) — sharing
+/// this same mapping — writes the corelib out under a directory named to be that comp_dir.
 fn dwarf_file_location(path: &str) -> (String, String) {
     if path.ends_with(".qn") {
         return split_source_path(Path::new(path));
     }
-    let mut segments: Vec<&str> = path.split('.').collect();
-    // Anything before the last segment nests under `corelib/`; the leading `core.` is the
-    // corelib itself and is not a directory of its own.
-    let leaf = segments.pop().unwrap_or(path);
-    let directory = std::iter::once("corelib")
+    let relative = corelib_relative_path(path);
+    // `relative` always starts with the literal `corelib` segment (see
+    // `corelib_relative_path`), so `.parent()` is never `None`/empty the way a real,
+    // possibly-root-level file path's can be in `split_source_path` above.
+    let directory = relative
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    let filename = relative
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
+    (directory, filename)
+}
+
+/// A bundled built-in module's dotted name (`core.test`, `core.a.b`) to its `.qn` path
+/// relative to `corelib/`: `core.test` maps to `corelib/test.qn`, and a nested `core.a.b`
+/// would map to `corelib/a/b.qn` — the segments after the leading `core.` (which is the
+/// corelib itself, not a directory of its own) nest as directories, and the last segment is
+/// the file's stem. Shared by [`dwarf_file_location`] (what the DWARF emitted for a corelib
+/// function names) and the language server's `quilon/corelibDir` request (what it writes
+/// each embedded corelib module out as) — the two must never disagree about this layout.
+pub(crate) fn corelib_relative_path(dotted_name: &str) -> std::path::PathBuf {
+    let mut segments: Vec<&str> = dotted_name.split('.').collect();
+    let leaf = segments.pop().unwrap_or(dotted_name);
+    std::iter::once("corelib")
         .chain(segments.into_iter().skip(1))
-        .collect::<Vec<&str>>()
-        .join("/");
-    (directory, format!("{leaf}.qn"))
+        .collect::<std::path::PathBuf>()
+        .join(format!("{leaf}.qn"))
 }
 
 /// The byte offset at which each line begins. `line_starts[0]` is always `0`; a new entry
@@ -592,4 +614,43 @@ fn line_starts(source: &str) -> Vec<usize> {
         }
     }
     starts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corelib_relative_path_drops_the_leading_core_segment() {
+        assert_eq!(
+            corelib_relative_path("core.test"),
+            std::path::PathBuf::from("corelib/test.qn")
+        );
+        assert_eq!(
+            corelib_relative_path("core.http"),
+            std::path::PathBuf::from("corelib/http.qn")
+        );
+    }
+
+    #[test]
+    fn corelib_relative_path_nests_segments_after_the_leaf_as_directories() {
+        assert_eq!(
+            corelib_relative_path("core.a.b"),
+            std::path::PathBuf::from("corelib/a/b.qn")
+        );
+    }
+
+    #[test]
+    fn dwarf_file_location_for_a_builtin_module_matches_corelib_relative_path() {
+        // The two must never disagree: `dwarf_file_location` is what a `--debug` build's
+        // DWARF names a corelib function's file, and `corelib_relative_path` is what
+        // `quilon/corelibDir` (the language server) writes it out as.
+        let (directory, filename) = dwarf_file_location("core.http");
+        assert_eq!(directory, "corelib");
+        assert_eq!(filename, "http.qn");
+        assert_eq!(
+            std::path::Path::new(&directory).join(&filename),
+            corelib_relative_path("core.http")
+        );
+    }
 }

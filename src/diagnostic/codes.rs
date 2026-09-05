@@ -111,6 +111,7 @@ codes! {
     NotRenderable = 338 => "value with no rendering",
     NoEntryPoint = 339 => "no `^` entry point",
     StaticCallNeedsReceiverValue = 340 => "static call on a method that reads its receiver",
+    MutableStoreOfImmutable = 341 => "store into a mutable container aliasing an immutable value",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

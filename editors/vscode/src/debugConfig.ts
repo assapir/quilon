@@ -117,6 +117,38 @@ export interface LldbConfigInput {
    * start so Quilon values render nicely (see `formatters/quilon.py`).
    */
   formatterPath?: string;
+  /**
+   * The `.qn` source being debugged. Together with `corelibDir`, computes the
+   * `sourceMap` entry that lets stepping into corelib code (`http.body()`, …) show real
+   * source — see `corelibSourceMap`. Omitted (or `corelibDir` missing), no `sourceMap` is
+   * added and the session still starts, just without corelib source.
+   */
+  sourceFile?: string;
+  /**
+   * The directory the language server's `quilon/corelibDir` request materialized the
+   * embedded corelib modules into, when that request succeeded.
+   */
+  corelibDir?: string;
+}
+
+/**
+ * The CodeLLDB `sourceMap` entry that redirects a corelib function's DWARF source path to
+ * the real files `quilon/corelibDir` wrote to disk.
+ *
+ * A corelib module (`core.http`, …) is embedded in the compiler and exists on no disk at
+ * all, but a `--debug` build still attributes its functions to `corelib/http.qn` (relative
+ * — see `dwarf_file_location` in `src/codegen/debug.rs`), which DWARF resolves against the
+ * compile unit's `DW_AT_comp_dir`: the debugged `.qn` file's OWN directory (see
+ * `split_source_path`, same file). So the "from" half of the map is that directory's own
+ * `corelib` subdirectory — which need not exist on disk at all, and differs per file being
+ * debugged — remapped to the `corelib` subdirectory `quilon/corelibDir` actually populated
+ * (its answer is a directory that CONTAINS a `corelib/` layout, mirroring
+ * `corelib_relative_path`, not that layout itself).
+ */
+export function corelibSourceMap(sourceFile: string, corelibDir: string): Record<string, string> {
+  return {
+    [path.join(path.dirname(sourceFile), "corelib")]: path.join(corelibDir, "corelib"),
+  };
 }
 
 /**
@@ -140,6 +172,13 @@ export function toLldbConfiguration(input: LldbConfigInput): Record<string, unkn
     // Load the Quilon value formatters into the lldb session before the target
     // runs. Quote the path so spaces in the extension install path survive.
     config["initCommands"] = [`command script import "${input.formatterPath}"`];
+  }
+  if (
+    input.sourceFile !== undefined &&
+    input.corelibDir !== undefined &&
+    input.corelibDir.length > 0
+  ) {
+    config["sourceMap"] = corelibSourceMap(input.sourceFile, input.corelibDir);
   }
   return config;
 }
