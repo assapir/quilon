@@ -228,6 +228,26 @@ fn test_non_exhaustive_match_on_a_non_sum_is_rejected() {
 }
 
 #[test]
+fn test_constructor_missing_field_is_rejected() {
+    // `P { x = 1 }` leaves out `P`'s declared `y` field.
+    assert!(matches!(
+        check_ok("P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1 }  0 >"),
+        Err(TypeError::MissingConstructorField { .. })
+    ));
+}
+
+#[test]
+fn test_constructor_unknown_field_is_rejected() {
+    // `P` declares no `z` field.
+    assert!(matches!(
+        check_ok(
+            "P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1, y = 2, z = 3 }  0 >"
+        ),
+        Err(TypeError::UnknownConstructorField { .. })
+    ));
+}
+
+#[test]
 fn test_constructor_arity() {
     // A constructor pattern binds one sub-pattern per payload slot; `Ok` carries one.
     assert!(matches!(

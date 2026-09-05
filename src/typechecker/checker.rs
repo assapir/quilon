@@ -350,6 +350,19 @@ pub enum TypeError {
         type_name: String,
         span: Span,
     },
+    /// A record constructor (`P { x = 1 }`) that leaves out one of its type's declared
+    /// fields.
+    MissingConstructorField {
+        type_name: String,
+        field: String,
+        span: Span,
+    },
+    /// A record constructor supplying a field its type does not declare.
+    UnknownConstructorField {
+        type_name: String,
+        field: String,
+        span: Span,
+    },
     /// A binding under a name the language reserves (see `ast::reserved_for`), with what
     /// the name is reserved for.
     ReservedName {

@@ -133,6 +133,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN339 | no `^` entry point |
 | QN340 | static call on a method that reads its receiver |
 | QN341 | store into a mutable container aliasing an immutable value |
+| QN342 | missing constructor field |
+| QN343 | unknown constructor field |
 | QN344 | reserved name |
 | QN400 | code generation failed |
 | QN401 | native build failed |
@@ -954,6 +956,28 @@ Box = { item :: Counter }
 ```
 
 Store a fresh value: `b.item := Counter { value = c.value }`.
+
+### QN342 — missing constructor field
+
+A record constructor leaves out one of its type's declared fields.
+
+```quilon ignore
+P = { x :: Num, y :: Num }
+^ = () -> Num => < p = P { x = 1 }  0 >
+```
+
+Add the missing field: `P { x = 1, y = 2 }`.
+
+### QN343 — unknown constructor field
+
+A record constructor supplies a field its type does not declare.
+
+```quilon ignore
+P = { x :: Num, y :: Num }
+^ = () -> Num => < p = P { x = 1, y = 2, z = 3 }  0 >
+```
+
+Remove the field, or fix its name against the type's declared fields.
 
 ### QN344 — reserved name
 
