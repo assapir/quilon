@@ -584,6 +584,25 @@ fn graphemes_composes_with_array_methods() {
 }
 
 #[test]
+fn at_is_notok_for_infinite_index() {
+    // `at` with +infinity or -infinity is NotOk, same as NaN and any other
+    // out-of-bounds index — never the first grapheme.
+    assert_exit(
+        "^ = () -> Num => <\n  positive = \"abc\".at(1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  negative = \"abc\".at(0 - 1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  positive * 10 + negative\n>",
+        11,
+    );
+}
+
+#[test]
+fn slice_clamps_infinite_bounds_to_the_far_end() {
+    // +infinity clamps to the end of the text, -infinity to the start.
+    assert_exit(
+        "^ = () -> Num => <\n  a = \"Hello\".slice(0, 1 / 0).size\n  b = \"Hello\".slice(1 / 0, 3).size\n  c = \"Hello\".slice(0 - 1 / 0, 3).size\n  a * 100 + b * 10 + c\n>",
+        503,
+    );
+}
+
+#[test]
 fn at_takes_exactly_one_num_index() {
     assert_type_error(
         "^ = () -> Num => <\n  \"abc\".at(\"x\") ?\n    | Ok(_) => 1\n    | NotOk(_) => 0\n>",
