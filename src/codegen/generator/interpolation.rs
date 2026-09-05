@@ -39,7 +39,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let ty = self.infer_type(expression);
+        let ty = self.oracle_type(expression, "a rendered expression")?;
         let value = self.generate_expression(expression)?;
         // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
         // own type's `` ` `` override would invoke that override forever. That one case

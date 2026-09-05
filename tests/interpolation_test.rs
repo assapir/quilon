@@ -124,8 +124,12 @@ fn backtick_override_must_return_text() {
 fn codegen_emits_render_intrinsics_for_holes() {
     let tokens = Lexer::tokenize("^ = () -> Text => < \"n `1` b `true`\" >").unwrap();
     let program = parse(&tokens).unwrap();
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .expect("type check failed");
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
     let ir = generator.generate(&program).expect("codegen");
     assert!(
         ir.contains("@__num_to_text"),

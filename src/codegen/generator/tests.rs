@@ -19,31 +19,47 @@ fn generate_checked(code: &str) -> Result<String, String> {
     codegen.generate(&program)
 }
 
-/// A hand-built oracle entry for every `pattern` substring's byte range in `code`, typed
-/// `[]Num` — for a test that asks codegen a question WITHOUT running the type checker
-/// (so a checker rejection elsewhere in the program cannot pre-empt what codegen itself
-/// is being asked), but still needs an array literal's element type recorded (codegen
-/// treats a missing oracle entry for an array literal as a compiler bug, never a guess).
-fn num_array_oracle(code: &str, pattern: &str) -> TypeTable {
-    let element_type = Type::Array(Box::new(Type::Num));
-    code.match_indices(pattern)
-        .map(|(start, matched)| {
-            let start = start as u32;
-            let span = Span::in_root(start, start + matched.len() as u32);
-            (span, element_type.clone())
-        })
-        .collect()
+/// A type table recording each top-level variable declaration's literal type — `Num`,
+/// `Text`, `Bool`, or `[]Num` for an array of number literals — for a test that asks
+/// codegen a question the checker can never let it be asked for real. `[]Num == []Num`
+/// (and the mixed Text/Array form) is rejected at `check_binary_operator` before codegen
+/// ever sees it — no overload of `==` admits an array — so there is no checker-accepted
+/// rewrite of that program; the oracle is hand-built instead, covering every declaration
+/// in it (an array literal's operands included) so nothing else in the same function is
+/// left without the entry codegen now requires. Built by walking the parsed AST rather
+/// than matching source text, so a span can't drift from what it names.
+fn literal_variable_oracle(program: &crate::ast::Program) -> TypeTable {
+    let mut table = TypeTable::new();
+    for item in &program.items {
+        let crate::ast::Item::FunctionDeclaration(declaration) = item else {
+            continue;
+        };
+        let Expression::Block { statements, .. } = &declaration.body else {
+            continue;
+        };
+        for statement in statements {
+            let crate::ast::Statement::Item(crate::ast::Item::VariableDeclaration(
+                variable_declaration,
+            )) = statement
+            else {
+                continue;
+            };
+            let ty = match &variable_declaration.value {
+                Expression::Number { .. } => Type::Num,
+                Expression::String { .. } => Type::Text,
+                Expression::Bool { .. } => Type::Bool,
+                Expression::Array { .. } => Type::Array(Box::new(Type::Num)),
+                _ => continue,
+            };
+            table.insert(variable_declaration.value.span().clone(), ty);
+        }
+    }
+    table
 }
 
 #[test]
 fn test_simple_number() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
-    let tokens = Lexer::tokenize("x = 42").unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked("x = 42");
     assert!(result.is_ok());
 
     let ir = result.unwrap();
@@ -54,13 +70,7 @@ fn test_simple_number() {
 
 #[test]
 fn test_simple_function() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
-    let tokens = Lexer::tokenize("add = (a :: Num, b :: Num) -> Num => < a + b >").unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let result = codegen.generate(&program);
+    let result = generate_checked("add = (a :: Num, b :: Num) -> Num => < a + b >");
     assert!(result.is_ok());
 
     let ir = result.unwrap();
@@ -245,7 +255,7 @@ fn comparing_arrays_is_not_lowered_as_a_text_comparison() {
     let code = "same = () -> Bool => < a = [1, 2] b = [1, 2] a == b >";
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
-    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
+    codegen.set_type_table(literal_variable_oracle(&program));
 
     let result = codegen.generate(&program);
     let error = result.expect_err("array comparison has no lowering");
@@ -265,7 +275,7 @@ fn comparing_a_text_against_an_array_is_not_lowered_as_a_text_comparison() {
     let code = r#"same = () -> Bool => < a = "x" b = [1, 2] a == b >"#;
     let tokens = Lexer::tokenize(code).unwrap();
     let program = parse(&tokens).unwrap();
-    codegen.set_type_table(num_array_oracle(code, "[1, 2]"));
+    codegen.set_type_table(literal_variable_oracle(&program));
 
     let error = codegen
         .generate(&program)
@@ -279,16 +289,8 @@ fn comparing_a_text_against_an_array_is_not_lowered_as_a_text_comparison() {
 /// The same routing, from the other side: two `Text` operands DO reach `__text_cmp`.
 #[test]
 fn comparing_texts_calls_the_text_compare_intrinsic() {
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context, "test");
-
     let code = r#"same = () -> Bool => < a = "x" b = "y" a == b >"#;
-    let tokens = Lexer::tokenize(code).unwrap();
-    let program = parse(&tokens).unwrap();
-
-    let ir = codegen
-        .generate(&program)
-        .expect("text comparison compiles");
+    let ir = generate_checked(code).expect("text comparison compiles");
     assert!(ir.contains("@__text_cmp"), "expected __text_cmp in:\n{ir}");
 }
 

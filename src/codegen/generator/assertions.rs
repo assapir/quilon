@@ -61,7 +61,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(live);
         }
 
-        let actual_type = self.infer_type(actual);
+        let actual_type = self.oracle_type(actual, "the value under test")?;
         let actual_value = self.generate_expression(actual)?;
         let mut wanted = Vec::new();
         let held = self.matcher_condition(&actual_type, actual_value, matcher, &mut wanted)?;
@@ -124,13 +124,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         match name.as_str() {
             "equals" => {
-                let expected_type = self.infer_type(&arguments[0]);
+                let expected_type =
+                    self.oracle_type(&arguments[0], "an `equals` matcher's expected value")?;
                 let expected = self.generate_expression(&arguments[0])?;
                 wanted.push(Piece::Value(expected_type, expected));
                 self.values_equal(actual_type, actual, expected)
             }
             "contains" => {
-                let part_type = self.infer_type(&arguments[0]);
+                let part_type =
+                    self.oracle_type(&arguments[0], "a `contains` matcher's expected part")?;
                 let part = self.generate_expression(&arguments[0])?;
                 wanted.push(Piece::Literal("something containing ".to_string()));
                 wanted.push(Piece::Value(part_type, part));

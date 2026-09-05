@@ -183,15 +183,10 @@ pub struct CodeGenerator<'ctx> {
     // `declare_module_function`). Keyed by the declaration's span — its identity — and
     // consumed by `emit_module_function` as each body is filled in.
     predeclared_functions: HashMap<Span, inkwell::values::FunctionValue<'ctx>>,
-    // Quilon type of each in-scope local/parameter, for argument-type inference at
-    // overloaded call sites (codegen lacks the type checker's full inference, so it
-    // tracks just enough — locals, parameters, and constructor results — to mangle).
+    // Quilon type of each in-scope local/parameter, for overloaded-call argument
+    // mangling. Every value here comes from the checker — a parameter/binding's oracle or
+    // declared type — never from codegen re-deriving one.
     var_types: HashMap<String, Type>,
-    // Declared return type of each NON-overloaded top-level function, so `infer_type`
-    // can give a call's result its real type (not a `Num` default) when that result is
-    // an argument to an overloaded call/operator — keeping codegen dispatch in sync
-    // with the type checker. (Overloaded callees' returns come from `overloads`.)
-    fn_return_types: HashMap<String, Type>,
     // Active self-tail-call optimization context for the function currently being
     // emitted, set up by `generate_function_declaration` only when the body has a self-call in
     // tail position. A tail self-call then overwrites the parameter slots and branches back
@@ -367,7 +362,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             overloads: HashMap::new(),
             predeclared_functions: HashMap::new(),
             var_types: HashMap::new(),
-            fn_return_types: HashMap::new(),
             tco: None,
             render_overrides: std::collections::HashSet::new(),
             declared_methods: HashMap::new(),
@@ -582,18 +576,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Pre-pass: record each NON-overloaded top-level function's declared return
-        // type, so `infer_type` can give a call result its real type when it feeds an
-        // overloaded call/operator (keeps codegen dispatch in sync with the checker).
+        // Pre-pass: record each NON-overloaded top-level function's parameter arity that
+        // takes a trailing `Site`, so a call to it can be recognized as one that fills the
+        // call site in (`fills_call_site`).
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
                 && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = declaration.declared_return_type() {
-                    self.fn_return_types
-                        .insert(declaration.name.clone(), ret.clone());
-                }
                 let parameters = self.parameter_types(&declaration.parameters);
                 if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
