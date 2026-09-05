@@ -1,9 +1,7 @@
-// Codegen tests for the core IO builtins and the Boehm GC wiring.
-//
-// These exercise the code generator directly (no typecheck pass): `print`/`eprint`/
-// `write` are recognized and lowered by codegen regardless of whether `core.io` has
-// been imported. We assert the generated LLVM IR declares the right runtime
-// intrinsics and that `main` initializes the GC.
+// Codegen tests for the core IO builtins and the Boehm GC wiring: that `print`/`eprint`/
+// `write` are recognized and lowered by codegen regardless of whether `core.io` has been
+// imported. We assert the generated LLVM IR declares the right runtime intrinsics and
+// that `main` initializes the GC.
 
 use inkwell::context::Context;
 use quilon::codegen::CodeGenerator;
@@ -19,8 +17,12 @@ fn gen_ir(source: &str) -> String {
     let program = quilon::modules::link(program, std::path::Path::new("."), None)
         .expect("import linking failed")
         .0;
+    let types = quilon::typechecker::TypeChecker::new()
+        .check_program(&program)
+        .expect("type check failed");
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
     generator
         .generate(&program)
         .unwrap_or_else(|e| panic!("Codegen failed: {:?}", e))

@@ -170,9 +170,9 @@ let client: LanguageClient | undefined;
 
 /**
  * Spawn `quilon lsp` with the resolved compiler invocation and connect the
- * editor to it. Diagnostics, go-to-definition, hover, semantic tokens, and the
- * test code lenses all come from the server; a failure to start is reported
- * once, with the setting that fixes it.
+ * editor to it. Diagnostics, go-to-definition, hover, completion (triggered on
+ * `.`), semantic tokens, and the test code lenses all come from the server; a
+ * failure to start is reported once, with the setting that fixes it.
  */
 async function startLanguageClient(): Promise<void> {
   const compiler = resolvedQuilonCompiler();
