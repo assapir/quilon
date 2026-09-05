@@ -58,8 +58,8 @@ pub use collections::{
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{
-    __alloc, __alloc_array, __gc_init, __index_fail, __range_endpoint, GcThread, MAX_EXACT_NUM,
-    check_range_endpoint, register_thread,
+    __alloc, __alloc_array, __gc_init, __index_fail, __range_endpoint, __render_c_string, GcThread,
+    MAX_EXACT_NUM, check_range_endpoint, register_thread,
 };
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
@@ -147,6 +147,7 @@ intrinsic_registry! {
     __range_endpoint: extern "C" fn(f64, *const QlSite) -> i64,
     __alloc: extern "C" fn(i64) -> *mut c_void,
     __alloc_array: extern "C" fn(i64, i64) -> *mut c_void,
+    __render_c_string: extern "C" fn(*const u8, i64) -> *const u8,
     __text_length: extern "C" fn(*const u8, i64) -> i64,
     __text_cmp: extern "C" fn(*const u8, i64, *const u8, i64) -> i32,
     __write_bytes: extern "C" fn(i64, *const u8, i64) -> i64,

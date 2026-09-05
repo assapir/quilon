@@ -39,6 +39,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // i8* __alloc_array(i64 count, i64 elem_size) — GC-managed allocation of an
             // array's backing store, sized by the runtime under an overflow check.
             "__alloc_array" => ptr.fn_type(&[i64t.into(), i64t.into()], false),
+            // i8* __render_c_string(i8* data, i64 len) — GC-allocate a NUL-terminated copy
+            // of a rendered `Text`'s bytes. Backs every `--debug` build's `__qn_render$...`
+            // thunks (see `di.rs::emit_render_thunk`), which a debugger calls expecting a C
+            // string back rather than the `{ptr,i64}` ABI a Quilon caller uses.
+            "__render_c_string" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
             // void __gc_init() — initialize the Boehm GC.
             "__gc_init" => void.fn_type(&[], false),
             // void __exit(i32 code) — terminate the process with `code`. Backs the

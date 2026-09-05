@@ -294,13 +294,18 @@ fn a_call_site_without_a_source_map_still_compiles() {
     );
 }
 
-/// The LLVM IR for `src`, generated with NO source map installed — the IR-only path the
-/// codegen tests use, where a call site resolves to the documented "unknown" location.
+/// The LLVM IR for `src`, generated with NO source map installed — so a call site
+/// resolves to the documented "unknown" location. The type checker still runs (codegen
+/// reads its type-oracle); only the source map, a separate concern, is left unset.
 fn ir_for(src: &str) -> String {
     let tokens = Lexer::tokenize(src).expect("lexing failed");
     let program = parse(&tokens).expect("parsing failed");
+    let types = quilon::typechecker::TypeChecker::new()
+        .check_program(&program)
+        .expect("type check failed");
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
     generator
         .generate(&program)
         .unwrap_or_else(|e| panic!("codegen without a source map failed: {e}"))

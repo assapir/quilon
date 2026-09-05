@@ -23,7 +23,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M1** | Diagnostics & small wins (readable errors, `Unit` `$`, VS Code extension) | ✅ Complete |
 | **M2** | Type system (setters, user sum types `/`, ad-hoc overloading) | ✅ Complete |
 | **M3** | Closures & functional core | ✅ Complete |
-| **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | 🔨 In progress (partly 💤) |
+| **M4** | Codegen infra — authoritative types in codegen, static methods; monomorphization/defunctionalization deprioritized | ✅ Complete (monomorphization 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
@@ -77,11 +77,13 @@ served an auto-data-parallelism goal the project no longer pursues.
 | Concrete `Result` payload typing | ✅ |
 | `core.cli` module | ✅ |
 
-### M4 — Codegen infra 🔨
+### M4 — Codegen infra ✅ (monomorphization 💤)
+
+Remaining codegen follow-ups are tracked as GitHub issues under the `M4` label.
 
 | Item | Status |
 |------|--------|
-| Authoritative types in codegen (retire the lossy `infer_type`; use the type-oracle) — generally useful, **kept** | 🔨 (the type-oracle ships and is threaded through codegen; some `infer_type` callers remain) |
+| Authoritative types in codegen: the checker's type-oracle is the single source of truth for every type and dispatch decision; the codegen-side inference systems (`infer_type`, `closure_sigs`, `expression_is_unit`) are gone (#342) | ✅ |
 | Monomorphization + defunctionalization (function values statically visible) — **deprioritized**: it served the auto-data-parallelism goal (M5), now dropped | 💤 |
 | **Static methods (#259, locked):** a member whose body never reads `it` is **static** and callable on the type name (`Point.origin()`), including through a module binding (`http.Request.get(url)`) — it stays callable on a value too. A type-name call to a member that DOES read `it` is a compile error (`QN340`). See [`types/records.md#static-methods`](types/records.md#static-methods). | ✅ |
 
@@ -119,7 +121,8 @@ and specified in full in [#120]. Built smallest-first:
 | `quilon test` — in-language test framework ([`describe`/`it`](corelib/test/README.md), the blocks erased from every other command and the harness they need tree-shaken out with them), over the `assert`/`expect` matcher assertions | ✅ |
 | Corelib | 🔨 (`core.io`/`core.test`/`core.cli`/`core.time`/`core.net` ship, plus the internal `core.text` behind the built-in Text methods; grows with the language) |
 | Debug info (→ real VS Code debugging) | ✅ (`--debug` DWARF: line tables, locals, types, multi-file — steps into corelib; entry frame reads `^`) |
-| Optimization levels — `quilon build` debug vs release (O3) | ⬜ |
+| Optimization levels — `quilon build` debug vs release (O3) | ✅ (`build` optimizes at O3; `--debug` is unoptimized with DWARF) |
+| Immutability-driven optimization — `=` methods and parameters carry LLVM `memory(read)`/`noalias` attributes; purity as a checker fact for concurrency | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 
 ### M8 — Web: a native HTTP server on the runtime ⬜

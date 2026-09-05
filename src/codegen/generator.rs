@@ -10,7 +10,7 @@ use crate::lexer::Span;
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::debug_info::{AsDIScope, DIScope, DIType};
+use inkwell::debug_info::{AsDIScope, DILocation, DIScope, DIType};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
@@ -102,6 +102,15 @@ struct FrameState<'ctx> {
     boxed_vars: std::collections::HashSet<String>,
 }
 
+/// Enclosing-function state saved by `suspend_enclosing_function` around emitting a
+/// nested function mid-body, and restored by `resume_enclosing_function`.
+struct SuspendedFunction<'ctx> {
+    block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    function: Option<FunctionValue<'ctx>>,
+    frame: FrameState<'ctx>,
+    debug_location: Option<DILocation<'ctx>>,
+}
+
 pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -174,15 +183,10 @@ pub struct CodeGenerator<'ctx> {
     // `declare_module_function`). Keyed by the declaration's span — its identity — and
     // consumed by `emit_module_function` as each body is filled in.
     predeclared_functions: HashMap<Span, inkwell::values::FunctionValue<'ctx>>,
-    // Quilon type of each in-scope local/parameter, for argument-type inference at
-    // overloaded call sites (codegen lacks the type checker's full inference, so it
-    // tracks just enough — locals, parameters, and constructor results — to mangle).
+    // Quilon type of each in-scope local/parameter, for overloaded-call argument
+    // mangling. Every value here comes from the checker — a parameter/binding's oracle or
+    // declared type — never from codegen re-deriving one.
     var_types: HashMap<String, Type>,
-    // Declared return type of each NON-overloaded top-level function, so `infer_type`
-    // can give a call's result its real type (not a `Num` default) when that result is
-    // an argument to an overloaded call/operator — keeping codegen dispatch in sync
-    // with the type checker. (Overloaded callees' returns come from `overloads`.)
-    fn_return_types: HashMap<String, Type>,
     // Active self-tail-call optimization context for the function currently being
     // emitted, set up by `generate_function_declaration` only when the body has a self-call in
     // tail position. A tail self-call then overwrites the parameter slots and branches back
@@ -225,6 +229,15 @@ pub struct CodeGenerator<'ctx> {
     // Structural type keys currently being lowered to DWARF, so a (hypothetically) recursive
     // record/sum breaks the cycle with an opaque pointer instead of recursing forever.
     di_building: RefCell<HashSet<String>>,
+    // Structural type keys (see `di_type_key`) already enqueued for a `--debug` render thunk
+    // (`__qn_render$...`), so each type is queued (and later emitted) exactly once — see
+    // `di_pending_thunks` and `di.rs::enqueue_render_thunk`/`drain_pending_render_thunks`.
+    di_render_thunks: RefCell<HashSet<String>>,
+    // Types enqueued for a `--debug` render thunk by `di_type`'s OWN `&self` recursive type
+    // building — so a type reached only nested (an array element, a record field, a Map/Set's
+    // key/value) is queued too, not just one directly reaching `declare_variable`. Drained
+    // (emitting the actual IR, which needs `&mut self`) once, near the end of `generate`.
+    di_pending_thunks: RefCell<Vec<Type>>,
     // Every source file the program was assembled from, keyed by the `FileId` its spans
     // carry. Read when filling in a `Site` argument at a call site, which needs the call's
     // path, line, column, and the text of its line. Empty for the IR-only codegen tests
@@ -349,7 +362,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             overloads: HashMap::new(),
             predeclared_functions: HashMap::new(),
             var_types: HashMap::new(),
-            fn_return_types: HashMap::new(),
             tco: None,
             render_overrides: std::collections::HashSet::new(),
             declared_methods: HashMap::new(),
@@ -359,6 +371,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             record_field_types: HashMap::new(),
             sum_variant_defs: HashMap::new(),
             di_building: RefCell::new(HashSet::new()),
+            di_render_thunks: RefCell::new(HashSet::new()),
+            di_pending_thunks: RefCell::new(Vec::new()),
             sources: Rc::new(crate::source_map::SourceMap::default()),
             site_globals: HashMap::new(),
             text_constants: HashMap::new(),
@@ -562,18 +576,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Pre-pass: record each NON-overloaded top-level function's declared return
-        // type, so `infer_type` can give a call result its real type when it feeds an
-        // overloaded call/operator (keeps codegen dispatch in sync with the checker).
+        // Pre-pass: record each NON-overloaded top-level function's parameter arity that
+        // takes a trailing `Site`, so a call to it can be recognized as one that fills the
+        // call site in (`fills_call_site`).
         for item in &program.items {
             if let Item::FunctionDeclaration(declaration) = item
                 && !declaration.is_inert_corelib_placeholder()
                 && !self.overloads.contains_key(&declaration.name)
             {
-                if let Some(ret) = declaration.declared_return_type() {
-                    self.fn_return_types
-                        .insert(declaration.name.clone(), ret.clone());
-                }
                 let parameters = self.parameter_types(&declaration.parameters);
                 if crate::ast::takes_call_site(&parameters) {
                     self.fn_call_site_arity
@@ -650,6 +660,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .unwrap_or_default();
             self.generate_main_wrapper(&entry_parameters)?;
         }
+
+        // Emit every `--debug` render thunk `di_type` enqueued while building DWARF types
+        // for the code just generated — after every function body, so a type reached only
+        // NESTED (an array element, a record field, a Map/Set's key/value) gets a thunk too.
+        // A no-op when debug info is off (nothing was ever enqueued).
+        self.drain_pending_render_thunks();
 
         // Embed the provenance watermark as an `!llvm.ident` entry (harmless for the JIT
         // path, which produces no artifact to carry it).
@@ -941,5 +957,36 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.var_named_types = frame.var_named_types;
         self.var_types = frame.var_types;
         self.boxed_vars = frame.boxed_vars;
+    }
+
+    /// Suspend the enclosing function (frame, insert block, current function) to emit a
+    /// nested one mid-body. Also saves and clears the builder's `!dbg` location, so an
+    /// instruction emitted back in the enclosing body right after resuming isn't stamped
+    /// with the nested function's scope. Pair with [`resume_enclosing_function`].
+    fn suspend_enclosing_function(&mut self) -> SuspendedFunction<'ctx> {
+        let block = self.builder.get_insert_block();
+        let function = self.current_function;
+        let frame = self.take_frame();
+        let debug_location = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+        SuspendedFunction {
+            block,
+            function,
+            frame,
+            debug_location,
+        }
+    }
+
+    /// Reinstate the state suspended by [`suspend_enclosing_function`] once the nested
+    /// function's body is emitted.
+    fn resume_enclosing_function(&mut self, saved: SuspendedFunction<'ctx>) {
+        self.restore_frame(saved.frame);
+        self.current_function = saved.function;
+        if let Some(block) = saved.block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved.debug_location {
+            self.builder.set_current_debug_location(loc);
+        }
     }
 }

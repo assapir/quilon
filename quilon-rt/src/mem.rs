@@ -318,6 +318,29 @@ pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     }
 }
 
+/// GC-allocate a NUL-terminated copy of the `len` bytes at `data`. Backs every `--debug`
+/// build's `__qn_render$...` thunks (see `CodeGenerator::emit_render_thunk`): a debugger
+/// evaluates a C-ABI call and reads back a `const char*`, not the `{ ptr, i64 }` ABI a
+/// Quilon caller uses, so the thunk hands this a `Text` it just rendered and returns what
+/// this produces. Not reachable from a `.qn` program.
+///
+/// # Safety contract (upheld by the compiler)
+/// `data` points to at least `len` readable bytes (or is null with `len <= 0`).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __render_c_string(data: *const u8, len: i64) -> *const u8 {
+    let len = len.max(0) as usize;
+    let buf = __alloc(len as i64 + 1) as *mut u8;
+    if len > 0 {
+        // SAFETY: `data` is a `Text`'s own `(ptr, len)` this same process just rendered, and
+        // `__alloc` returned at least `len + 1` writable, non-overlapping bytes.
+        unsafe { std::ptr::copy_nonoverlapping(data, buf, len) };
+    }
+    // SAFETY: `buf` has `len + 1` bytes; index `len` is the one past the copied data.
+    unsafe { *buf.add(len) = 0 };
+    buf
+}
+
 /// Render an `f64` the way Quilon shows a `Num`: whole values without a fractional part
 /// (`5`, not `5.0`), everything else in shortest round-trip form. Shared by `__num_to_text`
 /// and the `__index_fail` diagnostic.
@@ -404,6 +427,28 @@ mod tests {
             std::ptr::write_bytes(p, 0xAB, 16);
             assert_eq!(*p, 0xAB);
         }
+    }
+
+    #[test]
+    fn render_c_string_nul_terminates_a_copy() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let bytes = b"hi";
+        let out = __render_c_string(bytes.as_ptr(), bytes.len() as i64);
+        assert!(!out.is_null());
+        // SAFETY: `out` is a fresh GC allocation of `bytes.len() + 1` bytes this call made.
+        let copied = unsafe { std::slice::from_raw_parts(out, bytes.len() + 1) };
+        assert_eq!(copied, b"hi\0");
+    }
+
+    #[test]
+    fn render_c_string_of_zero_length_is_just_a_nul() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let out = __render_c_string(std::ptr::null(), 0);
+        assert!(!out.is_null());
+        // SAFETY: `out` is a fresh 1-byte GC allocation this call made.
+        assert_eq!(unsafe { *out }, 0);
     }
 
     #[test]

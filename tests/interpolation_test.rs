@@ -124,8 +124,12 @@ fn backtick_override_must_return_text() {
 fn codegen_emits_render_intrinsics_for_holes() {
     let tokens = Lexer::tokenize("^ = () -> Text => < \"n `1` b `true`\" >").unwrap();
     let program = parse(&tokens).unwrap();
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .expect("type check failed");
     let context = Context::create();
     let mut generator = CodeGenerator::new(&context, "test");
+    generator.set_type_table(types);
     let ir = generator.generate(&program).expect("codegen");
     assert!(
         ir.contains("@__num_to_text"),
@@ -204,6 +208,38 @@ fn renders_array_full_and_truncated() {
     );
     assert_exit(
         "^ = () -> Num => <\n  a :: []Num = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]\n  \"`a`\" == \"[1 <- 11]\" ? 1 : 0\n>",
+        1,
+    );
+}
+
+#[test]
+fn renders_map_and_set_contents() {
+    // A single-entry Map/Set renders deterministically (`[|k => v|]`/`[|e|]`); iteration
+    // order over more than one entry is unspecified, so those cases only check membership
+    // and separators, not an exact order.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"ada\" => 36|]\n  \"`m`\" == \"[|ada => 36|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|=>|]\n  \"`m`\" == \"[|=>|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1|]\n  \"`s`\" == \"[|1|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [||]\n  \"`s`\" == \"[||]\" ? 1 : 0\n>",
+        1,
+    );
+    // Two entries: order-independent — both keys/elements present, comma-separated.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Num => Num|] = [|1 => 10, 2 => 20|]\n  t :: Text = \"`m`\"\n  (t.contains(\"1 => 10\") && t.contains(\"2 => 20\") && t.contains(\", \") ? 1 : 0)\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  t :: Text = \"`s`\"\n  (t.contains(\"1\") && t.contains(\"2\") && t.contains(\", \") ? 1 : 0)\n>",
         1,
     );
 }

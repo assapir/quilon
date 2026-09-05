@@ -106,168 +106,43 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Whether `expression` is a `Text` — the operand test the built-in `Text` operators
-    /// (comparison and `+`) route on. Reads the checker's recorded type for the node where
-    /// there is one, and only falls back to [`infer_type`]'s structural inference (which
-    /// clones) where there is not: the codegen tests that skip the type-check pass.
+    /// (comparison and `+`) route on. `None` (an expression the checker never typed) reads
+    /// as "not Text", exactly like the array/set checks this routing sits alongside.
     pub(super) fn is_text_expression(&self, expression: &Expression) -> bool {
-        match self.oracle.expression_type(expression) {
-            Some(ty) => *ty == Type::Text,
-            None => self.infer_type(expression) == Type::Text,
-        }
+        self.oracle.expression_type(expression) == Some(&Type::Text)
     }
 
-    /// Best-effort Quilon type of `expression`, sufficient to mangle overloaded call sites.
-    /// Codegen lacks the type checker's full inference, so this covers exactly the
-    /// shapes that can be an overloaded argument: literals, locals/parameters (tracked in
-    /// `var_types`), constructor results, field access on a known record, and the
-    /// result types of the supported operators. Falls back to `Num` (the historical
-    /// default) when it can't tell — overloaded dispatch then simply won't match and a
-    /// clear "function not found" surfaces, never a silent miscompile.
-    pub(super) fn infer_type(&self, expression: &Expression) -> Type {
-        // Prefer the type checker's authoritative type for this exact node (the oracle) —
-        // the same source codegen's read sites use. It knows shapes the structural fallback
-        // below can't (an `arr[i]` element, a `.split(…)`/`.replace(…)` result, a field
-        // read), so an overloaded call taking one of those (e.g. `render(parts[0])`)
-        // mangles to the right member. Falls back to structural inference only when the
-        // oracle has no entry — the IR-only codegen tests that skip the type-check pass.
-        if let Some(ty) = self.oracle.expression_type(expression) {
-            return ty.clone();
-        }
-        match expression {
-            Expression::Number { .. } => Type::Num,
-            Expression::String { .. } => Type::Text,
-            Expression::Bool { .. } => Type::Bool,
-            Expression::Unit { .. } => Type::Unit,
-            Expression::Identifier { name, .. } => {
-                // A bare nullary sum-type constructor (not a bound variable) is a value
-                // of its sum type.
-                if let Some((_, type_name)) = self.sum_variants.get(name)
-                    && !self.var_types.contains_key(name)
-                {
-                    return self.sum_or_named(type_name);
-                }
-                self.var_types.get(name).cloned().unwrap_or(Type::Num)
-            }
-            Expression::Constructor { type_name, .. } => self.sum_or_named(type_name),
-            Expression::Call {
-                function,
-                arguments,
-                ..
-            } => {
-                if let Expression::Identifier { name, .. } = function.as_ref() {
-                    // A constructor call yields its sum type.
-                    if let Some((_, type_name)) = self.sum_variants.get(name) {
-                        return self.sum_or_named(type_name);
-                    }
-                    // An overloaded function call yields its resolved member's return.
-                    let arg_types: Vec<Type> =
-                        arguments.iter().map(|a| self.infer_type(a)).collect();
-                    if let Some((_, ret)) = self.matching_overload(name, &arg_types) {
-                        return ret.clone();
-                    }
-                    // A non-overloaded top-level function yields its declared return
-                    // type — so a call result that feeds an overloaded call/operator
-                    // mangles to the right member (codegen agrees with the checker).
-                    if let Some(ret) = self.fn_return_types.get(name) {
-                        return self.resolve_named(ret);
-                    }
-                }
-                // Unknown callee (no declared return, e.g. an unannotated function):
-                // default to Num, the historical inference default.
-                Type::Num
-            }
-            Expression::BinaryOperator {
-                left,
-                operator,
-                right,
-                ..
-            } => {
-                // A user operator overload yields its resolved member's return type.
-                let sym = operator.symbol();
-                if self.overloads.contains_key(sym) {
-                    let arg_types = [self.infer_type(left), self.infer_type(right)];
-                    if let Some((_, ret)) = self.matching_overload(sym, &arg_types) {
-                        return ret.clone();
-                    }
-                }
-                // Built-ins: comparisons/logicals yield Bool; `+` on Text yields Text;
-                // arithmetic yields Num. Matches the type checker's operator results
-                // closely enough to mangle a nested overloaded argument.
-                match operator {
-                    BinaryOperator::Eq
-                    | BinaryOperator::Ne
-                    | BinaryOperator::Lt
-                    | BinaryOperator::Le
-                    | BinaryOperator::Gt
-                    | BinaryOperator::Ge
-                    | BinaryOperator::And
-                    | BinaryOperator::Or => Type::Bool,
-                    BinaryOperator::Add
-                        if self.infer_type(left) == Type::Text
-                            || self.infer_type(right) == Type::Text =>
-                    {
-                        Type::Text
-                    }
-                    _ => Type::Num,
-                }
-            }
-            Expression::If { then, .. } => self.infer_type(then),
-            // A `?`/`|` match's result type is whatever its arms yield. Codegen can't
-            // easily unify the arms, so take the checker's recorded type from the oracle
-            // (as record/spread do); this lets a local bound to a match — e.g.
-            // `ok = r ? | Ok(_) => true | NotOk(_) => false` — mangle correctly when it
-            // later feeds an overloaded call such as `assert(ok)`.
-            Expression::Match { .. } => self
-                .oracle
-                .expression_type(expression)
-                .cloned()
-                .unwrap_or(Type::Num),
-            // Unary `!` is logical-not (Bool); unary `-` is numeric negation (Num). So a
-            // local bound to `!ok` mangles as Bool when it feeds an overloaded call.
-            Expression::UnaryOperator { operator, .. } => match operator {
-                crate::ast::UnaryOperator::Not => Type::Bool,
-                crate::ast::UnaryOperator::Neg => Type::Num,
-            },
-            Expression::Block { statements, .. } => match statements.last() {
-                Some(crate::ast::Statement::Expression(tail)) => self.infer_type(tail),
-                _ => Type::Num,
-            },
-            Expression::FieldAccess { field, .. } if field == "size" || field == "length" => {
-                Type::Num
-            }
-            // A record literal / spread — including a functional-update — takes its type
-            // from the oracle (which resolves the named-vs-anonymous result of a `<-`
-            // spread), so a binding to it mangles / tracks correctly.
-            Expression::Record { .. } | Expression::Spread { .. } => self
-                .oracle
-                .expression_type(expression)
-                .cloned()
-                .unwrap_or(Type::Num),
-            _ => Type::Num,
-        }
+    /// The checker's recorded type for `expression` — every codegen read of "what type is
+    /// this" that isn't already a parameter/element/field type it holds directly funnels
+    /// through here. `description` names what is being lowered, for the error a missing
+    /// entry raises: a missing entry is a compiler bug (the checker records one for every
+    /// expression it type-checks), never a fallback to a guess.
+    pub(super) fn oracle_type(
+        &self,
+        expression: &Expression,
+        description: &str,
+    ) -> Result<Type, String> {
+        self.oracle
+            .expression_type(expression)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "no type recorded for {description} at {:?} — it was not type-checked",
+                    expression.span()
+                )
+            })
     }
 
-    /// Normalize a declared type annotation for `infer_type`: a bare `Named { name }`
-    /// (the parser's form for a `:: SomeType` reference) becomes the canonical sum/named
-    /// tag so it mangles identically to an inferred value of that type. Built-ins pass
-    /// through unchanged.
-    pub(super) fn resolve_named(&self, ty: &Type) -> Type {
-        match ty {
-            Type::Named { name, .. } | Type::Sum { name, .. } => self.sum_or_named(name),
-            other => other.clone(),
-        }
-    }
-
-    /// The `Type` for a registered type name: a sum type if known, else a `Named`.
-    pub(super) fn sum_or_named(&self, name: &str) -> Type {
-        if self.sum_layouts.contains_key(name) || name == "Result" {
-            Type::Sum {
-                name: name.to_string(),
-                variants: vec![],
-            }
-        } else {
-            Type::named_ref(name)
-        }
+    /// [`Self::oracle_type`] over a call's arguments, in the order an overloaded call's
+    /// dispatch reads them to pick its member.
+    pub(super) fn oracle_argument_types(
+        &self,
+        arguments: &[Expression],
+    ) -> Result<Vec<Type>, String> {
+        arguments
+            .iter()
+            .map(|a| self.oracle_type(a, "an overloaded call's argument"))
+            .collect()
     }
 
     /// If `name` is an overload set, pick the member matching `arg_types` exactly and

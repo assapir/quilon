@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
@@ -36,7 +37,13 @@ pub struct DebugSource<'a> {
 /// Emit a native object file for `program` at `obj_path` using LLVM's
 /// `TargetMachine`. Uses PIC relocation so string/data relocations link cleanly
 /// into a (default) PIE executable. When `debug` is `Some`, DWARF line-number info
-/// is emitted (the `--debug` build mode); otherwise the object carries no debug info.
+/// is emitted (the `--debug` build mode) and the object is left unoptimized — a
+/// debugger needs to see every local and step every line, which the optimizer would
+/// otherwise inline, reorder, or eliminate. Otherwise the build is optimized: LLVM's
+/// O3 pass pipeline (inlining, `mem2reg`, LICM, loop optimizations, …) runs over the
+/// module before it is emitted, alongside `OptimizationLevel::Aggressive` backend
+/// codegen — the target-machine level alone only tunes instruction selection, not
+/// the IR-level middle-end passes that do the actual optimization work.
 fn emit_object(
     program: &Program,
     types: TypeTable,
@@ -45,6 +52,7 @@ fn emit_object(
     obj_path: &Path,
     debug: Option<&DebugSource<'_>>,
 ) -> Result<(), String> {
+    let optimize = debug.is_none();
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {e}"))?;
 
@@ -69,16 +77,30 @@ fn emit_object(
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
+    let optimization = if optimize {
+        OptimizationLevel::Aggressive
+    } else {
+        OptimizationLevel::None
+    };
     let machine = target
         .create_target_machine(
             &triple,
             &cpu,
             &features,
-            OptimizationLevel::None,
+            optimization,
             RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| "Failed to create target machine".to_string())?;
+
+    // The target machine's own optimization level only tunes backend codegen (instruction
+    // selection, scheduling). The actual O3 work — inlining, mem2reg, LICM, loop
+    // optimizations — is the middle-end pass pipeline, run explicitly here.
+    if optimize {
+        module
+            .run_passes("default<O3>", &machine, PassBuilderOptions::create())
+            .map_err(|e| format!("Failed to run the O3 optimization pipeline: {e}"))?;
+    }
 
     machine
         .write_to_file(module, FileType::Object, obj_path)
@@ -312,7 +334,8 @@ fn append_runtime_link_args(command: &mut Command, rt_lib: &Path, force_load: bo
 
 /// Build `program` into a native executable at `out`, linking with `linker`
 /// (`clang` or `gcc`) against `libquilon_rt`, which carries the Boehm GC. The two stages
-/// — code generation, then the link — are announced through `status`.
+/// — code generation, then the link — are announced through `status`. Optimized (LLVM O3)
+/// unless `debug` is `Some` (see [`emit_object`]).
 #[allow(clippy::too_many_arguments)] // one call site, the CLI, which passes what it was given
 pub fn build_native(
     program: &Program,
@@ -348,9 +371,33 @@ pub fn build_native(
         });
 
         match status? {
-            s if s.success() => Ok(()),
-            s => Err(format!("linker `{linker}` failed with {s}")),
+            s if s.success() => {}
+            s => return Err(format!("linker `{linker}` failed with {s}")),
         }
+
+        // ld64 leaves DWARF in the `.o` (only `N_OSO` stabs point back at it), unlike GNU ld,
+        // which copies DWARF into the executable. `obj` is about to be deleted along with the
+        // rest of the staged directory, so the DWARF has to be collected into a `.dSYM` bundle
+        // — where lldb looks for it — before that happens.
+        if cfg!(target_os = "macos") && debug.is_some() {
+            let status =
+                Command::new("dsymutil")
+                    .arg(out)
+                    .status()
+                    .map_err(|e| match e.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            "`dsymutil` not found on PATH; it ships with the Xcode Command Line \
+                         Tools (`xcode-select --install`)."
+                                .to_string()
+                        }
+                        _ => format!("failed to invoke `dsymutil`: {e}"),
+                    })?;
+            if !status.success() {
+                return Err(format!("`dsymutil` failed with {status}"));
+            }
+        }
+
+        Ok(())
     })
 }
 
