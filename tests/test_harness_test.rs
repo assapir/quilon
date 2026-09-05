@@ -518,14 +518,13 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.headerOr",
         "core.http.parsed",
         // core.text, merged implicitly because the client calls composable Text methods
-        // (`.split`/`.trim`/`.contains`) — the implementations those calls lower to,
-        // qualified so they claim no name an importer could write.
-        "core.text.split",
-        "core.text.splitOnto",
+        // (`.trim`/`.contains`) — the implementations those calls lower to, qualified so
+        // they claim no name an importer could write. (The client also calls `.split` and
+        // `.replaceAll`, but those are native primitives now, so they contribute nothing
+        // here.)
         "core.text.trim",
         "core.text.contains",
         "core.text.replace",
-        "core.text.replaceAll",
         "core.text.replaceOnto",
         "core.text.replaceRemainder",
         "core.text.repeat",
