@@ -464,7 +464,11 @@ pub fn is_corelib_source(source: &str) -> bool {
     CORELIB_MODULES.iter().any(|(_, s)| *s == source)
 }
 
-fn item_is_exported(item: &Item) -> bool {
+/// Whether `item` is `>>`-marked — reachable through its module's binding. Also used
+/// outside this module by the language server's completion (`src/lsp/analysis.rs`), which
+/// resolves one import in isolation the same way [`link`] does and needs the same filter
+/// over the result.
+pub(crate) fn item_is_exported(item: &Item) -> bool {
     match item {
         Item::VariableDeclaration(d) => d.exported,
         Item::FunctionDeclaration(d) => d.exported,

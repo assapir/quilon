@@ -541,15 +541,12 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Type-check a built-in array method call. `arguments[0]` is the receiver array (already
-    /// known to be `Array(_)`); the remaining arguments are the method's own arguments,
-    /// typically a lambda whose parameters bind to the element (or accumulator) type:
-    ///   - `map(f: elem => R)`            -> `[]R`
-    ///   - `filter(pred: elem => Bool)`   -> `[]elem`  (same element type)
-    ///   - `reduce(init: A, f: (A, elem) => A)` -> `A`
-    ///   - `each(f: elem => _)`           -> the receiver array itself (`[]elem`)
-    ///   - `find(pred: elem => Bool)`     -> `Result` with `Ok(elem)` / `NotOk`
-    ///   - `at(n: Num)`                   -> `Result` with `Ok(elem)` / `NotOk`
+    /// Type-check a built-in array method call. `arguments[0]` is the receiver array
+    /// (already known to be `Array(_)`); the remaining arguments are the method's own
+    /// arguments. Signatures are [`array_method_table`]; `map`/`filter`/`reduce`/`each`/
+    /// `find` still need their own bespoke lambda inference (a fixed parameter TYPE isn't
+    /// enough — the callback's own body type feeds the result), so only their arity comes
+    /// from the table; `at` has no lambda and is fully table-driven.
     pub(super) fn check_array_method(
         &mut self,
         method: &str,
@@ -560,15 +557,12 @@ impl TypeChecker {
         // `arguments[0]` (the receiver array) was already inferred by the dispatch guard in
         // `check_call`, which passes its element type in — no need to re-infer it here.
         let method_args = &arguments[1..];
+        let table = array_method_table(&elem_type);
+        let (parameters, result) = method_signature(&table, method);
 
-        // Arity check for every method (the lambda/value argument count).
-        let expected = match method {
-            "reduce" => 2,
-            _ => 1,
-        };
-        if method_args.len() != expected {
+        if method_args.len() != parameters.len() {
             return Err(TypeError::WrongNumberOfArguments {
-                expected,
+                expected: parameters.len(),
                 got: method_args.len(),
                 span: span.clone(),
             });
@@ -619,22 +613,17 @@ impl TypeChecker {
             }
             "at" => {
                 let idx_type = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&Type::Num, &idx_type, span)?;
-                Ok(result_of(elem_type))
+                self.check_type_compatibility(&parameters[0], &idx_type, span)?;
+                Ok(result.clone())
             }
             other => unreachable!("unhandled array method {other}"),
         }
     }
 
-    /// Type-check a built-in `Map` method call. `arguments[0]` is the receiver map (already
-    /// known to be `Map(K, V)`); the remaining arguments are the method's own arguments.
-    ///   - `get(k :: K)`        -> `Result` (`Ok(V)` / `NotOk`) — the safe lookup
-    ///   - `has(k :: K)`        -> `Bool`
-    ///   - `set(k :: K, v :: V)`-> `Map(K, V)` (a NEW map; the receiver is unchanged)
-    ///   - `remove(k :: K)`     -> `Map(K, V)` (a NEW map without `k`; the receiver is unchanged)
-    ///   - `keys()`             -> `[]K`
-    ///   - `values()`           -> `[]V`
-    ///   - `each(f: (K, V) => _)` -> the receiver map (so `.each` chains)
+    /// Type-check a built-in `Map` method call. `arguments[0]` is the receiver map
+    /// (already known to be `Map(K, V)`); the remaining arguments are the method's own
+    /// arguments. Signatures are [`map_method_table`]; only `each` needs its own bespoke
+    /// lambda inference.
     pub(super) fn check_map_method(
         &mut self,
         method: &str,
@@ -644,151 +633,8 @@ impl TypeChecker {
         span: &Span,
     ) -> Result<Type, TypeError> {
         let method_args = &arguments[1..];
-        let map_type = Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()));
-
-        let expected = match method {
-            "keys" | "values" => 0,
-            "set" => 2,
-            _ => 1,
-        };
-        if method_args.len() != expected {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected,
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
-
-        match method {
-            "get" => {
-                let k = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&key_type, &k, span)?;
-                Ok(result_of(value_type))
-            }
-            "has" => {
-                let k = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&key_type, &k, span)?;
-                Ok(Type::Bool)
-            }
-            "set" => {
-                let k = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&key_type, &k, span)?;
-                let v = self.infer_expression(&method_args[1])?;
-                self.check_type_compatibility(&value_type, &v, span)?;
-                Ok(map_type)
-            }
-            "remove" => {
-                let k = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&key_type, &k, span)?;
-                Ok(map_type)
-            }
-            "keys" => Ok(Type::Array(Box::new(key_type))),
-            "values" => Ok(Type::Array(Box::new(value_type))),
-            "each" => {
-                // `f` binds the key AND value; result ignored. Returns the receiver map.
-                self.check_lambda_arg(&method_args[0], &[key_type, value_type], span)?;
-                Ok(map_type)
-            }
-            other => unreachable!("unhandled map method {other}"),
-        }
-    }
-
-    /// Type-check a built-in `Set` method call. `arguments[0]` is the receiver set (already
-    /// known to be `Set(T)`); the remaining arguments are the method's own arguments.
-    ///   - `has(x :: T)`   -> `Bool`
-    ///   - `add(x :: T)`   -> `Set(T)` (a NEW set; the receiver is unchanged)
-    ///   - `items()`       -> `[]T`
-    ///   - `each(f: T => _)` -> the receiver set (so `.each` chains)
-    pub(super) fn check_set_method(
-        &mut self,
-        method: &str,
-        elem_type: Type,
-        arguments: &[Expression],
-        span: &Span,
-    ) -> Result<Type, TypeError> {
-        let method_args = &arguments[1..];
-        let set_type = Type::Set(Box::new(elem_type.clone()));
-
-        let expected = match method {
-            "items" => 0,
-            _ => 1,
-        };
-        if method_args.len() != expected {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected,
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
-
-        match method {
-            "has" => {
-                let x = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&elem_type, &x, span)?;
-                Ok(Type::Bool)
-            }
-            "add" => {
-                let x = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&elem_type, &x, span)?;
-                Ok(set_type)
-            }
-            "remove" => {
-                let x = self.infer_expression(&method_args[0])?;
-                self.check_type_compatibility(&elem_type, &x, span)?;
-                Ok(set_type)
-            }
-            "items" => Ok(Type::Array(Box::new(elem_type))),
-            "each" => {
-                self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
-                Ok(set_type)
-            }
-            other => unreachable!("unhandled set method {other}"),
-        }
-    }
-
-    /// Type-check a built-in `Text` method call. `arguments[0]` is the receiver (already
-    /// known to be `Text`); the remaining arguments are the method's own arguments.
-    ///
-    /// The composable methods' bodies live in `corelib/text.qn` (receiver first,
-    /// fail-loud ones with a trailing `Site`), but their TYPE surface is this table — a
-    /// signature change there needs a matching edit here, and nothing checks the pair
-    /// beyond the end-to-end tests. Signatures (see docs/types/text.md):
-    ///   - `split(sep :: Text)`                 -> `[]Text`
-    ///   - `trim()` / `trimStart()` / `trimEnd()` / `toUpper()` / `toLower()` -> `Text`
-    ///   - `replaceAll(from :: Text, to :: Text)` -> `Text`
-    ///   - `replace(from :: Text, to :: Text, count :: Num)` -> `Text` (first `count`)
-    ///   - `contains(sub :: Text)`              -> `Bool`
-    ///   - `indexOf(sub :: Text)`               -> `Result` (`Ok(Num)` / `NotOk`)
-    ///   - `slice(start :: Num, end :: Num)`    -> `Text`
-    ///   - `repeat(count :: Num)`               -> `Text` (`count` copies, joined)
-    ///   - `at(index :: Num)`                   -> `Result` (`Ok(Text)` / `NotOk`)
-    ///   - `graphemes()`                        -> `[]Text` (one length-1 Text each)
-    pub(super) fn check_text_method(
-        &mut self,
-        method: &str,
-        arguments: &[Expression],
-        span: &Span,
-    ) -> Result<Type, TypeError> {
-        // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
-        let method_args = &arguments[1..];
-
-        // Each method's expected parameter types and result type — the single table that
-        // drives both the arity check and the per-argument type check below. `indexOf`
-        // returns `Ok(Num)`/`NotOk` (no -1 sentinel); `split` returns `[]Text`.
-        use Type::{Bool, Num, Text};
-        let (parameters, result): (Vec<Type>, Type) = match method {
-            "trim" | "trimStart" | "trimEnd" | "toUpper" | "toLower" => (vec![], Text),
-            "split" => (vec![Text], Type::Array(Box::new(Text))),
-            "graphemes" => (vec![], Type::Array(Box::new(Text))),
-            "contains" => (vec![Text], Bool),
-            "indexOf" => (vec![Text], result_of(Num)),
-            "at" => (vec![Num], result_of(Text)),
-            "slice" => (vec![Num, Num], Text),
-            "repeat" => (vec![Num], Text),
-            "replaceAll" => (vec![Text, Text], Text),
-            "replace" => (vec![Text, Text, Num], Text),
-            other => unreachable!("unhandled text method {other}"),
-        };
+        let table = map_method_table(&key_type, &value_type);
+        let (parameters, result) = method_signature(&table, method);
 
         if method_args.len() != parameters.len() {
             return Err(TypeError::WrongNumberOfArguments {
@@ -797,10 +643,92 @@ impl TypeChecker {
                 span: span.clone(),
             });
         }
-        for (arg, parameter_ty) in method_args.iter().zip(&parameters) {
+
+        match method {
+            "get" | "has" | "set" | "remove" => {
+                let k = self.infer_expression(&method_args[0])?;
+                self.check_type_compatibility(&parameters[0], &k, span)?;
+                if method == "set" {
+                    let v = self.infer_expression(&method_args[1])?;
+                    self.check_type_compatibility(&parameters[1], &v, span)?;
+                }
+                Ok(result.clone())
+            }
+            "keys" | "values" => Ok(result.clone()),
+            "each" => {
+                // `f` binds the key AND value; result ignored. Returns the receiver map.
+                self.check_lambda_arg(&method_args[0], &[key_type, value_type], span)?;
+                Ok(result.clone())
+            }
+            other => unreachable!("unhandled map method {other}"),
+        }
+    }
+
+    /// Type-check a built-in `Set` method call. `arguments[0]` is the receiver set
+    /// (already known to be `Set(T)`); the remaining arguments are the method's own
+    /// arguments. Signatures are [`set_method_table`]; only `each` needs its own bespoke
+    /// lambda inference.
+    pub(super) fn check_set_method(
+        &mut self,
+        method: &str,
+        elem_type: Type,
+        arguments: &[Expression],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let method_args = &arguments[1..];
+        let table = set_method_table(&elem_type);
+        let (parameters, result) = method_signature(&table, method);
+
+        if method_args.len() != parameters.len() {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: parameters.len(),
+                got: method_args.len(),
+                span: span.clone(),
+            });
+        }
+
+        match method {
+            "has" | "add" | "remove" => {
+                let x = self.infer_expression(&method_args[0])?;
+                self.check_type_compatibility(&parameters[0], &x, span)?;
+                Ok(result.clone())
+            }
+            "items" => Ok(result.clone()),
+            "each" => {
+                self.check_lambda_arg(&method_args[0], &[elem_type], span)?;
+                Ok(result.clone())
+            }
+            other => unreachable!("unhandled set method {other}"),
+        }
+    }
+
+    /// Type-check a built-in `Text` method call. `arguments[0]` is the receiver (already
+    /// known to be `Text`); the remaining arguments are the method's own arguments.
+    /// Signatures are [`text_method_table`]; no `Text` method takes a lambda, so this is
+    /// fully table-driven.
+    pub(super) fn check_text_method(
+        &mut self,
+        method: &str,
+        arguments: &[Expression],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
+        let method_args = &arguments[1..];
+        let table = text_method_table();
+        let (parameters, result) = method_signature(&table, method);
+
+        if method_args.len() != parameters.len() {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: parameters.len(),
+                got: method_args.len(),
+                span: span.clone(),
+            });
+        }
+        for (arg, parameter_ty) in method_args.iter().zip(parameters) {
             let arg_type = self.infer_expression(arg)?;
             self.check_type_compatibility(parameter_ty, &arg_type, span)?;
         }
+        let result = result.clone();
 
         // Fail-loud contract for `replace`/`replaceAll`: reject at COMPILE time whatever is
         // determinable from literals (the runtime aborts on the rest — no silent no-ops).
@@ -976,4 +904,119 @@ fn is_empty_collection_literal(expression: &Expression) -> bool {
         Expression::SetLiteral { elements, .. } => elements.is_empty(),
         _ => false,
     }
+}
+
+/// `(name, parameters, return type)` for every method a built-in type answers through
+/// `.` — the single source `check_text_method`/`check_array_method`/`check_map_method`/
+/// `check_set_method` above and the language server's completion
+/// (`src/lsp/analysis.rs`) both read, so the two can never drift apart. `map`'s and
+/// `reduce`'s own result depends on the lambda passed at the call site; here it is
+/// spelled with a placeholder name (`R`, `A`) no real call ever actually produces.
+pub(crate) fn text_method_table() -> Vec<(&'static str, Vec<Type>, Type)> {
+    use Type::{Bool, Num, Text};
+    vec![
+        ("trim", vec![], Text),
+        ("trimStart", vec![], Text),
+        ("trimEnd", vec![], Text),
+        ("toUpper", vec![], Text),
+        ("toLower", vec![], Text),
+        ("split", vec![Text], Type::Array(Box::new(Text))),
+        ("graphemes", vec![], Type::Array(Box::new(Text))),
+        ("contains", vec![Text], Bool),
+        ("indexOf", vec![Text], result_of(Num)),
+        ("at", vec![Num], result_of(Text)),
+        ("slice", vec![Num, Num], Text),
+        ("repeat", vec![Num], Text),
+        ("replaceAll", vec![Text, Text], Text),
+        ("replace", vec![Text, Text, Num], Text),
+    ]
+}
+
+fn function_type(parameters: Vec<Type>, return_type: Type) -> Type {
+    Type::Function {
+        parameters,
+        return_type: Box::new(return_type),
+    }
+}
+
+pub(crate) fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
+    let r = Type::named_ref("R");
+    let a = Type::named_ref("A");
+    vec![
+        (
+            "map",
+            vec![function_type(vec![elem.clone()], r.clone())],
+            Type::Array(Box::new(r)),
+        ),
+        (
+            "filter",
+            vec![function_type(vec![elem.clone()], Type::Bool)],
+            Type::Array(Box::new(elem.clone())),
+        ),
+        (
+            "reduce",
+            vec![
+                a.clone(),
+                function_type(vec![a.clone(), elem.clone()], a.clone()),
+            ],
+            a,
+        ),
+        (
+            "each",
+            vec![function_type(vec![elem.clone()], Type::Unit)],
+            Type::Array(Box::new(elem.clone())),
+        ),
+        (
+            "find",
+            vec![function_type(vec![elem.clone()], Type::Bool)],
+            result_of(elem.clone()),
+        ),
+        ("at", vec![Type::Num], result_of(elem.clone())),
+    ]
+}
+
+pub(crate) fn map_method_table(key: &Type, value: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
+    let map_type = Type::Map(Box::new(key.clone()), Box::new(value.clone()));
+    vec![
+        ("get", vec![key.clone()], result_of(value.clone())),
+        ("has", vec![key.clone()], Type::Bool),
+        ("set", vec![key.clone(), value.clone()], map_type.clone()),
+        ("remove", vec![key.clone()], map_type.clone()),
+        ("keys", vec![], Type::Array(Box::new(key.clone()))),
+        ("values", vec![], Type::Array(Box::new(value.clone()))),
+        (
+            "each",
+            vec![function_type(vec![key.clone(), value.clone()], Type::Unit)],
+            map_type,
+        ),
+    ]
+}
+
+pub(crate) fn set_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
+    let set_type = Type::Set(Box::new(elem.clone()));
+    vec![
+        ("has", vec![elem.clone()], Type::Bool),
+        ("add", vec![elem.clone()], set_type.clone()),
+        ("remove", vec![elem.clone()], set_type.clone()),
+        ("items", vec![], Type::Array(Box::new(elem.clone()))),
+        (
+            "each",
+            vec![function_type(vec![elem.clone()], Type::Unit)],
+            set_type,
+        ),
+    ]
+}
+
+/// One table's entry for `method` — every one of these tables' names is exhaustively
+/// dispatched by its caller's `match`, so a miss here means the dispatch guard in
+/// `check_call` let an unknown name through.
+fn method_signature<'a>(
+    table: &'a [(&'static str, Vec<Type>, Type)],
+    method: &str,
+) -> (&'a [Type], &'a Type) {
+    let (_, parameters, result) = table
+        .iter()
+        .find(|(name, _, _)| *name == method)
+        .unwrap_or_else(|| unreachable!("unhandled method {method}"));
+    (parameters, result)
 }

@@ -39,6 +39,30 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   `isOk()`, `isNotOk()` — it yields the matcher's own signature and the type it applies to
   instead: `isOk()  matcher over Result`, `equals(Num)  matcher over Num`,
   `not(equals(Num))  matcher over Num`.
+- **Completion** (triggered on `.`, and answered on every request regardless of what
+  triggered it) offers, depending on where the cursor sits:
+  - **A bare name.** Locals and parameters of the enclosing blocks (only bindings ABOVE
+    the cursor — Quilon has no hoisting), the document's top-level functions and types
+    defined above the cursor (never the enclosing definition itself), every sum type's
+    constructors defined above the cursor, and every `<<` import's binding.
+  - **After `binding.` for an imported module** (`http.`): that module's exported names,
+    the same qualified names `http.Response` or `http.Get` reach — resolved by loading
+    that one import in isolation, so this answers even when the rest of the document does
+    not parse.
+  - **After `expr.` for any other expression** (`response.`): the checked receiver
+    type's members — a record's fields and methods, a sum's methods, or the fixed
+    built-in members of `Text`, an array, a `Map`, or a `Set`.
+
+  Each item carries a protocol `kind` (variable, function, field, method, class, module,
+  or enum member) and a `detail` string with the type or signature, in the same spelling
+  hover uses. A completion request's document is normally unparseable at the cursor
+  (`response.` has no member yet). The server holds no cached copy of any earlier,
+  cleanly-parsing version of the document: it re-derives a checkable document from the
+  CURRENT buffer by deleting the incomplete token at the cursor — the trailing `.member`
+  being typed, or the bare word being typed. What is left parses (and, but for the module
+  case, checks) like any other snapshot, one token earlier. The one trade-off: a cursor
+  inside an expression that is ALREADY broken for an unrelated reason (a stray paren
+  earlier in the file) still answers empty — there is no fallback to a stale good version.
 - **Semantic tokens** classify:
   - a `<` or `>` that delimits a block as a keyword token, and a `<` or `>` that is the
     comparison operator as an operator token;
