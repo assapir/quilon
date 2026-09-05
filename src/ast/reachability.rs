@@ -148,6 +148,11 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
             value: right,
             ..
         }
+        | Expression::IndexAssign {
+            target: left,
+            value: right,
+            ..
+        }
         | Expression::Index {
             expression: left,
             index: right,

@@ -237,7 +237,8 @@ impl Resolver {
             Expression::UnaryOperator { expression, .. }
             | Expression::FieldAccess { expression, .. }
             | Expression::Spread { expression, .. } => self.expression(expression),
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. }
+            | Expression::IndexAssign { target, value, .. } => {
                 self.expression(target);
                 self.expression(value);
             }
@@ -758,7 +759,8 @@ fn walk_expressions<'a>(expression: &'a Expression, visit: &mut impl FnMut(&'a E
         Expression::UnaryOperator { expression, .. }
         | Expression::FieldAccess { expression, .. }
         | Expression::Spread { expression, .. } => walk_expressions(expression, visit),
-        Expression::FieldAssign { target, value, .. } => {
+        Expression::FieldAssign { target, value, .. }
+        | Expression::IndexAssign { target, value, .. } => {
             walk_expressions(target, visit);
             walk_expressions(value, visit);
         }
@@ -1169,7 +1171,8 @@ fn expression_children(expression: &Expression) -> Vec<&Expression> {
         Expression::UnaryOperator { expression, .. }
         | Expression::FieldAccess { expression, .. }
         | Expression::Spread { expression, .. } => vec![expression],
-        Expression::FieldAssign { target, value, .. } => vec![target, value],
+        Expression::FieldAssign { target, value, .. }
+        | Expression::IndexAssign { target, value, .. } => vec![target, value],
         Expression::Index {
             expression, index, ..
         } => vec![expression, index],

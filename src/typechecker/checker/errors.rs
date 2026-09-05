@@ -306,10 +306,7 @@ impl std::fmt::Display for TypeError {
                 write!(f, "cannot assign to `{name}`, which is bound with `=`")
             }
             TypeError::ImmutableFieldWrite { name, .. } => {
-                write!(
-                    f,
-                    "cannot write to a field of `{name}`, which is bound with `=`"
-                )
+                write!(f, "cannot write to `{name}`, which is bound with `=`")
             }
             TypeError::MutableAliasOfImmutable {
                 name,

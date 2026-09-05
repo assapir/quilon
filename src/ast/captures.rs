@@ -159,7 +159,8 @@ fn collect(
                 collect(&arm.body, &mut arm_local, outer, seen, out);
             }
         }
-        Expression::FieldAssign { target, value, .. } => {
+        Expression::FieldAssign { target, value, .. }
+        | Expression::IndexAssign { target, value, .. } => {
             collect(target, local, outer, seen, out);
             collect(value, local, outer, seen, out);
         }

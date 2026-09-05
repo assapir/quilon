@@ -318,21 +318,15 @@ impl TypeChecker {
                     }
 
                     // A mutating (setter) method requires a receiver that aliases no `=`
-                    // binding and no parameter — a `:=` binding, a fresh value, or a
-                    // setter's own `it` (mutable at every call site) all pass, however
-                    // the receiver expression reaches them. Meaningless for a type-name
-                    // receiver (nothing to write through), so skipped there.
+                    // binding and no parameter, however the receiver expression reaches
+                    // them. Meaningless for a type-name receiver (nothing to write
+                    // through), so skipped there.
                     if !type_name_receiver
                         && self
                             .setter_methods
                             .contains(&(type_name.clone(), name.clone()))
-                        && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
                     {
-                        return Err(TypeError::MutatingMethodOnImmutable {
-                            method: name.clone(),
-                            receiver: recv_name,
-                            span: span.clone(),
-                        });
+                        self.require_mutable_receiver(&arguments[0], name, span)?;
                     }
 
                     // Method parameters don't include the implicit receiver
@@ -541,6 +535,28 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// A mutating (setter) call requires a receiver that aliases no `=` binding and no
+    /// parameter — a `:=` binding, a fresh value, or a setter's own `it` (mutable at every
+    /// call site) all pass, however the receiver expression reaches them. Shared by a
+    /// user record's `:=`-declared methods and the built-in `Map`/`Set` mutators
+    /// (`set`/`remove`/`add`) — one gate for every form of "this call writes through its
+    /// receiver".
+    fn require_mutable_receiver(
+        &self,
+        receiver: &Expression,
+        method: &str,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if let Some(recv_name) = self.immutable_write_witness(receiver) {
+            return Err(TypeError::MutatingMethodOnImmutable {
+                method: method.to_string(),
+                receiver: recv_name,
+                span: span.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Type-check a built-in array method call. `arguments[0]` is the receiver array
     /// (already known to be `Array(_)`); the remaining arguments are the method's own
     /// arguments. Signatures are [`array_method_table`]; `map`/`filter`/`reduce`/`each`/
@@ -632,6 +648,12 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `set`/`remove` mutate the receiver in place, so — exactly like a record's `:=`
+        // setter methods — they require a `:=` receiver.
+        if matches!(method, "set" | "remove") {
+            self.require_mutable_receiver(&arguments[0], method, span)?;
+        }
+
         let method_args = &arguments[1..];
         let table = map_method_table(&key_type, &value_type);
         let (parameters, result) = method_signature(&table, method);
@@ -651,6 +673,13 @@ impl TypeChecker {
                 if method == "set" {
                     let v = self.infer_expression(&method_args[1])?;
                     self.check_type_compatibility(&parameters[1], &v, span)?;
+                    // `set` stores both into the receiver in place: a store across the
+                    // `=`/`:=` line is a compile error at the store, the same check a
+                    // record field write and a user setter's stored parameter both go
+                    // through (`require_mutable_receiver` above already confirmed the
+                    // receiver itself is `:=`-reachable).
+                    self.check_store_not_crossing(&method_args[0], span)?;
+                    self.check_store_not_crossing(&method_args[1], span)?;
                 }
                 Ok(result.clone())
             }
@@ -675,6 +704,12 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `add`/`remove` mutate the receiver in place, so — exactly like a record's `:=`
+        // setter methods — they require a `:=` receiver.
+        if matches!(method, "add" | "remove") {
+            self.require_mutable_receiver(&arguments[0], method, span)?;
+        }
+
         let method_args = &arguments[1..];
         let table = set_method_table(&elem_type);
         let (parameters, result) = method_signature(&table, method);
@@ -691,6 +726,11 @@ impl TypeChecker {
             "has" | "add" | "remove" => {
                 let x = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&parameters[0], &x, span)?;
+                if method == "add" {
+                    // `add` stores the element into the receiver in place — same
+                    // store-crosses-the-line check as `Map.set` above.
+                    self.check_store_not_crossing(&method_args[0], span)?;
+                }
                 Ok(result.clone())
             }
             "items" => Ok(result.clone()),

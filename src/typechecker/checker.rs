@@ -59,7 +59,7 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
-    /// `obj.field := v` where `obj`'s root binding is immutable (`=`-bound).
+    /// `obj.field := v` or `arr[i] := v` where the root binding is immutable (`=`-bound).
     ImmutableFieldWrite {
         name: String,
         span: Span,

@@ -407,6 +407,59 @@ fn run_a_setter_reading_only_a_scalar_field_of_its_parameter_accepts_an_immutabl
     );
 }
 
+#[test]
+fn an_array_element_write_storing_an_immutable_record_is_rejected() {
+    // `arr[0] := p` is the array analog of `b.item := c`: the same store-crosses-the-line
+    // check that already covers a field write must cover an element write too.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  p = T { v = 1 }\n  arr :: []T := [T { v = 0 }]\n  arr[0] := p\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the element-write store to name 'p' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn run_an_array_element_write_storing_a_fresh_value_stays_legal() {
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  arr :: []T := [T { v = 0 }]\n  arr[0] := T { v = 9 }\n  arr[0].v\n>",
+        9,
+    );
+}
+
+#[test]
+fn map_set_storing_an_immutable_record_value_is_rejected() {
+    // `m.set(k, p)` stores `p` into the map's storage exactly like `Map`'s in-place
+    // mutator that it is; a later `m.values()[i].v := ...` would reach `p`.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  p = T { v = 1 }\n  m :: [|Text => T|] := [|=>|]\n  m.set(\"k\", p)\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the map-set store to name 'p' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn run_map_set_storing_a_fresh_record_value_stays_legal() {
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  m :: [|Text => T|] := [|=>|]\n  m.set(\"k\", T { v = 9 })\n  m.values()[0].v\n>",
+        9,
+    );
+}
+
+#[test]
+fn set_add_storing_an_immutable_record_element_is_rejected() {
+    let error = type_error_message(
+        "T = { v :: Num, % = () -> Num => < it.v >, == = (o :: T) -> Bool => < it.v == o.v > }\n^ = () -> Num => <\n  p = T { v = 1 }\n  s :: [|T|] := [||]\n  s.add(p)\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the set-add store to name 'p' under QN341, got: {error}"
+    );
+}
+
 // --- Route 8: lambdas, higher-order calls, and closures returning a capture. ---
 
 #[test]
@@ -634,5 +687,58 @@ fn run_a_closure_three_levels_deep_returning_a_fresh_value_binds_mutably() {
     assert_exit(
         "T = { value :: Num }\nmk = () -> () -> () -> T => <\n  () -> () -> T => <\n    () -> T => < T { value = 9 } >\n  >\n>\n^ = () -> Num => <\n  x := mk()()()\n  x.value\n>",
         9,
+    );
+}
+
+// --- Route 16: a derived collection shares its ELEMENTS, not its own identity — a fresh
+// array/map of scalars binds either way, but one of reference-typed elements stays tied
+// to the source, exactly like an alias of the source itself. ---
+
+#[test]
+fn an_alias_of_an_immutable_array_is_rejected() {
+    let error =
+        type_error_message("^ = () -> Num => <\n  nums = [1, 2, 3]\n  ys := nums\n  ys[0]\n>");
+    assert!(
+        error.contains("'nums' is immutable"),
+        "expected the array alias to name 'nums', got: {error}"
+    );
+}
+
+#[test]
+fn run_map_of_scalars_from_an_immutable_array_is_a_fresh_mutable_array() {
+    // `nums.map(...)` builds a fresh array of copied `Num`s: writing into it can never
+    // reach `nums`, so it binds `:=` even though `nums` is `=`.
+    assert_type_checks(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  doubled := nums.map(x => x * 2)\n  doubled[0]\n>",
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  doubled := nums.map(x => x * 2)\n  doubled[0] := 10\n  doubled[0] + nums[0]\n>",
+        11,
+    );
+}
+
+#[test]
+fn run_filter_of_scalars_from_an_immutable_array_is_a_fresh_mutable_array() {
+    assert_type_checks(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  evens := nums.filter(x => x > 1)\n  evens[0]\n>",
+    );
+}
+
+#[test]
+fn run_keys_of_an_immutable_map_of_scalars_is_a_fresh_mutable_array() {
+    assert_type_checks("^ = () -> Num => <\n  m = [|\"a\" => 1|]\n  ks := m.keys()\n  ks.size\n>");
+}
+
+#[test]
+fn filter_of_reference_typed_elements_from_an_immutable_array_is_still_rejected() {
+    // `points`'s elements are records: `filter` returns a fresh array, but its kept
+    // entries are the SAME record values `points` holds, so the result still ties back
+    // to `points` exactly as a direct alias would.
+    let error = type_error_message(
+        "Point = { x :: Num }\n^ = () -> Num => <\n  points = [Point { x = 1 }]\n  firsts := points.filter(p => p.x > 0)\n  firsts[0].x\n>",
+    );
+    assert!(
+        error.contains("'points' is immutable"),
+        "expected the filtered record array to still name 'points', got: {error}"
     );
 }

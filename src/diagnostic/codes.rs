@@ -75,7 +75,7 @@ codes! {
     NotAFunction = 302 => "call on a data value",
     WrongNumberOfArguments = 303 => "wrong number of arguments",
     ImmutableAssignment = 304 => "assignment to an immutable binding",
-    ImmutableFieldWrite = 305 => "field write through an immutable binding",
+    ImmutableFieldWrite = 305 => "write through an immutable binding",
     MutableAliasOfImmutable = 306 => "`:=` binding aliasing an immutable value",
     ImmutableAliasOfMutable = 307 => "`=` binding aliasing a mutable value",
     MutatingMethodOnImmutable = 308 => "mutating method on an immutable receiver",

@@ -81,15 +81,16 @@ pub struct ResultAliasing {
 }
 
 /// Whether values of `ty` are shared by reference AND writable through an alias — the
-/// types the deep-immutability gates apply to. A record (named or anonymous) is; a
-/// container is exactly when what it holds is (an array of `Num` copies freely — nothing
-/// reached through it can be written — while an array of records shares its elements). A
-/// sum is when any variant payload is. Scalars copy.
+/// types the deep-immutability gates apply to. A record (named or anonymous) is. So is
+/// every array/`Map`/`Set`, regardless of what it holds: `arr[i] := v`, `m.set(...)`, and
+/// `s.add(...)` all mutate the underlying storage in place, so two bindings of the same
+/// array/map/set alias each other's writes even when the element type is a plain `Num`. A
+/// sum is when any variant payload is. Scalars (`Num`/`Bool`/`Text`) copy.
 pub(super) fn is_reference_type(ty: &Type) -> bool {
     match ty {
-        Type::Named { .. } | Type::Record(_) => true,
-        Type::Array(element) | Type::Set(element) => is_reference_type(element),
-        Type::Map(key, value) => is_reference_type(key) || is_reference_type(value),
+        Type::Named { .. } | Type::Record(_) | Type::Array(_) | Type::Set(_) | Type::Map(_, _) => {
+            true
+        }
         Type::Sum { variants, .. } => variants
             .iter()
             .any(|variant| variant.fields.iter().any(is_reference_type)),
@@ -293,10 +294,14 @@ impl TypeChecker {
                         .unwrap_or_default();
                     self.apply_result_aliasing(&result_aliasing, &borrowed)
                 }
-                Some(Type::Array(_)) | Some(Type::Map(_, _)) | Some(Type::Set(_)) => {
+                Some(receiver_ty @ (Type::Array(_) | Type::Map(_, _) | Type::Set(_))) => {
                     let result_aliasing = ResultAliasing {
                         fixed: ValueAliasing::default(),
-                        argument_slots: builtin_collection_method_slots(name).to_vec(),
+                        argument_slots: self.builtin_collection_method_slots(
+                            name,
+                            receiver_ty,
+                            &borrowed,
+                        ),
                     };
                     let mut out = self.apply_result_aliasing(&result_aliasing, &borrowed);
                     // `map` and `reduce` thread their callback's RETURN value into the
@@ -585,22 +590,47 @@ impl TypeChecker {
     pub(super) fn leave_declaration(&mut self, previous: u64) {
         self.current_declaration = previous;
     }
-}
 
-/// Which argument slots (0 = the receiver) a built-in collection method's result may
-/// alias. `each` returns its receiver; `filter` shares the kept elements, and `map`'s
-/// lambda may hand elements through (`xs.map(x => x)`); `at`/`find` wrap an element;
-/// `reduce` may return its initial value; a map/set update shares the receiver's entries
-/// and the added one. Consulted only for reference-typed results, so the
-/// scalar-returning methods — and every `map` producing scalars — never reach it.
-fn builtin_collection_method_slots(name: &str) -> &'static [usize] {
-    match name {
-        "each" | "filter" | "map" | "at" | "find" | "remove" | "keys" | "values" | "items"
-        | "get" => &[0],
-        "reduce" => &[1],
-        "set" => &[0, 2],
-        "add" => &[0, 1],
-        _ => &[],
+    /// Which argument slots (0 = the receiver) a built-in collection method's result
+    /// actually aliases. `each`/`set`/`add`/`remove` mutate the receiver in place and
+    /// literally return it — slot 0 regardless of element type. Every other method
+    /// (`filter`, `map`, `at`, `find`, `keys`, `values`, `items`, `get`, and `reduce`'s own
+    /// slot, the init argument) builds a FRESH container instead — or extracts a single
+    /// element — which shares an alias only through the value it carries: a `[]Point`
+    /// result still shares its records, but a `[]Num` result shares nothing a write could
+    /// reach, so `is_reference_type` on that shared type gates the slot.
+    /// `filter`/`at`/`find`/`keys`/`values`/`get`/`items` share the receiver's own
+    /// element/key/value type; `map` and `reduce` may change it, so those two are resolved
+    /// from the callback's return type (already in the type table — the callback was
+    /// inferred at the definition/check site) and the init argument's type respectively.
+    fn builtin_collection_method_slots(
+        &self,
+        name: &str,
+        receiver_type: &Type,
+        arguments: &[&Expression],
+    ) -> Vec<usize> {
+        if matches!(name, "each" | "set" | "add" | "remove") {
+            return vec![0];
+        }
+        let shared_type = match (name, receiver_type) {
+            ("filter" | "at" | "find", Type::Array(elem)) => Some((**elem).clone()),
+            ("keys", Type::Map(key, _)) => Some((**key).clone()),
+            ("values" | "get", Type::Map(_, value)) => Some((**value).clone()),
+            ("items", Type::Set(elem)) => Some((**elem).clone()),
+            ("map", _) => arguments.get(1).and_then(|callback| match callback {
+                Expression::Lambda { body, .. } => self.type_table.get(body.span()).cloned(),
+                _ => None,
+            }),
+            ("reduce", _) => arguments
+                .get(1)
+                .and_then(|init| self.type_table.get(init.span()).cloned()),
+            _ => None,
+        };
+        let slot = if name == "reduce" { 1 } else { 0 };
+        match shared_type {
+            Some(ty) if is_reference_type(&ty) => vec![slot],
+            _ => vec![],
+        }
     }
 }
 
