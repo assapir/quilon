@@ -12,7 +12,8 @@
 ~ defined here. Both take the value under test and a matcher:
 ~
 ~   assert(2 + 2, equals(4))    report at YOUR call site and exit 101 on failure
-~   expect(2 + 2, equals(4))    report, mark the case failed, and carry on (tests only)
+~   expect(2 + 2, equals(4))    report, then end the case (tests only) — the suite
+~                               carries on with the next one
 ~
 ~ The matchers are `equals`, `contains`, `not`, `isOk`, `isNotOk` — see
 ~ docs/corelib/test/README.md.
@@ -92,8 +93,9 @@
 ~ Close the group just entered; yields the depth that remains.
 >> leaveSuite = () -> Num => < __test_suite_leave() >
 
-~ Whether the case now running has already failed an `expect`. Ask BEFORE closing it —
-~ closing clears the mark for the next case.
+~ Whether the case now running has already failed an `expect`. A failing `expect` ends the
+~ case right there, so this only ever answers for code that runs before one could have
+~ failed.
 >> caseFailing = () -> Bool => < __test_case_failing() == 1 >
 
 ~ Close the case `name` that just ran, tallying it as passed or failed and reporting it;

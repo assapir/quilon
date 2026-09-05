@@ -5,8 +5,10 @@
 //! without generics. Each lowers to the condition it tests plus the description of what it
 //! wanted, and the description is only rendered on the failing path.
 //!
-//! `assert` reports and exits; `expect` reports, marks the running case failed, and returns —
-//! and reads that mark first, so a case's later assertions are skipped once one has failed.
+//! `assert` reports and exits; `expect` reports, marks the running case failed, and ends the
+//! case — `generate_run_case` is what makes that possible. `expect` also reads the case's
+//! failed mark before doing anything else, a defensive fallback for whatever reaches it with
+//! no case actually running to end (see the comment at that check, below).
 //!
 //! Part of the LLVM code generator; see `super` for the `CodeGenerator` state these methods
 //! run against.
@@ -40,9 +42,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             .ok_or_else(|| format!("{name} outside a function"))?;
         let done = self.context.append_basic_block(function, "assert_done");
 
-        // An `expect` in a case that has already failed does nothing at all — not even
-        // evaluating the value under test. That is what makes a failure skip the rest of
-        // its case while the suite carries on.
+        // Defensive: a failing `expect` (below) ends the case by jumping straight back to
+        // `generate_run_case`'s `__test_case_run_guarded` call, so a later `expect` in the
+        // same case is never reached to ask this at all. Kept as the fallback for wherever
+        // that jump does not apply — it still does nothing at all, not even evaluating the
+        // value under test, so a failure never reports twice.
         if !fatal {
             let live = self.context.append_basic_block(function, "expect_live");
             let failing = self.generate_test_registry("__test_case_failing", &[])?;
