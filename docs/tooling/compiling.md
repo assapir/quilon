@@ -93,8 +93,8 @@ gdb ./program                              # break/step by .qn line, print local
 A `--debug` build is unoptimized (O0 plus `-g`, in `cc` terms), so a debugger sees
 every local and steps every line. On macOS, it also writes the debug info to a
 `program.dSYM` bundle beside the executable (via `dsymutil`, from the Xcode Command Line
-Tools) — lldb reads DWARF from there rather than from the executable itself, so the bundle
-ships or is deleted together with the executable.
+Tools); lldb reads DWARF from that bundle, so it ships or is deleted together with the
+executable.
 
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
