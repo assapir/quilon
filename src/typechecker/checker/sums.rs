@@ -43,6 +43,20 @@ impl TypeChecker {
             Span::in_root(0, 0),
         );
 
+        // The built-in scalar types are reserved names, not merely a default meaning for
+        // an unbound one: registering them in `env` here makes `Num = Foo / Bar` collide
+        // with an existing binding the same way `Result = Foo / Bar` already does, instead
+        // of silently shadowing the type every annotation `:: Num` still resolves to.
+        for (name, builtin) in [
+            ("Num", Type::Num),
+            ("Bool", Type::Bool),
+            ("Text", Type::Text),
+        ] {
+            let _ = self
+                .env
+                .define(name.to_string(), builtin, false, Span::in_root(0, 0));
+        }
+
         // `Site` — the built-in call-site record (`file`/`line`/`column`/`excerpt`/`width`).
         // A named record type like any other, registered here rather than declared in a
         // corelib module so `:: Site` is nameable in any signature with no import; what

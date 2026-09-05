@@ -172,6 +172,23 @@ fn duplicate_variant_names_are_rejected() {
 }
 
 #[test]
+fn num_redeclared_as_a_sum_type_is_rejected() {
+    // `Num` is a built-in scalar type, already defined in every scope — declaring a
+    // type under that name collides like any other duplicate definition.
+    assert_type_error("Num = Foo / Bar");
+}
+
+#[test]
+fn bool_redeclared_as_a_sum_type_is_rejected() {
+    assert_type_error("Bool = Yes / No");
+}
+
+#[test]
+fn text_redeclared_as_a_record_type_is_rejected() {
+    assert_type_error("Text = { x :: Num }");
+}
+
+#[test]
 fn literal_payload_pattern_is_rejected() {
     // Codegen dispatches on the constructor TAG alone, so `Ok(1)` would silently
     // match ANY `Ok` payload (the wrong arm wins with no diagnostic). Until payload

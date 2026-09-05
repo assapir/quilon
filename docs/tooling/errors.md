@@ -578,7 +578,9 @@ body shadows the receiver; rename it where the write targets the lambda's own va
 
 ### QN310 — duplicate definition
 
-A name is defined twice in one scope, and the two definitions form no overload set.
+A name is defined twice in one scope, and the two definitions form no overload set. A
+built-in type name (`Num`, `Bool`, `Text`, `Result`, `Site`) is already defined in every
+scope, so declaring a type under one of those names collides the same way.
 
 ```quilon ignore
 x = 1
