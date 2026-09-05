@@ -543,10 +543,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let function = self.module.add_function(&name, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
 
-        // Save enclosing emission state — we are about to emit a DIFFERENT function body.
-        let saved_block = self.builder.get_insert_block();
-        let saved_function = self.current_function;
-        let saved_frame = self.take_frame();
+        // Suspend enclosing emission state — we are about to emit a DIFFERENT function body.
+        let suspended = self.suspend_enclosing_function();
         // The lifted body has its own frame: recompute which of ITS `:=` locals are boxed.
         self.boxed_vars = self.compute_boxed_vars(body);
         // A by-reference capture is ALSO a shared cell in this frame: mark it boxed so a
@@ -560,13 +558,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // with it: field access, method dispatch, and overloaded-call mangling on the
         // captured name inside the closure body all resolve through these maps.
         for cap in captures {
-            if let Some(qty) = saved_frame.var_types.get(&cap.name) {
+            if let Some(qty) = suspended.frame.var_types.get(&cap.name) {
                 self.var_types.insert(cap.name.clone(), qty.clone());
             }
-            if let Some(fields) = saved_frame.record_types.get(&cap.name) {
+            if let Some(fields) = suspended.frame.record_types.get(&cap.name) {
                 self.record_types.insert(cap.name.clone(), fields.clone());
             }
-            if let Some(type_name) = saved_frame.var_named_types.get(&cap.name) {
+            if let Some(type_name) = suspended.frame.var_named_types.get(&cap.name) {
                 self.var_named_types
                     .insert(cap.name.clone(), type_name.clone());
             }
@@ -653,18 +651,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_return(Some(&body_value))
             .map_err(ctx("Failed to build closure return"))?;
 
-        // Restore the enclosing emission state.
-        self.restore_frame(saved_frame);
-        self.current_function = saved_function;
+        // Restore the enclosing emission state, including its debug location.
         self.end_di_scope(saved_scope);
-        if let Some(block) = saved_block {
-            self.builder.position_at_end(block);
-            // Reactivate the enclosing function's source scope for whatever it emits next
-            // (the closure value assembly), now that this nested body is closed out.
-            if self.di_scope.is_some() {
-                self.set_debug_loc(body.span());
-            }
-        }
+        self.resume_enclosing_function(suspended);
 
         Ok(function)
     }
