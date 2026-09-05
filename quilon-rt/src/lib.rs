@@ -69,8 +69,9 @@ pub use report::{
 };
 pub use scheduler::__run_fiber_main;
 pub use test_registry::{
-    __test_case_failing, __test_case_finish, __test_case_selected, __test_depth, __test_failed,
-    __test_passed, __test_suite_enter, __test_suite_leave, __test_suite_selected, __test_summary,
+    __test_case_failing, __test_case_finish, __test_case_run_guarded, __test_case_selected,
+    __test_depth, __test_failed, __test_passed, __test_suite_enter, __test_suite_leave,
+    __test_suite_selected, __test_summary,
 };
 pub use text::{
     __bool_to_text, __num_to_text, __text_at, __text_cmp, __text_contains, __text_graphemes,
@@ -227,6 +228,7 @@ intrinsic_registry! {
     __test_summary: extern "C" fn() -> f64,
     __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
     __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
+    __test_case_run_guarded: extern "C" fn(*const c_void, *mut c_void),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

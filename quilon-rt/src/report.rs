@@ -14,7 +14,7 @@
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
-use crate::test_registry::{Failure, mark_case_failed};
+use crate::test_registry::{Failure, abort_running_case, mark_case_failed};
 use std::os::raw::c_int;
 
 /// The exit status a failing `assert` leaves — the Rust-panic convention, so a self-verifying
@@ -181,8 +181,8 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 }
 
 /// A failing `expect(actual, matcher)`: report `message` at the assertion's own call site,
-/// mark the running case failed, and RETURN. The case's remaining assertions see the mark and
-/// do nothing; the suite carries on with the next case.
+/// mark the running case failed, and END the case — jumping back to where
+/// `__test_case_run_guarded` started running it. The suite carries on with the next case.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
@@ -196,6 +196,7 @@ pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, lengt
         file,
         line,
     });
+    abort_running_case();
 }
 
 /// The file and line `site` names, as a JSON reporter carries them — empty and 0 for a

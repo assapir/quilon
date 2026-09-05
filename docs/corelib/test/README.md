@@ -31,7 +31,7 @@ Two entry points, one vocabulary. They differ in what a FAILURE does:
 | Function | On failure |
 |----------|-----------|
 | `assert(actual, matcher) -> $` | Report at the call site and **exit 101**. For examples and ordinary code. |
-| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and carry on. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
+| `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and end the case — the suite carries on with the next one. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
 
 A holding assertion has no effect. A failure reports in the standard
 [error frame](../../tooling/errors.md) at the assertion's own call site — the line the
@@ -268,7 +268,7 @@ and the case lifecycle `describe` and `it` drive:
 |----------|--------|
 | `test.enterSuite(name :: Text) -> Num` | Open the group `name` and report it; yields the depth it sits at. |
 | `test.leaveSuite() -> Num` | Close the innermost open group; yields the depth that remains. |
-| `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. Closing the case clears the mark. |
+| `test.caseFailing() -> Bool` | Whether the running case has already failed an `expect`. A failing `expect` ends the case at the point it fails, so a call reached afterward in the same case never happens — this answers for code that runs before any `expect` in the case could have failed. |
 | `test.finishCase(name :: Text) -> Num` | Close the case `name`, tallying it passed or failed and reporting it; yields the depth it sits at. |
 
 `test.reportSummary() -> Num` ends the run: the entry point `quilon test` synthesizes calls it

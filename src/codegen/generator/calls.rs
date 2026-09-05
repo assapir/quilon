@@ -155,6 +155,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_assertion(function_name, arguments, span);
         }
 
+        // `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE`) — lowered here for the
+        // same reason as the assertions just above.
+        if !member_call && crate::ast::is_run_test_case(function_name) {
+            return self.generate_run_case(arguments);
+        }
+
         // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
         // into the name. Handled before every other dispatch — the name is not an
         // overload/method/constructor. The `@`-identifier span carries the call's launch site.
