@@ -46,7 +46,7 @@ syntax (`array.method(...)`) and freely chainable. The higher-order ones take a 
 | `map(f)` | new `[]R` | element type `R` is `f`'s return type (so `map` may change the element type, e.g. `[]Num → []Text`) |
 | `filter(predicate)` | new `[]element` | keeps the elements where `predicate` returns `Bool` `true`, in order; `predicate` **must** return `Bool` |
 | `reduce(initial, (accumulator, x) => …)` | the accumulator | fold-left from `initial`; the reducer's result type must match `initial`'s type |
-| `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains; walks indices `0` to `size - 1` over the array's own storage, so a body writing `arr[j] := v` at an index not yet visited is read back when the walk reaches it |
+| `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains; walks indices `0` to `size - 1` over the array's own storage, so a body writing `arr[j] := v` ahead of the walk is read back the moment the walk reaches `j` |
 | `find(predicate)` | `Ok(element)` / `NotOk` | the first element satisfying `predicate`, absent-safe; `predicate` returns `Bool` |
 | `at(n :: Num)` | `Ok(element)` / `NotOk` | checked index as a value — `Ok` in bounds, `NotOk` otherwise (NaN included); a raw `array[n]` out of bounds is a runtime error |
 
