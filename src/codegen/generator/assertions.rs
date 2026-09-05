@@ -102,12 +102,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Lower `__test_run_case(body)` (see [`crate::ast::RUN_TEST_CASE`]): split `body`'s
-    /// `{ ptr fn, ptr env }` value apart and hand both to `__test_case_run`, which calls
-    /// `fn(env)` with a bail-out point recorded first — a failing `expect` ends the case by
-    /// jumping straight back to it (`quilon-rt/src/case_guard.c`), skipping whatever of the
-    /// body is left however deeply the failure is nested. `runCase` calls this instead of
-    /// calling `body` directly, which is what a flag checked between statements cannot do
-    /// once the body has called into a lambda of its own (`.each`, and the like).
+    /// `{ ptr fn, ptr env }` value apart and hand both to `__test_case_run_guarded`, which
+    /// calls `fn(env)` with a setjmp/longjmp bail-out point recorded first
+    /// (`quilon-rt/src/case_guard.c`) — a failing `expect` ends the case by jumping straight
+    /// back to it.
     pub(super) fn generate_run_case(
         &mut self,
         arguments: &[Expression],
@@ -127,7 +125,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .builder
             .build_extract_value(closure, 1, "case_body_env")
             .map_err(ctx("Failed to extract the case body's environment"))?;
-        let run = self.get_intrinsic("__test_case_run")?;
+        let run = self.get_intrinsic("__test_case_run_guarded")?;
         self.builder
             .build_call(run, &[function_pointer.into(), environment.into()], "")
             .map_err(ctx("Failed to call the guarded case runner"))?;

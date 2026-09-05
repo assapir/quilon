@@ -11,8 +11,8 @@
 //!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
 //! as passed or failed. What ENDS a case at its first failing `expect` is a different
-//! mechanism — [`__test_case_run`] runs the case's body with a setjmp/longjmp bail-out point
-//! (`quilon-rt/src/case_guard.c`), which [`abort_running_case`] jumps back to.
+//! mechanism — [`__test_case_run_guarded`] runs the case's body with a setjmp/longjmp
+//! bail-out point (`quilon-rt/src/case_guard.c`), which [`abort_running_case`] jumps back to.
 //!
 //! The runner (`quilon test`) configures a run before it starts, through [`set_reporter`]
 //! and [`set_selection`]; the harness never sees the CLI.
@@ -227,8 +227,7 @@ pub extern "C" fn __test_case_failing() -> f64 {
 unsafe extern "C" {
     /// Run `body(env)` (`case_guard.c`) with a bail-out point recorded first: control
     /// resumes right after the `setjmp` there, instead of finishing the call, the moment
-    /// `ql_case_abort` is reached — however deeply nested inside `body`'s own call tree
-    /// that happens to be.
+    /// `ql_case_abort` is reached.
     fn ql_case_run(body: *const c_void, env: *mut c_void);
     /// Jump back to the running case's bail-out point. A no-op if none is recorded.
     fn ql_case_abort();
@@ -244,14 +243,13 @@ unsafe extern "C" {
 /// closure value, exactly as the code generator represents one.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_case_run(function: *const c_void, environment: *mut c_void) {
+pub extern "C" fn __test_case_run_guarded(function: *const c_void, environment: *mut c_void) {
     unsafe { ql_case_run(function, environment) }
 }
 
 /// End the running case's body at the point a failing `expect` was reported, resuming right
-/// after the [`__test_case_run`] call that is running it. The case's remaining statements —
-/// whatever `expect` and its subjects come after, and everything past the point where the
-/// failure was nested — are left unevaluated; the run continues with the next case.
+/// after the [`__test_case_run_guarded`] call that is running it. The case's remaining
+/// statements are left unevaluated; the run continues with the next case.
 pub(crate) fn abort_running_case() {
     unsafe { ql_case_abort() }
 }

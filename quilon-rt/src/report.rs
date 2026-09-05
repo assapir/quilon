@@ -182,8 +182,7 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 
 /// A failing `expect(actual, matcher)`: report `message` at the assertion's own call site,
 /// mark the running case failed, and END the case — jumping back to where
-/// `__test_case_run` started running it, so nothing after this point, however deeply
-/// nested, runs. The suite carries on with the next case.
+/// `__test_case_run_guarded` started running it. The suite carries on with the next case.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.

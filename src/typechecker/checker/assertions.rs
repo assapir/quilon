@@ -168,13 +168,7 @@ impl TypeChecker {
             parameters: Vec::new(),
             return_type: Box::new(Type::Unit),
         };
-        if body_type != expected {
-            return Err(TypeError::TypeMismatch {
-                expected: Box::new(expected),
-                got: Box::new(body_type),
-                span: span.clone(),
-            });
-        }
+        self.check_type_compatibility(&expected, &body_type, span)?;
         Ok(Type::Unit)
     }
 

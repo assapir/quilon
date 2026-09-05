@@ -168,9 +168,8 @@ impl TypeChecker {
             return self.check_assertion(name, arguments, span);
         }
 
-        // `core.test`'s `runCase` runs a case's body through this form — see
-        // `crate::ast::RUN_TEST_CASE` — so resolved here for the same reason as the
-        // assertions just above.
+        // `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE`) — resolved here for
+        // the same reason as the assertions just above.
         if let Expression::Identifier { name, .. } = function
             && !member_call
             && crate::ast::is_run_test_case(name)

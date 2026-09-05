@@ -90,9 +90,9 @@ const EVERY_INTRINSIC: &str = r#"
   assert(__test_depth(), equals(1))
   assert(__test_case_selected("case"), equals(1))
   assert(__test_case_failing(), equals(0))
-  ~ __test_case_run, which `it`'s case body runs through — called directly here, the way
-  ~ the rest of the registry above is (a `describe` block never compiles into an ordinary
-  ~ program).
+  ~ __test_case_run_guarded, which `it`'s case body runs through — called directly here,
+  ~ the way the rest of the registry above is (a `describe` block never compiles into an
+  ~ ordinary program).
   __test_run_case(() => $)
   assert(__test_case_finish("case"), equals(1))
   ~ `core.test`'s `failAt`, on a branch that never runs — it is what reaches the exit

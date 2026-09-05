@@ -154,9 +154,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_assertion(function_name, arguments, span);
         }
 
-        // `core.test`'s `runCase` runs a case's body through this form — see
-        // `crate::ast::RUN_TEST_CASE` — lowered here for the same reason as the
-        // assertions just above: it takes a closure directly, not an ordinary argument.
+        // `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE`) — lowered here for the
+        // same reason as the assertions just above.
         if !member_call && crate::ast::is_run_test_case(function_name) {
             return self.generate_run_case(arguments);
         }
