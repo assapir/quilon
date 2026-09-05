@@ -69,18 +69,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             method_fn.set_linkage(inkwell::module::Linkage::Internal);
         }
 
-        // Pass 2: generate each receiver-dispatched method body, then lower each operator
-        // member to its overload function. A type may be declared INSIDE a block (nested
-        // mid-emission of the enclosing function's body) — emitting a method body re-enters
-        // function emission, which reassigns `current_function` and starts each method from
-        // a fresh, dropped frame. Save/restore the enclosing function, its frame, and the
-        // builder's position around the method loop (the same discipline a nested plain
-        // function declaration uses — see `generate_function_declaration`), so the enclosing
-        // body's own locals and position survive. At the top level this is a no-op restore
-        // (there is no enclosing function to return to).
-        let saved_block = self.builder.get_insert_block();
-        let saved_function = self.current_function;
-        let saved_frame = self.take_frame();
+        // A type may be declared INSIDE a block (nested mid-emission of the enclosing
+        // function's body), so suspend/resume around the method loop the same way a nested
+        // plain function declaration does (see `generate_function_declaration`).
+        let suspended = self.suspend_enclosing_function();
 
         let result = (|| {
             for method in methods {
@@ -93,11 +85,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(())
         })();
 
-        self.restore_frame(saved_frame);
-        self.current_function = saved_function;
-        if let Some(block) = saved_block {
-            self.builder.position_at_end(block);
-        }
+        self.resume_enclosing_function(suspended);
         result
     }
 
@@ -412,20 +400,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result = if !captures.is_empty() {
                 self.generate_local_closure(declaration)
             } else {
-                // No captures: emit a plain module function, but save/restore the
-                // enclosing per-function frame and builder state around it, since
-                // `emit_module_function` starts from an empty frame.
-                let saved_block = self.builder.get_insert_block();
-                let saved_function = self.current_function;
-                let saved_frame = self.take_frame();
-
+                // No captures: emit a plain module function, but suspend/resume the
+                // enclosing per-function frame, builder position, and debug location
+                // around it, since `emit_module_function` starts from an empty frame.
+                let suspended = self.suspend_enclosing_function();
                 let result = self.emit_module_function(declaration);
-
-                self.restore_frame(saved_frame);
-                self.current_function = saved_function;
-                if let Some(block) = saved_block {
-                    self.builder.position_at_end(block);
-                }
+                self.resume_enclosing_function(suspended);
                 result
             };
             self.tco = saved_tco;

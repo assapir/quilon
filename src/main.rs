@@ -50,7 +50,8 @@ enum Commands {
         #[arg(long, default_value = "clang")]
         linker: String,
         /// Emit DWARF line-number debug info (source-level debugging: gdb/lldb line
-        /// stepping, backtraces referencing `.qn` lines). Builds are already unoptimized.
+        /// stepping, backtraces referencing `.qn` lines). Unoptimized, so a debugger
+        /// sees every local and steps every line.
         #[arg(short = 'g', long)]
         debug: bool,
     },

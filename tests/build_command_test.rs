@@ -258,6 +258,112 @@ fn documented_build_flow_produces_running_binary() {
     }
 }
 
+/// A default `quilon build` now runs LLVM's O3 pipeline. Self-tail-call lowering happens
+/// in codegen's own IR construction, not as an LLVM optimization pass, so
+/// `tail_recursion.qn`'s 1,000,000-deep self-recursion is the sharpest check that O3
+/// hasn't disturbed it: a regression there stack-overflows instead of merely running slow.
+#[test]
+fn default_build_runs_the_tail_recursion_example() {
+    let Some(linker) = available_linker() else {
+        eprintln!(
+            "skipping default-build tail-recursion gate: need a linker (`clang` or `gcc`) on PATH"
+        );
+        return;
+    };
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("tail_recursion.qn");
+    let out: PathBuf = std::env::temp_dir().join(format!("quilon_o3_tco_{}", std::process::id()));
+
+    let mut cmd = Command::new(quilon);
+    cmd.args(["build", example.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run produced binary");
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "an O3 build of tail_recursion.qn produced the wrong exit code"
+    );
+}
+
+/// A default build is optimized (O3); `--debug` is unoptimized with DWARF — the two codegen
+/// paths in `emit_object` must actually diverge. Building the same source once with no flags
+/// and once with `--debug` must not produce byte-identical output; this proves only that the
+/// two paths are not silently collapsed into one, not which pipeline ran or how much they
+/// differ.
+#[test]
+fn default_build_differs_from_a_debug_build_of_the_same_source() {
+    let Some(linker) = available_linker() else {
+        eprintln!(
+            "skipping optimized/debug divergence gate: need a linker (`clang` or `gcc`) on PATH"
+        );
+        return;
+    };
+
+    let src = "\
+double = (x :: Num) -> Num => < x * 2 >
+^ = () -> Num => <
+  xs = 1 <- 500000
+  total = xs.map(x => double(x)).filter(x => x > 100).reduce(0, (a, x) => a + x)
+  total > 0 ? 0 : 1
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_optdbg_diff_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let optimized = dir.join("optimized");
+    let debug = dir.join("debug");
+
+    for (out, extra_args) in [
+        (&optimized, [].as_slice()),
+        (&debug, ["--debug"].as_slice()),
+    ] {
+        let mut cmd = Command::new(quilon);
+        cmd.args(["build", ql.to_str().unwrap()])
+            .args(["--linker", linker])
+            .args(extra_args)
+            .args(["-o", out.to_str().unwrap()]);
+        let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+        assert!(
+            build.status.success(),
+            "`quilon build` failed (debug={}): {}",
+            !extra_args.is_empty(),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let run = run_allowing_busy_executable(&mut Command::new(out)).expect("run built binary");
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "wrong exit code (debug={})",
+            !extra_args.is_empty()
+        );
+    }
+
+    let optimized_bytes = std::fs::read(&optimized).expect("read optimized binary");
+    let debug_bytes = std::fs::read(&debug).expect("read --debug binary");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_ne!(
+        optimized_bytes, debug_bytes,
+        "a default build and a --debug build produced byte-identical output"
+    );
+}
+
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no
 /// `libquilon_rt.a` next to it, no build tree on disk. `quilon build` must still
 /// work, by decompressing the runtime archive embedded in the binary itself into

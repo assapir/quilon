@@ -258,3 +258,47 @@ fn runnable_examples_match_across_jit_and_aot() {
     // Best-effort cleanup of this run's intermediates.
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Every runnable example must build and run under `--debug`: a debug build runs the LLVM
+/// verifier over the extra `!dbg` attachments, which codegen can get wrong in ways a normal
+/// build never exercises. One linker is enough — the bug lives in codegen, not the link.
+#[test]
+fn runnable_examples_build_and_run_with_debug_info() {
+    if !tool_available("clang") {
+        eprintln!("skipping debug-info gate: need `clang` (the default linker) on PATH");
+        return;
+    }
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let tmp = std::env::temp_dir().join(format!("quilon_debug_gate_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("create temp dir");
+
+    for src in runnable_examples() {
+        let name = src.file_name().unwrap().to_string_lossy().to_string();
+        let bin = tmp.join(&name);
+        let build = Command::new(quilon)
+            .args(["build", "--debug", src.to_str().unwrap()])
+            .args(["-o", bin.to_str().unwrap()])
+            .output()
+            .expect("run quilon build --debug");
+        assert!(
+            build.status.success(),
+            "{name}: `quilon build --debug` failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let native = Command::new(&bin)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap_or_else(|e| panic!("run native binary {}: {e}", bin.display()));
+        assert_eq!(
+            native.status.code().unwrap_or(-1),
+            0,
+            "{name}: debug-info build did not exit 0"
+        );
+    }
+
+    // Best-effort cleanup of this run's intermediates.
+    let _ = std::fs::remove_dir_all(&tmp);
+}
