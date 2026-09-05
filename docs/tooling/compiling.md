@@ -88,6 +88,11 @@ llvm-dwarfdump --debug-line program        # lists the .qn file + its line table
 llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
+On macOS, a `--debug` build also writes the debug info to a `program.dSYM` bundle beside
+the executable (via `dsymutil`, from the Xcode Command Line Tools) — lldb reads DWARF from
+there rather than from the executable itself, so the bundle ships or is deleted together
+with the executable.
+
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own

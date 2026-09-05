@@ -369,11 +369,14 @@ export function registerDebug(
       "quilon",
       new QuilonDebugConfigurationProvider(context, getClient),
     ),
-    // Delete the temp binary once its session ends, so builds don't pile up.
+    // Delete the temp binary once its session ends, so builds don't pile up. On macOS a
+    // `--debug` build also leaves a `<program>.dSYM` bundle beside it (see `src/build.rs`);
+    // `recursive` removes that directory tree, and is a no-op elsewhere since it never exists.
     vscode.debug.onDidTerminateDebugSession((session) => {
       const program = session.configuration.program;
       if (isOurTempBinary(program)) {
         fs.rm(program, { force: true }, () => {});
+        fs.rm(`${program}.dSYM`, { recursive: true, force: true }, () => {});
       }
     }),
     vscode.commands.registerCommand("quilon.debug", () => {

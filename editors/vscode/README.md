@@ -315,6 +315,13 @@ there, so stepping into `body()` on an `http.Response` (say) shows the real
 server running, or an older one without it), the session still starts, without corelib
 source.
 
+**On macOS**, the first debug launch shows the system's "Developer Tools Access"
+authorization prompt (password or Touch ID), since lldb's `debugserver` takes control of
+the debuggee process; accepting it once adds the user to the `_developer` group, after
+which sessions start without the prompt. Running `sudo DevToolsSecurity -enable` from a
+terminal grants the same access ahead of time. The `--debug` build's `.dSYM` bundle is
+created beside the temp binary and removed with it when the session ends.
+
 ## Publishing
 
 CI/CD for this extension lives in
