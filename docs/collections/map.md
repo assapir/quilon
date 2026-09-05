@@ -21,6 +21,10 @@ empty :: [|Num => Num|] = [|=>|]                          ~ empty map
 `:=`-bound map in place and return `it`, so calls chain like `each` (see
 [mutation](../mutation.md)). Calling either on an `=`-bound map is a compile error.
 
+A map literal names each literal key once: `[|"a" => 1, "a" => 2|]` is a duplicate
+definition. Only the literal token is compared — two computed keys that happen to be
+equal are unaffected: the later entry wins, as a `set` of the same key would.
+
 ## User-defined key types
 
 A record or sum type becomes a key by defining two members (see

@@ -283,6 +283,53 @@ impl TypeChecker {
                 name: type_name, ..
             } = first_arg_type
             {
+                // 2+ methods sharing this name on this type form an overload set (see
+                // `check_type_methods`), registered under a name qualified by its type so
+                // it cannot collide with an unrelated top-level set. Dispatch by exact
+                // argument type through the same mechanism a top-level overload call
+                // uses, ahead of the single-signature lookup below.
+                let qualified_name = format!("{type_name}.{name}");
+                if self.overloads.contains_key(&qualified_name) {
+                    // An overload set dispatches on a receiver VALUE — a bare type-name
+                    // receiver (`T.f(1)`) has none — and a `:=` member among its members
+                    // holds the whole set to a setter's receiver rule (see below).
+                    if matches!(
+                        &arguments[0],
+                        Expression::Identifier { name: receiver_name, .. }
+                            if receiver_name == type_name
+                    ) {
+                        return Err(TypeError::StaticCallNeedsReceiverValue {
+                            method: name.clone(),
+                            type_name: type_name.clone(),
+                            span: span.clone(),
+                        });
+                    }
+                    if self
+                        .setter_methods
+                        .contains(&(type_name.clone(), name.clone()))
+                        && let Some(recv_name) = self.immutable_write_witness(&arguments[0])
+                    {
+                        return Err(TypeError::MutatingMethodOnImmutable {
+                            method: name.clone(),
+                            receiver: recv_name,
+                            span: span.clone(),
+                        });
+                    }
+                    let call_args = &arguments[1..];
+                    let call_arg_types: Vec<Type> = call_args
+                        .iter()
+                        .map(|arg| self.infer_expression(arg))
+                        .collect::<Result<_, _>>()?;
+                    let call_arg_spans: Vec<Span> =
+                        call_args.iter().map(|arg| arg.span().clone()).collect();
+                    return self.resolve_overload(
+                        &qualified_name,
+                        &call_arg_types,
+                        &call_arg_spans,
+                        span,
+                    );
+                }
+
                 // Look up method in the type's method list. Only the signature is taken —
                 // cloning the whole entry would deep-copy the method's body at every call.
                 if let Some((method_parameters, method_return_type)) = self

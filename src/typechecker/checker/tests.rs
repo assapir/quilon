@@ -354,6 +354,83 @@ fn test_assertions_and_matchers_still_work_as_calls() {
 }
 
 #[test]
+fn test_constructor_literal_duplicate_field_is_rejected() {
+    // A SECOND literal `x = 3` names a field the constructor already provided.
+    let err = check_ok(
+        "P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1, y = 2, x = 3 }  0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_anonymous_record_literal_duplicate_field_is_rejected() {
+    let err = check_ok("^ = () -> Num => < q = { x = 1, x = 2 }  0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_declared_field_is_rejected() {
+    // `T` declares `a` twice, once as each type — the second declaration collides
+    // regardless of its own type.
+    let err = check_ok("T = { a :: Num, a :: Text }\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_field_and_method_sharing_a_name_is_rejected() {
+    let err = check_ok("T = { a :: Num, a = => < 9 > }\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_same_signature_method_in_a_record_is_rejected() {
+    let err = check_ok(
+        "T = { a :: Num, f = () -> Num => < 1 >, f = () -> Num => < 2 > }\n\
+         ^ = () -> Num => < 0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_same_signature_method_in_a_sum_is_rejected() {
+    let err = check_ok(
+        "S = A / B { f = () -> Num => < 1 >, f = () -> Num => < 2 > }\n\
+         ^ = () -> Num => < 0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_method_overload_set_resolves_by_type() {
+    // Two `f` methods on the same type, differing only in their parameter's type — a
+    // legitimate overload set, dispatched by exact argument type exactly like a
+    // top-level overload.
+    assert!(
+        check_ok(
+            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < s.size > }\n\
+             ^ = () -> Num => < t = T { a = 1 }  t.f(1) + t.f(\"xy\") >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_method_overload_set_needs_a_receiver_value() {
+    // An overload set dispatches on a receiver value; the bare type name has none, even
+    // though neither member reads `it`.
+    assert!(matches!(
+        check_ok(
+            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < s.size > }\n\
+             ^ = () -> Num => < T.f(1) >"
+        ),
+        Err(TypeError::StaticCallNeedsReceiverValue { .. })
+    ));
+}
+
+#[test]
 fn test_comparison_operator_overload_must_return_bool() {
     // A `==` member returning a non-Bool is rejected with a clear diagnostic.
     let err = check_ok("V = { x :: Num, == = (other :: V) -> V => < it >}\n^ = () -> Num => < 0 >")

@@ -119,7 +119,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // A method on the receiver's type claims the name first, exactly as in call
         // lowering — so a function calling `recv.name(...)` on a type whose method shares
         // its name is a call to that method, not a self-call.
-        let symbol = match self.method_symbol_for(name, arguments, *member_call) {
+        let symbol = match self.method_symbol_for(name, arguments, *member_call)? {
             Some(method) => method,
             // A `.` call the receiver's type answers with a BUILT-IN declares no method
             // symbol, and it is still not this function: `t.contains(s)` inside a

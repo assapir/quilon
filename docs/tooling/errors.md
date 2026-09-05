@@ -585,6 +585,8 @@ body shadows the receiver; rename it where the write targets the lambda's own va
 ### QN310 — duplicate definition
 
 A name is defined twice in one scope, and the two definitions form no overload set.
+A record's fields and methods, a constructor or record literal's fields, a map literal's
+literal keys, and the members of one overload set are each one scope of their own.
 
 ```quilon ignore
 x = 1

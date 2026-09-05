@@ -60,6 +60,27 @@ fn record_render_member_is_used_by_interpolation_and_print() {
     );
 }
 
+// --- Method overload sets ---
+
+#[test]
+fn record_method_overload_set_dispatches_by_argument_type() {
+    // Two `describe` methods on the same record, differing only in their parameter's
+    // type — a legitimate overload set, dispatched by exact argument type exactly like
+    // a top-level overload or an operator member.
+    assert_exit(
+        "T = {\n\
+           a :: Num,\n\
+           describe = (n :: Num) -> Num => < n * 2 >,\n\
+           describe = (s :: Text) -> Num => < s.size >\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           t = T { a = 1 }\n\
+           t.describe(5) + t.describe(\"abcd\")\n\
+         >",
+        14,
+    );
+}
+
 // --- Sum { } method blocks ---
 
 #[test]

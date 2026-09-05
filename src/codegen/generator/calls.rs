@@ -112,20 +112,39 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// under. Call lowering, call-site filling and the tail-call analysis all ask this one
     /// question, so none of them can disagree with the checker about which function a call
     /// names — including that only the `.` form (`member_call`) reaches a method at all.
+    ///
+    /// `Err` only when an overloaded member's argument has no type in the oracle (see
+    /// [`Self::oracle_argument_types`]).
     pub(super) fn method_symbol_for(
         &self,
         name: &str,
         arguments: &[Expression],
         member_call: bool,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
         if !member_call {
-            return None;
+            return Ok(None);
         }
-        let declaring = self.declared_methods.get(name)?;
-        let type_name = self.receiver_type_name(arguments.first()?)?;
-        declaring
-            .contains(type_name)
-            .then(|| method_symbol(type_name, name))
+        let (Some(declaring), Some(receiver)) =
+            (self.declared_methods.get(name), arguments.first())
+        else {
+            return Ok(None);
+        };
+        let Some(type_name) = self.receiver_type_name(receiver) else {
+            return Ok(None);
+        };
+        if !declaring.contains(type_name) {
+            return Ok(None);
+        }
+        // 2+ methods sharing this name on this type form an overload set (see the type
+        // checker's `check_type_methods`), registered under a name qualified by its type.
+        // Dispatch by exact argument type through the same mechanism a top-level overload
+        // call uses, ahead of the plain single-signature symbol below.
+        let qualified_name = format!("{type_name}.{name}");
+        if self.overloads.contains_key(&qualified_name) {
+            let arg_types = self.oracle_argument_types(&arguments[1..])?;
+            return Ok(self.resolve_overload_symbol(&qualified_name, &arg_types));
+        }
+        Ok(Some(method_symbol(type_name, name)))
     }
 
     /// Lower a call. `member_call` marks the `recv.name(args)` form, which resolves against
@@ -165,7 +184,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The `.` form resolves against the receiver's type alone, ahead of everything the
         // top-level namespace holds — the order the checker resolved the call in.
         let method_callee = self
-            .method_symbol_for(function_name, arguments, member_call)
+            .method_symbol_for(function_name, arguments, member_call)?
             .and_then(|symbol| self.module.get_function(&symbol));
 
         // Only the calls a built-in itself claims are lowered to its runtime intrinsic
@@ -368,7 +387,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // A method is not called by name, so it can declare no `Site` parameter (the
         // checker rejects one).
         if self
-            .method_symbol_for(name, arguments, member_call)
+            .method_symbol_for(name, arguments, member_call)?
             .is_some()
         {
             return Ok(false);

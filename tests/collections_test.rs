@@ -33,11 +33,21 @@ fn map_size_is_entry_count() {
     );
 }
 
-/// A duplicate key keeps the LAST value (`insert` overwrites), so `size` counts uniques.
+/// Two entries naming the SAME LITERAL key are a mistake, not a legitimate "last wins" —
+/// rejected at compile time rather than silently keeping only the last value.
 #[test]
-fn map_duplicate_key_overwrites() {
+fn map_literal_duplicate_key_is_rejected() {
+    assert_type_error(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"a\" => 9|]\n  m.size\n>",
+    );
+}
+
+/// Only the literal TOKEN is compared, never an expression's evaluated value — two
+/// COMPUTED keys that happen to be equal are unaffected, and the later entry wins.
+#[test]
+fn map_computed_duplicate_key_still_overwrites() {
     assert_exit(
-        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 1, \"a\" => 9|]\n  m.size * 100 + (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
+        "^ = () -> Num => <\n  a = \"a\"\n  b = \"a\"\n  m :: [|Text => Num|] = [|a => 1, b => 9|]\n  m.size * 100 + (m.get(\"a\") ? | Ok(v) => v | NotOk(_) => 0)\n>",
         109,
     );
 }

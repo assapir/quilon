@@ -576,6 +576,46 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        // Pre-pass: 2+ methods sharing a name on the same type form an overload set (see
+        // the type checker's `check_type_methods`), mirrored here the same way a top-level
+        // overload set is — registered under a name qualified by its type so it cannot
+        // collide with an unrelated top-level or operator overload set.
+        for item in &program.items {
+            if let Item::TypeDeclaration(declaration) = item {
+                let methods = declaration.type_definition.methods();
+                let mut method_name_counts: HashMap<&str, usize> = HashMap::new();
+                for method in methods {
+                    if !is_operator_symbol(&method.name) {
+                        *method_name_counts.entry(method.name.as_str()).or_insert(0) += 1;
+                    }
+                }
+                for method in methods {
+                    if is_operator_symbol(&method.name)
+                        || method_name_counts
+                            .get(method.name.as_str())
+                            .copied()
+                            .unwrap_or(0)
+                            <= 1
+                    {
+                        continue;
+                    }
+                    let parameters = self.parameter_types(&method.parameters);
+                    // The checker requires every overload member's return annotation
+                    // (`UnannotatedOverloadMember`) before the program reaches codegen.
+                    let ret = method.return_type.clone().ok_or_else(|| {
+                        format!(
+                            "overload member `{}.{}` at {:?} has no return type — it was not type-checked",
+                            declaration.name, method.name, method.span
+                        )
+                    })?;
+                    self.overloads
+                        .entry(format!("{}.{}", declaration.name, method.name))
+                        .or_default()
+                        .push((parameters, ret));
+                }
+            }
+        }
+
         // Pre-pass: record each NON-overloaded top-level function's parameter arity that
         // takes a trailing `Site`, so a call to it can be recognized as one that fills the
         // call site in (`fills_call_site`).
