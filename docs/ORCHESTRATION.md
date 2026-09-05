@@ -120,6 +120,8 @@ Whole-program compilation (modules merged into one program). Conservative Boehm 
 language feature typically touches lexer → parser → AST → checker → codegen, in that order, with
 tests following `tokenize → parse → check → generate → run`. The checker records each expression's
 type into a side-table (the **type-oracle**) that codegen reads for everything it doesn't already
-carry from a checked signature or declaration; codegen never re-derives a type itself, and a
-missing oracle entry is a compiler bug, reported with the expression's span, not a fallback guess —
-extend the oracle instead of adding inference to codegen.
+carry from a checked signature or declaration; codegen never re-derives a type itself. Most read
+sites treat a missing oracle entry as a compiler bug and report it with the expression's span
+rather than falling back to a guess (a handful of element/parameter reads still default for the
+IR-only codegen tests that skip type-checking) — extend the oracle instead of adding inference to
+codegen.
