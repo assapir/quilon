@@ -371,9 +371,33 @@ pub fn build_native(
         });
 
         match status? {
-            s if s.success() => Ok(()),
-            s => Err(format!("linker `{linker}` failed with {s}")),
+            s if s.success() => {}
+            s => return Err(format!("linker `{linker}` failed with {s}")),
         }
+
+        // ld64 leaves DWARF in the `.o` (only `N_OSO` stabs point back at it), unlike GNU ld,
+        // which copies DWARF into the executable. `obj` is about to be deleted along with the
+        // rest of the staged directory, so the DWARF has to be collected into a `.dSYM` bundle
+        // — where lldb looks for it — before that happens.
+        if cfg!(target_os = "macos") && debug.is_some() {
+            let status =
+                Command::new("dsymutil")
+                    .arg(out)
+                    .status()
+                    .map_err(|e| match e.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            "`dsymutil` not found on PATH; it ships with the Xcode Command Line \
+                         Tools (`xcode-select --install`)."
+                                .to_string()
+                        }
+                        _ => format!("failed to invoke `dsymutil`: {e}"),
+                    })?;
+            if !status.success() {
+                return Err(format!("`dsymutil` failed with {status}"));
+            }
+        }
+
+        Ok(())
     })
 }
 

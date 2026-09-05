@@ -91,15 +91,18 @@ llvm-dwarfdump --debug-info program        # shows variables + their debug types
 gdb ./program                              # break/step by .qn line, print locals
 ```
 A `--debug` build is unoptimized (O0 plus `-g`, in `cc` terms), so a debugger sees
-every local and steps every line.
+every local and steps every line. On macOS, it also writes the debug info to a
+`program.dSYM` bundle beside the executable (via `dsymutil`, from the Xcode Command Line
+Tools); lldb reads DWARF from that bundle, so it ships or is deleted together with the
+executable.
 
 Debug info is opt-in through `--debug`. It covers line tables,
 per-function scopes, and **locals, parameters, and debug types**. Every `=`/`:=` local and
 parameter is emitted with its type, and nested `{ }` blocks and closures get their own
 lexical scopes. A `?`/`|` match arm's bound pattern — including a constructor's payload
 (`| Ok(page) => page`) — is emitted the same way, typed from its concrete resolved type. Each
-Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`, arrays (`[]T`), records, and
-sum types — so a debugger tells them apart.
+Quilon type gets a distinct debug type — `Num`, `Bool`, `Text`, arrays (`[]T`), records, sum
+types, and Map/Set (named `Map[K, V]`/`Set[T]`) — so a debugger tells them apart.
 Each `=`/`:=` binding also opens its own nested lexical scope covering the rest of its
 enclosing block, so a debugger's Locals listing (or a hover) at a given line shows exactly
 the bindings already made by that line. Line info is multi-file: a
@@ -115,5 +118,34 @@ into corelib function against. The [language server](language-server.md)'s
 that layout and answers with its path, so a client can point its debugger's source map at
 it; the [Visual Studio Code extension](https://github.com/assapir/quilon/tree/main/editors/vscode)
 does this automatically for every debug session it starts.
+
+### Value display
+
+A `--debug` build also emits, per DWARF-typed local/parameter, one exported render thunk
+(`__qn_render$<type>`) that renders the value through the SAME `` ` `` path
+[`io.print`/interpolation](../types/text.md) use, so a debugger shows exactly what
+`` `value` `` would: a user override (`User(Ada, 36)`), the default record render (`Point`),
+an array (`[1, 2, 3]`), a sum's variant name (`Ok`), and a Map/Set's entries
+(`[|ada => 36|]`, `[|1, 2|]`).
+
+The VS Code extension's Quilon debug configuration loads
+`editors/vscode/formatters/quilon.py` into CodeLLDB (via its `initCommands`), which
+registers a summary provider calling the matching thunk for every Quilon value. It works
+the same way in a plain `lldb` session:
+```bash
+quilon build program.qn --debug -o program
+lldb ./program
+(lldb) command script import editors/vscode/formatters/quilon.py
+(lldb) breakpoint set -f program.qn -l 5
+(lldb) run
+(lldb) frame variable
+```
+**This runs code in the stopped program**: every display calls the value's own `` ` `` —
+a user override included — inside the debuggee. A record still expands into its own
+fields (the DWARF struct); a Map/Set shows only the rendered summary, with no children.
+
+A bare `Num`/`Bool`/`$` local shows lldb's own native value (`7`, `true`) alone: lldb
+places a scalar's natural value and any added summary side by side, so a composite's own
+type gets the render as its ONE display and a scalar keeps its native one.
 
 (During development, prefix any command with `cargo run --`, e.g. `cargo run -- run program.qn`.)

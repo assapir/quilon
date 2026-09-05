@@ -76,6 +76,11 @@ jobs:
       - name: Compile + test
         run: pnpm test
 
+      # The lldb formatter (formatters/quilon.py) is Python, not TypeScript — `pnpm test`
+      # above never touches it. Its own render-thunk-symbol table is checked here.
+      - name: Test lldb formatter (render-thunk symbol table)
+        run: python3 -m unittest formatters/test_quilon.py -v
+
       - name: Package extension (.vsix)
         run: pnpm exec vsce package --no-dependencies
 
@@ -122,8 +127,12 @@ jobs:
         with:
           working-directory: editors/vscode
 
-      # `vsce package` compiles first via the `vscode:prepublish` hook
-      # (`pnpm run compile`), so no separate compile step is needed here.
+      # `vsce` only shells out to `npm run <hook>` for a prepublish hook, and
+      # this is a pnpm-only repo, so compile explicitly rather than rely on
+      # a `vscode:prepublish` script.
+      - name: Compile
+        run: pnpm run compile
+
       - name: Package extension (.vsix)
         run: pnpm exec vsce package --no-dependencies
 

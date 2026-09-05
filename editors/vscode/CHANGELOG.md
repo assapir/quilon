@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Completion**, triggered on `.`. A bare name offers locals, parameters, top-level
+  functions and types defined above the cursor, sum constructors, and import bindings.
+  `http.` after an import offers that module's exports; `response.` after any other
+  expression offers its checked type's fields and methods (a record's or sum's own, or
+  the built-in members of `Text`, an array, a `Map`, or a `Set`). Comes from the
+  language server's new `textDocument/completion` handling — no extension-side change
+  needed, `vscode-languageclient` picks the capability up automatically.
 - **🐞 Debug suite / 🐞 Debug case CodeLens**, next to **▶ Run suite** / **▶ Run case** above
   every `describe` and `it`. Debug builds just that suite or case into a native, debuggable
   executable (`quilon test <file> --only <path> --binary <tmp>`) and launches it under
@@ -45,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   external, provided by the host); `.vscodeignore` excludes `node_modules` and every
   other build/source file, so the packaged `.vsix` carries a small, fixed set of files
   instead of the whole unbundled dependency tree.
+
+### Fixed
+
+- **`pnpm run package` no longer fails on a machine without `npm`.** `vsce` only
+  recognizes `npm run <hook>` for a `vscode:prepublish` script, so it shelled out to
+  `npm` even in this pnpm-only repo. Removed the `vscode:prepublish` script; `package`
+  now runs `pnpm run compile` itself before `vsce package`.
 
 ## [0.10.0] - 2026-09-03
 

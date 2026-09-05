@@ -147,7 +147,16 @@ const EVERY_INTRINSIC: &str = r#"
 /// `__expect_failed` backs `expect`, which only exists inside a `describe` block — and a
 /// suite runs under the in-process JIT, never a native build, so no program could call it.
 /// `tests/test_harness_test.rs` drives it there, on every failing case.
-const UNREACHABLE_FROM_A_PROGRAM: &[&str] = &["__expect_failed"];
+/// `__render_c_string` backs every `--debug` build's `__qn_render$...` thunks (see
+/// `di.rs::emit_render_thunk`) — codegen never emits a call to it from ORDINARY `.qn`
+/// source, only from a thunk it generates itself when `--debug` is on, which this smoke
+/// program (an ordinary `quilon compile`, no `--debug`) never triggers. The LINK concern
+/// this gate exists for is covered instead by
+/// `tests/debug_info_test.rs::debug_build_emits_a_render_thunk_symbol_per_declared_type`,
+/// which AOT-links a `--debug` binary whose emitted thunks call it (so a dropped symbol is
+/// the same undefined-reference link failure there); its own logic is covered directly by
+/// `quilon-rt/src/mem.rs`'s `render_c_string_*` unit tests.
+const UNREACHABLE_FROM_A_PROGRAM: &[&str] = &["__expect_failed", "__render_c_string"];
 
 /// The linkers to exercise: `clang` and `gcc` when present, since what each pulls out of an
 /// archive is a separately observed behaviour and the project supports both.

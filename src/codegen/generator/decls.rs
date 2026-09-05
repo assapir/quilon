@@ -69,18 +69,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             method_fn.set_linkage(inkwell::module::Linkage::Internal);
         }
 
-        // Pass 2: generate each receiver-dispatched method body, then lower each operator
-        // member to its overload function. A type may be declared INSIDE a block (nested
-        // mid-emission of the enclosing function's body) — emitting a method body re-enters
-        // function emission, which reassigns `current_function` and starts each method from
-        // a fresh, dropped frame. Save/restore the enclosing function, its frame, and the
-        // builder's position around the method loop (the same discipline a nested plain
-        // function declaration uses — see `generate_function_declaration`), so the enclosing
-        // body's own locals and position survive. At the top level this is a no-op restore
-        // (there is no enclosing function to return to).
-        let saved_block = self.builder.get_insert_block();
-        let saved_function = self.current_function;
-        let saved_frame = self.take_frame();
+        // A type may be declared INSIDE a block (nested mid-emission of the enclosing
+        // function's body), so suspend/resume around the method loop the same way a nested
+        // plain function declaration does (see `generate_function_declaration`).
+        let suspended = self.suspend_enclosing_function();
 
         let result = (|| {
             for method in methods {
@@ -93,11 +85,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(())
         })();
 
-        self.restore_frame(saved_frame);
-        self.current_function = saved_function;
-        if let Some(block) = saved_block {
-            self.builder.position_at_end(block);
-        }
+        self.resume_enclosing_function(suspended);
         result
     }
 
@@ -231,6 +219,28 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), String> {
+        // A top-level binding becomes a global, and a global's initializer must already be
+        // a constant — there is no code before `^` in which to compute one. Checked FIRST,
+        // ahead of every oracle read below: this is a pure AST-shape test needing no type
+        // information, and it is the dedicated diagnostic for a caller that builds IR
+        // without checking first (the type checker itself rejects the same program, with a
+        // source location, before codegen ever sees it) — it must run before an oracle read
+        // downstream has a chance to fail first with the generic "not type-checked" error.
+        if self.current_function.is_none()
+            && !matches!(
+                declaration.value,
+                Expression::Number { .. }
+                    | Expression::Bool { .. }
+                    | Expression::Unit { .. }
+                    | Expression::Lambda { .. }
+            )
+        {
+            return Err(format!(
+                "top-level '{}' must hold a Num, Bool or $ literal, or a function",
+                declaration.name
+            ));
+        }
+
         // Check if this is a record literal to track field names. Prefer the oracle's
         // inferred type (authoritative field names/order, and it expands `<-` spreads);
         // a functional-update whose result is a NAMED type also tracks that name so
@@ -279,34 +289,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `name(args)` to dispatch as an indirect call: the checker already recorded this
         // binding's type as `Type::Function` in the oracle, keyed by the CALL's own
         // identifier expression, which is what codegen reads at the call site.
-        let inferred_qty = self.infer_type(&declaration.value);
+        let inferred_qty =
+            self.oracle_type(&declaration.value, "a variable declaration's value")?;
         // If the value is a named record (e.g. bound to a user operator overload's
         // result), track its type/fields so later `name.field` / method calls resolve.
         self.track_named_record_binding(&declaration.name, &inferred_qty);
         self.var_types
             .insert(declaration.name.clone(), inferred_qty);
-
-        // A top-level binding becomes a global, and a global's initializer must already be
-        // a constant — there is no code before `^` in which to compute one. Refused BEFORE
-        // the value is generated: with the builder still pointing wherever the last
-        // function left it, generating a computed value here appended its instructions to
-        // that function (a call left it with a block that had no terminator, failing module
-        // verification). The type checker reports this with a source location; this keeps
-        // the invariant even for callers that build IR without checking first.
-        if self.current_function.is_none()
-            && !matches!(
-                declaration.value,
-                Expression::Number { .. }
-                    | Expression::Bool { .. }
-                    | Expression::Unit { .. }
-                    | Expression::Lambda { .. }
-            )
-        {
-            return Err(format!(
-                "top-level '{}' must hold a Num, Bool or $ literal, or a function",
-                declaration.name
-            ));
-        }
 
         let value = self.generate_expression(&declaration.value)?;
 
@@ -412,20 +401,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result = if !captures.is_empty() {
                 self.generate_local_closure(declaration)
             } else {
-                // No captures: emit a plain module function, but save/restore the
-                // enclosing per-function frame and builder state around it, since
-                // `emit_module_function` starts from an empty frame.
-                let saved_block = self.builder.get_insert_block();
-                let saved_function = self.current_function;
-                let saved_frame = self.take_frame();
-
+                // No captures: emit a plain module function, but suspend/resume the
+                // enclosing per-function frame, builder position, and debug location
+                // around it, since `emit_module_function` starts from an empty frame.
+                let suspended = self.suspend_enclosing_function();
                 let result = self.emit_module_function(declaration);
-
-                self.restore_frame(saved_frame);
-                self.current_function = saved_function;
-                if let Some(block) = saved_block {
-                    self.builder.position_at_end(block);
-                }
+                self.resume_enclosing_function(suspended);
                 result
             };
             self.tco = saved_tco;
@@ -577,7 +558,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // then rewrites the parameter slots and `br`s back here. The parameter allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(declaration, &symbol) {
+        let body_value = if self.body_has_self_tail_call(declaration, &symbol)? {
             let parameter_slots: Vec<PointerValue<'ctx>> = declaration
                 .parameters
                 .iter()

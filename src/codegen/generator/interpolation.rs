@@ -39,7 +39,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let ty = self.infer_type(expression);
+        let ty = self.oracle_type(expression, "a rendered expression")?;
         let value = self.generate_expression(expression)?;
         // Break unbounded self-recursion: rendering the receiver `it` WHOLESALE inside its
         // own type's `` ` `` override would invoke that override forever. That one case
@@ -105,12 +105,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // An array renders its elements (truncated past 10, see `render_array`).
             Type::Array(elem) => self.render_array(elem, value),
-            // Maps and Sets render as their type label (element-by-element rendering of a
-            // native collection is deferred); iteration order would be unspecified anyway.
-            Type::Map(_, _) | Type::Set(_) => {
-                let label = crate::ast::type_label(ty);
-                self.text_literal(&label)
-            }
+            // A Map renders its entries `[|k => v, ...|]`; a Set its elements `[|e, ...|]` —
+            // each key/value/element through its own `` ` ``. Iteration order is unspecified
+            // (see docs/collections/), so which entry prints first is not guaranteed.
+            Type::Map(key, val) => self.render_map(key, val, value),
+            Type::Set(elem) => self.render_set(elem, value),
             Type::Function { .. } => self.text_literal("<function>"),
         }
     }

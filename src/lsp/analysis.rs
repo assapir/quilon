@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::ast::nodes::{
-    Expression, InterpolationPart, Item, Parameter, Pattern, Program, RECEIVER, Statement,
-    display_name, type_label,
+    Expression, FunctionDeclaration, Import, InterpolationPart, Item, MethodDeclaration,
+    ModulePath, Parameter, Pattern, Program, RECEIVER, Statement, SumVariant, Type,
+    TypeDeclaration, TypeDefinition, display_name, type_label,
 };
 use crate::driver::{self, Checked, FrontEndError, TestBlocks};
 use crate::lexer::{Lexer, ROOT_FILE, Span, Token, TokenKind};
@@ -820,4 +821,875 @@ fn walk_expressions<'a>(expression: &'a Expression, visit: &mut impl FnMut(&'a E
         | Expression::Unit { .. }
         | Expression::Identifier { .. } => {}
     }
+}
+
+// --- Completion ---------------------------------------------------------------
+
+/// Maps onto the protocol's `CompletionItemKind` in `src/lsp.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionKind {
+    Variable,
+    Function,
+    Field,
+    Method,
+    Class,
+    Module,
+    EnumMember,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: CompletionKind,
+    /// The type or signature, in Quilon spelling — [`type_label`], the same formatter
+    /// hover uses.
+    pub detail: Option<String>,
+}
+
+/// Complete at byte offset `offset` in `text`, the buffer at `path`.
+///
+/// The document at the cursor is normally unparseable (`response.` has no member yet), so
+/// every request deletes just the incomplete token at the cursor — the trailing `.member`
+/// or the bare word being typed — before parsing: what's left parses like the document one
+/// token earlier. A completion request whose cursor sits in an expression broken for an
+/// unrelated reason answers empty regardless.
+pub fn completions_at(path: &Path, text: &str, offset: u32) -> Vec<CompletionItem> {
+    let offset = offset as usize;
+    match dot_before_cursor(text, offset) {
+        Some(dot) => member_completions(path, text, dot, offset),
+        None => scope_completions_at(text, offset),
+    }
+}
+
+fn is_ident_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// `text` with the byte range `[start, end)` deleted.
+fn without(text: &str, start: usize, end: usize) -> String {
+    let mut out = String::with_capacity(text.len() - (end - start));
+    out.push_str(&text[..start]);
+    out.push_str(&text[end..]);
+    out
+}
+
+/// The byte offset just before `offset` while scanning back over identifier characters —
+/// the start of the (possibly empty) word being typed there.
+fn word_start_before(text: &str, offset: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut i = offset;
+    while i > 0 && is_ident_char(bytes[i - 1]) {
+        i -= 1;
+    }
+    i
+}
+
+/// The byte offset of the `.` immediately before `offset`, once any partial member name
+/// being typed there is skipped — `None` when `offset` is not in a member-access position
+/// at all.
+fn dot_before_cursor(text: &str, offset: usize) -> Option<usize> {
+    let word_start = word_start_before(text, offset);
+    let bytes = text.as_bytes();
+    (word_start > 0 && bytes[word_start - 1] == b'.').then(|| word_start - 1)
+}
+
+/// The bare identifier ending exactly at byte `dot` in `text`, when there is one — `None`
+/// when `dot` is not immediately preceded by a name, or that name is itself part of a
+/// longer `.`-chain (`x.http.` — `http` there is a field of `x`, not an import binding).
+fn bare_identifier_ending_at(text: &str, dot: usize) -> Option<&str> {
+    let start = word_start_before(text, dot);
+    if start == dot || (start > 0 && text.as_bytes()[start - 1] == b'.') {
+        return None;
+    }
+    Some(&text[start..dot])
+}
+
+/// Case 1: names in scope at `offset`. Purely syntactic — no type-check — so this works
+/// on a document [`check_text`] would reject.
+fn scope_completions_at(text: &str, offset: usize) -> Vec<CompletionItem> {
+    let word_start = word_start_before(text, offset);
+    let stripped = without(text, word_start, offset);
+    let Some(program) = parse_text(&stripped) else {
+        return Vec::new();
+    };
+    let offset = word_start as u32;
+
+    let mut scopes: Vec<HashMap<String, CompletionItem>> = vec![HashMap::new()];
+    let mut sums: Vec<CompletionItem> = Vec::new();
+    walk_items(&program.items, offset, &mut scopes, &mut sums);
+    for block in &program.test_blocks {
+        if covers(block.span(), offset) {
+            scope_walk(block, offset, &mut scopes, &mut sums);
+        }
+    }
+
+    let mut merged: HashMap<String, CompletionItem> = HashMap::new();
+    for scope in scopes {
+        merged.extend(scope);
+    }
+    let mut items: Vec<CompletionItem> = merged.into_values().collect();
+    items.extend(sums);
+    for import in &program.imports {
+        if let Some(binding) = import.path.binding_name() {
+            items.push(CompletionItem {
+                label: binding,
+                kind: CompletionKind::Module,
+                detail: Some(module_path_label(&import.path)),
+            });
+        }
+    }
+    items
+}
+
+fn module_path_label(path: &ModulePath) -> String {
+    match path {
+        ModulePath::BuiltinDotted(parts) => parts.join("."),
+        ModulePath::FilePath(raw) => raw.clone(),
+    }
+}
+
+/// Walk a program's top-level items up to `offset` (see [`item_step`]).
+fn walk_items(
+    items: &[Item],
+    offset: u32,
+    scopes: &mut Vec<HashMap<String, CompletionItem>>,
+    sums: &mut Vec<CompletionItem>,
+) {
+    for item in items {
+        if item_step(item, offset, scopes, sums) {
+            return;
+        }
+    }
+}
+
+/// One item's contribution to a positioned search over a list of items in document order.
+/// Returns whether the caller's loop should stop. Shared by [`walk_items`] and
+/// [`scope_walk`]'s `Block` arm — the two places a list of items is walked this way.
+fn item_step(
+    item: &Item,
+    offset: u32,
+    scopes: &mut Vec<HashMap<String, CompletionItem>>,
+    sums: &mut Vec<CompletionItem>,
+) -> bool {
+    if item.span().start > offset {
+        return true;
+    }
+    if covers(item.span(), offset) {
+        if let Item::TypeDeclaration(declaration) = item {
+            collect_sum_constructors(declaration, sums);
+        }
+        descend_item_body(item, offset, scopes, sums);
+        return true;
+    }
+    bind_item(item, scopes, sums);
+    false
+}
+
+fn bind_item(
+    item: &Item,
+    scopes: &mut [HashMap<String, CompletionItem>],
+    sums: &mut Vec<CompletionItem>,
+) {
+    if let Item::TypeDeclaration(declaration) = item {
+        collect_sum_constructors(declaration, sums);
+    }
+    let completion = match item {
+        Item::FunctionDeclaration(declaration) => CompletionItem {
+            label: declaration.name.clone(),
+            kind: CompletionKind::Function,
+            detail: Some(function_signature_label(declaration)),
+        },
+        Item::TypeDeclaration(declaration) => CompletionItem {
+            label: declaration.name.clone(),
+            kind: CompletionKind::Class,
+            detail: None,
+        },
+        Item::VariableDeclaration(declaration) => CompletionItem {
+            label: declaration.name.clone(),
+            kind: CompletionKind::Variable,
+            detail: declaration.type_annotation.as_ref().map(type_label),
+        },
+    };
+    if let Some(scope) = scopes.last_mut() {
+        scope.insert(completion.label.clone(), completion);
+    }
+}
+
+fn collect_sum_constructors(declaration: &TypeDeclaration, sums: &mut Vec<CompletionItem>) {
+    if let TypeDefinition::Sum { variants, .. } = &declaration.type_definition {
+        for variant in variants {
+            sums.push(CompletionItem {
+                label: variant.name.clone(),
+                kind: CompletionKind::EnumMember,
+                detail: Some(declaration.name.clone()),
+            });
+        }
+    }
+}
+
+fn bind_parameter(parameter: &Parameter, scopes: &mut [HashMap<String, CompletionItem>]) {
+    let completion = CompletionItem {
+        label: parameter.name.clone(),
+        kind: CompletionKind::Variable,
+        detail: parameter.type_annotation.as_ref().map(type_label),
+    };
+    if let Some(scope) = scopes.last_mut() {
+        scope.insert(completion.label.clone(), completion);
+    }
+}
+
+fn descend_item_body(
+    item: &Item,
+    offset: u32,
+    scopes: &mut Vec<HashMap<String, CompletionItem>>,
+    sums: &mut Vec<CompletionItem>,
+) {
+    match item {
+        Item::FunctionDeclaration(declaration) => {
+            scopes.push(HashMap::new());
+            for parameter in &declaration.parameters {
+                bind_parameter(parameter, scopes);
+            }
+            scope_walk(&declaration.body, offset, scopes, sums);
+        }
+        Item::TypeDeclaration(declaration) => {
+            for method in declaration.type_definition.methods() {
+                if covers(&method.span, offset) {
+                    scopes.push(HashMap::new());
+                    if let Some(scope) = scopes.last_mut() {
+                        scope.insert(
+                            RECEIVER.to_string(),
+                            CompletionItem {
+                                label: RECEIVER.to_string(),
+                                kind: CompletionKind::Variable,
+                                detail: Some(declaration.name.clone()),
+                            },
+                        );
+                    }
+                    for parameter in &method.parameters {
+                        bind_parameter(parameter, scopes);
+                    }
+                    scope_walk(&method.body, offset, scopes, sums);
+                    return;
+                }
+            }
+        }
+        Item::VariableDeclaration(declaration) => {
+            scope_walk(&declaration.value, offset, scopes, sums);
+        }
+    }
+}
+
+/// Find the child (if any) whose span covers `offset`, recurse, and along the way push a
+/// new scope for a `Block`'s statements, a `Lambda`'s parameters, or a matched `Match`
+/// arm's pattern bindings.
+fn scope_walk(
+    expression: &Expression,
+    offset: u32,
+    scopes: &mut Vec<HashMap<String, CompletionItem>>,
+    sums: &mut Vec<CompletionItem>,
+) {
+    if !covers(expression.span(), offset) {
+        return;
+    }
+    match expression {
+        Expression::Block { statements, .. } => {
+            scopes.push(HashMap::new());
+            for statement in statements {
+                match statement {
+                    Statement::Item(item) => {
+                        if item_step(item, offset, scopes, sums) {
+                            return;
+                        }
+                    }
+                    Statement::Expression(nested) => {
+                        if nested.span().start > offset {
+                            return;
+                        }
+                        if covers(nested.span(), offset) {
+                            scope_walk(nested, offset, scopes, sums);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        Expression::Lambda {
+            parameters, body, ..
+        } => {
+            scopes.push(HashMap::new());
+            for parameter in parameters {
+                bind_parameter(parameter, scopes);
+            }
+            scope_walk(body, offset, scopes, sums);
+        }
+        Expression::Match {
+            expression: scrutinee,
+            arms,
+            ..
+        } => {
+            if covers(scrutinee.span(), offset) {
+                scope_walk(scrutinee, offset, scopes, sums);
+                return;
+            }
+            for arm in arms {
+                if covers(&arm.span, offset) {
+                    scopes.push(HashMap::new());
+                    bind_pattern(&arm.pattern, scopes);
+                    scope_walk(&arm.body, offset, scopes, sums);
+                    return;
+                }
+            }
+        }
+        // Every other composite form has at most one child covering `offset` (spans nest,
+        // never overlap); [`expression_statement_span`] shares this same child list.
+        other => {
+            for child in expression_children(other) {
+                if covers(child.span(), offset) {
+                    scope_walk(child, offset, scopes, sums);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The immediate children of every "pass-through" expression form — one that introduces
+/// no binding or statement boundary of its own. `Block`/`Lambda`/`Match` each DO introduce
+/// one, so [`scope_walk`] and [`expression_statement_span`] special-case those three
+/// themselves and share this list for everything else.
+fn expression_children(expression: &Expression) -> Vec<&Expression> {
+    match expression {
+        Expression::Call {
+            function,
+            arguments,
+            ..
+        } => std::iter::once(function.as_ref())
+            .chain(arguments.iter())
+            .collect(),
+        Expression::BinaryOperator { left, right, .. } => vec![left, right],
+        Expression::UnaryOperator { expression, .. }
+        | Expression::FieldAccess { expression, .. }
+        | Expression::Spread { expression, .. } => vec![expression],
+        Expression::FieldAssign { target, value, .. }
+        | Expression::IndexAssign { target, value, .. } => vec![target, value],
+        Expression::Index {
+            expression, index, ..
+        } => vec![expression, index],
+        Expression::If {
+            condition,
+            then,
+            else_,
+            ..
+        } => vec![condition, then, else_],
+        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
+            elements.iter().collect()
+        }
+        Expression::MapLiteral { entries, .. } => entries
+            .iter()
+            .flat_map(|(key, value)| [key, value])
+            .collect(),
+        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
+            fields.iter().map(|(_, value)| value).collect()
+        }
+        Expression::Range { start, end, .. } => vec![start, end],
+        Expression::Interpolation { parts, .. } => parts
+            .iter()
+            .filter_map(|part| match part {
+                InterpolationPart::Hole(hole) => Some(hole),
+                InterpolationPart::Literal(_) => None,
+            })
+            .collect(),
+        Expression::Number { .. }
+        | Expression::String { .. }
+        | Expression::Bool { .. }
+        | Expression::Unit { .. }
+        | Expression::Identifier { .. }
+        | Expression::Block { .. }
+        | Expression::Lambda { .. }
+        | Expression::Match { .. } => Vec::new(),
+    }
+}
+
+fn bind_pattern(pattern: &Pattern, scopes: &mut [HashMap<String, CompletionItem>]) {
+    match pattern {
+        Pattern::Identifier { name, .. } => {
+            let completion = CompletionItem {
+                label: name.clone(),
+                kind: CompletionKind::Variable,
+                detail: None,
+            };
+            if let Some(scope) = scopes.last_mut() {
+                scope.insert(name.clone(), completion);
+            }
+        }
+        Pattern::Constructor { arguments, .. } => {
+            for argument in arguments {
+                bind_pattern(argument, scopes);
+            }
+        }
+        Pattern::Number { .. } | Pattern::Wildcard { .. } => {}
+    }
+}
+
+/// A function's call signature, in Quilon spelling. `declared_return_type`/
+/// `parameter_type` read both annotation forms (per-parameter, or a whole-signature `::`).
+fn function_signature_label(declaration: &FunctionDeclaration) -> String {
+    let parameters: Vec<String> = (0..declaration.parameters.len())
+        .map(|index| {
+            declaration
+                .parameter_type(index)
+                .map(type_label)
+                .unwrap_or_else(|| "_".to_string())
+        })
+        .collect();
+    let ret = declaration
+        .declared_return_type()
+        .map(type_label)
+        .unwrap_or_else(|| "_".to_string());
+    format!("({}) -> {ret}", parameters.join(", "))
+}
+
+/// Case 2/3: complete after a `.` at byte `dot`, deleting it and any partial member name
+/// already typed. Case 3 isolates the receiver from its enclosing STATEMENT before
+/// checking — cutting everything else that statement covers, both before the receiver
+/// (`1 + `) and after it (a call's closing `)`) — so a genuine mismatch elsewhere in the
+/// statement (`1 + s.` strips to `1 + s`, `Num + Text`) doesn't blank the result. This is a
+/// no-op when the receiver is already the whole statement, so it needs no separate
+/// simpler-case attempt.
+fn member_completions(path: &Path, text: &str, dot: usize, offset: usize) -> Vec<CompletionItem> {
+    let stripped = without(text, dot, offset);
+    let Some(program) = parse_text(&stripped) else {
+        return Vec::new();
+    };
+
+    if let Some(binding) = bare_identifier_ending_at(text, dot)
+        && let Some(import) = program
+            .imports
+            .iter()
+            .find(|import| import.path.binding_name().as_deref() == Some(binding))
+    {
+        return module_completions(path, import);
+    }
+
+    let Some(receiver) = expression_ending_at(&program, dot as u32) else {
+        return Vec::new();
+    };
+    let Some(statement) = statement_span_at(&program, dot as u32) else {
+        return Vec::new();
+    };
+    if statement.start > receiver.start || statement.end < dot as u32 {
+        return Vec::new();
+    }
+    // Cut the suffix FIRST (it lies entirely at or after `dot`), so the prefix cut right
+    // after — entirely before `dot` — still lands on the same byte offsets.
+    let without_suffix = without(&stripped, dot, statement.end as usize);
+    let isolated = without(
+        &without_suffix,
+        statement.start as usize,
+        receiver.start as usize,
+    );
+    let new_dot = dot - (receiver.start as usize - statement.start as usize);
+    let Ok(checked) = check_text(path, &isolated) else {
+        return Vec::new();
+    };
+    let Some(ty) = type_ending_at(&checked.types, &isolated, new_dot) else {
+        return Vec::new();
+    };
+    type_member_completions(&checked.program, &checked.types, ty)
+}
+
+/// The type of the smallest expression ending exactly at byte `end` in `types`. Skips
+/// back over spaces/tabs first, so a deliberately spaced member access (`response .body`)
+/// still resolves.
+fn type_ending_at<'a>(types: &'a TypeTable, text: &str, end: usize) -> Option<&'a Type> {
+    let bytes = text.as_bytes();
+    let mut end = end;
+    while end > 0 && matches!(bytes[end - 1], b' ' | b'\t') {
+        end -= 1;
+    }
+    let end = end as u32;
+    types
+        .iter()
+        .filter(|(span, _)| span.file == ROOT_FILE && span.end == end)
+        .min_by_key(|(span, _)| span.end - span.start)
+        .map(|(_, ty)| ty)
+}
+
+/// Case 2: `import`'s exported members, resolved by loading it in isolation
+/// ([`crate::modules::link`]) — a bare import binding is a qualifier, not a checkable
+/// expression, so this never touches the rest of the document.
+fn module_completions(path: &Path, import: &Import) -> Vec<CompletionItem> {
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let synthetic = Program {
+        imports: vec![import.clone()],
+        items: Vec::new(),
+        test_blocks: Vec::new(),
+    };
+    let Ok((linked, _sources)) = crate::modules::link(synthetic, base_dir, Some(path)) else {
+        return Vec::new();
+    };
+    let Some(canonical) = canonical_prefix(&import.path) else {
+        return Vec::new();
+    };
+    let prefix = format!("{canonical}.");
+
+    let mut items = Vec::new();
+    for item in &linked.items {
+        if !crate::modules::item_is_exported(item) || item.name().starts_with('@') {
+            continue;
+        }
+        if let Some(short) = item.name().strip_prefix(&prefix) {
+            items.push(module_completion_item(item, short));
+        }
+        if let Item::TypeDeclaration(declaration) = item
+            && declaration.name.starts_with(&prefix)
+            && let TypeDefinition::Sum { variants, .. } = &declaration.type_definition
+        {
+            items.extend(module_sum_variant_items(
+                variants,
+                &prefix,
+                &declaration.name,
+            ));
+        }
+    }
+    items
+}
+
+fn module_sum_variant_items(
+    variants: &[SumVariant],
+    prefix: &str,
+    type_name: &str,
+) -> Vec<CompletionItem> {
+    variants
+        .iter()
+        .filter_map(|variant| variant.name.strip_prefix(prefix))
+        .map(|short| CompletionItem {
+            label: short.to_string(),
+            kind: CompletionKind::EnumMember,
+            detail: Some(display_name(type_name).to_string()),
+        })
+        .collect()
+}
+
+/// Matches `src/modules.rs`'s own choice of canonical name per import form.
+fn canonical_prefix(path: &ModulePath) -> Option<String> {
+    match path {
+        ModulePath::BuiltinDotted(parts) => Some(parts.join(".")),
+        ModulePath::FilePath(_) => path.binding_name(),
+    }
+}
+
+fn module_completion_item(item: &Item, short: &str) -> CompletionItem {
+    match item {
+        Item::FunctionDeclaration(declaration) => CompletionItem {
+            label: short.to_string(),
+            kind: CompletionKind::Function,
+            detail: Some(function_signature_label(declaration)),
+        },
+        Item::TypeDeclaration(_) => CompletionItem {
+            label: short.to_string(),
+            kind: CompletionKind::Class,
+            detail: None,
+        },
+        Item::VariableDeclaration(declaration) => CompletionItem {
+            label: short.to_string(),
+            kind: CompletionKind::Variable,
+            detail: declaration.type_annotation.as_ref().map(type_label),
+        },
+    }
+}
+
+/// Case 3: the members of `ty` reached through `.`.
+fn type_member_completions(program: &Program, types: &TypeTable, ty: &Type) -> Vec<CompletionItem> {
+    match ty {
+        Type::Record(fields) => fields
+            .iter()
+            .map(|(name, field_type)| CompletionItem {
+                label: name.clone(),
+                kind: CompletionKind::Field,
+                detail: Some(type_label(field_type)),
+            })
+            .collect(),
+        Type::Named { name, fields, .. } => {
+            let mut items: Vec<CompletionItem> = fields
+                .iter()
+                .map(|(name, field_type)| CompletionItem {
+                    label: name.clone(),
+                    kind: CompletionKind::Field,
+                    detail: Some(type_label(field_type)),
+                })
+                .collect();
+            items.extend(user_method_completions(program, types, name));
+            items
+        }
+        Type::Sum { name, .. } => user_method_completions(program, types, name),
+        Type::Text => text_method_completions(),
+        Type::Array(elem) => array_method_completions(elem),
+        Type::Map(key, value) => map_method_completions(key, value),
+        Type::Set(elem) => set_method_completions(elem),
+        _ => Vec::new(),
+    }
+}
+
+/// Filters out operator and render (`` ` ``) members via [`is_identifier`] — neither is
+/// ever typed after a `.`.
+fn user_method_completions(
+    program: &Program,
+    types: &TypeTable,
+    type_name: &str,
+) -> Vec<CompletionItem> {
+    let Some(declaration) = find_type_declaration(program, type_name) else {
+        return Vec::new();
+    };
+    declaration
+        .type_definition
+        .methods()
+        .iter()
+        .filter(|method| is_identifier(&method.name))
+        .map(|method| CompletionItem {
+            label: method.name.clone(),
+            kind: CompletionKind::Method,
+            detail: Some(method_signature_label(method, types)),
+        })
+        .collect()
+}
+
+/// The bodies (or method bodies) an item carries.
+fn item_bodies(item: &Item) -> Vec<&Expression> {
+    match item {
+        Item::FunctionDeclaration(declaration) => vec![&declaration.body],
+        Item::VariableDeclaration(declaration) => vec![&declaration.value],
+        Item::TypeDeclaration(declaration) => declaration
+            .type_definition
+            .methods()
+            .iter()
+            .map(|method| &method.body)
+            .collect(),
+    }
+}
+
+/// `type_name`'s own [`TypeDeclaration`], searched top-level first, then anywhere nested
+/// inside a block (a type may be declared locally too).
+fn find_type_declaration<'a>(program: &'a Program, type_name: &str) -> Option<&'a TypeDeclaration> {
+    for item in &program.items {
+        if let Item::TypeDeclaration(declaration) = item
+            && declaration.name == type_name
+        {
+            return Some(declaration);
+        }
+    }
+    program
+        .items
+        .iter()
+        .find_map(|item| find_type_declaration_in_item(item, type_name))
+}
+
+fn find_type_declaration_in_item<'a>(
+    item: &'a Item,
+    type_name: &str,
+) -> Option<&'a TypeDeclaration> {
+    item_bodies(item)
+        .into_iter()
+        .find_map(|body| find_type_declaration_in_expression(body, type_name))
+}
+
+fn find_type_declaration_in_expression<'a>(
+    expression: &'a Expression,
+    type_name: &str,
+) -> Option<&'a TypeDeclaration> {
+    let mut found = None;
+    walk_expressions(expression, &mut |node| {
+        if found.is_some() {
+            return;
+        }
+        let Expression::Block { statements, .. } = node else {
+            return;
+        };
+        for statement in statements {
+            let Statement::Item(item) = statement else {
+                continue;
+            };
+            if let Item::TypeDeclaration(declaration) = item
+                && declaration.name == type_name
+            {
+                found = Some(declaration);
+                return;
+            }
+            if let Some(inner) = find_type_declaration_in_item(item, type_name) {
+                found = Some(inner);
+                return;
+            }
+        }
+    });
+    found
+}
+
+/// A syntax-only analogue of [`type_ending_at`], for before the document has checked at
+/// all (there is no [`TypeTable`] yet to read a span out of).
+fn expression_ending_at(program: &Program, end: u32) -> Option<Span> {
+    let mut best: Option<Span> = None;
+    let mut consider = |expression: &Expression| {
+        let span = expression.span();
+        if span.end == end
+            && best
+                .as_ref()
+                .is_none_or(|current| span.end - span.start < current.end - current.start)
+        {
+            best = Some(span.clone());
+        }
+    };
+    for item in &program.items {
+        for body in item_bodies(item) {
+            walk_expressions(body, &mut consider);
+        }
+    }
+    for block in &program.test_blocks {
+        walk_expressions(block, &mut consider);
+    }
+    best
+}
+
+/// [`covers`], but INCLUSIVE of a span's own end: `offset` here is always the byte right
+/// after a receiver's trailing `.member` was cut off, i.e. exactly the receiver's own end,
+/// which strict `covers` would call past the span.
+fn ends_at_or_covers(span: &Span, offset: u32) -> bool {
+    span.file == ROOT_FILE && span.start <= offset && offset <= span.end
+}
+
+/// The span of the smallest STATEMENT — a block's own statement, or a top-level item's
+/// whole declaration — covering byte `offset`.
+fn statement_span_at(program: &Program, offset: u32) -> Option<Span> {
+    program
+        .items
+        .iter()
+        .find(|item| ends_at_or_covers(item.span(), offset))
+        .map(|item| item_statement_span(item, offset))
+}
+
+/// `item`'s own declaration span, unless `offset` sits inside a block nested somewhere in
+/// its body — then that block's own covering statement's span.
+fn item_statement_span(item: &Item, offset: u32) -> Span {
+    item_bodies(item)
+        .into_iter()
+        .filter(|body| ends_at_or_covers(body.span(), offset))
+        .find_map(|body| expression_statement_span(body, offset))
+        .unwrap_or_else(|| item.span().clone())
+}
+
+/// `Some(span)` when `offset` is inside a `Block` nested somewhere in `expression`; `None`
+/// when it carries no block at all covering `offset`.
+fn expression_statement_span(expression: &Expression, offset: u32) -> Option<Span> {
+    if !ends_at_or_covers(expression.span(), offset) {
+        return None;
+    }
+    match expression {
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                let (span, item) = match statement {
+                    Statement::Item(item) => (item.span(), Some(item)),
+                    Statement::Expression(nested) => (nested.span(), None),
+                };
+                if !ends_at_or_covers(span, offset) {
+                    continue;
+                }
+                return Some(match item {
+                    Some(item) => item_statement_span(item, offset),
+                    None => span.clone(),
+                });
+            }
+            None
+        }
+        Expression::Lambda { body, .. } => expression_statement_span(body, offset),
+        Expression::Match {
+            expression: scrutinee,
+            arms,
+            ..
+        } => expression_statement_span(scrutinee, offset).or_else(|| {
+            arms.iter()
+                .find(|arm| ends_at_or_covers(&arm.span, offset))
+                .and_then(|arm| expression_statement_span(&arm.body, offset))
+        }),
+        other => expression_children(other)
+            .into_iter()
+            .find(|child| ends_at_or_covers(child.span(), offset))
+            .and_then(|child| expression_statement_span(child, offset)),
+    }
+}
+
+/// A method's call signature. The return type is the annotation when present, else the
+/// body's own inferred type (a self-typed return, e.g. a method returning `it`).
+fn method_signature_label(method: &MethodDeclaration, types: &TypeTable) -> String {
+    let parameters: Vec<String> = method
+        .parameters
+        .iter()
+        .map(|parameter| {
+            parameter
+                .type_annotation
+                .as_ref()
+                .map(type_label)
+                .unwrap_or_else(|| "_".to_string())
+        })
+        .collect();
+    let ret = method
+        .return_type
+        .as_ref()
+        .or_else(|| types.get(method.body.span()))
+        .map(type_label)
+        .unwrap_or_else(|| "_".to_string());
+    format!("({}) -> {ret}", parameters.join(", "))
+}
+
+fn method_items(table: Vec<(&str, Vec<Type>, Type)>) -> Vec<CompletionItem> {
+    table
+        .into_iter()
+        .map(|(name, parameters, ret)| CompletionItem {
+            label: name.to_string(),
+            kind: CompletionKind::Method,
+            detail: Some(format!(
+                "({}) -> {}",
+                parameters
+                    .iter()
+                    .map(type_label)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                type_label(&ret)
+            )),
+        })
+        .collect()
+}
+
+fn field_item(name: &str, ty: Type) -> CompletionItem {
+    CompletionItem {
+        label: name.to_string(),
+        kind: CompletionKind::Field,
+        detail: Some(type_label(&ty)),
+    }
+}
+
+/// Reads `TypeChecker`'s own signature table (`src/typechecker/checker/calls.rs`) — the
+/// one source both the checker's dispatch and this completion consult.
+fn text_method_completions() -> Vec<CompletionItem> {
+    let mut items = method_items(crate::typechecker::text_method_table());
+    items.push(field_item("size", Type::Num));
+    items.push(field_item("length", Type::Num));
+    items
+}
+
+fn array_method_completions(elem: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(crate::typechecker::array_method_table(elem));
+    items.push(field_item("size", Type::Num));
+    items
+}
+
+fn map_method_completions(key: &Type, value: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(crate::typechecker::map_method_table(key, value));
+    items.push(field_item("size", Type::Num));
+    items
+}
+
+fn set_method_completions(elem: &Type) -> Vec<CompletionItem> {
+    let mut items = method_items(crate::typechecker::set_method_table(elem));
+    items.push(field_item("size", Type::Num));
+    items
 }

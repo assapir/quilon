@@ -377,6 +377,183 @@ impl<'ctx> CodeGenerator<'ctx> {
         })
     }
 
+    /// Render a Map as `[|k1 => v1, k2 => v2|]` (each key/value through its own `` ` ``), or
+    /// the literal empty form `[|=>|]` for zero entries — the SAME path
+    /// `io.print`/interpolation use for every other type, so a debugger's value display
+    /// matches. Built on [`render_joined`]; see there for the join/truncation shape.
+    pub(super) fn render_map(
+        &mut self,
+        key_ty: &Type,
+        value_ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let map = value.into_pointer_value();
+        let n = self.call_rt_int("__map_len", &[map.into()])?;
+        let value_llvm = self.value_repr_type(value_ty)?;
+        let key_ty = key_ty.clone();
+        let value_ty = value_ty.clone();
+        self.render_joined(n, "[|=>|]", |this, i| {
+            let ka = this.call_rt_int("__map_key_a", &[map.into(), i.into()])?;
+            let kb = this.call_rt_int("__map_key_b", &[map.into(), i.into()])?;
+            let key = this.key_from_words(ka, kb, &key_ty)?;
+            let ktext = this.render_value(&key_ty, key)?;
+            let boxed = this.call_rt_ptr("__map_val", &[map.into(), i.into()])?;
+            let val = this
+                .builder
+                .build_load(value_llvm, boxed, "map_render_v")
+                .map_err(ctx("Failed to load map value"))?;
+            let vtext = this.render_value(&value_ty, val)?;
+            let arrow = this.text_literal(" => ")?;
+            let k_arrow =
+                this.generate_text_concat(ktext.into_struct_value(), arrow.into_struct_value())?;
+            this.generate_text_concat(k_arrow.into_struct_value(), vtext.into_struct_value())
+        })
+    }
+
+    /// Render a Set as `[|e1, e2|]` (each element through its own `` ` ``), or the literal
+    /// empty form `[||]` for zero elements. Built on [`render_joined`]; see [`render_map`].
+    pub(super) fn render_set(
+        &mut self,
+        elem_ty: &Type,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let set = value.into_pointer_value();
+        let n = self.call_rt_int("__set_len", &[set.into()])?;
+        let elem_ty = elem_ty.clone();
+        self.render_joined(n, "[||]", |this, i| {
+            let a = this.call_rt_int("__set_item_a", &[set.into(), i.into()])?;
+            let b = this.call_rt_int("__set_item_b", &[set.into(), i.into()])?;
+            let elem = this.key_from_words(a, b, &elem_ty)?;
+            this.render_value(&elem_ty, elem)
+        })
+    }
+
+    /// Render `n` items as `[|...|]`, each produced by `item(self, i)` — `render_map`'s
+    /// `k => v` entries or `render_set`'s bare elements — separated by `, `, or the literal
+    /// `empty_form` when `n == 0`. Mirrors `render_array`'s (interpolation.rs) truncation
+    /// convention: `n <= 10` renders every item in full; a longer collection renders only
+    /// `[|first <- last|]`, since a Map/Set's iteration order is unspecified anyway (so
+    /// "first"/"last" carry no promise beyond "two of its entries") and every append here
+    /// copies the WHOLE accumulated text so far — leaving a large collection untruncated
+    /// would make rendering it, in the debuggee, cost O(n²) bytes copied rather than O(1).
+    fn render_joined(
+        &mut self,
+        n: IntValue<'ctx>,
+        empty_form: &str,
+        mut item: impl FnMut(&mut Self, IntValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let func = self
+            .current_function
+            .ok_or_else(|| "collection render outside a function".to_string())?;
+        let text_ty = self.ptr_len_struct_type();
+        let acc_slot = self.create_entry_block_alloca("coll_render_acc", text_ty.into())?;
+        let i64t = self.context.i64_type();
+        let zero = i64t.const_zero();
+        let ten = i64t.const_int(10, false);
+
+        let is_empty = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, n, zero, "coll_render_empty")
+            .map_err(ctx("Failed to test empty collection"))?;
+        let empty_bb = self
+            .context
+            .append_basic_block(func, "coll_render_empty_bb");
+        let nonempty_bb = self
+            .context
+            .append_basic_block(func, "coll_render_nonempty_bb");
+        let merge_bb = self.context.append_basic_block(func, "coll_render_merge");
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, nonempty_bb)
+            .map_err(ctx("Failed to branch collection render"))?;
+
+        self.builder.position_at_end(empty_bb);
+        let empty_text = self.text_literal(empty_form)?;
+        self.builder
+            .build_store(acc_slot, empty_text)
+            .map_err(ctx("Failed to store empty collection text"))?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(ctx("Failed to branch"))?;
+
+        self.builder.position_at_end(nonempty_bb);
+        let is_small = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, n, ten, "coll_render_small")
+            .map_err(ctx("Failed to compare collection size"))?;
+        let small_bb = self
+            .context
+            .append_basic_block(func, "coll_render_small_bb");
+        let trunc_bb = self
+            .context
+            .append_basic_block(func, "coll_render_trunc_bb");
+        self.builder
+            .build_conditional_branch(is_small, small_bb, trunc_bb)
+            .map_err(ctx("Failed to branch on collection size"))?;
+
+        // --- Full form: every item, comma-separated. ---
+        self.builder.position_at_end(small_bb);
+        let open = self.text_literal("[|")?;
+        self.builder
+            .build_store(acc_slot, open)
+            .map_err(ctx("Failed to seed collection render"))?;
+        self.array_loop(n, |this, i| {
+            let is_first = this
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, i, zero, "coll_render_first")
+                .map_err(ctx("Failed to test first item"))?;
+            let sep_bb = this.context.append_basic_block(func, "coll_render_sep");
+            let after_sep = this
+                .context
+                .append_basic_block(func, "coll_render_after_sep");
+            this.builder
+                .build_conditional_branch(is_first, after_sep, sep_bb)
+                .map_err(ctx("Failed to branch sep"))?;
+            this.builder.position_at_end(sep_bb);
+            let comma = this.text_literal(", ")?;
+            this.append_text(acc_slot, comma)?;
+            this.builder
+                .build_unconditional_branch(after_sep)
+                .map_err(ctx("Failed to branch after sep"))?;
+            this.builder.position_at_end(after_sep);
+
+            let text = item(this, i)?;
+            this.append_text(acc_slot, text)?;
+            Ok(())
+        })?;
+        let close = self.text_literal("|]")?;
+        self.append_text(acc_slot, close)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(ctx("Failed to finish small collection render"))?;
+
+        // --- Truncated form: `[|first <- last|]`. ---
+        self.builder.position_at_end(trunc_bb);
+        let open2 = self.text_literal("[|")?;
+        self.builder
+            .build_store(acc_slot, open2)
+            .map_err(ctx("Failed to seed truncated collection render"))?;
+        let first = item(self, zero)?;
+        self.append_text(acc_slot, first)?;
+        let arrow = self.text_literal(" <- ")?;
+        self.append_text(acc_slot, arrow)?;
+        let last_idx = self
+            .builder
+            .build_int_sub(n, i64t.const_int(1, false), "coll_render_last_idx")
+            .map_err(ctx("Failed to compute last index"))?;
+        let last = item(self, last_idx)?;
+        self.append_text(acc_slot, last)?;
+        let close2 = self.text_literal("|]")?;
+        self.append_text(acc_slot, close2)?;
+        self.builder
+            .build_unconditional_branch(merge_bb)
+            .map_err(ctx("Failed to finish truncated collection render"))?;
+
+        self.builder.position_at_end(merge_bb);
+        self.builder
+            .build_load(text_ty, acc_slot, "coll_render_text")
+            .map_err(ctx("Failed to load collection render text"))
+    }
+
     /// Emit a Map/Set `.size` field read (the entry/element count as a `Num`) via
     /// `intrinsic` (`__map_len` / `__set_len`). Shared by `generate_field_access`.
     pub(super) fn generate_collection_size(

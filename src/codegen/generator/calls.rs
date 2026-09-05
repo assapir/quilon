@@ -72,7 +72,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &self,
         name: &str,
         arguments: &[Expression],
-    ) -> Option<IntrinsicLowering> {
+    ) -> Result<Option<IntrinsicLowering>, String> {
         let lowering = match name {
             "core.io.print" | "core.io.eprint" => IntrinsicLowering::Print,
             "core.io.write" => IntrinsicLowering::Write,
@@ -86,25 +86,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__exit" => IntrinsicLowering::Exit,
             "__color_enabled" => IntrinsicLowering::ColorEnabled,
             name if crate::ast::is_test_registry_intrinsic(name) => IntrinsicLowering::TestRegistry,
-            _ => return None,
+            _ => return Ok(None),
         };
-        if arguments.len() != crate::ast::builtin_arity(name)? {
-            return None;
+        if Some(arguments.len()) != crate::ast::builtin_arity(name) {
+            return Ok(None);
         }
         // An output built-in takes any renderable value at its arity, so no user member can
         // stand between this call and it.
         if crate::ast::renderable_builtin(name).is_some() {
-            return Some(lowering);
+            return Ok(Some(lowering));
         }
         // No user member can match unless the name is an overload set here at all, and
-        // inferring every argument's type is the expensive part — so ask that first.
+        // reading every argument's type is the expensive part — so ask that first.
         if !self.overloads.contains_key(name) {
-            return Some(lowering);
+            return Ok(Some(lowering));
         }
-        let argument_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
-        self.matching_overload(name, &argument_types)
+        let argument_types = self.oracle_argument_types(arguments)?;
+        Ok(self
+            .matching_overload(name, &argument_types)
             .is_none()
-            .then_some(lowering)
+            .then_some(lowering))
     }
 
     /// The method a call resolves to on its receiver's type, as the symbol it was emitted
@@ -171,7 +172,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (see `intrinsic_lowering`); anything a user member of the same set matches is
         // dispatched as an ordinary mangled call below.
         if method_callee.is_none()
-            && let Some(lowering) = self.intrinsic_lowering(function_name, arguments)
+            && let Some(lowering) = self.intrinsic_lowering(function_name, arguments)?
         {
             return match lowering {
                 // The single argument renders through its `` ` `` operator (built-in
@@ -309,7 +310,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Overloaded function call: dispatch to the per-signature mangled symbol chosen
         // by exact argument types (the type checker has already verified a unique match).
         let overload_symbol = if self.overloads.contains_key(function_name.as_str()) {
-            let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
+            let arg_types = self.oracle_argument_types(arguments)?;
             self.resolve_overload_symbol(function_name, &arg_types)
         } else {
             None
@@ -317,7 +318,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Does this call leave off a trailing `Site` for the compiler to fill in? Asked
         // before the argument values are generated, so the answer is one immutable lookup.
-        let fills_call_site = self.fills_call_site(function_name, arguments, member_call);
+        let fills_call_site = self.fills_call_site(function_name, arguments, member_call)?;
 
         // The resolved callee: the overload member chosen by argument types, else the
         // plain top-level function of that name.
@@ -363,24 +364,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         name: &str,
         arguments: &[Expression],
         member_call: bool,
-    ) -> bool {
+    ) -> Result<bool, String> {
         // A method is not called by name, so it can declare no `Site` parameter (the
         // checker rejects one).
         if self
             .method_symbol_for(name, arguments, member_call)
             .is_some()
         {
-            return false;
+            return Ok(false);
         }
         match self.overloads.contains_key(name) {
             true => {
-                let arg_types: Vec<Type> = arguments.iter().map(|a| self.infer_type(a)).collect();
-                self.matching_overload(name, &arg_types)
+                let arg_types = self.oracle_argument_types(arguments)?;
+                Ok(self
+                    .matching_overload(name, &arg_types)
                     .is_some_and(|(parameters, _)| {
                         crate::ast::fills_call_site(parameters, arguments.len())
-                    })
+                    }))
             }
-            false => self.fn_call_site_arity.get(name) == Some(&(arguments.len() + 1)),
+            false => Ok(self.fn_call_site_arity.get(name) == Some(&(arguments.len() + 1))),
         }
     }
 
