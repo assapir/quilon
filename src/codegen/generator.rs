@@ -10,7 +10,7 @@ use crate::lexer::Span;
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::debug_info::{AsDIScope, DIScope, DIType};
+use inkwell::debug_info::{AsDIScope, DILocation, DIScope, DIType};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
@@ -100,6 +100,15 @@ struct FrameState<'ctx> {
     var_named_types: HashMap<String, String>,
     var_types: HashMap<String, Type>,
     boxed_vars: std::collections::HashSet<String>,
+}
+
+/// Enclosing-function state saved by `suspend_enclosing_function` around emitting a
+/// nested function mid-body, and restored by `resume_enclosing_function`.
+struct SuspendedFunction<'ctx> {
+    block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    function: Option<FunctionValue<'ctx>>,
+    frame: FrameState<'ctx>,
+    debug_location: Option<DILocation<'ctx>>,
 }
 
 pub struct CodeGenerator<'ctx> {
@@ -958,5 +967,36 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.var_named_types = frame.var_named_types;
         self.var_types = frame.var_types;
         self.boxed_vars = frame.boxed_vars;
+    }
+
+    /// Suspend the enclosing function (frame, insert block, current function) to emit a
+    /// nested one mid-body. Also saves and clears the builder's `!dbg` location, so an
+    /// instruction emitted back in the enclosing body right after resuming isn't stamped
+    /// with the nested function's scope. Pair with [`resume_enclosing_function`].
+    fn suspend_enclosing_function(&mut self) -> SuspendedFunction<'ctx> {
+        let block = self.builder.get_insert_block();
+        let function = self.current_function;
+        let frame = self.take_frame();
+        let debug_location = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+        SuspendedFunction {
+            block,
+            function,
+            frame,
+            debug_location,
+        }
+    }
+
+    /// Reinstate the state suspended by [`suspend_enclosing_function`] once the nested
+    /// function's body is emitted.
+    fn resume_enclosing_function(&mut self, saved: SuspendedFunction<'ctx>) {
+        self.restore_frame(saved.frame);
+        self.current_function = saved.function;
+        if let Some(block) = saved.block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved.debug_location {
+            self.builder.set_current_debug_location(loc);
+        }
     }
 }
