@@ -1637,30 +1637,6 @@ fn method_signature_label(method: &MethodDeclaration, types: &TypeTable) -> Stri
     format!("({}) -> {ret}", parameters.join(", "))
 }
 
-/// Mirrors the type checker's own (private) `result_of` in `src/typechecker/checker/sums.rs`.
-fn result_of(elem: Type) -> Type {
-    Type::Sum {
-        name: "Result".to_string(),
-        variants: vec![
-            SumVariant {
-                name: "Ok".to_string(),
-                fields: vec![elem],
-            },
-            SumVariant {
-                name: "NotOk".to_string(),
-                fields: vec![Type::Unit],
-            },
-        ],
-    }
-}
-
-fn function_type(parameters: Vec<Type>, return_type: Type) -> Type {
-    Type::Function {
-        parameters,
-        return_type: Box::new(return_type),
-    }
-}
-
 fn method_items(table: Vec<(&str, Vec<Type>, Type)>) -> Vec<CompletionItem> {
     table
         .into_iter()
@@ -1688,236 +1664,29 @@ fn field_item(name: &str, ty: Type) -> CompletionItem {
     }
 }
 
-/// Mirrors `TypeChecker::check_text_method`'s table in `src/typechecker/checker/calls.rs`
-/// (see also `docs/types/text.md`).
+/// Reads `TypeChecker`'s own signature table (`src/typechecker/checker/calls.rs`) — the
+/// one source both the checker's dispatch and this completion consult.
 fn text_method_completions() -> Vec<CompletionItem> {
-    let mut items = method_items(text_method_table());
+    let mut items = method_items(crate::typechecker::text_method_table());
     items.push(field_item("size", Type::Num));
     items.push(field_item("length", Type::Num));
     items
 }
 
-fn text_method_table() -> Vec<(&'static str, Vec<Type>, Type)> {
-    use Type::{Bool, Num, Text};
-    vec![
-        ("trim", vec![], Text),
-        ("trimStart", vec![], Text),
-        ("trimEnd", vec![], Text),
-        ("toUpper", vec![], Text),
-        ("toLower", vec![], Text),
-        ("split", vec![Text], Type::Array(Box::new(Text))),
-        ("graphemes", vec![], Type::Array(Box::new(Text))),
-        ("contains", vec![Text], Bool),
-        ("indexOf", vec![Text], result_of(Num)),
-        ("at", vec![Num], result_of(Text)),
-        ("slice", vec![Num, Num], Text),
-        ("repeat", vec![Num], Text),
-        ("replaceAll", vec![Text, Text], Text),
-        ("replace", vec![Text, Text, Num], Text),
-    ]
-}
-
-/// Mirrors `TypeChecker::check_array_method`'s signatures. `map`/`reduce`'s own result
-/// type is generic, spelled with a placeholder name (`R`, `A`).
 fn array_method_completions(elem: &Type) -> Vec<CompletionItem> {
-    let mut items = method_items(array_method_table(elem));
+    let mut items = method_items(crate::typechecker::array_method_table(elem));
     items.push(field_item("size", Type::Num));
     items
 }
 
-fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
-    let r = Type::named_ref("R");
-    let a = Type::named_ref("A");
-    vec![
-        (
-            "map",
-            vec![function_type(vec![elem.clone()], r.clone())],
-            Type::Array(Box::new(r)),
-        ),
-        (
-            "filter",
-            vec![function_type(vec![elem.clone()], Type::Bool)],
-            Type::Array(Box::new(elem.clone())),
-        ),
-        (
-            "reduce",
-            vec![
-                a.clone(),
-                function_type(vec![a.clone(), elem.clone()], a.clone()),
-            ],
-            a,
-        ),
-        (
-            "each",
-            vec![function_type(vec![elem.clone()], Type::Unit)],
-            Type::Array(Box::new(elem.clone())),
-        ),
-        (
-            "find",
-            vec![function_type(vec![elem.clone()], Type::Bool)],
-            result_of(elem.clone()),
-        ),
-        ("at", vec![Type::Num], result_of(elem.clone())),
-    ]
-}
-
-/// Mirrors `TypeChecker::check_map_method`'s signatures.
 fn map_method_completions(key: &Type, value: &Type) -> Vec<CompletionItem> {
-    let mut items = method_items(map_method_table(key, value));
+    let mut items = method_items(crate::typechecker::map_method_table(key, value));
     items.push(field_item("size", Type::Num));
     items
 }
 
-fn map_method_table(key: &Type, value: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
-    let map_type = Type::Map(Box::new(key.clone()), Box::new(value.clone()));
-    vec![
-        ("get", vec![key.clone()], result_of(value.clone())),
-        ("has", vec![key.clone()], Type::Bool),
-        ("set", vec![key.clone(), value.clone()], map_type.clone()),
-        ("remove", vec![key.clone()], map_type.clone()),
-        ("keys", vec![], Type::Array(Box::new(key.clone()))),
-        ("values", vec![], Type::Array(Box::new(value.clone()))),
-        (
-            "each",
-            vec![function_type(vec![key.clone(), value.clone()], Type::Unit)],
-            map_type,
-        ),
-    ]
-}
-
-/// Mirrors `TypeChecker::check_set_method`'s signatures.
 fn set_method_completions(elem: &Type) -> Vec<CompletionItem> {
-    let mut items = method_items(set_method_table(elem));
+    let mut items = method_items(crate::typechecker::set_method_table(elem));
     items.push(field_item("size", Type::Num));
     items
-}
-
-fn set_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
-    let set_type = Type::Set(Box::new(elem.clone()));
-    vec![
-        ("has", vec![elem.clone()], Type::Bool),
-        ("add", vec![elem.clone()], set_type.clone()),
-        ("remove", vec![elem.clone()], set_type.clone()),
-        ("items", vec![], Type::Array(Box::new(elem.clone()))),
-        (
-            "each",
-            vec![function_type(vec![elem.clone()], Type::Unit)],
-            set_type,
-        ),
-    ]
-}
-
-#[cfg(test)]
-mod builtin_table_tests {
-    //! Guards `text_method_table`/`array_method_table`/`map_method_table`/
-    //! `set_method_table` against drifting from the checker's own signatures
-    //! (`src/typechecker/checker/calls.rs`): for every entry, synthesize a call, check it,
-    //! and compare the checker's own inferred type against the table's declared one.
-
-    use super::*;
-
-    fn literal_for(ty: &Type) -> String {
-        match ty {
-            Type::Num => "0".to_string(),
-            Type::Text => "\"a\"".to_string(),
-            Type::Bool => "true".to_string(),
-            Type::Unit => "$".to_string(),
-            Type::Function {
-                parameters,
-                return_type,
-            } => {
-                let names: Vec<String> = (0..parameters.len()).map(|i| format!("p{i}")).collect();
-                format!("({}) => {}", names.join(", "), literal_for(return_type))
-            }
-            other => panic!("no literal synthesizer in this guard test for {other:?}"),
-        }
-    }
-
-    /// `replace`/`replaceAll`/`repeat` reject some otherwise well-typed literals at
-    /// compile time (an empty `from`, a non-positive `repeat` count, …) — these three
-    /// need arguments chosen to satisfy that, not just their parameter types.
-    fn arguments_for(name: &str, parameters: &[Type]) -> Vec<String> {
-        match name {
-            "replace" => vec!["\"a\"".to_string(), "\"z\"".to_string(), "1".to_string()],
-            "replaceAll" => vec!["\"a\"".to_string(), "\"z\"".to_string()],
-            "repeat" => vec!["2".to_string()],
-            _ => parameters.iter().map(literal_for).collect(),
-        }
-    }
-
-    /// `ty` with every `Type::Named` called `name` replaced by `with` — substitutes a
-    /// table's generic placeholder (`map`'s `R`, `reduce`'s `A`) with a concrete type
-    /// this test can actually check a call against.
-    fn substitute(ty: &Type, name: &str, with: &Type) -> Type {
-        match ty {
-            Type::Named { name: n, .. } if n == name => with.clone(),
-            Type::Array(elem) => Type::Array(Box::new(substitute(elem, name, with))),
-            Type::Function {
-                parameters,
-                return_type,
-            } => Type::Function {
-                parameters: parameters
-                    .iter()
-                    .map(|p| substitute(p, name, with))
-                    .collect(),
-                return_type: Box::new(substitute(return_type, name, with)),
-            },
-            other => other.clone(),
-        }
-    }
-
-    fn assert_table_matches_checker(
-        receiver: &str,
-        prelude: &str,
-        table: Vec<(&str, Vec<Type>, Type)>,
-    ) {
-        for (name, parameters, ret) in table {
-            let concrete =
-                |ty: &Type| substitute(&substitute(ty, "R", &Type::Num), "A", &Type::Num);
-            let parameters: Vec<Type> = parameters.iter().map(concrete).collect();
-            let ret = concrete(&ret);
-            let call = format!(
-                "{receiver}.{name}({})",
-                arguments_for(name, &parameters).join(", ")
-            );
-            let text = format!("^ = () -> Num => <\n  {prelude}\n  {call}\n  0\n>\n");
-            let checked = check_text(Path::new("guard.qn"), &text)
-                .unwrap_or_else(|error| panic!("`{call}` must check clean: {error:?}"));
-            let start = text.find(&call).expect("the call is in its own text") as u32;
-            let span = Span::in_root(start, start + call.len() as u32);
-            let inferred = checked
-                .types
-                .get(&span)
-                .unwrap_or_else(|| panic!("no recorded type for `{call}`"));
-            assert_eq!(
-                type_label(inferred),
-                type_label(&ret),
-                "`{name}`'s table return type disagrees with the checker"
-            );
-        }
-    }
-
-    #[test]
-    fn text_method_table_matches_the_checker() {
-        assert_table_matches_checker("s", "s = \"aaa\"", text_method_table());
-    }
-
-    #[test]
-    fn array_method_table_matches_the_checker() {
-        assert_table_matches_checker("xs", "xs = [0]", array_method_table(&Type::Num));
-    }
-
-    #[test]
-    fn map_method_table_matches_the_checker() {
-        assert_table_matches_checker(
-            "m",
-            "m = [|\"a\" => 0|]",
-            map_method_table(&Type::Text, &Type::Num),
-        );
-    }
-
-    #[test]
-    fn set_method_table_matches_the_checker() {
-        assert_table_matches_checker("xs", "xs = [|0|]", set_method_table(&Type::Num));
-    }
 }

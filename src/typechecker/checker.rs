@@ -29,6 +29,10 @@ use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
 use sums::result_of;
 
+/// Re-exported so the language server's completion (`src/lsp/analysis.rs`) reads the same
+/// built-in method signatures the checker itself dispatches on — see `calls.rs`.
+pub(crate) use calls::{array_method_table, map_method_table, set_method_table, text_method_table};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
     UndefinedVariable {
