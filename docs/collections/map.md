@@ -63,7 +63,7 @@ the receiver is a Map):
 | `remove(k)` | **the receiver map** | removes `k` in place; requires a `:=`-bound receiver; removing an absent key is a no-op |
 | `keys()` | `[]K` | the keys as an array (order unspecified) |
 | `values()` | `[]V` | the values as an array (same order as `keys()`) |
-| `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains) |
+| `each((k, v) => …)` | **the receiver map** | runs the body per entry for effect, then returns the map (chains); visits the entries present when it starts — a body that mutates the receiver changes the map, not the walk |
 
 ```quilon ignore
 << core.io

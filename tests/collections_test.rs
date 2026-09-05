@@ -127,6 +127,27 @@ fn map_each_effect_and_chains() {
     );
 }
 
+/// `each` visits the entries present when it starts: removing every key from inside the
+/// callback still visits all of them, and leaves the map empty afterward.
+#[test]
+fn map_each_removing_every_key_visits_all_entries_first() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] := [|\"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4|]\n  visits := 0\n  m.each((k, v) => <\n    visits := visits + 1\n    m.remove(k)\n  >\n  )\n  visits * 100 + m.size\n>",
+        400,
+    );
+}
+
+/// `each`'s walk is fixed at the start: a `set` of a NEW key from inside the callback
+/// grows the map but is not itself visited by this same walk.
+#[test]
+fn map_each_setting_new_keys_visits_only_the_original_entries() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Num => Num|] := [|1 => 10, 2 => 20|]\n  visits := 0\n  m.each((k, v) => <\n    visits := visits + 1\n    m.set(k + 100, v)\n  >\n  )\n  visits * 100 + m.size\n>",
+        // 2 original entries visited; 2 more added -> size 4.
+        204,
+    );
+}
+
 /// Num keys work (hashed by value).
 #[test]
 fn map_num_keys() {
@@ -243,6 +264,16 @@ fn set_each_effect_and_chains() {
         "^ = () -> Num => <\n  s :: [|Num|] = [|4, 5, 6|]\n  sum := 0\n  s.each(x => <\n    sum := sum + x\n  >\n  )\n  sum + s.each(x => x).size\n>",
         // sum 15 ; chained .size 3 -> 18
         18,
+    );
+}
+
+/// `each` visits the elements present when it starts: removing every element from inside
+/// the callback still visits all of them, and leaves the set empty afterward.
+#[test]
+fn set_each_removing_every_element_visits_all_entries_first() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] := [|1, 2, 3, 4|]\n  visits := 0\n  s.each(x => <\n    visits := visits + 1\n    s.remove(x)\n  >\n  )\n  visits * 100 + s.size\n>",
+        400,
     );
 }
 

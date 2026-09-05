@@ -648,3 +648,56 @@ fn run_a_closure_three_levels_deep_returning_a_fresh_value_binds_mutably() {
         9,
     );
 }
+
+// --- Route 16: a derived collection shares its ELEMENTS, not its own identity — a fresh
+// array/map of scalars binds either way, but one of reference-typed elements stays tied
+// to the source, exactly like an alias of the source itself. ---
+
+#[test]
+fn an_alias_of_an_immutable_array_is_rejected() {
+    let error =
+        type_error_message("^ = () -> Num => <\n  nums = [1, 2, 3]\n  ys := nums\n  ys[0]\n>");
+    assert!(
+        error.contains("'nums' is immutable"),
+        "expected the array alias to name 'nums', got: {error}"
+    );
+}
+
+#[test]
+fn run_map_of_scalars_from_an_immutable_array_is_a_fresh_mutable_array() {
+    // `nums.map(...)` builds a fresh array of copied `Num`s: writing into it can never
+    // reach `nums`, so it binds `:=` even though `nums` is `=`.
+    assert_type_checks(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  doubled := nums.map(x => x * 2)\n  doubled[0]\n>",
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  doubled := nums.map(x => x * 2)\n  doubled[0] := 10\n  doubled[0] + nums[0]\n>",
+        11,
+    );
+}
+
+#[test]
+fn run_filter_of_scalars_from_an_immutable_array_is_a_fresh_mutable_array() {
+    assert_type_checks(
+        "^ = () -> Num => <\n  nums = [1, 2, 3]\n  evens := nums.filter(x => x > 1)\n  evens[0]\n>",
+    );
+}
+
+#[test]
+fn run_keys_of_an_immutable_map_of_scalars_is_a_fresh_mutable_array() {
+    assert_type_checks("^ = () -> Num => <\n  m = [|\"a\" => 1|]\n  ks := m.keys()\n  ks.size\n>");
+}
+
+#[test]
+fn filter_of_reference_typed_elements_from_an_immutable_array_is_still_rejected() {
+    // `points`'s elements are records: `filter` returns a fresh array, but its kept
+    // entries are the SAME record values `points` holds, so the result still ties back
+    // to `points` exactly as a direct alias would.
+    let error = type_error_message(
+        "Point = { x :: Num }\n^ = () -> Num => <\n  points = [Point { x = 1 }]\n  firsts := points.filter(p => p.x > 0)\n  firsts[0].x\n>",
+    );
+    assert!(
+        error.contains("'points' is immutable"),
+        "expected the filtered record array to still name 'points', got: {error}"
+    );
+}

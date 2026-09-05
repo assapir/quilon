@@ -38,7 +38,7 @@ the receiver is a Set):
 | `add(x)` | **the receiver set** | adds `x` in place; requires a `:=`-bound receiver |
 | `remove(x)` | **the receiver set** | removes `x` in place; requires a `:=`-bound receiver; removing an absent element is a no-op |
 | `items()` | `[]T` | the elements as an array (order unspecified) |
-| `each(x => …)` | **the receiver set** | runs the body per element for effect, then returns the set (chains) |
+| `each(x => …)` | **the receiver set** | runs the body per element for effect, then returns the set (chains); visits the elements present when it starts — a body that mutates the receiver changes the set, not the walk |
 
 **Set algebra** (each builds a new set of the same element type):
 

@@ -674,6 +674,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to load element"))
     }
 
+    /// Store `value` at `data_ptr[i]` — [`Self::load_element`]'s write counterpart, used to
+    /// build a snapshot buffer element by element (see `Map`/`Set`'s `each`).
+    pub(super) fn store_element(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        elem_llvm: BasicTypeEnum<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let ptr = unsafe {
+            self.builder
+                .build_gep(elem_llvm, data_ptr, &[i], "am_elem_dst")
+                .map_err(ctx("Failed to GEP element"))?
+        };
+        self.builder
+            .build_store(ptr, value)
+            .map_err(ctx("Failed to store element"))?;
+        Ok(())
+    }
+
     /// Inline a lambda body with its parameters bound to `arg_values`. An array method's
     /// lambda is lowered inline (not as a closure value): each parameter is bound to a
     /// freshly-stored value (an alloca, like a loop variable) and the body is emitted in

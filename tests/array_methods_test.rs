@@ -84,6 +84,16 @@ fn each_returns_receiver_and_chains() {
     );
 }
 
+/// A body that writes into the receiver through `arr[i] := v` mutates it in place: a read
+/// after `each` returns sees the written values.
+#[test]
+fn each_body_writing_an_element_by_index_reads_back_afterward() {
+    assert_exit(
+        "^ = () -> Num => <\n  a := [1, 2, 3]\n  i := 0\n  a.each(x => <\n    a[i] := x * 10\n    i := i + 1\n  >\n  )\n  a[0] + a[1] + a[2]\n>",
+        60,
+    );
+}
+
 // ---- find ---------------------------------------------------------------
 
 /// `find` returns `Ok(elem)` of the first match.
