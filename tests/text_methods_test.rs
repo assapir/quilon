@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // Unique suffix for temp files across parallel subprocess crash tests.
 
 mod common;
-use common::{assert_exit, assert_type_error};
+use common::{
+    assert_exit, assert_type_error, build_and_run_native, run_program_named, tool_available,
+};
+use std::time::{Duration, Instant};
 
 static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -90,6 +93,42 @@ fn split_empty_separator_is_graphemes() {
     assert_exit("^ = () -> Num => <\n  \"héllo\".split(\"\").size\n>", 5);
 }
 
+#[test]
+fn split_leading_and_trailing_separators() {
+    // ",a,b,".split(",") -> ["","a","b",""], size 4, first and last empty.
+    assert_exit(
+        "^ = () -> Num => <\n  p = \",a,b,\".split(\",\")\n  first = p.at(0) ?\n    | Ok(s)    => s.size\n    | NotOk(_) => 9\n  last = p.at(p.size - 1) ?\n    | Ok(s)    => s.size\n    | NotOk(_) => 9\n  p.size * 100 + first * 10 + last\n>",
+        400,
+    );
+}
+
+#[test]
+fn split_separator_absent_yields_the_whole_text() {
+    // No occurrence of the separator: one piece, the whole text.
+    assert_exit(
+        "^ = () -> Num => <\n  p = \"abc\".split(\",\")\n  first = p.at(0) ?\n    | Ok(s)    => s == \"abc\" ? 1 : 0\n    | NotOk(_) => 0\n  p.size * 10 + first\n>",
+        11,
+    );
+}
+
+#[test]
+fn split_separator_equals_the_whole_text() {
+    // The separator matches the entire haystack: two empty pieces.
+    assert_exit(
+        "^ = () -> Num => <\n  p = \"abc\".split(\"abc\")\n  first = p.at(0) ?\n    | Ok(s)    => s.size\n    | NotOk(_) => 9\n  second = p.at(1) ?\n    | Ok(s)    => s.size\n    | NotOk(_) => 9\n  p.size * 100 + first * 10 + second\n>",
+        200,
+    );
+}
+
+#[test]
+fn split_on_non_ascii_graphemes() {
+    // "a🌍b🌍c".split("🌍") -> ["a","b","c"] — the separator is a non-ASCII grapheme.
+    assert_exit(
+        "^ = () -> Num => <\n  p = \"a🌍b🌍c\".split(\"🌍\")\n  p.size * 100 + (p.at(1) ? | Ok(s) => s == \"b\" ? 1 : 0 | NotOk(_) => 0)\n>",
+        301,
+    );
+}
+
 // ---- trim -----------------------------------------------------------------
 
 #[test]
@@ -114,6 +153,40 @@ fn replace_all_replaces_every_occurrence() {
     assert_exit(
         "^ = () -> Num => < \"a-a-a\".replaceAll(\"a\", \"xx\").size >",
         8,
+    );
+}
+
+#[test]
+fn replace_all_leading_and_trailing_occurrences() {
+    // ",a,b,".replaceAll(",", "-") -> "-a-b-".
+    assert_exit(
+        "^ = () -> Num => < \",a,b,\".replaceAll(\",\", \"-\") == \"-a-b-\" ? 1 : 0 >",
+        1,
+    );
+}
+
+#[test]
+fn replace_all_from_absent_is_a_no_op() {
+    assert_exit(
+        "^ = () -> Num => < \"abc\".replaceAll(\"z\", \"Q\") == \"abc\" ? 1 : 0 >",
+        1,
+    );
+}
+
+#[test]
+fn replace_all_from_equals_the_whole_text() {
+    assert_exit(
+        "^ = () -> Num => < \"abc\".replaceAll(\"abc\", \"xyz\") == \"xyz\" ? 1 : 0 >",
+        1,
+    );
+}
+
+#[test]
+fn replace_all_on_non_ascii_graphemes() {
+    // "a🌍b🌍c".replaceAll("🌍", "é") -> "aébéc" — a non-ASCII grapheme as `from`.
+    assert_exit(
+        "^ = () -> Num => < \"a🌍b🌍c\".replaceAll(\"🌍\", \"é\") == \"aébéc\" ? 1 : 0 >",
+        1,
     );
 }
 
@@ -604,6 +677,88 @@ fn slice_clamps_infinite_bounds_to_the_far_end() {
 fn at_takes_exactly_one_num_index() {
     assert_type_error(
         "^ = () -> Num => <\n  \"abc\".at(\"x\") ?\n    | Ok(_) => 1\n    | NotOk(_) => 0\n>",
+    );
+}
+
+// ---- performance: split/replaceAll are linear in bytes, not quadratic -----
+//
+// Before both moved to native intrinsics, each was an accumulator-shaped Quilon walk
+// that re-searched the shrinking tail from its own start on every step — quadratic in
+// the text's length. 20000 repeats took 41s (replaceAll) / 42s (split); a 50000-repeat
+// text is an ordinary input and must finish in a small fraction of a second.
+
+#[test]
+fn replace_all_50000_repeats_finishes_quickly_under_jit() {
+    let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.replaceAll(\"a\", \"\").length)\n  0\n>";
+    let start = Instant::now();
+    let run = run_program_named("replace_all_perf_jit.qn", src);
+    let elapsed = start.elapsed();
+    assert_eq!(run.code, 0, "program failed: {}", run.stderr);
+    assert_eq!(
+        run.stdout.trim(),
+        "50000",
+        "unexpected output: {}",
+        run.stdout
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "replaceAll on 50000 repeats took {elapsed:?} under `quilon run` — is it quadratic again?"
+    );
+}
+
+#[test]
+fn replace_all_50000_repeats_finishes_quickly_native() {
+    if !tool_available("clang") {
+        eprintln!("skipping native replaceAll performance gate: clang not on PATH");
+        return;
+    }
+    let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.replaceAll(\"a\", \"\").length)\n  0\n>";
+    let start = Instant::now();
+    let (code, stdout) = build_and_run_native("replace_all_perf_native", src);
+    let elapsed = start.elapsed();
+    assert_eq!(code, 0, "program failed: {stdout}");
+    assert_eq!(stdout.trim(), "50000", "unexpected output: {stdout}");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "replaceAll on 50000 repeats took {elapsed:?} natively — is it quadratic again?"
+    );
+}
+
+#[test]
+fn split_50000_repeats_finishes_quickly_under_jit() {
+    // "ab" x 50000 has 50000 occurrences of "b", so splitting on it yields 50001 pieces.
+    let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.split(\"b\").size)\n  0\n>";
+    let start = Instant::now();
+    let run = run_program_named("split_perf_jit.qn", src);
+    let elapsed = start.elapsed();
+    assert_eq!(run.code, 0, "program failed: {}", run.stderr);
+    assert_eq!(
+        run.stdout.trim(),
+        "50001",
+        "unexpected output: {}",
+        run.stdout
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "split on 50000 repeats took {elapsed:?} under `quilon run` — is it quadratic again?"
+    );
+}
+
+#[test]
+fn split_50000_repeats_finishes_quickly_native() {
+    if !tool_available("clang") {
+        eprintln!("skipping native split performance gate: clang not on PATH");
+        return;
+    }
+    let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.split(\"b\").size)\n  0\n>";
+    let start = Instant::now();
+    let (code, stdout) = build_and_run_native("split_perf_native", src);
+    let elapsed = start.elapsed();
+    assert_eq!(code, 0, "program failed: {stdout}");
+    assert_eq!(stdout.trim(), "50001", "unexpected output: {stdout}");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "split on 50000 repeats took {elapsed:?} natively — is it quadratic again?"
     );
 }
 

@@ -141,6 +141,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN503 | no arm matched |
 | QN504 | allocation failed |
 | QN505 | reading stdin failed |
+| QN506 | empty `from` in `replaceAll` |
 
 ## Input
 
@@ -1052,3 +1053,18 @@ error[QN505]: @readStdin failed: Input/output error (os error 5)
 ```
 
 Run the program with a readable stdin.
+
+### QN506 — empty `from` in `replaceAll`
+
+A computed `from` argument to `Text.replaceAll` was the empty text at run time — an empty
+`from` is an ill-defined request. (A literal empty `from` is instead a compile-time
+error.)
+
+```quilon ignore
+^ = () -> Num => <
+  from = ""
+  "abc".replaceAll(from, "x").size
+>
+```
+
+Pass a non-empty `from`.

@@ -124,6 +124,7 @@ codes! {
     MatchFailed = 503 => "no arm matched",
     AllocationFailed = 504 => "allocation failed",
     ReadFailed = 505 => "reading stdin failed",
+    ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
 }
 
 impl Code {
@@ -284,5 +285,9 @@ mod tests {
         assert_eq!(codes::MATCH_FAILED, Code::MatchFailed.number());
         assert_eq!(codes::ALLOCATION_FAILED, Code::AllocationFailed.number());
         assert_eq!(codes::READ_FAILED, Code::ReadFailed.number());
+        assert_eq!(
+            codes::REPLACE_ALL_EMPTY_FROM,
+            Code::ReplaceAllEmptyFrom.number()
+        );
     }
 }

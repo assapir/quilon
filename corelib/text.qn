@@ -1,26 +1,26 @@
-~ core.text — the self-hosted half of the built-in `Text` methods (issue #57): the
-~ composable methods, written in Quilon over the native grapheme primitives. Reference:
+~ core.text — the self-hosted half of the built-in `Text` methods: the composable
+~ methods, written in Quilon over the native grapheme primitives. Reference:
 ~ docs/types/text.md.
 ~
 ~ `Text` is conceptually a sequence of graphemes (`Text = []Grapheme`, a grapheme being a
-~ length-1 `Text`), and the native surface is exactly the operations that need the byte
-~ representation: segmentation (`length`/`graphemes`/`at`), substring search (`indexOf`),
-~ grapheme-boundary `slice`, the whitespace walks (`trimStart`/`trimEnd`), case mapping
+~ length-1 `Text`), and the native surface is every operation that is either linear only
+~ in bytes (segmentation, substring search, `split`, `replaceAll`) or needs the byte
+~ representation directly: `length`/`graphemes`/`at`, `indexOf`, grapheme-boundary
+~ `slice`, the whitespace walks (`trimStart`/`trimEnd`), case mapping
 ~ (`toUpper`/`toLower`), comparison, and `+`. Everything else composes from those, here.
 ~
 ~ This module is the compiler's own, and pure implementation: no program imports it (a
 ~ written `<< core.text` is rejected), it exports nothing, and it binds no name. The
 ~ compiler merges it — under its qualified names — into any program that calls one of
-~ the methods it implements, so `text.split(",")` keeps working with no import, and
-~ member syntax is the ONLY way these are reached. Each function takes the receiver as
-~ its first parameter because that is a method's shape once compiled (`it` is the first
-~ argument); the compiler lowers `t.split(sep)` to a call of `core.text.split(t, sep)`.
+~ the methods it implements, so `text.trim()` keeps working with no import, and member
+~ syntax is the ONLY way these are reached. Each function takes the receiver as its
+~ first parameter because that is a method's shape once compiled (`it` is the first
+~ argument); the compiler lowers `t.replace(from, to, n)` to a call of
+~ `core.text.replace(t, from, to, n)`.
 ~
-~ The split/replace walks are accumulator-shaped self-tail-calls, which the compiler
-~ lowers to loops — their depth never grows with the text (`repeat` instead recurses at
-~ log(count) depth, the cost of doubling). Each step still re-walks the tail's graphemes
-~ (`indexOf`), so a split/replace is quadratic in graphemes where the old intrinsic was
-~ linear in bytes; measured hot paths may return to native (issue #57).
+~ The replace walk is an accumulator-shaped self-tail-call, which the compiler lowers to
+~ a loop — its depth never grows with the text (`repeat` instead recurses at log(count)
+~ depth, the cost of doubling).
 ~
 ~ The module's own suite lives at the bottom (`quilon test corelib/text.qn`), which is
 ~ what `<< core.test` is for.
@@ -53,28 +53,9 @@ contains = (t :: Text, sub :: Text) -> Bool => <
     | NotOk(_) => false
 >
 
-~ The pieces of `rest` split on `sep` (never empty here), appended to `acc`. `sepLen` is
-~ `sep.length`, passed along so it is walked once, not once per piece. `.size` (bytes,
-~ O(1)) is the "to the end" slice bound throughout this file: `slice` clamps its end to
-~ the grapheme count, which the byte length always reaches, so it spares the full
-~ grapheme walk `.length` would cost every iteration.
-splitOnto = (acc :: []Text, rest :: Text, sep :: Text, sepLen :: Num) -> []Text => <
-  rest.indexOf(sep) ?
-    | Ok(i)    => splitOnto(acc + [rest.slice(0, i)], rest.slice(i + sepLen, rest.size), sep, sepLen)
-    | NotOk(_) => acc + [rest]
->
-
-~ Split `t` on `sep`. Consecutive separators keep empty pieces, an empty `t` yields
-~ `[""]`, and an EMPTY separator splits into graphemes (where an empty `t` yields `[]` —
-~ the graphemes of nothing). `"".graphemes()` is how this file writes an empty `[]Text`:
-~ a bare `[]` literal has no element type to take.
-split = (t :: Text, sep :: Text) -> []Text => <
-  sep.size == 0 ? t.graphemes() : splitOnto("".graphemes(), t, sep, sep.length)
->
-
-~ The end of a replace walk: the text is exhausted with `remaining` replacements still
+~ The end of a `replace` walk: the text is exhausted with `remaining` replacements still
 ~ owed — a `count` beyond the occurrences present, which fails loudly (the whole text
-~ held `count - remaining` of them). `replaceAll`'s negative `remaining` never owes.
+~ held `count - remaining` of them).
 replaceRemainder = (acc :: Text, rest :: Text, count :: Num, remaining :: Num, site :: Site) -> Text => <
   remaining > 0
     ? test.failAt("replace: count `count` exceeds `count - remaining` occurrences", site)
@@ -83,22 +64,13 @@ replaceRemainder = (acc :: Text, rest :: Text, count :: Num, remaining :: Num, s
 >
 
 ~ `rest` with its first `remaining` occurrences of `from` replaced by `to`, appended to
-~ `acc` — one pass, validating the count as it goes. A negative `remaining` never
-~ reaches 0, which is how `replaceAll` replaces every occurrence.
+~ `acc` — one pass, validating the count as it goes.
 replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Text, remaining :: Num, count :: Num, site :: Site) -> Text => <
   rest.indexOf(from) ?
     | Ok(i)    => remaining == 0
       ? acc + rest
       : replaceOnto(acc + rest.slice(0, i) + to, rest.slice(i + fromLen, rest.size), from, fromLen, to, remaining - 1, count, site)
     | NotOk(_) => replaceRemainder(acc, rest, count, remaining, site)
->
-
-~ Replace EVERY occurrence of `from` with `to`. An empty `from` is an ill-defined
-~ request and fails loudly (exit 101) — never a silent no-op.
-replaceAll = (t :: Text, from :: Text, to :: Text, site :: Site) -> Text => <
-  from.size == 0 ? test.failAt("replace: ``from`` must not be empty", site) : $
-  ~ the -1s: never-owed `remaining`, and a `count` no failure can ever read
-  replaceOnto("", t, from, from.length, to, 0 - 1, 0 - 1, site)
 >
 
 ~ Replace EXACTLY the first `count` occurrences of `from` with `to`, left to right;

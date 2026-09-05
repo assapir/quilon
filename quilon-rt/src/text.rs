@@ -3,9 +3,10 @@
 //! Text intrinsics — the PRIMITIVE floor under the built-in `Text` methods:
 //! segmentation (`length`, `graphemes`, `at`), comparison (`cmp`), the
 //! whitespace walks (`trimStart`/`trimEnd`), case mapping, substring search
-//! (`indexOf`), and grapheme-boundary `slice`. The composable methods
-//! (`split`/`trim`/`contains`/`replace`/`replaceAll`/`repeat`) are written in
-//! Quilon over these (`corelib/text.qn`), so they are deliberately NOT here.
+//! (`indexOf`), grapheme-boundary `slice`, and the two byte-linear walks
+//! (`split`, `replaceAll`). The remaining composable methods
+//! (`trim`/`contains`/`replace`/`repeat`) are written in Quilon over these
+//! (`corelib/text.qn`), so they are deliberately NOT here.
 //! All are UTF-8 correct and grapheme-based where an index/length is
 //! user-visible (matching `Text.length`). A `Text` argument arrives as
 //! `(ptr, len)`; a `Text` / `[]Text` result is returned as a GC-allocated
@@ -13,6 +14,7 @@
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{QlSlice, alloc_slots, alloc_text, format_num};
+use crate::report::{ASSERTION_EXIT_CODE, QlSite, codes, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -167,30 +169,35 @@ pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -
     alloc_text(s[bounds[lo]..bounds[hi]].as_bytes())
 }
 
+/// Build a `[]Text` (a `QlSlice` over `parts.len()` contiguous `Text` structs — the
+/// layout codegen loads) with one length-`parts[i].len()` `Text` per slice, each
+/// GC-allocated. Shared by every native primitive that answers with an array of pieces
+/// (`graphemes`, `split`).
+fn text_array(parts: &[&str]) -> QlSlice {
+    if parts.is_empty() {
+        return QlSlice::empty();
+    }
+    let elems = alloc_slots::<QlSlice>(parts.len());
+    for (i, part) in parts.iter().enumerate() {
+        // SAFETY: `elems` has room for `parts.len()` `QlSlice`s and `i < parts.len()`.
+        unsafe { std::ptr::write(elems.add(i), alloc_text(part.as_bytes())) };
+    }
+    QlSlice {
+        data: elems as *const c_void,
+        len: parts.len() as i64,
+    }
+}
+
 /// The individual graphemes of the text, as a `[]Text` of length-1 `Text`s — the
-/// segmentation primitive `Text = []Grapheme` rests on. Backs `Text.graphemes()` (and
-/// `split("")`, which `core.text` delegates here). An empty text has no graphemes: `[]`.
-/// Returns the array as a `QlSlice` over `len` contiguous `Text` structs — exactly the
-/// `[]Text` layout codegen loads.
+/// segmentation primitive `Text = []Grapheme` rests on. Backs `Text.graphemes()` and
+/// `Text.split("")` (an empty separator, delegated to this from [`__text_split`]). An
+/// empty text has no graphemes: `[]`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
     let s = text_str(ptr, len);
     let parts: Vec<&str> = s.graphemes(true).collect();
-    let n = parts.len();
-    if n == 0 {
-        return QlSlice::empty();
-    }
-    // Backing array of `n` Text structs (GC-owned), one per grapheme.
-    let elems = alloc_slots::<QlSlice>(n);
-    for (i, part) in parts.iter().enumerate() {
-        // SAFETY: `elems` has room for `n` `QlSlice`s and `i < n`.
-        unsafe { std::ptr::write(elems.add(i), alloc_text(part.as_bytes())) };
-    }
-    QlSlice {
-        data: elems as *const c_void,
-        len: n as i64,
-    }
+    text_array(&parts)
 }
 
 /// The grapheme at `index` (0-based), or the EMPTY text when `index` is out of bounds —
@@ -207,6 +214,66 @@ pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
         Some(grapheme) => alloc_text(grapheme.as_bytes()),
         None => QlSlice::empty(),
     }
+}
+
+/// Split the haystack on every non-overlapping occurrence of `sep`, as a `[]Text` —
+/// consecutive separators keep the pieces between them empty, and an empty haystack with
+/// a non-empty `sep` yields a single empty piece. An empty `sep` splits into individual
+/// graphemes instead (delegating to [`__text_graphemes`]). Backs `Text.split(sep)`.
+///
+/// The separator is matched on raw bytes, not re-derived from grapheme indices: a
+/// grapheme boundary is always a byte boundary in valid UTF-8, so a byte-level match can
+/// never land inside one, and the search stays linear in the haystack's length.
+///
+/// # Safety contract (upheld by the compiler)
+/// `hptr`/`sptr` are null or point to at least `hlen`/`slen` readable bytes.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> QlSlice {
+    let sep = text_str(sptr, slen);
+    if sep.is_empty() {
+        return __text_graphemes(hptr, hlen);
+    }
+    let hay = text_str(hptr, hlen);
+    let parts: Vec<&str> = hay.split(&*sep).collect();
+    text_array(&parts)
+}
+
+/// Replace every non-overlapping occurrence of `from` with `to`, left to right. Backs
+/// `Text.replaceAll(from, to)`, matched on raw bytes for the same reason [`__text_split`]
+/// is: a byte-level match cannot land inside a grapheme cluster.
+///
+/// An empty `from` is an ill-defined request: report it at `site` (the method call's own
+/// location) and exit the way a failing `assert` does. A literal empty `from` is instead
+/// rejected at compile time (`check_replace_literals`), so only a COMPUTED one reaches
+/// this check.
+///
+/// # Safety contract (upheld by the compiler)
+/// `hptr`/`fptr`/`tptr` are null or point to at least `hlen`/`flen`/`tlen` readable
+/// bytes; `site` is null or points to a valid [`QlSite`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_replace_all(
+    hptr: *const u8,
+    hlen: i64,
+    fptr: *const u8,
+    flen: i64,
+    tptr: *const u8,
+    tlen: i64,
+    site: *const QlSite,
+) -> QlSlice {
+    let from = text_str(fptr, flen);
+    if from.is_empty() {
+        fail_at(
+            site,
+            codes::REPLACE_ALL_EMPTY_FROM,
+            "replaceAll: `from` must not be empty",
+            ASSERTION_EXIT_CODE,
+        );
+    }
+    let hay = text_str(hptr, hlen);
+    let to = text_str(tptr, tlen);
+    alloc_text(hay.replace(&*from, &to).as_bytes())
 }
 
 #[cfg(test)]

@@ -80,8 +80,8 @@ another type. `split`/`graphemes` yield a plain `[]Text`, which composes with `.
 to a `Text` with `reduce` + `+`.
 
 The primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
-`slice`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison, and `+`. The composable
-methods — `split`, `trim`, `contains`, `replace`, `replaceAll`, `repeat` — are ordinary
+`slice`, `split`, `replaceAll`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison,
+and `+`. The composable methods — `trim`, `contains`, `replace`, `repeat` — are ordinary
 Quilon over those (`corelib/text.qn`), merged in by the compiler under its qualified
 names, binding nothing in the program's own scope, when a program uses one. That module
 is the compiler's own: member syntax is the way its methods are reached, and `<< core.text`

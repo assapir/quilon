@@ -587,6 +587,8 @@ pub fn is_text_method(name: &str) -> bool {
                 | "trimEnd"
                 | "indexOf"
                 | "slice"
+                | "split"
+                | "replaceAll"
                 | "at"
                 | "graphemes"
                 | "toUpper"
@@ -603,11 +605,9 @@ pub fn is_text_method(name: &str) -> bool {
 /// loader (a program mentioning one gets `core.text` merged in).
 pub fn qn_text_impl(name: &str) -> Option<&'static str> {
     Some(match name {
-        "split" => "core.text.split",
         "trim" => "core.text.trim",
         "contains" => "core.text.contains",
         "replace" => "core.text.replace",
-        "replaceAll" => "core.text.replaceAll",
         "repeat" => "core.text.repeat",
         _ => return None,
     })

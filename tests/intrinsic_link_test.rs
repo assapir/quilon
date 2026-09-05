@@ -104,8 +104,8 @@ const EVERY_INTRINSIC: &str = r#"
   assert("abc" < "abd", equals(true))
   assert("héllo".length, equals(5))
 
-  ~ The native Text primitives, one call each. (`split`/`trim`/`contains`/`replace`/
-  ~ `replaceAll`/`repeat` are Quilon — `core.text` — so they reach only these.)
+  ~ The native Text primitives, one call each. (`trim`/`contains`/`replace`/`repeat` are
+  ~ Quilon — `core.text` — so they reach only these.)
   assert("  pad  ".trimStart(), equals("pad  "))
   assert("  pad  ".trimEnd(), equals("  pad"))
   assert("up".toUpper(), equals("UP"))
@@ -114,6 +114,8 @@ const EVERY_INTRINSIC: &str = r#"
   assert("slice".slice(1, 3), equals("li"))
   assert("xy".graphemes().size, equals(2))
   assert("xy".at(0), isOk())
+  assert("a,b".split(",").size, equals(2))
+  assert("a-a".replaceAll("a", "b"), equals("b-b"))
   ~ The `contains` MATCHER (not the method) is what reaches __text_contains.
   assert("haystack", contains("stack"))
 

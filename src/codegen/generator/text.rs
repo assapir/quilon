@@ -10,13 +10,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver).
     ///
     /// The PRIMITIVE methods (segmentation, search, slice, the whitespace walks, case
-    /// mapping) lower to their `quilon-rt` intrinsics; the COMPOSABLE ones (those
-    /// [`crate::ast::qn_text_impl`] names) lower to a plain call of their `core.text`
-    /// implementation, with the receiver as the first argument — the module loader merged
-    /// those functions in exactly because this call appears. The plain-call machinery also
-    /// fills in the trailing `Site` the fail-loud implementations (`repeat`, `replace`,
-    /// `replaceAll`) declare, so a violated contract reports where the METHOD call is
-    /// written.
+    /// mapping, `split`, `replaceAll`) lower to their `quilon-rt` intrinsics; the
+    /// COMPOSABLE ones (those [`crate::ast::qn_text_impl`] names) lower to a plain call of
+    /// their `core.text` implementation, with the receiver as the first argument — the
+    /// module loader merged those functions in exactly because this call appears. The
+    /// plain-call machinery fills in the trailing `Site` a composable's fail-loud
+    /// implementation (`repeat`, `replace`) declares; `replaceAll`'s own fail-loud contract
+    /// (an empty `from`) is native, so its call site builds the `Site` itself, the same way
+    /// `at`/`slice`'s index conversion and array indexing's bounds check do.
     pub(super) fn generate_text_method(
         &mut self,
         method: &str,
@@ -104,6 +105,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 )
             }
             "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
+            "split" => {
+                let (sep_ptr, sep_len) = self.extract_text(&args[1])?;
+                call_struct(
+                    self,
+                    "__text_split",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        sep_ptr.into(),
+                        sep_len.into(),
+                    ],
+                )
+            }
+            "replaceAll" => {
+                let (from_ptr, from_len) = self.extract_text(&args[1])?;
+                let (to_ptr, to_len) = self.extract_text(&args[2])?;
+                let site = self.site_value(span)?;
+                call_struct(
+                    self,
+                    "__text_replace_all",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        from_ptr.into(),
+                        from_len.into(),
+                        to_ptr.into(),
+                        to_len.into(),
+                        site.into(),
+                    ],
+                )
+            }
             other => Err(format!("unknown text method `{other}`")),
         }
     }
