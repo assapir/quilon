@@ -129,11 +129,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to extract the case body's environment"))?;
         let run = self.get_intrinsic("__test_case_run")?;
         self.builder
-            .build_call(
-                run,
-                &[function_pointer.into(), environment.into()],
-                "",
-            )
+            .build_call(run, &[function_pointer.into(), environment.into()], "")
             .map_err(ctx("Failed to call the guarded case runner"))?;
         Ok(self.unit_value().into())
     }
