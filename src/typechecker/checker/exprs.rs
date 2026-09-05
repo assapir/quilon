@@ -38,36 +38,54 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let elem_type = self.infer_expression(target)?;
 
-        if let Expression::Index {
+        let Expression::Index {
             expression: base, ..
         } = target
-            && let Some(name) = self.immutable_write_witness(base)
-        {
+        else {
+            unreachable!("IndexAssign target is always an Index expression");
+        };
+
+        // The same two write gates a field write goes through (`FieldAssign` above) —
+        // an immutable-binding gate, then (once the value is inferred) the
+        // store-crosses-the-line gate — shared as `check_write_target_mutable` /
+        // `check_write_value_not_crossing`.
+        self.check_write_target_mutable(base, span)?;
+
+        let value_type = self.infer_expression(value)?;
+        self.check_type_compatibility(&elem_type, &value_type, span)?;
+        self.check_write_value_not_crossing(base, value, span)?;
+
+        // An element write is an effect; its value is the unit type `$`.
+        Ok(Type::Unit)
+    }
+
+    /// The immutable-binding gate a field write and an element write share: `base`'s
+    /// value must alias no `=` binding and no parameter — see `ImmutableFieldWrite`.
+    fn check_write_target_mutable(&self, base: &Expression, span: &Span) -> Result<(), TypeError> {
+        if let Some(name) = self.immutable_write_witness(base) {
             return Err(TypeError::ImmutableFieldWrite {
                 name,
                 span: span.clone(),
             });
         }
+        Ok(())
+    }
 
-        let value_type = self.infer_expression(value)?;
-        self.check_type_compatibility(&elem_type, &value_type, span)?;
-
-        // A store across the line is a compile error at the store — see the identical
-        // gate on `FieldAssign` above for the full reasoning (a mutable witness on the
-        // base, skipped when the write reaches a setter's own `it`, which is always
-        // mutable regardless of caller).
-        if let Expression::Index {
-            expression: base, ..
-        } = target
-        {
-            let base_aliasing = self.value_aliasing(base);
-            if base_aliasing.mutable_witness().is_some() && !base_aliasing.reaches_setter_receiver {
-                self.check_store_not_crossing(value, span)?;
-            }
+    /// The store-crosses-the-line gate a field write and an element write share: once
+    /// `base` is confirmed `:=`-reachable (a mutable witness, skipped when the write
+    /// reaches a setter's own `it`, always mutable regardless of caller), `value` may
+    /// not alias an `=` binding or a parameter — see `check_store_not_crossing`.
+    fn check_write_value_not_crossing(
+        &self,
+        base: &Expression,
+        value: &Expression,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let base_aliasing = self.value_aliasing(base);
+        if base_aliasing.mutable_witness().is_some() && !base_aliasing.reaches_setter_receiver {
+            self.check_store_not_crossing(value, span)?;
         }
-
-        // An element write is an effect; its value is the unit type `$`.
-        Ok(Type::Unit)
+        Ok(())
     }
 
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
@@ -358,17 +376,15 @@ impl TypeChecker {
                 // reached — a named binding, an element read, a call result. It is
                 // allowed only when that record aliases no `=` binding and no parameter
                 // (a setter's receiver, and anything reached only through `:=` bindings
-                // or freshly built, passes).
-                if let Expression::FieldAccess {
+                // or freshly built, passes) — the same gate an element write goes
+                // through (`check_index_assign`), shared as `check_write_target_mutable`.
+                let Expression::FieldAccess {
                     expression: base, ..
                 } = target.as_ref()
-                    && let Some(name) = self.immutable_write_witness(base)
-                {
-                    return Err(TypeError::ImmutableFieldWrite {
-                        name,
-                        span: span.clone(),
-                    });
-                }
+                else {
+                    unreachable!("FieldAssign target is always a FieldAccess expression");
+                };
+                self.check_write_target_mutable(base, span)?;
 
                 let value_type = self.infer_expression(value)?;
                 self.check_type_compatibility(&field_type, &value_type, span)?;
@@ -390,18 +406,9 @@ impl TypeChecker {
                 // `setter_stored_parameter_slots` classifies at the definition and
                 // `check_call` checks against the concrete argument at each call site —
                 // rejecting it here too, before any caller is known, would make storing a
-                // parameter into `it` an error unconditionally.
-                if let Expression::FieldAccess {
-                    expression: base, ..
-                } = target.as_ref()
-                {
-                    let base_aliasing = self.value_aliasing(base);
-                    if base_aliasing.mutable_witness().is_some()
-                        && !base_aliasing.reaches_setter_receiver
-                    {
-                        self.check_store_not_crossing(value, span)?;
-                    }
-                }
+                // parameter into `it` an error unconditionally. Shared with an element
+                // write as `check_write_value_not_crossing`.
+                self.check_write_value_not_crossing(base, value, span)?;
 
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
