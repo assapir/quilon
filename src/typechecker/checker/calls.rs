@@ -19,12 +19,7 @@ impl TypeChecker {
             || crate::ast::is_assertion(name)
     }
 
-    /// Whether `type_name`'s OVERLOADED `method_name` member matching `arg_types` is
-    /// STATIC — resolving the specific member the call's argument types pick out, the
-    /// same way `resolve_overload` would, off the member's own `Overload.is_static`
-    /// field, rather than asking about the name as a whole. An overloaded name's members
-    /// classify independently, so a static call to one member must not be rejected
-    /// because a same-named sibling reads `it`.
+    /// Whether the member of overload set `qualified_name` matching `arg_types` is STATIC.
     fn overloaded_static_member(&self, qualified_name: &str, arg_types: &[Type]) -> bool {
         self.overloads.get(qualified_name).is_some_and(|set| {
             set.iter().any(|overload| {

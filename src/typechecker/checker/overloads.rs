@@ -289,7 +289,6 @@ impl TypeChecker {
             .declared_return_type()
             .map(|t| self.resolve_type(t));
 
-        // A top-level function has no type-name-receiver call form, so never STATIC.
         self.finish_overload_registration(
             &declaration.name,
             &declaration.span,
@@ -410,8 +409,6 @@ impl TypeChecker {
                     span: method.span.clone(),
                 });
             }
-            // An operator member dispatches through `it <op> other`, never through a
-            // type-name receiver, so it is never STATIC.
             return self.finish_overload_registration(
                 &method.name,
                 &method.span,

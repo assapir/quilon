@@ -53,14 +53,9 @@ All notable changes to Quilon are documented here.
 ### Fixed
 
 - **An overloaded static method is callable on the type name.** Two or more same-named
-  methods that never read `it` (a static overload set — e.g. `P.make(1)` alongside
-  `P.make("ab")`, or two `make`s differing only in arity) used to be rejected with
-  `QN340: reads it, so P.make() needs a value of P`, even though neither member reads
-  `it`. The "reads `it`" classification was recorded per method NAME, but a static call
-  through an overload set never consulted it at all — it unconditionally demanded a
-  receiver value. The classification is now recorded per overload MEMBER, and a static
-  call resolves the specific member by argument type first, exactly as a value-receiver
-  call does, before asking whether that member needs `it`. Closes #371.
+  methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
+  rejected as needing a receiver value. A static call now resolves the specific member
+  by argument type first, the same way a value-receiver call does. Closes #371.
 
 - **A parameter's declaration span covers its name, not just its type annotation.** Go to
   definition on a parameter used to land on its `:: Type` annotation; it now lands on the

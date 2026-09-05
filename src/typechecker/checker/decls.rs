@@ -498,12 +498,7 @@ impl TypeChecker {
             // checked, so a self-call and a call to an earlier sibling member both
             // resolve. A single method under a name is unaffected.
             //
-            // `is_static` (never reads `it`) is classified per MEMBER here — a purely
-            // syntactic property of the body, known before it is even checked — so an
-            // overloaded static constructor's members (`P.make(1)` alongside
-            // `P.make("ab")`) each carry their own classification rather than one shared
-            // by the name; a static call then resolves the member by argument type
-            // exactly as a value-receiver call does before asking whether it needs `it`.
+            // `is_static` is classified per member here, before the body is checked.
             let is_overloaded = method_name_counts
                 .get(method.name.as_str())
                 .copied()
@@ -597,11 +592,7 @@ impl TypeChecker {
                     );
                 }
 
-                // A single (non-overloaded) method whose body never reads `it` needs no
-                // receiver VALUE at all — it may be called on the bare type name
-                // (`Point.origin()`), the natural spelling for a constructor. An
-                // overloaded name's members classify independently instead, on the
-                // `Overload.is_static` field set at registration time (see above).
+                // A non-overloaded static method is callable on the bare type name.
                 if !is_overloaded && !body_references_receiver(&method.body) {
                     self.static_methods
                         .insert((type_name.to_string(), method.name.clone()));
