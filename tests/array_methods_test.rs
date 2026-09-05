@@ -125,6 +125,16 @@ fn at_notok_out_of_bounds() {
     );
 }
 
+/// `at` returns `NotOk` for a NaN or infinite index — never the poison-converted
+/// element a naive `fptosi` of an unrepresentable float would produce.
+#[test]
+fn at_notok_for_nan_and_infinity() {
+    assert_exit(
+        "^ = () -> Num => <\n  nan = [10, 20, 30].at(0 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  positive = [10, 20, 30].at(1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  negative = [10, 20, 30].at(0 - 1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  nan * 100 + positive * 10 + negative\n>",
+        111,
+    );
+}
+
 // ---- []Text (oracle integration) ---------------------------------------
 
 /// `map`/`reduce` over `[]Text` works — proving the element type flows from the
