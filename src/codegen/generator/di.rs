@@ -379,17 +379,53 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// function body (so every `di_type` call that will ever run already has). A no-op when
     /// debug info is off: nothing is ever queued then. Emission failures are logged and
     /// swallowed — a `--debug` build should not fail over a debugger convenience.
+    ///
+    /// Every successfully emitted thunk is also added to `@llvm.used` afterward
+    /// ([`emit_used_marker`]): nothing in the compiled program ever calls one (only a
+    /// debugger, later, by symbol), so an optimizing/dead-stripping linker would otherwise
+    /// treat it as unreferenced and drop it — confirmed on macOS, where ld64's
+    /// `-dead_strip` (always passed, `--debug` build included) removed a thunk with no
+    /// `@llvm.used` entry protecting it. `@llvm.used` is the portable, linker-agnostic
+    /// fix: LLVM backends and every linker this project supports (`ld`/`lld`/ld64)
+    /// recognize it as "keep this global no matter what looks unreferenced."
     pub(super) fn drain_pending_render_thunks(&mut self) {
+        let mut emitted = Vec::new();
         loop {
             // Popped into an owned value in its own statement, so the `RefCell` borrow ends
             // before `emit_render_thunk` (which needs `&mut self`) runs.
             let next = self.di_pending_thunks.borrow_mut().pop();
             let Some(ty) = next else { break };
-            if let Err(e) = self.emit_render_thunk(&ty) {
-                let key = self.di_type_key(&ty);
-                eprintln!("warning: quilon --debug: failed to emit render thunk for {key}: {e}");
+            match self.emit_render_thunk(&ty) {
+                Ok(thunk) => emitted.push(thunk),
+                Err(e) => {
+                    let key = self.di_type_key(&ty);
+                    eprintln!(
+                        "warning: quilon --debug: failed to emit render thunk for {key}: {e}"
+                    );
+                }
             }
         }
+        self.emit_used_marker(&emitted);
+    }
+
+    /// Append `functions` to `@llvm.used` (`appending global [N x ptr] ..., section
+    /// "llvm.metadata"`) — the standard LLVM marker that keeps an otherwise-unreferenced
+    /// global alive through both compiler and linker dead-code elimination. A no-op for an
+    /// empty list (a non-`--debug` build, or one declaring no DWARF-typed variable).
+    fn emit_used_marker(&self, functions: &[inkwell::values::FunctionValue<'ctx>]) {
+        if functions.is_empty() {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let pointers: Vec<PointerValue<'ctx>> = functions
+            .iter()
+            .map(|f| f.as_global_value().as_pointer_value())
+            .collect();
+        let array_ty = ptr_ty.array_type(pointers.len() as u32);
+        let used = self.module.add_global(array_ty, None, "llvm.used");
+        used.set_linkage(inkwell::module::Linkage::Appending);
+        used.set_section(Some("llvm.metadata"));
+        used.set_initializer(&ptr_ty.const_array(&pointers));
     }
 
     /// Emit the thunk `drain_pending_render_thunks` gates: `const char*
@@ -400,10 +436,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// runtime helper (a debugger evaluates a C-ABI call and expects a C string back, not the
     /// `{ptr, i64}` ABI a Quilon caller uses). Exported (external linkage) under its
     /// `render_thunk_symbol` name so `nm`/a debugger can find it by symbol.
-    fn emit_render_thunk(&mut self, ty: &Type) -> Result<(), String> {
+    fn emit_render_thunk(
+        &mut self,
+        ty: &Type,
+    ) -> Result<inkwell::values::FunctionValue<'ctx>, String> {
         let symbol = crate::codegen::debug::render_thunk_symbol(&self.di_debug_name(ty));
-        if self.module.get_function(&symbol).is_some() {
-            return Ok(());
+        if let Some(existing) = self.module.get_function(&symbol) {
+            return Ok(existing);
         }
         let ptr = self.context.ptr_type(AddressSpace::default());
         let value_llvm = self.value_repr_type(ty)?;
@@ -447,6 +486,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(loc) = saved_loc {
             self.builder.set_current_debug_location(loc);
         }
-        Ok(())
+        Ok(thunk)
     }
 }
