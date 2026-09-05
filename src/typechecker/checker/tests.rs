@@ -281,6 +281,58 @@ fn test_duplicate_overload_signature_is_error() {
     assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
 }
 
+fn reserved(src: &str) -> bool {
+    matches!(check_ok(src), Err(TypeError::ReservedName { .. }))
+}
+
+#[test]
+fn test_a_reserved_name_is_refused_at_every_binding_kind() {
+    // A type declaration, a `=` binding, a `:=` binding, a function, a parameter, a lambda
+    // parameter, a pattern binding, and an overload member — a mix of the reserved words.
+    assert!(reserved("Map = A / B"));
+    assert!(reserved("^ = () -> Num => < it = 1  it >"));
+    assert!(reserved("^ = () -> Num => < not := 1  not >"));
+    assert!(reserved(
+        "contains = (t :: Text) -> Bool => < true >\n^ = () -> Num => < 0 >"
+    ));
+    assert!(reserved(
+        "f = (equals :: Num) -> Num => < equals >\n^ = () -> Num => < f(1) >"
+    ));
+    assert!(reserved(
+        "^ = () -> Num => < [1].map(expect => expect)[0] >"
+    ));
+    assert!(reserved(
+        "^ = () -> Num => < r :: Result = Ok(1)  r ? | Ok(isOk) => isOk | NotOk(_) => 0 >"
+    ));
+    assert!(reserved(
+        "assert = (n :: Num) -> Num => < n >\nassert = (t :: Text) -> Num => < 0 >\n\
+         ^ = () -> Num => < 0 >"
+    ));
+}
+
+#[test]
+fn test_a_member_may_carry_a_reserved_name() {
+    // A field or method is not a binding: `it`, `contains`, and `not` are all legal member
+    // names, and reached as members.
+    assert!(
+        check_ok(
+            "T = { it :: Num, contains = (n :: Num) -> Bool => < it.it == n >, not = () -> Num => < 0 - it.it > }\n\
+             ^ = () -> Num => <\n  t = T { it = 3 }\n  (t.contains(3) ? 1 : 0) + t.not()\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_assertions_and_matchers_still_work_as_calls() {
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  assert(1, equals(1))\n  assert(\"ab\", contains(\"a\"))\n  assert(1, not(equals(2)))\n  r :: Result = Ok(1)\n  assert(r, isOk())\n  0\n>"
+        )
+        .is_ok()
+    );
+}
+
 #[test]
 fn test_comparison_operator_overload_must_return_bool() {
     // A `==` member returning a non-Bool is rejected with a clear diagnostic.

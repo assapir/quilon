@@ -53,6 +53,12 @@ impl TypeChecker {
         // its own body); what it rules out is a call reaching forward to a definition
         // below, which codegen has no symbol for.
         for item in &program.items {
+            // A program may not bind a reserved name (`ast::reserved_for`); the corelib is
+            // where some of them are defined, so its declarations are exempt.
+            self.env.enforce_reserved_names = !matches!(
+                item,
+                Item::FunctionDeclaration(declaration) if declaration.from_corelib
+            );
             if let Item::FunctionDeclaration(declaration) = item
                 && self.overloaded_names.contains(&declaration.name)
                 && !declaration.is_inert_corelib_placeholder()
@@ -390,11 +396,9 @@ impl TypeChecker {
                     method.span.clone(),
                 )?;
             } else {
-                self.env.define_parameter(
-                    crate::ast::RECEIVER.to_string(),
+                self.env.define_receiver(
                     self_type.clone(),
                     self.current_declaration,
-                    0,
                     method.span.clone(),
                 )?;
             }

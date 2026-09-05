@@ -350,6 +350,13 @@ pub enum TypeError {
         type_name: String,
         span: Span,
     },
+    /// A binding under a name the language reserves (see `ast::reserved_for`), with what
+    /// the name is reserved for.
+    ReservedName {
+        name: String,
+        reserved_for: &'static str,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual
@@ -473,6 +480,10 @@ pub struct Symbol {
 #[derive(Debug, Clone)]
 pub struct Environment {
     scopes: Vec<HashMap<String, Symbol>>,
+    /// Whether binding a name the language reserves is refused (see `define_symbol`). Off
+    /// while a corelib declaration is checked: the corelib is where `it` (`core.test`) and
+    /// `contains` (`core.text`) are defined, so it binds them.
+    enforce_reserved_names: bool,
 }
 
 /// A method's signature and body: (parameters, return type, body expression). The return

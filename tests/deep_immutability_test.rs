@@ -598,30 +598,18 @@ fn a_setter_forwarding_an_immutable_argument_to_a_nested_setter_is_rejected() {
     );
 }
 
-// --- Route 14: `it` is an ordinary identifier — a `:=` local named `it` is not the receiver. ---
+// --- Route 14: `it` is reserved for the receiver — a `:=` local named `it` is refused. ---
 
 #[test]
-fn a_field_write_through_a_plain_local_named_it_is_still_checked() {
-    // `it` is not a keyword: a `:=` local outside any method that happens to be named
-    // `it` is an ordinary mutable binding, not a setter's receiver — the store check
-    // must not defer to it as though it were.
+fn a_local_named_it_is_refused_as_a_reserved_name() {
+    // A local outside any method can never be mistaken for a setter's receiver, because it
+    // cannot be named `it` at all (QN344).
     let error = type_error_message(
-        "T = { value :: Num }\nBox = { item :: T }\n^ = () -> Num => <\n  c = T { value = 30 }\n  it := Box { item = T { value = 1 } }\n  it.item := c\n  c.value\n>",
+        "T = { value :: Num }\n^ = () -> Num => <\n  it := T { value = 1 }\n  it.value\n>",
     );
     assert!(
-        error.contains("QN341") && error.contains("'c' is immutable"),
-        "expected the plain-local field write to name 'c' under QN341, got: {error}"
-    );
-}
-
-#[test]
-fn a_setter_call_through_a_plain_local_named_it_is_still_checked() {
-    let error = type_error_message(
-        "T = { value :: Num }\nBox = { item :: T, put := (k :: T) => < it.item := k > }\n^ = () -> Num => <\n  c = T { value = 30 }\n  it := Box { item = T { value = 1 } }\n  it.put(c)\n  c.value\n>",
-    );
-    assert!(
-        error.contains("QN341") && error.contains("'c' is immutable"),
-        "expected the plain-local setter call to name 'c' under QN341, got: {error}"
+        error.contains("QN344"),
+        "expected the local `it` to be refused as a reserved name, got: {error}"
     );
 }
 
