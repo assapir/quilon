@@ -55,7 +55,18 @@ impl TypeError {
             TypeError::MethodCalledAsFunction { .. } => Code::MethodCalledAsFunction,
             TypeError::NotRenderable { .. } => Code::NotRenderable,
             TypeError::StaticCallNeedsReceiverValue { .. } => Code::StaticCallNeedsReceiverValue,
+            TypeError::ReservedName { .. } => Code::ReservedName,
         }
+    }
+
+    /// The error for binding `name`, if the language reserves it (see `ast::reserved_for`)
+    /// — the one check every place a user-written name is bound runs.
+    pub(super) fn reserved_name(name: &str, span: &Span) -> Option<TypeError> {
+        crate::ast::reserved_for(name).map(|reserved_for| TypeError::ReservedName {
+            name: name.to_string(),
+            reserved_for,
+            span: span.clone(),
+        })
     }
 
     /// The error as a diagnostic: its code, message and span, plus the labels and help
@@ -161,6 +172,9 @@ impl TypeError {
             TypeError::StaticCallNeedsReceiverValue { method, .. } => {
                 diagnostic.help(format!("call it on a value: `x.{method}()`"))
             }
+            TypeError::ReservedName { name, .. } => diagnostic.help(format!(
+                "pick another name; a record field or method may still be called `{name}`"
+            )),
             _ => diagnostic,
         }
     }
@@ -209,7 +223,8 @@ impl TypeError {
             | TypeError::UnknownMember { span, .. }
             | TypeError::MethodCalledAsFunction { span, .. }
             | TypeError::NotRenderable { span, .. }
-            | TypeError::StaticCallNeedsReceiverValue { span, .. } => span,
+            | TypeError::StaticCallNeedsReceiverValue { span, .. }
+            | TypeError::ReservedName { span, .. } => span,
         }
     }
 }
@@ -654,6 +669,11 @@ impl std::fmt::Display for TypeError {
                     "`{method}` reads `it`, so `{type_name}.{method}()` needs a value of \
                      {type_name} — there is none"
                 )
+            }
+            TypeError::ReservedName {
+                name, reserved_for, ..
+            } => {
+                write!(f, "`{name}` is reserved for {reserved_for}")
             }
         }
     }

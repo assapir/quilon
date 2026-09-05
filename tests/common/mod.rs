@@ -12,6 +12,7 @@
 #![allow(dead_code)]
 
 use quilon::deferral::{self, DeferInfo};
+use quilon::diagnostic::codes::Code;
 use quilon::jit;
 use quilon::lexer::Lexer;
 use quilon::parser;
@@ -97,6 +98,16 @@ pub fn assert_type_error(src: &str) {
         TypeChecker::new().check_program(&program).is_err(),
         "expected a type error for source:\n{src}"
     );
+}
+
+/// Assert the type checker rejects `src` with exactly `code`.
+pub fn assert_type_error_code(src: &str, code: Code) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    let error = TypeChecker::new()
+        .check_program(&program)
+        .expect_err(&format!("expected a type error for source:\n{src}"));
+    assert_eq!(error.code(), code, "wrong code for source:\n{src}\n{error}");
 }
 
 /// Assert `src` is REJECTED by the parser (a syntactic error, before type checking).

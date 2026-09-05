@@ -133,6 +133,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN339 | no `^` entry point |
 | QN340 | static call on a method that reads its receiver |
 | QN341 | store into a mutable container aliasing an immutable value |
+| QN344 | reserved name |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -578,9 +579,7 @@ body shadows the receiver; rename it where the write targets the lambda's own va
 
 ### QN310 — duplicate definition
 
-A name is defined twice in one scope, and the two definitions form no overload set. A
-built-in type name (`Num`, `Bool`, `Text`, `Result`, `Site`) is already defined in every
-scope, so declaring a type under one of those names collides the same way.
+A name is defined twice in one scope, and the two definitions form no overload set.
 
 ```quilon ignore
 x = 1
@@ -955,6 +954,22 @@ Box = { item :: Counter }
 ```
 
 Store a fresh value: `b.item := Counter { value = c.value }`.
+
+### QN344 — reserved name
+
+A binding — a type, a `=`/`:=` binding, a function, a parameter, a lambda parameter, or a
+pattern binding — under a name the language reserves. The reserved names are the built-in
+types `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set`; the constructors `Ok` and
+`NotOk`; the receiver `it`; the assertions `assert` and `expect`; and the matchers
+`equals`, `contains`, `not`, `isOk`, `isNotOk`. The message names what the word is reserved
+for. A member — a record field or method — is not a binding and may carry any of these
+names.
+
+```quilon ignore
+not = (b :: Bool) -> Bool => < !b >
+```
+
+Pick another name.
 
 ## Code generation and build
 

@@ -8,23 +8,22 @@ use super::*;
 
 impl TypeChecker {
     pub(super) fn add_builtins(&mut self) {
-        use crate::ast::{SumVariant, Type};
-        use crate::lexer::Span;
+        use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant, Type};
 
         // Unified Result{T} type with Ok and NotOk constructors
         // Ok(value) for success, NotOk(error) for failure
         let result_type = Type::Sum {
-            name: "Result".to_string(),
+            name: RESULT_TYPE_NAME.to_string(),
             variants: vec![
                 SumVariant {
-                    name: "Ok".to_string(),
+                    name: OK.to_string(),
                     fields: vec![Type::Generic {
                         name: "T".to_string(),
                         arguments: vec![],
                     }],
                 },
                 SumVariant {
-                    name: "NotOk".to_string(),
+                    name: NOT_OK.to_string(),
                     fields: vec![Type::Generic {
                         name: "E".to_string(),
                         arguments: vec![],
@@ -33,41 +32,20 @@ impl TypeChecker {
             ],
         };
 
-        // Register Result type in both env and sum_types registry
+        // Register Result type in both env and sum_types registry. Its name — like every
+        // built-in type's — is reserved (`ast::reserved_for`), so a program cannot rebind
+        // it; the scalars need no env entry for that.
         self.sum_types
-            .insert("Result".to_string(), result_type.clone());
-        let _ = self.env.define(
-            "Result".to_string(),
-            result_type.clone(),
-            false,
-            Span::in_root(0, 0),
-        );
-
-        // The built-in scalar types are reserved names, not merely a default meaning for
-        // an unbound one: registering them in `env` here makes `Num = Foo / Bar` collide
-        // with an existing binding the same way `Result = Foo / Bar` already does, instead
-        // of silently shadowing the type every annotation `:: Num` still resolves to.
-        for (name, builtin) in [
-            ("Num", Type::Num),
-            ("Bool", Type::Bool),
-            ("Text", Type::Text),
-        ] {
-            let _ = self
-                .env
-                .define(name.to_string(), builtin, false, Span::in_root(0, 0));
-        }
+            .insert(RESULT_TYPE_NAME.to_string(), result_type.clone());
+        self.env.define_builtin(RESULT_TYPE_NAME, result_type);
 
         // `Site` — the built-in call-site record (`file`/`line`/`column`/`excerpt`/`width`).
         // A named record type like any other, registered here rather than declared in a
         // corelib module so `:: Site` is nameable in any signature with no import; what
         // makes it special is only that a call FILLS IN a trailing `Site` argument with its
         // own location (see `ast::is_site_type`).
-        let _ = self.env.define(
-            crate::ast::SITE_TYPE_NAME.to_string(),
-            crate::ast::site_type(),
-            false,
-            Span::in_root(0, 0),
-        );
+        self.env
+            .define_builtin(crate::ast::SITE_TYPE_NAME, crate::ast::site_type());
     }
 
     /// Type-check a constructor application `variant(args...)` against the registered
@@ -255,16 +233,16 @@ impl TypeChecker {
 /// for the "absent" case). `find`/`at` return this so a downstream match binds the
 /// element at its real type and exhaustiveness/codegen size it correctly.
 pub(super) fn result_of(elem: Type) -> Type {
-    use crate::ast::SumVariant;
+    use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
     Type::Sum {
-        name: "Result".to_string(),
+        name: RESULT_TYPE_NAME.to_string(),
         variants: vec![
             SumVariant {
-                name: "Ok".to_string(),
+                name: OK.to_string(),
                 fields: vec![elem],
             },
             SumVariant {
-                name: "NotOk".to_string(),
+                name: NOT_OK.to_string(),
                 fields: vec![Type::Unit],
             },
         ],

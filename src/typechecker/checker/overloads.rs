@@ -258,6 +258,13 @@ impl TypeChecker {
         &mut self,
         declaration: &FunctionDeclaration,
     ) -> Result<(), TypeError> {
+        // An overload member is bound on its set rather than in `env`, so the reserved-name
+        // check `env` runs for every other binding runs here, under the same switch.
+        if self.env.enforce_reserved_names
+            && let Some(error) = TypeError::reserved_name(&declaration.name, &declaration.span)
+        {
+            return Err(error);
+        }
         let mut parameters = Vec::with_capacity(declaration.parameters.len());
         for (i, p) in declaration.parameters.iter().enumerate() {
             match declaration.parameter_type(i) {

@@ -10,7 +10,8 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 
 mod common;
-use common::{assert_exit, assert_exit_linked};
+use common::{assert_exit, assert_exit_linked, assert_type_error_code};
+use quilon::diagnostic::codes::Code;
 
 /// The LLVM IR for `src`, which is where a pruned function is visibly absent.
 fn emit(src: &str) -> String {
@@ -156,30 +157,30 @@ fn an_overload_member_reached_only_by_dispatch_survives() {
 
 #[test]
 fn a_methods_receiver_is_not_a_mention_of_a_top_level_name() {
-    // Reading the receiver as a top-level mention keeps the harness's `it` function, and the
-    // harness's whole chain behind it, in any program that declares a type with a method.
-    let ir = emit(concat!(
-        "it = (name :: Text) -> Num => < name.size >\n",
+    // Reading the receiver as a mention of a same-named function (matched by last segment)
+    // keeps the harness's `it`, and the harness's whole chain behind it, in any program
+    // that imports `core.test` and declares a type with a method.
+    let ir = emit_linked(concat!(
+        "<< core.test\n",
         "Box = { size :: Num, doubled = => < it.size * 2 >}\n",
         "^ = () -> Num => < Box { size = 21 }.doubled() >"
     ));
     assert!(
-        !defines(&ir, "it"),
-        "the receiver in `it.size` must not keep the top-level `it`:\n{ir}"
+        !defines(&ir, "core.test.it"),
+        "the receiver in `it.size` must not keep the harness's `it`:\n{ir}"
     );
 }
 
 #[test]
-fn a_call_of_a_top_level_function_named_it_still_reaches_it() {
-    // The other side of the narrowing: callee position is where a bare `it` CAN name a
-    // top-level function, and dropping it there would break the harness itself.
-    assert_exit(
+fn a_top_level_function_named_it_is_refused() {
+    // `it` is reserved for the receiver: the harness's own `it` is the corelib's to define,
+    // and a program reaches it only through its module (`test.it`).
+    assert_type_error_code(
         concat!(
             "it = (name :: Text) -> Num => < name.size >\n",
-            "Box = { size :: Num, doubled = => < it.size * 2 >}\n",
-            "^ = () -> Num => < Box { size = 20 }.doubled() + it(\"ab\") >"
+            "^ = () -> Num => < it(\"ab\") >"
         ),
-        42,
+        Code::ReservedName,
     );
 }
 
