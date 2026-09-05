@@ -28,6 +28,19 @@ All notable changes to Quilon are documented here.
   instead. See `docs/tooling/language-server.md`.
 - `docs/tooling/errors.md` is verified by the test suite: every code's example raises that
   code, and the summary table matches the registry.
+- **A `--debug` build's values now render the way `` `value` ``/`io.print` do, in a
+  debugger.** Every DWARF-typed local/parameter gets an exported `__qn_render$<type>`
+  thunk that renders it through the SAME `` ` `` path interpolation uses; the VS Code
+  extension's `editors/vscode/formatters/quilon.py` (loaded into CodeLLDB) calls it, and
+  works the same way in a plain `lldb` session. A Map/Set now also carries a NAMED DWARF
+  type (`Map[Text, Num]`, `Set[Num]`) and renders its entries (`[|ada => 36|]`, `[|1, 2|]`)
+  instead of showing only its type or an opaque pointer. See
+  `docs/tooling/compiling.md#value-display` and `docs/types/text.md`.
+- **A Map/Set renders its contents, not just its type.** `` `map` ``/`io.print(map)` now
+  produce `[|k => v, ...|]` (or `[|=>|]` empty) and a Set `[|e, ...|]` (or `[||]` empty),
+  each key/value/element through its own `` ` `` — previously both showed only their type
+  label (e.g. `[|Text => Num|]`), with no way to see what they held. See
+  `docs/types/text.md`.
 - **Static methods: a method whose body never reads `it` may be called on the bare TYPE
   NAME** (`Point.origin()`), not just on a value — the natural spelling for a constructor
   (`Request.get(url)`). This settles #259's design call: a method called on a type name

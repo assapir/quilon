@@ -141,6 +141,8 @@ through the default.
 | record | the **type name** (unless overridden) | `Point` |
 | sum type | the **variant/constructor name** (unless overridden) | `Green`, `Ok` |
 | array | length **≤ 10** → full `[a, b, c]` (each element via its own `` ` ``); length **> 10** → truncated `[first <- last]` | `[1, 2, 3]`, `[1 <- 100]` |
+| [`Map`](../collections/map.md) | `[|=>|]` empty; length **≤ 10** → full `[|k => v, ...|]` (each key/value via its own `` ` ``); length **> 10** → truncated `[|first <- last|]`; entry order is unspecified | `[|ada => 36|]` |
+| [`Set`](../collections/set.md) | `[||]` empty; length **≤ 10** → full `[|e, ...|]` (each element via its own `` ` ``); length **> 10** → truncated `[|first <- last|]`; element order is unspecified | `[|1, 2|]` |
 
 Every type renders except a **function** value; handing one to `print` is a compile error
 naming the missing member. Rendering takes no format specifiers. (See

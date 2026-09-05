@@ -209,6 +209,38 @@ fn renders_array_full_and_truncated() {
 }
 
 #[test]
+fn renders_map_and_set_contents() {
+    // A single-entry Map/Set renders deterministically (`[|k => v|]`/`[|e|]`); iteration
+    // order over more than one entry is unspecified, so those cases only check membership
+    // and separators, not an exact order.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"ada\" => 36|]\n  \"`m`\" == \"[|ada => 36|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|=>|]\n  \"`m`\" == \"[|=>|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1|]\n  \"`s`\" == \"[|1|]\" ? 1 : 0\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [||]\n  \"`s`\" == \"[||]\" ? 1 : 0\n>",
+        1,
+    );
+    // Two entries: order-independent — both keys/elements present, comma-separated.
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Num => Num|] = [|1 => 10, 2 => 20|]\n  t :: Text = \"`m`\"\n  (t.contains(\"1 => 10\") && t.contains(\"2 => 20\") && t.contains(\", \") ? 1 : 0)\n>",
+        1,
+    );
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|1, 2|]\n  t :: Text = \"`s`\"\n  (t.contains(\"1\") && t.contains(\"2\") && t.contains(\", \") ? 1 : 0)\n>",
+        1,
+    );
+}
+
+#[test]
 fn nested_interpolation_in_a_hole() {
     // A hole may contain a string literal with its OWN interpolation; offsets/bounds must
     // handle the nesting. `"inner `1`"` renders to "inner 1", so the outer is "outer inner 1".
