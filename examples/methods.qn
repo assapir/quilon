@@ -22,11 +22,14 @@ bump = (by :: Num) -> Num => < by * 100 >
 bump = (counter :: Counter, by :: Num) -> Num => < counter.value * by >
 
 ~ A method whose body never reads `it` — STATIC — may be called on the bare TYPE NAME
-~ instead of on a value: the natural spelling for a constructor.
+~ instead of on a value: the natural spelling for a constructor. A static method may be
+~ overloaded: `at` dispatches on the type name by the argument count it is called with,
+~ the same way a value-receiver overload dispatches on argument type.
 Point = {
   x :: Num,
   y :: Num,
   origin = () -> Point => < Point { x = 0, y = 0 } >,
+  at = (x :: Num) -> Point => < Point { x = x, y = x } >,
   at = (x :: Num, y :: Num) -> Point => < Point { x = x, y = y } >
 }
 
@@ -42,6 +45,8 @@ Point = {
 
   origin :: Point = Point.origin()
   assert(origin.x, equals(0))
+  diagonal :: Point = Point.at(3)
+  assert(diagonal.x + diagonal.y, equals(6))
   p :: Point = Point.at(3, 4)
   assert(p.x + p.y, equals(7))
 >

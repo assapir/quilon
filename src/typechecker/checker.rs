@@ -544,6 +544,13 @@ pub struct Overload {
     /// `None` (assumed to alias every argument) and is classified when its body is
     /// checked.
     pub(crate) result_aliasing: Option<ResultAliasing>,
+    /// Whether this member is a STATIC method (its body never reads the receiver `it`),
+    /// so it may be called on the bare TYPE NAME (`Point.origin()`) as well as on a
+    /// value. Only a type's own method member can be one — a top-level function or an
+    /// operator member has no type-name-receiver call form, so this is always `false`
+    /// for those. Unlike `result_aliasing`, this is known before the body is checked (a
+    /// purely syntactic property of the body), so it is set at registration time.
+    pub(crate) is_static: bool,
 }
 
 /// Whether a declaration sits at the top level of a module or inside some body (a
@@ -564,9 +571,12 @@ pub struct TypeChecker {
     // Methods declared with `:=` ("setters"): they may mutate their receiver in place,
     // so calling one requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
-    // Methods whose body never reads the receiver `it` — STATIC-eligible, so they may be
-    // called on the bare TYPE NAME (`Point.origin()`) as well as on a value. A method
-    // absent here needs an actual receiver value; calling it on the type name is
+    // NON-overloaded methods whose body never reads the receiver `it` — STATIC-eligible,
+    // so they may be called on the bare TYPE NAME (`Point.origin()`) as well as on a
+    // value. A single method under a name has only one signature, so the name alone is
+    // the key; an OVERLOADED name's members classify independently instead, on the
+    // `Overload.is_static` field of the member itself (see `Overload`). A method absent
+    // here needs an actual receiver value; calling it on the type name is
     // `StaticCallNeedsReceiverValue`.
     static_methods: std::collections::HashSet<(String, String)>,
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,

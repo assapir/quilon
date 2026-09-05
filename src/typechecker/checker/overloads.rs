@@ -26,6 +26,7 @@ impl TypeChecker {
                     parameters: vec![Type::Num, Type::Num],
                     ret: Some(Type::Num),
                     result_aliasing: Some(ResultAliasing::default()),
+                    is_static: false,
                 },
             );
         }
@@ -36,6 +37,7 @@ impl TypeChecker {
                 parameters: vec![Type::Text, Type::Text],
                 ret: Some(Type::Text),
                 result_aliasing: Some(ResultAliasing::default()),
+                is_static: false,
             },
         );
 
@@ -57,6 +59,7 @@ impl TypeChecker {
                         parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
                         result_aliasing: Some(ResultAliasing::default()),
+                        is_static: false,
                     },
                 );
             }
@@ -69,6 +72,7 @@ impl TypeChecker {
                         parameters: vec![ty.clone(), ty],
                         ret: Some(Type::Bool),
                         result_aliasing: Some(ResultAliasing::default()),
+                        is_static: false,
                     },
                 );
             }
@@ -82,6 +86,7 @@ impl TypeChecker {
                     parameters: vec![Type::Bool, Type::Bool],
                     ret: Some(Type::Bool),
                     result_aliasing: Some(ResultAliasing::default()),
+                    is_static: false,
                 },
             );
         }
@@ -99,6 +104,7 @@ impl TypeChecker {
                     parameters: member.parameters.to_vec(),
                     ret: Some(member.ret.clone()),
                     result_aliasing: Some(ResultAliasing::default()),
+                    is_static: false,
                 },
             );
         }
@@ -283,7 +289,14 @@ impl TypeChecker {
             .declared_return_type()
             .map(|t| self.resolve_type(t));
 
-        self.finish_overload_registration(&declaration.name, &declaration.span, parameters, ret)
+        // A top-level function has no type-name-receiver call form, so never STATIC.
+        self.finish_overload_registration(
+            &declaration.name,
+            &declaration.span,
+            parameters,
+            ret,
+            false,
+        )
     }
 
     /// The shared tail of registering one overload member (a top-level function or a type's
@@ -301,6 +314,7 @@ impl TypeChecker {
         span: &Span,
         parameters: Vec<Type>,
         ret: Option<Type>,
+        is_static: bool,
     ) -> Result<(), TypeError> {
         if is_comparison_operator(name)
             && let Some(ret) = &ret
@@ -338,9 +352,10 @@ impl TypeChecker {
             Overload {
                 parameters,
                 ret,
-                // A user member's classification is filled in when its body is checked;
-                // until then a call to it is assumed to alias every argument.
+                // A user member's aliasing classification is filled in when its body is
+                // checked; until then a call to it is assumed to alias every argument.
                 result_aliasing: None,
+                is_static,
             },
         );
         Ok(())
@@ -395,11 +410,14 @@ impl TypeChecker {
                     span: method.span.clone(),
                 });
             }
+            // An operator member dispatches through `it <op> other`, never through a
+            // type-name receiver, so it is never STATIC.
             return self.finish_overload_registration(
                 &method.name,
                 &method.span,
                 vec![self_type.clone()],
                 ret,
+                false,
             );
         }
 
@@ -425,7 +443,7 @@ impl TypeChecker {
         let parameters = vec![self_type.clone(), parameter_type];
         let ret = method.return_type.as_ref().map(|t| self.resolve_type(t));
 
-        self.finish_overload_registration(&method.name, &method.span, parameters, ret)
+        self.finish_overload_registration(&method.name, &method.span, parameters, ret, false)
     }
 
     /// After every item is checked, an overload member that never got its return type

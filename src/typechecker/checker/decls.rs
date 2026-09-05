@@ -497,17 +497,25 @@ impl TypeChecker {
             // collide with an unrelated top-level overload set, and before the body is
             // checked, so a self-call and a call to an earlier sibling member both
             // resolve. A single method under a name is unaffected.
-            if method_name_counts
+            //
+            // `is_static` (never reads `it`) is classified per MEMBER here — a purely
+            // syntactic property of the body, known before it is even checked — so an
+            // overloaded static constructor's members (`P.make(1)` alongside
+            // `P.make("ab")`) each carry their own classification rather than one shared
+            // by the name; a static call then resolves the member by argument type
+            // exactly as a value-receiver call does before asking whether it needs `it`.
+            let is_overloaded = method_name_counts
                 .get(method.name.as_str())
                 .copied()
                 .unwrap_or(0)
-                > 1
-            {
+                > 1;
+            if is_overloaded {
                 self.finish_overload_registration(
                     &format!("{type_name}.{}", method.name),
                     &method.span,
                     resolved_parameter_types.clone(),
                     annotated_return_type.clone(),
+                    !body_references_receiver(&method.body),
                 )?;
             }
 
@@ -581,22 +589,23 @@ impl TypeChecker {
                     &operator_parameters,
                     result_aliasing,
                 );
-            } else if result_aliasing != ResultAliasing::default() {
-                self.method_result_aliasing.insert(
-                    (type_name.to_string(), method.name.clone()),
-                    result_aliasing,
-                );
-            }
+            } else {
+                if result_aliasing != ResultAliasing::default() {
+                    self.method_result_aliasing.insert(
+                        (type_name.to_string(), method.name.clone()),
+                        result_aliasing,
+                    );
+                }
 
-            // A method whose body never reads `it` needs no receiver VALUE at all — it may
-            // be called on the bare type name (`Point.origin()`), the natural spelling for
-            // a constructor. Operator members are excluded: they dispatch through the
-            // overload set on `it` <op> `other`, never through a type-name receiver.
-            if !crate::ast::is_operator_symbol(&method.name)
-                && !body_references_receiver(&method.body)
-            {
-                self.static_methods
-                    .insert((type_name.to_string(), method.name.clone()));
+                // A single (non-overloaded) method whose body never reads `it` needs no
+                // receiver VALUE at all — it may be called on the bare type name
+                // (`Point.origin()`), the natural spelling for a constructor. An
+                // overloaded name's members classify independently instead, on the
+                // `Overload.is_static` field set at registration time (see above).
+                if !is_overloaded && !body_references_receiver(&method.body) {
+                    self.static_methods
+                        .insert((type_name.to_string(), method.name.clone()));
+                }
             }
 
             self.methods.insert(

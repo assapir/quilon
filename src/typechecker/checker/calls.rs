@@ -19,6 +19,21 @@ impl TypeChecker {
             || crate::ast::is_assertion(name)
     }
 
+    /// Whether `type_name`'s OVERLOADED `method_name` member matching `arg_types` is
+    /// STATIC — resolving the specific member the call's argument types pick out, the
+    /// same way `resolve_overload` would, off the member's own `Overload.is_static`
+    /// field, rather than asking about the name as a whole. An overloaded name's members
+    /// classify independently, so a static call to one member must not be rejected
+    /// because a same-named sibling reads `it`.
+    fn overloaded_static_member(&self, qualified_name: &str, arg_types: &[Type]) -> bool {
+        self.overloads.get(qualified_name).is_some_and(|set| {
+            set.iter().any(|overload| {
+                overload.is_static
+                    && crate::ast::parameters_accept(&overload.parameters, arg_types, types_match)
+            })
+        })
+    }
+
     /// Whether `ty` answers `name` through the `.` form — a method the record or sum
     /// declares, or a built-in reserved on `Text`/an array/a `Map`/a `Set`.
     fn type_has_member(&self, ty: &Type, name: &str) -> bool {
@@ -290,14 +305,26 @@ impl TypeChecker {
                 // uses, ahead of the single-signature lookup below.
                 let qualified_name = format!("{type_name}.{name}");
                 if self.overloads.contains_key(&qualified_name) {
+                    let call_args = &arguments[1..];
+                    let call_arg_types: Vec<Type> = call_args
+                        .iter()
+                        .map(|arg| self.infer_expression(arg))
+                        .collect::<Result<_, _>>()?;
+                    let call_arg_spans: Vec<Span> =
+                        call_args.iter().map(|arg| arg.span().clone()).collect();
+
                     // An overload set dispatches on a receiver VALUE — a bare type-name
-                    // receiver (`T.f(1)`) has none — and a `:=` member among its members
-                    // holds the whole set to a setter's receiver rule (see below).
+                    // receiver (`T.f(1)`) has none, legal only when the member the call's
+                    // argument types resolve to is itself STATIC (never reads `it`) — a
+                    // same-named sibling reading `it` does not disqualify this one. A `:=`
+                    // member among its members holds the whole set to a setter's receiver
+                    // rule (see below).
                     if matches!(
                         &arguments[0],
                         Expression::Identifier { name: receiver_name, .. }
                             if receiver_name == type_name
-                    ) {
+                    ) && !self.overloaded_static_member(&qualified_name, &call_arg_types)
+                    {
                         return Err(TypeError::StaticCallNeedsReceiverValue {
                             method: name.clone(),
                             type_name: type_name.clone(),
@@ -315,13 +342,6 @@ impl TypeChecker {
                             span: span.clone(),
                         });
                     }
-                    let call_args = &arguments[1..];
-                    let call_arg_types: Vec<Type> = call_args
-                        .iter()
-                        .map(|arg| self.infer_expression(arg))
-                        .collect::<Result<_, _>>()?;
-                    let call_arg_spans: Vec<Span> =
-                        call_args.iter().map(|arg| arg.span().clone()).collect();
                     return self.resolve_overload(
                         &qualified_name,
                         &call_arg_types,

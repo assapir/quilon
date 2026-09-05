@@ -418,13 +418,40 @@ fn test_method_overload_set_resolves_by_type() {
 }
 
 #[test]
-fn test_method_overload_set_needs_a_receiver_value() {
-    // An overload set dispatches on a receiver value; the bare type name has none, even
-    // though neither member reads `it`.
+fn test_static_overload_set_resolves_by_type() {
+    // Two `make` methods differing only in their parameter's type, neither reading
+    // `it` — a static overload set dispatches on the bare type name exactly as a
+    // value-receiver overload dispatches on a value, resolving each call to its own
+    // member by argument type.
+    assert!(
+        check_ok(
+            "T = { a :: Num, make = (n :: Num) -> Num => < n >, make = (s :: Text) -> Num => < s.size > }\n\
+             ^ = () -> Num => < T.make(1) + T.make(\"xy\") >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_static_overload_set_resolves_by_arity() {
+    // Two `make` methods differing only in arity, neither reading `it`.
+    assert!(
+        check_ok(
+            "T = { a :: Num, make = (n :: Num) -> Num => < n >, make = (n :: Num, m :: Num) -> Num => < n + m > }\n\
+             ^ = () -> Num => < T.make(1) + T.make(1, 2) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_overload_member_that_reads_it_still_needs_a_receiver_value() {
+    // An overload set still requires a receiver VALUE for the specific member that
+    // reads `it` — a same-named static sibling does not exempt it.
     assert!(matches!(
         check_ok(
-            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < s.size > }\n\
-             ^ = () -> Num => < T.f(1) >"
+            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < it.a > }\n\
+             ^ = () -> Num => < T.f(\"xy\") >"
         ),
         Err(TypeError::StaticCallNeedsReceiverValue { .. })
     ));
