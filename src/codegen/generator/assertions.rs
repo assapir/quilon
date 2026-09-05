@@ -101,6 +101,43 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
+    /// Lower `__test_run_case(body)` (see [`crate::ast::RUN_TEST_CASE`]): split `body`'s
+    /// `{ ptr fn, ptr env }` value apart and hand both to `__test_case_run`, which calls
+    /// `fn(env)` with a bail-out point recorded first — a failing `expect` ends the case by
+    /// jumping straight back to it (`quilon-rt/src/case_guard.c`), skipping whatever of the
+    /// body is left however deeply the failure is nested. `runCase` calls this instead of
+    /// calling `body` directly, which is what a flag checked between statements cannot do
+    /// once the body has called into a lambda of its own (`.each`, and the like).
+    pub(super) fn generate_run_case(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let [body] = arguments else {
+            return Err(format!(
+                "__test_run_case takes exactly the case body, got {} argument(s)",
+                arguments.len()
+            ));
+        };
+        let closure = self.generate_expression(body)?.into_struct_value();
+        let function_pointer = self
+            .builder
+            .build_extract_value(closure, 0, "case_body_fn")
+            .map_err(ctx("Failed to extract the case body's function pointer"))?;
+        let environment = self
+            .builder
+            .build_extract_value(closure, 1, "case_body_env")
+            .map_err(ctx("Failed to extract the case body's environment"))?;
+        let run = self.get_intrinsic("__test_case_run")?;
+        self.builder
+            .build_call(
+                run,
+                &[function_pointer.into(), environment.into()],
+                "",
+            )
+            .map_err(ctx("Failed to call the guarded case runner"))?;
+        Ok(self.unit_value().into())
+    }
+
     /// Lower one matcher against the already-evaluated value under test: yields the `i1`
     /// condition that HOLDS when the assertion passes, and appends to `wanted` the
     /// description of what it wanted (rendered only if the assertion fails).

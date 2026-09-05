@@ -147,6 +147,37 @@ impl TypeChecker {
         Ok(signature)
     }
 
+    /// Check `__test_run_case(body)` (see [`crate::ast::RUN_TEST_CASE`]): `body` must be the
+    /// zero-argument, `$`-returning closure a case's body always is — no ordinary builtin
+    /// signature can express that, so this is checked here rather than through
+    /// [`crate::ast::BUILTIN_OVERLOADS`].
+    pub(super) fn check_run_test_case(
+        &mut self,
+        arguments: &[Expression],
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let [body] = arguments else {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: 1,
+                got: arguments.len(),
+                span: span.clone(),
+            });
+        };
+        let body_type = self.infer_expression(body)?;
+        let expected = Type::Function {
+            parameters: Vec::new(),
+            return_type: Box::new(Type::Unit),
+        };
+        if body_type != expected {
+            return Err(TypeError::TypeMismatch {
+                expected: Box::new(expected),
+                got: Box::new(body_type),
+                span: span.clone(),
+            });
+        }
+        Ok(Type::Unit)
+    }
+
     /// The two sides of a comparison must share one runtime REPRESENTATION. A `Generic` — a
     /// sum payload whose type is not yet concrete — is represented as a `Num`, while
     /// `types_compatible` treats it as a wildcard that pairs with anything; without this,

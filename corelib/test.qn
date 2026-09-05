@@ -116,16 +116,18 @@ runSuite = (name :: Text, body :: () -> $) -> $ => <
   __test_suite_selected(name) == 1 ? runSuite(name, body) : $
 >
 
-~ A case's run: run its body, then close it.
+~ A case's run: run its body, then close it. `__test_run_case` ends `body` at its first
+~ failing `expect`, however deeply that failure is nested — a lambda passed to `.each`
+~ included — rather than letting the rest of it run.
 runCase = (name :: Text, body :: () -> $) -> $ => <
-  body()
+  __test_run_case(body)
   finishCase(name)
   $
 >
 
-~ One case, reported once `body` has run. A failing `expect` inside `body` marks the case
-~ and skips what is left of it, so the report says which way the case went and the run
-~ continues with the next one. A case the run did not select is passed over.
+~ One case, reported once `body` has run. A failing `expect` inside `body` ends the case
+~ right there — nothing after it runs — so the report says which way the case went and
+~ the run continues with the next one. A case the run did not select is passed over.
 >> it = (name :: Text, body :: () -> $) -> $ => <
   __test_case_selected(name) == 1 ? runCase(name, body) : $
 >

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! Cargo build script for `quilon-rt`: compiles the Boehm collector from the
-//! `vendor/bdwgc` submodule into a static `libgc` and links it into this crate.
+//! `vendor/bdwgc` submodule into a static `libgc`, and `src/case_guard.c` (a case's
+//! setjmp/longjmp bail-out point — see that file) into a static `libcase_guard`, then
+//! links both into this crate.
 //!
 //! Why build it here rather than link the system `-lgc`: `quilon build` links a
 //! compiled program against `libquilon_rt.a`, and rustc *bundles* a `static`
@@ -9,11 +11,12 @@
 //! it inside `libquilon_rt.a` — which the compiler already embeds — and a produced
 //! executable carries its own GC instead of needing `libgc` installed wherever it
 //! runs. The same objects reach the `quilon` binary through the rlib, so the
-//! in-process JIT resolves `GC_*` at the addresses it always did.
+//! in-process JIT resolves `GC_*` at the addresses it always did. `case_guard.c` rides
+//! along for the same reason.
 //!
-//! The build is a single translation unit: upstream's `extra/gc.c` `#include`s
-//! every collector source, which is exactly the "one link object" path bdwgc
-//! documents for embedding. That keeps this to the `cc` crate — no autotools, no
+//! The collector's build is a single translation unit: upstream's `extra/gc.c`
+//! `#include`s every collector source, which is exactly the "one link object" path
+//! bdwgc documents for embedding. That keeps this to the `cc` crate — no autotools, no
 //! cmake, no `libatomic_ops` (`GC_BUILTIN_ATOMIC` uses compiler intrinsics).
 
 use std::path::Path;
@@ -77,4 +80,9 @@ fn main() {
     }
 
     build.compile("gc");
+
+    println!("cargo:rerun-if-changed=src/case_guard.c");
+    cc::Build::new()
+        .file("src/case_guard.c")
+        .compile("case_guard");
 }

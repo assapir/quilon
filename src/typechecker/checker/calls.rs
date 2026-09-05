@@ -17,6 +17,7 @@ impl TypeChecker {
             || self.overloads.contains_key(name)
             || crate::ast::is_compiler_provided_name(name)
             || crate::ast::is_assertion(name)
+            || crate::ast::is_run_test_case(name)
     }
 
     /// Whether `ty` answers `name` through the `.` form — a method the record or sum
@@ -165,6 +166,16 @@ impl TypeChecker {
             && crate::ast::is_assertion(name)
         {
             return self.check_assertion(name, arguments, span);
+        }
+
+        // `core.test`'s `runCase` runs a case's body through this form — see
+        // `crate::ast::RUN_TEST_CASE` — so resolved here for the same reason as the
+        // assertions just above.
+        if let Expression::Identifier { name, .. } = function
+            && !member_call
+            && crate::ast::is_run_test_case(name)
+        {
+            return self.check_run_test_case(arguments, span);
         }
 
         // Check if this is a sum type constructor call: Ok(42), Circle(r), etc.

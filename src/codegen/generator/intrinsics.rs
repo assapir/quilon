@@ -128,6 +128,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__assert_failed" | "__expect_failed" => {
                 void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
             }
+            // void __test_case_run(ptr fn, ptr env) — run a case's body (`fn(env)`, a
+            // closure's split-apart function and environment pointers) with a bail-out
+            // point recorded first; a failing `expect` resumes here instead of letting
+            // the call finish. Backs `__test_run_case(body)`.
+            "__test_case_run" => void.fn_type(&[ptr.into(), ptr.into()], false),
             // double __test_*(…) — the test registry (see `is_test_registry_intrinsic`): the
             // harness's event sink and reporter, which `core.test`'s `describe` and `it`
             // drive. Each takes the `Text` (as `i8*, i64`) and `Num` parameters its table

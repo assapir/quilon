@@ -490,6 +490,19 @@ pub fn is_matcher(name: &str) -> bool {
     MATCHERS.contains(&name)
 }
 
+/// `core.test`'s `runCase` runs a case's body through this form rather than calling it
+/// directly: `__test_run_case(body)` runs the zero-argument closure `body`, but a failing
+/// `expect` anywhere in its call tree — however deeply nested, inside a lambda passed to
+/// `.each` included — ends the call early instead of letting it finish. No ordinary builtin
+/// signature can express a closure argument, so this is recognized by name ahead of ordinary
+/// call dispatch, the way [`ASSERT`]/[`EXPECT`] are; it has no `.qn` declaration of its own.
+pub const RUN_TEST_CASE: &str = "__test_run_case";
+
+/// Whether `name` is [`RUN_TEST_CASE`] — a call the compiler lowers itself.
+pub fn is_run_test_case(name: &str) -> bool {
+    name == RUN_TEST_CASE
+}
+
 /// The sum variant `isOk()` / `isNotOk()` asks about, or `None` for a matcher that reads no
 /// variant. Shared by the checker (which requires the value's type to carry that variant) and
 /// codegen (which compares against its tag), so the two can never disagree — and named
