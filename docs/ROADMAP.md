@@ -23,7 +23,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M1** | Diagnostics & small wins (readable errors, `Unit` `$`, VS Code extension) | ✅ Complete |
 | **M2** | Type system (setters, user sum types `/`, ad-hoc overloading) | ✅ Complete |
 | **M3** | Closures & functional core | ✅ Complete |
-| **M4** | Codegen infra — authoritative types in codegen (kept); monomorphization/defunctionalization deprioritized | 🔨 In progress (partly 💤) |
+| **M4** | Codegen infra — authoritative types in codegen, static methods; monomorphization/defunctionalization deprioritized | ✅ Complete (monomorphization 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
@@ -77,7 +77,9 @@ served an auto-data-parallelism goal the project no longer pursues.
 | Concrete `Result` payload typing | ✅ |
 | `core.cli` module | ✅ |
 
-### M4 — Codegen infra 🔨
+### M4 — Codegen infra ✅ (monomorphization 💤)
+
+Remaining codegen follow-ups are tracked as GitHub issues under the `M4` label.
 
 | Item | Status |
 |------|--------|
