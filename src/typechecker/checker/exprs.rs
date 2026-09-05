@@ -52,6 +52,20 @@ impl TypeChecker {
         let value_type = self.infer_expression(value)?;
         self.check_type_compatibility(&elem_type, &value_type, span)?;
 
+        // A store across the line is a compile error at the store — see the identical
+        // gate on `FieldAssign` above for the full reasoning (a mutable witness on the
+        // base, skipped when the write reaches a setter's own `it`, which is always
+        // mutable regardless of caller).
+        if let Expression::Index {
+            expression: base, ..
+        } = target
+        {
+            let base_aliasing = self.value_aliasing(base);
+            if base_aliasing.mutable_witness().is_some() && !base_aliasing.reaches_setter_receiver {
+                self.check_store_not_crossing(value, span)?;
+            }
+        }
+
         // An element write is an effect; its value is the unit type `$`.
         Ok(Type::Unit)
     }

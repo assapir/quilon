@@ -407,6 +407,59 @@ fn run_a_setter_reading_only_a_scalar_field_of_its_parameter_accepts_an_immutabl
     );
 }
 
+#[test]
+fn an_array_element_write_storing_an_immutable_record_is_rejected() {
+    // `arr[0] := p` is the array analog of `b.item := c`: the same store-crosses-the-line
+    // check that already covers a field write must cover an element write too.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  p = T { v = 1 }\n  arr :: []T := [T { v = 0 }]\n  arr[0] := p\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the element-write store to name 'p' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn run_an_array_element_write_storing_a_fresh_value_stays_legal() {
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  arr :: []T := [T { v = 0 }]\n  arr[0] := T { v = 9 }\n  arr[0].v\n>",
+        9,
+    );
+}
+
+#[test]
+fn map_set_storing_an_immutable_record_value_is_rejected() {
+    // `m.set(k, p)` stores `p` into the map's storage exactly like `Map`'s in-place
+    // mutator that it is; a later `m.values()[i].v := ...` would reach `p`.
+    let error = type_error_message(
+        "T = { v :: Num }\n^ = () -> Num => <\n  p = T { v = 1 }\n  m :: [|Text => T|] := [|=>|]\n  m.set(\"k\", p)\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the map-set store to name 'p' under QN341, got: {error}"
+    );
+}
+
+#[test]
+fn run_map_set_storing_a_fresh_record_value_stays_legal() {
+    assert_exit(
+        "T = { v :: Num }\n^ = () -> Num => <\n  m :: [|Text => T|] := [|=>|]\n  m.set(\"k\", T { v = 9 })\n  m.values()[0].v\n>",
+        9,
+    );
+}
+
+#[test]
+fn set_add_storing_an_immutable_record_element_is_rejected() {
+    let error = type_error_message(
+        "T = { v :: Num, % = () -> Num => < it.v >, == = (o :: T) -> Bool => < it.v == o.v > }\n^ = () -> Num => <\n  p = T { v = 1 }\n  s :: [|T|] := [||]\n  s.add(p)\n  p.v\n>",
+    );
+    assert!(
+        error.contains("QN341") && error.contains("'p' is immutable"),
+        "expected the set-add store to name 'p' under QN341, got: {error}"
+    );
+}
+
 // --- Route 8: lambdas, higher-order calls, and closures returning a capture. ---
 
 #[test]

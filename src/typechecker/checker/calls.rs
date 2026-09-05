@@ -697,6 +697,13 @@ impl TypeChecker {
                 self.check_type_compatibility(&key_type, &k, span)?;
                 let v = self.infer_expression(&method_args[1])?;
                 self.check_type_compatibility(&value_type, &v, span)?;
+                // `set` stores both into the receiver in place: a store across the
+                // `=`/`:=` line is a compile error at the store, the same check a
+                // record field write and a user setter's stored parameter both go
+                // through (`require_mutable_receiver` above already confirmed the
+                // receiver itself is `:=`-reachable).
+                self.check_store_not_crossing(&method_args[0], span)?;
+                self.check_store_not_crossing(&method_args[1], span)?;
                 Ok(map_type)
             }
             "remove" => {
@@ -759,6 +766,9 @@ impl TypeChecker {
             "add" => {
                 let x = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&elem_type, &x, span)?;
+                // `add` stores the element into the receiver in place — same
+                // store-crosses-the-line check as `Map.set` above.
+                self.check_store_not_crossing(&method_args[0], span)?;
                 Ok(set_type)
             }
             "remove" => {

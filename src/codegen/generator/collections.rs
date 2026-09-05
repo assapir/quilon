@@ -2,9 +2,10 @@
 //!
 //! A Map/Set value is a single opaque pointer to a GC-allocated native runtime wrapper
 //! (a `std::collections::HashMap`/`HashSet` with a fixed-seed hasher; see
-//! `quilon-rt/src/collections/`). The collections are IMMUTABLE — every mutator
-//! (`set`/`add`, the set operators) returns a NEW collection pointer and never touches
-//! the receiver.
+//! `quilon-rt/src/collections/`). `set`/`remove`/`add` are SETTERS: they mutate the
+//! receiver's table in place and return the SAME pointer, exactly like a record's own
+//! `:=` methods (see `docs/mutation.md`). The set operators (`+`/`-`/`+-`) stay
+//! non-mutating and build a NEW collection, leaving both operands as they were.
 //!
 //! Keys/elements are passed across the runtime ABI as a uniform triple `(tag, a, b)` of
 //! `i64`s: `tag` picks the hashable kind (0 = Num, 1 = Text, 2 = Bool); `a`/`b` carry the
@@ -58,8 +59,8 @@ impl<'ctx> KeyAbi<'ctx> {
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then a persistent
-    /// `__map_set` per entry. The oracle gives the map's `Map(K, V)` type.
+    /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then `__map_set` (an
+    /// in-place mutator) per entry. The oracle gives the map's `Map(K, V)` type.
     pub(super) fn generate_map_literal(
         &mut self,
         node: &Expression,
