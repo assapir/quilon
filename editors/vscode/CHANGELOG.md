@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other build/source file, so the packaged `.vsix` carries a small, fixed set of files
   instead of the whole unbundled dependency tree.
 
+### Fixed
+
+- **`pnpm run package` no longer fails on a machine without `npm`.** `vsce` only
+  recognizes `npm run <hook>` for a `vscode:prepublish` script, so it shelled out to
+  `npm` even in this pnpm-only repo. Removed the `vscode:prepublish` script; `package`
+  now runs `pnpm run compile` itself before `vsce package`.
+
 ## [0.10.0] - 2026-09-03
 
 Version matches the Quilon compiler it targets.
