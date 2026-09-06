@@ -59,7 +59,7 @@ All notable changes to Quilon are documented here.
   failure kept doing it, and could still fail loudly a second time. The first failing
   `expect` in a case now ends the case right there, however deeply nested in the call
   tree it is reached; the suite carries on with the next case. `assert` inside a case
-  keeps its own documented behavior, ending the whole run. Closes #337.
+  keeps its own documented behavior, ending the whole run. (#337)
 
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
