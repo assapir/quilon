@@ -112,6 +112,28 @@ pub(super) fn is_reference_type(ty: &Type) -> bool {
     }
 }
 
+/// Split declaration-relative `(declaration, slot, name)` triples (a `parameters` or
+/// `called_parameters` list) by comparison to `current`: this declaration's own
+/// (`Equal`) become its own argument slots, an outer declaration's (`Less`) are carried
+/// forward unresolved as a `fixed`-style list, and an inner one's (`Greater`) dies with
+/// it. Shared by `declaration_result_aliasing` and `reclassify_returned_closure`, once
+/// per field the two triple lists share.
+fn split_by_declaration(
+    current: u64,
+    entries: Vec<(u64, usize, String)>,
+) -> (Vec<usize>, Vec<(u64, usize, String)>) {
+    let mut slots = Vec::new();
+    let mut fixed = Vec::new();
+    for (declaration, slot, name) in entries {
+        match declaration.cmp(&current) {
+            std::cmp::Ordering::Equal => slots.push(slot),
+            std::cmp::Ordering::Less => fixed.push((declaration, slot, name)),
+            std::cmp::Ordering::Greater => {}
+        }
+    }
+    (slots, fixed)
+}
+
 impl TypeChecker {
     /// The bindings `expression`'s value may alias. Sound over-approximation: an
     /// expression this cannot see through reports every reference-typed constituent.
@@ -505,18 +527,8 @@ impl TypeChecker {
                 std::cmp::Ordering::Greater => {}
             }
         }
-        for (declaration, slot, name) in inner.fixed.called_parameters {
-            match declaration.cmp(&current) {
-                std::cmp::Ordering::Equal => result.called_argument_slots.push(slot),
-                std::cmp::Ordering::Less => {
-                    result
-                        .fixed
-                        .called_parameters
-                        .push((declaration, slot, name))
-                }
-                std::cmp::Ordering::Greater => {}
-            }
-        }
+        (result.called_argument_slots, result.fixed.called_parameters) =
+            split_by_declaration(current, inner.fixed.called_parameters);
         result.fixed.mutable = inner
             .fixed
             .mutable
@@ -584,25 +596,10 @@ impl TypeChecker {
                 result.fixed.immutable.push((owner, name));
             }
         }
-        for (declaration, slot, name) in aliasing.parameters {
-            match declaration.cmp(&current) {
-                std::cmp::Ordering::Equal => result.argument_slots.push(slot),
-                std::cmp::Ordering::Less => result.fixed.parameters.push((declaration, slot, name)),
-                std::cmp::Ordering::Greater => {}
-            }
-        }
-        for (declaration, slot, name) in aliasing.called_parameters {
-            match declaration.cmp(&current) {
-                std::cmp::Ordering::Equal => result.called_argument_slots.push(slot),
-                std::cmp::Ordering::Less => {
-                    result
-                        .fixed
-                        .called_parameters
-                        .push((declaration, slot, name))
-                }
-                std::cmp::Ordering::Greater => {}
-            }
-        }
+        (result.argument_slots, result.fixed.parameters) =
+            split_by_declaration(current, aliasing.parameters);
+        (result.called_argument_slots, result.fixed.called_parameters) =
+            split_by_declaration(current, aliasing.called_parameters);
         result
     }
 

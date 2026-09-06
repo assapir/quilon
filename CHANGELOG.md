@@ -122,7 +122,11 @@ All notable changes to Quilon are documented here.
   expression there, matched against the same `(Elem) -> R` shape a declared
   function-typed parameter checks a closure against; codegen calls a non-literal
   callback through the existing closure-value call path, evaluated once before the loop
-  rather than once per element. (#341)
+  rather than once per element. Deep immutability now also tracks a function-typed
+  PARAMETER through a call: calling it (directly, or forwarded as a `map`/`reduce`
+  callback) aliases whatever the closure actually passed for that slot aliases, so a
+  parameter forwarding a captured `:=`-mutable value into an `=`-bound name is rejected
+  the same way returning it directly already was. (#341)
 
 - **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
   x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm
