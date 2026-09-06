@@ -9,15 +9,17 @@
 //! and Quilon has none to offer: a top-level `:=` binding does not persist across function
 //! calls. It is per thread, which keeps parallel runs in one process independent.
 //!
-//! A case carries a failed flag: a failing `expect` sets it, every later `expect` in the
-//! same case reads it and does nothing, and the case's close tallies it as passed or failed.
-//! That is what lets a run report `N passed, M failed` rather than stopping at the first
-//! failure.
+//! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
+//! as passed or failed. What ENDS a case at its first failing `expect` is a different
+//! mechanism — [`__test_case_run_guarded`] runs the case's body on its own nested fiber
+//! (`crate::scheduler::run_case_guarded`), which a failing `expect` suspends with the abort
+//! marker (`crate::scheduler::abort_current_case`) to end right there.
 //!
 //! The runner (`quilon test`) configures a run before it starts, through [`set_reporter`]
 //! and [`set_selection`]; the harness never sees the CLI.
 
 use std::cell::{Cell, RefCell};
+use std::os::raw::c_void;
 
 use serde::Serialize;
 
@@ -214,11 +216,32 @@ pub(crate) fn mark_case_failed(failure: Failure) {
     });
 }
 
-/// Whether the case being run has already failed — 1 or 0. An `expect` asks this first and
-/// evaluates nothing when the answer is 1, which is how a failure skips the rest of its case.
+/// Whether the case being run has already failed — 1 or 0. Defensive: once a failing
+/// `expect` ends its case (see [`__test_case_run_guarded`]) by suspending it past the rest
+/// of the case's own statements, a later `expect` in the same case is never reached to ask
+/// this at all — kept as the fallback for wherever that does not apply.
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_case_failing() -> f64 {
     CASE_FAILURE.with(|failure| f64::from(failure.borrow().is_some()))
+}
+
+/// Run a case's body guarded: `function`/`environment` are a `() -> $` closure's function
+/// and environment pointers, split apart by the code generator's lowering of
+/// `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE` in the compiler). Runs on its
+/// own nested fiber (`crate::scheduler::run_case_guarded`), so a failing `expect` anywhere
+/// in the call tree — however deeply nested — can end the case right there.
+///
+/// # Safety contract (upheld by the compiler)
+/// `function`/`environment` are the function and environment pointers of a live `() -> $`
+/// closure value, exactly as the code generator represents one: `function` takes the
+/// environment pointer and returns the closure's `$` result.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __test_case_run_guarded(function: *const c_void, environment: *mut c_void) {
+    // SAFETY: `function` is the function pointer of a live `() -> $` closure (the caller's
+    // contract, above), which is exactly this signature.
+    let function: extern "C" fn(*mut c_void) -> u8 = unsafe { std::mem::transmute(function) };
+    crate::scheduler::run_case_guarded(function, environment);
 }
 
 /// Close the case named by `name`/`length` that just ran: tally it as passed or failed,

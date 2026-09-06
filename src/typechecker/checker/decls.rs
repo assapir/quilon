@@ -318,17 +318,23 @@ impl TypeChecker {
                 sum_type
             }
             TypeDefinition::Record { fields, methods } => {
-                // A declared field name must be unique, and distinct from every method
-                // name — `it.a` would otherwise read one of two conflicting members with
-                // no way to say which. Two methods sharing a name are a separate case,
-                // handled below in `check_type_methods`, as either a duplicate signature
-                // or a legitimate overload set.
+                // A declared field name must be unique. A field and a method may share a
+                // name — a bare access (`it.a`) always reaches the field and a dot-call
+                // (`it.a(...)`) always reaches the method, so the two never compete. Two
+                // methods sharing a name are a separate case, handled below in
+                // `check_type_methods`, as either a duplicate signature or a legitimate
+                // overload set.
                 let mut seen_field_names = std::collections::HashSet::new();
-                for (field_name, _) in fields {
-                    if !seen_field_names.insert(field_name.as_str())
-                        || methods.iter().any(|method| &method.name == field_name)
-                    {
+                for (field_name, field_type) in fields {
+                    if !seen_field_names.insert(field_name.as_str()) {
                         return Err(TypeError::DuplicateDefinition {
+                            name: field_name.clone(),
+                            span: declaration.span.clone(),
+                        });
+                    }
+                    // A field holds data; a function member of a record is a method.
+                    if matches!(field_type, Type::Function { .. }) {
+                        return Err(TypeError::FunctionTypedField {
                             name: field_name.clone(),
                             span: declaration.span.clone(),
                         });

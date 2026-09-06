@@ -6,6 +6,11 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` sends HTTP/1.1 and dechunks a `Transfer-Encoding: chunked` reply.** A
+  native intrinsic frames the body — chunked, `Content-Length`, or close-delimited — on raw
+  bytes, since a boundary can fall inside a multi-byte character where grapheme-indexed
+  `Text` cannot split it; malformed framing surfaces through `send()` as `NotOk`. See
+  `docs/corelib/http.md`. Closes #260.
 - **VS Code: 🐞 Debug suite / 🐞 Debug case CodeLens and a Test Explorer Debug profile.**
   The language server now places a Debug lens beside every Run suite/Run case lens above a
   `describe`/`it`; the extension's new `quilon.debugTests` command builds just that suite or
@@ -49,6 +54,10 @@ All notable changes to Quilon are documented here.
   receiver value to pass. Calling a method that DOES read `it` on a bare type name is now
   a compile error (`QN340`) instead; a method that reads `it` is unaffected when called on
   an ordinary value, exactly as before. See `docs/types/records.md#static-methods`.
+- **A record field may not have a function type (`QN345`).** A function member of a
+  record is a method, not a field — `Box = { scale :: (Num) -> Num }` is now a compile
+  error naming the field and pointing at the method form. Function-typed parameters,
+  bindings, and return types are unaffected. See `docs/types/records.md`.
 - **A sum's variants may carry different concrete payload types at the same position.**
   `Ok(Text) / NotOk(Num)` is a normal `Result` — `Ok` and `NotOk` each carry their own
   concrete type at a given position, and the two may differ; every value of one variant
@@ -84,6 +93,10 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **A field and a method may share a name.** A bare access (`it.a`) always reaches the
+  field, and a dot-call (`it.a(...)`) always reaches the method, so the two forms never
+  compete; only a field declared twice, or two methods with the same signature, is still a
+  duplicate definition. See `docs/types/records.md`. Closes #374.
 - **`quilon build` optimizes at O3 by default; `--debug` stays unoptimized.** A built
   executable now runs LLVM's `default<O3>` pass pipeline (inlining, `mem2reg`, LICM, loop
   optimizations, ...) unless `--debug` is passed, which keeps the previous unoptimized (O0
@@ -110,6 +123,14 @@ All notable changes to Quilon are documented here.
   function-typed parameter checks a closure against; codegen calls a non-literal
   callback through the existing closure-value call path, evaluated once before the loop
   rather than once per element. Closes #341.
+- **A failing `expect` ends its case, not just the assertions after it.** A statement
+  between two `expect`s, and a later iteration of a `.each` callback a failing `expect`
+  ran inside, used to keep running once the first `expect` in a case failed — only that
+  `expect`'s own remaining matcher work was skipped, so a case with more work after the
+  failure kept doing it, and could still fail loudly a second time. The first failing
+  `expect` in a case now ends the case right there, however deeply nested in the call
+  tree it is reached; the suite carries on with the next case. `assert` inside a case
+  keeps its own documented behavior, ending the whole run. (#337)
 
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
