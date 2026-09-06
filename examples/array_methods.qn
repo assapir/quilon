@@ -10,29 +10,29 @@
 << core.test
 
 ^ = () -> $ => <
-  nums :: []Num = [1, 2, 3, 4, 5, 6]
+  nums = [1, 2, 3, 4, 5, 6]
 
   ~ Chain map -> filter -> reduce: double, keep those > 4, sum them.
-  sum :: Num = nums
+  sum = nums
     .map(x => x * 2)              ~ [2, 4, 6, 8, 10, 12]
     .filter(x => x > 4)           ~ [6, 8, 10, 12]
     .reduce(0, (acc, x) => acc + x)   ~ 6+8+10+12
   assert(sum, equals(36))
 
-  doubled :: []Num = nums.map(x => x * 2)  ~ [2, 4, 6, 8, 10, 12]
+  doubled = nums.map(x => x * 2)  ~ [2, 4, 6, 8, 10, 12]
 
   ~ find: first element > 8 is 10 (the Ok path).
-  hit :: Num = doubled.find(x => x > 8) ?
+  hit = doubled.find(x => x > 8) ?
     | Ok(v)    => v
     | NotOk(_) => 0
   assert(hit, equals(10))
 
   ~ find with no match -> NotOk path.
-  miss :: Result = doubled.find(x => x > 99)
+  miss = doubled.find(x => x > 99)
   assert(miss, isNotOk())
 
   ~ at: in-bounds Ok, then out-of-bounds NotOk.
-  third :: Num = doubled.at(2) ?         ~ doubled[2] = 6
+  third = doubled.at(2) ?         ~ doubled[2] = 6
     | Ok(v)    => v
     | NotOk(_) => 0
   assert(third, equals(6))
@@ -42,8 +42,8 @@
   ~ `at` is the form to reach for when an index MIGHT be out of range: a direct
   ~ `doubled[wanted]` is checked too, but a bad index there fails loudly — the program
   ~ stops with a report naming that read. `at` hands the decision back to you instead.
-  wanted :: Num = doubled.size + 5
-  fallback :: Num = doubled.at(wanted) ?
+  wanted = doubled.size + 5
+  fallback = doubled.at(wanted) ?
     | Ok(v)    => v
     | NotOk(_) => -1
   assert(fallback, equals(-1))

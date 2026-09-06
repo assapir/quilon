@@ -16,11 +16,11 @@ Point = {
 }
 
 ^ = () -> $ => <
-  primes :: [|Num|] := [|2, 3, 5, 7|]
-  evens :: [|Num|] = [|2, 4, 6, 8|]
+  primes := [|2, 3, 5, 7|]
+  evens = [|2, 4, 6, 8|]
 
   ~ Duplicates collapse; membership and size are built in.
-  dups :: [|Num|] = [|1, 1, 2, 2, 3|]
+  dups = [|1, 1, 2, 2, 3|]
   assert(dups.size, equals(3))
   assert(primes.has(7), equals(true))
   assert(!primes.has(4), equals(true))
@@ -53,7 +53,7 @@ Point = {
   assert(count, equals(4))
 
   ~ A Set of a user record type deduplicates by `%`/`==`.
-  seen :: [|Point|] = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
+  seen = [|Point { x = 1, y = 1 }, Point { x = 2, y = 2 }, Point { x = 1, y = 1 }|]
   assert(seen.size, equals(2))
   assert(seen.has(Point { x = 2, y = 2 }), equals(true))
 >

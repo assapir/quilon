@@ -10,8 +10,8 @@
 << core.test
 
 ^ = () -> $ => <
-  asc  :: []Num = 1 <- 4                ~ [1, 2, 3, 4]
-  desc :: []Num = 4 <- 1                ~ [4, 3, 2, 1]
+  asc  = 1 <- 4                ~ [1, 2, 3, 4]
+  desc = 4 <- 1                ~ [4, 3, 2, 1]
 
   ~ Inclusive count = |hi - lo| + 1.
   assert(asc.size, equals(4))
@@ -31,14 +31,14 @@
   ~ Endpoints may be negative, and may be computed — so long as what they compute is
   ~ a whole number. `6 / 2` is exactly 3, so this range is [-2, -1, 0, 1, 2, 3].
   half = 6 / 2
-  span :: []Num = -2 <- half
+  span = -2 <- half
   assert(span.size, equals(6))
   assert(span[0], equals(-2))
   assert(span[5], equals(3))
 
   ~ A wide range holds every element it claims: the backing array is sized from the
   ~ count, and both ends read back.
-  wide :: []Num = 1 <- 100000
+  wide = 1 <- 100000
   assert(wide.size, equals(100000))
   assert(wide[0], equals(1))
   assert(wide[99999], equals(100000))

@@ -15,7 +15,7 @@
 
 ^ = () -> $ => <
   ~ split -> []Text; its pieces are genuine Text values.
-  parts :: []Text = "Hello, World".split(", ")
+  parts = "Hello, World".split(", ")
   assert(parts.size, equals(2))
   assert(parts[0], equals("Hello"))
   assert(parts[1], equals("World"))
@@ -47,7 +47,7 @@
   assert("héllo".indexOf("llo"), isOk())
   assert("Hello".indexOf("z"), isNotOk())
   ~ the index counts graphemes: "b" sits past the 4-byte 🌍, at grapheme 2.
-  idx :: Num = "a🌍b".indexOf("b") ?
+  idx = "a🌍b".indexOf("b") ?
     | Ok(i)    => i
     | NotOk(_) => 0 - 1
   assert(idx, equals(2))
@@ -62,7 +62,7 @@
   ~ at -> Ok(grapheme) / NotOk; a Text is a sequence of graphemes, and `at` reads one —
   ~ a multi-codepoint cluster (the 4-byte 🌍, a ZWJ emoji) comes back whole.
   assert("a🌍b".at(0), isOk())
-  world :: Text = "a🌍b".at(1) ?
+  world = "a🌍b".at(1) ?
     | Ok(g)    => g
     | NotOk(_) => ""
   assert(world, equals("🌍"))
@@ -70,7 +70,7 @@
   assert("abc".at(0 - 1), isNotOk())
 
   ~ graphemes -> []Text: the whole sequence at once, composing with the array methods.
-  gs :: []Text = "héllo".graphemes()
+  gs = "héllo".graphemes()
   assert(gs.size, equals(5))
   assert(gs[1], equals("é"))
   assert("".graphemes().size, equals(0))
@@ -84,7 +84,7 @@
 
   ~ []Text is a plain generic array: it composes with the array methods and `+`.
   assert("aa,b,ccc".split(",").map(w => w.size).reduce(0, (a, x) => a + x), equals(6))
-  cat :: []Text = "a,b".split(",") + "c,d".split(",")
+  cat = "a,b".split(",") + "c,d".split(",")
   assert(cat.size, equals(4))
   assert(cat[3], equals("d"))
 >

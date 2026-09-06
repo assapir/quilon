@@ -79,9 +79,10 @@ The matchers are compiler-provided. They compose with one another, and
 fail-loud exit, failing when the lambda returns — the way an example or a case verifies the
 language's own **fail-loud** guarantees, the ones that would otherwise end the whole process:
 
-```quilon ignore
-assert(() => "a".replace("x", "y", 0), aborts())     ~ holds: a non-positive count aborts
-expect(() => [1, 2].at(9), not(aborts()))             ~ composes with not; at(9) yields NotOk, no abort
+```quilon
+zeroCount = 3 - 3
+assert(() => "a".replace("x", "y", zeroCount), aborts())     ~ holds: a non-positive count aborts
+assert(() => [1, 2].at(9), not(aborts()))                    ~ composes with not; at(9) yields NotOk, no abort
 ```
 
 A failing `aborts()`'s message names the return; a failing `not(aborts())`'s message shows

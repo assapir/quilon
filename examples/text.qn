@@ -7,7 +7,7 @@
 << core.test
 
 ^ = () -> $ => <
-  s :: Text = "héllo" + " 🌍"
+  s = "héllo" + " 🌍"
   assert(s.length, equals(7))   ~ 7 grapheme clusters
   assert(s.size, equals(11))    ~ 11 UTF-8 bytes
 
@@ -16,20 +16,20 @@
   ~ display would draw a right-to-left script in. Hebrew and Arabic below prove it: `.at(0)`
   ~ is the first-TYPED letter, `.indexOf` counts from the start of what was typed, and `+`
   ~ never reorders what it joins.
-  hebrew :: Text = "שלום"        ~ Hebrew "hello", 4 letters
+  hebrew = "שלום"        ~ Hebrew "hello", 4 letters
   assert(hebrew.length, equals(4))
-  first :: Text = hebrew.at(0) ? | Ok(g) => g | NotOk(_) => "?"
+  first = hebrew.at(0) ? | Ok(g) => g | NotOk(_) => "?"
   assert(first, equals("ש"))     ~ the first-typed letter, not the last-drawn
 
-  arabic :: Text = "مرحبا"        ~ Arabic "hello", 5 letters
+  arabic = "مرحبا"        ~ Arabic "hello", 5 letters
   assert(arabic.length, equals(5))
 
-  mixed :: Text = hebrew + " " + arabic   ~ `+` joins in typed order, Hebrew then Arabic
+  mixed = hebrew + " " + arabic   ~ `+` joins in typed order, Hebrew then Arabic
   assert(mixed, equals("שלום مرحبا"))
   assert(mixed.indexOf(arabic), isOk())   ~ found at its typed position
 
-  sentence :: Text = "שלום, مرحبا, world"   ~ a mixed-direction sentence with punctuation
-  parts :: []Text = sentence.split(", ")
+  sentence = "שלום, مرحبا, world"   ~ a mixed-direction sentence with punctuation
+  parts = sentence.split(", ")
   assert(parts.size, equals(3))
   assert(parts[0], equals(hebrew))
   assert(parts[1], equals(arabic))

@@ -14,7 +14,7 @@
   ~ Read argv[0] back as a Text and count the env's entries, exercising the `[]Text` and
   ~ `[|Text => Text|]` entry-point paths. Both are invocation-dependent, so they are
   ~ shown (printed) rather than asserted on.
-  first :: Text = args[0]
+  first = args[0]
   varCount = env.size
   io.print(first)
   io.print(varCount)

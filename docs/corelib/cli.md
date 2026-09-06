@@ -21,9 +21,9 @@ Thin helpers over the [entry point](../modules/entry-point.md)'s
 ```quilon
 << core.cli
 ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <
-  home :: Text = cli.getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
-  verbose :: Bool = cli.hasFlag(args, "-v")
-  outputs :: []Text = cli.getOpt(args, "--out") ? | Ok(vs) => vs | NotOk(_) => args.filter(x => false)
+  home = cli.getEnv(env, "HOME") ? | Ok(v) => v | NotOk(_) => "?"
+  verbose = cli.hasFlag(args, "-v")
+  outputs = cli.getOpt(args, "--out") ? | Ok(vs) => vs | NotOk(_) => args.filter(x => false)
   verbose ? 0 : outputs.size
 >
 ```

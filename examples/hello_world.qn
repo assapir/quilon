@@ -5,7 +5,7 @@
 << core.test
 
 ^ = () -> $ => <
-  greeting :: Text = "Hello, " + "Quilon" + "!"
+  greeting = "Hello, " + "Quilon" + "!"
   io.print(greeting)                       ~ io.stdout: Hello, Quilon!
   assert(greeting, equals("Hello, Quilon!"))
 >

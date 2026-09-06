@@ -21,11 +21,11 @@ arrayP = (p :: []Num) -> Num => < p.size >
   assert(user.name.length, equals(6))   ~ "Quilon" -> 6
 
   ~ Array of Text: index it, then take the byte length of the element.
-  words :: []Text = ["a", "cde"]
+  words = ["a", "cde"]
   assert(words[1].size, equals(3))      ~ "cde" -> 3
 
   ~ Nested array (array of arrays): double-index it.
-  grid :: [][]Num = [[1, 2], [3, 4]]
+  grid = [[1, 2], [3, 4]]
   assert(grid[1][0], equals(3))
 
   ~ A binding NAME is per-function: `p` is a record in one function and an array
@@ -35,7 +35,7 @@ arrayP = (p :: []Num) -> Num => < p.size >
 
   ~ A closure capture keeps its type too: field reads and method calls on a
   ~ captured record resolve inside the closure body.
-  c :: Counter = Counter { v = 4 }
+  c = Counter { v = 4 }
   readV = () => < c.get() >
   assert(readV(), equals(4))
 >
