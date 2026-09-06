@@ -2123,6 +2123,51 @@ fn aot_static_method_called_on_the_type_name_constructs_a_value() {
     assert_eq!(code, 7, "a native build must exit 7 on the same program");
 }
 
+/// A field and a method may share a name: a bare access always reaches the field, and a
+/// dot-call always reaches the method. `options` names both a field and a STATIC method
+/// (reached through the type name); `count` names both a field and a value-receiver
+/// method. `m.options` (5, the field) + `m.count()` (`it.count + 1` = 0 + 1 = 1) = 6.
+#[test]
+fn run_field_and_method_sharing_a_name_resolve_by_call_form() {
+    let src = r#"
+        Metrics = {
+          options :: Num,
+          count :: Num,
+          options = (n :: Num) -> Metrics => < Metrics { options = n, count = 0 } >,
+          count = () -> Num => < it.count + 1 >
+        }
+        ^ = () -> Num => <
+          m = Metrics.options(5)
+          m.options + m.count()
+        >
+    "#;
+    assert_exit(src, 6);
+}
+
+/// AOT counterpart: the field/method-sharing-a-name resolution must produce the same
+/// result through `quilon build` as through the JIT.
+#[test]
+fn aot_field_and_method_sharing_a_name_resolve_by_call_form() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native field/method-name check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Metrics = {
+          options :: Num,
+          count :: Num,
+          options = (n :: Num) -> Metrics => < Metrics { options = n, count = 0 } >,
+          count = () -> Num => < it.count + 1 >
+        }
+        ^ = () -> Num => <
+          m = Metrics.options(5)
+          m.options + m.count()
+        >
+    "#;
+    let (code, _) = build_and_run_native("field_method_shared_name", src);
+    assert_eq!(code, 6, "a native build must exit 6 on the same program");
+}
+
 /// Regression: an OVERLOADED static constructor — two same-named methods, neither
 /// reading `it`, differing only in their parameter's TYPE — dispatches on the bare type
 /// name by resolving the matching member exactly as a value-receiver overload call does.

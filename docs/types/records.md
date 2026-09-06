@@ -63,13 +63,33 @@ double(5)      ~ 10
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
 `Text`'s `split`, and `split("a,b", ",")` is an undefined name.
 
-Every field and method name on a type is distinct — a field declared twice, or a field and
-a method sharing a name, is a duplicate definition. Two or more methods sharing a name
-form an [overload set](../functions/overloading.md#method-overloading), each member fully
-annotated and dispatched by exact argument type; two members with the same signature are
-a duplicate definition. A constructor or record literal names each field once — a `<-source`
-spread fills fields, and a later literal may override one of them, but the same field
-written twice as a literal is a duplicate.
+A field declared twice is a duplicate definition, whatever type each declaration gives it.
+A field and a method may share a name: a bare access (`it.a`) always reaches the field, and
+a dot-call (`it.a(...)`) always reaches the method, so the two never compete — a field
+holds data, and a function member of a record is written as a method. Two or more methods
+sharing a name form an [overload set](../functions/overloading.md#method-overloading), each
+member fully annotated and dispatched by exact argument type; two members with the same
+signature are a duplicate definition. A constructor or record literal names each field once
+— a `<-source` spread fills fields, and a later literal may override one of them, but the
+same field written twice as a literal is a duplicate.
+
+A field's type is never a function — a function member of a record is a method, not a
+field (`Box = { scale :: (Num) -> Num }` is a compile error naming the field and pointing
+at the method form). A method's parameters, a binding's declared type, and a function's
+return type may all be function-typed.
+```quilon
+Request = {
+  options :: Num,
+  options = (n :: Num) -> Request => < Request { options = n } >
+}
+
+^ = () -> Num => <
+  r = Request.options(3)  ~ dot-call on the type name reaches the static method
+  r.options                ~ bare access reaches the field
+>
+```
+(See `examples/methods.qn`, which also exercises a value-receiver method sharing a
+field's name.)
 
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the type name

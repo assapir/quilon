@@ -136,6 +136,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN342 | missing constructor field |
 | QN343 | unknown constructor field |
 | QN344 | reserved name |
+| QN345 | record field with a function type |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -999,6 +1000,18 @@ not = (b :: Bool) -> Bool => < !b >
 ```
 
 Pick another name.
+
+### QN345 — record field with a function type
+
+A record field declared with a function type. A field holds data; a function member of a
+record is written as a method instead.
+
+```quilon ignore
+Box = { scale :: (Num) -> Num }
+^ = () -> Num => < 0 >
+```
+
+Write `scale` as a method: `scale = (n :: Num) -> Num => < n * 2 >`.
 
 ## Code generation and build
 
