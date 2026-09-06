@@ -4,14 +4,14 @@
 << core.http
 
 ^ = () -> $ => <
-  canned = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
+  canned :: Text = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
 
   ~ A reply that is not HTTP is rejected as a value rather than a crash.
   assert(http.Response { raw = "not http at all" }.validate(), isNotOk())
 
-  checked = http.Response { raw = canned }.validate()
+  checked :: Result = http.Response { raw = canned }.validate()
   assert(checked, isOk())
-  response = checked ?
+  response :: http.Response = checked ?
     | Ok(reply)  => reply
     | NotOk(_)   => http.Response { raw = "" }
   assert(response.status(), equals(200))
@@ -19,30 +19,40 @@
   assert(response.body(), equals("hello"))
 
   ~ Header lookup is case-insensitive, and absent means NotOk rather than a crash.
-  contentType = response.header("content-type") ?
+  contentType :: Text = response.headers().get("content-type") ?
     | Ok(value) => value
     | NotOk(_)  => "?"
   assert(contentType, equals("text/html"))
-  assert(response.header("X-Absent"), isNotOk())
-  assert(response.headers().size, equals(2))
+  assert(response.headers().get("X-Absent"), isNotOk())
+  assert(response.headers().names().size, equals(2))
+
+  ~ Two header lines sharing a name are kept as separate values under it, in order.
+  repeated :: http.Response =
+    http.Response { raw = "HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n" }
+  cookies :: []Text = repeated.headers().all("set-cookie")
+  assert(cookies.size, equals(2))
+  assert(cookies[0], equals("a=1"))
 
   ~ A bare-LF reply from a sloppy server reads the same as a CRLF one.
-  lineFeed = http.Response { raw = "HTTP/1.0 404 Not Found\nX-A: b\n\ngone" }
+  lineFeed :: http.Response = http.Response { raw = "HTTP/1.0 404 Not Found\nX-A: b\n\ngone" }
   assert(lineFeed.status(), equals(404))
   assert(lineFeed.body(), equals("gone"))
 
   ~ A body-bearing method carries the content to send and the media type to advertise for it;
   ~ `send` is what puts it on the wire — see examples/http_get.qn.
-  submission = http.Request {
-    method = http.Post(http.Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
-    url = "http://example.com/submit"
-  }
+  submission :: http.Request = http.Request.post("http://example.com/submit",
+    http.Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" })
   assert(submission.method.token(), equals("POST"))
-  carried = submission.method.payload()
+  carried :: http.Body = submission.method.payload()
   assert(carried.content, equals("name=ada"))
   assert(carried.contentType, equals("application/x-www-form-urlencoded"))
 
   ~ A nullary method carries an empty body.
-  none = http.Get.payload()
+  none :: http.Body = http.Get.payload()
   assert(none.content, equals(""))
+
+  ~ A request's query string reads as `Params`, one entry per name, repeats kept as an array.
+  withQuery :: http.Request = http.Request.get("http://example.com/search?q=ada&tag=a&tag=b")
+  tags :: []Text = withQuery.params().all("tag")
+  assert(tags.size, equals(2))
 >

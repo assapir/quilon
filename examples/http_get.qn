@@ -1,13 +1,13 @@
-~ A live HTTP GET with the `core.http` client: a `Request` carries the method and the URL,
+~ A live HTTP GET with the `core.http` client: `Request.get` builds the request,
 ~ `send` puts it on the wire over core.net's `@tcpRequest` and parses the reply into
 ~ `Ok(Response)`. On success the program exits 0.
 ~ NOTE: this makes a LIVE network call to example.com:80 when run.
 << core.http
 
 ^ = () -> $ => <
-  result = http.Request { method = http.Get, url = "http://example.com/" }.send()
+  result :: Result = http.Request.get("http://example.com/").send()
   assert(result, isOk())
-  response = result ?
+  response :: http.Response = result ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
   assert(response.status(), equals(200))
@@ -16,8 +16,8 @@
   assert(response.body().size > 0, equals(true))
 
   ~ The reply carries headers, read case-insensitively off the live response.
-  assert(response.header("Content-Type"), isOk())
+  assert(response.headers().get("Content-Type"), isOk())
 
   ~ A transport failure comes back as NotOk, not a crash.
-  assert(http.Request { method = http.Get, url = "http://127.0.0.1:1/" }.send(), isNotOk())
+  assert(http.Request.get("http://127.0.0.1:1/").send(), isNotOk())
 >

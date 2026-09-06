@@ -511,6 +511,12 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Method",
         "core.http.Response",
         "core.http.Request",
+        "core.http.Headers",
+        "core.http.Params",
+        "core.http.RequestOptions",
+        // The private base record `Headers`/`Params` compose over: carried with the
+        // module, exported to no importer.
+        "core.http.Values",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
         "core.http.crlfReply",
@@ -1305,6 +1311,10 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "the body",
         "line endings",
         "the Method sum",
+        "Headers",
+        "Params",
+        "Request.params",
+        "Request's static constructors",
         "reading a URL apart",
         "serialising a request",
         "a round trip",
@@ -1316,7 +1326,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("71 passed, 0 failed"),
+        out.stdout.contains("98 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

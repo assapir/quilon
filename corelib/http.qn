@@ -6,9 +6,141 @@
 ~ A request body: the text to send and the media type to advertise for it.
 >> Body = { content :: Text, contentType :: Text }
 
+~ A multi-value name/value store: every value under a name is kept, in the order added
+~ (HTTP treats `X-A: 1` + `X-A: 2` as one name with two values). `Headers` and `Params`
+~ each hold one and delegate, so the append/lookup logic lives here once.
+Values = {
+  entries :: [|Text => []Text|],
+
+  empty = () -> Values => < Values { entries = [|=>|] } >,
+
+  ~ Every value under `name`, in the order added; `[]` when absent.
+  all = (name :: Text) -> []Text => <
+    none :: []Text = []
+    it.entries.get(name) ?
+      | Ok(list) => list
+      | NotOk(_) => none
+  >,
+
+  ~ The first value under `name`, or `NotOk(name)` when absent.
+  get = (name :: Text) -> Result => <
+    list = it.all(name)
+    list.size > 0 ? Ok(list[0]) : NotOk(name)
+  >,
+
+  has = (name :: Text) -> Bool => < it.entries.has(name) >,
+
+  names = () -> []Text => < it.entries.keys() >,
+
+  ~ Append one value under `name`, keeping any values already there.
+  add := (name :: Text, value :: Text) -> $ => <
+    it.entries.set(name, [<-it.all(name), value])
+    $
+  >,
+
+  ~ Append every entry of `entries`, one name at a time.
+  add := (entries :: [|Text => Text|]) -> $ => <
+    entries.keys().each(name => <
+      value :: Text = entries.get(name) ? | Ok(v) => v | NotOk(_) => ""
+      it.entries.set(name, [<-it.all(name), value])
+    >)
+    $
+  >
+}
+
+~ Request/response headers: names are lower-cased, HTTP/2 style, before every lookup or
+~ append, so `add("X-Trace", "abc")` and a later `get("x-trace")` agree.
+>> Headers = {
+  values :: Values,
+
+  empty = () -> Headers => < Headers { values = Values.empty() } >,
+
+  get = (name :: Text) -> Result => < it.values.get(name.trim().toLower()) >,
+  all = (name :: Text) -> []Text => < it.values.all(name.trim().toLower()) >,
+  has = (name :: Text) -> Bool => < it.values.has(name.trim().toLower()) >,
+
+  ~ Every header name present, already lower-cased.
+  names = () -> []Text => < it.values.names() >,
+
+  add := (name :: Text, value :: Text) -> $ => <
+    it.values.add(name.trim().toLower(), value)
+    $
+  >,
+
+  ~ Lower-cases each name before delegating, so this can't just forward the map whole.
+  add := (headers :: [|Text => Text|]) -> $ => <
+    headers.keys().each(name => <
+      value :: Text = headers.get(name) ? | Ok(v) => v | NotOk(_) => ""
+      it.values.add(name.trim().toLower(), value)
+    >)
+    $
+  >,
+
+  ~ One `name: value\r\n` line per value.
+  wire = () -> Text => <
+    it.names().reduce("", (acc, name) =>
+      acc + it.all(name).reduce("", (lines, value) => lines + name + ": " + value + "\r\n"))
+  >,
+
+  ~ Headers parsed from trimmed `Name: value` lines: names lower-cased, values trimmed, a
+  ~ colon inside a value kept (only the first colon splits a line).
+  parse = (lines :: []Text) -> Headers => <
+    headers := Headers.empty()
+    lines.each(line => <
+      line.indexOf(":") ?
+        | Ok(colon) =>
+          headers.add(line.slice(0, colon).trim(), line.slice(colon + 1, line.length).trim())
+        | NotOk(_) => $
+    >)
+    headers
+  >
+}
+
+~ A URL's query parameters, name-sensitive (unlike `Headers`): `add`/`get`/`all` compare
+~ names exactly as written. No percent-encoding on the way out or decoding on the way in.
+>> Params = {
+  values :: Values,
+
+  empty = () -> Params => < Params { values = Values.empty() } >,
+
+  get = (name :: Text) -> Result => < it.values.get(name) >,
+  all = (name :: Text) -> []Text => < it.values.all(name) >,
+  has = (name :: Text) -> Bool => < it.values.has(name) >,
+  names = () -> []Text => < it.values.names() >,
+
+  add := (name :: Text, value :: Text) -> $ => <
+    it.values.add(name, value)
+    $
+  >,
+  add := (params :: [|Text => Text|]) -> $ => <
+    it.values.add(params)
+    $
+  >,
+
+  ~ `a=1&b=2` style, split on `&` then each pair's first `=`; a bare name (no `=`) is a
+  ~ value of `""`. An empty query parses to no params at all.
+  parse = (query :: Text) -> Params => <
+    params := Params.empty()
+    query.split("&").filter(pair => pair != "").each(pair => <
+      pair.indexOf("=") ?
+        | Ok(mark) => params.add(pair.slice(0, mark), pair.slice(mark + 1, pair.length))
+        | NotOk(_) => params.add(pair, "")
+    >)
+    params
+  >
+}
+
+~ Per-request settings beyond method and URL — headers today, room for more later without
+~ changing `Request`'s own shape.
+>> RequestOptions = {
+  headers :: Headers,
+
+  default = () -> RequestOptions => < RequestOptions { headers = Headers.empty() } >
+}
+
 ~ The HTTP method. Body-bearing methods carry a `Body`; the rest are nullary. `Query` is
 ~ RFC 10008's safe, idempotent method with a body.
->> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head {
+>> Method = Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head / Options / Patch(Body) {
   ~ The token this method writes in a request line.
   token = () -> Text => <
     it ?
@@ -18,6 +150,8 @@
       | Query(_) => "QUERY"
       | Delete   => "DELETE"
       | Head     => "HEAD"
+      | Options  => "OPTIONS"
+      | Patch(_) => "PATCH"
   >
 
   ~ The body this method carries — an empty one for the methods that carry none.
@@ -26,6 +160,7 @@
       | Post(carried)  => carried
       | Put(carried)   => carried
       | Query(carried) => carried
+      | Patch(carried) => carried
       | _              => Body { content = "", contentType = "" }
   >
 
@@ -37,6 +172,7 @@
       | Post(_)  => true
       | Put(_)   => true
       | Query(_) => true
+      | Patch(_) => true
       | _        => false
   >
 }
@@ -77,14 +213,16 @@
   ~ The reply's first line, trimmed: `HTTP/1.1 200 OK`.
   statusLine = () -> Text => < it.head().split("\n")[0].trim() >
 
-  ~ The header lines, trimmed and without the status line. A line carrying no colon is
-  ~ not a header and is left out, so a garbled reply yields the headers it does have.
-  headers = () -> []Text => <
+  ~ The reply's headers, parsed off the lines between the status line and the blank line. A
+  ~ line carrying no colon is not a header and is left out, so a garbled reply yields the
+  ~ headers it does have.
+  headers = () -> Headers => <
     section = it.head()
     afterStatusLine = section.indexOf("\n") ?
       | Ok(mark) => section.slice(mark + 1, section.length)
       | NotOk(_) => ""
-    afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+    lines = afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+    Headers.parse(lines)
   >
 
   ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
@@ -108,22 +246,6 @@
       : 0
   >
 
-  ~ Look up a header by name, case-insensitively: `Ok(value)` or `NotOk(name)`. The value
-  ~ is trimmed, so `X-Empty:` yields `Ok("")`; when a name repeats, the first line wins.
-  header = (name :: Text) -> Result => <
-    wanted = name.trim().toLower()
-    ~ Every line `headers()` yields carries a colon, so splitting on it always has a name.
-    nameOf = (line :: Text) -> Text => < line.split(":")[0].trim().toLower() >
-    valueOf = (line :: Text) -> Text => <
-      line.indexOf(":") ?
-        | Ok(colon) => line.slice(colon + 1, line.length).trim()
-        | NotOk(_)  => ""
-    >
-    it.headers().find(line => nameOf(line) == wanted) ?
-      | Ok(line) => Ok(valueOf(line))
-      | NotOk(_) => NotOk(name)
-  >
-
   ~ Everything after the blank line, sliced out of the RAW text so a body carrying its own CRLF
   ~ survives intact; "" for a reply with no blank line. `Content-Length` is never consulted —
   ~ the close delimits the body.
@@ -133,10 +255,38 @@
   >
 }
 
-~ A request: the method and the target URL (`http://host[:port]/path`, scheme optional).
+~ A request: the method, the target URL (`http://host[:port]/path`, scheme optional), and
+~ its options (headers today).
 >> Request = {
   method :: Method,
   url :: Text,
+  options :: RequestOptions,
+
+  get = (url :: Text) -> Request => < Request { method = Get, url = url, options = RequestOptions.default() } >,
+  get = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Get, url = url, options = options } >,
+
+  head = (url :: Text) -> Request => < Request { method = Head, url = url, options = RequestOptions.default() } >,
+  head = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Head, url = url, options = options } >,
+
+  delete = (url :: Text) -> Request => < Request { method = Delete, url = url, options = RequestOptions.default() } >,
+  delete = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Delete, url = url, options = options } >,
+
+  ~ The OPTIONS method constructor: a dot-call (`Request.options(url)`) reaches this; a bare
+  ~ access on a value (`request.options`) reaches the `options` FIELD instead.
+  options = (url :: Text) -> Request => < Request { method = Options, url = url, options = RequestOptions.default() } >,
+  options = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Options, url = url, options = options } >,
+
+  post = (url :: Text, body :: Body) -> Request => < Request { method = Post(body), url = url, options = RequestOptions.default() } >,
+  post = (url :: Text, body :: Body, options :: RequestOptions) -> Request => < Request { method = Post(body), url = url, options = options } >,
+
+  put = (url :: Text, body :: Body) -> Request => < Request { method = Put(body), url = url, options = RequestOptions.default() } >,
+  put = (url :: Text, body :: Body, options :: RequestOptions) -> Request => < Request { method = Put(body), url = url, options = options } >,
+
+  patch = (url :: Text, body :: Body) -> Request => < Request { method = Patch(body), url = url, options = RequestOptions.default() } >,
+  patch = (url :: Text, body :: Body, options :: RequestOptions) -> Request => < Request { method = Patch(body), url = url, options = options } >,
+
+  query = (url :: Text, body :: Body) -> Request => < Request { method = Query(body), url = url, options = RequestOptions.default() } >,
+  query = (url :: Text, body :: Body, options :: RequestOptions) -> Request => < Request { method = Query(body), url = url, options = options } >,
 
   ~ The URL with any `scheme://` prefix removed: `host[:port]/path`.
   withoutScheme = () -> Text => <
@@ -176,17 +326,36 @@
     target == "" ? "/" : (target.slice(0, 1) == "/" ? target : "/" + target)
   >
 
+  ~ The URL's query string, parsed into `Params` — `[]` when the URL carries none.
+  params = () -> Params => <
+    target = it.path()
+    target.indexOf("?") ?
+      | Ok(mark) => Params.parse(target.slice(mark + 1, target.length))
+      | NotOk(_) => Params.empty()
+  >
+
+  ~ The request's own headers (empty unless a constructor was given options carrying some).
+  headers = () -> Headers => < it.options.headers >
+
   ~ The request serialised to the text that goes on the wire. A body-bearing method adds
-  ~ `Content-Type` and a `Content-Length` counted in BYTES — even for empty content, which is a
-  ~ body of length zero rather than no body — then the body after the blank line.
+  ~ `content-type` and a `content-length` counted in BYTES — even for empty content, which is
+  ~ a body of length zero rather than no body — then the caller's own headers, then the body
+  ~ after the blank line. A caller header sharing a generated name (`host`, `connection`,
+  ~ `content-type`, `content-length`) replaces that generated line rather than duplicating it.
   wire = () -> Text => <
     carried = it.method.payload()
     requestLine = "`it.method.token()` `it.path()` HTTP/1.0\r\n"
-    headers = "Host: `it.authority()`\r\nConnection: close\r\n"
-    bodyHeaders = it.method.carriesBody()
-      ? "Content-Type: `carried.contentType`\r\nContent-Length: `carried.content.size`\r\n"
+    given = it.headers()
+    hostLine = given.has("host") ? "" : "host: `it.authority()`\r\n"
+    connectionLine = given.has("connection") ? "" : "connection: close\r\n"
+    contentTypeLine = it.method.carriesBody() && !given.has("content-type")
+      ? "content-type: `carried.contentType`\r\n"
       : ""
-    requestLine + headers + bodyHeaders + "\r\n" + carried.content
+    contentLengthLine = it.method.carriesBody() && !given.has("content-length")
+      ? "content-length: `carried.content.size`\r\n"
+      : ""
+    requestLine + hostLine + connectionLine + contentTypeLine + contentLengthLine
+      + given.wire() + "\r\n" + carried.content
   >
 
   ~ Perform the request over core.net and read the reply into `Ok(Response)`; a transport
@@ -219,7 +388,7 @@ lineFeedReply = () -> Text => <
 
 ~ Read a header, or a marker when it is absent, so a case can assert on plain `Text`.
 headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text => <
-  response.header(name) ?
+  response.headers().get(name) ?
     | Ok(value) => value
     | NotOk(_)  => fallback
 >
@@ -291,16 +460,21 @@ test.describe("headers", () => <
     expect(headerOr(parsed(crlfReply()), "  Content-Type  ", "absent"), equals("text/html")))
 
   test.it("reports an absent header as NotOk", () =>
-    expect(parsed(crlfReply()).header("X-Absent"), isNotOk()))
+    expect(parsed(crlfReply()).headers().get("X-Absent"), isNotOk()))
 
   test.it("keeps the first of two headers with one name", () => <
     twice = parsed("HTTP/1.1 200 OK\r\nX-Pick: first\r\nX-Pick: second\r\n\r\n")
     expect(headerOr(twice, "x-pick", "absent"), equals("first"))
   >)
 
+  test.it("keeps every value of a header with one name", () => <
+    twice = parsed("HTTP/1.1 200 OK\r\nX-Pick: first\r\nX-Pick: second\r\n\r\n")
+    expect(twice.headers().all("x-pick").size, equals(2))
+  >)
+
   test.it("reads a header with no value as an empty value", () => <
     empty = parsed("HTTP/1.1 200 OK\r\nX-Empty:\r\n\r\n")
-    expect(empty.header("X-Empty"), isOk())
+    expect(empty.headers().get("X-Empty"), isOk())
     expect(headerOr(empty, "X-Empty", "absent"), equals(""))
   >)
 
@@ -316,24 +490,24 @@ test.describe("headers", () => <
 
   test.it("ignores a body line that looks like a header", () => <
     sneaky = parsed("HTTP/1.1 200 OK\r\nX-Real: yes\r\n\r\nX-Body: no")
-    expect(sneaky.header("X-Real"), isOk())
-    expect(sneaky.header("X-Body"), isNotOk())
+    expect(sneaky.headers().get("X-Real"), isOk())
+    expect(sneaky.headers().get("X-Body"), isNotOk())
   >)
 
   test.it("leaves a line carrying no colon out of the headers", () => <
     junk = parsed("HTTP/1.1 200 OK\r\ngarbage line\r\nX-Real: yes\r\n\r\n")
-    expect(junk.headers().size, equals(1))
+    expect(junk.headers().names().size, equals(1))
     expect(headerOr(junk, "x-real", "absent"), equals("yes"))
   >)
 
-  test.it("lists the header lines without the status line", () => <
+  test.it("lists every header name without the status line", () => <
     two = parsed(crlfReply())
-    expect(two.headers().size, equals(2))
-    expect(two.headers()[0], equals("Content-Type: text/html"))
+    expect(two.headers().names().size, equals(2))
+    expect(headerOr(two, "content-type", "absent"), equals("text/html"))
   >)
 
   test.it("finds no headers in a reply that has none", () =>
-    expect(parsed("HTTP/1.1 200 OK\r\n\r\nbody").headers().size, equals(0)))
+    expect(parsed("HTTP/1.1 200 OK\r\n\r\nbody").headers().names().size, equals(0)))
 >)
 
 test.describe("the body", () => <
@@ -380,7 +554,7 @@ test.describe("line endings", () => <
 
   test.it("reads a bare-LF reply's headers", () => <
     reply = parsed(lineFeedReply())
-    expect(reply.headers().size, equals(2))
+    expect(reply.headers().names().size, equals(2))
     expect(headerOr(reply, "content-type", "absent"), equals("text/html"))
   >)
 
@@ -392,7 +566,7 @@ test.describe("line endings", () => <
     ~ the split inside the body and swallow most of it into the head.
     mixed = parsed("HTTP/1.1 200 OK\nX-A: b\n\nbody with \r\n\r\n inside")
     expect(mixed.statusLine(), equals("HTTP/1.1 200 OK"))
-    expect(mixed.headers().size, equals(1))
+    expect(mixed.headers().names().size, equals(1))
     expect(mixed.body(), equals("body with \r\n\r\n inside"))
   >)
 
@@ -409,7 +583,7 @@ test.describe("line endings", () => <
   test.it("splits at the first blank line when the body carries a bare-LF one", () => <
     ~ The mirror case: CRLF headers, a bare-LF blank line in the body.
     mixed = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nbody with \n\n inside")
-    expect(mixed.headers().size, equals(1))
+    expect(mixed.headers().names().size, equals(1))
     expect(mixed.body(), equals("body with \n\n inside"))
   >)
 
@@ -427,6 +601,7 @@ test.describe("the Method sum", () => <
   test.it("writes GET", () => expect(Get.token(), equals("GET")))
   test.it("writes DELETE", () => expect(Delete.token(), equals("DELETE")))
   test.it("writes HEAD", () => expect(Head.token(), equals("HEAD")))
+  test.it("writes OPTIONS", () => expect(Options.token(), equals("OPTIONS")))
 
   test.it("writes POST", () =>
     expect(Post(Body { content = "x", contentType = "text/plain" }).token(), equals("POST")))
@@ -437,10 +612,18 @@ test.describe("the Method sum", () => <
   test.it("writes QUERY", () =>
     expect(Query(Body { content = "x", contentType = "text/plain" }).token(), equals("QUERY")))
 
+  test.it("writes PATCH", () =>
+    expect(Patch(Body { content = "x", contentType = "text/plain" }).token(), equals("PATCH")))
+
   test.it("carries the body of a body-bearing method", () => <
     carried = Post(Body { content = "sent", contentType = "text/plain" }).payload()
     expect(carried.content, equals("sent"))
     expect(carried.contentType, equals("text/plain"))
+  >)
+
+  test.it("carries the body of a PATCH", () => <
+    carried = Patch(Body { content = "sent", contentType = "text/plain" }).payload()
+    expect(carried.content, equals("sent"))
   >)
 
   test.it("carries an empty body for a nullary method", () => <
@@ -448,149 +631,275 @@ test.describe("the Method sum", () => <
     expect(none.content, equals(""))
     expect(none.contentType, equals(""))
   >)
+
+  test.it("treats PATCH like POST for carriesBody", () =>
+    expect(Patch(Body { content = "x", contentType = "text/plain" }).carriesBody(), equals(true)))
+
+  test.it("treats OPTIONS like the other nullary methods for carriesBody", () =>
+    expect(Options.carriesBody(), equals(false)))
 >)
 
-~ From here down, the internals the blocks above rest on — reachable at all only because the
-~ suite lives in the module beside them.
+test.describe("Headers", () => <
+  test.it("lower-cases the name on add", () => <
+    headers := Headers.empty()
+    headers.add("X-Trace", "abc")
+    expect(headers.has("x-trace"), equals(true))
+  >)
 
-test.describe("the head/body split", () => <
-  test.it("hands back the head with its endings rewritten and the body left off", () =>
-    expect(parsed(crlfReply()).head(),
-      equals("HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5")))
+  test.it("looks a value up case-insensitively", () => <
+    headers := Headers.empty()
+    headers.add("X-Trace", "abc")
+    expect(headers.get("X-TRACE"), isOk())
+  >)
 
-  test.it("hands back the whole reply as head when there is no blank line", () =>
-    expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n").head(), equals("HTTP/1.1 200 OK\nX-A: b\n")))
+  test.it("keeps the first value when a name is added twice", () => <
+    headers := Headers.empty()
+    headers.add("X-A", "1")
+    headers.add("x-a", "2")
+    firstValue :: Text = headers.get("x-a") ? | Ok(value) => value | NotOk(_) => "?"
+    expect(firstValue, equals("1"))
+  >)
+
+  test.it("keeps every value added under one name", () => <
+    headers := Headers.empty()
+    headers.add("X-A", "1")
+    headers.add("x-a", "2")
+    expect(headers.all("x-a").size, equals(2))
+  >)
+
+  test.it("lists every name added, lower-cased", () => <
+    headers := Headers.empty()
+    headers.add("X-A", "1")
+    headers.add("X-B", "2")
+    expect(headers.names().size, equals(2))
+  >)
+
+  test.it("adds every entry of a map literal, lower-cased", () => <
+    headers := Headers.empty()
+    headers.add([|"X-A" => "1", "X-B" => "2"|])
+    expect(headers.has("x-a"), equals(true))
+    expect(headers.has("x-b"), equals(true))
+  >)
+
+  test.it("writes one name: value line per value", () => <
+    headers := Headers.empty()
+    headers.add("X-A", "1")
+    headers.add("x-a", "2")
+    expect(headers.wire(), contains("x-a: 1\r\n"))
+    expect(headers.wire(), contains("x-a: 2\r\n"))
+  >)
+
+  test.it("parses two same-named header lines into one name with two values", () => <
+    fromLines = Headers.parse(["X-A: 1", "X-A: 2"])
+    expect(fromLines.all("x-a").size, equals(2))
+  >)
+
+  test.it("reports an absent name as NotOk", () =>
+    expect(Headers.empty().get("x-absent"), isNotOk()))
+>)
+
+test.describe("Params", () => <
+  test.it("keeps a repeated name's every value, and a single name's one", () => <
+    parsedParams = Params.parse("q=ada&tag=a&tag=b")
+    expect(parsedParams.all("tag").size, equals(2))
+    firstQuery :: Text = parsedParams.get("q") ? | Ok(value) => value | NotOk(_) => "?"
+    expect(firstQuery, equals("ada"))
+  >)
+
+  test.it("reads a bare name as an empty value", () => <
+    flagOnly = Params.parse("flag")
+    flagValue :: Text = flagOnly.get("flag") ? | Ok(value) => value | NotOk(_) => "?"
+    expect(flagValue, equals(""))
+  >)
+
+  test.it("parses an empty query as no params at all", () =>
+    expect(Params.parse("").names().size, equals(0)))
+
+  test.it("compares names exactly, unlike Headers", () => <
+    parsedParams = Params.parse("Q=ada")
+    expect(parsedParams.has("Q"), equals(true))
+    expect(parsedParams.has("q"), equals(false))
+  >)
+>)
+
+test.describe("Request.params", () => <
+  test.it("reads a repeated and a single query parameter off the URL", () => <
+    request = Request.get("http://example.com/s?q=ada&tag=a&tag=b")
+    expect(request.params().all("tag").size, equals(2))
+  >)
+
+  test.it("reads no params from a URL with no query", () =>
+    expect(Request.get("http://example.com/s").params().names().size, equals(0)))
+>)
+
+test.describe("Request's static constructors", () => <
+  test.it("get defaults to empty options", () => <
+    request = Request.get("example.com/x")
+    expect(request.method.token(), equals("GET"))
+    expect(request.options.headers.names().size, equals(0))
+  >)
+
+  test.it("get accepts explicit options", () => <
+    withOptions := RequestOptions.default()
+    withOptions.headers.add("Accept", "text/plain")
+    request := Request.get("example.com/x", withOptions)
+    expect(request.options.headers.has("accept"), equals(true))
+  >)
+
+  test.it("post carries a body with default options", () => <
+    request = Request.post("example.com/x", Body { content = "hi", contentType = "text/plain" })
+    expect(request.method.token(), equals("POST"))
+    expect(request.options.headers.names().size, equals(0))
+  >)
+
+  test.it("post accepts explicit options", () => <
+    withOptions := RequestOptions.default()
+    withOptions.headers.add("X-Trace", "abc")
+    request := Request.post(
+      "example.com/x", Body { content = "hi", contentType = "text/plain" }, withOptions)
+    expect(request.options.headers.has("x-trace"), equals(true))
+  >)
+
+  test.it("options builds an OPTIONS request, distinct from the Options method variant", () => <
+    request = Request.options("example.com/x")
+    expect(request.method.token(), equals("OPTIONS"))
+    expect(request.options.headers.names().size, equals(0))
+  >)
+
+  test.it("head, delete, put, patch and query each build their own method", () => <
+    body = Body { content = "x", contentType = "text/plain" }
+    expect(Request.head("example.com/x").method.token(), equals("HEAD"))
+    expect(Request.delete("example.com/x").method.token(), equals("DELETE"))
+    expect(Request.put("example.com/x", body).method.token(), equals("PUT"))
+    expect(Request.patch("example.com/x", body).method.token(), equals("PATCH"))
+    expect(Request.query("example.com/x", body).method.token(), equals("QUERY"))
+  >)
 >)
 
 test.describe("reading a URL apart", () => <
   test.it("drops the scheme", () =>
-    expect(Request { method = Get, url = "http://example.com/a" }.withoutScheme(),
-      equals("example.com/a")))
+    expect(Request.get("http://example.com/a").withoutScheme(), equals("example.com/a")))
 
   test.it("takes the authority from a URL with a path", () =>
-    expect(Request { method = Get, url = "http://example.com/a/b" }.authority(),
-      equals("example.com")))
+    expect(Request.get("http://example.com/a/b").authority(), equals("example.com")))
 
   test.it("takes the authority from a URL with no path", () =>
-    expect(Request { method = Get, url = "example.com" }.authority(), equals("example.com")))
+    expect(Request.get("example.com").authority(), equals("example.com")))
 
   test.it("keeps a port in the authority", () =>
-    expect(Request { method = Get, url = "http://example.com:8080/a" }.authority(),
-      equals("example.com:8080")))
+    expect(Request.get("http://example.com:8080/a").authority(), equals("example.com:8080")))
 
   test.it("defaults an absent path to /", () =>
-    expect(Request { method = Get, url = "example.com" }.path(), equals("/")))
+    expect(Request.get("example.com").path(), equals("/")))
 
   test.it("keeps a path with a query string", () =>
-    expect(Request { method = Get, url = "http://example.com/s?q=ada&n=1" }.path(),
-      equals("/s?q=ada&n=1")))
+    expect(Request.get("http://example.com/s?q=ada&n=1").path(), equals("/s?q=ada&n=1")))
 
   test.it("keeps a query string out of the authority", () => <
     ~ A URL with a query and no path: the `?` must not be read as part of the host, or the
     ~ Host header names a host that cannot resolve.
-    bare = Request { method = Get, url = "http://example.com?a=b" }
+    bare = Request.get("http://example.com?a=b")
     expect(bare.authority(), equals("example.com"))
     expect(bare.path(), equals("/?a=b"))
   >)
 
   test.it("drops a fragment rather than putting it on the wire", () => <
-    fragmented = Request { method = Get, url = "http://example.com/a#section" }
+    fragmented = Request.get("http://example.com/a#section")
     expect(fragmented.authority(), equals("example.com"))
     expect(fragmented.path(), equals("/a"))
   >)
 
   test.it("reads a bare host carrying only a fragment as the root path", () =>
-    expect(Request { method = Get, url = "http://example.com#top" }.path(), equals("/")))
+    expect(Request.get("http://example.com#top").path(), equals("/")))
 
   test.it("drops userinfo from the authority", () =>
-    expect(Request { method = Get, url = "http://ada@example.com/x" }.authority(),
-      equals("example.com")))
+    expect(Request.get("http://ada@example.com/x").authority(), equals("example.com")))
 >)
 
 test.describe("serialising a request", () => <
   test.it("writes a GET exactly", () => <
-    request = Request { method = Get, url = "http://example.com/index.html" }
+    request = Request.get("http://example.com/index.html")
     expect(request.wire(), equals(
-      "GET /index.html HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"))
+      "GET /index.html HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
   >)
 
   test.it("writes a GET for a URL with no path exactly", () => <
-    request = Request { method = Get, url = "example.com" }
+    request = Request.get("example.com")
     expect(request.wire(), equals(
-      "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n"))
+      "GET / HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
   >)
 
   test.it("writes a POST with its body exactly", () => <
-    request = Request {
-      method = Post(Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" }),
-      url = "http://example.com/submit"
-    }
+    request = Request.post("http://example.com/submit",
+      Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" })
     expect(request.wire(), equals(
-      "POST /submit HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
-        + "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 8\r\n"
+      "POST /submit HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+        + "content-type: application/x-www-form-urlencoded\r\ncontent-length: 8\r\n"
         + "\r\nname=ada"))
   >)
 
   test.it("writes a QUERY with its body exactly", () => <
-    request = Request {
-      method = Query(Body { content = "{\"q\":\"ada\"}", contentType = "application/json" }),
-      url = "http://example.com/search"
-    }
+    request = Request.query("http://example.com/search",
+      Body { content = "{\"q\":\"ada\"}", contentType = "application/json" })
     expect(request.wire(), equals(
-      "QUERY /search HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
-        + "Content-Type: application/json\r\nContent-Length: 11\r\n"
+      "QUERY /search HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+        + "content-type: application/json\r\ncontent-length: 11\r\n"
         + "\r\n{\"q\":\"ada\"}"))
   >)
 
   test.it("counts Content-Length in bytes, not characters", () => <
     ~ "héllo" is five characters and six UTF-8 bytes; the wire wants bytes.
-    request = Request {
-      method = Put(Body { content = "héllo", contentType = "text/plain" }),
-      url = "example.com/x"
-    }
-    expect(request.wire(), contains("Content-Length: 6\r\n"))
+    request = Request.put("example.com/x", Body { content = "héllo", contentType = "text/plain" })
+    expect(request.wire(), contains("content-length: 6\r\n"))
   >)
 
   test.it("sends no body headers for a method carrying no body", () => <
-    request = Request { method = Delete, url = "example.com/gone" }
-    expect(request.wire(), not(contains("Content-Type")))
-    expect(request.wire(), not(contains("Content-Length")))
+    request = Request.delete("example.com/gone")
+    expect(request.wire(), not(contains("content-type")))
+    expect(request.wire(), not(contains("content-length")))
   >)
 
   test.it("sends Content-Length: 0 for a body-bearing method with empty content", () => <
     ~ Empty content is a body of length zero, not the absence of a body; a POST with no
     ~ Content-Length at all draws a 411 from real servers.
-    request = Request {
-      method = Post(Body { content = "", contentType = "text/plain" }),
-      url = "example.com/x"
-    }
+    request = Request.post("example.com/x", Body { content = "", contentType = "text/plain" })
     expect(request.wire(), equals(
-      "POST /x HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
-        + "Content-Type: text/plain\r\nContent-Length: 0\r\n"
+      "POST /x HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+        + "content-type: text/plain\r\ncontent-length: 0\r\n"
         + "\r\n"))
   >)
 
   test.it("names the port in Host when the URL carries one", () =>
-    expect(Request { method = Head, url = "http://example.com:8080/p" }.wire(),
-      contains("Host: example.com:8080\r\n")))
+    expect(Request.head("http://example.com:8080/p").wire(), contains("host: example.com:8080\r\n")))
 
   test.it("writes a HEAD request line", () =>
-    expect(Request { method = Head, url = "example.com/p" }.wire(),
-      contains("HEAD /p HTTP/1.0\r\n")))
+    expect(Request.head("example.com/p").wire(), contains("HEAD /p HTTP/1.0\r\n")))
 
   test.it("writes a DELETE request line", () =>
-    expect(Request { method = Delete, url = "example.com/p" }.wire(),
-      contains("DELETE /p HTTP/1.0\r\n")))
+    expect(Request.delete("example.com/p").wire(), contains("DELETE /p HTTP/1.0\r\n")))
 
   test.it("writes a PUT request line with its body", () => <
-    request = Request {
-      method = Put(Body { content = "replaced", contentType = "text/plain" }),
-      url = "example.com/p"
-    }
+    request = Request.put("example.com/p", Body { content = "replaced", contentType = "text/plain" })
     expect(request.wire(), equals(
-      "PUT /p HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n"
-        + "Content-Type: text/plain\r\nContent-Length: 8\r\n"
+      "PUT /p HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+        + "content-type: text/plain\r\ncontent-length: 8\r\n"
         + "\r\nreplaced"))
+  >)
+
+  test.it("a caller header replaces the generated content-type", () => <
+    withOptions := RequestOptions.default()
+    withOptions.headers.add("Content-Type", "application/json")
+    request := Request.post(
+      "example.com/x", Body { content = "{}", contentType = "text/plain" }, withOptions)
+    expect(request.wire(), contains("content-type: application/json\r\n"))
+    expect(request.wire(), not(contains("text/plain")))
+  >)
+
+  test.it("a caller header goes on the wire lower-cased", () => <
+    withOptions := RequestOptions.default()
+    withOptions.headers.add("X-Trace", "abc123")
+    request := Request.get("example.com/x", withOptions)
+    expect(request.wire(), contains("x-trace: abc123\r\n"))
   >)
 >)
 
@@ -599,10 +908,7 @@ test.describe("a round trip", () => <
     ~ Serialise a POST, then hand its body back as a reply's body: what goes out and what
     ~ comes in agree on where the blank line falls.
     sent = "name=ada"
-    request = Request {
-      method = Post(Body { content = sent, contentType = "text/plain" }),
-      url = "example.com/echo"
-    }
+    request = Request.post("example.com/echo", Body { content = sent, contentType = "text/plain" })
     expect(request.wire(), contains("\r\n\r\n" + sent))
     echoed = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + sent)
     expect(echoed.body(), equals(sent))

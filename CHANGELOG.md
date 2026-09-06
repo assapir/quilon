@@ -6,6 +6,17 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` gains request headers, query params, `Options`/`Patch`, and static request
+  constructors.** `Method` gains `Options` and a body-carrying `Patch`. `Headers` (a
+  case-insensitive, multi-value name/value store — a repeated name like `X-A: 1` / `X-A: 2`
+  keeps both values) and `Params` (the same store, case-sensitive, read off a URL's query
+  string via `Request.params()`) are new exported types, along with `RequestOptions`
+  (`{ headers :: Headers }`), which a `Request` now carries. A request is built through a
+  static constructor per method — `Request.get(url)`, `.post(url, body)`, `.options(url)`,
+  … — each with a second overload taking explicit `RequestOptions`; a caller header
+  replaces a generated one (`host`/`connection`/`content-type`/`content-length`) of the
+  same name, and every generated header line goes on the wire lower-cased. See
+  `docs/corelib/http.md`.
 - **VS Code: 🐞 Debug suite / 🐞 Debug case CodeLens and a Test Explorer Debug profile.**
   The language server now places a Debug lens beside every Run suite/Run case lens above a
   `describe`/`it`; the extension's new `quilon.debugTests` command builds just that suite or
@@ -88,6 +99,9 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **`core.http`'s `Response.headers()` returns `Headers`, not raw lines.** Reading a
+  specific header goes through `headers().get(name)`; `Response.header(name)` is gone. See
+  `docs/corelib/http.md`. Closes #370.
 - **A field and a method may share a name.** A bare access (`it.a`) always reaches the
   field, and a dot-call (`it.a(...)`) always reaches the method, so the two forms never
   compete; only a field declared twice, or two methods with the same signature, is still a
