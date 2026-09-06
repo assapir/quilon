@@ -33,6 +33,16 @@ Point = {
   at = (x :: Num, y :: Num) -> Point => < Point { x = x, y = y } >
 }
 
+~ A field and a method may share a name: a bare access reaches the field, a dot-call
+~ reaches the method. `options` names both a field and the static constructor;
+~ `count` names both a field and a value-receiver method.
+Metrics = {
+  options :: Num,
+  count :: Num,
+  options = (n :: Num) -> Metrics => < Metrics { options = n, count = 0 } >,
+  count = () -> Num => < it.count + 1 >
+}
+
 ^ = () -> $ => <
   c :: Counter = Counter { value = 30 }
   assert(c.bump(5), equals(35))     ~ Counter's method: it.value + 5
@@ -49,4 +59,9 @@ Point = {
   assert(diagonal.x + diagonal.y, equals(6))
   p :: Point = Point.at(3, 4)
   assert(p.x + p.y, equals(7))
+
+  m :: Metrics = Metrics.options(5)  ~ dot-call on the type name reaches the method
+  assert(m.options, equals(5))       ~ bare access reaches the field
+  assert(m.count, equals(0))         ~ bare access reaches the other field
+  assert(m.count(), equals(1))       ~ dot-call reaches the other method
 >
