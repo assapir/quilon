@@ -122,7 +122,7 @@ All notable changes to Quilon are documented here.
   expression there, matched against the same `(Elem) -> R` shape a declared
   function-typed parameter checks a closure against; codegen calls a non-literal
   callback through the existing closure-value call path, evaluated once before the loop
-  rather than once per element. Closes #341.
+  rather than once per element. (#341)
 - **A failing `expect` ends its case, not just the assertions after it.** A statement
   between two `expect`s, and a later iteration of a `.each` callback a failing `expect`
   ran inside, used to keep running once the first `expect` in a case failed — only that
