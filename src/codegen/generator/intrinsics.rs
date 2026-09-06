@@ -148,10 +148,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // `assert` at `site` and terminate with 101. Never returns; the call is left as
             // ordinary flow so an assertion composes in expression position.
             // void __expect_failed(Site*, i8*, i64) — the same report, but it marks the
-            // running test case failed and RETURNS, so the suite carries on.
+            // running test case failed and ends it there, so the suite carries on with
+            // the next one; declared `void` since the call composes as ordinary flow, even
+            // though it never actually falls through on a real failure.
             "__assert_failed" | "__expect_failed" => {
                 void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
             }
+            // void __test_case_run_guarded(ptr fn, ptr env) — run a case's body (`fn(env)`,
+            // a closure's split-apart function and environment pointers) on its own nested
+            // fiber; a failing `expect` ends the case by suspending it. Backs
+            // `__test_run_case(body)`.
+            "__test_case_run_guarded" => void.fn_type(&[ptr.into(), ptr.into()], false),
             // double __test_*(…) — the test registry (see `is_test_registry_intrinsic`): the
             // harness's event sink and reporter, which `core.test`'s `describe` and `it`
             // drive. Each takes the `Text` (as `i8*, i64`) and `Num` parameters its table
