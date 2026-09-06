@@ -1,0 +1,70 @@
+~ Request headers, query params, and every constructor of the `core.http` client.
+~ On success the program exits 0.
+~ NOTE: this makes LIVE network calls to example.com:80 when run.
+<< core.http
+
+^ = () -> $ => <
+  ~ Build options with headers added one at a time, then a whole map at once.
+  options := http.RequestOptions.default()
+  options.headers.add("X-Trace", "abc123")
+  options.headers.add([|"Accept" => "text/html"|])
+
+  ~ The two-argument constructor carries the given options; the request's own headers
+  ~ read them back, lower-cased, `has` included.
+  request := http.Request.get("http://example.com/", options)
+  assert(request.headers().get("x-trace"), isOk())
+  assert(request.headers().names().size, equals(2))
+  assert(request.headers().has("accept"), equals(true))
+  assert(request.headers().has("x-absent"), equals(false))
+
+  ~ The one-argument constructor sends a HEAD with no extra headers.
+  headResult = http.Request.head("http://example.com/").send()
+  assert(headResult, isOk())
+  headResponse = headResult ?
+    | Ok(page) => page
+    | NotOk(_) => http.Response { raw = "" }
+
+  ~ The live reply's own headers, read the same way.
+  assert(headResponse.headers().get("content-type"), isOk())
+  assert(headResponse.headers().all("content-type").size > 0, equals(true))
+  assert(headResponse.headers().names().size > 0, equals(true))
+
+  ~ A request's query string reads as Params without being sent: a repeated name keeps
+  ~ every value, a single name keeps its one, and both answer `has`/`names`.
+  withQuery = http.Request.get("http://example.com/?q=ada&tag=a&tag=b")
+  assert(withQuery.params().all("tag").size, equals(2))
+  assert(withQuery.params().get("q"), isOk())
+  assert(withQuery.params().has("tag"), equals(true))
+  assert(withQuery.params().names().size, equals(2))
+
+  ~ Params built by hand the same way Headers are: one name at a time, then a whole map.
+  params := http.Params.empty()
+  params.add("tag", "c")
+  params.add([|"page" => "2"|])
+  assert(params.all("tag").size, equals(1))
+  assert(params.names().size, equals(2))
+
+  ~ One body, reused for every body-bearing constructor below.
+  body = http.Body { content = "{}", contentType = "application/json" }
+
+  ~ An OPTIONS request sent live: example.com answers, whatever status it picks.
+  assert(http.Request.options("http://example.com/").send(), isOk())
+
+  ~ Every remaining constructor sent live: each reaches example.com and gets some reply.
+  assert(http.Request.delete("http://example.com/").send(), isOk())
+  assert(http.Request.put("http://example.com/", body).send(), isOk())
+  assert(http.Request.patch("http://example.com/", body).send(), isOk())
+  assert(http.Request.query("http://example.com/", body).send(), isOk())
+
+  ~ The three-argument POST carries explicit options alongside its body.
+  postResult = http.Request.post("http://example.com/", body, options).send()
+  assert(postResult, isOk())
+  postResponse = postResult ?
+    | Ok(page) => page
+    | NotOk(_) => http.Response { raw = "" }
+  assert(postResponse.status() > 0, equals(true))
+
+  ~ PATCH carries a body the same way POST and PUT do.
+  patched = http.Patch(body)
+  assert(patched.token(), equals("PATCH"))
+>

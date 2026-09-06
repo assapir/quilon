@@ -14,7 +14,7 @@
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
-use crate::scheduler::abort_current_case;
+use crate::scheduler::{abort_current_case, abort_current_trap, abort_trap_active};
 use crate::test_registry::{Failure, mark_case_failed};
 use std::os::raw::c_int;
 
@@ -120,9 +120,19 @@ impl Style {
 /// up, matching what the compiler does with the same case. A null site means the caller
 /// predates this plumbing and is treated the same way.
 ///
+/// While an `aborts()` trap is active ([`abort_trap_active`]), the report is WITHHELD from
+/// stderr — the abort is the expected outcome — and carried into the trap instead, through
+/// [`abort_current_trap`]; a failing `not(aborts())` is what shows it, as the mismatch it
+/// expected not to see. Never returns either way: trapped, the coroutine is force-reset by
+/// [`crate::scheduler::run_abort_trap_guarded`] and never resumed here.
+///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
 pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: c_int) -> ! {
+    if abort_trap_active() {
+        let report = render_report(site, code, message, &Style::for_stderr());
+        abort_current_trap(exit_code, report);
+    }
     report_at(site, code, message);
     __exit(exit_code)
 }
@@ -133,7 +143,13 @@ pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: 
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
 pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
-    let style = Style::for_stderr();
+    let out = render_report(site, code, message, &Style::for_stderr());
+    write_to_fd(2, out.as_bytes());
+}
+
+/// Render the frame [`report_at`] writes to stderr, WITHOUT writing it — the pure half
+/// [`fail_at`] uses to carry a withheld report into an `aborts()` trap instead.
+fn render_report(site: *const QlSite, code: u16, message: &str, style: &Style) -> String {
     let mut out = format!(
         "{}error[QN{code:03}]:{} {message}\n",
         style.problem, style.plain
@@ -165,7 +181,7 @@ pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
         ));
         out.push_str(&format!("{}{gutter}╰────{}\n", style.frame, style.plain));
     }
-    write_to_fd(2, out.as_bytes());
+    out
 }
 
 /// A failing `assert(actual, matcher)`: report `message` at the assertion's own call site and

@@ -742,3 +742,64 @@ fn filter_of_reference_typed_elements_from_an_immutable_array_is_still_rejected(
         "expected the filtered record array to still name 'points', got: {error}"
     );
 }
+
+// --- Route 17: calling a function-typed PARAMETER threads whatever the ACTUAL closure
+// passed for it aliases, worked out at the call that supplies it — the same
+// substitution a directly-returned parameter's argument slot already gets, one level
+// in: the slot carries "called" rather than "returned". ---
+
+#[test]
+fn a_map_callback_forwarding_a_parameter_whose_closure_captures_a_mutable_value_is_rejected() {
+    // `applyToAll`'s own result aliases "calling whatever closure its `f` slot is given"
+    // — `makeR` ignores its argument and always returns the captured `:=` record, so
+    // `results` (and any element read out of it) is exactly as mutable-aliased as
+    // `shared` itself.
+    let error = type_error_message(
+        "R = { v :: Num }\napplyToAll = (xs :: []Num, f :: (Num) -> R) -> []R => < xs.map(f) >\n\
+         ^ = () -> Num => <\n  shared := R { v = 1 }\n  \
+         makeR = (n :: Num) -> R => < shared >\n  \
+         results = applyToAll([1, 2, 3], makeR)\n  results[0].v\n>",
+    );
+    assert!(
+        error.contains("'shared' is mutable"),
+        "expected the forwarded-callback result to name 'shared', got: {error}"
+    );
+}
+
+#[test]
+fn run_a_map_callback_forwarding_a_parameter_whose_closure_builds_fresh_values_stays_legal() {
+    assert_exit(
+        "R = { v :: Num }\napplyToAll = (xs :: []Num, f :: (Num) -> R) -> []R => < xs.map(f) >\n\
+         ^ = () -> Num => <\n  bias := 0\n  \
+         makeFresh = (n :: Num) -> R => < R { v = n + bias } >\n  \
+         results = applyToAll([1, 2, 3], makeFresh)\n  results[0].v\n>",
+        1,
+    );
+}
+
+#[test]
+fn calling_a_function_typed_parameter_directly_that_returns_a_captured_mutable_value_is_rejected() {
+    // Same mechanism outside any array method: `g`'s own result aliases "calling
+    // whatever closure its `f` slot is given", so `g(makeR)` inherits `shared`'s
+    // mutability exactly as `makeR()` called directly would.
+    let error = type_error_message(
+        "R = { v :: Num }\ng = (f :: (Num) -> R) -> R => < f(0) >\n\
+         ^ = () -> Num => <\n  shared := R { v = 1 }\n  \
+         makeR = (n :: Num) -> R => < shared >\n  frozen = g(makeR)\n  frozen.v\n>",
+    );
+    assert!(
+        error.contains("'shared' is mutable"),
+        "expected the directly-called parameter's result to name 'shared', got: {error}"
+    );
+}
+
+#[test]
+fn run_calling_a_function_typed_parameter_directly_that_builds_a_fresh_value_stays_legal() {
+    assert_exit(
+        "R = { v :: Num }\ng = (f :: (Num) -> R) -> R => < f(0) >\n\
+         ^ = () -> Num => <\n  bias := 0\n  \
+         makeFresh = (n :: Num) -> R => < R { v = n + bias + 5 } >\n  \
+         frozen = g(makeFresh)\n  frozen.v\n>",
+        5,
+    );
+}

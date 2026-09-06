@@ -477,8 +477,9 @@ pub const EXPECT: &str = "expect";
 ///
 /// Compiler-provided rather than written in `.qn` because a matcher holds a value of the type
 /// under test, which without generics would need one matcher type per value type. `not` takes
-/// a matcher and negates it; the rest take the value they compare against, or nothing.
-pub const MATCHERS: &[&str] = &["equals", "contains", "not", "isOk", "isNotOk"];
+/// a matcher and negates it; `aborts` reads a zero-parameter lambda instead of comparing a
+/// value; the rest take the value they compare against, or nothing.
+pub const MATCHERS: &[&str] = &["equals", "contains", "not", "isOk", "isNotOk", "aborts"];
 
 /// Whether `name` is `assert` or `expect` — a call the compiler lowers itself.
 pub fn is_assertion(name: &str) -> bool {

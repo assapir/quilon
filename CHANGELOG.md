@@ -6,6 +6,17 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` gains request headers, query params, `Options`/`Patch`, and static request
+  constructors.** `Method` gains `Options` and a body-carrying `Patch`. `Headers` (a
+  case-insensitive, multi-value name/value store — a repeated name like `X-A: 1` / `X-A: 2`
+  keeps both values) and `Params` (the same store, case-sensitive, read off a URL's query
+  string via `Request.params()`) are new exported types, along with `RequestOptions`
+  (`{ headers :: Headers }`), which a `Request` now carries. A request is built through a
+  static constructor per method — `Request.get(url)`, `.post(url, body)`, `.options(url)`,
+  … — each with a second overload taking explicit `RequestOptions`; a caller header
+  replaces a generated one (`host`/`connection`/`content-type`/`content-length`) of the
+  same name, and every generated header line goes on the wire lower-cased. See
+  `docs/corelib/http.md`.
 - **`core.http` sends HTTP/1.1 and dechunks a `Transfer-Encoding: chunked` reply.** A
   native intrinsic frames the body — chunked, `Content-Length`, or close-delimited — on raw
   bytes, since a boundary can fall inside a multi-byte character where grapheme-indexed
@@ -90,9 +101,19 @@ All notable changes to Quilon are documented here.
   same mechanism a top-level function overload set already uses. A bare type-name receiver
   (`T.f(1)`) on an overloaded member is still rejected (`QN340`), since dispatch needs a
   receiver value. See `docs/functions/overloading.md#method-overloading`.
+- **The `aborts()` matcher — verify that a fail-loud exit actually fires.** `assert(() =>
+  …, aborts())` runs a zero-parameter lambda on its own guarded fiber and holds if it ends
+  in a fail-loud exit (an `assert` failure, a runtime fault, `failAt`) instead of
+  returning; composes with `not`. Built on the per-case guarded-fiber mechanism from #368:
+  while trapped, the exit's own stderr report is withheld and, if `not(aborts())` fails
+  instead, shown in ITS mismatch message. See `docs/corelib/test/README.md#the-matchers`
+  and `examples/assert_demo.qn`. Closes #85.
 
 ### Changed
 
+- **`core.http`'s `Response.headers()` returns `Headers`, not raw lines.** Reading a
+  specific header goes through `headers().get(name)`; `Response.header(name)` is gone. See
+  `docs/corelib/http.md`. Closes #370.
 - **A field and a method may share a name.** A bare access (`it.a`) always reaches the
   field, and a dot-call (`it.a(...)`) always reaches the method, so the two forms never
   compete; only a field declared twice, or two methods with the same signature, is still a
@@ -125,6 +146,17 @@ All notable changes to Quilon are documented here.
   fail-loud exit code; anything else restores the default disposition and re-raises, so an
   unrelated crash stays a crash. See `docs/tooling/errors.md` and
   `docs/status/limitations.md`. (#336)
+
+- **A named closure (or any other function-valued expression) can be passed to
+  `.map`/`.filter`/`.reduce`/`.each`/`.find` and the `Map`/`Set` `.each`.** These
+  built-ins only accepted a lambda LITERAL as their callback; anything else — a named
+  local closure, a forwarded function-typed parameter, a closure returned by a call —
+  was rejected with the confusing `(Num) -> Num is not a function` (a diagnostic meant
+  for a data value called as a function). The checker now accepts any function-typed
+  expression there, matched against the same `(Elem) -> R` shape a declared
+  function-typed parameter checks a closure against; codegen calls a non-literal
+  callback through the existing closure-value call path, evaluated once before the loop
+  rather than once per element. (#341)
 
 - **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
   x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm

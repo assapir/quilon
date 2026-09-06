@@ -25,8 +25,9 @@
 //! genuinely lib-aligned module), [`text`] (the built-in `Text` type), [`http`]
 //! (`core.http`'s byte-level body framing), [`process`]
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
-//! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`), and
-//! [`mem`] (general memory primitives: allocation,
+//! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`),
+//! [`abort_trap`] (the `aborts()` matcher — run a lambda on a guarded fiber and report
+//! whether it ended in a fail-loud exit), and [`mem`] (general memory primitives: allocation,
 //! GC, the shared `QlSlice` ABI type, bounds-check and range-endpoint failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
@@ -37,6 +38,7 @@
 //! into a staticlib, the collector travels inside `libquilon_rt.a` — an AOT-linked
 //! Quilon binary needs no `libgc` on the machine that runs it.
 
+pub mod abort_trap;
 pub mod collections;
 pub mod deferred;
 pub mod gc;
@@ -53,6 +55,7 @@ pub mod test_registry;
 pub mod text;
 pub mod time;
 
+pub use abort_trap::{__abort_trap_report, __abort_trap_run};
 pub use collections::{
     __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_remove, __map_set,
     __map_val, __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b,
@@ -238,6 +241,8 @@ intrinsic_registry! {
     __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
     __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
     __test_case_run_guarded: extern "C" fn(*const c_void, *mut c_void),
+    __abort_trap_run: extern "C" fn(*const c_void, *mut c_void) -> u8,
+    __abort_trap_report: extern "C" fn() -> QlSlice,
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

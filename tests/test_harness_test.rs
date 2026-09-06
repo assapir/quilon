@@ -553,6 +553,12 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Method",
         "core.http.Response",
         "core.http.Request",
+        "core.http.Headers",
+        "core.http.Params",
+        "core.http.RequestOptions",
+        // The private base record `Headers`/`Params` compose over: carried with the
+        // module, exported to no importer.
+        "core.http.Values",
         // The native body-framing primitive: carried with the module (an exported item
         // calls it), exported to no importer.
         "core.http.frameBody",
@@ -846,6 +852,44 @@ fn a_describe_body_overflowing_after_its_case_reports_qn507() {
         out.stderr.contains("error[QN507]: stack overflow"),
         "the describe body's own recursion, after the case, must report QN507, got stdout:\n{}\nstderr:\n{}",
         out.stdout,
+        out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `expect(() => …, aborts())` inside a case: the trapped abort passes the case, the run's
+/// summary counts it, and the withheld report never reaches stderr — the abort was the
+/// expected outcome, not a failure to report.
+#[test]
+fn expect_aborts_passes_and_withholds_the_trapped_report() {
+    let dir = work_dir("expect_aborts");
+    let source = write(
+        &dir,
+        "suite.qn",
+        concat!(
+            "<< core.test\n",
+            "test.describe(\"aborts\", () => <\n",
+            "  xs :: []Num = [1, 2]\n",
+            "  test.it(\"catches a fail-loud exit\", () => expect(() => xs[9], aborts()))\n",
+            ">)\n"
+        ),
+    );
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_eq!(
+        out.code, 0,
+        "a trapped abort must pass the case:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains("✓ catches a fail-loud exit")
+            && out.stdout.contains("1 passed, 0 failed"),
+        "the run's summary must count the case:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stderr.contains("index 9 out of bounds") && !out.stderr.contains("error[QN"),
+        "the trapped abort's report must stay withheld:\n{}",
         out.stderr
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1456,6 +1500,10 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "the body",
         "line endings",
         "the Method sum",
+        "Headers",
+        "Params",
+        "Request.params",
+        "Request's static constructors",
         "reading a URL apart",
         "serialising a request",
         "a round trip",
@@ -1467,7 +1515,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("78 passed, 0 failed"),
+        out.stdout.contains("105 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
@@ -1501,7 +1549,7 @@ fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("20 passed, 0 failed"),
+        out.stdout.contains("21 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
