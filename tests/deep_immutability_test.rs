@@ -803,3 +803,32 @@ fn run_calling_a_function_typed_parameter_directly_that_builds_a_fresh_value_sta
         5,
     );
 }
+
+#[test]
+fn a_curried_functions_returned_closure_calling_its_own_parameter_is_rejected() {
+    // One level deeper: `mk`'s returned closure calls `mk`'s OWN parameter `f`, so
+    // `mk`'s classification (re-bucketed from the inner lambda's, `reclassify_returned_
+    // closure`) carries "calling MY OWN slot 0" forward — `mk(makeR)` returns a closure
+    // whose call inherits `shared`'s mutability exactly as calling `makeR` directly would.
+    let error = type_error_message(
+        "R = { v :: Num }\nmk = (f :: (Num) -> R) -> (Num) -> R => < (x) => f(x) >\n\
+         ^ = () -> Num => <\n  shared := R { v = 1 }\n  \
+         makeR = (n :: Num) -> R => < shared >\n  \
+         g = mk(makeR)\n  frozen = g(0)\n  frozen.v\n>",
+    );
+    assert!(
+        error.contains("'shared' is mutable"),
+        "expected the curried call's result to name 'shared', got: {error}"
+    );
+}
+
+#[test]
+fn run_a_curried_functions_returned_closure_calling_a_fresh_parameter_stays_legal() {
+    assert_exit(
+        "R = { v :: Num }\nmk = (f :: (Num) -> R) -> (Num) -> R => < (x) => f(x) >\n\
+         ^ = () -> Num => <\n  bias := 0\n  \
+         makeFresh = (n :: Num) -> R => < R { v = n + bias + 7 } >\n  \
+         g = mk(makeFresh)\n  frozen = g(0)\n  frozen.v\n>",
+        7,
+    );
+}
