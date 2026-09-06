@@ -377,12 +377,51 @@ fn is_ok_on_a_sum_without_that_variant_is_refused() {
     );
 }
 
+// --- aborts() ---------------------------------------------------------------
+
+/// `aborts()` reads a zero-parameter lambda of ANY return type — it runs the value under
+/// test rather than comparing it, so no `==`/variant requirement applies. Exit-code and
+/// message behavior (what the trap actually catches) are covered in `tests/run_test.rs`,
+/// alongside `test_harness_test.rs` for `expect(…, aborts())` inside a case.
+#[test]
+fn aborts_accepts_a_zero_parameter_lambda_of_any_return_type() {
+    for (tag, body) in [
+        ("aborts_num", "assert(() => 1, not(aborts()))"),
+        ("aborts_text", "assert(() => \"x\", not(aborts()))"),
+        ("aborts_unit", "assert(() => $, not(aborts()))"),
+    ] {
+        let (code, stderr) = run_entry(tag, body);
+        assert_eq!(code, 0, "`{body}` must hold, got: {stderr:?}");
+    }
+}
+
+#[test]
+fn aborts_on_a_non_lambda_value_is_refused() {
+    let (code, stderr) = run_entry("aborts_non_lambda", "assert(1, aborts())");
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("aborts` reads a zero-parameter lambda"),
+        "unexpected diagnostic: {stderr:?}"
+    );
+}
+
+#[test]
+fn aborts_on_a_lambda_with_parameters_is_refused() {
+    let (code, stderr) = run_entry("aborts_with_params", "assert((n :: Num) => n, aborts())");
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("aborts` reads a zero-parameter lambda"),
+        "unexpected diagnostic: {stderr:?}"
+    );
+}
+
 /// A matcher's arity is checked: `isOk` takes nothing, `equals` takes one value.
 #[test]
 fn a_matcher_with_the_wrong_number_of_arguments_is_refused() {
     for (tag, body) in [
         ("arity_ok", "assert([1].at(0), isOk(1))"),
         ("arity_equals", "assert(1, equals(1, 2))"),
+        ("arity_aborts", "assert(() => 1, aborts(1))"),
     ] {
         let (code, stderr) = run_entry(tag, body);
         assert_ne!(code, 0, "`{body}` must be refused");

@@ -159,6 +159,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // fiber; a failing `expect` ends the case by suspending it. Backs
             // `__test_run_case(body)`.
             "__test_case_run_guarded" => void.fn_type(&[ptr.into(), ptr.into()], false),
+            // i8 __abort_trap_run(ptr thunk, ptr bundle) — run the `aborts()` trampoline
+            // (`thunk(bundle)`) on its own guarded fiber; 1 if it ended in a fail-loud
+            // exit, 0 if it returned. Backs the `aborts()` matcher.
+            "__abort_trap_run" => ctx.i8_type().fn_type(&[ptr.into(), ptr.into()], false),
+            // { ptr, i64 } __abort_trap_report() — the report withheld from the most recent
+            // `__abort_trap_run` that aborted, empty when it returned instead.
+            "__abort_trap_report" => self.ptr_len_struct_type().fn_type(&[], false),
             // double __test_*(…) — the test registry (see `is_test_registry_intrinsic`): the
             // harness's event sink and reporter, which `core.test`'s `describe` and `it`
             // drive. Each takes the `Text` (as `i8*, i64`) and `Num` parameters its table

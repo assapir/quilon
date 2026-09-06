@@ -293,6 +293,10 @@ impl std::fmt::Display for TypeError {
                         "`{matcher}` reads a `Result`, and {label} has no `{}` variant",
                         crate::ast::matcher_variant(matcher).unwrap_or_default()
                     ),
+                    "aborts" => write!(
+                        f,
+                        "`aborts` reads a zero-parameter lambda, and {label} is not one"
+                    ),
                     _ => write!(
                         f,
                         "`{matcher}` compares with `==`, which {label} has no member for"

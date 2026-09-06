@@ -72,6 +72,12 @@ enum Park {
     /// by a coroutine [`run_case_guarded`] resumes, and only ever seen by that function's own
     /// loop — it never reaches [`run`]'s.
     CaseAborted,
+    /// An `aborts()` lambda ended in a fail-loud exit: yielded by [`abort_current_trap`] from
+    /// wherever that exit is reached (an `assert`/runtime fault via `report::fail_at`, or a
+    /// raw `__exit`), carrying the exit code and the report text withheld from stderr. Only
+    /// ever yielded by a coroutine [`run_abort_trap_guarded`] resumes, and only ever seen by
+    /// that function's own loop — it never reaches [`run`]'s.
+    AbortTrapped(c_int, String),
 }
 
 type FiberCoroutine = Coroutine<(), Park, (), DefaultStack>;
@@ -148,6 +154,14 @@ thread_local! {
     /// readiness ops in [`crate::net`], executing inside a fiber, can register and
     /// (re)register their sources with the same `Poll` the scheduler waits on.
     static REACTOR: RefCell<Option<Reactor>> = const { RefCell::new(None) };
+
+    /// How many `aborts()` traps are currently in progress on this thread — incremented
+    /// before [`run_abort_trap_guarded`] resumes its nested fiber for the first time,
+    /// decremented once that fiber has finished or aborted. A plain counter rather than a
+    /// stack: nesting (a trap inside a case inside another trap) only needs to know
+    /// whether SOME trap is active, since a fail-loud exit always suspends whichever fiber
+    /// is actually running (the innermost one), caught by that fiber's own guard loop.
+    static ABORT_TRAP_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Run `f` against the active scheduler. A short borrow only — never held across a
@@ -318,6 +332,77 @@ pub(crate) fn abort_current_case() -> ! {
     unreachable!("run_case_guarded force-resets this coroutine on the abort marker")
 }
 
+/// Whether an `aborts()` trap is currently in progress on this thread — checked by
+/// `report::fail_at` and `process::__exit` to decide whether a fail-loud exit is withheld
+/// and trapped instead of terminating the process.
+pub(crate) fn abort_trap_active() -> bool {
+    ABORT_TRAP_DEPTH.get() > 0
+}
+
+/// Run an `aborts()` lambda's body — `function(environment)`, the raw parts of its
+/// (possibly wrapped) closure — to completion on a fresh nested fiber, resumed
+/// synchronously right here exactly as [`run_case_guarded`] resumes a case's. Yields the
+/// outcome: whether [`abort_current_trap`] ended it early, and if so, what it recorded.
+///
+/// A park the body causes (`@sleep` and the rest) is forwarded to the fiber calling this,
+/// the same way [`run_case_guarded`] forwards one, so the scheduler keeps driving it as it
+/// would a top-level fiber's. Must be called from within a fiber (asserts otherwise).
+pub(crate) fn run_abort_trap_guarded(
+    function: extern "C" fn(*mut c_void) -> u8,
+    environment: *mut c_void,
+) -> Option<(c_int, String)> {
+    let outer_yielder = current_yielder("run_abort_trap_guarded");
+
+    let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
+    let (low, high) = (allocation.low, allocation.high);
+    let mut coroutine = new_fiber(allocation.stack, move || {
+        function(environment);
+    });
+    let id = with_scheduler(|scheduler| scheduler.reserve_id());
+    gc::register(id, low, high);
+
+    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
+    let outcome = loop {
+        match resume_fiber(id, high, &mut coroutine) {
+            CoroutineResult::Yield(Park::AbortTrapped(exit_code, report)) => {
+                break Some((exit_code, report));
+            }
+            CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
+            CoroutineResult::Return(()) => break None,
+        }
+    };
+    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
+    // See `run_case_guarded`'s own comment at the identical line: put the outer yielder
+    // back before returning control to it, or its next park dereferences a dangling one.
+    CURRENT_YIELDER.set(outer_yielder);
+
+    if outcome.is_some() {
+        // Safe for the same reason `run_case_guarded` force-resets its own coroutine: the
+        // only frames left on the trap's stack are Quilon frames (no destructors) and the
+        // fail-loud reporter, whose outcome it already moved into the `Park` value before
+        // suspending.
+        unsafe { coroutine.force_reset() };
+    }
+    gc::unregister(id);
+    drop(coroutine);
+    with_scheduler(|scheduler| scheduler.release_id(id));
+
+    outcome
+}
+
+/// End the currently running `aborts()` trap: suspend it with the abort marker (see
+/// [`Park::AbortTrapped`]), carrying `exit_code` and the report withheld from stderr,
+/// through the same thread-local yielder [`sleep`] uses. Never returns —
+/// [`run_abort_trap_guarded`]'s loop force-resets this coroutine once it sees the marker,
+/// so it is never resumed again. Must be called from within a trapped fiber (a fail-loud
+/// exit only ever reaches this while [`abort_trap_active`] is true).
+pub(crate) fn abort_current_trap(exit_code: c_int, report: String) -> ! {
+    let yielder = current_yielder("abort_current_trap");
+    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
+    unsafe { (*yielder).suspend(Park::AbortTrapped(exit_code, report)) };
+    unreachable!("run_abort_trap_guarded force-resets this coroutine on the abort marker")
+}
+
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
 /// be called from within a fiber (panics otherwise).
 pub fn sleep(duration: Duration) {
@@ -447,6 +532,10 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 CoroutineResult::Yield(Park::CaseAborted) => unreachable!(
                     "only a coroutine run_case_guarded resumes yields this, and only its own \
                      loop ever resumes one — never the ready queue this loop drains"
+                ),
+                CoroutineResult::Yield(Park::AbortTrapped(..)) => unreachable!(
+                    "only a coroutine run_abort_trap_guarded resumes yields this, and only \
+                     its own loop ever resumes one — never the ready queue this loop drains"
                 ),
                 CoroutineResult::Return(()) => {
                     // Unregister the stack range before dropping the fiber, which
@@ -750,5 +839,95 @@ mod tests {
         });
 
         assert_eq!(VERIFIED.load(Ordering::SeqCst), N);
+    }
+
+    #[test]
+    fn abort_trap_active_reflects_nesting_depth() {
+        extern "C" fn returns(_environment: *mut c_void) -> u8 {
+            0
+        }
+        extern "C" fn aborts(_environment: *mut c_void) -> u8 {
+            crate::report::fail_at(ptr::null(), 500, "trapped for a unit test", 101)
+        }
+
+        on_gc_thread(|| {
+            run(|| {
+                assert!(!abort_trap_active(), "no trap active outside one");
+
+                let outcome = run_abort_trap_guarded(returns, ptr::null_mut());
+                assert!(outcome.is_none(), "a returning lambda does not abort");
+                assert!(!abort_trap_active(), "the trap ends once it has returned");
+
+                let outcome = run_abort_trap_guarded(aborts, ptr::null_mut());
+                let (exit_code, report) = outcome.expect("the lambda aborted");
+                assert_eq!(exit_code, 101);
+                assert!(report.contains("trapped for a unit test"));
+                assert!(
+                    !abort_trap_active(),
+                    "the trap ends once it has caught the abort"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn a_trap_inside_a_trap_catches_its_own_abort_and_keeps_the_reports_apart() {
+        extern "C" fn inner_aborts(_environment: *mut c_void) -> u8 {
+            crate::report::fail_at(ptr::null(), 500, "inner", 101)
+        }
+        extern "C" fn outer(_environment: *mut c_void) -> u8 {
+            let inner = run_abort_trap_guarded(inner_aborts, ptr::null_mut());
+            assert!(inner.is_some(), "the inner trap must catch its own abort");
+            assert!(abort_trap_active(), "the outer trap is still in progress");
+            crate::report::fail_at(ptr::null(), 500, "outer", 101)
+        }
+
+        on_gc_thread(|| {
+            run(|| {
+                let outcome = run_abort_trap_guarded(outer, ptr::null_mut());
+                let (_, report) = outcome.expect("the outer lambda aborted");
+                assert!(report.contains("outer"));
+                assert!(
+                    !report.contains("inner"),
+                    "the inner trap's report stays with the inner trap: {report}"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn a_trap_inside_a_case_inside_the_seed_fiber_scans_correctly() {
+        // Three fibers deep (seed -> case -> trap) with nothing spawned: proves the
+        // trap's own nested fiber is covered by the same "stack of running fibers"
+        // bookkeeping (`crate::gc`) a case's already is, by surviving a collection
+        // triggered while the trap fiber is the one executing.
+        const LEN: usize = 96;
+        static VERIFIED: AtomicUsize = AtomicUsize::new(0);
+        VERIFIED.store(0, Ordering::SeqCst);
+
+        extern "C" fn trap_body(_environment: *mut c_void) -> u8 {
+            let held = alloc_filled(LEN, 0x42);
+            let held = std::hint::black_box(held);
+            collect();
+            for _ in 0..64 {
+                std::hint::black_box(alloc_filled(LEN, 0xEE));
+            }
+            if all_bytes(held, LEN, 0x42) {
+                VERIFIED.store(1, Ordering::SeqCst);
+            }
+            0
+        }
+        extern "C" fn case_body(_environment: *mut c_void) -> u8 {
+            run_abort_trap_guarded(trap_body, ptr::null_mut());
+            0
+        }
+
+        on_gc_thread(|| {
+            run(|| {
+                run_case_guarded(case_body, ptr::null_mut());
+            });
+        });
+
+        assert_eq!(VERIFIED.load(Ordering::SeqCst), 1);
     }
 }
