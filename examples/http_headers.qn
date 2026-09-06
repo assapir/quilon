@@ -1,0 +1,42 @@
+~ Request headers, query params, and the OPTIONS/PATCH methods of the `core.http` client.
+~ On success the program exits 0.
+~ NOTE: this makes LIVE network calls to example.com:80 when run.
+<< core.http
+
+^ = () -> $ => <
+  ~ Build options with headers added one at a time, then a whole map at once.
+  options := http.RequestOptions.default()
+  options.headers.add("X-Trace", "abc123")
+  options.headers.add([|"Accept" => "text/html"|])
+
+  ~ The two-argument constructor carries the given options; the request's own headers
+  ~ read them back, lower-cased.
+  request := http.Request.get("http://example.com/", options)
+  assert(request.headers().get("x-trace"), isOk())
+  assert(request.headers().names().size, equals(2))
+
+  ~ The one-argument constructor sends a HEAD with no extra headers.
+  headResult = http.Request.head("http://example.com/").send()
+  assert(headResult, isOk())
+  headResponse = headResult ?
+    | Ok(page) => page
+    | NotOk(_) => http.Response { raw = "" }
+
+  ~ The live reply's own headers, read the same way.
+  assert(headResponse.headers().get("content-type"), isOk())
+  assert(headResponse.headers().all("content-type").size > 0, equals(true))
+  assert(headResponse.headers().names().size > 0, equals(true))
+
+  ~ A request's query string reads as Params without being sent: a repeated name keeps
+  ~ every value, a single name keeps its one.
+  withQuery = http.Request.get("http://example.com/?q=ada&tag=a&tag=b")
+  assert(withQuery.params().all("tag").size, equals(2))
+  assert(withQuery.params().get("q"), isOk())
+
+  ~ An OPTIONS request sent live: example.com answers, whatever status it picks.
+  assert(http.Request.options("http://example.com/").send(), isOk())
+
+  ~ PATCH carries a body the same way POST and PUT do.
+  patched = http.Patch(http.Body { content = "{}", contentType = "application/json" })
+  assert(patched.token(), equals("PATCH"))
+>

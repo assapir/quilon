@@ -5,9 +5,9 @@
 << core.http
 
 ^ = () -> $ => <
-  result :: Result = http.Request.get("http://example.com/").send()
+  result = http.Request.get("http://example.com/").send()
   assert(result, isOk())
-  response :: http.Response = result ?
+  response = result ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
   assert(response.status(), equals(200))
