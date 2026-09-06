@@ -42,11 +42,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             .ok_or_else(|| format!("{name} outside a function"))?;
         let done = self.context.append_basic_block(function, "assert_done");
 
-        // Defensive: a failing `expect` (below) ends the case by jumping straight back to
-        // `generate_run_case`'s `__test_case_run_guarded` call, so a later `expect` in the
-        // same case is never reached to ask this at all. Kept as the fallback for wherever
-        // that jump does not apply — it still does nothing at all, not even evaluating the
-        // value under test, so a failure never reports twice.
+        // Defensive: a failing `expect` (below) ends the case by suspending its fiber, so a
+        // later `expect` in the same case is never reached to ask this at all. Kept as the
+        // fallback for wherever that does not apply — it still does nothing at all, not
+        // even evaluating the value under test, so a failure never reports twice.
         if !fatal {
             let live = self.context.append_basic_block(function, "expect_live");
             let failing = self.generate_test_registry("__test_case_failing", &[])?;
@@ -107,9 +106,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Lower `__test_run_case(body)` (see [`crate::ast::RUN_TEST_CASE`]): split `body`'s
     /// `{ ptr fn, ptr env }` value apart and hand both to `__test_case_run_guarded`, which
-    /// calls `fn(env)` with a setjmp/longjmp bail-out point recorded first
-    /// (`quilon-rt/src/case_guard.c`) — a failing `expect` ends the case by jumping straight
-    /// back to it.
+    /// runs `fn(env)` on its own nested fiber — a failing `expect` ends the case by
+    /// suspending that fiber, however deeply nested inside the call tree it is reached.
     pub(super) fn generate_run_case(
         &mut self,
         arguments: &[Expression],

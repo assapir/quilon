@@ -83,6 +83,26 @@ test.describe("case ending", () => <
 >)
 "#;
 
+/// A case that ends WITHOUT ever parking, followed by one that parks on `@sleep` before its
+/// failing `expect`: ending the first case has to leave the fiber machinery in the state the
+/// second case's own `@sleep` needs — a case that never parks is the ordering that would hide
+/// a guard failing to hand control back to its caller cleanly. Ending the second case then has
+/// to forward its `@sleep` park to the scheduler (so the fiber actually waits) rather than
+/// mistaking it for the case's own end. The third case still runs and passes.
+const SLEEP_THEN_FAILING_CASE_SUITE: &str = r#"
+<< core.test
+<< core.time
+
+test.describe("case ending after a park", () => <
+  test.it("passes without parking", () => expect(1, equals(1)))
+  test.it("sleeps then fails", () => <
+    @sleep(0.01)
+    expect(1, equals(2))
+  >)
+  test.it("still runs and passes", () => expect(1, equals(1)))
+>)
+"#;
+
 /// The line a `describe` block prints — in `examples/tests_alongside_code.qn` and in this
 /// file's fixtures. Nothing else in the repository prints it, so finding it in a build's
 /// output means a block that should have been erased ran.
@@ -756,6 +776,34 @@ fn a_failed_expect_ends_the_case_not_just_its_own_assertions() {
     );
     assert!(
         out.stdout.contains("1 passed, 2 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A case that parks on `@sleep` before its failing `expect` still ends there, and the park
+/// itself must actually have reached the scheduler rather than being swallowed as the
+/// case's own end: the next case runs and passes either way.
+#[test]
+fn a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
+    let dir = work_dir("ends_case_after_sleep");
+    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_ne!(
+        out.code, 0,
+        "a suite with a failing case must exit non-zero"
+    );
+    assert!(
+        out.stdout.contains("✓ passes without parking")
+            && out.stdout.contains("✗ sleeps then fails")
+            && out.stdout.contains("✓ still runs and passes"),
+        "each case must be marked as it went:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("2 passed, 1 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
@@ -1552,8 +1600,8 @@ fn binary_of_a_failing_suite_exits_non_zero() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The setjmp/longjmp case-ending mechanism (`quilon-rt/src/case_guard.c`) has to work the
-/// same way through a native build as it does under the JIT.
+/// The case-ending mechanism has to work the same way through a native build as it does
+/// under the JIT.
 #[test]
 fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
     let dir = work_dir("binary_ends_case");
@@ -1576,6 +1624,37 @@ fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
             );
             assert!(
                 run.stdout.contains("1 passed, 2 failed"),
+                "unexpected summary:\n{}",
+                run.stdout
+            );
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A case that parks on `@sleep` before its failing `expect` has to end there through a
+/// native build too, with the next case still running and passing.
+#[test]
+fn binary_of_a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
+    let dir = work_dir("binary_ends_case_after_sleep");
+    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &[]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_ne!(
+                run.code, 0,
+                "a suite with a failing case must exit non-zero"
+            );
+            assert!(
+                run.stdout.contains("✓ passes without parking")
+                    && run.stdout.contains("✗ sleeps then fails")
+                    && run.stdout.contains("✓ still runs and passes"),
+                "each case must be marked as it went:\n{}",
+                run.stdout
+            );
+            assert!(
+                run.stdout.contains("2 passed, 1 failed"),
                 "unexpected summary:\n{}",
                 run.stdout
             );

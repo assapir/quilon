@@ -52,6 +52,15 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A failing `expect` ends its case, not just the assertions after it.** A statement
+  between two `expect`s, and a later iteration of a `.each` callback a failing `expect`
+  ran inside, used to keep running once the first `expect` in a case failed — only that
+  `expect`'s own remaining matcher work was skipped, so a case with more work after the
+  failure kept doing it, and could still fail loudly a second time. The first failing
+  `expect` in a case now ends the case right there, however deeply nested in the call
+  tree it is reached; the suite carries on with the next case. `assert` inside a case
+  keeps its own documented behavior, ending the whole run. Closes #337.
+
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
   rejected as needing a receiver value. A static call now resolves the specific member

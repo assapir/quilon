@@ -11,8 +11,9 @@
 //!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
 //! as passed or failed. What ENDS a case at its first failing `expect` is a different
-//! mechanism — [`__test_case_run_guarded`] runs the case's body with a setjmp/longjmp
-//! bail-out point (`quilon-rt/src/case_guard.c`), which [`abort_running_case`] jumps back to.
+//! mechanism — [`__test_case_run_guarded`] runs the case's body on its own nested fiber
+//! (`crate::scheduler::run_case_guarded`), which a failing `expect` suspends with the abort
+//! marker (`crate::scheduler::abort_current_case`) to end right there.
 //!
 //! The runner (`quilon test`) configures a run before it starts, through [`set_reporter`]
 //! and [`set_selection`]; the harness never sees the CLI.
@@ -215,43 +216,32 @@ pub(crate) fn mark_case_failed(failure: Failure) {
     });
 }
 
-/// Whether the case being run has already failed — 1 or 0. Defensive: once
-/// [`abort_running_case`] can jump straight back out of a case at its first failing
-/// `expect`, a later `expect` in the same case is never reached to ask this at all — kept as
-/// the fallback for wherever that jump does not apply.
+/// Whether the case being run has already failed — 1 or 0. Defensive: once a failing
+/// `expect` ends its case (see [`__test_case_run_guarded`]) by suspending it past the rest
+/// of the case's own statements, a later `expect` in the same case is never reached to ask
+/// this at all — kept as the fallback for wherever that does not apply.
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_case_failing() -> f64 {
     CASE_FAILURE.with(|failure| f64::from(failure.borrow().is_some()))
 }
 
-unsafe extern "C" {
-    /// Run `body(env)` (`case_guard.c`) with a bail-out point recorded first: control
-    /// resumes right after the `setjmp` there, instead of finishing the call, the moment
-    /// `ql_case_abort` is reached.
-    fn ql_case_run(body: *const c_void, env: *mut c_void);
-    /// Jump back to the running case's bail-out point. A no-op if none is recorded.
-    fn ql_case_abort();
-}
-
 /// Run a case's body guarded: `function`/`environment` are a `() -> $` closure's function
 /// and environment pointers, split apart by the code generator's lowering of
-/// `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE` in the compiler). A failing
-/// `expect` anywhere in the call tree ends the case right here — see [`abort_running_case`].
+/// `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE` in the compiler). Runs on its
+/// own nested fiber (`crate::scheduler::run_case_guarded`), so a failing `expect` anywhere
+/// in the call tree — however deeply nested — can end the case right there.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `function`/`environment` are the function and environment pointers of a live `() -> $`
-/// closure value, exactly as the code generator represents one.
+/// closure value, exactly as the code generator represents one: `function` takes the
+/// environment pointer and returns the closure's `$` result.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __test_case_run_guarded(function: *const c_void, environment: *mut c_void) {
-    unsafe { ql_case_run(function, environment) }
-}
-
-/// End the running case's body at the point a failing `expect` was reported, resuming right
-/// after the [`__test_case_run_guarded`] call that is running it. The case's remaining
-/// statements are left unevaluated; the run continues with the next case.
-pub(crate) fn abort_running_case() {
-    unsafe { ql_case_abort() }
+    // SAFETY: `function` is the function pointer of a live `() -> $` closure (the caller's
+    // contract, above), which is exactly this signature.
+    let function: extern "C" fn(*mut c_void) -> u8 = unsafe { std::mem::transmute(function) };
+    crate::scheduler::run_case_guarded(function, environment);
 }
 
 /// Close the case named by `name`/`length` that just ran: tally it as passed or failed,
