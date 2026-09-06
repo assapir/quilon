@@ -126,6 +126,16 @@ All notable changes to Quilon are documented here.
   unrelated crash stays a crash. See `docs/tooling/errors.md` and
   `docs/status/limitations.md`. (#336)
 
+- **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
+  x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm
+  (`cond ? n := 1 : n := 2`) failed the same way, while the equivalent block body
+  (`xs.each(x => < n := n + x >)`) and a field write in the same bare position
+  (`xs.each(x => it.value := s)`) both parsed. `:=` is the expression grammar's
+  lowest-precedence operator, but a bare identifier target fell through the shared
+  assignment check unhandled — only a field access or an index did anything with a
+  following `:=`. Fixed at that one shared point, so a lambda body, a ternary branch, and
+  a match arm all parse it alike now. (#335)
+
 - **A failing `expect` ends its case, not just the assertions after it.** A statement
   between two `expect`s, and a later iteration of a `.each` callback a failing `expect`
   ran inside, used to keep running once the first `expect` in a case failed — only that
