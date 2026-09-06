@@ -28,7 +28,7 @@ fn get_program(address: &str, expected: &str) -> String {
 << core.http
 
 ^ = () -> Num => <
-  http.Request {{ method = http.Get, url = "http://{address}/" }}.send() ?
+  http.Request.get("http://{address}/").send() ?
     | Ok(response) => assert(response.body(), equals("{expected}"))
     | NotOk(error) => test.failAt(error)
   0
@@ -47,7 +47,7 @@ fn expect_not_ok_program(address: &str) -> String {
 << core.http
 
 ^ = () -> Num => <
-  http.Request {{ method = http.Get, url = "http://{address}/" }}.send() ?
+  http.Request.get("http://{address}/").send() ?
     | Ok(_)    => test.failAt("expected malformed framing to fail")
     | NotOk(_) => $
   0
@@ -67,7 +67,7 @@ fn head_program(address: &str) -> String {
 << core.http
 
 ^ = () -> Num => <
-  http.Request {{ method = http.Head, url = "http://{address}/" }}.send() ?
+  http.Request.head("http://{address}/").send() ?
     | Ok(_)        => $
     | NotOk(error) => test.failAt(error)
   0
