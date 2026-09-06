@@ -63,7 +63,7 @@ fn an_importer_may_define_every_name_the_client_uses() {
         "  assert(reply.validate(), isOk())\n",
         "  assert(reply.status(), equals(200))\n",
         "  assert(reply.body(), equals(\"hi\"))\n",
-        "  assert(reply.header(\"x-a\"), isOk())\n",
+        "  assert(reply.headers().get(\"x-a\"), isOk())\n",
         "  own = Response { note = \"mine\" }\n",
         "  assert(own.note, equals(\"mine\"))\n",
         "  assert(get(\"u\"), equals(\"u\"))\n",

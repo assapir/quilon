@@ -21,7 +21,9 @@ print = (n :: Num) -> Num => < n + 1 >
 
   ~ Exported types and their variants qualify in every position: construction,
   ~ annotations, and patterns.
-  request = http.Request { method = http.Get, url = "http://example.com/" }
+  request = http.Request {
+    method = http.Get, url = "http://example.com/", options = http.RequestOptions.default()
+  }
   kind = request.method ?
     | http.Get     => 1
     | http.Post(_) => 2
