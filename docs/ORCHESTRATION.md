@@ -58,6 +58,7 @@ A feature/change is not done until **all** of these are true:
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 - **No issue/PR references in code.** No source, test, example, or corelib file (`.qn` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — the `docs/` tree and the `README`s — may reference issues; code files may not.)
+- **A changelog entry is a deliverable.** Every user-visible change — a language rule, a diagnostic, CLI or tooling behavior, runtime behavior, a fix a user could have hit — adds an entry under `## Unreleased` in `CHANGELOG.md` as part of the same PR, in the file's existing style. An internal refactor with no user-visible effect does not.
 
 **`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
 add items, not to restructure, not even to mark their own item done. The **orchestrator** updates a
