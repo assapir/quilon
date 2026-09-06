@@ -82,6 +82,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN110 | sum type with fields or a mutating method |
 | QN111 | bare expression as a function body |
 | QN112 | `>>` where two block closers were meant |
+| QN113 | disallowed character glued to a name |
 | QN200 | `@` primitive declared outside the corelib |
 | QN201 | missing module |
 | QN202 | private member reached through its module |
@@ -349,6 +350,18 @@ Two block closers written together (`>>`) lex as the export marker.
 ```
 
 Separate them with a space: `< 1 > >`.
+
+### QN113 — disallowed character glued to a name
+
+A definition or parameter name is immediately followed, with no space, by a character
+that is not part of a name — a name holds only letters, digits and `_`.
+
+```quilon ignore
+isEmpty? = () -> Bool => < true >
+```
+
+Drop the character or move it after a space: `isEmpty` (not `isEmpty?`), `myCount` (not
+`my-count`).
 
 ## Imports
 

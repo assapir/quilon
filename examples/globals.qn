@@ -14,6 +14,9 @@ scale = (n :: Num) => < n * 3 >
 ~ assert about it — it has exactly one inhabitant.
 nothing = $
 
+~ A name may start with any Unicode letter, not only ASCII ones.
+größe = 12
+
 ~ A `:=` binding is mutable wherever it lives; this one is written from inside `^` below.
 counter := 4
 
@@ -23,6 +26,7 @@ counter := 4
 
   ~ A top-level function value is called like any other function.
   assert(scale(limit), equals(30))
+  assert(größe, equals(12))
 
   ~ Writing a global: the store lands in the one cell, so the read that follows sees it.
   counter := counter + 1

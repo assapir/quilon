@@ -422,3 +422,31 @@ fn test_parsed_nodes_inherit_their_files_id() {
         spans
     );
 }
+
+#[test]
+fn test_non_ascii_identifiers_lex_as_a_single_name() {
+    // A name starts with a Unicode `XID_Start` letter and continues with `XID_Continue`
+    // characters and `_` — German, Japanese and an accented Latin name all lex as one
+    // `Ident` token, byte spans included.
+    for source in ["größe", "名前", "café"] {
+        let tokens = Lexer::tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident, "source: {source}");
+        assert_eq!(tokens[0].text, source, "source: {source}");
+        assert_eq!(tokens[0].span.start, 0);
+        assert_eq!(tokens[0].span.end, source.len() as u32);
+    }
+}
+
+#[test]
+fn test_underscore_led_names_lex_as_one_ident_with_non_ascii_continuations() {
+    // `_` alone stays the wildcard; `_` followed by more characters (ASCII or not) is an
+    // ordinary name.
+    let tokens = Lexer::tokenize("_").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Underscore);
+
+    for source in ["_count", "_größe"] {
+        let tokens = Lexer::tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident, "source: {source}");
+        assert_eq!(tokens[0].text, source, "source: {source}");
+    }
+}

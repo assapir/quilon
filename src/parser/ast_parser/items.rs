@@ -127,9 +127,9 @@ impl<'a> Parser<'a> {
         // module). A `@name` is always a function declaration (a primitive takes args).
         let name = if self.check(&TokenKind::At) {
             self.advance();
-            format!("@{}", self.expect_ident()?)
+            format!("@{}", self.expect_definition_name()?)
         } else {
-            self.expect_ident()?
+            self.expect_definition_name()?
         };
 
         // The top level takes only declarations, so an `Ident.` here can only be a
@@ -385,7 +385,7 @@ impl<'a> Parser<'a> {
                 )
                 .help(format!("declare it with `=`: `{operator} = (other) => …`")));
             } else {
-                self.expect_ident()?
+                self.expect_definition_name()?
             };
 
             if self.check(&TokenKind::TypeAnnotation) {
@@ -474,7 +474,7 @@ impl<'a> Parser<'a> {
 
         let mut variants = Vec::new();
         loop {
-            let variant_name = self.expect_ident()?;
+            let variant_name = self.expect_definition_name()?;
             if !is_capitalized(&variant_name) {
                 return Err(ParseError::new(
                     Code::VariantNotCapitalized,

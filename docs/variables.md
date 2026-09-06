@@ -18,6 +18,20 @@ For a record — and for containers holding records — the binding operator gov
 put one value on both sides of the `=`/`:=` line is a compile error (see
 [Deep immutability](mutation.md#deep-immutability)).
 
+## Names
+
+A name starts with a letter — any Unicode letter, ASCII or not — or `_`, and continues with
+letters, digits and `_`. Names are case-sensitive, with no normalization: two different
+spellings of the same accented letter are two different names.
+
+```quilon
+größe = 12  ~ a non-ASCII name, bound like any other
+```
+
+A bare `_` is the wildcard pattern, never an ordinary name. `true` and `false` are the
+lexer's only two reserved words; every other word lexes as an ordinary name, and the
+checker reserves a handful of those (see the [symbol table](README.md#symbols)).
+
 ## A top-level binding is a constant or a function
 
 A binding written outside any function is a **global**. A global's initializer is a

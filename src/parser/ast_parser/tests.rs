@@ -930,3 +930,60 @@ fn test_method_chain_across_lines_still_continues() {
     );
     assert_eq!(arguments.len(), 2);
 }
+
+#[test]
+fn test_a_character_glued_to_a_definition_name_is_qn113() {
+    // A binding name (`isEmpty?`), a parameter name (`my-count`, the sole parameter of a
+    // one-line function), and a record field name each report the new code — the disallowed
+    // character named, and both fix examples in the help.
+    for src in [
+        "isEmpty? = () -> Bool => < true >",
+        "f = (my-count) => < my-count >",
+        "Point = { x :: Num, y! :: Num }",
+    ] {
+        let tokens = Lexer::tokenize(src).unwrap();
+        let Err(err) = parse(&tokens) else {
+            panic!("expected `{src}` to be a parse error");
+        };
+        assert_eq!(err.code, Code::NameGluedToSymbol, "source: {src}");
+        assert!(
+            err.message.contains("a name is letters, digits and `_`"),
+            "source: {src}, message: {}",
+            err.message
+        );
+        let help = err.help.as_deref().unwrap_or_default();
+        assert!(
+            help.contains("isEmpty") && help.contains("myCount"),
+            "source: {src}, help: {help}"
+        );
+    }
+}
+
+#[test]
+fn test_a_character_glued_to_a_reference_stays_untouched() {
+    // The new adjacency check applies only where a NAME IS BEING DEFINED — an expression
+    // reading a name is unaffected: `x-1` is still subtraction, and `a?b:c`'s `?` is still
+    // the ternary.
+    let tokens = Lexer::tokenize("f = (x :: Num) -> Num => < x-1 >").unwrap();
+    let program = parse(&tokens).expect("`x-1` in expression position is subtraction");
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a FunctionDeclaration");
+    };
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    assert!(matches!(
+        statements.last(),
+        Some(Statement::Expression(Expression::BinaryOperator {
+            operator: crate::ast::BinaryOperator::Sub,
+            ..
+        }))
+    ));
+
+    let tokens =
+        Lexer::tokenize("f = (a :: Bool, b :: Num, c :: Num) -> Num => < a?b:c >").unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a?b:c in expression position is still the ternary"
+    );
+}

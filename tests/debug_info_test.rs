@@ -206,6 +206,72 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A non-ASCII function name reaches DWARF as-is: `DW_AT_name` carries raw UTF-8 bytes, and
+/// LLVM's DIBuilder takes a name/length pair rather than a null-terminated C string, so it
+/// never truncates or mangles one at a stray byte.
+#[test]
+fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping non-ASCII debug-info test: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping non-ASCII debug-info test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "größe = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => < größe(21) >\n";
+    let dir = std::env::temp_dir().join(format!("quilon_dbg_non_ascii_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("prog");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug --linker {linker}` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(42), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    assert!(info.status.success(), "llvm-dwarfdump --debug-info failed");
+    let info_out = String::from_utf8_lossy(&info.stdout);
+    // `llvm-dwarfdump`'s own text format escapes every non-ASCII-graphic byte as `\OOO`
+    // (three-digit octal) rather than printing raw UTF-8 — the DWARF attribute itself still
+    // carries the name's exact bytes, this only decodes how the dump SPELLS them.
+    let escaped: String = "größe"
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_graphic() {
+                (b as char).to_string()
+            } else {
+                format!("\\{b:03o}")
+            }
+        })
+        .collect();
+    assert!(
+        info_out.contains(&format!("\"{escaped}\"")),
+        "expected a `größe` subprogram (dumped as `{escaped}`) in the DWARF info"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The own attributes of every `DW_TAG_subprogram` in `dump`, as `(name, decl_file,
 /// artificial)`. A subprogram's own `DW_AT_name`/`DW_AT_decl_file`/`DW_AT_artificial` all
 /// precede its first child DIE, so reading each subprogram block only up to the next

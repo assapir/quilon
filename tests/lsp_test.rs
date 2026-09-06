@@ -1030,6 +1030,21 @@ fn completions_after_a_text_expression_list_its_built_in_members() {
     assert_eq!(size.detail.as_deref(), Some("Num"));
 }
 
+/// Case 3 with a non-ASCII receiver name: the word-boundary scan that finds the bare
+/// identifier before a `.` has to walk back over the WHOLE name, not stop at its first
+/// non-ASCII character — a byte-at-a-time ASCII scan sees `größe`'s `ß` and `ö` as
+/// separators and misreads the receiver as just `e`, an unbound name with no members.
+#[test]
+fn completions_after_a_non_ascii_expression_list_the_receivers_record_members() {
+    let text = "Punkt = {\n  x :: Num,\n  y :: Num\n}\n\n\
+^ = () -> Num => <\n  größe = Punkt { x = 1, y = 2 }\n  größe.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, std::collections::HashSet::from(["x", "y"]));
+}
+
 /// Case 3 on a corelib record reached through an import: `http.Response`'s own fields and
 /// methods, exactly as any other record's.
 #[test]
