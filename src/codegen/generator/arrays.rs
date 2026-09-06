@@ -6,6 +6,20 @@
 
 use super::*;
 
+/// A higher-order array/`Map`/`Set` method's callback, prepared once ([`CodeGenerator::prepare_callback`])
+/// before the loop that applies it per element ([`CodeGenerator::apply_callback`]).
+pub(super) enum Callback<'a, 'ctx> {
+    /// A lambda literal, inlined per element rather than called as a value.
+    Lambda(&'a Expression),
+    /// Any other function-valued expression, already evaluated to its `{ ptr fn, ptr env }`
+    /// closure value — called per element through the shared closure-call path.
+    Closure {
+        value: inkwell::values::StructValue<'ctx>,
+        parameter_tys: Vec<BasicTypeEnum<'ctx>>,
+        return_ty: BasicTypeEnum<'ctx>,
+    },
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn generate_array(
         &mut self,
@@ -694,13 +708,59 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// A higher-order array/`Map`/`Set` method's callback, prepared once before the loop
+    /// that visits every element — a lambda LITERAL needs no preparation (each element
+    /// inlines its body afresh, see [`Self::inline_lambda`]); any other function-valued
+    /// expression (a named closure, a forwarded function-typed parameter, a call's
+    /// result) is evaluated to its closure value here, exactly once, matching ordinary
+    /// argument evaluation — never once per element.
+    pub(super) fn prepare_callback<'a>(
+        &mut self,
+        callback: &'a Expression,
+    ) -> Result<Callback<'a, 'ctx>, String> {
+        if let Expression::Lambda { .. } = callback {
+            return Ok(Callback::Lambda(callback));
+        }
+        let (parameter_tys, return_ty) = self.closure_value_signature(callback)?;
+        let value = self.generate_expression(callback)?.into_struct_value();
+        Ok(Callback::Closure {
+            value,
+            parameter_tys,
+            return_ty,
+        })
+    }
+
+    /// Apply a callback [`prepare_callback`] prepared to one element's argument values:
+    /// a lambda literal inlines its body; a closure value is called through the shared
+    /// closure-call path, reading its signature from the oracle-derived preparation.
+    pub(super) fn apply_callback(
+        &mut self,
+        prepared: &Callback<'_, 'ctx>,
+        arg_values: &[(BasicValueEnum<'ctx>, Type)],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match prepared {
+            Callback::Lambda(lambda) => self.inline_lambda(lambda, arg_values),
+            Callback::Closure {
+                value,
+                parameter_tys,
+                return_ty,
+            } => {
+                let values: Vec<BasicValueEnum<'ctx>> =
+                    arg_values.iter().map(|(v, _)| *v).collect();
+                self.call_closure_value_with(*value, parameter_tys, *return_ty, &values)
+            }
+        }
+    }
+
     /// Inline a lambda body with its parameters bound to `arg_values`. An array method's
-    /// lambda is lowered inline (not as a closure value): each parameter is bound to a
-    /// freshly-stored value (an alloca, like a loop variable) and the body is emitted in
-    /// the current block. Saves/restores any shadowed bindings of the same names, so an
-    /// inline never leaks the parameter binding past its use (and nesting is safe).
-    /// `arg_values` carries each argument's Quilon type for overload mangling in the body.
-    pub(super) fn inline_lambda(
+    /// lambda LITERAL is lowered inline (not as a closure value): each parameter is bound
+    /// to a freshly-stored value (an alloca, like a loop variable) and the body is
+    /// emitted in the current block. Saves/restores any shadowed bindings of the same
+    /// names, so an inline never leaks the parameter binding past its use (and nesting is
+    /// safe). `arg_values` carries each argument's Quilon type for overload mangling in
+    /// the body. Reached only through [`Self::apply_callback`], which routes anything but
+    /// a lambda literal to a closure-value call instead.
+    fn inline_lambda(
         &mut self,
         lambda: &Expression,
         arg_values: &[(BasicValueEnum<'ctx>, Type)],
@@ -768,14 +828,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let result_llvm = match self.lambda_body_repr(lambda) {
+        let callback = self.prepare_callback(lambda)?;
+        // The result element type is the callback's own return type — a lambda
+        // literal's inferred body type (from the oracle), or a closure value's
+        // already-prepared return type — since `map` may change the element type.
+        let result_llvm = match &callback {
+            Callback::Lambda(lambda) => self.lambda_body_repr(lambda),
+            Callback::Closure { return_ty, .. } => Some(Ok(*return_ty)),
+        };
+        let result_llvm = match result_llvm {
             Some(r) => r?,
             None => elem_llvm,
         };
         let out_ptr = self.alloc_array_data(result_llvm, size)?;
         self.array_loop(size, |this, i| {
             let elem = this.source_element(source, elem_llvm, i)?;
-            let mapped = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let mapped = this.apply_callback(&callback, &[(elem, elem_qty.clone())])?;
             let dst = unsafe {
                 this.builder
                     .build_gep(result_llvm, out_ptr, &[i], "map_dst")
@@ -800,6 +868,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let callback = self.prepare_callback(lambda)?;
         let i64t = self.context.i64_type();
         let out_ptr = self.alloc_array_data(elem_llvm, size)?;
         let count_ptr = self.create_entry_block_alloca("filter_count", i64t.into())?;
@@ -808,7 +877,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to init filter count"))?;
         self.array_loop(size, |this, i| {
             let elem = this.source_element(source, elem_llvm, i)?;
-            let keep = this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            let keep = this.apply_callback(&callback, &[(elem, elem_qty.clone())])?;
             let keep_bool = this.value_to_boolean(keep)?;
             let function = this.current_function.unwrap();
             let keep_bb = this.context.append_basic_block(function, "filter_keep");
@@ -873,6 +942,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 )
             })?
             .clone();
+        let callback = self.prepare_callback(lambda)?;
         let acc_ptr = self.create_entry_block_alloca("reduce_acc", init_val.get_type())?;
         self.builder
             .build_store(acc_ptr, init_val)
@@ -884,8 +954,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .builder
                 .build_load(acc_llvm, acc_ptr, "reduce_load")
                 .map_err(ctx("Failed to load acc"))?;
-            let next =
-                this.inline_lambda(lambda, &[(acc, acc_qty.clone()), (elem, elem_qty.clone())])?;
+            let next = this.apply_callback(
+                &callback,
+                &[(acc, acc_qty.clone()), (elem, elem_qty.clone())],
+            )?;
             this.builder
                 .build_store(acc_ptr, next)
                 .map_err(ctx("Failed to store acc"))?;
@@ -906,9 +978,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         source: ElementSource<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<(), String> {
+        let callback = self.prepare_callback(lambda)?;
         self.array_loop(size, |this, i| {
             let elem = this.source_element(source, elem_llvm, i)?;
-            this.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+            this.apply_callback(&callback, &[(elem, elem_qty.clone())])?;
             Ok(())
         })?;
         Ok(())
@@ -925,6 +998,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         data_ptr: PointerValue<'ctx>,
         size: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let callback = self.prepare_callback(lambda)?;
         let result_ty = self.result_struct_type(elem_llvm);
         let result_ptr = self.create_entry_block_alloca("find_result", result_ty.into())?;
         // Default: NotOk (tag 1, zeroed payload).
@@ -962,7 +1036,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to branch find body"))?;
         self.builder.position_at_end(body);
         let elem = self.load_element(data_ptr, elem_llvm, i)?;
-        let matched = self.inline_lambda(lambda, &[(elem, elem_qty.clone())])?;
+        let matched = self.apply_callback(&callback, &[(elem, elem_qty.clone())])?;
         let matched_bool = self.value_to_boolean(matched)?;
         let found_bb = self.context.append_basic_block(function, "find_found");
         let next_bb = self.context.append_basic_block(function, "find_next");
@@ -1146,10 +1220,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// The LLVM value-representation type of a lambda's body (its inferred result type,
     /// from the oracle), if known — used by `map` to size the output array. `None` when
     /// the oracle has no entry (IR-only tests), so the caller falls back.
-    pub(super) fn lambda_body_repr(
-        &self,
-        lambda: &Expression,
-    ) -> Option<Result<BasicTypeEnum<'ctx>, String>> {
+    fn lambda_body_repr(&self, lambda: &Expression) -> Option<Result<BasicTypeEnum<'ctx>, String>> {
         let Expression::Lambda { body, .. } = lambda else {
             return None;
         };

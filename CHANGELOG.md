@@ -134,6 +134,17 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A named closure (or any other function-valued expression) can be passed to
+  `.map`/`.filter`/`.reduce`/`.each`/`.find` and the `Map`/`Set` `.each`.** These
+  built-ins only accepted a lambda LITERAL as their callback; anything else — a named
+  local closure, a forwarded function-typed parameter, a closure returned by a call —
+  was rejected with the confusing `(Num) -> Num is not a function` (a diagnostic meant
+  for a data value called as a function). The checker now accepts any function-typed
+  expression there, matched against the same `(Elem) -> R` shape a declared
+  function-typed parameter checks a closure against; codegen calls a non-literal
+  callback through the existing closure-value call path, evaluated once before the loop
+  rather than once per element. (#341)
+
 - **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
   x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm
   (`cond ? n := 1 : n := 2`) failed the same way, while the equivalent block body

@@ -954,13 +954,13 @@ impl TypeChecker {
             parameters, body, ..
         } = arg
         else {
-            // An array method expects a *literal* lambda here, which it inlines per
-            // element. Passing anything else (e.g. a bare name or a closure value) is
-            // not supported in this position — higher-order values aren't accepted.
-            return Err(TypeError::NotAFunction {
-                got: self.infer_expression(arg)?,
-                span: arg.span().clone(),
-            });
+            // Not a lambda literal — any other function-valued expression (a named
+            // local closure, a function-typed parameter, a call result) is read as a
+            // value and checked against the same shape a lambda literal would have to
+            // match. Its own aliasing is resolved from the expression itself wherever a
+            // call reads it (`callable_result_aliasing`), so nothing needs recording
+            // here the way a literal lambda's body does above.
+            return self.check_callback_value(arg, parameter_types);
         };
         if parameters.len() != parameter_types.len() {
             return Err(TypeError::WrongNumberOfArguments {
@@ -1003,6 +1003,48 @@ impl TypeChecker {
         self.type_table
             .insert(arg.span().clone(), body_type.clone());
         Ok(body_type)
+    }
+
+    /// A higher-order array/`Map`/`Set` method's callback, written as anything but a
+    /// lambda literal: read as an ordinary value and matched against the same
+    /// `(parameter_types) -> R` shape a lambda literal's own parameters are checked
+    /// against above, using the same [`Self::check_type_compatibility`] every other
+    /// call-argument check in this file uses. Returns `R`, exactly like the lambda
+    /// literal path returns its body's type — the caller applies whatever further
+    /// constraint its own method places on it (`filter`/`find` require `Bool`,
+    /// `reduce` requires the accumulator's type).
+    ///
+    /// An identifier naming an overload set rather than a value has no binding to
+    /// infer here, so it surfaces the checker's ordinary undefined-name error naming
+    /// the set — there is no single function value to call without a call resolving
+    /// which member.
+    fn check_callback_value(
+        &mut self,
+        callback: &Expression,
+        parameter_types: &[Type],
+    ) -> Result<Type, TypeError> {
+        let callback_type = self.infer_expression(callback)?;
+        let Type::Function {
+            parameters,
+            return_type,
+        } = callback_type
+        else {
+            return Err(TypeError::NotAFunction {
+                got: callback_type,
+                span: callback.span().clone(),
+            });
+        };
+        if parameters.len() != parameter_types.len() {
+            return Err(TypeError::WrongNumberOfArguments {
+                expected: parameter_types.len(),
+                got: parameters.len(),
+                span: callback.span().clone(),
+            });
+        }
+        for (expected, declared) in parameter_types.iter().zip(&parameters) {
+            self.check_type_compatibility(expected, declared, callback.span())?;
+        }
+        Ok(*return_type)
     }
 }
 

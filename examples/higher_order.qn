@@ -59,4 +59,13 @@ adder = (n :: Num) -> (Num) -> Num => < (x :: Num) => x + n >
   results = fs.map(f => f(10))
   assert(results[0], equals(11))
   assert(results[1], equals(12))
+
+  ~ `.map`'s callback need not be a lambda literal: a NAMED closure of the matching
+  ~ `(Num) -> Num` shape works exactly the same way.
+  factor = 3
+  triple :: (Num) -> Num = (n) => < n * factor >
+  tripled = [1, 2, 3].map(triple)
+  assert(tripled[0], equals(3))
+  assert(tripled[1], equals(6))
+  assert(tripled[2], equals(9))
 >
