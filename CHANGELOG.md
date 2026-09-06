@@ -100,6 +100,16 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
+  x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm
+  (`cond ? n := 1 : n := 2`) failed the same way, while the equivalent block body
+  (`xs.each(x => < n := n + x >)`) and a field write in the same bare position
+  (`xs.each(x => it.value := s)`) both parsed. `:=` is the expression grammar's
+  lowest-precedence operator, but a bare identifier target fell through the shared
+  assignment check unhandled — only a field access or an index did anything with a
+  following `:=`. Fixed at that one shared point, so a lambda body, a ternary branch, and
+  a match arm all parse it alike now. Closes #335.
+
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
   rejected as needing a receiver value. A static call now resolves the specific member
