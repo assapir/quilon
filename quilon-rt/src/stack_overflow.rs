@@ -33,19 +33,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static GUARD_LOW: AtomicUsize = AtomicUsize::new(0);
 static GUARD_HIGH: AtomicUsize = AtomicUsize::new(0);
 
-/// Record the running fiber's guard page before resuming it. Called from the scheduler
-/// around every `coroutine.resume`.
-pub(crate) fn set_current_guard(low: usize, high: usize) {
+/// Record the running fiber's guard page before resuming it, returning whichever pair was
+/// current before this call — pass it to [`restore_guard`] once the resume returns. A
+/// resume can nest (`run_case_guarded` resumes a case's own fiber from inside a fiber
+/// `run`'s ready-queue loop already resumed), so the outer fiber's guard has to come back,
+/// not just get cleared, once the inner one is done — the outer fiber keeps running Quilon
+/// code afterward, on its own stack, and a fault there is exactly the kind this module
+/// exists to catch.
+pub(crate) fn set_current_guard(low: usize, high: usize) -> (usize, usize) {
+    let previous = (
+        GUARD_LOW.load(Ordering::Relaxed),
+        GUARD_HIGH.load(Ordering::Relaxed),
+    );
     GUARD_LOW.store(low, Ordering::Relaxed);
     GUARD_HIGH.store(high, Ordering::Relaxed);
+    previous
 }
 
-/// Forget the guard page after a fiber yields or finishes, so a fault while no fiber is
-/// running (the scheduler's own code, between two resumes) is never misattributed to the
-/// last one.
-pub(crate) fn clear_current_guard() {
-    GUARD_LOW.store(0, Ordering::Relaxed);
-    GUARD_HIGH.store(0, Ordering::Relaxed);
+/// Put back the guard page [`set_current_guard`] returned, once its resume is done.
+pub(crate) fn restore_guard(previous: (usize, usize)) {
+    GUARD_LOW.store(previous.0, Ordering::Relaxed);
+    GUARD_HIGH.store(previous.1, Ordering::Relaxed);
 }
 
 /// The plain-text report a stack overflow gets: no location, no color — a compile-time

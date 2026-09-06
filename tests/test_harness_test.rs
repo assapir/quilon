@@ -813,6 +813,44 @@ fn a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A `describe` body that recurses deeply AFTER a case has run and returned. `test.it`
+/// resumes its case on a nested fiber of its own; once that fiber is done, the OUTER
+/// fiber (still running the rest of this describe body) has to get its own guard page
+/// back, not have none recorded at all, or a stack overflow reached from here goes back
+/// to a bare, message-less crash.
+const OVERFLOW_AFTER_A_CASE_SUITE: &str = r#"
+<< core.test
+<< core.io
+
+deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >
+
+test.describe("overflow after a case", () => <
+  test.it("passes", () => expect(1, equals(1)))
+  io.print(deep(10000000))
+>)
+"#;
+
+#[test]
+fn a_describe_body_overflowing_after_its_case_reports_qn507() {
+    let dir = work_dir("overflow_after_case");
+    let source = write(&dir, "suite.qn", OVERFLOW_AFTER_A_CASE_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_ne!(out.code, 0, "a stack overflow must exit non-zero");
+    assert!(
+        out.stdout.contains("passes"),
+        "the case before the overflow must still have run and reported, got stdout:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("error[QN507]: stack overflow"),
+        "the describe body's own recursion, after the case, must report QN507, got stdout:\n{}\nstderr:\n{}",
+        out.stdout,
+        out.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `expect` records with the run, which only a `describe` block opens — so outside one it
 /// is a compile error naming `assert` instead, rather than a program that silently drops its
 /// failures. (`describe` blocks are stripped from every command but `quilon test`.)

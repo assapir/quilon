@@ -196,9 +196,9 @@ fn resume_fiber(
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
     gc::enter_fiber(id, high);
-    stack_overflow::set_current_guard(guard_low, guard_high);
+    let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
     let result = coroutine.resume(());
-    stack_overflow::clear_current_guard();
+    stack_overflow::restore_guard(previous_guard);
     gc::leave_fiber();
     result
 }
