@@ -2,7 +2,7 @@
 
 use crate::ast::{
     BinaryOperator, Expression, FunctionDeclaration, Import, InterpolationPart, Item,
-    MethodDeclaration, ModulePath, Parameter, Program, TypeDeclaration, TypeDefinition,
+    MethodDeclaration, ModulePath, Parameter, Program, Statement, TypeDeclaration, TypeDefinition,
     UnaryOperator, VariableDeclaration,
 };
 use crate::diagnostic::Code;

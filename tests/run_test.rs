@@ -103,6 +103,27 @@ fn run_pattern_match_wildcard() {
     );
 }
 
+#[test]
+fn ternary_branch_may_be_a_reassignment() {
+    // `:=` is the lowest-precedence operator, so a ternary branch — a bare-expression
+    // position, like a lambda body — may itself be a reassignment of an outer `:=`
+    // binding, not just a value.
+    assert_exit(
+        "^ = () -> Num => <\n  n := 0\n  true ? n := 1 : n := 2\n  n\n>",
+        1,
+    );
+}
+
+#[test]
+fn match_arm_may_be_a_reassignment() {
+    // Same bare-expression position as a ternary branch: a `?`/`|` match arm may be a
+    // reassignment of an outer `:=` binding.
+    assert_exit(
+        "^ = () -> Num => <\n  n := 0\n  choice = Ok(7)\n  choice ?\n    | Ok(v) => n := v\n    | NotOk(_) => n := 0\n  n\n>",
+        7,
+    );
+}
+
 // --- Text: { ptr, byte_len }, with `+` concatenation, `.size` (bytes) and
 //     `.length` (grapheme clusters). "héllo" + " 🌍":
 //       bytes     = 6 ("héllo": é is 2 bytes) + 5 (" 🌍": 🌍 is 4 bytes) = 11
