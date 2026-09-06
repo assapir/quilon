@@ -124,7 +124,7 @@ a reply that gives neither `Transfer-Encoding` nor `Content-Length`. `Content-Le
 **bytes** (`.size`), and a body-bearing method sends it for empty content too — a body of
 length zero. Every generated header (`host`, `connection`, `content-type`, `content-length`)
 goes on the wire lower-cased; a caller header sharing one of those names replaces the
-generated line rather than duplicating it.
+generated line.
 
 `send()`'s framing check runs `body()`'s own rule (below) and turns a malformed result into
 `NotOk`, with a reason naming what went wrong: `"malformed chunked framing"` for a bad chunk
