@@ -544,6 +544,9 @@ pub struct Overload {
     /// `None` (assumed to alias every argument) and is classified when its body is
     /// checked.
     pub(crate) result_aliasing: Option<ResultAliasing>,
+    /// Whether this member is STATIC (never reads `it`), set per member since an
+    /// overloaded name's members classify independently.
+    pub(crate) is_static: bool,
 }
 
 /// Whether a declaration sits at the top level of a module or inside some body (a
@@ -564,10 +567,8 @@ pub struct TypeChecker {
     // Methods declared with `:=` ("setters"): they may mutate their receiver in place,
     // so calling one requires a `:=`-bound (mutable) receiver.
     setter_methods: std::collections::HashSet<(String, String)>,
-    // Methods whose body never reads the receiver `it` — STATIC-eligible, so they may be
-    // called on the bare TYPE NAME (`Point.origin()`) as well as on a value. A method
-    // absent here needs an actual receiver value; calling it on the type name is
-    // `StaticCallNeedsReceiverValue`.
+    // STATIC (never reads `it`) NON-overloaded methods; an overloaded name's members
+    // carry `Overload.is_static` instead.
     static_methods: std::collections::HashSet<(String, String)>,
     // The type oracle (see `TypeTable`): every inferred expression type, keyed by span,
     // populated as a side effect of `infer_expression` and returned by `check_program`.

@@ -2102,6 +2102,58 @@ fn aot_static_method_called_on_the_type_name_constructs_a_value() {
     assert_eq!(code, 7, "a native build must exit 7 on the same program");
 }
 
+/// Regression: an OVERLOADED static constructor — two same-named methods, neither
+/// reading `it`, differing only in their parameter's TYPE — dispatches on the bare type
+/// name by resolving the matching member exactly as a value-receiver overload call does.
+/// `make(Num)` builds `{x=1}`, `make(Text)` builds `{x=2}` (`"ab".length`); 1 + 2 = 3.
+#[test]
+fn run_static_overloaded_method_called_on_the_type_name_dispatches_by_type() {
+    let src = r#"
+        P = {
+          x :: Num,
+          make = (x :: Num) -> P => < P { x = x } >,
+          make = (t :: Text) -> P => < P { x = t.length } >
+        }
+        ^ = () -> Num => < P.make(1).x + P.make("ab").x >
+    "#;
+    assert_exit(src, 3);
+}
+
+/// AOT counterpart: the overloaded static call must produce the same result through
+/// `quilon build`.
+#[test]
+fn aot_static_overloaded_method_called_on_the_type_name_dispatches_by_type() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native overloaded-static-method check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        P = {
+          x :: Num,
+          make = (x :: Num) -> P => < P { x = x } >,
+          make = (t :: Text) -> P => < P { x = t.length } >
+        }
+        ^ = () -> Num => < P.make(1).x + P.make("ab").x >
+    "#;
+    let (code, _) = build_and_run_native("static_overload_ctor_by_type", src);
+    assert_eq!(code, 3, "a native build must exit 3 on the same program");
+}
+
+/// Same regression, differing only in ARITY rather than parameter type. `make(1)` builds
+/// `{x=1}`, `make(2, 3)` builds `{x=5}`; 1 + 5 = 6.
+#[test]
+fn run_static_overloaded_method_called_on_the_type_name_dispatches_by_arity() {
+    let src = r#"
+        P = {
+          x :: Num,
+          make = (x :: Num) -> P => < P { x = x } >,
+          make = (x :: Num, y :: Num) -> P => < P { x = x + y } >
+        }
+        ^ = () -> Num => < P.make(1).x + P.make(2, 3).x >
+    "#;
+    assert_exit(src, 6);
+}
+
 /// A SUM type's trailing `{ }` methods block may declare a static member too — the same
 /// static-eligibility rule (never reads `it`) applies regardless of whether the receiver
 /// type is a record or a sum. `"a shape"`.size = 7.
