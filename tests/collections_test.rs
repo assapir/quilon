@@ -137,6 +137,18 @@ fn map_each_effect_and_chains() {
     );
 }
 
+/// `.each` accepts a NAMED closure (not just a lambda literal written inline) — a
+/// function-valued expression of the matching `(Text, Num) -> R` shape.
+#[test]
+fn map_each_accepts_a_named_closure() {
+    assert_exit(
+        "^ = () -> Num => <\n  m :: [|Text => Num|] = [|\"a\" => 10, \"b\" => 20|]\n  \
+         sum := 0\n  addValue = (k :: Text, v :: Num) => < sum := sum + v >\n  \
+         m.each(addValue)\n  sum\n>",
+        30,
+    );
+}
+
 /// `each` visits the entries present when it starts: removing every key from inside the
 /// callback still visits all of them, and leaves the map empty afterward.
 #[test]
@@ -274,6 +286,16 @@ fn set_each_effect_and_chains() {
         "^ = () -> Num => <\n  s :: [|Num|] = [|4, 5, 6|]\n  sum := 0\n  s.each(x => <\n    sum := sum + x\n  >\n  )\n  sum + s.each(x => x).size\n>",
         // sum 15 ; chained .size 3 -> 18
         18,
+    );
+}
+
+/// `.each` accepts a NAMED closure of the matching `(Num) -> R` shape.
+#[test]
+fn set_each_accepts_a_named_closure() {
+    assert_exit(
+        "^ = () -> Num => <\n  s :: [|Num|] = [|4, 5, 6|]\n  sum := 0\n  \
+         addElement = (x :: Num) => < sum := sum + x >\n  s.each(addElement)\n  sum\n>",
+        15,
     );
 }
 

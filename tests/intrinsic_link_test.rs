@@ -100,6 +100,10 @@ const EVERY_INTRINSIC: &str = r#"
   ~ ordinary program).
   __test_run_case(() => $)
   assert(__test_case_finish("case"), equals(1))
+  ~ __abort_trap_run and __abort_trap_report, via the `aborts()` matcher — every assertion
+  ~ using it emits both, whichever way the assertion itself goes.
+  assert(() => xs[9], aborts())
+  assert(() => xs[0], not(aborts()))
   ~ `core.test`'s `failAt`, on a branch that never runs — it is what reaches the exit
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")

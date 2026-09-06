@@ -17,12 +17,20 @@ use std::os::raw::{c_char, c_int, c_void};
 /// use as their normal exit status) and the runtime's own fail-loud paths. Codegen lowers a `__exit(n)` call to a call of this symbol;
 /// see `CodeGenerator::generate_exit`.
 ///
+/// While an `aborts()` trap is active, this is withheld the same way `report::fail_at`
+/// withholds its own report — no message accompanies a raw `__exit` (whatever led to it,
+/// like `core.test`'s `failAt`, already reported through its own path), so the trap
+/// records no report text for it.
+///
 /// Never returns. Uses libc `exit(3)` directly rather than `std::process::exit` for
 /// the same reason `write_to_fd` uses raw `write(2)`: an AOT-linked native binary
 /// enters through the LLVM-generated C `main`, so the Rust std runtime is never
 /// initialized.
 #[unsafe(no_mangle)]
 pub extern "C" fn __exit(code: c_int) -> ! {
+    if crate::scheduler::abort_trap_active() {
+        crate::scheduler::abort_current_trap(code, String::new());
+    }
     // SAFETY: libc `exit` is always available in a linked C runtime; it terminates
     // the process and never returns.
     unsafe extern "C" {

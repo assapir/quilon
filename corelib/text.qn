@@ -94,8 +94,9 @@ repeat = (t :: Text, count :: Num, site :: Site) -> Text => <
 >
 
 ~ ── The module's own suite ─────────────────────────────────────────────────────────
-~ The fail-loud paths (an invalid `replace`/`repeat` request) exit the process, so they
-~ are covered by the compiler's subprocess tests (tests/text_methods_test.rs), not here.
+~ `aborts()` covers that a fail-loud path (an invalid `replace`/`repeat` request) exits;
+~ the compiler's own subprocess tests (tests/text_methods_test.rs) pin its exit code and
+~ message in full.
 
 test.describe("split", () => <
   test.it("splits on the separator", () => <
@@ -159,6 +160,11 @@ test.describe("replace", () => <
 
   test.it("replaces a multibyte from with a multibyte to", () =>
     expect("a🌍b🌍c".replaceAll("🌍", "é"), equals("aébéc")))
+
+  test.it("aborts on a non-positive count", () => <
+    zeroCount = 3 - 3
+    expect(() => "a-a-a".replace("a", "b", zeroCount), aborts())
+  >)
 >)
 
 test.describe("repeat", () => <

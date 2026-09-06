@@ -172,6 +172,27 @@ pub fn run_file(file: &Path) -> Run {
 /// `(exit code, stdout)`. The caller must have checked that a linker is on PATH
 /// ([`tool_available`]); `tag` names the program's file and its binary.
 pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
+    let run = build_and_run_native_output(tag, src);
+    (
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+    )
+}
+
+/// Like [`build_and_run_native`], also returning stderr — for a gate that needs the
+/// failure report a fail-loud exit writes there, not just the exit code.
+pub fn build_and_run_native_with_stderr(tag: &str, src: &str) -> (i32, String, String) {
+    let run = build_and_run_native_output(tag, src);
+    (
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+        String::from_utf8_lossy(&run.stderr).into_owned(),
+    )
+}
+
+/// The shared build-then-run tail of [`build_and_run_native`] and
+/// [`build_and_run_native_with_stderr`].
+fn build_and_run_native_output(tag: &str, src: &str) -> std::process::Output {
     let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
 
@@ -194,14 +215,10 @@ pub fn build_and_run_native(tag: &str, src: &str) -> (i32, String) {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&binary)
+    Command::new(&binary)
         .stdin(std::process::Stdio::null())
         .output()
-        .expect("run the built executable");
-    (
-        run.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&run.stdout).into_owned(),
-    )
+        .expect("run the built executable")
 }
 
 /// Serializes nothing — it only keeps concurrently-running tests from colliding on a

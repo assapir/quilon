@@ -3,11 +3,12 @@
 // that takes a closure and calls it, and returning a closure across the call boundary.
 
 use quilon::ast::{FunctionDeclaration, Item, Type};
+use quilon::diagnostic::codes::Code;
 use quilon::lexer::Lexer;
 use quilon::parser;
 
 mod common;
-use common::{assert_exit, assert_type_error, type_error_message};
+use common::{assert_exit, assert_type_error, assert_type_error_code, type_error_message};
 
 /// The first top-level function declaration of `src`.
 fn first_function(src: &str) -> FunctionDeclaration {
@@ -523,5 +524,84 @@ fn nested_lambda_calls_the_outer_lambdas_array_sourced_closure_parameter() {
          ^ = () -> Num => <\n  fs = [adder(1), adder(2)]\n  \
          results = fs.map(f => [10].map(x => f(x)))\n  results[0][0] + results[1][0]\n>",
         23,
+    );
+}
+
+#[test]
+fn map_accepts_a_named_local_closure_as_its_callback() {
+    // The callback need not be a lambda literal written inline: a named closure of the
+    // matching `(Num) -> Num` shape works the same way. `double` captures `factor`.
+    assert_exit(
+        "^ = () -> Num => <\n  factor = 2\n  double = (n :: Num) -> Num => < n * factor >\n  \
+         results = [1, 2, 3].map(double)\n  results[0] + results[1] + results[2]\n>",
+        12,
+    );
+}
+
+#[test]
+fn filter_accepts_a_named_local_closure_as_its_callback() {
+    assert_exit(
+        "^ = () -> Num => <\n  threshold = 2\n  \
+         keep = (n :: Num) -> Bool => < n > threshold >\n  \
+         [1, 2, 3, 4].filter(keep).size\n>",
+        2,
+    );
+}
+
+#[test]
+fn reduce_accepts_a_named_local_closure_as_its_callback() {
+    assert_exit(
+        "^ = () -> Num => <\n  bias = 0\n  \
+         add = (acc :: Num, n :: Num) -> Num => < acc + n + bias >\n  \
+         [1, 2, 3, 4].reduce(0, add)\n>",
+        10,
+    );
+}
+
+#[test]
+fn each_accepts_a_named_local_closure_as_its_callback() {
+    assert_exit(
+        "^ = () -> Num => <\n  sum := 0\n  bump = (n :: Num) => < sum := sum + n >\n  \
+         [1, 2, 3, 4].each(bump)\n  sum\n>",
+        10,
+    );
+}
+
+#[test]
+fn function_typed_parameter_forwarded_as_a_map_callback() {
+    // `applyToAll`'s own `f` parameter is forwarded straight into `.map`, unchanged.
+    assert_exit(
+        "applyToAll = (xs :: []Num, f :: (Num) -> Num) -> []Num => < xs.map(f) >\n\
+         ^ = () -> Num => <\n  factor = 3\n  \
+         triple = (n :: Num) -> Num => < n * factor >\n  \
+         results = applyToAll([1, 2, 3], triple)\n  \
+         results[0] + results[1] + results[2]\n>",
+        18,
+    );
+}
+
+#[test]
+fn map_callback_returned_from_a_call_is_evaluated_once() {
+    // The callback expression is a CALL that returns a closure — evaluated once, before
+    // the loop, exactly like any other call argument, never once per element.
+    assert_exit(
+        "^ = () -> Num => <\n  calls := 0\n  makeDoubler = () -> (Num) -> Num => <\n    \
+         calls := calls + 1\n    (x) => x * 2\n  >\n  \
+         results = [1, 2, 3].map(makeDoubler())\n  \
+         results[0] + results[1] + results[2] + calls * 100\n>",
+        112,
+    );
+}
+
+#[test]
+fn map_callback_naming_an_overload_set_is_rejected() {
+    // `double` names an OVERLOAD SET here (two same-named definitions): no single
+    // function value exists to pass without a call choosing a member, so this is
+    // rejected the same way any other use of an overloaded name as a bare value is.
+    assert_type_error_code(
+        "double = (n :: Num) -> Num => < n * 2 >\n\
+         double = (n :: Text) -> Text => < n >\n\
+         ^ = () -> Num => <\n  [1, 2].map(double)\n  0\n>",
+        Code::UndefinedVariable,
     );
 }
