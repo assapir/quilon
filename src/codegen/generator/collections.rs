@@ -276,10 +276,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             this.store_element(values_buf, value_llvm, i, value)?;
             Ok(())
         })?;
+        let callback = self.prepare_callback(lambda)?;
         self.array_loop(n, |this, i| {
             let key = this.load_element(keys_buf, key_llvm, i)?;
             let value = this.load_element(values_buf, value_llvm, i)?;
-            this.inline_lambda(lambda, &[(key, key_ty.clone()), (value, value_ty.clone())])?;
+            this.apply_callback(
+                &callback,
+                &[(key, key_ty.clone()), (value, value_ty.clone())],
+            )?;
             Ok(())
         })
     }
@@ -370,9 +374,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             this.store_element(items_buf, elem_llvm, i, elem)?;
             Ok(())
         })?;
+        let callback = self.prepare_callback(lambda)?;
         self.array_loop(n, |this, i| {
             let elem = this.load_element(items_buf, elem_llvm, i)?;
-            this.inline_lambda(lambda, &[(elem, elem_ty.clone())])?;
+            this.apply_callback(&callback, &[(elem, elem_ty.clone())])?;
             Ok(())
         })
     }

@@ -100,6 +100,17 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A named closure (or any other function-valued expression) can be passed to
+  `.map`/`.filter`/`.reduce`/`.each`/`.find` and the `Map`/`Set` `.each`.** These
+  built-ins only accepted a lambda LITERAL as their callback; anything else — a named
+  local closure, a forwarded function-typed parameter, a closure returned by a call —
+  was rejected with the confusing `(Num) -> Num is not a function` (a diagnostic meant
+  for a data value called as a function). The checker now accepts any function-typed
+  expression there, matched against the same `(Elem) -> R` shape a declared
+  function-typed parameter checks a closure against; codegen calls a non-literal
+  callback through the existing closure-value call path, evaluated once before the loop
+  rather than once per element. Closes #341.
+
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
   rejected as needing a receiver value. A static call now resolves the specific member

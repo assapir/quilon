@@ -38,8 +38,11 @@ end of `examples/array_methods.qn`.
 ## Array methods
 
 Arrays carry a set of **built-in, compiler-provided methods**, called with method
-syntax (`array.method(...)`) and freely chainable. The higher-order ones take a **lambda**
-(`x => …`, `(a, b) => …`) written as a direct argument to the method.
+syntax (`array.method(...)`) and freely chainable. The higher-order ones take any
+[function value](../functions/README.md#function-types--higher-order-functions) of the
+matching shape as their callback — most directly a **lambda** (`x => …`, `(a, b) => …`)
+written inline, but a named closure, a function-typed parameter, or a call's result work
+exactly the same way.
 
 | Method | Result | Notes |
 |--------|--------|-------|
