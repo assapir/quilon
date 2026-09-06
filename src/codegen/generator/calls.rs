@@ -185,14 +185,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         // general dispatch chain: its corelib declaration's body is an inert placeholder
         // (there only to pin the checker's inferred `Result` payload type), and the
         // byte-level work is a runtime intrinsic, not that Quilon body. Merged into an
-        // importer, the link's rename gives every call the qualified name; checking
-        // `corelib/http.qn` directly (its own suite) leaves the call bare — the same two
-        // spellings `FunctionDeclaration::is_inert_corelib_placeholder` reconciles for
-        // `now`/`print`. The arity match (frameBody's fixed 4) is what keeps this from
-        // ever mistaking an unrelated same-named user function for it.
+        // importer, the link's rename gives every call the qualified name — always safe,
+        // since a written identifier can never contain a `.`. The bare form only lowers
+        // when `frame_body_from_corelib` says THIS program's own bare `frameBody` is
+        // `core.http`'s (checking `corelib/http.qn` directly, its own suite): a module's
+        // overload set is closed, so an unrelated user program's own bare `frameBody` stays
+        // an ordinary function, never hijacked.
         if !member_call
-            && arguments.len() == 4
-            && (function_name == "core.http.frameBody" || function_name == "frameBody")
+            && (function_name == "core.http.frameBody"
+                || (function_name == "frameBody" && self.frame_body_from_corelib))
         {
             return self.generate_frame_body(arguments);
         }
