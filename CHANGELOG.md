@@ -49,6 +49,54 @@ All notable changes to Quilon are documented here.
   receiver value to pass. Calling a method that DOES read `it` on a bare type name is now
   a compile error (`QN340`) instead; a method that reads `it` is unaffected when called on
   an ordinary value, exactly as before. See `docs/types/records.md#static-methods`.
+- **A sum's variants may carry different concrete payload types at the same position.**
+  `Ok(Text) / NotOk(Num)` is a normal `Result` — `Ok` and `NotOk` each carry their own
+  concrete type at a given position, and the two may differ; every value of one variant
+  still carries the same concrete type at that position. This settles, as a documented
+  rule, the shape array-literal and `+` element unification already relied on for a mixed
+  `Ok`/`NotOk` array. See `docs/types/sum-types.md`.
+- **The language server completes names, module members, and expression members**,
+  triggered on `.`. A bare name offers locals and parameters in scope, top-level functions
+  and types defined above the cursor, a sum's constructors, and import bindings; `http.`
+  after an import offers that module's exports; `response.` after any other expression
+  offers the checked receiver type's fields and methods (or the built-in members of `Text`,
+  an array, `Map`, or `Set`). See `docs/tooling/language-server.md`.
+- **Debugging steps into real corelib source, hovers a matcher's signature, and highlights
+  `[| |]` fences.** A debug session now asks the language server for the directory it wrote
+  the embedded corelib modules into and maps a stepped-into corelib function's DWARF path
+  there, so, say, `body()` on an `http.Response` opens `corelib/http.qn` instead of
+  disassembly. Hovering `isOk()`, `equals(...)`, `contains(...)`, or a nested `not(...)`
+  inside `assert`/`expect` now shows the matcher's own signature instead of the enclosing
+  call's `$`. The `[| |]` map/set-literal fence gets its own syntax highlighting. See
+  `docs/tooling/compiling.md#value-display` and the extension's own changelog.
+- **One registry of reserved names, checked everywhere a name is bound (`QN344`).** The
+  built-in type names (`Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set`), the
+  constructors `Ok`/`NotOk`, the receiver `it`, `assert`/`expect`, and the matchers
+  (`equals`, `contains`, `not`, `isOk`, `isNotOk`) cannot be bound as a type, a `=`/`:=`
+  binding, a function, a parameter, or a pattern binding — a record field or method may
+  still carry one of these names (`Text`'s own `.contains` is one). See
+  `docs/tooling/errors.md` and `docs/types/README.md`.
+- **Methods can be overloaded.** Two or more same-named methods on a record or sum with
+  *different* signatures now form an overload set, dispatched by exact argument type — the
+  same mechanism a top-level function overload set already uses. A bare type-name receiver
+  (`T.f(1)`) on an overloaded member is still rejected (`QN340`), since dispatch needs a
+  receiver value. See `docs/functions/overloading.md#method-overloading`.
+
+### Changed
+
+- **`quilon build` optimizes at O3 by default; `--debug` stays unoptimized.** A built
+  executable now runs LLVM's `default<O3>` pass pipeline (inlining, `mem2reg`, LICM, loop
+  optimizations, ...) unless `--debug` is passed, which keeps the previous unoptimized (O0
+  plus `-g`) path a debugger needs to see every local and step every line. `quilon run`
+  (the JIT) and `quilon test --binary` (always built with debug info) are unaffected. See
+  `docs/tooling/compiling.md`.
+- **`split`/`replaceAll` are native intrinsics, linear in the text's length.** Both used to
+  be written in Quilon over `indexOf`/`slice` in a self-tail-call, re-scanning the
+  shrinking tail from its own start on every step — quadratic, so a 20000-repeat text took
+  over 40 seconds and a 100000-grapheme one did not finish in practical time. Both now
+  match on raw UTF-8 bytes in the runtime (a grapheme boundary is always a byte boundary),
+  so the same text is instant. `replaceAll`'s empty-`from` runtime check now reports a
+  dedicated `QN506` instead of the generic assertion exit. See `docs/types/text.md`.
 
 ### Fixed
 
@@ -90,6 +138,67 @@ All notable changes to Quilon are documented here.
   already do for a nested function declaration, and type-declaration emission now
   saves/restores the enclosing function, its frame, and the builder's position around a
   nested type's methods. (#257)
+
+- **Codegen reads the checker's type-oracle for every type and dispatch decision; its own
+  inference is gone.** Three miscompiles this closes:
+
+  - A closure held in a lambda parameter (`xs.map(f => f(10))` over an array of closures)
+    failed at codegen with `Function not found` — codegen kept its own, separately
+    populated table of which local names held closures, and a lambda parameter bound from
+    an array element never populated it.
+  - A function whose block ends in a declaration (`< x = 1 >`) rather than an expression
+    failed native-build module verification — the block's running value defaulted to a
+    stray `f64 0.0` instead of `$`.
+  - An array literal mixing `Ok(Text)` and `NotOk(Text)` segfaulted — array-literal element
+    inference kept only the first element's type, so a later variant's payload type never
+    made it into the array's element type and was read back as the wrong concrete type.
+
+  Every remaining site that used to guess a type from an expression's shape now reads the
+  oracle instead, and reports the expression's span as a compiler bug if the oracle has
+  nothing recorded rather than falling back to a guess.
+
+- **Deep immutability closes two holes: a store through a field write or setter, and a
+  value returned from a lambda or higher-order call.** `b.item := c` (a field write) and
+  `b.put(c)` (a setter storing its argument into `it`) could move an `=`-bound value into a
+  `:=`-reachable container without ever going through a binding, and a lambda, a
+  higher-order call (`map`/`reduce`), an immediately invoked lambda, or a closure returned
+  from a function never got a mutability classification at all — so a captured `=` local
+  could ride out through any of them. Both routes are now checked the same way a direct
+  binding already was, with a new diagnostic, `QN341`. See `docs/mutation.md`.
+
+- **Several `--debug`-build DWARF fidelity and macOS debugging bugs.**
+
+  - A match arm's identifier or constructor-payload binding (`| Ok(page) => page`) never
+    got a DWARF variable, so it was invisible to a debugger's Locals view and had no hover,
+    even though the value computed correctly. Every `=`/`:=` binding also opened its DWARF
+    scope for the whole enclosing block rather than from its own line, so a debugger paused
+    on a block's first statement could see locals not yet bound.
+  - A capture-free function nested beside a capturing one (as in `corelib/cli.qn`'s
+    `getOpt`) left the builder's debug location pointed at the wrong subprogram afterward,
+    which the LLVM verifier rejected under `quilon build --debug`.
+  - On macOS, a `--debug` build's DWARF lived only in the deleted staging object (`ld64`,
+    unlike GNU `ld`, does not copy it into the executable), so breakpoints never resolved;
+    the build now runs `dsymutil` after linking to collect a `.dSYM` bundle beside the
+    executable.
+
+- **A missing or unknown constructor field gets its own diagnostic.** `P { }` missing a
+  declared field, or naming one `P` does not have, used to report the generic `QN300
+  undefined name` with the field's whole description standing in for the name. It is now
+  `QN342` (missing constructor field) or `QN343` (unknown constructor field), each naming
+  the field directly. See `docs/tooling/errors.md`.
+
+- **Duplicate fields, methods, and literal keys are compile errors (`QN310`).** A field
+  declared twice, a field and a method sharing a name, two methods with the same signature,
+  the same field written twice in a record literal or constructor, and the same literal key
+  twice in a map literal were all accepted silently before, with the last (or first)
+  definition winning. Each is now rejected. See `docs/tooling/errors.md`.
+
+- **`Text.at`/`Text.slice` with an infinite or NaN index.** Converting the `Num` index to
+  the native intrinsic's `i64` used LLVM's `fptosi` directly, which is undefined for a
+  value that doesn't fit — so `.at(1/0)` returned `Ok` of the first grapheme instead of
+  `NotOk`, and `.slice` with an infinite bound clamped to `0` instead of the far end, both
+  by accident of what the undefined conversion happened to produce. The index is now
+  clamped into `i64`'s range before converting.
 
 ## 0.10.0 "Demosthenes" — 2026-09-03
 
