@@ -373,7 +373,7 @@ pub(crate) fn run_abort_trap_guarded(
     let outer_yielder = current_yielder("run_abort_trap_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
-    let (low, high) = (allocation.low, allocation.high);
+    let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
     let mut coroutine = new_fiber(allocation.stack, move || {
         function(environment);
     });
@@ -382,7 +382,7 @@ pub(crate) fn run_abort_trap_guarded(
 
     ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
     let outcome = loop {
-        match resume_fiber(id, high, &mut coroutine) {
+        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
             CoroutineResult::Yield(Park::AbortTrapped(exit_code, report)) => {
                 break Some((exit_code, report));
             }
