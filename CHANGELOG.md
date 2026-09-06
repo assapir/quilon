@@ -111,6 +111,13 @@ All notable changes to Quilon are documented here.
   same mechanism a top-level function overload set already uses. A bare type-name receiver
   (`T.f(1)`) on an overloaded member is still rejected (`QN340`), since dispatch needs a
   receiver value. See `docs/functions/overloading.md#method-overloading`.
+- **The `aborts()` matcher — verify that a fail-loud exit actually fires.** `assert(() =>
+  …, aborts())` runs a zero-parameter lambda on its own guarded fiber and holds if it ends
+  in a fail-loud exit (an `assert` failure, a runtime fault, `failAt`) instead of
+  returning; composes with `not`. Built on the per-case guarded-fiber mechanism from #368:
+  while trapped, the exit's own stderr report is withheld and, if `not(aborts())` fails
+  instead, shown in ITS mismatch message. See `docs/corelib/test/README.md#the-matchers`
+  and `examples/assert_demo.qn`. Closes #85.
 
 ### Changed
 
@@ -136,6 +143,17 @@ All notable changes to Quilon are documented here.
   dedicated `QN506` instead of the generic assertion exit. See `docs/types/text.md`.
 
 ### Fixed
+
+- **A named closure (or any other function-valued expression) can be passed to
+  `.map`/`.filter`/`.reduce`/`.each`/`.find` and the `Map`/`Set` `.each`.** These
+  built-ins only accepted a lambda LITERAL as their callback; anything else — a named
+  local closure, a forwarded function-typed parameter, a closure returned by a call —
+  was rejected with the confusing `(Num) -> Num is not a function` (a diagnostic meant
+  for a data value called as a function). The checker now accepts any function-typed
+  expression there, matched against the same `(Elem) -> R` shape a declared
+  function-typed parameter checks a closure against; codegen calls a non-literal
+  callback through the existing closure-value call path, evaluated once before the loop
+  rather than once per element. (#341)
 
 - **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
   x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm

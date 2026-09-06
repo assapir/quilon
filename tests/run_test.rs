@@ -12,7 +12,8 @@ use std::process::Command;
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    build_and_run_native, ensure_runtime_lib, tool_available,
+    build_and_run_native, build_and_run_native_with_stderr, ensure_runtime_lib, run_program,
+    tool_available,
 };
 
 #[test]
@@ -2596,4 +2597,113 @@ fn native_aot_non_ascii_function_name_and_record_field() {
             String::from_utf8_lossy(&run.stderr)
         );
     }
+}
+
+// --- The `aborts()` matcher: trap a fail-loud exit -------------------------
+//
+// A HOLDING `assert(…, aborts())`/`not(aborts())` never really terminates the process (the
+// trap catches the exit before it reaches the real one), so the in-process `assert_exit` is
+// safe for it. A FAILING one calls the real `__exit`, which would take the test binary down
+// in-process — those run as subprocesses, under both the JIT and native AOT, mirroring
+// `tests/assert_test.rs`'s own reasoning for assertion failures.
+
+const ABORTS_FAIL_CODE: i32 = 101;
+
+/// `aborts()` holds when the lambda ends in a fail-loud exit — here, an out-of-bounds
+/// index. `examples/assert_demo.qn` covers the `Text.replace` contract-check example from
+/// `docs/corelib/test/README.md`.
+#[test]
+fn run_aborts_holds_when_the_lambda_ends_fail_loud() {
+    assert_exit(
+        "^ = () -> $ => <\n  xs :: []Num = [1, 2]\n  assert(() => xs[9], aborts())\n>",
+        0,
+    );
+}
+
+/// `aborts()` fails when the lambda returns instead — the outer `assert` itself then fails
+/// for real, so this runs as a subprocess under JIT and native AOT.
+#[test]
+fn run_aborts_fails_and_says_the_lambda_returned() {
+    let src = "^ = () -> $ => < assert(() => 1, aborts()) >\n";
+
+    let (code, stderr, _) = run_program("aborts_returns", src);
+    assert_eq!(code, ABORTS_FAIL_CODE);
+    assert!(
+        stderr.contains("the lambda to abort, but it returned"),
+        "unexpected message: {stderr:?}"
+    );
+
+    if tool_available("clang") || tool_available("gcc") {
+        let (code, _, stderr) = build_and_run_native_with_stderr("aborts_returns_aot", src);
+        assert_eq!(code, ABORTS_FAIL_CODE);
+        assert!(
+            stderr.contains("the lambda to abort, but it returned"),
+            "native AOT: unexpected message: {stderr:?}"
+        );
+    }
+}
+
+/// `not(aborts())` holds when the lambda returns.
+#[test]
+fn run_not_aborts_holds_when_the_lambda_returns() {
+    assert_exit("^ = () -> $ => < assert(() => 1, not(aborts())) >", 0);
+}
+
+/// `not(aborts())` fails when the lambda aborts — the failure message shows the withheld
+/// report, so the reader sees what actually aborted.
+#[test]
+fn run_not_aborts_fails_and_shows_the_withheld_report() {
+    let src = "^ = () -> $ => <\n  xs :: []Num = [1, 2]\n  assert(() => xs[9], not(aborts()))\n>\n";
+
+    let (code, stderr, _) = run_program("not_aborts_fails", src);
+    assert_eq!(code, ABORTS_FAIL_CODE);
+    assert!(
+        stderr.contains("expected the lambda not to abort, but it aborted"),
+        "unexpected message: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("index 9 out of bounds"),
+        "the withheld report must show what aborted: {stderr:?}"
+    );
+
+    if tool_available("clang") || tool_available("gcc") {
+        let (code, _, stderr) = build_and_run_native_with_stderr("not_aborts_fails_aot", src);
+        assert_eq!(code, ABORTS_FAIL_CODE);
+        assert!(
+            stderr.contains("index 9 out of bounds"),
+            "native AOT: the withheld report must show what aborted: {stderr:?}"
+        );
+    }
+}
+
+/// An abort reached AFTER an `@sleep` inside the lambda is still caught: the trap forwards
+/// the sleep's park to the outer fiber like any other park, then catches the abort once the
+/// lambda resumes and reaches it.
+#[test]
+fn run_aborts_catches_an_abort_reached_after_a_sleep() {
+    assert_exit_linked(
+        r#"
+<< core.time
+^ = () -> $ => <
+  xs :: []Num = [1, 2]
+  assert(() => < @sleep(0.01)  xs[9] >, aborts())
+>
+"#,
+        0,
+    );
+}
+
+/// Nested traps: an inner `aborts()` catches its own abort and holds, and the SAME outer
+/// lambda then goes on to abort again itself, caught by the outer trap.
+#[test]
+fn run_a_trap_inside_a_trap_each_catch_their_own_abort() {
+    assert_exit_linked(
+        r#"
+^ = () -> $ => <
+  xs :: []Num = [1, 2]
+  assert(() => < assert(() => xs[9], aborts())  xs[9] >, aborts())
+>
+"#,
+        0,
+    );
 }

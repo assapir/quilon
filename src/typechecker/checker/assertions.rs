@@ -72,7 +72,7 @@ impl TypeChecker {
                 span: matcher.span().clone(),
             });
         }
-        let wanted = usize::from(name.as_str() != "isOk" && name.as_str() != "isNotOk");
+        let wanted = usize::from(!matches!(name.as_str(), "isOk" | "isNotOk" | "aborts"));
         if arguments.len() != wanted {
             return Err(TypeError::MatcherArity {
                 matcher: name.clone(),
@@ -117,6 +117,21 @@ impl TypeChecker {
             "not" => {
                 let inner = self.check_matcher(assertion, actual_type, &arguments[0])?;
                 format!("not({inner})")
+            }
+            // The value under test is a zero-parameter lambda of any return type — it is
+            // RUN, not compared, so no `==`/variant requirement applies here.
+            "aborts" => {
+                match actual_type {
+                    Type::Function { parameters, .. } if parameters.is_empty() => {}
+                    other => {
+                        return Err(TypeError::MatcherTypeUnsupported {
+                            matcher: name.clone(),
+                            ty: Box::new(other.clone()),
+                            span: span.clone(),
+                        });
+                    }
+                }
+                "aborts()".to_string()
             }
             // A `Result` — or any sum carrying the variant being asked about.
             matcher_name => {

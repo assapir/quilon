@@ -402,7 +402,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// The LLVM signature of a function literal: (source-parameter types, return type).
     /// Mirrors the type rules used when emitting the lifted function, but without the
-    /// trailing env pointer (which is implicit to every closure call).
+    /// trailing env pointer (which is implicit to every closure call). Distinct from
+    /// [`Self::closure_value_signature`], which reads a CALLEE's signature from the
+    /// oracle rather than an AST literal's own parameters/return annotation.
     pub(super) fn closure_signature(
         &self,
         parameters: &[crate::ast::Parameter],
@@ -660,6 +662,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
+    /// A function-VALUED expression's parameter and return LLVM types at the call
+    /// boundary, read from the oracle's own recorded `Type::Function` for it — shared by
+    /// every closure-value call site: a direct call on a function-valued expression
+    /// (`generate_closure_value_call`), and a higher-order method's callback, prepared
+    /// once before the loop that applies it per element (`prepare_callback`). Distinct
+    /// from [`Self::closure_signature`], which is the signature of a closure LITERAL
+    /// being lifted, from its own AST parameters/return annotation rather than the
+    /// oracle.
+    pub(super) fn closure_value_signature(
+        &self,
+        expression: &Expression,
+    ) -> Result<(Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>), String> {
+        let Some(Type::Function {
+            parameters,
+            return_type,
+        }) = self.oracle.expression_type(expression).cloned()
+        else {
+            return Err(
+                "the callee is not a function name or a function-valued expression".to_string(),
+            );
+        };
+        let parameter_tys = parameters
+            .iter()
+            .map(|t| self.boundary_type(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let return_ty = self.boundary_type(&return_type)?;
+        Ok((parameter_tys, return_ty))
+    }
+
     /// Call a function-valued EXPRESSION — a local variable holding a closure, a call on
     /// a call (`adder(5)(2)`), or any other callee that is not a plain top-level function
     /// name: generate it to a closure `{ ptr fn, ptr env }` value and call through it,
@@ -669,40 +700,46 @@ impl<'ctx> CodeGenerator<'ctx> {
         function: &Expression,
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let Some(Type::Function {
-            parameters,
-            return_type,
-        }) = self.oracle.expression_type(function).cloned()
-        else {
-            return Err(
-                "the callee is not a function name or a function-valued expression".to_string(),
-            );
-        };
-        if args.len() != parameters.len() {
+        let (parameter_tys, ret_ty) = self.closure_value_signature(function)?;
+        if args.len() != parameter_tys.len() {
             return Err(format!(
                 "this closure expects {} argument(s), got {}",
-                parameters.len(),
+                parameter_tys.len(),
                 args.len()
             ));
         }
-        let parameter_tys = parameters
-            .iter()
-            .map(|t| self.boundary_type(t))
-            .collect::<Result<Vec<_>, _>>()?;
-        let ret_ty = self.boundary_type(&return_type)?;
         let closure_val = self.generate_expression(function)?.into_struct_value();
         self.call_closure_value(closure_val, &parameter_tys, ret_ty, args)
     }
 
-    /// The shared tail of every closure call: split the `{ ptr fn, ptr env }` value into
-    /// its function and environment pointers and emit an indirect call passing the source
-    /// arguments followed by the environment pointer.
+    /// [`Self::call_closure_value_with`], evaluating each source argument expression
+    /// first — the form every direct closure call site (a name, `adder(5)(2)`) uses.
     fn call_closure_value(
         &mut self,
         closure_val: inkwell::values::StructValue<'ctx>,
         parameter_tys: &[BasicTypeEnum<'ctx>],
         ret_ty: BasicTypeEnum<'ctx>,
         args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let arg_values = args
+            .iter()
+            .map(|arg| self.generate_expression(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.call_closure_value_with(closure_val, parameter_tys, ret_ty, &arg_values)
+    }
+
+    /// The shared tail of every closure call: split the `{ ptr fn, ptr env }` value into
+    /// its function and environment pointers and emit an indirect call passing the
+    /// already-generated argument values followed by the environment pointer. Also the
+    /// per-element call a higher-order array/`Map`/`Set` method's callback makes, once
+    /// the closure value itself has been prepared (`prepare_callback`) — there each
+    /// element's value is already in hand, with no source expression to re-evaluate.
+    pub(super) fn call_closure_value_with(
+        &mut self,
+        closure_val: inkwell::values::StructValue<'ctx>,
+        parameter_tys: &[BasicTypeEnum<'ctx>],
+        ret_ty: BasicTypeEnum<'ctx>,
+        arg_values: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let fn_ptr = self
@@ -716,12 +753,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to extract closure env"))?
             .into_pointer_value();
 
-        // Evaluate arguments, then append the environment pointer.
         let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-            Vec::with_capacity(args.len() + 1);
-        for arg in args {
-            call_args.push(self.generate_expression(arg)?.into());
-        }
+            Vec::with_capacity(arg_values.len() + 1);
+        call_args.extend(
+            arg_values
+                .iter()
+                .map(|v| inkwell::values::BasicMetadataValueEnum::from(*v)),
+        );
         call_args.push(env_ptr.into());
 
         // Reconstruct the callee function type: source parameters + trailing env ptr -> ret.

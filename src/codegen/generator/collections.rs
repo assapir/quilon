@@ -257,6 +257,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         value_llvm: BasicTypeEnum<'ctx>,
         value_ty: &Type,
     ) -> Result<(), String> {
+        // The callback is prepared before the receiver's entries are even counted — an
+        // expression evaluated for its side effects (a call that mutates `map` before
+        // handing back the closure to run per entry) is part of "the call starting" the
+        // same way any other argument's evaluation is, so the snapshot below must see
+        // whatever it did.
+        let callback = self.prepare_callback(lambda)?;
         let n = self.call_rt_int("__map_len", &[map.into()])?;
         let key_ty = key_ty.clone();
         let value_ty = value_ty.clone();
@@ -279,7 +285,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.array_loop(n, |this, i| {
             let key = this.load_element(keys_buf, key_llvm, i)?;
             let value = this.load_element(values_buf, value_llvm, i)?;
-            this.inline_lambda(lambda, &[(key, key_ty.clone()), (value, value_ty.clone())])?;
+            this.apply_callback(
+                &callback,
+                &[(key, key_ty.clone()), (value, value_ty.clone())],
+            )?;
             Ok(())
         })
     }
@@ -359,6 +368,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         lambda: &Expression,
         elem_ty: &Type,
     ) -> Result<(), String> {
+        // Prepared before the snapshot below for the same reason `map_each` prepares
+        // its callback first: a callback EXPRESSION evaluated for its side effects is
+        // part of the call starting, not something that happens after.
+        let callback = self.prepare_callback(lambda)?;
         let n = self.call_rt_int("__set_len", &[set.into()])?;
         let elem_ty = elem_ty.clone();
         let elem_llvm = self.value_repr_type(&elem_ty)?;
@@ -372,7 +385,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         })?;
         self.array_loop(n, |this, i| {
             let elem = this.load_element(items_buf, elem_llvm, i)?;
-            this.inline_lambda(lambda, &[(elem, elem_ty.clone())])?;
+            this.apply_callback(&callback, &[(elem, elem_ty.clone())])?;
             Ok(())
         })
     }

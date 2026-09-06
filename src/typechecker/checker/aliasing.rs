@@ -32,6 +32,13 @@ pub struct ValueAliasing {
     /// `:=` binding there, and a result built from it inherits the argument's mutability
     /// at each call site.
     pub(super) parameters: Vec<(u64, usize, String)>,
+    /// Function-typed parameters (or other unclassified callables) the value may alias
+    /// the RESULT OF CALLING, as (declaration, argument slot, name) — distinct from
+    /// `parameters`, which is the parameter's own value, never invoked. Substituted the
+    /// same way `parameters` is, one call deeper: at the slot's OWN call site, with what
+    /// CALLING the actual argument passed there aliases (`callable_result_aliasing`),
+    /// not the argument's own value.
+    pub(super) called_parameters: Vec<(u64, usize, String)>,
     /// Whether this value's aliasing reaches the ENCLOSING setter's own receiver `it` —
     /// a flag, not a name lookup, because `it` is an ordinary identifier (not a
     /// keyword): a `:=` local that happens to be named `it` is an ordinary mutable
@@ -44,6 +51,7 @@ impl ValueAliasing {
         self.mutable.extend(other.mutable);
         self.immutable.extend(other.immutable);
         self.parameters.extend(other.parameters);
+        self.called_parameters.extend(other.called_parameters);
         self.reaches_setter_receiver |= other.reaches_setter_receiver;
     }
 
@@ -78,6 +86,12 @@ pub struct ResultAliasing {
     pub(super) fixed: ValueAliasing,
     /// Argument positions whose value the result may alias.
     pub(super) argument_slots: Vec<usize>,
+    /// Argument positions the result may alias the RESULT OF CALLING — a function-typed
+    /// parameter this declaration calls and threads through its own result (a `map`/
+    /// `reduce` callback, or a call the body makes directly). Substituted at the call
+    /// site with `callable_result_aliasing` of the actual argument passed there, not
+    /// the argument's own value.
+    pub(super) called_argument_slots: Vec<usize>,
 }
 
 /// Whether values of `ty` are shared by reference AND writable through an alias — the
@@ -238,6 +252,11 @@ impl TypeChecker {
                 out.merge(self.value_aliasing(argument));
             }
         }
+        for &slot in &result_aliasing.called_argument_slots {
+            if let Some(argument) = arguments.get(slot) {
+                out.merge(self.callable_result_aliasing(argument).fixed);
+            }
+        }
         out
     }
 
@@ -302,6 +321,7 @@ impl TypeChecker {
                             receiver_ty,
                             &borrowed,
                         ),
+                        called_argument_slots: Vec::new(),
                     };
                     let mut out = self.apply_result_aliasing(&result_aliasing, &borrowed);
                     // `map` and `reduce` thread their callback's RETURN value into the
@@ -310,6 +330,9 @@ impl TypeChecker {
                     // returning a receiver element does. `each`/`filter`/`find`/`at` don't
                     // — their result comes from the receiver's own elements, the callback's
                     // return discarded or used only as a predicate — so they need no fold.
+                    // `callable_result_aliasing` resolves a function-typed PARAMETER
+                    // callback through `called_argument_slots` too (see there), so a
+                    // parameter forwarded here is no longer reported fresh.
                     if let Some(callback) =
                         callback_argument_slot(name).and_then(|slot| arguments.get(slot))
                     {
@@ -357,18 +380,31 @@ impl TypeChecker {
             Some(result_aliasing) => {
                 self.apply_result_aliasing(&result_aliasing.clone(), &borrowed)
             }
-            None => self.every_argument_aliasing(arguments),
+            // No classified result for this name — most notably a function-typed
+            // PARAMETER called directly (`f(x)`), whose own binding never gets one (see
+            // `Environment::define_parameter`). Fold in what CALLING it aliases
+            // (`callable_result_aliasing` resolves a parameter through its own
+            // self-referential `value_aliasing`) on top of the conservative "every
+            // argument" aliasing, mirroring the non-identifier callee branch above.
+            None => {
+                let mut out = self.callable_result_aliasing(function).fixed;
+                out.merge(self.every_argument_aliasing(arguments));
+                out
+            }
         }
     }
 
     /// What CALLING a function-typed `expression` may alias — a lambda literal's own
-    /// classified captures, a name bound to a classified function or closure, either
-    /// branch of an `If` (mirroring `value_aliasing`'s own handling of one), a block's
-    /// tail, or a call whose own result is itself a closure (a function returning one,
-    /// resolved through that function's classification, substituted against the call's
-    /// OWN arguments exactly as a reference-typed result would be). `Expression::Lambda`
-    /// aside, only forms the two issues' repros need are covered — an expression this
-    /// cannot see through answers fresh, same as `value_aliasing`'s own gaps elsewhere.
+    /// classified captures, a name bound to a classified function or closure, a
+    /// function-typed PARAMETER (resolved through `called_argument_slots`: calling it
+    /// aliases whatever CALLING the real closure passed for its own slot aliases, worked
+    /// out at every one of ITS OWN call sites), either branch of an `If` (mirroring
+    /// `value_aliasing`'s own handling of one), a block's tail, or a call whose own
+    /// result is itself a closure (a function returning one, resolved through that
+    /// function's classification, substituted against the call's OWN arguments exactly
+    /// as a reference-typed result would be). `Expression::Lambda` aside, only forms the
+    /// issues' repros need are covered — an expression this cannot see through answers
+    /// fresh, same as `value_aliasing`'s own gaps elsewhere.
     ///
     /// Used wherever a function value is called without going through `check_call`'s named
     /// path: an immediately invoked lambda, and a higher-order built-in's callback
@@ -380,11 +416,29 @@ impl TypeChecker {
                 .get(body.span())
                 .cloned()
                 .unwrap_or_default(),
-            Expression::Identifier { name, .. } => self
-                .env
-                .lookup(name)
-                .and_then(|symbol| symbol.result_aliasing.clone())
-                .unwrap_or_default(),
+            Expression::Identifier { name, .. } => {
+                let Some(symbol) = self.env.lookup(name) else {
+                    return ResultAliasing::default();
+                };
+                if let Some(result_aliasing) = &symbol.result_aliasing {
+                    return result_aliasing.clone();
+                }
+                // No classified result (a named function/closure always has one; a
+                // function-typed PARAMETER never does — see `Environment::define_parameter`).
+                // A parameter's own `value_aliasing` is self-referential (its argument
+                // slot under its owning declaration, set by `Environment::parameter_symbol`),
+                // so calling it aliases the RESULT OF CALLING whatever the caller actually
+                // passes for that slot — carried as `called_parameters`, resolved the same
+                // way a directly-returned parameter's `parameters` entry already is
+                // (`declaration_result_aliasing`, `reclassify_returned_closure`).
+                ResultAliasing {
+                    fixed: ValueAliasing {
+                        called_parameters: symbol.value_aliasing.parameters.clone(),
+                        ..ValueAliasing::default()
+                    },
+                    ..ResultAliasing::default()
+                }
+            }
             Expression::Block { statements, .. } => match statements.last() {
                 Some(crate::ast::Statement::Expression(tail)) => {
                     self.callable_result_aliasing(tail)
@@ -396,6 +450,9 @@ impl TypeChecker {
                 let other = self.callable_result_aliasing(else_);
                 result.fixed.merge(other.fixed);
                 result.argument_slots.extend(other.argument_slots);
+                result
+                    .called_argument_slots
+                    .extend(other.called_argument_slots);
                 result
             }
             // A call whose own result is itself a closure (a function returning one) is
@@ -415,7 +472,7 @@ impl TypeChecker {
                 let borrowed: Vec<&Expression> = arguments.iter().collect();
                 ResultAliasing {
                     fixed: self.apply_result_aliasing(&callee_result_aliasing, &borrowed),
-                    argument_slots: Vec::new(),
+                    ..ResultAliasing::default()
                 }
             }
             _ => ResultAliasing::default(),
@@ -444,6 +501,18 @@ impl TypeChecker {
                 }
                 std::cmp::Ordering::Less => {
                     result.fixed.parameters.push((declaration, slot, name));
+                }
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+        for (declaration, slot, name) in inner.fixed.called_parameters {
+            match declaration.cmp(&current) {
+                std::cmp::Ordering::Equal => result.called_argument_slots.push(slot),
+                std::cmp::Ordering::Less => {
+                    result
+                        .fixed
+                        .called_parameters
+                        .push((declaration, slot, name))
                 }
                 std::cmp::Ordering::Greater => {}
             }
@@ -519,6 +588,18 @@ impl TypeChecker {
             match declaration.cmp(&current) {
                 std::cmp::Ordering::Equal => result.argument_slots.push(slot),
                 std::cmp::Ordering::Less => result.fixed.parameters.push((declaration, slot, name)),
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+        for (declaration, slot, name) in aliasing.called_parameters {
+            match declaration.cmp(&current) {
+                std::cmp::Ordering::Equal => result.called_argument_slots.push(slot),
+                std::cmp::Ordering::Less => {
+                    result
+                        .fixed
+                        .called_parameters
+                        .push((declaration, slot, name))
+                }
                 std::cmp::Ordering::Greater => {}
             }
         }
