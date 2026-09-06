@@ -216,6 +216,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ..
             } => self.generate_index(expression, array, index),
 
+            Expression::IndexAssign { target, value, .. } => {
+                let Expression::Index {
+                    expression: array,
+                    index,
+                    ..
+                } = target.as_ref()
+                else {
+                    return Err("Index-assign target must be an index expression".to_string());
+                };
+                self.generate_index_assign(target, array, index, value)
+            }
+
             Expression::Match {
                 expression: scrutinee,
                 arms,
@@ -829,80 +841,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         array: &Expression,
         index_expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // Generate the array expression
+        // Generate the array and index expressions, then read the bounds-checked element
+        // pointer shared with `generate_index_assign` (`arrays.rs`) — extracting the
+        // `{ptr, size}` fields straight out of the SSA struct value with `extractvalue`
+        // (no stack `alloca`/store round-trip) is load-bearing for the constant-stack
+        // tail-call guarantee: this emits at the current insert point, so any `alloca`
+        // here would land INSIDE a lowered tail-recursion loop and re-allocate on every
+        // iteration, growing the stack without bound until it overflows.
         let array_val = self.generate_expression(array)?;
-
-        // Generate the index expression
         let index_val = self.generate_expression(index_expression)?;
-
-        // An array is a `{ ptr data, i64 size }` struct. To index it: read the data ptr and
-        // size fields, bounds-check the index, convert it f64->i64, then GEP + load the elem.
-        if let BasicValueEnum::StructValue(_) = array_val {
-            // Read the `{ptr, size}` fields straight out of the SSA struct value with
-            // `extractvalue` — no stack `alloca`/store round-trip. This is load-bearing for
-            // the constant-stack tail-call guarantee: `generate_index` emits at the current
-            // insert point, so any `alloca` here would land INSIDE a lowered tail-recursion
-            // loop and re-allocate on every iteration, growing the stack without bound until
-            // it overflows. Extraction keeps the field reads purely in registers.
-            let data_ptr = self.array_data_field(array_val)?;
-            let size = self.array_size_field(array_val)?;
-
-            let idx_f = if let BasicValueEnum::FloatValue(f) = index_val {
-                f
-            } else {
-                return Err("Index must be a number".to_string());
-            };
-
-            // CHECKED indexing (fail loud, never silent): an out-of-bounds, negative,
-            // or NaN index is a clear runtime error (stderr + exit 1), never a raw read.
-            // The check runs on the f64 BEFORE `fptosi` — converting an invalid index
-            // is poison. A fractional in-range index truncates toward zero (documented).
-            let in_bounds = self.index_in_bounds(idx_f, size)?;
-            let function = self
-                .current_function
-                .ok_or_else(|| "Index expression outside of function".to_string())?;
-            let fail_bb = self.context.append_basic_block(function, "idx_fail");
-            let ok_bb = self.context.append_basic_block(function, "idx_ok");
-            self.builder
-                .build_conditional_branch(in_bounds, ok_bb, fail_bb)
-                .map_err(ctx("Failed to branch on index bounds"))?;
-
-            self.builder.position_at_end(fail_bb);
-            let fail_fn = self.get_intrinsic("__index_fail")?;
-            // Where the program wrote `arr[i]`, so the report points at the read rather
-            // than leaving the reader to guess which one of them it was.
-            let site = self.site_value(index_node.span())?;
-            self.builder
-                .build_call(fail_fn, &[idx_f.into(), size.into(), site.into()], "")
-                .map_err(ctx("Failed to call __index_fail"))?;
-            self.builder
-                .build_unreachable()
-                .map_err(ctx("Failed to build unreachable"))?;
-
-            self.builder.position_at_end(ok_bb);
-            let index_i64 = self
-                .builder
-                .build_float_to_signed_int(idx_f, self.context.i64_type(), "index_i64")
-                .map_err(ctx("Failed to convert index"))?;
-
-            // Element LLVM type comes from the type oracle (the index expression's type
-            // IS the element type), NOT from a hardcoded `f64` — so `Text`/array/record
-            // elements load correctly. The element memory was laid out by `generate_array`
-            // using this same value representation.
-            let elem_llvm = self.oracle_value_type(index_node)?;
-
-            // Use GEP (indexing by element type) to get the element pointer, then load it.
-            let elem_ptr = unsafe {
-                self.builder
-                    .build_gep(elem_llvm, data_ptr, &[index_i64], "elem_ptr")
-                    .map_err(ctx("Failed to build GEP"))?
-            };
-
-            self.builder
-                .build_load(elem_llvm, elem_ptr, "elem")
-                .map_err(ctx("Failed to load element"))
-        } else {
-            Err("Can only index into arrays".to_string())
-        }
+        let (elem_ptr, elem_llvm) =
+            self.checked_element_pointer(index_node, array_val, index_val)?;
+        self.builder
+            .build_load(elem_llvm, elem_ptr, "elem")
+            .map_err(ctx("Failed to load element"))
     }
 }

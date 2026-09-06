@@ -75,7 +75,7 @@ codes! {
     NotAFunction = 302 => "call on a data value",
     WrongNumberOfArguments = 303 => "wrong number of arguments",
     ImmutableAssignment = 304 => "assignment to an immutable binding",
-    ImmutableFieldWrite = 305 => "field write through an immutable binding",
+    ImmutableFieldWrite = 305 => "write through an immutable binding",
     MutableAliasOfImmutable = 306 => "`:=` binding aliasing an immutable value",
     ImmutableAliasOfMutable = 307 => "`=` binding aliasing a mutable value",
     MutatingMethodOnImmutable = 308 => "mutating method on an immutable receiver",
@@ -112,6 +112,8 @@ codes! {
     NoEntryPoint = 339 => "no `^` entry point",
     StaticCallNeedsReceiverValue = 340 => "static call on a method that reads its receiver",
     MutableStoreOfImmutable = 341 => "store into a mutable container aliasing an immutable value",
+    MissingConstructorField = 342 => "missing constructor field",
+    UnknownConstructorField = 343 => "unknown constructor field",
     ReservedName = 344 => "reserved name",
 
     // Family 4 — codegen and build
@@ -125,6 +127,7 @@ codes! {
     MatchFailed = 503 => "no arm matched",
     AllocationFailed = 504 => "allocation failed",
     ReadFailed = 505 => "reading stdin failed",
+    ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
 }
 
 impl Code {
@@ -285,5 +288,9 @@ mod tests {
         assert_eq!(codes::MATCH_FAILED, Code::MatchFailed.number());
         assert_eq!(codes::ALLOCATION_FAILED, Code::AllocationFailed.number());
         assert_eq!(codes::READ_FAILED, Code::ReadFailed.number());
+        assert_eq!(
+            codes::REPLACE_ALL_EMPTY_FROM,
+            Code::ReplaceAllEmptyFrom.number()
+        );
     }
 }

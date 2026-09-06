@@ -84,6 +84,16 @@ fn each_returns_receiver_and_chains() {
     );
 }
 
+/// A body that writes into the receiver through `arr[i] := v` mutates it in place: a read
+/// after `each` returns sees the written values.
+#[test]
+fn each_body_writing_an_element_by_index_reads_back_afterward() {
+    assert_exit(
+        "^ = () -> Num => <\n  a := [1, 2, 3]\n  i := 0\n  a.each(x => <\n    a[i] := x * 10\n    i := i + 1\n  >\n  )\n  a[0] + a[1] + a[2]\n>",
+        60,
+    );
+}
+
 // ---- find ---------------------------------------------------------------
 
 /// `find` returns `Ok(elem)` of the first match.
@@ -122,6 +132,16 @@ fn at_notok_out_of_bounds() {
         "^ = () -> Num => <\n  hi = [10, 20, 30].at(9) ?\n    | Ok(v) => v\n    | NotOk(_) => 1\n  lo = [10, 20, 30].at(0) ?\n    | Ok(v) => v\n    | NotOk(_) => 0\n  hi + lo\n>",
         // at(9) -> NotOk -> 1 ; at(0) -> Ok(10) -> 10 ; total 11
         11,
+    );
+}
+
+/// `at` returns `NotOk` for a NaN or infinite index — never the poison-converted
+/// element a naive `fptosi` of an unrepresentable float would produce.
+#[test]
+fn at_notok_for_nan_and_infinity() {
+    assert_exit(
+        "^ = () -> Num => <\n  nan = [10, 20, 30].at(0 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  positive = [10, 20, 30].at(1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  negative = [10, 20, 30].at(0 - 1 / 0) ?\n    | Ok(_)    => 9\n    | NotOk(_) => 1\n  nan * 100 + positive * 10 + negative\n>",
+        111,
     );
 }
 

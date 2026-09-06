@@ -644,6 +644,8 @@ pub fn is_text_method(name: &str) -> bool {
                 | "trimEnd"
                 | "indexOf"
                 | "slice"
+                | "split"
+                | "replaceAll"
                 | "at"
                 | "graphemes"
                 | "toUpper"
@@ -660,11 +662,9 @@ pub fn is_text_method(name: &str) -> bool {
 /// loader (a program mentioning one gets `core.text` merged in).
 pub fn qn_text_impl(name: &str) -> Option<&'static str> {
     Some(match name {
-        "split" => "core.text.split",
         "trim" => "core.text.trim",
         "contains" => "core.text.contains",
         "replace" => "core.text.replace",
-        "replaceAll" => "core.text.replaceAll",
         "repeat" => "core.text.repeat",
         _ => return None,
     })
@@ -907,6 +907,16 @@ pub enum Expression {
         span: Span,
     },
 
+    // In-place array element write: `arr[i] := value`. `target` is an `Index`; it
+    // mutates the existing array memory in place rather than re-binding a name. Only
+    // allowed when `arr`'s binding is mutable (`:=`); the type checker enforces this,
+    // and the index is checked exactly like a read.
+    IndexAssign {
+        target: Box<Expression>,
+        value: Box<Expression>,
+        span: Span,
+    },
+
     // Array literal
     Array {
         elements: Vec<Expression>,
@@ -981,6 +991,7 @@ impl Expression {
             Expression::FieldAccess { span, .. } => span,
             Expression::FieldAssign { span, .. } => span,
             Expression::Index { span, .. } => span,
+            Expression::IndexAssign { span, .. } => span,
             Expression::Array { span, .. } => span,
             Expression::MapLiteral { span, .. } => span,
             Expression::SetLiteral { span, .. } => span,

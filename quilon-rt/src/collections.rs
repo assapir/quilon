@@ -8,12 +8,11 @@
 //! table's hash order, NOT insertion order); the fixed seed only makes it reproducible so
 //! example-asserts don't flake.
 //!
-//! Immutability: every mutator (`__map_set`, `__set_add`, the set-algebra ops) CLONES the
-//! table and returns a NEW header — the receiver is never touched. Because the header is
-//! GC-allocated and the collector never runs Rust `Drop`, a superseded table's system-heap
-//! buffer is never freed: a long fold that rebuilds a map N times leaks N buffers. That is
-//! a deliberate trade-off for this release (a GC finalizer that drops the table, or storing
-//! the table in GC memory, is the post-0.9 fix); it never affects correctness.
+//! Mutation: `__map_set`/`__map_remove`/`__set_add`/`__set_remove` mutate the receiver's
+//! header IN PLACE (table insert/remove, then a fresh snapshot) and return the same
+//! pointer, so the language-level `it` a Quilon `set`/`remove`/`add` call returns is
+//! literally the mutated receiver. The set-algebra operators (`+`/`-`/`+-`) stay
+//! non-mutating and return a freshly built header.
 //!
 //! GC visibility: the `std` table's own buffer comes from the global allocator and is
 //! invisible to the conservative Boehm collector, but that is safe here because the header

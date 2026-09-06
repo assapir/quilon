@@ -172,7 +172,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::collect_mutable_locals(&arm.body, out);
                 }
             }
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. }
+            | Expression::IndexAssign { target, value, .. } => {
                 Self::collect_mutable_locals(target, out);
                 Self::collect_mutable_locals(value, out);
             }
@@ -316,7 +317,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::walk_expressions(&arm.body, f);
                 }
             }
-            Expression::FieldAssign { target, value, .. } => {
+            Expression::FieldAssign { target, value, .. }
+            | Expression::IndexAssign { target, value, .. } => {
                 Self::walk_expressions(target, f);
                 Self::walk_expressions(value, f);
             }

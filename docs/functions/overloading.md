@@ -93,6 +93,28 @@ member. Both are required together, and `%`/`==` must agree: equal values hash t
 This unary `%` is distinct from the binary `%` remainder operator, which takes one
 parameter. It has no call syntax of its own — the collections invoke it.
 
+## Method overloading
+
+2+ named methods sharing a name on one [record](../types/records.md#named-record-types-with-methods)
+or [sum](../types/sum-types.md) form an overload set, exactly like top-level functions do
+— every member fully annotated, dispatched by exact argument type:
+
+```quilon
+T = {
+  a :: Num,
+  describe = (n :: Num) -> Num => < n * 2 >,
+  describe = (s :: Text) -> Num => < s.size >
+}
+
+t = T { a = 1 }
+t.describe(5)      ~ 10 — the Num member
+t.describe("abcd") ~ 4  — the Text member
+```
+
+A single method under a name is unaffected — its return type may still be inferred from
+its body, the way an ordinary (non-overloaded) function's can. Two methods sharing both a
+name and a signature is a duplicate definition, the same as two top-level members would be.
+
 (See `examples/overloading.qn`, `examples/sum_methods.qn`, `examples/maps.qn`,
 `examples/sets.qn`, and `examples/overload_dispatch.qn` for dispatch on argument types out
 of an array element, a match, a call, or a lambda.)

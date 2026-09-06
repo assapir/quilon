@@ -25,6 +25,14 @@ step = (t :: Text) -> Num => < 0 >
 walk = (t :: Text) -> Text => < t >
 walk = (n :: Num) -> Text => < n == 0 ? "done" : walk(step(n)) >
 
+~ Methods overload the same way top-level functions do: 2+ methods sharing a name on
+~ one type form a set, dispatched by exact argument type.
+Describer = {
+  a :: Num,
+  describe = (n :: Num) -> Num => < n * 2 >,
+  describe = (s :: Text) -> Num => < s.size >
+}
+
 ^ = () -> $ => <
   words :: []Text = ["alpha", "beta"]
   nums :: []Num = [10, 20]
@@ -53,4 +61,9 @@ walk = (n :: Num) -> Text => < n == 0 ? "done" : walk(step(n)) >
   assert(walk(3), equals("done"))
   assert(walk("kept"), equals("kept"))
   assert(kind(walk(1)), equals(2))
+
+  ~ A method overload set dispatches on its argument, same as `kind` above.
+  describer = Describer { a = 1 }
+  assert(describer.describe(5), equals(10))
+  assert(describer.describe("abcd"), equals(4))
 >

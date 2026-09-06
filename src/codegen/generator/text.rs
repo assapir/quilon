@@ -10,13 +10,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver).
     ///
     /// The PRIMITIVE methods (segmentation, search, slice, the whitespace walks, case
-    /// mapping) lower to their `quilon-rt` intrinsics; the COMPOSABLE ones (those
-    /// [`crate::ast::qn_text_impl`] names) lower to a plain call of their `core.text`
-    /// implementation, with the receiver as the first argument — the module loader merged
-    /// those functions in exactly because this call appears. The plain-call machinery also
-    /// fills in the trailing `Site` the fail-loud implementations (`repeat`, `replace`,
-    /// `replaceAll`) declare, so a violated contract reports where the METHOD call is
-    /// written.
+    /// mapping, `split`, `replaceAll`) lower to their `quilon-rt` intrinsics; the
+    /// COMPOSABLE ones (those [`crate::ast::qn_text_impl`] names) lower to a plain call of
+    /// their `core.text` implementation, with the receiver as the first argument — the
+    /// module loader merged those functions in exactly because this call appears. The
+    /// plain-call machinery fills in the trailing `Site` a composable's fail-loud
+    /// implementation (`repeat`, `replace`) declares; `replaceAll`'s own fail-loud contract
+    /// (an empty `from`) is native, so its call site builds the `Site` itself, the same way
+    /// `at`/`slice`'s index conversion and array indexing's bounds check do.
     pub(super) fn generate_text_method(
         &mut self,
         method: &str,
@@ -104,6 +105,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 )
             }
             "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
+            "split" => {
+                let (sep_ptr, sep_len) = self.extract_text(&args[1])?;
+                call_struct(
+                    self,
+                    "__text_split",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        sep_ptr.into(),
+                        sep_len.into(),
+                    ],
+                )
+            }
+            "replaceAll" => {
+                let (from_ptr, from_len) = self.extract_text(&args[1])?;
+                let (to_ptr, to_len) = self.extract_text(&args[2])?;
+                let site = self.site_value(span)?;
+                call_struct(
+                    self,
+                    "__text_replace_all",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        from_ptr.into(),
+                        from_len.into(),
+                        to_ptr.into(),
+                        to_len.into(),
+                        site.into(),
+                    ],
+                )
+            }
             other => Err(format!("unknown text method `{other}`")),
         }
     }
@@ -152,8 +184,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok((ptr, len))
     }
 
-    /// Evaluate a `Num` index argument (an `f64`) and convert it to the `i64` the Text
-    /// intrinsics take (used by `slice`'s start/end).
     /// Narrow an intrinsic's `i64` 0/1 answer to an `i1` Quilon `Bool`. Several runtime
     /// intrinsics return a plain integer because the C ABI has no bool of our width.
     pub(super) fn int_to_bool(
@@ -173,14 +203,60 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into())
     }
 
+    /// Evaluate a `Num` index argument (an `f64`) and convert it to the `i64` the Text
+    /// intrinsics take (`at`'s index, `slice`'s start/end).
     pub(super) fn text_index_arg(
         &mut self,
         expression: &Expression,
         name: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let f = self.generate_expression(expression)?.into_float_value();
+        self.saturating_i64(f, name)
+    }
+
+    /// Convert an f64 to i64, clamping first on the float so `fptosi` never sees a value
+    /// it cannot represent: converting a NaN or a magnitude that overflows i64 (±infinity
+    /// included) is poison, which is what let `Text.at`/`Text.slice` disagree with their
+    /// documented behavior on ±infinity. The array index path avoids the same conversion
+    /// by bounds-checking the float before ever converting it (`index_in_bounds`); `Text`
+    /// has no bound to check against ahead of time, so this clamps to i64's range instead
+    /// and leaves the actual bounds/clamp semantics to the intrinsics, which already
+    /// handle any in-range i64 correctly. NaN clamps to the same sentinel as -infinity: the
+    /// low-bound compare is UNORDERED, true for both "less than the minimum" and NaN.
+    pub(super) fn saturating_i64(
+        &mut self,
+        f: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let f64_type = self.context.f64_type();
+        // The largest f64 strictly below 2^63 (i64::MAX rounds up to 2^63 in f64, which
+        // overflows), and i64::MIN itself (exactly representable, the lowest value
+        // `fptosi` can still convert).
+        let max = f64_type.const_float(9_223_372_036_854_774_784.0);
+        let min = f64_type.const_float(i64::MIN as f64);
+
+        let above_max = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::OGT, f, max, "idx_above_max")
+            .map_err(ctx("Failed to compare index to max"))?;
+        let below_min_or_nan = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::ULT, f, min, "idx_below_min_or_nan")
+            .map_err(ctx("Failed to compare index to min"))?;
+
+        let clamped_hi = self
+            .builder
+            .build_select(above_max, max, f, "idx_clamp_hi")
+            .map_err(ctx("Failed to clamp index to max"))?
+            .into_float_value();
+        let safe = self
+            .builder
+            .build_select(below_min_or_nan, min, clamped_hi, "idx_safe")
+            .map_err(ctx("Failed to clamp index to min"))?
+            .into_float_value();
+
         self.builder
-            .build_float_to_signed_int(f, self.context.i64_type(), name)
+            .build_float_to_signed_int(safe, self.context.i64_type(), name)
             .map_err(ctx("Failed to convert text index"))
     }
 

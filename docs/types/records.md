@@ -63,6 +63,14 @@ double(5)      ~ 10
 The same holds for the methods reserved on the built-in types: `"a,b".split(",")` reaches
 `Text`'s `split`, and `split("a,b", ",")` is an undefined name.
 
+Every field and method name on a type is distinct — a field declared twice, or a field and
+a method sharing a name, is a duplicate definition. Two or more methods sharing a name
+form an [overload set](../functions/overloading.md#method-overloading), each member fully
+annotated and dispatched by exact argument type; two members with the same signature are
+a duplicate definition. A constructor or record literal names each field once — a `<-source`
+spread fills fields, and a later literal may override one of them, but the same field
+written twice as a literal is a duplicate.
+
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the type name
 itself — the natural spelling for a constructor.
@@ -82,4 +90,21 @@ Point = {
 A static method is also callable on a value, the same way as any other method.
 ```quilon ignore
 Point.distance()        ~ error QN340: `distance` needs a value of Point
+```
+A static method may be overloaded: two or more same-named static members dispatch on the
+bare type name by exact argument type, exactly as a value-receiver overload dispatches on
+a value.
+```quilon
+Segment = {
+  start :: Num,
+  end   :: Num,
+  make = (end :: Num) -> Segment => < Segment { start = 0, end = end } >,
+  make = (start :: Num, end :: Num) -> Segment => < Segment { start = start, end = end } >
+}
+
+^ = () -> Num => <
+  a = Segment.make(5)      ~ start = 0, end = 5
+  b = Segment.make(2, 5)   ~ start = 2, end = 5
+  a.end + b.start
+>
 ```

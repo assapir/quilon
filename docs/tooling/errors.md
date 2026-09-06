@@ -96,7 +96,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN302 | call on a data value |
 | QN303 | wrong number of arguments |
 | QN304 | assignment to an immutable binding |
-| QN305 | field write through an immutable binding |
+| QN305 | write through an immutable binding |
 | QN306 | `:=` binding aliasing an immutable value |
 | QN307 | `=` binding aliasing a mutable value |
 | QN308 | mutating method on an immutable receiver |
@@ -133,6 +133,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN339 | no `^` entry point |
 | QN340 | static call on a method that reads its receiver |
 | QN341 | store into a mutable container aliasing an immutable value |
+| QN342 | missing constructor field |
+| QN343 | unknown constructor field |
 | QN344 | reserved name |
 | QN400 | code generation failed |
 | QN401 | native build failed |
@@ -142,6 +144,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN503 | no arm matched |
 | QN504 | allocation failed |
 | QN505 | reading stdin failed |
+| QN506 | empty `from` in `replaceAll` |
 
 ## Input
 
@@ -518,16 +521,17 @@ A binding made with `=` is reassigned.
 
 Bind it with `:=` to allow writes: `n := 1`.
 
-### QN305 — field write through an immutable binding
+### QN305 — write through an immutable binding
 
-A field is written through a binding made with `=`.
+A record field or array element is written through a binding made with `=`.
 
 ```quilon ignore
 Point = { x :: Num }
 ^ = () -> Num => < p = Point { x = 1 }  p.x := 2 >
 ```
 
-Bind the record with `:=`: `p := Point { x = 1 }`.
+Bind the record with `:=`: `p := Point { x = 1 }`. The same applies to an array element
+write (`arr[i] := v`) on an `=`-bound array.
 
 ### QN306 — `:=` binding aliasing an immutable value
 
@@ -557,7 +561,8 @@ Bind with `:=`, or build a fresh value.
 
 ### QN308 — mutating method on an immutable receiver
 
-A `:=` method is called on a receiver bound with `=`.
+A `:=` method is called on a receiver bound with `=`. The same applies to a built-in
+`Map`/`Set` mutator (`set`/`remove` on a `Map`, `add`/`remove` on a `Set`).
 
 ```quilon ignore
 Counter = { n :: Num, bump := () -> $ => < it.n := it.n + 1 > }
@@ -580,6 +585,8 @@ body shadows the receiver; rename it where the write targets the lambda's own va
 ### QN310 — duplicate definition
 
 A name is defined twice in one scope, and the two definitions form no overload set.
+A record's fields and methods, a constructor or record literal's fields, a map literal's
+literal keys, and the members of one overload set are each one scope of their own.
 
 ```quilon ignore
 x = 1
@@ -955,6 +962,28 @@ Box = { item :: Counter }
 
 Store a fresh value: `b.item := Counter { value = c.value }`.
 
+### QN342 — missing constructor field
+
+A record constructor leaves out one of its type's declared fields.
+
+```quilon ignore
+P = { x :: Num, y :: Num }
+^ = () -> Num => < p = P { x = 1 }  0 >
+```
+
+Add the missing field: `P { x = 1, y = 2 }`.
+
+### QN343 — unknown constructor field
+
+A record constructor supplies a field its type does not declare.
+
+```quilon ignore
+P = { x :: Num, y :: Num }
+^ = () -> Num => < p = P { x = 1, y = 2, z = 3 }  0 >
+```
+
+Remove the field, or fix its name against the type's declared fields.
+
 ### QN344 — reserved name
 
 A binding — a type, a `=`/`:=` binding, a function, a parameter, a lambda parameter, or a
@@ -1069,3 +1098,18 @@ error[QN505]: @readStdin failed: Input/output error (os error 5)
 ```
 
 Run the program with a readable stdin.
+
+### QN506 — empty `from` in `replaceAll`
+
+A computed `from` argument to `Text.replaceAll` was the empty text at run time — an empty
+`from` is an ill-defined request. (A literal empty `from` is instead a compile-time
+error.)
+
+```quilon ignore
+^ = () -> Num => <
+  from = ""
+  "abc".replaceAll(from, "x").size
+>
+```
+
+Pass a non-empty `from`.

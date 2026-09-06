@@ -1,8 +1,8 @@
-~ In-place record mutation. The binding operator decides mutability, for instances
-~ and for methods alike:
-~   `=`  -> immutable: no field writes, and a method that promises not to mutate.
-~   `:=` -> mutable: in-place field writes, and a method that may mutate `it`.
-~ Calling a `:=` method needs a `:=` receiver.
+~ In-place mutation. The binding operator decides mutability, for instances, arrays,
+~ and methods alike:
+~   `=`  -> immutable: no field/element writes, and a method that promises not to mutate.
+~   `:=` -> mutable: in-place field/element writes, and a method that may mutate `it`.
+~ Calling a `:=` method needs a `:=` receiver; writing `arr[i] := v` needs a `:=` array.
 ~ `<< core.test` verifies each mutation; on success the program exits 0.
 << core.test
 
@@ -26,4 +26,11 @@ Counter = {
   assert(c.peek(), equals(42))
   c.bumpEach([1, 2, 3])          ~ setter writing from inside a lambda: value = 48
   assert(c.peek(), equals(48))
+
+  ~ An array element write is the array analog of a field write: in place, on a
+  ~ `:=`-bound array.
+  nums :: []Num := [10, 20, 30]
+  nums[0] := 99
+  assert(nums[0], equals(99))
+  assert(nums.size, equals(3))
 >

@@ -24,6 +24,28 @@ struct QlMap {
 /// Move `table` into a fresh GC-allocated header, building the ordered snapshot (which
 /// also anchors every key's bytes and value box for the collector).
 unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut QlMap {
+    let header = alloc_slots::<QlMap>(1);
+    unsafe {
+        std::ptr::write(
+            header,
+            QlMap {
+                table,
+                snapshot_a: std::ptr::null(),
+                snapshot_b: std::ptr::null(),
+                snapshot_values: std::ptr::null(),
+                len: 0,
+            },
+        );
+        refresh_snapshot(header);
+    }
+    header
+}
+
+/// Rebuild `header`'s ordered snapshot arrays and `len` from its current `table`. Called
+/// after every in-place mutation (`__map_set`/`__map_remove`) so `keys`/`values`/`each`
+/// keep seeing a consistent, freshly GC-anchored snapshot.
+unsafe fn refresh_snapshot(header: *mut QlMap) {
+    let table = unsafe { &(*header).table };
     let n = table.len();
     let snapshot_a = alloc_slots::<u64>(n);
     let snapshot_b = alloc_slots::<u64>(n);
@@ -35,20 +57,12 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
             *snapshot_values.add(i) = *value;
         }
     }
-    let header = alloc_slots::<QlMap>(1);
     unsafe {
-        std::ptr::write(
-            header,
-            QlMap {
-                table,
-                snapshot_a,
-                snapshot_b,
-                snapshot_values,
-                len: n as i64,
-            },
-        )
-    };
-    header
+        (*header).snapshot_a = snapshot_a;
+        (*header).snapshot_b = snapshot_b;
+        (*header).snapshot_values = snapshot_values;
+        (*header).len = n as i64;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -90,6 +104,8 @@ pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8]
     map
 }
 
+/// Insert `(key, value)` into `map` IN PLACE and return the same header: `set` is a
+/// mutator (see the module docs), not a constructor.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn __map_set(
@@ -101,14 +117,17 @@ pub extern "C" fn __map_set(
     eq_fn: *const c_void,
     value: *const c_void,
 ) -> *mut c_void {
-    let map = map as *const QlMap;
-    let mut table = unsafe { (*map).table.clone() };
+    let header = map as *mut QlMap;
     let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
-    debug_check_user_key(table.keys(), &key);
-    table.insert(key, value);
-    unsafe { build_map(table) as *mut c_void }
+    unsafe {
+        debug_check_user_key((*header).table.keys(), &key);
+        (*header).table.insert(key, value);
+        refresh_snapshot(header);
+    }
+    header as *mut c_void
 }
 
+/// Remove `key` from `map` IN PLACE and return the same header (absent key: no-op).
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_remove(
     map: *const c_void,
@@ -118,10 +137,14 @@ pub extern "C" fn __map_remove(
     hash_fn: *const c_void,
     eq_fn: *const c_void,
 ) -> *mut c_void {
-    let map = map as *const QlMap;
-    let mut table = unsafe { (*map).table.clone() };
-    table.remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
-    unsafe { build_map(table) as *mut c_void }
+    let header = map as *mut QlMap;
+    unsafe {
+        (*header)
+            .table
+            .remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
+        refresh_snapshot(header);
+    }
+    header as *mut c_void
 }
 
 #[unsafe(no_mangle)]

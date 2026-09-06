@@ -228,6 +228,26 @@ fn test_non_exhaustive_match_on_a_non_sum_is_rejected() {
 }
 
 #[test]
+fn test_constructor_missing_field_is_rejected() {
+    // `P { x = 1 }` leaves out `P`'s declared `y` field.
+    assert!(matches!(
+        check_ok("P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1 }  0 >"),
+        Err(TypeError::MissingConstructorField { .. })
+    ));
+}
+
+#[test]
+fn test_constructor_unknown_field_is_rejected() {
+    // `P` declares no `z` field.
+    assert!(matches!(
+        check_ok(
+            "P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1, y = 2, z = 3 }  0 >"
+        ),
+        Err(TypeError::UnknownConstructorField { .. })
+    ));
+}
+
+#[test]
 fn test_constructor_arity() {
     // A constructor pattern binds one sub-pattern per payload slot; `Ok` carries one.
     assert!(matches!(
@@ -331,6 +351,110 @@ fn test_assertions_and_matchers_still_work_as_calls() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn test_constructor_literal_duplicate_field_is_rejected() {
+    // A SECOND literal `x = 3` names a field the constructor already provided.
+    let err = check_ok(
+        "P = { x :: Num, y :: Num }\n^ = () -> Num => < p = P { x = 1, y = 2, x = 3 }  0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_anonymous_record_literal_duplicate_field_is_rejected() {
+    let err = check_ok("^ = () -> Num => < q = { x = 1, x = 2 }  0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_declared_field_is_rejected() {
+    // `T` declares `a` twice, once as each type — the second declaration collides
+    // regardless of its own type.
+    let err = check_ok("T = { a :: Num, a :: Text }\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_field_and_method_sharing_a_name_is_rejected() {
+    let err = check_ok("T = { a :: Num, a = => < 9 > }\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_same_signature_method_in_a_record_is_rejected() {
+    let err = check_ok(
+        "T = { a :: Num, f = () -> Num => < 1 >, f = () -> Num => < 2 > }\n\
+         ^ = () -> Num => < 0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_duplicate_same_signature_method_in_a_sum_is_rejected() {
+    let err = check_ok(
+        "S = A / B { f = () -> Num => < 1 >, f = () -> Num => < 2 > }\n\
+         ^ = () -> Num => < 0 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+}
+
+#[test]
+fn test_method_overload_set_resolves_by_type() {
+    // Two `f` methods on the same type, differing only in their parameter's type — a
+    // legitimate overload set, dispatched by exact argument type exactly like a
+    // top-level overload.
+    assert!(
+        check_ok(
+            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < s.size > }\n\
+             ^ = () -> Num => < t = T { a = 1 }  t.f(1) + t.f(\"xy\") >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_static_overload_set_resolves_by_type() {
+    // Two `make` methods differing only in their parameter's type, neither reading
+    // `it` — a static overload set dispatches on the bare type name exactly as a
+    // value-receiver overload dispatches on a value, resolving each call to its own
+    // member by argument type.
+    assert!(
+        check_ok(
+            "T = { a :: Num, make = (n :: Num) -> Num => < n >, make = (s :: Text) -> Num => < s.size > }\n\
+             ^ = () -> Num => < T.make(1) + T.make(\"xy\") >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_static_overload_set_resolves_by_arity() {
+    // Two `make` methods differing only in arity, neither reading `it`.
+    assert!(
+        check_ok(
+            "T = { a :: Num, make = (n :: Num) -> Num => < n >, make = (n :: Num, m :: Num) -> Num => < n + m > }\n\
+             ^ = () -> Num => < T.make(1) + T.make(1, 2) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_overload_member_that_reads_it_still_needs_a_receiver_value() {
+    // An overload set still requires a receiver VALUE for the specific member that
+    // reads `it` — a same-named static sibling does not exempt it.
+    assert!(matches!(
+        check_ok(
+            "T = { a :: Num, f = (n :: Num) -> Num => < n >, f = (s :: Text) -> Num => < it.a > }\n\
+             ^ = () -> Num => < T.f(\"xy\") >"
+        ),
+        Err(TypeError::StaticCallNeedsReceiverValue { .. })
+    ));
 }
 
 #[test]

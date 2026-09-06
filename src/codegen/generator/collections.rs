@@ -2,9 +2,10 @@
 //!
 //! A Map/Set value is a single opaque pointer to a GC-allocated native runtime wrapper
 //! (a `std::collections::HashMap`/`HashSet` with a fixed-seed hasher; see
-//! `quilon-rt/src/collections/`). The collections are IMMUTABLE — every mutator
-//! (`set`/`add`, the set operators) returns a NEW collection pointer and never touches
-//! the receiver.
+//! `quilon-rt/src/collections/`). `set`/`remove`/`add` are SETTERS: they mutate the
+//! receiver's table in place and return the SAME pointer, exactly like a record's own
+//! `:=` methods (see `docs/mutation.md`). The set operators (`+`/`-`/`+-`) stay
+//! non-mutating and build a NEW collection, leaving both operands as they were.
 //!
 //! Keys/elements are passed across the runtime ABI as a uniform triple `(tag, a, b)` of
 //! `i64`s: `tag` picks the hashable kind (0 = Num, 1 = Text, 2 = Bool); `a`/`b` carry the
@@ -58,8 +59,8 @@ impl<'ctx> KeyAbi<'ctx> {
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then a persistent
-    /// `__map_set` per entry. The oracle gives the map's `Map(K, V)` type.
+    /// `[|k1 => v1, ...|]` — build a fresh map by `__map_new` then `__map_set` (an
+    /// in-place mutator) per entry. The oracle gives the map's `Map(K, V)` type.
     pub(super) fn generate_map_literal(
         &mut self,
         node: &Expression,
@@ -242,7 +243,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.array_struct(out_ptr, n)
     }
 
-    /// `m.each(f)` — inline `f(key, value)` over every entry, for effect.
+    /// `m.each(f)` — inline `f(key, value)` over every entry PRESENT WHEN THE CALL STARTS.
+    /// `f`'s own body may mutate `map` in place (a `:=`-bound receiver's `set`/`remove` are
+    /// legal there), and each mutation replaces the header's live snapshot arrays out from
+    /// under an in-progress walk over them — so every entry is first copied into a FIXED,
+    /// freshly allocated (and therefore GC-anchored) buffer, and only that copy is walked:
+    /// a mutation changes the map, never the entries this call is visiting.
     fn map_each(
         &mut self,
         map: PointerValue<'ctx>,
@@ -254,6 +260,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         let n = self.call_rt_int("__map_len", &[map.into()])?;
         let key_ty = key_ty.clone();
         let value_ty = value_ty.clone();
+        let key_llvm = self.value_repr_type(&key_ty)?;
+        let keys_buf = self.alloc_array_data(key_llvm, n)?;
+        let values_buf = self.alloc_array_data(value_llvm, n)?;
         self.array_loop(n, |this, i| {
             let ka = this.call_rt_int("__map_key_a", &[map.into(), i.into()])?;
             let kb = this.call_rt_int("__map_key_b", &[map.into(), i.into()])?;
@@ -263,6 +272,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .builder
                 .build_load(value_llvm, boxed, "each_v")
                 .map_err(ctx("Failed to load value"))?;
+            this.store_element(keys_buf, key_llvm, i, key)?;
+            this.store_element(values_buf, value_llvm, i, value)?;
+            Ok(())
+        })?;
+        self.array_loop(n, |this, i| {
+            let key = this.load_element(keys_buf, key_llvm, i)?;
+            let value = this.load_element(values_buf, value_llvm, i)?;
             this.inline_lambda(lambda, &[(key, key_ty.clone()), (value, value_ty.clone())])?;
             Ok(())
         })
@@ -333,7 +349,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.array_struct(out_ptr, n)
     }
 
-    /// `s.each(f)` — inline `f(elem)` over every element, for effect.
+    /// `s.each(f)` — inline `f(elem)` over every element PRESENT WHEN THE CALL STARTS, for
+    /// effect. Snapshots into a fixed buffer before running `f` at all, for the same
+    /// reason [`Self::map_each`] does: `f` may mutate `set` in place, and each mutation
+    /// replaces the header's live snapshot out from under an in-progress walk over it.
     fn set_each(
         &mut self,
         set: PointerValue<'ctx>,
@@ -342,10 +361,17 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<(), String> {
         let n = self.call_rt_int("__set_len", &[set.into()])?;
         let elem_ty = elem_ty.clone();
+        let elem_llvm = self.value_repr_type(&elem_ty)?;
+        let items_buf = self.alloc_array_data(elem_llvm, n)?;
         self.array_loop(n, |this, i| {
             let a = this.call_rt_int("__set_item_a", &[set.into(), i.into()])?;
             let b = this.call_rt_int("__set_item_b", &[set.into(), i.into()])?;
             let elem = this.key_from_words(a, b, &elem_ty)?;
+            this.store_element(items_buf, elem_llvm, i, elem)?;
+            Ok(())
+        })?;
+        self.array_loop(n, |this, i| {
+            let elem = this.load_element(items_buf, elem_llvm, i)?;
             this.inline_lambda(lambda, &[(elem, elem_ty.clone())])?;
             Ok(())
         })

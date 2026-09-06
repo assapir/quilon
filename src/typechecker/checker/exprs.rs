@@ -24,6 +24,70 @@ impl TypeChecker {
         Ok(Type::Text)
     }
 
+    /// Type-check `arr[i] := v`: the element type must accept `v`, the index is checked
+    /// exactly like a read (bounds/negative/NaN, via the `Index` inference `target`
+    /// resolves through), and the array's root binding must be mutable (`:=`-bound) — an
+    /// element write through an immutable (`=`) array is a compile error. Kept separate
+    /// from `infer_expression_inner` so its locals do not enlarge that hot, deeply-recursive
+    /// frame (see `check_interpolation`, same reasoning).
+    fn check_index_assign(
+        &mut self,
+        target: &Expression,
+        value: &Expression,
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let elem_type = self.infer_expression(target)?;
+
+        let Expression::Index {
+            expression: base, ..
+        } = target
+        else {
+            unreachable!("IndexAssign target is always an Index expression");
+        };
+
+        // The same two write gates a field write goes through (`FieldAssign` above) —
+        // an immutable-binding gate, then (once the value is inferred) the
+        // store-crosses-the-line gate — shared as `check_write_target_mutable` /
+        // `check_write_value_not_crossing`.
+        self.check_write_target_mutable(base, span)?;
+
+        let value_type = self.infer_expression(value)?;
+        self.check_type_compatibility(&elem_type, &value_type, span)?;
+        self.check_write_value_not_crossing(base, value, span)?;
+
+        // An element write is an effect; its value is the unit type `$`.
+        Ok(Type::Unit)
+    }
+
+    /// The immutable-binding gate a field write and an element write share: `base`'s
+    /// value must alias no `=` binding and no parameter — see `ImmutableFieldWrite`.
+    fn check_write_target_mutable(&self, base: &Expression, span: &Span) -> Result<(), TypeError> {
+        if let Some(name) = self.immutable_write_witness(base) {
+            return Err(TypeError::ImmutableFieldWrite {
+                name,
+                span: span.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The store-crosses-the-line gate a field write and an element write share: once
+    /// `base` is confirmed `:=`-reachable (a mutable witness, skipped when the write
+    /// reaches a setter's own `it`, always mutable regardless of caller), `value` may
+    /// not alias an `=` binding or a parameter — see `check_store_not_crossing`.
+    fn check_write_value_not_crossing(
+        &self,
+        base: &Expression,
+        value: &Expression,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let base_aliasing = self.value_aliasing(base);
+        if base_aliasing.mutable_witness().is_some() && !base_aliasing.reaches_setter_receiver {
+            self.check_store_not_crossing(value, span)?;
+        }
+        Ok(())
+    }
+
     /// Infer an expression's type, **recording it in the type oracle** (`type_table`)
     /// keyed by the expression's source span. This is the public inference entry point;
     /// the per-node logic lives in `infer_expression_inner`. The recorded side-table is what
@@ -312,17 +376,15 @@ impl TypeChecker {
                 // reached — a named binding, an element read, a call result. It is
                 // allowed only when that record aliases no `=` binding and no parameter
                 // (a setter's receiver, and anything reached only through `:=` bindings
-                // or freshly built, passes).
-                if let Expression::FieldAccess {
+                // or freshly built, passes) — the same gate an element write goes
+                // through (`check_index_assign`), shared as `check_write_target_mutable`.
+                let Expression::FieldAccess {
                     expression: base, ..
                 } = target.as_ref()
-                    && let Some(name) = self.immutable_write_witness(base)
-                {
-                    return Err(TypeError::ImmutableFieldWrite {
-                        name,
-                        span: span.clone(),
-                    });
-                }
+                else {
+                    unreachable!("FieldAssign target is always a FieldAccess expression");
+                };
+                self.check_write_target_mutable(base, span)?;
 
                 let value_type = self.infer_expression(value)?;
                 self.check_type_compatibility(&field_type, &value_type, span)?;
@@ -344,22 +406,19 @@ impl TypeChecker {
                 // `setter_stored_parameter_slots` classifies at the definition and
                 // `check_call` checks against the concrete argument at each call site —
                 // rejecting it here too, before any caller is known, would make storing a
-                // parameter into `it` an error unconditionally.
-                if let Expression::FieldAccess {
-                    expression: base, ..
-                } = target.as_ref()
-                {
-                    let base_aliasing = self.value_aliasing(base);
-                    if base_aliasing.mutable_witness().is_some()
-                        && !base_aliasing.reaches_setter_receiver
-                    {
-                        self.check_store_not_crossing(value, span)?;
-                    }
-                }
+                // parameter into `it` an error unconditionally. Shared with an element
+                // write as `check_write_value_not_crossing`.
+                self.check_write_value_not_crossing(base, value, span)?;
 
                 // A field write is an effect; its value is the unit type `$`.
                 Ok(Type::Unit)
             }
+
+            Expression::IndexAssign {
+                target,
+                value,
+                span,
+            } => self.check_index_assign(target, value, span),
 
             Expression::Index {
                 expression,
@@ -429,6 +488,11 @@ impl TypeChecker {
 
                             // Type-check each field
                             let mut provided_fields = std::collections::HashSet::new();
+                            // Field names written as a direct `name = value` entry — as
+                            // opposed to one a `<-source` spread fills in, which a later
+                            // literal may legitimately override. A SECOND literal naming
+                            // the same field is a duplicate.
+                            let mut literal_field_names = std::collections::HashSet::new();
 
                             for (field_name, field_expression) in fields {
                                 // A `<-source` entry fills every declared field at once.
@@ -472,6 +536,12 @@ impl TypeChecker {
                                     continue;
                                 }
 
+                                if !literal_field_names.insert(field_name.clone()) {
+                                    return Err(TypeError::DuplicateDefinition {
+                                        name: field_name.clone(),
+                                        span: span.clone(),
+                                    });
+                                }
                                 provided_fields.insert(field_name.clone());
 
                                 // Find the expected type for this field
@@ -479,8 +549,9 @@ impl TypeChecker {
                                     .iter()
                                     .find(|(f, _)| f == field_name)
                                     .map(|(_, t)| t.clone())
-                                    .ok_or_else(|| TypeError::UndefinedVariable {
-                                        name: format!("field {} in type {}", field_name, type_name),
+                                    .ok_or_else(|| TypeError::UnknownConstructorField {
+                                        type_name: type_name.clone(),
+                                        field: field_name.clone(),
                                         span: span.clone(),
                                     })?;
 
@@ -498,11 +569,9 @@ impl TypeChecker {
                             // Check all fields are provided
                             for (field_name, _) in type_fields.iter() {
                                 if !provided_fields.contains(field_name) {
-                                    return Err(TypeError::UndefinedVariable {
-                                        name: format!(
-                                            "Missing field {} in constructor for {}",
-                                            field_name, type_name
-                                        ),
+                                    return Err(TypeError::MissingConstructorField {
+                                        type_name: type_name.clone(),
+                                        field: field_name.clone(),
                                         span: span.clone(),
                                     });
                                 }
@@ -555,6 +624,10 @@ impl TypeChecker {
         // The named type of the FIRST named-record spread source, if any (holds its
         // declared fields + methods) — the candidate the result may keep.
         let mut named_identity: Option<Type> = None;
+        // Field names written as a direct `name = value` entry — as opposed to one a
+        // `<-source` spread brought in, which a later literal may legitimately overwrite
+        // (functional update). A SECOND literal naming the same field is a duplicate.
+        let mut literal_field_names = std::collections::HashSet::new();
 
         for (name, value) in fields {
             if let Expression::Spread {
@@ -585,6 +658,12 @@ impl TypeChecker {
                     }
                 }
             } else {
+                if !literal_field_names.insert(name.clone()) {
+                    return Err(TypeError::DuplicateDefinition {
+                        name: name.clone(),
+                        span: value.span().clone(),
+                    });
+                }
                 let value_type = self.infer_expression(value)?;
                 match merged.iter_mut().find(|(n, _)| *n == *name) {
                     Some(slot) => slot.1 = value_type,
@@ -752,7 +831,22 @@ impl TypeChecker {
         }
         let mut key_type: Option<Type> = None;
         let mut value_type: Option<Type> = None;
+        // Two entries naming the SAME LITERAL key (`"a" => 1, "a" => 2`) is a mistake, not
+        // a legitimate "later wins" — a computed key (`k => 1, k => 2`) is unaffected,
+        // since only the literal TOKEN is compared, never an expression's evaluated value.
+        let mut seen_literal_keys: Vec<&Expression> = Vec::new();
         for (key, value) in entries {
+            if seen_literal_keys
+                .iter()
+                .any(|previous| same_literal_key(previous, key))
+            {
+                return Err(TypeError::DuplicateDefinition {
+                    name: literal_key_label(key),
+                    span: key.span().clone(),
+                });
+            }
+            seen_literal_keys.push(key);
+
             let k = self.infer_expression(key)?;
             self.check_key_type(&k, key.span())?;
             let v = self.infer_expression(value)?;
@@ -966,4 +1060,27 @@ fn checked_range_type(
         })?;
     }
     Ok(Type::Array(Box::new(Type::Num)))
+}
+
+/// Whether `a` and `b` are the same LITERAL map key — the same literal token, never an
+/// evaluated value: a `Num`/`Text`/`Bool` literal compares equal to another of the same
+/// kind and value; anything else (a computed key, or two different literal kinds) is
+/// never considered the same key, however it would evaluate.
+fn same_literal_key(a: &Expression, b: &Expression) -> bool {
+    match (a, b) {
+        (Expression::Number { value: a, .. }, Expression::Number { value: b, .. }) => a == b,
+        (Expression::String { value: a, .. }, Expression::String { value: b, .. }) => a == b,
+        (Expression::Bool { value: a, .. }, Expression::Bool { value: b, .. }) => a == b,
+        _ => false,
+    }
+}
+
+/// A duplicate literal key's own text, for the diagnostic's `name`.
+fn literal_key_label(key: &Expression) -> String {
+    match key {
+        Expression::Number { value, .. } => value.to_string(),
+        Expression::String { value, .. } => value.clone(),
+        Expression::Bool { value, .. } => value.to_string(),
+        _ => String::new(),
+    }
 }

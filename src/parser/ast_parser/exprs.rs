@@ -16,24 +16,36 @@ impl<'a> Parser<'a> {
     }
 
     /// Assignment is the lowest-precedence form. Parse a ternary; if it is a
-    /// field-access path (`a.b` / `a.b.c`) immediately followed by `:=`, treat
-    /// the whole thing as an in-place field write `target := value`. Anything
-    /// else (including a bare `name := …`, which `parse_item` handles) falls
-    /// straight through unchanged.
+    /// field-access path (`a.b` / `a.b.c`) or an index (`a[i]`) immediately followed
+    /// by `:=`, treat the whole thing as an in-place write `target := value`.
+    /// Anything else (including a bare `name := …`, which `parse_item` handles)
+    /// falls straight through unchanged.
     pub(super) fn parse_assignment(&mut self) -> Result<Expression, ParseError> {
         let expression = self.parse_ternary()?;
 
-        if self.check(&TokenKind::MutAssign) && matches!(expression, Expression::FieldAccess { .. })
+        if self.check(&TokenKind::MutAssign)
+            && matches!(
+                expression,
+                Expression::FieldAccess { .. } | Expression::Index { .. }
+            )
         {
             self.advance(); // consume `:=`
             // Depth-guard the value: a `:=` chain (`a.x := b.y := …`) re-enters
             // `parse_assignment` directly, bypassing the `parse_expression` funnel.
             let value = self.nested(Self::parse_assignment)?;
             let span = self.span(expression.span().start, value.span().end);
-            return Ok(Expression::FieldAssign {
-                target: Box::new(expression),
-                value: Box::new(value),
-                span,
+            return Ok(if matches!(expression, Expression::FieldAccess { .. }) {
+                Expression::FieldAssign {
+                    target: Box::new(expression),
+                    value: Box::new(value),
+                    span,
+                }
+            } else {
+                Expression::IndexAssign {
+                    target: Box::new(expression),
+                    value: Box::new(value),
+                    span,
+                }
             });
         }
 

@@ -94,8 +94,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
             // Text primitives. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. Only the true primitives
-            // live here — the composable methods (`split`/`trim`/`contains`/`replace`/
-            // `replaceAll`/`repeat`) are Quilon (`corelib/text.qn`). See `quilon-rt`.
+            // live here — the composable methods (`trim`/`contains`/`replace`/`repeat`)
+            // are Quilon (`corelib/text.qn`). See `quilon-rt`.
             // { ptr, i64 } trimStart / trimEnd / toUpper / toLower / graphemes (i8*, i64);
             // `graphemes` yields a `[]Text` of the grapheme clusters.
             "__text_trim_start" | "__text_trim_end" | "__text_to_upper" | "__text_to_lower"
@@ -119,6 +119,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__text_at" => self
                 .ptr_len_struct_type()
                 .fn_type(&[ptr.into(), i64t.into(), i64t.into()], false),
+            // { ptr, i64 } __text_split(i8* hay, i64, i8* sep, i64) — `[]Text`.
+            "__text_split" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
+            // { ptr, i64 } __text_replace_all(i8* hay, i64, i8* from, i64, i8* to, i64,
+            // Site* site) — every occurrence of `from` replaced by `to`; `site` is where an
+            // empty `from` is reported.
+            "__text_replace_all" => self.ptr_len_struct_type().fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             // void __sleep(double seconds) — the `@sleep` leaf IO primitive: pause the
             // current fiber for `seconds` seconds, then continue.
             "__sleep" => void.fn_type(&[f64t.into()], false),
