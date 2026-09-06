@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! Cargo build script for `quilon-rt`: compiles the Boehm collector from the
-//! `vendor/bdwgc` submodule into a static `libgc` and links it into this crate.
+//! `vendor/bdwgc` submodule into a static `libgc`, then links it into this crate.
 //!
 //! Why build it here rather than link the system `-lgc`: `quilon build` links a
 //! compiled program against `libquilon_rt.a`, and rustc *bundles* a `static`
@@ -11,9 +11,9 @@
 //! runs. The same objects reach the `quilon` binary through the rlib, so the
 //! in-process JIT resolves `GC_*` at the addresses it always did.
 //!
-//! The build is a single translation unit: upstream's `extra/gc.c` `#include`s
-//! every collector source, which is exactly the "one link object" path bdwgc
-//! documents for embedding. That keeps this to the `cc` crate — no autotools, no
+//! The collector's build is a single translation unit: upstream's `extra/gc.c`
+//! `#include`s every collector source, which is exactly the "one link object" path
+//! bdwgc documents for embedding. That keeps this to the `cc` crate — no autotools, no
 //! cmake, no `libatomic_ops` (`GC_BUILTIN_ATOMIC` uses compiler intrinsics).
 
 use std::path::Path;

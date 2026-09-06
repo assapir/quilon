@@ -61,6 +61,48 @@ test.describe("arithmetic", () => <
 >)
 "#;
 
+/// A suite whose first two cases fail and must END right there — not just at their own
+/// `expect`s: an ordinary statement (`io.print`) after the failing one, and a `.each`
+/// callback's later iterations after the failing one, must both go unevaluated. The third
+/// case still runs and passes.
+const CASE_ENDING_SUITE: &str = r#"
+<< core.test
+<< core.io
+
+test.describe("case ending", () => <
+  test.it("statement after a failing expect", () => <
+    expect(1, equals(9))
+    io.print("SHOULD-NOT-RUN-STATEMENT")
+    expect(1, equals(1))
+  >)
+  test.it("failure inside a nested lambda", () => <
+    [5, 6, 7].each(n => expect(n, equals(2)))
+    io.print("SHOULD-NOT-RUN-NESTED")
+  >)
+  test.it("still runs and passes", () => expect(1, equals(1)))
+>)
+"#;
+
+/// A case that ends WITHOUT ever parking, followed by one that parks on `@sleep` before its
+/// failing `expect`: ending the first case has to leave the fiber machinery in the state the
+/// second case's own `@sleep` needs — a case that never parks is the ordering that would hide
+/// a guard failing to hand control back to its caller cleanly. Ending the second case then has
+/// to forward its `@sleep` park to the scheduler (so the fiber actually waits) rather than
+/// mistaking it for the case's own end. The third case still runs and passes.
+const SLEEP_THEN_FAILING_CASE_SUITE: &str = r#"
+<< core.test
+<< core.time
+
+test.describe("case ending after a park", () => <
+  test.it("passes without parking", () => expect(1, equals(1)))
+  test.it("sleeps then fails", () => <
+    @sleep(0.01)
+    expect(1, equals(2))
+  >)
+  test.it("still runs and passes", () => expect(1, equals(1)))
+>)
+"#;
+
 /// The line a `describe` block prints — in `examples/tests_alongside_code.qn` and in this
 /// file's fixtures. Nothing else in the repository prints it, so finding it in a build's
 /// output means a block that should have been erased ran.
@@ -517,6 +559,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // The private base record `Headers`/`Params` compose over: carried with the
         // module, exported to no importer.
         "core.http.Values",
+        // The native body-framing primitive: carried with the module (an exported item
+        // calls it), exported to no importer.
+        "core.http.frameBody",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
         "core.http.crlfReply",
@@ -701,6 +746,74 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
     assert!(
         out.stdout.contains("✓ starts clean") && out.stdout.contains("1 passed, 1 failed"),
         "the next case must be unaffected:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The first failing `expect` in a case ends the case itself, not just the assertions after
+/// it: an ordinary statement between two `expect`s must not run, and a failure inside a
+/// `.each` callback must stop that `.each` rather than only skip its own `expect`.
+#[test]
+fn a_failed_expect_ends_the_case_not_just_its_own_assertions() {
+    let dir = work_dir("ends_case");
+    let source = write(&dir, "suite.qn", CASE_ENDING_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_ne!(out.code, 0, "a suite with failing cases must exit non-zero");
+    assert!(
+        !out.stdout.contains("SHOULD-NOT-RUN-STATEMENT"),
+        "a statement after a failing expect must not run:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("SHOULD-NOT-RUN-NESTED"),
+        "a statement after a failing nested expect must not run:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("expected 2, got 5") && !out.stderr.contains("expected 2, got 6"),
+        "a `.each` callback's later iterations must not run once one has failed:\n{}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.contains("✗ statement after a failing expect")
+            && out.stdout.contains("✗ failure inside a nested lambda")
+            && out.stdout.contains("✓ still runs and passes"),
+        "each case must be marked as it went:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("1 passed, 2 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A case that parks on `@sleep` before its failing `expect` still ends there, and the park
+/// itself must actually have reached the scheduler rather than being swallowed as the
+/// case's own end: the next case runs and passes either way.
+#[test]
+fn a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
+    let dir = work_dir("ends_case_after_sleep");
+    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    let out = quilon(&["test", source.to_str().unwrap()]);
+
+    assert_ne!(
+        out.code, 0,
+        "a suite with a failing case must exit non-zero"
+    );
+    assert!(
+        out.stdout.contains("✓ passes without parking")
+            && out.stdout.contains("✗ sleeps then fails")
+            && out.stdout.contains("✓ still runs and passes"),
+        "each case must be marked as it went:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("2 passed, 1 failed"),
+        "unexpected summary:\n{}",
         out.stdout
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1326,7 +1439,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("98 passed, 0 failed"),
+        out.stdout.contains("105 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
@@ -1489,6 +1602,70 @@ fn binary_of_a_failing_suite_exits_non_zero() {
         Some(binary) => {
             let run = execute(&binary);
             assert_ne!(run.code, 0, "a failing suite's binary must exit non-zero");
+            assert!(
+                run.stdout.contains("2 passed, 1 failed"),
+                "unexpected summary:\n{}",
+                run.stdout
+            );
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The case-ending mechanism has to work the same way through a native build as it does
+/// under the JIT.
+#[test]
+fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
+    let dir = work_dir("binary_ends_case");
+    let source = write(&dir, "suite.qn", CASE_ENDING_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &[]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_ne!(run.code, 0, "a suite with failing cases must exit non-zero");
+            assert!(
+                !run.stdout.contains("SHOULD-NOT-RUN-STATEMENT")
+                    && !run.stdout.contains("SHOULD-NOT-RUN-NESTED"),
+                "nothing after a failing expect must run:\n{}",
+                run.stdout
+            );
+            assert!(
+                run.stderr.contains("expected 2, got 5")
+                    && !run.stderr.contains("expected 2, got 6"),
+                "a `.each` callback's later iterations must not run once one has failed:\n{}",
+                run.stderr
+            );
+            assert!(
+                run.stdout.contains("1 passed, 2 failed"),
+                "unexpected summary:\n{}",
+                run.stdout
+            );
+        }
+        None => eprintln!("skipping the native half: need `clang` on PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A case that parks on `@sleep` before its failing `expect` has to end there through a
+/// native build too, with the next case still running and passing.
+#[test]
+fn binary_of_a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
+    let dir = work_dir("binary_ends_case_after_sleep");
+    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    match build_binary(&dir, &source, "suite_binary", &[]) {
+        Some(binary) => {
+            let run = execute(&binary);
+            assert_ne!(
+                run.code, 0,
+                "a suite with a failing case must exit non-zero"
+            );
+            assert!(
+                run.stdout.contains("✓ passes without parking")
+                    && run.stdout.contains("✗ sleeps then fails")
+                    && run.stdout.contains("✓ still runs and passes"),
+                "each case must be marked as it went:\n{}",
+                run.stdout
+            );
             assert!(
                 run.stdout.contains("2 passed, 1 failed"),
                 "unexpected summary:\n{}",

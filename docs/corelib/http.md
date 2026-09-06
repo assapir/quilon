@@ -10,7 +10,7 @@ Import with `<< core.http`. See the [corelib index](README.md).
 
 An HTTP client written in Quilon over [`core.net`](net.md)'s `@tcpRequest`. The scheme is
 **plain HTTP** — URLs are `http://host[:port]/path` (scheme optional, default port 80). Each
-request opens one connection, sends `Connection: close`, and reads the close-delimited reply.
+request opens one connection and sends `Connection: close`, over HTTP/1.1.
 
 ```quilon
 << core.http
@@ -117,13 +117,21 @@ reaches the `options` field instead.
 |--------|--------|
 | `params() -> Params` | The URL's query string, parsed (`?q=ada&tag=a&tag=b` → `q` carries `["ada"]`, `tag` carries `["a", "b"]`); no params when the URL carries none. |
 | `headers() -> Headers` | The request's own headers (`it.options.headers`). |
-| `send() -> Result` | Perform the request over `core.net` and validate the reply: `Ok(Response)`, or the `NotOk(Text)` the transport reported. A network failure is a value to match. |
+| `send() -> Result` | Perform the request over `core.net`, validate the reply, and check its body framing: `Ok(Response)`, or the `NotOk(Text)` the transport, the status line, or the framing reported. A network failure, a malformed status line, or a malformed body are each a value to match. |
 
-Requests go out as **HTTP/1.0**: the connection close delimits the body. `Content-Length`
-counts **bytes** (`.size`), and a body-bearing method sends it for empty content too — a
-body of length zero. Every generated header (`host`, `connection`, `content-type`,
-`content-length`) goes on the wire lower-cased; a caller header sharing one of those names
-replaces the generated line rather than duplicating it.
+Requests go out as **HTTP/1.1**: `Connection: close` keeps the close-delimited read valid for
+a reply that gives neither `Transfer-Encoding` nor `Content-Length`. `Content-Length` counts
+**bytes** (`.size`), and a body-bearing method sends it for empty content too — a body of
+length zero. Every generated header (`host`, `connection`, `content-type`, `content-length`)
+goes on the wire lower-cased; a caller header sharing one of those names replaces the
+generated line rather than duplicating it.
+
+`send()`'s framing check runs `body()`'s own rule (below) and turns a malformed result into
+`NotOk`, with a reason naming what went wrong: `"malformed chunked framing"` for a bad chunk
+size, a missing terminator, or data ending early; `"malformed Content-Length"` for a
+non-numeric value; `"truncated body: expected N bytes, got M"` for a `Content-Length` the
+reply's bytes fall short of. A `Head` request's reply carries a `Content-Length` for a body
+that is never sent, so `send()` skips the framing check for it.
 
 ## `Response`
 
@@ -135,11 +143,20 @@ Wrapped and checked in one step: `http.Response { raw = text }.validate()`.
 | `status() -> Num` | The status code (`HTTP/1.0 200 OK` → `200`); `0` when the status line's code is anything other than digits throughout. |
 | `statusLine() -> Text` | The reply's first line, trimmed. |
 | `headers() -> Headers` | The reply's headers, parsed from the lines between the status line and the blank line. |
-| `body() -> Text` | Everything after the blank line, character for character; `""` when the reply has no blank line. |
+| `body() -> Text` | The reply's body, framed per its headers (below); `""` when the reply has no blank line, carries no body by its status, or its framing is malformed. |
 
 Replies are read **leniently**: HTTP/1.0 or 1.1, CRLF or bare LF. All four spellings of a blank
-line are measured and the **earliest** wins. The close delimits the body: `body()` reads to
-the close independently of `Content-Length`, and a body carrying its own CRLF survives intact.
+line are measured and the **earliest** wins.
+
+`body()` frames the bytes after the blank line by what the head established, in order: an
+informational (1xx), a `204`, or a `304` status carries no body, whatever its headers claim.
+Otherwise, a `Transfer-Encoding` naming `chunked` (the last of a comma list, case-insensitive)
+is dechunked — each chunk a hex size line (a trailing `;extension` ignored), exactly that many
+bytes, and a terminating CRLF, ending at a zero-size chunk; any trailers up to the reply's own
+end are dropped unparsed. Otherwise, a `Content-Length` takes exactly that many bytes. With
+neither header, the close delimits the body, and a body carrying its own CRLF survives intact.
+This framing is native — a chunk or a `Content-Length` count cuts bytes, while `Text` slices
+by grapheme, so a boundary inside a multi-byte character has no Quilon-reachable position.
 
 Known limits: an IPv6 literal host (`http://[::1]/p`) is read as already carrying a port, and
 the default `:80` is left off; a scheme-less URL whose query itself contains `://` is cut at

@@ -38,6 +38,12 @@
   assert(lineFeed.status(), equals(404))
   assert(lineFeed.body(), equals("gone"))
 
+  ~ A chunked reply dechunks to its data, in order, with the terminating chunk dropped.
+  chunked = http.Response {
+    raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n \r\n5\r\nworld\r\n0\r\n\r\n"
+  }
+  assert(chunked.body(), equals("hello world"))
+
   ~ A body-bearing method carries the content to send and the media type to advertise for it;
   ~ `send` is what puts it on the wire — see examples/http_get.qn.
   submission :: http.Request = http.Request.post("http://example.com/submit",

@@ -22,7 +22,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -67,6 +67,11 @@ enum Park {
     /// single-reader stdin gate (the address is a fixed sentinel). The scheduler only ever
     /// compares the address; it never dereferences it.
     Waiting(usize),
+    /// A test case ended: yielded by [`abort_current_case`] from wherever a failing `expect`
+    /// is reached, however deeply nested inside the case's own call tree. Only ever yielded
+    /// by a coroutine [`run_case_guarded`] resumes, and only ever seen by that function's own
+    /// loop — it never reaches [`run`]'s.
+    CaseAborted,
 }
 
 type FiberCoroutine = Coroutine<(), Park, (), DefaultStack>;
@@ -107,14 +112,23 @@ impl Scheduler {
         }
     }
 
-    fn alloc_slot(&mut self, fiber: Fiber) -> usize {
+    /// Claim a fresh id from the slab every fiber gets one from, its slot left empty until
+    /// the caller fills it. [`run_case_guarded`] uses this directly: its coroutine is
+    /// resumed by its own loop rather than through the ready queue, so it never occupies
+    /// `fibers[id]` — it only needs the id so its GC registration (keyed by id, same as
+    /// every fiber's) cannot collide with one.
+    fn reserve_id(&mut self) -> usize {
         if let Some(id) = self.free.pop() {
-            self.fibers[id] = Some(fiber);
             id
         } else {
-            self.fibers.push(Some(fiber));
+            self.fibers.push(None);
             self.fibers.len() - 1
         }
+    }
+
+    fn release_id(&mut self, id: usize) {
+        self.fibers[id] = None;
+        self.free.push(id);
     }
 }
 
@@ -142,32 +156,92 @@ fn with_scheduler<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
     SCHEDULER.with(|s| f(s.borrow_mut().as_mut().expect("no active scheduler")))
 }
 
-/// Spawn `f` as a new fiber and enqueue it, with a stack of `stack_size` bytes.
-fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
+/// The calling fiber's `Yielder`, asserting one is set. Every free-standing park primitive
+/// below, plus [`run_case_guarded`], starts this way rather than repeating the same
+/// get-and-assert; `name` names the caller for the panic message.
+fn current_yielder(name: &str) -> *const FiberYielder {
+    let yielder = CURRENT_YIELDER.get();
+    assert!(!yielder.is_null(), "{name}() called outside a fiber");
+    yielder
+}
+
+/// Suspend `yielder` with `park`, then restore `CURRENT_YIELDER` to it: sibling fibers run
+/// between the suspend and its resume and clobber the shared cell (see `CURRENT_YIELDER`'s
+/// own doc), so later code on this fiber needs it put back.
+fn suspend_on(yielder: *const FiberYielder, park: Park) {
+    // SAFETY: `yielder` points at the live `Yielder` for this fiber, valid for the whole
+    // fiber body (it is a parameter of the corosensei closure we are inside).
+    unsafe { (*yielder).suspend(park) };
+    CURRENT_YIELDER.set(yielder);
+}
+
+/// Resume `coroutine` (fiber `id`, stack base `high`) with Boehm's stack bottom pointed at
+/// it for the resume's duration, restoring whatever it covered before once the coroutine
+/// yields or returns. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both resume this
+/// way — a fiber is a fiber to the collector whichever loop is driving it.
+fn resume_fiber(
+    id: usize,
+    high: usize,
+    coroutine: &mut FiberCoroutine,
+) -> CoroutineResult<Park, ()> {
+    gc::enter_fiber(id, high);
+    let result = coroutine.resume(());
+    gc::leave_fiber();
+    result
+}
+
+/// A freshly allocated fiber stack, and the usable GC-scannable range `[low, high)` within
+/// it. [`spawn_with_stack`] and [`run_case_guarded`]'s nested coroutine both need exactly
+/// this — the range is what [`gc::register`] tracks by fiber id, so computing it once here
+/// is what keeps both callers registering the same way.
+struct FiberStackAllocation {
+    stack: DefaultStack,
+    low: usize,
+    high: usize,
+}
+
+fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
     let stack = DefaultStack::new(stack_size).expect("failed to allocate fiber stack");
     let base = stack.base().get();
     let limit = stack.limit().get();
     // Usable region is [limit + guard_page, base); the guard page sits at the low
     // end of the mapping. Scanning from just above it never faults on PROT_NONE.
-    let stack_low = limit + page_size();
-    let stack_high = base;
+    FiberStackAllocation {
+        stack,
+        low: limit + page_size(),
+        high: base,
+    }
+}
 
-    let coroutine: FiberCoroutine = Coroutine::with_stack(stack, move |yielder, ()| {
+/// Build a coroutine on `stack` that installs its own `Yielder` into `CURRENT_YIELDER` as
+/// its first act, then runs `body` — the entry every fiber shares, whether driven by the
+/// ready queue ([`spawn_with_stack`]) or resumed directly by its own guard
+/// ([`run_case_guarded`]).
+fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCoroutine {
+    Coroutine::with_stack(stack, move |yielder, ()| {
         CURRENT_YIELDER.with(|c| c.set(yielder as *const FiberYielder));
-        f();
-    });
+        body();
+    })
+}
+
+/// Spawn `f` as a new fiber and enqueue it, with a stack of `stack_size` bytes.
+fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
+    let allocation = allocate_fiber_stack(stack_size);
+    let (low, high) = (allocation.low, allocation.high);
+    let coroutine = new_fiber(allocation.stack, f);
 
     SCHEDULER.with(|s| {
         let mut slot = s.borrow_mut();
         let scheduler = slot
             .as_mut()
             .expect("spawn() called with no active scheduler");
-        let id = scheduler.alloc_slot(Fiber {
+        let id = scheduler.reserve_id();
+        scheduler.fibers[id] = Some(Fiber {
             coroutine,
-            stack_high,
+            stack_high: high,
         });
         scheduler.ready.push_back(id);
-        gc::register(id, stack_low, stack_high);
+        gc::register(id, low, high);
     });
 }
 
@@ -178,18 +252,78 @@ pub fn spawn<F: FnOnce() + 'static>(f: F) {
     spawn_with_stack(FIBER_STACK_SIZE, f);
 }
 
+/// Run a test case's body — `function(environment)`, the raw parts of its `() -> $`
+/// closure — to completion on a fresh nested fiber, resumed synchronously right here rather
+/// than through the ready queue (corosensei supports resuming a coroutine from inside
+/// another one's own execution). Yields whether [`abort_current_case`] ended the case early.
+///
+/// A park the body causes (`@sleep` and the rest) is forwarded to the fiber calling this —
+/// suspended with the very same [`Park`] value — so the scheduler keeps driving it exactly
+/// as it would a top-level fiber's; once that outer fiber is resumed in turn, the case
+/// fiber is resumed right back. Must be called from within a fiber (asserts otherwise).
+pub(crate) fn run_case_guarded(
+    function: extern "C" fn(*mut c_void) -> u8,
+    environment: *mut c_void,
+) -> bool {
+    let outer_yielder = current_yielder("run_case_guarded");
+
+    let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
+    let (low, high) = (allocation.low, allocation.high);
+    let mut coroutine = new_fiber(allocation.stack, move || {
+        function(environment);
+    });
+    let id = with_scheduler(|scheduler| scheduler.reserve_id());
+    gc::register(id, low, high);
+
+    let aborted = loop {
+        match resume_fiber(id, high, &mut coroutine) {
+            CoroutineResult::Yield(Park::CaseAborted) => break true,
+            CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
+            CoroutineResult::Return(()) => break false,
+        }
+    };
+    // The loop above only ever restores `CURRENT_YIELDER` to `outer_yielder` on a forwarded
+    // park (`suspend_on`'s own job); ending the case (`CaseAborted`) or finishing normally
+    // (`Return`) leaves it pointing at the case coroutine's own `Yielder` instead — about to
+    // be freed below. Put it back before this function hands control back to the outer
+    // fiber, or its next park dereferences a dangling pointer.
+    CURRENT_YIELDER.set(outer_yielder);
+
+    if aborted {
+        // The only frames left on the case's stack are Quilon frames (no destructors to
+        // run) and the reporter that yielded the abort marker, whose failure it had already
+        // moved into the registry before doing so — abandoning them here is safe. A Rust
+        // runtime function that held onto heap while calling back into Quilon code that can
+        // `expect` would leak here, and none exists today.
+        unsafe { coroutine.force_reset() };
+    }
+    // Unregister before dropping, which unmaps the stack: never leave a range in the GC
+    // registry that points at freed memory (mirrors `run`'s own finished-fiber teardown).
+    gc::unregister(id);
+    drop(coroutine);
+    with_scheduler(|scheduler| scheduler.release_id(id));
+
+    aborted
+}
+
+/// End the currently running test case: suspend it with the abort marker (see
+/// [`Park::CaseAborted`]), through the same thread-local yielder [`sleep`] uses. Never
+/// returns — [`run_case_guarded`]'s loop force-resets this coroutine once it sees the
+/// marker, so it is never resumed again. Must be called from within a case's own fiber (a
+/// failing `expect` only ever reaches this from inside one — the type checker enforces it).
+pub(crate) fn abort_current_case() -> ! {
+    let yielder = current_yielder("abort_current_case");
+    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
+    unsafe { (*yielder).suspend(Park::CaseAborted) };
+    unreachable!("run_case_guarded force-resets this coroutine on the abort marker")
+}
+
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
 /// be called from within a fiber (panics otherwise).
 pub fn sleep(duration: Duration) {
-    let yielder = CURRENT_YIELDER.get();
-    assert!(!yielder.is_null(), "sleep() called outside a fiber");
+    let yielder = current_yielder("sleep");
     let deadline = Instant::now() + duration;
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber, valid for the
-    // whole fiber body (it is a parameter of the corosensei closure we are inside).
-    unsafe { (*yielder).suspend(Park::Sleep(deadline)) };
-    // Resumed: sibling fibers ran and overwrote the shared cell; restore ours so
-    // later code on this fiber still finds its yielder.
-    CURRENT_YIELDER.set(yielder);
+    suspend_on(yielder, Park::Sleep(deadline));
 }
 
 /// Park the current fiber until the reactor reports `token` ready, yielding to the
@@ -197,14 +331,8 @@ pub fn sleep(duration: Duration) {
 /// interest it needs *before* calling this, so the readiness that wakes it is the one
 /// it is waiting for. Must be called from within a fiber (panics otherwise).
 pub(crate) fn park_on_readiness(token: Token) {
-    let yielder = CURRENT_YIELDER.get();
-    assert!(
-        !yielder.is_null(),
-        "park_on_readiness() called outside a fiber"
-    );
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::Readiness(token)) };
-    CURRENT_YIELDER.set(yielder);
+    let yielder = current_yielder("park_on_readiness");
+    suspend_on(yielder, Park::Readiness(token));
 }
 
 /// Park the current fiber until another fiber wakes `address`. The caller re-checks its own
@@ -212,14 +340,8 @@ pub(crate) fn park_on_readiness(token: Token) {
 /// spurious or shared wake simply re-parks. Must be called from within a fiber (panics
 /// otherwise).
 pub(crate) fn park_on_address(address: usize) {
-    let yielder = CURRENT_YIELDER.get();
-    assert!(
-        !yielder.is_null(),
-        "park_on_address() called outside a fiber"
-    );
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::Waiting(address)) };
-    CURRENT_YIELDER.set(yielder);
+    let yielder = current_yielder("park_on_address");
+    suspend_on(yielder, Park::Waiting(address));
 }
 
 /// Re-ready every fiber parked on `address`. Called from the fiber that just made the waited
@@ -303,9 +425,7 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .pop_front()
                 .map(|id| (id, scheduler.fibers[id].take().unwrap()))
         }) {
-            gc::enter_fiber(id, fiber.stack_high);
-            let result = fiber.coroutine.resume(());
-            gc::leave_fiber();
+            let result = resume_fiber(id, fiber.stack_high, &mut fiber.coroutine);
 
             match result {
                 CoroutineResult::Yield(Park::Sleep(deadline)) => with_scheduler(|scheduler| {
@@ -324,6 +444,10 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                         .or_default()
                         .push(id);
                 }),
+                CoroutineResult::Yield(Park::CaseAborted) => unreachable!(
+                    "only a coroutine run_case_guarded resumes yields this, and only its own \
+                     loop ever resumes one — never the ready queue this loop drains"
+                ),
                 CoroutineResult::Return(()) => {
                     // Unregister the stack range before dropping the fiber, which
                     // unmaps its stack: never leave a range in the GC registry that

@@ -177,6 +177,16 @@ Values = {
   >
 }
 
+~ core.http's native body-framing primitive: locate the head/body blank line on RAW bytes,
+~ then dechunk, take exactly `contentLength` bytes, or close-delimit, given what the head
+~ already established. Compiler-lowered — the body below is an inert placeholder (it only
+~ pins the checker's inferred `Result` payload type to `Text`); the byte-level work — where a
+~ chunk or a `Content-Length` count can cut a multi-byte character in two, a split Quilon's
+~ grapheme-indexed `Text` cannot express — is a runtime intrinsic instead.
+frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLength :: Text) -> Result => <
+  bodiless ? Ok("") : NotOk("")
+>
+
 ~ A reply: the raw response text, read through the methods below.
 >> Response = {
   raw :: Text,
@@ -246,12 +256,46 @@ Values = {
       : 0
   >
 
-  ~ Everything after the blank line, sliced out of the RAW text so a body carrying its own CRLF
-  ~ survives intact; "" for a reply with no blank line. `Content-Length` is never consulted —
-  ~ the close delimits the body.
+  ~ Whether this reply carries no body regardless of what its headers claim: an informational
+  ~ (1xx), a 204, or a 304 status.
+  bodiless = () -> Bool => <
+    code = it.status()
+    (code >= 100 && code < 200) || code == 204 || code == 304
+  >
+
+  ~ The framed body as a `Result`: `Ok(bodyBytes)` when the reply's declared framing —
+  ~ chunked, `Content-Length`, or close-delimited — is well-formed, `NotOk(reason)` when it
+  ~ is not. `body()` and `send()`'s framing check both read this; `body()` masks a `NotOk`
+  ~ to `""`, `send()` surfaces it.
+  bodyResult = () -> Result => <
+    transferEncoding = it.headers().get("transfer-encoding") ?
+      | Ok(value) => value
+      | NotOk(_)  => ""
+    contentLength = it.headers().get("content-length") ?
+      | Ok(value) => value
+      | NotOk(_)  => ""
+    frameBody(it.raw, it.bodiless(), transferEncoding, contentLength)
+  >
+
+  ~ The reply's body: dechunked when `Transfer-Encoding: chunked`, exactly `Content-Length`
+  ~ bytes when one is given, else everything after the blank line (close-delimited). A
+  ~ malformed framing reads as `""` rather than a partial or corrupt body — `send()` is
+  ~ where that failure surfaces as `NotOk`.
   body = () -> Text => <
-    mark = it.blankLine()
-    mark < it.raw.length ? it.raw.slice(mark + 2, it.raw.length) : ""
+    it.bodyResult() ?
+      | Ok(bytes) => bytes
+      | NotOk(_)  => ""
+  >
+
+  ~ Whether this reply's body framing is well-formed. `skip` is true for a HEAD reply,
+  ~ whose Content-Length describes a body that is never sent, so the check does not apply:
+  ~ `Ok(it)` when the check passes or is skipped, `NotOk(reason)` when it does not.
+  framingOk = (skip :: Bool) -> Result => <
+    skip
+      ? Ok(it)
+      : (it.bodyResult() ?
+          | Ok(_)         => Ok(it)
+          | NotOk(reason) => NotOk(reason))
   >
 }
 
@@ -344,7 +388,7 @@ Values = {
   ~ `content-type`, `content-length`) replaces that generated line rather than duplicating it.
   wire = () -> Text => <
     carried = it.method.payload()
-    requestLine = "`it.method.token()` `it.path()` HTTP/1.0\r\n"
+    requestLine = "`it.method.token()` `it.path()` HTTP/1.1\r\n"
     given = it.headers()
     hostLine = given.has("host") ? "" : "host: `it.authority()`\r\n"
     connectionLine = given.has("connection") ? "" : "connection: close\r\n"
@@ -358,13 +402,18 @@ Values = {
       + given.wire() + "\r\n" + carried.content
   >
 
-  ~ Perform the request over core.net and read the reply into `Ok(Response)`; a transport
-  ~ failure arrives as the `NotOk(errorText)` the primitive reported, never as a crash.
+  ~ Perform the request over core.net and read the reply into `Ok(Response)`: the status
+  ~ line validates, and the body's framing (chunked or Content-Length) must be well-formed —
+  ~ a HEAD reply's Content-Length, which describes a body that is never sent, is exempt. A
+  ~ transport failure, an invalid status line, or malformed framing all arrive as the
+  ~ `NotOk(errorText)` reason, never as a crash.
   send = () -> Result => <
     host = it.authority()
     address = host.contains(":") ? host : host + ":80"
     @tcpRequest(address, it.wire()) ?
-      | Ok(responseText) => Response { raw = responseText }.validate()
+      | Ok(responseText) => (Response { raw = responseText }.validate() ?
+          | Ok(response)   => response.framingOk(it.method.token() == "HEAD")
+          | NotOk(problem) => NotOk(problem))
       | NotOk(problem)   => NotOk(problem)
   >
 }
@@ -532,16 +581,59 @@ test.describe("the body", () => <
   test.it("returns the body with no Content-Length to go by", () =>
     expect(parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\npayload").body(), equals("payload")))
 
-  test.it("ignores a Content-Length of zero", () => <
-    lying = parsed("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\npayload")
-    expect(lying.body(), equals("payload"))
+  test.it("takes exactly zero bytes for a Content-Length of zero", () => <
+    empty = parsed("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\npayload")
+    expect(empty.body(), equals(""))
   >)
 
-  test.it("ignores a Content-Length that disagrees with the body", () => <
+  test.it("takes exactly Content-Length bytes, dropping what follows", () => <
     short = parsed("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\npayload")
-    expect(short.body(), equals("payload"))
+    expect(short.body(), equals("pa"))
+  >)
+
+  test.it("reads as empty a Content-Length longer than the bytes present", () => <
+    ~ A short reply this way is malformed framing (`send()` is where that surfaces as
+    ~ `NotOk`); `body()` alone has no failure channel, so it reads as empty rather than
+    ~ handing back a partial, truncated body.
     long = parsed("HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\npayload")
-    expect(long.body(), equals("payload"))
+    expect(long.body(), equals(""))
+  >)
+
+  test.it("dechunks a chunked reply", () =>
+    expect(
+      parsed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n").body(),
+      equals("hello")))
+
+  test.it("dechunks several chunks", () =>
+    expect(
+      parsed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n")
+        .body(),
+      equals("hello")))
+
+  test.it("ignores a chunk's extensions", () =>
+    expect(
+      parsed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5;foo=bar\r\nhello\r\n0\r\n\r\n")
+        .body(),
+      equals("hello")))
+
+  test.it("drops trailers after the terminating chunk", () =>
+    expect(
+      parsed(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nX-Trailer: t\r\n\r\n")
+        .body(),
+      equals("hello")))
+
+  test.it("reads a malformed chunk as an empty body", () => <
+    ~ "ZZ" is not a hex chunk size — `send()` is where that surfaces as `NotOk`.
+    malformed =
+      parsed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nhello\r\n0\r\n\r\n")
+    expect(malformed.body(), equals(""))
+  >)
+
+  test.it("carries no body for a 204 with a Content-Length", () => <
+    ~ A 204 is bodiless regardless of what its headers claim.
+    noContent = parsed("HTTP/1.1 204 No Content\r\nContent-Length: 1234\r\n\r\n")
+    expect(noContent.body(), equals(""))
   >)
 >)
 
@@ -820,20 +912,20 @@ test.describe("serialising a request", () => <
   test.it("writes a GET exactly", () => <
     request = Request.get("http://example.com/index.html")
     expect(request.wire(), equals(
-      "GET /index.html HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
+      "GET /index.html HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
   >)
 
   test.it("writes a GET for a URL with no path exactly", () => <
     request = Request.get("example.com")
     expect(request.wire(), equals(
-      "GET / HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
+      "GET / HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n\r\n"))
   >)
 
   test.it("writes a POST with its body exactly", () => <
     request = Request.post("http://example.com/submit",
       Body { content = "name=ada", contentType = "application/x-www-form-urlencoded" })
     expect(request.wire(), equals(
-      "POST /submit HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+      "POST /submit HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n"
         + "content-type: application/x-www-form-urlencoded\r\ncontent-length: 8\r\n"
         + "\r\nname=ada"))
   >)
@@ -842,7 +934,7 @@ test.describe("serialising a request", () => <
     request = Request.query("http://example.com/search",
       Body { content = "{\"q\":\"ada\"}", contentType = "application/json" })
     expect(request.wire(), equals(
-      "QUERY /search HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+      "QUERY /search HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n"
         + "content-type: application/json\r\ncontent-length: 11\r\n"
         + "\r\n{\"q\":\"ada\"}"))
   >)
@@ -864,7 +956,7 @@ test.describe("serialising a request", () => <
     ~ Content-Length at all draws a 411 from real servers.
     request = Request.post("example.com/x", Body { content = "", contentType = "text/plain" })
     expect(request.wire(), equals(
-      "POST /x HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+      "POST /x HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n"
         + "content-type: text/plain\r\ncontent-length: 0\r\n"
         + "\r\n"))
   >)
@@ -873,15 +965,15 @@ test.describe("serialising a request", () => <
     expect(Request.head("http://example.com:8080/p").wire(), contains("host: example.com:8080\r\n")))
 
   test.it("writes a HEAD request line", () =>
-    expect(Request.head("example.com/p").wire(), contains("HEAD /p HTTP/1.0\r\n")))
+    expect(Request.head("example.com/p").wire(), contains("HEAD /p HTTP/1.1\r\n")))
 
   test.it("writes a DELETE request line", () =>
-    expect(Request.delete("example.com/p").wire(), contains("DELETE /p HTTP/1.0\r\n")))
+    expect(Request.delete("example.com/p").wire(), contains("DELETE /p HTTP/1.1\r\n")))
 
   test.it("writes a PUT request line with its body", () => <
     request = Request.put("example.com/p", Body { content = "replaced", contentType = "text/plain" })
     expect(request.wire(), equals(
-      "PUT /p HTTP/1.0\r\nhost: example.com\r\nconnection: close\r\n"
+      "PUT /p HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n"
         + "content-type: text/plain\r\ncontent-length: 8\r\n"
         + "\r\nreplaced"))
   >)
