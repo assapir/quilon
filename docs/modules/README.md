@@ -33,7 +33,7 @@ classify = (m :: http.Method) -> Num => < ~ a qualified type in an annotation
     | _            => 0
 >
 
-request = http.Request { method = http.Get, url = "http://example.com/" }
+request = http.Request.get("http://example.com/")
 ```
 
 The **full path always works too**: `core.http.send(...)`. It is the escape hatch, not
@@ -70,7 +70,7 @@ module's own name. A module that builds on another holds it and delegates (compo
 
 ```quilon ignore
 << core.http
->> fetch = (url :: Text) -> Result => < http.Request { method = http.Get, url = url }.send() >
+>> fetch = (url :: Text) -> Result => < http.Request.get(url).send() >
 ```
 
 ## Closed overload sets
