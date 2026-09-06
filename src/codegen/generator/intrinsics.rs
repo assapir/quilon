@@ -148,10 +148,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // `assert` at `site` and terminate with 101. Never returns; the call is left as
             // ordinary flow so an assertion composes in expression position.
             // void __expect_failed(Site*, i8*, i64) — the same report, but it marks the
-            // running test case failed and RETURNS, so the suite carries on.
+            // running test case failed and ends it there, so the suite carries on with
+            // the next one; declared `void` since the call composes as ordinary flow, even
+            // though it never actually falls through on a real failure.
             "__assert_failed" | "__expect_failed" => {
                 void.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false)
             }
+            // void __test_case_run_guarded(ptr fn, ptr env) — run a case's body (`fn(env)`,
+            // a closure's split-apart function and environment pointers) on its own nested
+            // fiber; a failing `expect` ends the case by suspending it. Backs
+            // `__test_run_case(body)`.
+            "__test_case_run_guarded" => void.fn_type(&[ptr.into(), ptr.into()], false),
             // double __test_*(…) — the test registry (see `is_test_registry_intrinsic`): the
             // harness's event sink and reporter, which `core.test`'s `describe` and `it`
             // drive. Each takes the `Text` (as `i8*, i64`) and `Num` parameters its table
@@ -187,6 +194,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             // return. Backs the HTTP client; not user-facing.
             "__tcp_request_launch" => ctx.void_type().fn_type(
                 &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
+                false,
+            ),
+            // void __http_frame_body({i8,{ptr,i64}}* out, i8* raw,i64, i8 bodiless,
+            // i8* transferEncoding,i64, i8* contentLength,i64) — the native `core.http` body
+            // framing primitive: locate the head/body blank line on RAW bytes, then dechunk,
+            // take exactly `Content-Length` bytes, or close-delimit, and write the resulting
+            // `Result` into `out`. Synchronous (no deferral) unlike `__tcp_request_launch` —
+            // there is no IO here, only bytes already in hand.
+            "__http_frame_body" => ctx.void_type().fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ctx.i8_type().into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                ],
                 false,
             ),
             // { ptr, i64 } __force_text(i8* promise) — force a deferred Text: park until the
@@ -495,6 +521,59 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(now, &[], "now")
             .map_err(ctx("Failed to call now()"))?;
         Self::call_result_to_basic(call)
+    }
+
+    /// Lower a call to `core.http`'s native body-framing primitive: the declaration's own
+    /// body is an inert placeholder (only there to pin the checker's inferred `Result`
+    /// payload type to `Text`), so every call is redirected here instead. `raw` is the
+    /// WHOLE reply text — the intrinsic locates the head/body blank line itself — and
+    /// `bodiless` (a `Bool`) widens to the `i8` the runtime signature takes.
+    pub(super) fn generate_frame_body(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if arguments.len() != 4 {
+            return Err(format!(
+                "core.http.frameBody expects exactly 4 arguments (raw, bodiless, \
+                 transferEncoding, contentLength), got {}",
+                arguments.len()
+            ));
+        }
+        let (raw_ptr, raw_len) = self.extract_text(&arguments[0])?;
+        let BasicValueEnum::IntValue(bodiless_bit) = self.generate_expression(&arguments[1])?
+        else {
+            return Err("core.http.frameBody expects a Bool bodiless argument".to_string());
+        };
+        let bodiless = self
+            .builder
+            .build_int_z_extend(bodiless_bit, self.context.i8_type(), "bodiless_i8")
+            .map_err(ctx("Failed to widen bodiless to i8"))?;
+        let (transfer_encoding_ptr, transfer_encoding_len) = self.extract_text(&arguments[2])?;
+        let (content_length_ptr, content_length_len) = self.extract_text(&arguments[3])?;
+        // A `Result` (24 bytes) crosses the FFI via an out-pointer, not an aggregate return
+        // — the same pattern `@tcpRequest` uses.
+        let result_ty = self.sum_struct_type("Result");
+        let out = self.create_entry_block_alloca("frame_body_out", result_ty.into())?;
+        let frame_body = self.get_intrinsic("__http_frame_body")?;
+        self.builder
+            .build_call(
+                frame_body,
+                &[
+                    out.into(),
+                    raw_ptr.into(),
+                    raw_len.into(),
+                    bodiless.into(),
+                    transfer_encoding_ptr.into(),
+                    transfer_encoding_len.into(),
+                    content_length_ptr.into(),
+                    content_length_len.into(),
+                ],
+                "",
+            )
+            .map_err(ctx("Failed to call core.http.frameBody"))?;
+        self.builder
+            .build_load(result_ty, out, "frame_body")
+            .map_err(ctx("Failed to load core.http.frameBody result"))
     }
 
     /// Lower the `write(content, fd)` builtin: render `content` through its `` ` ``

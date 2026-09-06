@@ -21,8 +21,11 @@
 //!     on a different stack) — a meaningless, huge range. On every switch INTO a
 //!     fiber we set Boehm's stack base to that fiber's base with `GC_set_stackbottom`,
 //!     so the automatic scan covers exactly the fiber's used stack; on switch back we
-//!     restore the main stack base. The running fiber is excluded from (a) so it is
-//!     scanned once, by the automatic scan.
+//!     restore whichever base was current before (the main thread's, unless a test
+//!     case's guard resumed this fiber's own coroutine from inside another fiber, in
+//!     which case that outer fiber's). Only the innermost fiber is excluded from (a);
+//!     every fiber beneath it in such a nested resume is scanned by (a) like a parked
+//!     one, since the automatic scan can only ever cover the innermost.
 //!
 //! Any pre-existing `GC_push_other_roots` callback is chained, not clobbered. The
 //! `#[no_mangle]` GC intrinsics (`__gc_init`, the allocation binding) live in
@@ -56,10 +59,14 @@ struct GcState {
     /// the slot is free). Mirrors the scheduler slab so the callback can scan parked
     /// fibers.
     ranges: Vec<Option<(usize, usize)>>,
-    /// The fiber currently executing (excluded from the parked-fiber scan; it is
-    /// covered by `GC_set_stackbottom` + Boehm's automatic scan instead).
-    running: Option<usize>,
-    /// The main (scheduler) thread's stack base, restored on every switch back.
+    /// The fibers currently executing, outermost first — more than one when a case's guard
+    /// (`crate::scheduler::run_case_guarded`) resumes its coroutine from inside another
+    /// fiber's own execution. Only the innermost (`last()`) is excluded from the
+    /// parked-fiber scan; it alone is covered by `GC_set_stackbottom` + Boehm's automatic
+    /// scan, so every fiber beneath it on this stack of resumes still needs pushing, exactly
+    /// like a genuinely parked one.
+    running: Vec<usize>,
+    /// The main (scheduler) thread's stack base, restored once every switch back reaches it.
     main_base: usize,
     /// Previous `GC_push_other_roots` callback, called after ours (chaining).
     previous: Option<GcPushOtherRootsProc>,
@@ -71,7 +78,7 @@ struct GcState {
 // trigger a collection, so the callback can always take it without deadlock.
 static GC_STATE: Mutex<GcState> = Mutex::new(GcState {
     ranges: Vec::new(),
-    running: None,
+    running: Vec::new(),
     main_base: 0,
     previous: None,
     installed: false,
@@ -88,7 +95,7 @@ extern "C" fn push_fiber_roots() {
         let state = lock();
         for (id, range) in state.ranges.iter().enumerate() {
             if let Some((low, high)) = *range
-                && Some(id) != state.running
+                && state.running.last() != Some(&id)
             {
                 // SAFETY: [low, high) is this fiber's committed, readable stack
                 // (above the guard page); pushing it is what keeps its roots alive.
@@ -133,7 +140,7 @@ pub(crate) fn begin_run() {
     unsafe { GC_get_stack_base(&mut stack_base) };
     let mut state = lock();
     state.ranges.clear();
-    state.running = None;
+    state.running.clear();
     state.main_base = stack_base.mem_base as usize;
 }
 
@@ -162,19 +169,30 @@ fn set_stackbottom(base: usize) {
     unsafe { GC_set_stackbottom(ptr::null_mut(), &stack_base) };
 }
 
-/// Switch Boehm's notion of "the stack" onto fiber `id` (base `high`) before
-/// resuming it, and mark it running so the parked-fiber scan skips it.
+/// Switch Boehm's notion of "the stack" onto fiber `id` (base `high`) before resuming it,
+/// and mark it running so the parked-fiber scan skips it. Nests: a case's guard resumes its
+/// coroutine from inside another fiber's own execution, so the fiber already running when
+/// this is called stays on the `running` stack underneath the new one, rather than being
+/// replaced — [`leave_fiber`] uncovers it again on the way back out.
 pub(crate) fn enter_fiber(id: usize, high: usize) {
-    lock().running = Some(id);
+    lock().running.push(id);
     set_stackbottom(high);
 }
 
-/// Restore the main stack base after a fiber yields or finishes.
+/// Restore Boehm's stack base to whichever fiber [`enter_fiber`] pushed before this one —
+/// or the main thread's, once every nested resume has unwound.
 pub(crate) fn leave_fiber() {
-    let main_base = {
+    let base = {
         let mut state = lock();
-        state.running = None;
-        state.main_base
+        state.running.pop();
+        match state.running.last() {
+            Some(&id) => {
+                state.ranges[id]
+                    .expect("a running fiber stays registered")
+                    .1
+            }
+            None => state.main_base,
+        }
     };
-    set_stackbottom(main_base);
+    set_stackbottom(base);
 }

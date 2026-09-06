@@ -378,9 +378,46 @@ fn test_duplicate_declared_field_is_rejected() {
 }
 
 #[test]
-fn test_field_and_method_sharing_a_name_is_rejected() {
-    let err = check_ok("T = { a :: Num, a = => < 9 > }\n^ = () -> Num => < 0 >").unwrap_err();
-    assert!(matches!(err, TypeError::DuplicateDefinition { .. }));
+fn test_field_and_method_sharing_a_name_is_accepted() {
+    // A bare access reaches the field, a dot-call reaches the method — both type-check.
+    assert!(
+        check_ok(
+            "T = { a :: Num, a = () -> Num => < it.a + 1 > }\n\
+             ^ = () -> Num => <\n  t = T { a = 9 }\n  t.a + t.a()\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_field_and_static_method_sharing_a_name_is_accepted() {
+    // The static method is reached on the bare type name; the field, on a value.
+    assert!(
+        check_ok(
+            "T = { a :: Num, a = (n :: Num) -> T => < T { a = n } > }\n\
+             ^ = () -> Num => <\n  t = T.a(9)\n  t.a\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_function_typed_field_is_rejected() {
+    let err = check_ok("Box = { scale :: (Num) -> Num }\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::FunctionTypedField { .. }));
+}
+
+#[test]
+fn test_function_typed_method_parameter_still_works() {
+    // Function-typed parameters, bindings, and return types are unaffected by the field
+    // restriction — only a FIELD may not carry a function type.
+    assert!(
+        check_ok(
+            "Box = { value :: Num, apply = (f :: (Num) -> Num) -> Num => < f(it.value) > }\n\
+             ^ = () -> Num => <\n  b = Box { value = 4 }\n  b.apply(n => n * 2)\n>"
+        )
+        .is_ok()
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@
 use crate::io::{__color_enabled, write_to_fd};
 use crate::mem::{QlSlice, format_num};
 use crate::process::__exit;
+use crate::scheduler::abort_current_case;
 use crate::test_registry::{Failure, mark_case_failed};
 use std::os::raw::c_int;
 
@@ -183,8 +184,8 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 }
 
 /// A failing `expect(actual, matcher)`: report `message` at the assertion's own call site,
-/// mark the running case failed, and RETURN. The case's remaining assertions see the mark and
-/// do nothing; the suite carries on with the next case.
+/// mark the running case failed, and END the case — suspending it right here so its guard
+/// (`crate::scheduler::run_case_guarded`) can move on to the next case.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
@@ -198,6 +199,7 @@ pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, lengt
         file,
         line,
     });
+    abort_current_case();
 }
 
 /// The file and line `site` names, as a JSON reporter carries them — empty and 0 for a
