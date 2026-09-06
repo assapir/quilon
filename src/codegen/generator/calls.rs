@@ -181,6 +181,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
+        // `core.http`'s native body-framing primitive, resolved by name ahead of the
+        // general dispatch chain: its corelib declaration's body is an inert placeholder
+        // (there only to pin the checker's inferred `Result` payload type), and the
+        // byte-level work is a runtime intrinsic, not that Quilon body. Merged into an
+        // importer, the link's rename gives every call the qualified name; checking
+        // `corelib/http.qn` directly (its own suite) leaves the call bare — the same two
+        // spellings `FunctionDeclaration::is_inert_corelib_placeholder` reconciles for
+        // `now`/`print`. The arity match (frameBody's fixed 4) is what keeps this from
+        // ever mistaking an unrelated same-named user function for it.
+        if !member_call
+            && arguments.len() == 4
+            && (function_name == "core.http.frameBody" || function_name == "frameBody")
+        {
+            return self.generate_frame_body(arguments);
+        }
+
         // The `.` form resolves against the receiver's type alone, ahead of everything the
         // top-level namespace holds — the order the checker resolved the call in.
         let method_callee = self

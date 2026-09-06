@@ -6,6 +6,11 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` sends HTTP/1.1 and dechunks a `Transfer-Encoding: chunked` reply.** A
+  native intrinsic frames the body — chunked, `Content-Length`, or close-delimited — on raw
+  bytes, since a boundary can fall inside a multi-byte character where grapheme-indexed
+  `Text` cannot split it; malformed framing surfaces through `send()` as `NotOk`. See
+  `docs/corelib/http.md`. Closes #260.
 - **VS Code: 🐞 Debug suite / 🐞 Debug case CodeLens and a Test Explorer Debug profile.**
   The language server now places a Debug lens beside every Run suite/Run case lens above a
   `describe`/`it`; the extension's new `quilon.debugTests` command builds just that suite or

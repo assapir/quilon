@@ -511,6 +511,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Method",
         "core.http.Response",
         "core.http.Request",
+        // The native body-framing primitive: carried with the module (an exported item
+        // calls it), exported to no importer.
+        "core.http.frameBody",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
         "core.http.crlfReply",
@@ -1316,7 +1319,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("71 passed, 0 failed"),
+        out.stdout.contains("78 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

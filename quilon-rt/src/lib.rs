@@ -22,7 +22,8 @@
 //! and an `rlib` (so the `quilon` binary embeds the same symbols for the JIT).
 //!
 //! The intrinsics are grouped by the surface they back: [`io`] (core.io — the one
-//! genuinely lib-aligned module), [`text`] (the built-in `Text` type), [`process`]
+//! genuinely lib-aligned module), [`text`] (the built-in `Text` type), [`http`]
+//! (`core.http`'s byte-level body framing), [`process`]
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
 //! `argv`/`envp` conversions), [`test_registry`] (the counters behind `quilon test`), and
 //! [`mem`] (general memory primitives: allocation,
@@ -39,6 +40,7 @@
 pub mod collections;
 pub mod deferred;
 pub mod gc;
+pub mod http;
 pub mod io;
 pub mod mem;
 pub mod net;
@@ -56,6 +58,7 @@ pub use collections::{
     __set_len, __set_new, __set_remove, __set_union,
 };
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
+pub use http::__http_frame_body;
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{
     __alloc, __alloc_array, __gc_init, __index_fail, __range_endpoint, __render_c_string, GcThread,
@@ -170,6 +173,8 @@ intrinsic_registry! {
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
     __tcp_request_launch: extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64),
+    __http_frame_body:
+        extern "C" fn(*mut QlResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
     __force_result: extern "C" fn(*mut QlResult, *const c_void),
     __run_fiber_main: extern "C" fn(
