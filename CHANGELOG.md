@@ -6,6 +6,11 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`core.http` sends HTTP/1.1 and dechunks a `Transfer-Encoding: chunked` reply.** A
+  native intrinsic frames the body — chunked, `Content-Length`, or close-delimited — on raw
+  bytes, since a boundary can fall inside a multi-byte character where grapheme-indexed
+  `Text` cannot split it; malformed framing surfaces through `send()` as `NotOk`. See
+  `docs/corelib/http.md`. Closes #260.
 - **VS Code: 🐞 Debug suite / 🐞 Debug case CodeLens and a Test Explorer Debug profile.**
   The language server now places a Debug lens beside every Run suite/Run case lens above a
   `describe`/`it`; the extension's new `quilon.debugTests` command builds just that suite or
@@ -114,6 +119,16 @@ All notable changes to Quilon are documented here.
   dedicated `QN506` instead of the generic assertion exit. See `docs/types/text.md`.
 
 ### Fixed
+
+- **A bare-expression position can now hold a `:=` reassignment.** `xs.each(x => n := n +
+  x)` used to fail with `expected `)`, found `:=``, and a ternary branch or match arm
+  (`cond ? n := 1 : n := 2`) failed the same way, while the equivalent block body
+  (`xs.each(x => < n := n + x >)`) and a field write in the same bare position
+  (`xs.each(x => it.value := s)`) both parsed. `:=` is the expression grammar's
+  lowest-precedence operator, but a bare identifier target fell through the shared
+  assignment check unhandled — only a field access or an index did anything with a
+  following `:=`. Fixed at that one shared point, so a lambda body, a ternary branch, and
+  a match arm all parse it alike now. (#335)
 
 - **A failing `expect` ends its case, not just the assertions after it.** A statement
   between two `expect`s, and a later iteration of a `.each` callback a failing `expect`

@@ -16,17 +16,28 @@ impl<'a> Parser<'a> {
     }
 
     /// Assignment is the lowest-precedence form. Parse a ternary; if it is a
-    /// field-access path (`a.b` / `a.b.c`) or an index (`a[i]`) immediately followed
-    /// by `:=`, treat the whole thing as an in-place write `target := value`.
-    /// Anything else (including a bare `name := …`, which `parse_item` handles)
-    /// falls straight through unchanged.
+    /// field-access path (`a.b` / `a.b.c`), an index (`a[i]`), or a bare name,
+    /// immediately followed by `:=`, treat the whole thing as a write —
+    /// `target := value`. A bare name has no expression-level AST node of its
+    /// own (only `Item::VariableDeclaration`, which every OTHER declaration/
+    /// reassignment form uses too), so it is wrapped as the one-statement block
+    /// the equivalent `< name := value >` already produces, giving both forms
+    /// the identical node and the same `$` (Unit) type.
+    ///
+    /// This is the ONE place `:=` binds into an expression, so every bare-expression
+    /// position reaches it through `parse_expression`'s funnel — a lambda's bare body,
+    /// a ternary branch, a match arm — not just a block statement, which instead
+    /// recognizes a LEADING `name := …` before ever calling `parse_expression`
+    /// (`parse_block_inner`) and so never reaches this function for that shape.
     pub(super) fn parse_assignment(&mut self) -> Result<Expression, ParseError> {
         let expression = self.parse_ternary()?;
 
         if self.check(&TokenKind::MutAssign)
             && matches!(
                 expression,
-                Expression::FieldAccess { .. } | Expression::Index { .. }
+                Expression::FieldAccess { .. }
+                    | Expression::Index { .. }
+                    | Expression::Identifier { .. }
             )
         {
             self.advance(); // consume `:=`
@@ -34,18 +45,31 @@ impl<'a> Parser<'a> {
             // `parse_assignment` directly, bypassing the `parse_expression` funnel.
             let value = self.nested(Self::parse_assignment)?;
             let span = self.span(expression.span().start, value.span().end);
-            return Ok(if matches!(expression, Expression::FieldAccess { .. }) {
-                Expression::FieldAssign {
+            return Ok(match expression {
+                Expression::FieldAccess { .. } => Expression::FieldAssign {
                     target: Box::new(expression),
                     value: Box::new(value),
                     span,
-                }
-            } else {
-                Expression::IndexAssign {
+                },
+                Expression::Index { .. } => Expression::IndexAssign {
                     target: Box::new(expression),
                     value: Box::new(value),
                     span,
-                }
+                },
+                Expression::Identifier { name, .. } => Expression::Block {
+                    statements: vec![Statement::Item(Item::VariableDeclaration(
+                        VariableDeclaration {
+                            mutable: true,
+                            name,
+                            type_annotation: None,
+                            value,
+                            exported: false,
+                            span: span.clone(),
+                        },
+                    ))],
+                    span,
+                },
+                _ => unreachable!("matched above: FieldAccess, Index, or Identifier"),
             });
         }
 

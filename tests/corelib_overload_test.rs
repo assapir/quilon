@@ -144,6 +144,48 @@ write = (label :: Text) -> Num => < io.write(label + "!", io.stdout) >
     );
 }
 
+#[test]
+fn a_user_frame_body_is_an_unrelated_function() {
+    // `frameBody` is `core.http`'s own internal body-framing name (no module exports it,
+    // so a program never imports it), but the same closed-set rule applies: a program's
+    // own bare `frameBody` — at the same 4-argument arity the intrinsic takes, even — is
+    // an ordinary, unrelated function, never hijacked into the native intrinsic.
+    assert_exit_linked(
+        r#"
+frameBody = (a :: Text, b :: Bool, c :: Text, d :: Text) -> Result => < b ? Ok(a) : NotOk(c) >
+^ = () -> Num => <
+  frameBody("x", true, "y", "z") ?
+    | Ok(t) => t == "x" ? 7 : 1
+    | NotOk(_) => 2
+>
+"#,
+        7,
+    );
+}
+
+#[test]
+fn a_user_frame_body_is_unrelated_in_a_native_executable() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native build: clang is not on PATH");
+        return;
+    }
+    let (code, _stdout) = build_and_run_native(
+        "frame_body_overload",
+        r#"
+frameBody = (a :: Text, b :: Bool, c :: Text, d :: Text) -> Result => < b ? Ok(a) : NotOk(c) >
+^ = () -> Num => <
+  frameBody("x", true, "y", "z") ?
+    | Ok(t) => t == "x" ? 7 : 1
+    | NotOk(_) => 2
+>
+"#,
+    );
+    assert_eq!(
+        code, 7,
+        "a user's own frameBody must run, not the intrinsic"
+    );
+}
+
 /// The corelib placeholder declarations the compiler replaces are not emitted, and the
 /// names they document still work without a user definition anywhere.
 #[test]

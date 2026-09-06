@@ -41,8 +41,13 @@ const EVERY_INTRINSIC: &str = r#"
 << core.test
 << core.time
 << core.net
+<< core.http
 
 ^ = (args :: []Text, env :: [|Text => Text|]) -> $ => <
+  ~ __http_frame_body, via `body()` reading a canned reply.
+  assert(http.Response { raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello" }.body(),
+    equals("hello"))
+
   ~ __sleep (the @sleep leaf primitive) and __run_fiber_main (the entry runs on a
   ~ scheduler fiber because an @ primitive is used), and __now (the plain clock read).
   @sleep(0)

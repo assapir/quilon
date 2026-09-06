@@ -169,6 +169,13 @@ pub struct CodeGenerator<'ctx> {
     // Whether this module is being emitted for an ahead-of-time build rather than the JIT.
     // Backs `core.info`'s `runMode`; only the caller knows which it is.
     aot: bool,
+    // Whether THIS program's own `frameBody` declaration (if any) is `core.http`'s real
+    // one — set from its `from_corelib` flag in `generate`'s first pre-pass. A bare call
+    // to `frameBody` lowers to the native intrinsic only when this is true (checking
+    // `corelib/http.qn` directly, where the link's rename never runs); an unrelated user
+    // program's own bare `frameBody` is never intercepted, the same closed-overload-set
+    // rule `now`/`print` get from `is_inert_corelib_placeholder`.
+    frame_body_from_corelib: bool,
     // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
     // Each entry is the list of that name's overload parameter-type signatures. A name
     // is present here iff it is an overload set (operator-named, or 2+ same-named
@@ -359,6 +366,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             oracle: TypeOracle::default(),
             defer: crate::deferral::DeferInfo::default(),
             aot: false,
+            frame_body_from_corelib: false,
             overloads: HashMap::new(),
             predeclared_functions: HashMap::new(),
             var_types: HashMap::new(),
@@ -490,6 +498,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             }) = item
             {
                 self.register_sum_variants(name, variants)?;
+            }
+            // `corelib/http.qn` checked directly (its own suite): its bare `frameBody`
+            // declaration is the real one, so calls to the bare name lower to the
+            // intrinsic too (see `frame_body_from_corelib`).
+            if let Item::FunctionDeclaration(declaration) = item
+                && declaration.name == "frameBody"
+                && declaration.from_corelib
+            {
+                self.frame_body_from_corelib = true;
             }
             // Under `--debug` only, keep every record type's full field types (name + type) so
             // the DWARF builders can build its composite members regardless of declaration order
