@@ -75,18 +75,17 @@ The matchers are compiler-provided. They compose with one another, and
 
 ### Verifying that something fails loudly
 
-`aborts()` runs the lambda under test on its own fiber and holds if that run ends in a
-fail-loud exit instead of returning — the way an example or a case verifies the language's
-own **fail-loud** guarantees, the ones that would otherwise end the whole process:
+`aborts()` runs the lambda under test on its own fiber and holds when that run ends in a
+fail-loud exit, failing when the lambda returns — the way an example or a case verifies the
+language's own **fail-loud** guarantees, the ones that would otherwise end the whole process:
 
 ```quilon ignore
 assert(() => "a".replace("x", "y", 0), aborts())     ~ holds: a non-positive count aborts
 expect(() => [1, 2].at(9), not(aborts()))             ~ composes with not; at(9) yields NotOk, no abort
 ```
 
-A failing `aborts()` reports that the lambda returned; a failing `not(aborts())` reports the
-report withheld from stderr while the lambda was trapped, so the reader still sees what
-aborted.
+A failing `aborts()`'s message names the return; a failing `not(aborts())`'s message shows
+the report withheld from stderr while the lambda was trapped, naming what aborted.
 
 ### Building a check of your own
 
