@@ -130,3 +130,13 @@ fn value_capture_threads_through_nested_closure() {
         42,
     );
 }
+
+// --- A bare (non-block) lambda body may itself be a `:=` reassignment of a captured
+//     cell, exactly like the block-bodied form: 1 + 2 + 3 = 6. ---
+#[test]
+fn bare_lambda_body_reassigns_captured_cell() {
+    assert_exit(
+        "^ = () -> Num => <\n  n := 0\n  [1, 2, 3].each(x => n := n + x)\n  n\n>",
+        6,
+    );
+}

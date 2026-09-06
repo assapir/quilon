@@ -930,3 +930,32 @@ fn test_method_chain_across_lines_still_continues() {
     );
     assert_eq!(arguments.len(), 2);
 }
+
+#[test]
+fn test_bare_lambda_body_takes_a_reassignment() {
+    // `:=` is the lowest-precedence operator, so a bare (non-block) lambda body may be
+    // a whole reassignment, not just its left-hand identifier: `x => n := n + x` reads
+    // as `x => (n := n + x)`, never a truncated `x => n` followed by a stray `:= n + x`.
+    let statements = entry_block_statements(
+        "^ = () -> Num => <\n  n := 0\n  [1, 2, 3].each(x => n := n + x)\n  n\n>",
+    );
+    let Statement::Expression(Expression::Call { arguments, .. }) = &statements[1] else {
+        panic!("expected the `.each(...)` call, got {:?}", statements[1]);
+    };
+    // `.each(...)` desugars to `each(receiver, lambda)`; the lambda is the second argument.
+    let Expression::Lambda { body, .. } = &arguments[1] else {
+        panic!("expected a lambda argument, got {:?}", arguments[1]);
+    };
+    let Expression::Block { statements, .. } = body.as_ref() else {
+        panic!(
+            "expected the bare `:=` body wrapped as a one-statement block, got {:?}",
+            body
+        );
+    };
+    assert_eq!(statements.len(), 1);
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!("expected a VariableDeclaration, got {:?}", statements[0]);
+    };
+    assert!(declaration.mutable, "`:=` must reassign, not bind fresh");
+    assert_eq!(declaration.name, "n");
+}
