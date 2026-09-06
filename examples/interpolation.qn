@@ -32,33 +32,33 @@ Color = Red / Green / Blue
   assert("a``b".size, equals(3))
 
   ~ A user override drives both interpolation and print.
-  u :: User = User { name = "Ada", age = 36 }
+  u = User { name = "Ada", age = 36 }
   assert("`u`", equals("User(Ada, 36)"))
   assert("hi `u`!", equals("hi User(Ada, 36)!"))
 
   ~ Default record rendering is the type name.
-  p :: Point = Point { x = 1, y = 2 }
+  p = Point { x = 1, y = 2 }
   assert("`p`", equals("Point"))
 
   ~ Default sum rendering is the variant name.
-  c :: Color = Green
+  c = Green
   assert("`c`", equals("Green"))
 
   ~ Arrays up to 10 elements render in full; longer ones truncate to first <- last.
-  small :: []Num = [1, 2, 3]
+  small = [1, 2, 3]
   assert("`small`", equals("[1, 2, 3]"))
-  big :: []Num = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  big = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   assert("`big`", equals("[1 <- 12]"))
 
   ~ A Map renders its entries `[|k => v, ...|]`, a Set its elements `[|e, ...|]` — each
   ~ through its own `` ` ``. Iteration order is unspecified, so only a single-entry
   ~ collection renders deterministically here.
-  ages :: [|Text => Num|] = [|"ada" => 36|]
+  ages = [|"ada" => 36|]
   assert("`ages`", equals("[|ada => 36|]"))
   emptyMap :: [|Text => Num|] = [|=>|]
   assert("`emptyMap`", equals("[|=>|]"))
 
-  primes :: [|Num|] = [|2|]
+  primes = [|2|]
   assert("`primes`", equals("[|2|]"))
   emptySet :: [|Num|] = [||]
   assert("`emptySet`", equals("[||]"))

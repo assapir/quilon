@@ -5,8 +5,8 @@
 << core.test
 
 ^ = () -> $ => <
-  nums :: []Num = [1, 2, 3, 4, 5]
-  first :: Num = nums[0]
+  nums = [1, 2, 3, 4, 5]
+  first = nums[0]
   assert(first, equals(1))
   assert(nums[4], equals(5))
   assert(nums[4.6], equals(5))          ~ fractional index truncates toward zero

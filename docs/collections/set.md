@@ -13,8 +13,8 @@ written with the same **pipe fence** `[| … |]`; the fence distinguishes a set 
 from an array (`[1, 2, 3]` is an array, `[|1, 2, 3|]` is a set).
 
 ```quilon
-primes :: [|Num|] = [|2, 3, 5, 7|]                        ~ a Set
-none   :: [|Num|] = [||]                                  ~ empty set
+primes = [|2, 3, 5, 7|]                        ~ a Set
+none   :: [|Num|] = [||]                       ~ empty set
 ```
 
 **Elements** may be `Num`, `Text` (hashed **by content**, consistent with `==`), `Bool`, or

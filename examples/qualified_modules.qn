@@ -16,13 +16,13 @@ print = (n :: Num) -> Num => < n + 1 >
   core.io.print("fully qualified")
 
   ~ An exported constant qualifies the same way.
-  written :: Num = io.write("hi", io.stdout)
+  written = io.write("hi", io.stdout)
   assert(written, equals(2))
 
   ~ Exported types and their variants qualify in every position: construction,
   ~ annotations, and patterns.
-  request :: http.Request = http.Request { method = http.Get, url = "http://example.com/" }
-  kind :: Num = request.method ?
+  request = http.Request { method = http.Get, url = "http://example.com/" }
+  kind = request.method ?
     | http.Get     => 1
     | http.Post(_) => 2
     | _            => 3

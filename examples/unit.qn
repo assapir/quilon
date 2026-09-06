@@ -13,6 +13,6 @@ log = (m :: Text) -> $ => < io.print(m) >
   log("started")              ~ called for effect; its result is `$`
   log("done")
   ~ A genuine, verifiable result computed alongside the `$`-typed effects.
-  total :: Num = "started".size + "done".size   ~ 7 + 4
+  total = "started".size + "done".size   ~ 7 + 4
   assert(total, equals(11))
 >

@@ -10,19 +10,19 @@ Point = { x :: Num, y :: Num }
 
 ~ Every parameter and local below gets a typed DWARF entry under `--debug`.
 describe = (p :: Point) -> Num => <
-  count :: Num = 3
-  flag :: Bool = count > 1
-  label :: Text = "point"
-  nums :: []Num = [1, 2, 3]
-  outcome :: Result = Ok(count)
-  base :: Num = outcome ?
+  count = 3
+  flag = count > 1
+  label = "point"
+  nums = [1, 2, 3]
+  outcome = Ok(count)
+  base = outcome ?
     | Ok(v)    => v
     | NotOk(e) => 0
   p.x + p.y + base + nums.size + label.length
 >
 
 ^ = () -> $ => <
-  origin :: Point = Point { x = 4, y = 5 }
+  origin = Point { x = 4, y = 5 }
   ~ 4 + 5 + 3 (base) + 3 (nums.size) + 5 ("point".length) = 20
   assert(describe(origin), equals(20))
 >

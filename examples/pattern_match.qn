@@ -10,15 +10,15 @@
 
 ^ = () -> $ => <
   ~ Binding and wildcard payload patterns.
-  r :: Result = Ok(2)
-  bound :: Num = r ?
+  r = Ok(2)
+  bound = r ?
     | Ok(x)     => x + 1
     | NotOk(_)  => 0
   assert(bound, equals(3))
 
   ~ The compare-in-the-body idiom replacing the illegal `| Ok(1) =>` form.
   pick = (v :: Num) -> Num => <
-    q :: Result = Ok(v)
+    q = Ok(v)
     q ?
       | Ok(n)    => n == 1 ? 10 : 20
       | NotOk(_) => 30
@@ -27,8 +27,8 @@
   assert(pick(2), equals(20))
 
   ~ Matching on a scalar value, with a wildcard fallthrough arm.
-  value :: Num = 5
-  picked :: Num = value ?
+  value = 5
+  picked = value ?
     | 0 => 10
     | 5 => 50      ~ matches here
     | _ => 99
@@ -36,8 +36,8 @@
 
   ~ A binding arm is the other way to cover the rest: it matches anything and names
   ~ the value it matched.
-  other :: Num = 7
-  doubled :: Num = other ?
+  other = 7
+  doubled = other ?
     | 0    => 0
     | rest => rest * 2
   assert(doubled, equals(14))
