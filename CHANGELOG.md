@@ -85,6 +85,13 @@ All notable changes to Quilon are documented here.
   same mechanism a top-level function overload set already uses. A bare type-name receiver
   (`T.f(1)`) on an overloaded member is still rejected (`QN340`), since dispatch needs a
   receiver value. See `docs/functions/overloading.md#method-overloading`.
+- **The `aborts()` matcher — verify that a fail-loud exit actually fires.** `assert(() =>
+  …, aborts())` runs a zero-parameter lambda on its own guarded fiber and holds if it ends
+  in a fail-loud exit (an `assert` failure, a runtime fault, `failAt`) instead of
+  returning; composes with `not`. Built on the per-case guarded-fiber mechanism from #368:
+  while trapped, the exit's own stderr report is withheld and, if `not(aborts())` fails
+  instead, shown in ITS mismatch message. See `docs/corelib/test/README.md#the-matchers`
+  and `examples/assert_demo.qn`. Closes #85.
 
 ### Changed
 

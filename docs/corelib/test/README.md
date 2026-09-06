@@ -53,6 +53,7 @@ error[QN500]: assertion failed: expected 41, got 42
 | `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (through the element type's `==`). |
 | `not(matcher)` | The wrapped matcher fails to hold. Composes around any matcher. |
 | `isOk()` / `isNotOk()` | A [`Result`](../../types/sum-types.md#result-is-a-normal-sum-type) is `Ok` / `NotOk`. |
+| `aborts()` | Reads a zero-parameter lambda of any return type — running it ends fail-loud: an `assert` failure, a runtime fault (an invalid index, a bad `Text.replace`), or `failAt`. |
 
 ```quilon
 assert(6 * 7, equals(42))
@@ -71,6 +72,21 @@ on a sum without that variant — is a compile error naming the missing member.
 
 The matchers are compiler-provided. They compose with one another, and
 [`failAt`](#building-a-check-of-your-own) builds a check of your own.
+
+### Verifying that something fails loudly
+
+`aborts()` runs the lambda under test on its own fiber and holds if that run ends in a
+fail-loud exit instead of returning — the way an example or a case verifies the language's
+own **fail-loud** guarantees, the ones that would otherwise end the whole process:
+
+```quilon ignore
+assert(() => "a".replace("x", "y", 0), aborts())     ~ holds: a non-positive count aborts
+expect(() => [1, 2].at(9), not(aborts()))             ~ composes with not; at(9) yields NotOk, no abort
+```
+
+A failing `aborts()` reports that the lambda returned; a failing `not(aborts())` reports the
+report withheld from stderr while the lambda was trapped, so the reader still sees what
+aborted.
 
 ### Building a check of your own
 
