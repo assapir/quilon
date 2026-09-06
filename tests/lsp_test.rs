@@ -1055,7 +1055,7 @@ response = http.Response { raw = \"HTTP/1.1 200 OK\\r\\n\\r\\n\" }\n  response.H
     let items = completions_at(Path::new("buffer.qn"), text, offset);
     let labels: std::collections::HashSet<&str> =
         items.iter().map(|item| item.label.as_str()).collect();
-    for expected in ["raw", "status", "header", "body"] {
+    for expected in ["raw", "status", "headers", "body"] {
         assert!(
             labels.contains(expected),
             "missing `{expected}`: {labels:?}"
@@ -1063,9 +1063,9 @@ response = http.Response { raw = \"HTTP/1.1 200 OK\\r\\n\\r\\n\" }\n  response.H
     }
     let raw = items.iter().find(|item| item.label == "raw").unwrap();
     assert_eq!(raw.kind, CompletionKind::Field);
-    let header = items.iter().find(|item| item.label == "header").unwrap();
-    assert_eq!(header.kind, CompletionKind::Method);
-    assert_eq!(header.detail.as_deref(), Some("(Text) -> Result"));
+    let headers = items.iter().find(|item| item.label == "headers").unwrap();
+    assert_eq!(headers.kind, CompletionKind::Method);
+    assert_eq!(headers.detail.as_deref(), Some("() -> core.http.Headers"));
 }
 
 /// A `textDocument/completion` request over the protocol, on a document that could never
