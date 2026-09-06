@@ -360,8 +360,9 @@ that is not part of a name — a name holds only letters, digits and `_`.
 isEmpty? = () -> Bool => < true >
 ```
 
-Drop the character or move it after a space: `isEmpty` (not `isEmpty?`), `myCount` (not
-`my-count`).
+Drop the character, or fold a `-`-joined continuation into the name: `isEmpty` (not
+`isEmpty?`), `myCount` (not `my-count`). The `help:` line names the fix for the exact name
+at hand.
 
 ## Imports
 

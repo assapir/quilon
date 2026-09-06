@@ -238,7 +238,7 @@ impl<'a> Parser<'a> {
     fn expect_definition_name(&mut self) -> Result<String, ParseError> {
         let name = self.expect_ident()?;
         let name_span = self.previous_span();
-        self.reject_glued_name_suffix(&name_span)?;
+        self.reject_glued_name_suffix(&name, &name_span)?;
         Ok(name)
     }
 
@@ -270,10 +270,10 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// Reject the token right after `name_span` when it starts exactly where the name
-    /// ended (no whitespace between them) and isn't one of the tokens a name may
-    /// legitimately be glued to (see `is_allowed_glued_to_name`).
-    fn reject_glued_name_suffix(&self, name_span: &Span) -> Result<(), ParseError> {
+    /// Reject the token right after `name_span` when it starts exactly where `name` ended
+    /// (no whitespace between them) and isn't one of the tokens a name may legitimately be
+    /// glued to (see `is_allowed_glued_to_name`).
+    fn reject_glued_name_suffix(&self, name: &str, name_span: &Span) -> Result<(), ParseError> {
         let next = self.peek();
         if next.span.file != name_span.file
             || next.span.start != name_span.end
@@ -281,6 +281,7 @@ impl<'a> Parser<'a> {
         {
             return Ok(());
         }
+        let fixed = self.suggested_name_fix(name, name_span.end);
         Err(ParseError::new(
             Code::NameGluedToSymbol,
             next.span.clone(),
@@ -290,11 +291,35 @@ impl<'a> Parser<'a> {
                 next.text
             ),
         )
-        .help(format!(
-            "drop `{}`, or separate it with a space: `isEmpty` (not `isEmpty?`), \
-             `myCount` (not `my-count`)",
-            next.text
-        )))
+        .help(format!("did you mean `{fixed}`?")))
+    }
+
+    /// The corrected spelling `reject_glued_name_suffix` offers for a name glued to a
+    /// disallowed suffix starting at byte `end`: a `-`-joined continuation folds into the
+    /// name camelCase (`my-count` -> `myCount`, chained for further `-word` runs); any other
+    /// glued character (`isEmpty?`) has nothing to fold in, so the fix is the name alone.
+    fn suggested_name_fix(&self, name: &str, end: u32) -> String {
+        let mut fixed = name.to_string();
+        let mut end = end;
+        let mut offset = 0;
+        loop {
+            let separator = self.peek_ahead(offset);
+            if separator.kind != TokenKind::Minus || separator.span.start != end {
+                break;
+            }
+            let word = self.peek_ahead(offset + 1);
+            if word.kind != TokenKind::Ident || word.span.start != separator.span.end {
+                break;
+            }
+            let mut chars = word.text.chars();
+            if let Some(first) = chars.next() {
+                fixed.extend(first.to_uppercase());
+                fixed.push_str(chars.as_str());
+            }
+            end = word.span.end;
+            offset += 2;
+        }
+        fixed
     }
 
     fn is_at_end(&self) -> bool {

@@ -206,9 +206,9 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A non-ASCII function name reaches DWARF as-is: `DW_AT_name` carries raw UTF-8 bytes, and
-/// LLVM's DIBuilder takes a name/length pair rather than a null-terminated C string, so it
-/// never truncates or mangles one at a stray byte.
+/// A non-ASCII, right-to-left function name reaches DWARF as-is: `DW_AT_name` carries raw
+/// UTF-8 bytes, and LLVM's DIBuilder takes a name/length pair rather than a
+/// null-terminated C string, so it never truncates or mangles one at a stray byte.
 #[test]
 fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
@@ -223,7 +223,7 @@ fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
     }
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let src = "größe = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => < größe(21) >\n";
+    let src = "ףסא = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => < ףסא(21) >\n";
     let dir = std::env::temp_dir().join(format!("quilon_dbg_non_ascii_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let ql = dir.join("prog.qn");
@@ -254,7 +254,7 @@ fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
     // `llvm-dwarfdump`'s own text format escapes every non-ASCII-graphic byte as `\OOO`
     // (three-digit octal) rather than printing raw UTF-8 — the DWARF attribute itself still
     // carries the name's exact bytes, this only decodes how the dump SPELLS them.
-    let escaped: String = "größe"
+    let escaped: String = "ףסא"
         .bytes()
         .map(|b| {
             if b.is_ascii_graphic() {
@@ -266,7 +266,7 @@ fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
         .collect();
     assert!(
         info_out.contains(&format!("\"{escaped}\"")),
-        "expected a `größe` subprogram (dumped as `{escaped}`) in the DWARF info"
+        "expected a `ףסא` subprogram (dumped as `{escaped}`) in the DWARF info"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

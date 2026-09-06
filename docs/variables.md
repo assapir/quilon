@@ -25,7 +25,7 @@ letters, digits and `_`. Names are case-sensitive, with no normalization: two di
 spellings of the same accented letter are two different names.
 
 ```quilon
-größe = 12  ~ a non-ASCII name, bound like any other
+ףסא = 12  ~ a non-ASCII name, bound like any other — right-to-left included
 ```
 
 A bare `_` is the wildcard pattern, never an ordinary name. `true` and `false` are the

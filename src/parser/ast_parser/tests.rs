@@ -934,12 +934,15 @@ fn test_method_chain_across_lines_still_continues() {
 #[test]
 fn test_a_character_glued_to_a_definition_name_is_qn113() {
     // A binding name (`isEmpty?`), a parameter name (`my-count`, the sole parameter of a
-    // one-line function), and a record field name each report the new code — the disallowed
-    // character named, and both fix examples in the help.
-    for src in [
-        "isEmpty? = () -> Bool => < true >",
-        "f = (my-count) => < my-count >",
-        "Point = { x :: Num, y! :: Num }",
+    // one-line function), a two-hyphen chain, and a record field name each report the new
+    // code — the disallowed character named, and the help's fix specific to that name: a
+    // trailing symbol just drops (`isEmpty`), a `-`-joined continuation folds in camelCase
+    // (`myCount`, chained for `myLongCount`).
+    for (src, fixed) in [
+        ("isEmpty? = () -> Bool => < true >", "isEmpty"),
+        ("f = (my-count) => < my-count >", "myCount"),
+        ("f = (my-long-count) => < my-long-count >", "myLongCount"),
+        ("Point = { x :: Num, y! :: Num }", "y"),
     ] {
         let tokens = Lexer::tokenize(src).unwrap();
         let Err(err) = parse(&tokens) else {
@@ -951,10 +954,10 @@ fn test_a_character_glued_to_a_definition_name_is_qn113() {
             "source: {src}, message: {}",
             err.message
         );
-        let help = err.help.as_deref().unwrap_or_default();
-        assert!(
-            help.contains("isEmpty") && help.contains("myCount"),
-            "source: {src}, help: {help}"
+        assert_eq!(
+            err.help.as_deref(),
+            Some(format!("did you mean `{fixed}`?")).as_deref(),
+            "source: {src}"
         );
     }
 }

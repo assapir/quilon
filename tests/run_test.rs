@@ -2502,21 +2502,23 @@ fn run_now_measures_that_sleep_actually_waited() {
     );
 }
 
-/// A non-ASCII function name and a non-ASCII record field work end to end under the JIT —
-/// the compiler mangles/emits by whatever bytes the name carries, not by an ASCII subset.
+/// A non-ASCII function name, a non-ASCII record field, and a right-to-left local name
+/// (starting with a non-ASCII letter, unlike `größe`) work end to end under the JIT — the
+/// compiler mangles/emits by whatever bytes a name carries, not by an ASCII subset.
 #[test]
 fn run_non_ascii_function_name_and_record_field() {
     assert_exit(
         "Punkt = { höhe :: Num }\n\n\
          größe = (p :: Punkt) -> Num => < p.höhe * 2 >\n\n\
-         ^ = () -> Num => < größe(Punkt { höhe = 21 }) >",
+         ^ = () -> Num => <\n  ףסא = größe(Punkt { höhe = 21 })\n  ףסא\n>",
         42,
     );
 }
 
 /// The same program under native AOT, with both supported linkers: the mangled LLVM symbol
-/// for `größe` and the field access into `höhe` have to survive `clang` and `gcc` linking a
-/// real object file, not just the JIT's in-process symbol resolution.
+/// for `größe`, the field access into `höhe`, and the right-to-left local `ףסא` have to
+/// survive `clang` and `gcc` linking a real object file, not just the JIT's in-process
+/// symbol resolution.
 #[test]
 fn native_aot_non_ascii_function_name_and_record_field() {
     let linkers: Vec<&str> = ["clang", "gcc"]
@@ -2534,7 +2536,7 @@ fn native_aot_non_ascii_function_name_and_record_field() {
 
     let src = "Punkt = { höhe :: Num }\n\n\
                größe = (p :: Punkt) -> Num => < p.höhe * 2 >\n\n\
-               ^ = () -> Num => < größe(Punkt { höhe = 21 }) >";
+               ^ = () -> Num => <\n  ףסא = größe(Punkt { höhe = 21 })\n  ףסא\n>";
 
     for linker in &linkers {
         let seq = std::time::SystemTime::now()
