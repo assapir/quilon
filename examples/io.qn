@@ -15,7 +15,7 @@ write = (content :: Text) -> Num => < io.write(content, io.stdout) >
 
 ^ = () -> $ => <
   io.print("hello")            ~ stdout: hello\n
-  written :: Num = io.write("raw", io.stdout)   ~ stdout: raw   (no newline)
+  written = io.write("raw", io.stdout)   ~ stdout: raw   (no newline)
   assert(written, equals(3))      ~ "raw" is 3 bytes
   assert(write("!"), equals(1))   ~ the program's own wrapper, a plain call
 

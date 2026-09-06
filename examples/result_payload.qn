@@ -21,7 +21,7 @@ describe = (n :: Num)  -> Num => < n >
 
 ^ = () -> $ => <
   ~ Ok(Text): the match binds `p : Text` and yields it — a usable `Text` value.
-  path :: Text = lookup("home") ?
+  path = lookup("home") ?
     | Ok(p)     => p
     | NotOk(_)  => "?"
   io.print(path)                        ~ prints: /usr/home
@@ -29,20 +29,20 @@ describe = (n :: Num)  -> Num => < n >
   assert(path.size, equals(9))             ~ "/usr/home".size = 9
 
   ~ NotOk(Text): the error payload is Text too, and equally usable.
-  miss :: Num = lookup("nope") ?
+  miss = lookup("nope") ?
     | Ok(_)      => 0
     | NotOk(err) => err.size          ~ "unset".size = 5
   assert(miss, equals(5))
 
   ~ Overload dispatch on the bound payload: `s : Text` picks the Text member.
-  viaOverload :: Num = Ok("hi") ?
+  viaOverload = Ok("hi") ?
     | Ok(s)     => describe(s)         ~ describe(Text) = "hi".size = 2
     | NotOk(_)  => 0
   assert(viaOverload, equals(2))
 
   ~ Numeric payloads still work end-to-end, and `Ok($)` (unit payload) too.
-  num :: Num = Ok(5) ? | Ok(x) => x * 2 | NotOk(_) => 0   ~ 10
-  unit :: Num = Ok($) ? | Ok(_) => 1     | NotOk(_) => 0  ~ 1
+  num = Ok(5) ? | Ok(x) => x * 2 | NotOk(_) => 0   ~ 10
+  unit = Ok($) ? | Ok(_) => 1     | NotOk(_) => 0  ~ 1
   assert(num, equals(10))
   assert(unit, equals(1))
 >

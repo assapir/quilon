@@ -26,7 +26,7 @@ Point = {
   ~ Safe lookup returns a Result: Ok(value) present, NotOk absent.
   assert(ages.get("alan"), isOk())
   assert(ages.get("nobody"), isNotOk())
-  found :: Num = ages.get("alan") ?
+  found = ages.get("alan") ?
     | Ok(v)    => v
     | NotOk(_) => 0
   assert(found, equals(41))
@@ -34,7 +34,7 @@ Point = {
   ~ `set` mutates `ages` in place and returns it, so the entry count read off the
   ~   return is the receiver's own.
   assert(ages.set("ada", 37).size, equals(3))
-  updatedAge :: Num = ages.get("ada") ?
+  updatedAge = ages.get("ada") ?
     | Ok(v)    => v
     | NotOk(_) => 0
   assert(updatedAge, equals(37))
@@ -50,7 +50,7 @@ Point = {
   assert(ages.remove("nobody").size, equals(3))
 
   ~ keys / values are plain arrays (order unspecified), so array methods compose.
-  total :: Num = ages.values().reduce(0, (acc, x) => acc + x)
+  total = ages.values().reduce(0, (acc, x) => acc + x)
   assert(total, equals(123))
   assert(ages.keys().size, equals(3))
 
@@ -71,7 +71,7 @@ Point = {
   assert(grid.size, equals(2))
 
   ~ `.get` looks up by value equality, returning a Result.
-  label :: Text = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
+  label = grid.get(Point { x = 1, y = 2 }) ? | Ok(t) => t | NotOk(_) => "missing"
   assert(label, equals("here"))
 
   ~ `set` mutates `grid` in place, so the receiver itself grows.

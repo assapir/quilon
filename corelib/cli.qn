@@ -24,7 +24,7 @@
 ~ WITHOUT a leading `--`, so `hasFlag(args, "verbose")` and
 ~ `hasFlag(args, "--verbose")` both match an arg `"--verbose"`.
 >> hasFlag = (args :: []Text, flag :: Text) -> Bool => <
-  wanted :: Text = flag.slice(0, 2) == "--" ? flag : "--" + flag
+  wanted = flag.slice(0, 2) == "--" ? flag : "--" + flag
   args.find(arg => arg == flag || arg == wanted) ?
     | Ok(_)    => true
     | NotOk(_) => false
@@ -40,7 +40,7 @@
 ~ Parsing is positional: the token right after a space-form `--name` is its value even if
 ~ that token looks like an option itself.
 >> getOpt = (args :: []Text, name :: Text) -> Result => <
-  wanted :: Text = name.slice(0, 2) == "--" ? name : "--" + name
+  wanted = name.slice(0, 2) == "--" ? name : "--" + name
   ~ The option name of a token: the text before the first `=`, else the whole token.
   optKey = (tok :: Text) -> Text => < tok.indexOf("=") ? | Ok(p) => tok.slice(0, p) | NotOk(_) => tok >
   ~ The `--name=value` value of a token: the text after the first `=`, else empty.
@@ -48,9 +48,9 @@
   ~ Does a token name this option (in either form, with or without `--`)?
   matches = (tok :: Text) -> Bool => < optKey(tok) == name || optKey(tok) == wanted >
   ~ Indices into args, skipping argv[0].
-  idx :: []Num = (0 <- (args.size - 1)).filter(i => i > 0)
-  empty :: []Text = args.filter(x => false)
-  vals :: []Text = idx.reduce(empty, (acc, i) =>
+  idx = (0 <- (args.size - 1)).filter(i => i > 0)
+  empty = args.filter(x => false)
+  vals = idx.reduce(empty, (acc, i) =>
     matches(args[i])
       ? (args[i].contains("=")
           ? acc + [optVal(args[i])]

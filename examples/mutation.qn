@@ -29,7 +29,7 @@ Counter = {
 
   ~ An array element write is the array analog of a field write: in place, on a
   ~ `:=`-bound array.
-  nums :: []Num := [10, 20, 30]
+  nums := [10, 20, 30]
   nums[0] := 99
   assert(nums[0], equals(99))
   assert(nums.size, equals(3))

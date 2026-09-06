@@ -5,8 +5,8 @@
 << core.test
 
 ^ = () -> $ => <
-  outcome :: Result = Ok(42)
-  doubled :: Num = outcome ?
+  outcome = Ok(42)
+  doubled = outcome ?
     | Ok(x)    => x * 2       ~ 42 * 2 = 84
     | NotOk(e) => 0
   assert(doubled, equals(84))

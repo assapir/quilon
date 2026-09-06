@@ -50,10 +50,11 @@ A feature/change is not done until **all** of these are true:
 - **An example** — every new language feature ships a runnable `examples/*.qn`, wired into the
   examples gate (`tests/examples_test.rs`) so it compiles + runs + asserts an exit code under JIT and
   native AOT (clang **and** gcc), and referenced exactly once from the language reference under `docs/`. (The user is
-  emphatic: examples are mandatory, never stripped.) Write examples **as explicitly as possible** —
-  explicit type annotations on bindings (`parts :: []Text = …`), full forms, no reliance on inference
-  — *unless the example's specific purpose is to demonstrate that something can be implicit*. Example
-  comments describe **what** the code does/demonstrates, **never** design decisions or rationale.
+  emphatic: examples are mandatory, never stripped.) Write examples the way a user would: **no
+  type annotation on a binding unless the compiler needs it** (an empty collection literal with
+  no type from context, a lambda whose parameter type nothing supplies) — inference is the
+  language's normal mode and examples show it. Example comments describe **what** the code
+  does/demonstrates, **never** design decisions or rationale.
 - **`/code-review` + `/simplify`** run before committing, findings addressed. (When the review skill
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
