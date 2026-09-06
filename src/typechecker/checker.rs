@@ -370,6 +370,12 @@ pub enum TypeError {
         reserved_for: &'static str,
         span: Span,
     },
+    /// A record field declared with a function type. A field holds data; a function
+    /// member of a record is written as a method.
+    FunctionTypedField {
+        name: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual

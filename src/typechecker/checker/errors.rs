@@ -58,6 +58,7 @@ impl TypeError {
             TypeError::MissingConstructorField { .. } => Code::MissingConstructorField,
             TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
+            TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
         }
     }
 
@@ -183,6 +184,9 @@ impl TypeError {
             TypeError::ReservedName { name, .. } => diagnostic.help(format!(
                 "pick another name; a record field or method may still be called `{name}`"
             )),
+            TypeError::FunctionTypedField { name, .. } => diagnostic.help(format!(
+                "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
+            )),
             _ => diagnostic,
         }
     }
@@ -234,7 +238,8 @@ impl TypeError {
             | TypeError::StaticCallNeedsReceiverValue { span, .. }
             | TypeError::MissingConstructorField { span, .. }
             | TypeError::UnknownConstructorField { span, .. }
-            | TypeError::ReservedName { span, .. } => span,
+            | TypeError::ReservedName { span, .. }
+            | TypeError::FunctionTypedField { span, .. } => span,
         }
     }
 }
@@ -691,6 +696,13 @@ impl std::fmt::Display for TypeError {
                 name, reserved_for, ..
             } => {
                 write!(f, "`{name}` is reserved for {reserved_for}")
+            }
+            TypeError::FunctionTypedField { name, .. } => {
+                write!(
+                    f,
+                    "field `{name}` cannot have a function type; a function member of a \
+                     record is a method"
+                )
             }
         }
     }

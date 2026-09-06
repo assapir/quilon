@@ -49,6 +49,10 @@ All notable changes to Quilon are documented here.
   receiver value to pass. Calling a method that DOES read `it` on a bare type name is now
   a compile error (`QN340`) instead; a method that reads `it` is unaffected when called on
   an ordinary value, exactly as before. See `docs/types/records.md#static-methods`.
+- **A record field may not have a function type (`QN345`).** A function member of a
+  record is a method, not a field — `Box = { scale :: (Num) -> Num }` is now a compile
+  error naming the field and pointing at the method form. Function-typed parameters,
+  bindings, and return types are unaffected. See `docs/types/records.md`.
 - **A sum's variants may carry different concrete payload types at the same position.**
   `Ok(Text) / NotOk(Num)` is a normal `Result` — `Ok` and `NotOk` each carry their own
   concrete type at a given position, and the two may differ; every value of one variant
@@ -84,6 +88,10 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **A field and a method may share a name.** A bare access (`it.a`) always reaches the
+  field, and a dot-call (`it.a(...)`) always reaches the method, so the two forms never
+  compete; only a field declared twice, or two methods with the same signature, is still a
+  duplicate definition. See `docs/types/records.md`. Closes #374.
 - **`quilon build` optimizes at O3 by default; `--debug` stays unoptimized.** A built
   executable now runs LLVM's `default<O3>` pass pipeline (inlining, `mem2reg`, LICM, loop
   optimizations, ...) unless `--debug` is passed, which keeps the previous unoptimized (O0
