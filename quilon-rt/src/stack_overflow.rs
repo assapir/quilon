@@ -9,12 +9,20 @@
 //! the currently RUNNING fiber's guard page and reports [`report::codes::STACK_OVERFLOW`]
 //! through the runtime's usual [`report::RUNTIME_EXIT_CODE`] when it lands there. A fault
 //! outside that page is not one the runtime knows how to explain, so the handler restores
-//! the default disposition and re-raises, leaving it a genuine crash.
+//! the default disposition and returns, letting the CPU re-execute the faulting
+//! instruction — now fatal, with the original registers and program counter intact for
+//! whatever reports the crash, exactly as an unhandled fault would look.
 //!
 //! Only the running fiber matters: a parked fiber's stack pointer is fixed until it
 //! resumes, so only the one currently executing can newly fault on its own guard page.
+//!
+//! `sigaltstack` is a per-THREAD attribute, unlike `sigaction`'s process-wide
+//! disposition, so [`install`] gives every thread that calls it its own — a compiled
+//! program has exactly one, but a host running several programs' schedulers on separate
+//! threads (the test suite, via `register_thread`) needs one per thread.
 
 use crate::report::RUNTIME_EXIT_CODE;
+use std::cell::Cell;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -50,24 +58,44 @@ const MESSAGE: &[u8] = b"error[QN507]: stack overflow\n";
 /// both are handled the same way.
 const HANDLED_SIGNALS: [c_int; 2] = [libc::SIGSEGV, libc::SIGBUS];
 
-/// Install the guard-page handler once. Idempotent; called from [`crate::gc::install_hooks`]
-/// before any fiber runs.
+thread_local! {
+    /// Whether THIS thread already has its own alternate signal stack. `sigaltstack`
+    /// is per-thread, so every thread that ever runs a fiber scheduler needs one — see
+    /// the module doc.
+    static ALT_STACK_READY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Give this thread its own alternate signal stack, once — the fault the handler needs
+/// to run for has no room left on the faulting stack. Idempotent per thread; a repeat
+/// call on the same thread does nothing.
+fn ensure_alt_stack() {
+    ALT_STACK_READY.with(|ready| {
+        if ready.get() {
+            return;
+        }
+        ready.set(true);
+        // Leaked for the thread's lifetime: the alternate stack must outlive every
+        // signal it is ever used to handle.
+        let stack_size = 64 * 1024;
+        let stack: &'static mut [u8] = vec![0u8; stack_size].leak();
+        let alternate_stack = libc::stack_t {
+            ss_sp: stack.as_mut_ptr().cast(),
+            ss_flags: 0,
+            ss_size: stack_size,
+        };
+        // SAFETY: `alternate_stack` describes the just-leaked, live-for-the-thread buffer.
+        unsafe { libc::sigaltstack(&alternate_stack, std::ptr::null_mut()) };
+    });
+}
+
+/// Install the guard-page handler on this thread's alternate stack, and register it for
+/// the process. Called from [`crate::gc::install_hooks`] on every thread that runs a
+/// scheduler, before any fiber of its own runs; registering the process-wide signal
+/// disposition again on a later call is harmless (the same handler, reinstalled).
 ///
-/// Puts the handler on an alternate signal stack (`sigaltstack`) — the faulting fiber's own
-/// stack has no room left — and registers it with `SA_SIGINFO` (for the faulting address)
-/// `| SA_ONSTACK`.
+/// Registers `SA_SIGINFO` (for the faulting address) `| SA_ONSTACK`.
 pub(crate) fn install() {
-    // Leaked for the process's lifetime: the alternate stack must outlive every signal it
-    // is ever used to handle.
-    let stack_size = 64 * 1024;
-    let stack: &'static mut [u8] = vec![0u8; stack_size].leak();
-    let alternate_stack = libc::stack_t {
-        ss_sp: stack.as_mut_ptr().cast(),
-        ss_flags: 0,
-        ss_size: stack_size,
-    };
-    // SAFETY: `alternate_stack` describes the just-leaked, live-for-the-process buffer.
-    unsafe { libc::sigaltstack(&alternate_stack, std::ptr::null_mut()) };
+    ensure_alt_stack();
 
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handle_signal as *const () as usize;
@@ -78,7 +106,7 @@ pub(crate) fn install() {
     for signal in HANDLED_SIGNALS {
         // SAFETY: `action` is a fully initialized `sigaction`. The previous disposition is
         // discarded (never restored elsewhere): the handler itself resets `SIG_DFL` before
-        // re-raising anything it does not recognize, which is the same end state.
+        // returning from anything it does not recognize, which is the same end state.
         unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
     }
 }
@@ -88,10 +116,12 @@ pub(crate) fn install() {
 ///
 /// # Safety contract
 /// Runs as a signal handler on the alternate stack [`install`] set up: every call inside
-/// must be async-signal-safe. `MESSAGE` is a `'static` byte string (no allocation),
-/// `write`/`_exit` are raw syscalls, and resetting the disposition then re-raising is the
-/// standard way to make an unhandled signal terminate the process as if this handler had
-/// never run.
+/// must be async-signal-safe. `MESSAGE` is a `'static` byte string (no allocation);
+/// [`crate::io::write_to_fd`] loops on a raw `write(2)` (handling a short write, the one
+/// realistic partial-progress case for a message this small) and never allocates; `_exit`
+/// is a raw syscall. Resetting the disposition then returning — rather than calling
+/// `raise` — lets the same faulting instruction retry, now fatal by the module doc's
+/// contract.
 extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context: *mut c_void) {
     // SAFETY: `info` is the siginfo the kernel handed the handler; reading the faulting
     // address neither allocates nor blocks.
@@ -102,24 +132,21 @@ extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context:
     );
 
     if low != 0 && fault_address >= low && fault_address < high {
-        // SAFETY: a raw `write(2)` on a fixed byte string, then `_exit(2)` — neither
-        // allocates, locks, nor returns.
-        unsafe {
-            libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len());
-            libc::_exit(RUNTIME_EXIT_CODE);
-        }
+        crate::io::write_to_fd(2, MESSAGE);
+        // SAFETY: `_exit(2)` neither allocates, locks, nor returns.
+        unsafe { libc::_exit(RUNTIME_EXIT_CODE) };
     }
 
-    // Not our guard page: restore the default action and re-raise, so an unrelated fault
-    // still crashes the process the way it would have with no handler installed.
+    // Not our guard page: restore the default action and return, so the CPU re-executes
+    // the faulting instruction — now fatal, an unrelated crash exactly as it would have
+    // been with no handler installed.
     let mut default_action: libc::sigaction = unsafe { std::mem::zeroed() };
     default_action.sa_sigaction = libc::SIG_DFL;
-    // SAFETY: a fully initialized `sigaction` requesting the default disposition, installed
-    // for the same signal the kernel just delivered, then re-raised on this thread.
+    // SAFETY: a fully initialized `sigaction` requesting the default disposition, for
+    // the same signal the kernel just delivered.
     unsafe {
         libc::sigemptyset(&mut default_action.sa_mask);
         libc::sigaction(signal, &default_action, std::ptr::null_mut());
-        libc::raise(signal);
     }
 }
 

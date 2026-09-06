@@ -111,16 +111,20 @@ extern "C" fn push_fiber_roots() {
     }
 }
 
-/// Idempotent one-time install: initialize the GC, permit foreign-thread
-/// registration, chain in our push-roots callback, and install the guard-page
-/// stack-overflow handler.
+/// Give this thread the guard-page stack-overflow handler, then run the rest — GC init,
+/// foreign-thread registration, chaining in the push-roots callback — once for the
+/// process. `stack_overflow::install` runs on every call, ahead of the once-only gate:
+/// its alternate signal stack is a per-THREAD attribute, so every thread that ever calls
+/// this (one for a compiled program; one per scheduler the test suite runs concurrently)
+/// needs its own, while the rest of this setup need only happen the first time.
 pub(crate) fn install_hooks() {
+    stack_overflow::install();
+
     let mut state = lock();
     if state.installed {
         return;
     }
     __gc_init();
-    stack_overflow::install();
     // SAFETY: all one-time GC configuration on an initialized collector.
     unsafe {
         GC_allow_register_threads();
