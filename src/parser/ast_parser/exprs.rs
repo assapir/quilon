@@ -57,16 +57,16 @@ impl<'a> Parser<'a> {
                     span,
                 },
                 Expression::Identifier { name, .. } => Expression::Block {
-                    statements: vec![crate::ast::Statement::Item(
-                        crate::ast::Item::VariableDeclaration(crate::ast::VariableDeclaration {
+                    statements: vec![Statement::Item(Item::VariableDeclaration(
+                        VariableDeclaration {
                             mutable: true,
                             name,
                             type_annotation: None,
                             value,
                             exported: false,
                             span: span.clone(),
-                        }),
-                    )],
+                        },
+                    ))],
                     span,
                 },
                 _ => unreachable!("matched above: FieldAccess, Index, or Identifier"),

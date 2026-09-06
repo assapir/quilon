@@ -108,7 +108,7 @@ All notable changes to Quilon are documented here.
   lowest-precedence operator, but a bare identifier target fell through the shared
   assignment check unhandled — only a field access or an index did anything with a
   following `:=`. Fixed at that one shared point, so a lambda body, a ternary branch, and
-  a match arm all parse it alike now. Closes #335.
+  a match arm all parse it alike now. (#335)
 
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
