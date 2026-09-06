@@ -1008,8 +1008,8 @@ impl TypeChecker {
     /// A higher-order array/`Map`/`Set` method's callback, written as anything but a
     /// lambda literal: read as an ordinary value and matched against the same
     /// `(parameter_types) -> R` shape a lambda literal's own parameters are checked
-    /// against above, using the same [`types_match`] a declared function-typed
-    /// parameter accepts a closure against. Returns `R`, exactly like the lambda
+    /// against above, using the same [`Self::check_type_compatibility`] every other
+    /// call-argument check in this file uses. Returns `R`, exactly like the lambda
     /// literal path returns its body's type — the caller applies whatever further
     /// constraint its own method places on it (`filter`/`find` require `Bool`,
     /// `reduce` requires the accumulator's type).

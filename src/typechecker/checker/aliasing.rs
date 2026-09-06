@@ -310,6 +310,20 @@ impl TypeChecker {
                     // returning a receiver element does. `each`/`filter`/`find`/`at` don't
                     // — their result comes from the receiver's own elements, the callback's
                     // return discarded or used only as a predicate — so they need no fold.
+                    //
+                    // KNOWN GAP: when `callback` is a function-typed PARAMETER (or any
+                    // other identifier `callable_result_aliasing` cannot classify),
+                    // `.fixed` comes back empty — "fresh" — rather than "unknown, assume
+                    // it may alias anything", because a parameter's own `result_aliasing`
+                    // is always `None` (see `Environment::define_parameter`) and this
+                    // module has no "conservatively unknown" `ValueAliasing` to fall back
+                    // to (only specific named bindings). A callback returning a
+                    // reference type can therefore smuggle a `:=`-mutable value into an
+                    // `=`-bound name through this fold. Closing this soundly needs either
+                    // a conservative sentinel in `ValueAliasing` or rejecting an
+                    // unclassified callback here when its return type is reference-typed
+                    // — a real extension to the aliasing model, out of scope for the fix
+                    // that made a parameter reach this position at all.
                     if let Some(callback) =
                         callback_argument_slot(name).and_then(|slot| arguments.get(slot))
                     {
@@ -369,6 +383,9 @@ impl TypeChecker {
     /// OWN arguments exactly as a reference-typed result would be). `Expression::Lambda`
     /// aside, only forms the two issues' repros need are covered — an expression this
     /// cannot see through answers fresh, same as `value_aliasing`'s own gaps elsewhere.
+    /// An identifier this CAN see through but that has no classification (a function-typed
+    /// PARAMETER, always unclassified) also answers fresh rather than "unknown" — see the
+    /// gap noted where `map`/`reduce` fold this into their own result, below.
     ///
     /// Used wherever a function value is called without going through `check_call`'s named
     /// path: an immediately invoked lambda, and a higher-order built-in's callback
