@@ -75,6 +75,7 @@ pub mod codes {
     pub const ALLOCATION_FAILED: u16 = 504;
     pub const READ_FAILED: u16 = 505;
     pub const REPLACE_ALL_EMPTY_FROM: u16 = 506;
+    pub const STACK_OVERFLOW: u16 = 507;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants

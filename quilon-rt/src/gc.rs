@@ -29,6 +29,7 @@
 //! [`crate::mem`]; this module holds only the scheduler-side scanning integration.
 
 use crate::mem::__gc_init;
+use crate::stack_overflow;
 use std::os::raw::{c_int, c_void};
 use std::ptr;
 use std::sync::Mutex;
@@ -104,13 +105,15 @@ extern "C" fn push_fiber_roots() {
 }
 
 /// Idempotent one-time install: initialize the GC, permit foreign-thread
-/// registration, and chain in our push-roots callback.
+/// registration, chain in our push-roots callback, and install the guard-page
+/// stack-overflow handler.
 pub(crate) fn install_hooks() {
     let mut state = lock();
     if state.installed {
         return;
     }
     __gc_init();
+    stack_overflow::install();
     // SAFETY: all one-time GC configuration on an initialized collector.
     unsafe {
         GC_allow_register_threads();

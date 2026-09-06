@@ -100,6 +100,19 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
+  `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's
+  8 MiB stack used to die with no message on stderr and exit 139, under both `quilon run`
+  and a native build. The runtime installs a guard-page signal handler (`sigaltstack` +
+  `sigaction`, `SA_SIGINFO | SA_ONSTACK`) once, at scheduler start — covering the JIT and a
+  native build alike, since both run the same generated `main` -> `__run_fiber_main` path.
+  A `SIGSEGV`/`SIGBUS` whose faulting address falls in the currently running fiber's guard
+  page reports `error[QN507]: stack overflow` (no source location — the exhausted frame
+  that would have carried one is the recursion itself) through the runtime's existing
+  fail-loud exit code; anything else restores the default disposition and re-raises, so an
+  unrelated crash stays a crash. See `docs/tooling/errors.md` and
+  `docs/status/limitations.md`. Closes #336.
+
 - **An overloaded static method is callable on the type name.** Two or more same-named
   methods that never read `it` (e.g. `P.make(1)` alongside `P.make("ab")`) used to be
   rejected as needing a receiver value. A static call now resolves the specific member

@@ -11,7 +11,7 @@ use std::path::Path;
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    build_and_run_native, tool_available,
+    build_and_run_native, run_program, tool_available,
 };
 
 #[test]
@@ -2453,5 +2453,24 @@ fn run_now_measures_that_sleep_actually_waited() {
 >
 "#,
         0,
+    );
+}
+
+/// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
+/// exits 1, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
+/// the crash is real, and a JIT run in-process would take the test harness down with it.
+#[test]
+fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
+    let (code, stderr, _) = run_program(
+        "stack_overflow",
+        "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >",
+    );
+    assert_eq!(
+        code, 1,
+        "a stack overflow must exit with the runtime-error code: {stderr}"
+    );
+    assert_eq!(
+        stderr, "error[QN507]: stack overflow\n",
+        "stderr must report the new code and nothing else"
     );
 }

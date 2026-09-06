@@ -128,6 +128,7 @@ codes! {
     AllocationFailed = 504 => "allocation failed",
     ReadFailed = 505 => "reading stdin failed",
     ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
+    StackOverflow = 507 => "stack overflow",
 }
 
 impl Code {
@@ -292,5 +293,6 @@ mod tests {
             codes::REPLACE_ALL_EMPTY_FROM,
             Code::ReplaceAllEmptyFrom.number()
         );
+        assert_eq!(codes::STACK_OVERFLOW, Code::StackOverflow.number());
     }
 }

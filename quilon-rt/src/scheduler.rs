@@ -14,6 +14,7 @@
 
 use crate::gc;
 use crate::reactor::Reactor;
+use crate::stack_overflow;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 use mio::event::Source;
@@ -77,6 +78,11 @@ struct Fiber {
     /// The fiber's stack base (top of its GC-scannable range); set as Boehm's stack
     /// bottom while this fiber runs. The full range is mirrored in the GC registry.
     stack_high: usize,
+    /// This fiber's guard page, `[guard_low, guard_high)` — the one page a stack
+    /// overflow faults on. Recorded so [`stack_overflow`] can tell such a fault from
+    /// any other while this fiber is the one running.
+    guard_low: usize,
+    guard_high: usize,
 }
 
 struct Scheduler {
@@ -151,6 +157,10 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
     // end of the mapping. Scanning from just above it never faults on PROT_NONE.
     let stack_low = limit + page_size();
     let stack_high = base;
+    // The guard page itself: [limit, stack_low). A fault here, on the fiber this stack
+    // belongs to, is a stack overflow (see `stack_overflow`).
+    let guard_low = limit;
+    let guard_high = stack_low;
 
     let coroutine: FiberCoroutine = Coroutine::with_stack(stack, move |yielder, ()| {
         CURRENT_YIELDER.with(|c| c.set(yielder as *const FiberYielder));
@@ -165,6 +175,8 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
         let id = scheduler.alloc_slot(Fiber {
             coroutine,
             stack_high,
+            guard_low,
+            guard_high,
         });
         scheduler.ready.push_back(id);
         gc::register(id, stack_low, stack_high);
@@ -304,7 +316,9 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .map(|id| (id, scheduler.fibers[id].take().unwrap()))
         }) {
             gc::enter_fiber(id, fiber.stack_high);
+            stack_overflow::set_current_guard(fiber.guard_low, fiber.guard_high);
             let result = fiber.coroutine.resume(());
+            stack_overflow::clear_current_guard();
             gc::leave_fiber();
 
             match result {
