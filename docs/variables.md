@@ -51,7 +51,10 @@ that cell, and the next read — from any function, on any later call — sees i
 
 ```quilon
 counter := 0
-countSheep = () -> Num => < counter := counter + 1; counter >
+countSheep = () -> Num => <
+  counter := counter + 1
+  counter
+>
 ~ countSheep() then countSheep() returns 2, not 1 twice
 ```
 
