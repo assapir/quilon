@@ -40,10 +40,9 @@ output (`print`/`write`), and native calls. Values launched before they are forc
 [overload resolution](../functions/overloading.md) sees `Text`.
 
 **Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the block
-joins every launch it made before returning — the no-fault rule, and the reason a
-bound-but-unused launch still runs to completion. A fault in a launched call — a failing
-`assert`, a stack overflow, or any other fault — ends the program at the fault, the same as
-an unlaunched fault, cutting off sibling launches; the report names the launch site.
+joins every launch it made before returning, and a launch is never cancelled — every launch
+settles. Once every launch has settled, a fault among them propagates out of the block: the
+first fault by launch order, reporting its launch site.
 
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.
