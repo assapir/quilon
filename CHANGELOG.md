@@ -154,6 +154,8 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **VS Code: a `"` inside a string's interpolation hole keeps the string open, and a hole
+  gets its own syntax-highlighting scope.** See the extension's own changelog. Closes #400.
 - **A `:=` global's write now persists across calls.** Reassigning a top-level `:=`
   binding from inside a function stored into a fresh local slot instead of the global —
   the write was lost on return, so a bumping function called twice returned 11, not 12.
