@@ -13,7 +13,7 @@ All notable changes to Quilon are documented here.
   it. A `:=` global is one mutable cell for the whole program: a write from any function
   persists across every later call and every later read. Exporting a `:=` global (`>>
   counter := 0`) raises
-  [QN346](docs/tooling/errors.md#qn346--mutable-global-exported); `QN329` is retired.
+  [QN329](docs/tooling/errors.md#qn329--mutable-global-exported).
   `src/typechecker/checker/decls.rs` and `src/codegen/generator/decls.rs` are renamed to
   `declarations.rs`. See `docs/variables.md`. Closes #245.
 - **`core.http` gains request headers, query params, `Options`/`Patch`, and static request

@@ -262,12 +262,9 @@ pub struct CodeGenerator<'ctx> {
     // (see `fills_call_site`). Only such functions are listed, so an ordinary call looks up
     // a miss and copies nothing. (Overloaded callees' parameters come from `overloads`.)
     fn_call_site_arity: HashMap<String, usize>,
-    // `__ql_init`: the function every computed top-level binding's initializer is emitted
-    // into, in file order, and the block a computed global's `generate_expression` builds
-    // into (advanced past whatever blocks that initializer's own control flow added — see
-    // `generate_variable_declaration`'s top-level branch). Declared unconditionally at the
-    // start of `generate`, called first thing inside `__ql_entry` (`emit_entry_dispatch`),
-    // `ret void`-terminated at the end of `generate`. `None` only before `generate` runs.
+    // The function every computed top-level binding's initializer runs in, called first
+    // inside `__ql_entry` and `ret void`-terminated at the end of `generate`. `None` only
+    // before `generate` declares it.
     init_function: Option<FunctionValue<'ctx>>,
     init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
 }
@@ -684,11 +681,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Declare `__ql_init` up front: every computed top-level binding's initializer
-        // (see `generate_variable_declaration`'s top-level branch) is emitted into this
-        // function's entry block, in file order, as the item loop below reaches it.
-        // `emit_entry_dispatch` calls it first thing inside `__ql_entry`. A program with no
-        // computed global still gets one — an empty body that falls straight to `ret void`.
+        // Declared unconditionally, even with no computed global, so
+        // `generate_variable_declaration` always finds `__ql_init` in place by the time the
+        // item loop below reaches the first one.
         let init_type = self.context.void_type().fn_type(&[], false);
         let init_function = self.module.add_function("__ql_init", init_type, None);
         let init_span = Span::in_root(0, 0);

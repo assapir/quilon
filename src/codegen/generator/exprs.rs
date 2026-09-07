@@ -97,11 +97,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .map_err(ctx("Failed to build load"));
                 }
                 // Otherwise a top-level/module global (e.g. core.io's `stdout`/`stderr`, or
-                // any top-level `name = <value>` / `name := <value>`). Its LLVM type comes
-                // from the checker's own record of THIS reference's type, never from the
-                // global's LLVM initializer — a computed global is zero-initialized at its
-                // declared type (see `generate_variable_declaration`), which
-                // `get_initializer` would read back as a meaningless zero-shaped constant.
+                // any top-level `name = <value>` / `name := <value>`). The load type comes
+                // from the oracle, not `get_initializer` — a computed global is
+                // zero-initialized, so its initializer's own shape would be meaningless.
                 if let Some(global) = self.module.get_global(name) {
                     let ty = self.oracle_value_type(expression)?;
                     return self

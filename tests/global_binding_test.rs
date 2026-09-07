@@ -1,4 +1,4 @@
-//! Top-level bindings: module-level state (issue #245).
+//! Top-level bindings: module-level state.
 //!
 //! A top-level binding's initializer is computed once, in file order, before `^` — imports
 //! first, then top to bottom, an initializer seeing only what is defined above it (no
@@ -16,9 +16,7 @@ use quilon::diagnostic::codes::Code;
 
 #[test]
 fn a_mutable_global_survives_across_calls() {
-    // The counter bug #245 fixed: a `:=` global's write used to be lost on return (the
-    // reassignment branch only consulted local slots), so calling the bumping function
-    // twice yielded 11, not 12.
+    // Regression: a `:=` global's write used to be lost on return.
     let src = concat!(
         "sheepCounted := 0\n",
         "countSheep = () -> Num => <\n",
@@ -76,8 +74,7 @@ fn a_mutable_record_global_field_is_written_through_from_a_function() {
 
 #[test]
 fn a_whole_array_global_reassignment_persists() {
-    // Not just a field write: reassigning the WHOLE `:=` binding to a freshly built array
-    // (the same shape the counter bug hit) must also persist across calls.
+    // Same failure shape as the counter regression above, but for a whole-value reassignment.
     let src = concat!(
         "shoppingList := [1]\n",
         "addToList = () -> Num => <\n",
@@ -121,8 +118,7 @@ fn an_exported_mutable_global_is_rejected() {
 
 #[test]
 fn deep_immutability_still_fires_across_a_global() {
-    // A `:=` binding's value may not cross the `=`/`:=` line, whether the `:=` side is a
-    // local or a global.
+    // Deep immutability applies whether the `:=` side is a local or a global.
     let src = concat!(
         "Llama = { spit :: Num }\n",
         "mood := Llama { spit = 1 }\n",
@@ -160,11 +156,9 @@ fn a_global_initializer_using_backtick_interpolation_over_an_array_is_accepted()
 
 #[test]
 fn a_deferred_value_is_forced_at_a_global_initializer() {
-    // A top-level initializer is a strict (forcing) site (`src/deferral.rs`): binding
-    // `@readStdin()`'s deferred value straight to a global must still force it before `^`
-    // runs, exactly as a local binding would. Spawns the real binary — a deferred read
-    // launches a background fiber that a same-process JIT call can't safely piggyback on
-    // from a test harness thread.
+    // A top-level initializer is a strict site (`src/deferral.rs`), so `@readStdin()`
+    // bound to a global still forces before `^` runs. Spawns the real binary: a deferred
+    // read's background fiber can't safely piggyback on a same-process JIT call here.
     let source = concat!(
         "<< core.io\n",
         "line = @readStdin()\n",

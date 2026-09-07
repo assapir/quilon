@@ -284,17 +284,8 @@ pub enum TypeError {
         message: String,
         span: Span,
     },
-    /// Retired by #245: a top-level binding's value may now be computed (an `__ql_init`
-    /// function runs every initializer once, in file order, before `^`). The variant stays
-    /// in the enum — codes are never reassigned — but nothing constructs it any more.
-    ComputedGlobalBinding {
-        name: String,
-        span: Span,
-    },
     /// `>> secretSauce := 0` — a mutable (`:=`) top-level binding was exported. Mutation
-    /// does not cross a module boundary: an importer sees only the value a `:=` global held
-    /// at import time, never a live view of the writing module's cell. Export a function
-    /// that reads or writes it instead.
+    /// does not cross a module boundary; export a function that reads or writes it instead.
     ExportedMutableGlobal {
         name: String,
         span: Span,

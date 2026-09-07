@@ -44,7 +44,6 @@ impl TypeError {
             TypeError::ConstructorPatternOnNonSum { .. } => Code::ConstructorPatternOnNonSum,
             TypeError::InvalidEntryPointSignature { .. } => Code::InvalidEntryPointSignature,
             TypeError::InvalidBuiltinArgument { .. } => Code::InvalidBuiltinArgument,
-            TypeError::ComputedGlobalBinding { .. } => Code::ComputedGlobalBinding,
             TypeError::ExportedMutableGlobal { .. } => Code::ExportedMutableGlobal,
             TypeError::OperatorMustBeMember { .. } => Code::OperatorMustBeMember,
             TypeError::OperatorMemberArity { .. } => Code::OperatorMemberArity,
@@ -226,7 +225,6 @@ impl TypeError {
             | TypeError::ConstructorPatternOnNonSum { span, .. }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. }
-            | TypeError::ComputedGlobalBinding { span, .. }
             | TypeError::ExportedMutableGlobal { span, .. }
             | TypeError::OperatorMustBeMember { span, .. }
             | TypeError::OperatorMemberArity { span, .. }
@@ -670,9 +668,6 @@ impl std::fmt::Display for TypeError {
                     "no function `{member}` in scope — `{member}` is a member of \
                      {type_name}, which `{member}({receiver}{rest})` does not look on",
                 )
-            }
-            TypeError::ComputedGlobalBinding { name, .. } => {
-                write!(f, "top-level `{name}` has to be computed")
             }
             TypeError::ExportedMutableGlobal { name, .. } => {
                 write!(

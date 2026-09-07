@@ -152,7 +152,7 @@ fn test_file_path_import_exported_item_usable() {
 
 #[test]
 fn test_exported_computed_binding_reads_through_the_module_binding() {
-    // A top-level `=` binding may be computed now (#245); `>>` still exports it, and an
+    // A top-level `=` binding may be computed now; `>>` still exports it, and an
     // importer reads it through the module's own binding — `zoo.penguins`, not `penguins`.
     let source = r#"
         << "zoo.qn"

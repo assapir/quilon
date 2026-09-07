@@ -58,11 +58,11 @@ countSheep = () -> Num => <
 ~ countSheep() then countSheep() returns 2, not 1 twice
 ```
 
-`>>` on a `:=` global is a compile error (`QN346`): mutation does not cross a module
+`>>` on a `:=` global is a compile error (`QN329`): mutation does not cross a module
 boundary. A function that reads or writes the cell is the export.
 
 ```quilon ignore
->> counter := 0   ~ error[QN346]: mutable global exported
+>> counter := 0   ~ error[QN329]: mutable global exported
 ```
 
 (See `examples/globals.qn` and `examples/global_computed.qn`.)

@@ -1,4 +1,4 @@
-~ Test fixture: an exported COMPUTED `=` binding (issue #245) — its value comes from a
+~ Test fixture: an exported COMPUTED `=` binding — its value comes from a
 ~ function defined above it, not a literal. `>>` on an `=` binding still exports; only a
 ~ `:=` (mutable) global rejects `>>`.
 

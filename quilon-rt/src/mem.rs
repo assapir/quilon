@@ -40,28 +40,19 @@ pub extern "C" fn __gc_init() {
     unsafe { GC_init() }
 }
 
-/// Register `bytes` bytes starting at `ptr` as an additional GC root, so the collector
-/// scans it on every collection.
+/// Register `bytes` bytes starting at `ptr` as an additional GC root.
 ///
-/// A computed top-level (`:=` or `=`) global lives in the module's `.data` section under a
-/// native build — Boehm scans that already — but under the JIT it lives in memory LLVM
-/// mapped at run time, which `.data` scanning never reaches; without this, a heap pointer
-/// a global holds could be collected out from under it. Called once per computed global,
-/// from `__ql_init`, for both build shapes alike: harmless under native builds, where the
-/// root is already found by the ordinary `.data` scan.
-///
-/// `GC_add_roots` takes an EXCLUSIVE upper bound (`high_address_plus_1`), so `ptr + bytes`
-/// — one past the region's last byte — is passed, not `ptr + bytes - 1`. A non-positive
-/// `bytes` registers nothing.
+/// Boehm scans `.data` but not memory the JIT maps at run time, so a computed global
+/// registers itself as a root here; harmless (redundant) under a native build.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
     if bytes <= 0 {
         return;
     }
-    // SAFETY: `ptr` is a global's address (never null) and `bytes` is that global's own
-    // LLVM-computed size, so `ptr.add(bytes as usize)` stays within (one past) the same
-    // allocation.
+    // `GC_add_roots` takes an EXCLUSIVE upper bound, hence `ptr + bytes` and not `- 1`.
+    // SAFETY: `bytes` is that same global's own LLVM-computed size, so this stays within
+    // (one past) the allocation.
     let high = unsafe { ptr.add(bytes as usize) };
     unsafe { GC_add_roots(ptr, high) };
 }

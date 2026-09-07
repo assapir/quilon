@@ -343,14 +343,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(());
         }
 
-        // Reassignment of a `:=` GLOBAL from inside a function: store through the SAME
-        // pointer `__ql_init` (or an earlier call) stored into, not a fresh local alloca —
-        // the root-cause fix for a `:=` global's write being lost on return (see
-        // `docs/variables.md` and the counter example in issue #245). The checker only
-        // reaches this declaration shape as a REASSIGNMENT of an existing name (a fresh
-        // `:=` binding sharing a global's name is already rejected — the name is already
-        // bound), so finding no local slot above and a global by this name below is
-        // conclusive, not a guess.
+        // A `:=` global written from inside a function must store through the SAME
+        // pointer `__ql_init` initialized, not a fresh local alloca. The checker rejects a
+        // `:=` that shadows a global name, so finding one here is always a reassignment.
         if declaration.mutable
             && let Some(global) = self.module.get_global(&declaration.name)
         {
@@ -397,12 +392,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// Generate a top-level (module-scope) binding. A `Num`/`Bool`/`$` literal or a lambda
-    /// keeps the existing CONSTANT-initializer path (nothing runs to produce it). Any other
-    /// value is a COMPUTED global (`docs/variables.md`): zero-initialized here at its
-    /// DECLARED (oracle) type, with the value itself computed once inside `__ql_init` (see
-    /// `generate`) — in file order, before `^` — and stored into the global there.
-    /// `inferred_qty` is the type the caller already read out of the oracle.
+    /// A `Num`/`Bool`/`$` literal or a lambda becomes an LLVM constant initializer
+    /// directly; anything else needs code to run, so it is zero-initialized here and
+    /// computed once inside `__ql_init` instead (`docs/variables.md`).
     fn generate_top_level_binding(
         &mut self,
         declaration: &VariableDeclaration,
@@ -426,21 +418,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(());
         }
 
-        // The global's LLVM type comes from the oracle's recorded type — never from the
-        // computed value's own LLVM shape — so a global nothing on the `^`-reachable path
-        // ever writes still reads back at its declared type (see the identifier load in
-        // `exprs.rs`). `value_repr_type` (not `type_to_llvm`) matches how
-        // `generate_expression` actually materializes a Record (a pointer) or an Array
-        // (the `{ ptr, i64 }` struct) — the same shape the `build_store` below produces.
+        // Uses the oracle's declared type, not the computed value's own shape, so a global
+        // nothing on the `^`-reachable path ever writes still reads back correctly (see
+        // the identifier load in `exprs.rs`). `value_repr_type`, not `type_to_llvm`,
+        // matches the pointer/struct shape `generate_expression` actually produces.
         let llvm_type = self.value_repr_type(inferred_qty)?;
         let global =
             self.module
                 .add_global(llvm_type, Some(AddressSpace::default()), &declaration.name);
         global.set_initializer(&zeroed(llvm_type));
 
-        // Emit the initializer into `__ql_init`, wherever the previous computed global's
-        // initializer (if any) left it — resuming the enclosing top-level item's own
-        // function/builder position afterwards, exactly as it was before this call.
+        // Multiple computed globals share one `__ql_init` body, so each initializer resumes
+        // where the previous one left the builder, then restores the caller's position.
         let init_function = self
             .init_function
             .expect("`generate` declares `__ql_init` before any top-level item is emitted");
@@ -457,10 +446,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_store(global.as_pointer_value(), value)
             .map_err(ctx("Failed to build store into computed global"))?;
 
-        // Register the global as an additional GC root: the JIT's mapped memory is
-        // invisible to Boehm's ordinary `.data` scan, so a heap pointer this global holds
-        // (a `Text`, a record, an array) needs one to survive a collection. Redundant but
-        // harmless under a native build, whose `.data` scan already finds it.
+        // Boehm scans `.data` but not JIT-mapped memory, so a heap pointer this global
+        // holds needs an explicit root; redundant but harmless under a native build.
         let gc_add_root = self.get_intrinsic("__gc_add_root")?;
         let size = llvm_type
             .size_of()
