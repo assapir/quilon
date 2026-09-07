@@ -433,9 +433,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // `generate_expression` actually materializes a Record (a pointer) or an Array
         // (the `{ ptr, i64 }` struct) — the same shape the `build_store` below produces.
         let llvm_type = self.value_repr_type(inferred_qty)?;
-        let global = self
-            .module
-            .add_global(llvm_type, Some(AddressSpace::default()), &declaration.name);
+        let global =
+            self.module
+                .add_global(llvm_type, Some(AddressSpace::default()), &declaration.name);
         global.set_initializer(&zeroed(llvm_type));
 
         // Emit the initializer into `__ql_init`, wherever the previous computed global's

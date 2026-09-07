@@ -9,7 +9,9 @@
 //! too — `check`, `run`, and `build` must all agree.
 
 mod common;
-use common::{assert_exit, assert_type_error, assert_type_error_code, build_and_run_native, tool_available};
+use common::{
+    assert_exit, assert_type_error, assert_type_error_code, build_and_run_native, tool_available,
+};
 use quilon::diagnostic::codes::Code;
 
 #[test]
