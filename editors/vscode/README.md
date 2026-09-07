@@ -8,6 +8,9 @@ compiles to native code via LLVM. Files use the `.qn` extension.
 
 - **Syntax highlighting** for the full symbol set:
   - Comments (`~ to end of line`), strings (`"…"` with escapes), numbers, `true`/`false`, wildcard `_`.
+    A string's interpolation holes (`` `expr` ``) carry their own scope, nestable — a `"`
+    inside a hole belongs to the hole's own (possibly further-nested) string, not the
+    enclosing one, and a doubled backtick (`` `` ``) is a literal-backtick escape.
   - The entry point `^`, module import `<<` (with the imported path), and export marker `>>`.
   - Operators: `:=` (mutable bind) vs `=` (immutable bind), `::` (type annotation),
     `=>` (function body / match arm), `->` (return type), `<-` (inclusive range),

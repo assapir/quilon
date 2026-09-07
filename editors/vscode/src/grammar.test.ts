@@ -243,3 +243,157 @@ test("|| still tokenizes as the logical operator, not two fence halves", () => {
     "|| must not be scoped as a collection fence",
   );
 });
+
+// --- String interpolation holes (`` `expr` ``) --------------------------------
+//
+// A hole is any expression wrapped in backticks; `"` is legal inside one, and a
+// doubled backtick (` `` `) is a literal-backtick escape that opens no hole
+// (docs/types/text.md#string-interpolation-and-the-render-operator-). Before the
+// fix, the grammar's `strings` rule ended the string at the first `"` inside a
+// hole (#400).
+
+const HOLE_SCOPE = "meta.embedded.interpolation.quilon";
+const STRING_SCOPE = "string.quoted.double.quilon";
+
+test('a `"` inside an interpolation hole does not end the outer string', () => {
+  // io.print("hi `name + "rld"` !") — one string literal with a hole whose
+  // expression itself contains a nested string.
+  const line = 'io.print("hi `name + "rld"` !")';
+  const tokens = grammar.tokenizeLine(line);
+
+  // Two string ends is correct here — the nested `"rld"` closes, then the
+  // outer string closes — but the call's closing `)` must land outside both,
+  // unscoped: that's what proves the outer string ran all the way to its real
+  // closing quote instead of ending early at the `"` inside the hole (#400).
+  const stringEnds = tokens.filter((t) => t.scope === "punctuation.definition.string.end.quilon");
+  assert.equal(
+    stringEnds.length,
+    2,
+    `expected two string ends (nested + outer), got ${JSON.stringify(tokens)}`,
+  );
+  const closeParen = tokens[tokens.length - 1];
+  assert.deepEqual(closeParen, { text: ")", scope: undefined });
+
+  // The text outside the hole keeps the outer string scope.
+  const outerRuns = tokens.filter((t) => t.scope === STRING_SCOPE);
+  assert.ok(
+    outerRuns.some((t) => t.text === "hi "),
+    `expected "hi " scoped as the outer string, got ${JSON.stringify(tokens)}`,
+  );
+  assert.ok(
+    outerRuns.some((t) => t.text === " !"),
+    `expected " !" scoped as the outer string, got ${JSON.stringify(tokens)}`,
+  );
+
+  // The hole itself is scoped, delimited by punctuation.section.interpolation.
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.section.interpolation.begin.quilon").length,
+    1,
+  );
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.section.interpolation.end.quilon").length,
+    1,
+  );
+  assert.ok(
+    tokens.some((t) => t.scope === HOLE_SCOPE),
+    `expected some text scoped ${HOLE_SCOPE}, got ${JSON.stringify(tokens)}`,
+  );
+
+  // The `"rld"` inside the hole is its own nested string, not plain text.
+  assert.ok(
+    tokens.some((t) => t.text === "rld" && t.scope === STRING_SCOPE),
+    `expected "rld" scoped as a nested string, got ${JSON.stringify(tokens)}`,
+  );
+
+  // The `+` inside the hole still tokenizes as the arithmetic operator.
+  assert.ok(
+    tokens.some((t) => t.text === "+" && t.scope === "keyword.operator.arithmetic.quilon"),
+    `expected + inside the hole to stay an operator, got ${JSON.stringify(tokens)}`,
+  );
+});
+
+test("a plain string with no hole is unchanged", () => {
+  const tokens = grammar.tokenizeLine('x = "plain"');
+  assert.ok(
+    tokens.some((t) => t.text === "plain" && t.scope === STRING_SCOPE),
+    `expected "plain" scoped as a string, got ${JSON.stringify(tokens)}`,
+  );
+  assert.equal(
+    tokens.filter((t) => t.scope === HOLE_SCOPE).length,
+    0,
+    "a string with no backtick must have no interpolation hole",
+  );
+});
+
+test("`` (doubled backtick) is an escape and opens no hole", () => {
+  const tokens = grammar.tokenizeLine('x = "a``b"');
+  assert.ok(
+    tokens.some((t) => t.text === "``" && t.scope === "constant.character.escape.quilon"),
+    `expected \`\` scoped as an escape, got ${JSON.stringify(tokens)}`,
+  );
+  assert.equal(
+    tokens.filter((t) => t.scope === HOLE_SCOPE).length,
+    0,
+    "`` must not open an interpolation hole",
+  );
+  // The string still closes normally: exactly one begin and one end.
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.definition.string.begin.quilon").length,
+    1,
+  );
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.definition.string.end.quilon").length,
+    1,
+  );
+});
+
+test("a hole nested inside another hole's own nested string still tokenizes (depth 2)", () => {
+  // `f("n `g` m")` as a hole's expression: the hole's own nested string
+  // ("n `g` m") itself contains a further hole (`g`). Exercises the lazily
+  // resolved `children()` recursion at more than one level.
+  const line = 'io.print("u `f("n `g` m")` w")';
+  const tokens = grammar.tokenizeLine(line);
+
+  assert.deepEqual(tokens[tokens.length - 1], { text: ")", scope: undefined }); // io.print's own closing paren, unscoped
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.section.interpolation.begin.quilon").length,
+    2,
+    `expected two hole starts (outer f(...), inner g), got ${JSON.stringify(tokens)}`,
+  );
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.section.interpolation.end.quilon").length,
+    2,
+  );
+  assert.ok(
+    tokens.some((t) => t.text === "g" && t.scope === HOLE_SCOPE),
+    `expected the inner hole's "g" scoped ${HOLE_SCOPE}, got ${JSON.stringify(tokens)}`,
+  );
+  assert.ok(
+    tokens.some((t) => t.text === "f" && t.scope?.includes("entity.name.function")),
+    `expected "f" to still tokenize as a function call, got ${JSON.stringify(tokens)}`,
+  );
+});
+
+test("~ inside a hole does not open a comment (does not swallow the rest of the string)", () => {
+  // Before the fix, the hole's patterns re-included #comments (via `$self`),
+  // so `~` inside a hole opened a comment running to end-of-line — eating the
+  // hole's own closing backtick, the string's closing quote, and everything
+  // after them on the line.
+  const line = 'io.print("a `x ~ y` b") + 1';
+  const tokens = grammar.tokenizeLine(line);
+
+  assert.equal(
+    tokens.filter((t) => t.scope === "comment.line.tilde.quilon").length,
+    0,
+    `expected no comment scope inside the hole, got ${JSON.stringify(tokens)}`,
+  );
+  // The string still closes, and code after it (`+ 1`) tokenizes normally.
+  assert.equal(
+    tokens.filter((t) => t.scope === "punctuation.definition.string.end.quilon").length,
+    1,
+  );
+  assert.ok(
+    tokens.some((t) => t.text === "+" && t.scope === "keyword.operator.arithmetic.quilon"),
+    `expected + after the string to tokenize as an operator, got ${JSON.stringify(tokens)}`,
+  );
+});

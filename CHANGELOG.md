@@ -144,6 +144,8 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **VS Code: a `"` inside a string's interpolation hole keeps the string open, and a hole
+  gets its own syntax-highlighting scope.** See the extension's own changelog. Closes #400.
 - **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
   `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's
   8 MiB stack used to die with no message on stderr and exit 139, under both `quilon run`

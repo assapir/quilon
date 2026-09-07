@@ -2,19 +2,38 @@
 // single line, used to test `syntaxes/quilon.tmLanguage.json` without pulling in
 // the (native) `vscode-textmate` + `vscode-oniguruma` engine as a dependency.
 //
-// It reproduces the one behaviour this grammar's correctness hinges on: at each
-// position TextMate scans the *ordered* list of patterns and applies the FIRST
-// one that matches there — ties at the same start position are decided by list
-// order, NOT by match length. That is exactly why every multi-character operator
-// (`=>`, `->`, `:=`, `<-`, `==`, `!=`, `<=`, `>=`, `&&`, `||`, `::`) must
-// be listed before the single-character operator rules: otherwise a rule for the
-// first character would win and split the operator into two tokens.
+// It reproduces the two behaviours this grammar's correctness hinges on:
 //
-// Supported subset (all this grammar uses): `match` rules, `begin`/`end` rules
-// (single line — enough for `~` comments and `"…"` strings), `#include`
-// references into `repository`, and a single top-level `name`. This module is
-// deliberately free of any `vscode` import so it runs under plain Node
-// (`node:test`), like `diagnostics.ts`.
+// - At each position TextMate scans the *ordered* list of patterns and applies
+//   the FIRST one that matches there — ties at the same start position are
+//   decided by list order, NOT by match length. That is exactly why every
+//   multi-character operator (`=>`, `->`, `:=`, `<-`, `==`, `!=`, `<=`, `>=`,
+//   `&&`, `||`, `::`) must be listed before the single-character operator
+//   rules: otherwise a rule for the first character would win and split the
+//   operator into two tokens. The same tie-break is why a string's `` (a
+//   literal-backtick escape) must be listed before its single-backtick
+//   interpolation-hole rule.
+// - A `begin`/`end` rule's own scope applies to its whole span by default —
+//   including any content its `patterns` don't otherwise claim — with a
+//   nested `begin`/`end` (an interpolation hole inside a string, a nested
+//   string inside that) recursing the same way, so a hole gets its own scope
+//   and a `"` inside one cannot close the enclosing string. `end` competes
+//   with `patterns` for the earliest match, same as TextMate's default
+//   `applyEndPatternLast: false`: a tie is won by `end`.
+//
+// Supported subset (all this grammar uses): `match` rules, single-line
+// `begin`/`end` rules (nestable, with `beginCaptures`/`endCaptures` and
+// `patterns`), and `#name` references into `repository` — including a named
+// rule re-including one of its own ancestors (an interpolation hole includes
+// `#expressions`, which includes `#strings`, the hole's own enclosing rule).
+// A `begin`/`end` rule's `patterns` are resolved lazily, on first use, with a
+// fresh include-cycle guard: resolving them can only happen after a `begin`
+// has actually matched some text, so unlike a flat (no `begin`/`end` in
+// between) named-group cycle, it can't recurse while the grammar itself is
+// still being built, and reusing the *same* rule deeper in the source (the
+// hole again, inside its own nested string) is genuine recursion to support,
+// not a cycle to reject. This module is deliberately free of any `vscode`
+// import so it runs under plain Node (`node:test`), like `diagnostics.ts`.
 //
 // Fidelity caveat: the grammar's regexes are run as JavaScript regexes here, not
 // Oniguruma (which the real engine uses). The grammar's patterns stay within the
@@ -32,8 +51,10 @@ interface RawRule {
   readonly end?: string;
   readonly include?: string;
   readonly patterns?: readonly RawRule[];
-  /** Per-capture-group scope names (keyed by group index as a string). */
+  /** Per-capture-group scope names (keyed by group index as a string; index `0` is the whole match). */
   readonly captures?: Readonly<Record<string, { readonly name: string }>>;
+  readonly beginCaptures?: Readonly<Record<string, { readonly name: string }>>;
+  readonly endCaptures?: Readonly<Record<string, { readonly name: string }>>;
 }
 
 interface RawGrammar {
@@ -44,11 +65,11 @@ interface RawGrammar {
 /** One tokenized slice of a line: its text and the scope name applied to it. */
 export interface Token {
   readonly text: string;
-  /** The grammar `name` scope, or `undefined` for unscoped (plain) text. */
+  /** The grammar `name` scope, or `undefined` for unscoped (plain, top-level) text. */
   readonly scope: string | undefined;
 }
 
-/** Capture-group index → scope name (for a `match` rule's `captures`). */
+/** Capture-group index → scope name. */
 type Captures = ReadonlyMap<number, string>;
 
 /** A leaf rule that actually matches text (an `include` has been resolved away). */
@@ -63,15 +84,18 @@ type Rule =
       readonly kind: "beginEnd";
       readonly name?: string;
       readonly begin: RegExp;
-      /** Global regex (compiled once) for locating where the span closes. */
+      readonly beginCaptures: Captures;
       readonly end: RegExp;
+      readonly endCaptures: Captures;
+      /** Lazily resolved and memoized — see the header comment on why a fresh cycle guard. */
+      readonly children: () => readonly Rule[];
     };
 
 export class Grammar {
   private readonly rootRules: readonly Rule[];
 
   private constructor(grammar: RawGrammar) {
-    this.rootRules = resolve(grammar.patterns, grammar.repository);
+    this.rootRules = resolve(grammar.patterns, grammar.repository, new Set());
   }
 
   /** Load and compile a tmLanguage JSON grammar from disk. */
@@ -81,64 +105,120 @@ export class Grammar {
 
   /**
    * Tokenize a single line. Returns the slices in order; their concatenated
-   * `text` reproduces the input exactly. Plain (unmatched) runs get an
-   * `undefined` scope.
+   * `text` reproduces the input exactly. Plain (unmatched) top-level text gets
+   * an `undefined` scope; unmatched text inside a `begin`/`end` span gets that
+   * rule's own scope (mirroring how TextMate applies a block's `name` to its
+   * whole span).
    */
   tokenizeLine(line: string): Token[] {
     const tokens: Token[] = [];
-    let pos = 0;
-    let plainStart = 0;
-
-    const flushPlain = (upTo: number): void => {
-      if (upTo > plainStart) {
-        tokens.push({ text: line.slice(plainStart, upTo), scope: undefined });
-      }
-    };
-
-    while (pos < line.length) {
-      const hit = firstMatch(this.rootRules, line, pos);
-      if (!hit) {
-        break;
-      }
-      flushPlain(hit.start);
-
-      if (hit.rule.kind === "match") {
-        tokens.push(...matchTokens(hit.rule, line, hit.start));
-        pos = hit.end;
-      } else {
-        // begin/end: consume from `begin` through the first `end` on this line
-        // (or to end-of-line if `end` is `$`/absent), as a single scoped token.
-        const innerEnd = findEnd(hit.rule, line, hit.end);
-        tokens.push({ text: line.slice(hit.start, innerEnd), scope: hit.rule.name });
-        pos = innerEnd;
-      }
-      plainStart = pos;
-    }
-
-    flushPlain(line.length);
+    scan(line, 0, this.rootRules, undefined, undefined, tokens);
     return tokens;
   }
+}
+
+/** An enclosing `begin`/`end` rule's own closing pattern, while scanning its content. */
+interface EndSpec {
+  readonly re: RegExp;
+  readonly captures: Captures;
+}
+
+/** The earliest-matching candidate at a scan position: `end`, or one pattern rule. */
+type Best =
+  | { readonly kind: "end"; readonly m: RegExpExecArray; readonly captures: Captures }
+  | { readonly kind: "rule"; readonly m: RegExpExecArray; readonly rule: Rule };
+
+/**
+ * Scan `line` from `pos` to the end (or to where `end` closes), applying
+ * `rules`. `enclosing` is the scope given to any run of characters `rules`
+ * doesn't otherwise claim — `undefined` at the top level, an enclosing
+ * `begin`/`end` rule's own `name` while scanning inside it. Returns the
+ * position the scan stopped at: the line length, or just past a matched `end`.
+ */
+function scan(
+  line: string,
+  pos: number,
+  rules: readonly Rule[],
+  end: EndSpec | undefined,
+  enclosing: string | undefined,
+  tokens: Token[],
+): number {
+  let plainStart = pos;
+  const flushPlain = (upTo: number): void => {
+    if (upTo > plainStart) {
+      tokens.push({ text: line.slice(plainStart, upTo), scope: enclosing });
+    }
+  };
+
+  while (pos < line.length) {
+    let best: Best | undefined;
+
+    if (end) {
+      const m = earliestMatchFrom(end.re, line, pos);
+      if (m) {
+        best = { kind: "end", m, captures: end.captures };
+      }
+    }
+    // A strictly-earlier pattern match overrides `end`; an equal start keeps
+    // `end` (TextMate's default `applyEndPatternLast: false`). Among the
+    // patterns themselves, an equal start keeps the earlier-listed rule.
+    for (const rule of rules) {
+      const re = rule.kind === "match" ? rule.re : rule.begin;
+      const m = earliestMatchFrom(re, line, pos);
+      if (m && (!best || m.index < best.m.index)) {
+        best = { kind: "rule", m, rule };
+      }
+    }
+
+    if (!best) {
+      break;
+    }
+    flushPlain(best.m.index);
+
+    if (best.kind === "end") {
+      tokens.push(...capturedTokens(best.m, best.captures, enclosing));
+      return best.m.index + best.m[0].length;
+    }
+
+    const { rule, m } = best;
+    if (rule.kind === "match") {
+      tokens.push(...capturedTokens(m, rule.captures, rule.name));
+      pos = m.index + m[0].length;
+    } else {
+      tokens.push(...capturedTokens(m, rule.beginCaptures, rule.name));
+      pos = scan(
+        line,
+        m.index + m[0].length,
+        rule.children(),
+        { re: rule.end, captures: rule.endCaptures },
+        rule.name,
+        tokens,
+      );
+    }
+    plainStart = pos;
+  }
+
+  flushPlain(line.length);
+  return line.length;
 }
 
 /** Flatten a pattern list into leaf rules, resolving `#include` against the repo. */
 function resolve(
   patterns: readonly RawRule[],
   repo: Readonly<Record<string, RawRule>>,
-  seen: ReadonlySet<string> = new Set(),
+  seen: ReadonlySet<string>,
 ): Rule[] {
   const out: Rule[] = [];
   for (const p of patterns) {
     if (p.include) {
       const key = p.include.replace(/^#/, "");
       if (seen.has(key)) {
-        continue; // guard against include cycles
+        continue; // guard against a flat (no begin/end in between) include cycle
       }
       const target = repo[key];
       if (!target) {
         continue;
       }
-      // `compile` already dispatches on match / begin / bare-patterns, so the
-      // include target goes through the same path as an inline rule.
       out.push(...compile(target, repo, new Set(seen).add(key)));
     } else {
       out.push(...compile(p, repo, seen));
@@ -155,19 +235,32 @@ function compile(
 ): Rule[] {
   if (typeof rule.match === "string") {
     return [
-      { kind: "match", name: rule.name, re: sticky(rule.match), captures: buildCaptures(rule) },
+      {
+        kind: "match",
+        name: rule.name,
+        re: sticky(rule.match),
+        captures: buildCaptures(rule.captures),
+      },
     ];
   }
   if (typeof rule.begin === "string") {
-    // The whole begin…end span is emitted as one scoped token (enough for `~`
-    // comments and `"…"` strings), so any inner `patterns` are intentionally not
-    // sub-scoped here — they don't affect the operator-tokenization this tests.
+    const rawChildren = rule.patterns ?? [];
+    let children: readonly Rule[] | undefined;
     return [
       {
         kind: "beginEnd",
         name: rule.name,
         begin: sticky(rule.begin),
-        end: new RegExp(rule.end ?? "$", "g"),
+        beginCaptures: buildCaptures(rule.beginCaptures),
+        end: sticky(rule.end ?? "$"),
+        endCaptures: buildCaptures(rule.endCaptures),
+        // A fresh cycle guard, not the inherited `seen`: this resolves lazily
+        // (on first use, after `begin` already matched), so re-including an
+        // ancestor here — a hole re-including `#strings` — is real recursion
+        // through the source text, not the eager flat cycle `seen` guards
+        // against. Reusing `seen` here would permanently mark e.g. "strings"
+        // as visited and silently drop it from every hole ever after.
+        children: () => (children ??= resolve(rawChildren, repo, new Set())),
       },
     ];
   }
@@ -182,96 +275,72 @@ function compile(
  * Compile a TextMate regex as a JS *sticky* regex with capture indices: `y`
  * anchors a match to `lastIndex` (so probing position-by-position finds the
  * earliest start cleanly and never silently skips ahead), `d` exposes each
- * group's span so a `match` rule's `captures` can be applied as sub-tokens, and
- * `u` turns on the `\p{...}` Unicode property escapes the grammar's own
- * identifier rules use (real Oniguruma, which VS Code runs on, supports those
- * natively with no flag).
+ * group's span so a `captures` map can be applied as sub-tokens, and `u` turns
+ * on the `\p{...}` Unicode property escapes the grammar's own identifier rules
+ * use (real Oniguruma, which VS Code runs on, supports those natively with no
+ * flag).
  */
 function sticky(source: string): RegExp {
   return new RegExp(source, "yud");
 }
 
-/** Read a rule's `captures` into an index→scope map. */
-function buildCaptures(rule: RawRule): Captures {
+/** Read a `captures`/`beginCaptures`/`endCaptures` object into an index→scope map. */
+function buildCaptures(captures: RawRule["captures"]): Captures {
   const map = new Map<number, string>();
-  if (rule.captures) {
-    for (const [index, value] of Object.entries(rule.captures)) {
+  if (captures) {
+    for (const [index, value] of Object.entries(captures)) {
       map.set(Number(index), value.name);
     }
   }
   return map;
 }
 
-interface Hit {
-  readonly rule: Rule;
-  readonly start: number;
-  readonly end: number;
-}
-
 /**
- * Find the winning rule at-or-after `from`: the leftmost match across all rules,
- * ties at the same start broken by list order (the first rule wins) — TextMate's
- * exact rule. This list-order tiebreak is what makes operator ordering matter.
+ * Earliest match of a sticky regex at or after `from`, or undefined. Returns
+ * the full exec result (capture group spans included) so a caller never has
+ * to re-run the regex to recover them.
  */
-function firstMatch(rules: readonly Rule[], line: string, from: number): Hit | undefined {
-  let best: Hit | undefined;
-  for (const rule of rules) {
-    const re = rule.kind === "match" ? rule.re : rule.begin;
-    const start = earliestMatchFrom(re, line, from);
-    if (!start) {
-      continue;
-    }
-    // Strictly-earlier start wins; an equal start keeps the earlier-listed rule.
-    if (!best || start.index < best.start) {
-      best = { rule, start: start.index, end: start.index + start.length };
-    }
-  }
-  return best;
-}
-
-/** Earliest match of a sticky regex at or after `from`, or undefined. */
-function earliestMatchFrom(
-  re: RegExp,
-  line: string,
-  from: number,
-): { index: number; length: number } | undefined {
+function earliestMatchFrom(re: RegExp, line: string, from: number): RegExpExecArray | undefined {
   for (let at = from; at <= line.length; at++) {
     re.lastIndex = at;
     const m = re.exec(line);
-    if (m && m[0].length > 0) {
-      return { index: m.index, length: m[0].length };
+    // A zero-width match (e.g. `end: "$"`) is only useful at end-of-line —
+    // elsewhere it would loop forever without ever consuming a character.
+    if (m && (m[0].length > 0 || at === line.length)) {
+      return m;
     }
   }
   return undefined;
 }
 
 /**
- * Emit the token(s) for a `match` rule at `start`. With no `captures` it is a
- * single token scoped to the rule `name`; with `captures` the whole match takes
- * `name` and each capture group layers its scope onto its sub-span (a later/
- * inner group overrides an outer one for the characters it covers), matching how
- * a theme colors a captured match.
+ * Tokenize one already-found match `m` (a `match` rule, or a `begin`/`end`
+ * rule's own begin/end/text). With no captures it is a single token scoped to
+ * `defaultName`; with captures, `defaultName` fills any span no capture
+ * covers and each capture group layers its scope on top (group `0` is the
+ * whole match; a later/inner group overrides an earlier/outer one where they
+ * overlap), matching how a theme colors a captured match.
  */
-function matchTokens(rule: Extract<Rule, { kind: "match" }>, line: string, start: number): Token[] {
-  rule.re.lastIndex = start;
-  const m = rule.re.exec(line);
-  if (!m) {
+function capturedTokens(
+  m: RegExpExecArray,
+  captures: Captures,
+  defaultName: string | undefined,
+): Token[] {
+  const whole = m[0];
+  if (whole.length === 0) {
     return [];
   }
-  const whole = m[0];
-  if (rule.captures.size === 0) {
-    return [{ text: whole, scope: rule.name }];
+  if (captures.size === 0) {
+    return [{ text: whole, scope: defaultName }];
   }
 
-  // Per-character scope: start everyone at the rule name, then stamp each
-  // capture group's span. Iterating groups by ascending index means a
-  // higher-indexed (inner) capture overrides a lower one where they overlap.
-  const scopes: (string | undefined)[] = Array.from({ length: whole.length }, () => rule.name);
+  const start = m.index;
+  const scopes: (string | undefined)[] = Array.from({ length: whole.length }, () => defaultName);
   const indices = m.indices;
   if (indices) {
-    for (let g = 1; g < indices.length; g++) {
+    for (let g = 0; g < indices.length; g++) {
       const span = indices[g];
-      const scope = rule.captures.get(g);
+      const scope = captures.get(g);
       if (!span || scope === undefined) {
         continue;
       }
@@ -291,15 +360,4 @@ function matchTokens(rule: Extract<Rule, { kind: "match" }>, line: string, start
     }
   }
   return tokens;
-}
-
-/** For a begin/end rule, find where its `end` closes on this line. */
-function findEnd(rule: Extract<Rule, { kind: "beginEnd" }>, line: string, from: number): number {
-  rule.end.lastIndex = from;
-  const m = rule.end.exec(line);
-  if (!m) {
-    return line.length;
-  }
-  // `$` matches with zero width at end-of-line: the comment runs to the line end.
-  return m.index + (m[0].length > 0 ? m[0].length : line.length - m.index);
 }
