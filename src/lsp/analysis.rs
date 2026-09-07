@@ -14,7 +14,7 @@ use crate::ast::nodes::{
     ModulePath, Parameter, Pattern, Program, RECEIVER, Statement, SumVariant, Type,
     TypeDeclaration, TypeDefinition, display_name, type_label,
 };
-use crate::driver::{self, Checked, FrontEndError, TestBlocks};
+use crate::driver::{self, Checked, FrontEndError, Linked, TestBlocks};
 use crate::lexer::{Lexer, ROOT_FILE, Span, Token, TokenKind};
 use crate::parser;
 use crate::typechecker::{MatcherHoverTable, TypeTable};
@@ -26,11 +26,26 @@ use crate::typechecker::{MatcherHoverTable, TypeTable};
 /// what `quilon test` executes. Any other document erases its blocks, matching every other
 /// command.
 pub fn check_text(path: &Path, text: &str) -> Result<Checked, FrontEndError> {
-    let tests = match parses_as_test_suite(text) {
+    driver::front_end_source(path, text.to_string(), test_blocks_for(text))
+}
+
+/// [`check_text`], stopping once `text` lexes, parses, and its imports link — without
+/// requiring it to type-check. Go-to-definition, find-references, and rename read this:
+/// each walks [`Program`] alone, so a type error elsewhere in the document does not stop
+/// them (`Err` here still means the document does not even parse or link, which none of the
+/// three can answer over). Uses the same test-suite choice as `check_text`, so a suite's
+/// bodies resolve names too.
+pub fn link_text(path: &Path, text: &str) -> Result<Linked, FrontEndError> {
+    driver::link_source(path, text.to_string(), test_blocks_for(text))
+}
+
+/// What [`check_text`] and [`link_text`] do with `text`'s top-level `describe` blocks: run
+/// them (see [`parses_as_test_suite`]), or erase them, matching every other command.
+fn test_blocks_for(text: &str) -> TestBlocks {
+    match parses_as_test_suite(text) {
         true => TestBlocks::Run,
         false => TestBlocks::Erase,
-    };
-    driver::front_end_source(path, text.to_string(), tests)
+    }
 }
 
 /// Whether `text` parses as a test suite: top-level test blocks and no `^` entry point.

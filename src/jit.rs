@@ -140,11 +140,8 @@ pub fn run_program(
         main.call(argc, argv.as_ptr(), envp.as_ptr())
     };
 
-    // Any computed global this run registered as a GC root (`__gc_add_root`) points into
-    // memory the engine is about to free when it and `context` drop below — a native
-    // build never frees that memory (the process just exits), but a host that runs many
-    // programs in one process, like this one, would otherwise leave a stale root for a
-    // later run's collection to walk into freed memory.
+    // This run's GC roots (`__gc_add_root`) point into memory the engine is about to free
+    // below; unregister them so a later run in this same process doesn't walk into it.
     quilon_rt::remove_registered_roots();
 
     Ok(exit_code)

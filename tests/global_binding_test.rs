@@ -11,7 +11,7 @@
 mod common;
 use common::{
     assert_exit, assert_exit_linked_from, assert_type_error, assert_type_error_code,
-    build_and_run_native, tool_available,
+    build_and_run_native, run_with_stdin, temp_ql, tool_available,
 };
 use quilon::diagnostic::codes::Code;
 use std::path::Path;
@@ -60,6 +60,23 @@ fn a_computed_text_global_is_accepted() {
         "battleCry = \"hi \" + \"there\"\n^ = () -> Num => < battleCry.size >",
         8,
     );
+}
+
+#[test]
+fn a_text_literal_global_is_accepted() {
+    assert_exit(
+        "battleCry = \"hi there\"\n^ = () -> Num => < battleCry.size >",
+        8,
+    );
+}
+
+#[test]
+fn a_bool_global_and_a_unit_global_are_accepted() {
+    assert_exit(
+        "gremlinAwake = true\n^ = () -> Num => < gremlinAwake ? 3 : 4 >",
+        3,
+    );
+    assert_exit("biscuitJar = $\n^ = () -> Num => < 7 >", 7);
 }
 
 #[test]
@@ -182,39 +199,17 @@ fn a_deferred_value_is_forced_at_a_global_initializer() {
         "  0\n",
         ">\n",
     );
-    let dir = std::env::temp_dir().join(format!(
-        "quilon_global_defer_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join("program.qn");
-    std::fs::write(&file, source).expect("write temp program");
+    let file = temp_ql("global_defer", source);
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn quilon run");
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .expect("child stdin")
-        .write_all(b"kaki the yak\n")
-        .expect("write to child stdin");
-    let output = child.wait_with_output().expect("wait for quilon run");
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_quilon"));
+    command.args(["run", file.to_str().unwrap()]);
+    let (code, stdout) = run_with_stdin(command, b"kaki the yak\n");
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(code, Some(0));
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&stdout),
         "kaki the yak\n",
         "the global's deferred @readStdin value must have been forced before `^` ran"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&file);
 }

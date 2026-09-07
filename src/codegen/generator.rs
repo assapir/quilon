@@ -266,6 +266,11 @@ pub struct CodeGenerator<'ctx> {
     // inside `__ql_entry` and `ret void`-terminated at the end of `generate`. `None` only
     // before `generate` declares it.
     init_function: Option<FunctionValue<'ctx>>,
+    // Where the NEXT computed global's initializer resumes emitting, and where `generate`
+    // closes `__ql_init` with its final `ret void`. NOT `init_function.get_last_basic_block()`:
+    // an initializer's control flow (a match's `match_no_arm`, an array render's merge
+    // helper) can append a block AFTER the one execution actually continues from, so the
+    // true resume point has to be recorded explicitly rather than derived.
     init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
 }
 
@@ -681,9 +686,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Declared unconditionally, even with no computed global, so
-        // `generate_variable_declaration` always finds `__ql_init` in place by the time the
-        // item loop below reaches the first one.
+        // Declared unconditionally, even with no computed global, so the item loop below
+        // always finds `__ql_init` in place by its first top-level binding.
         let init_type = self.context.void_type().fn_type(&[], false);
         let init_function = self.module.add_function("__ql_init", init_type, None);
         let init_span = Span::in_root(0, 0);
@@ -713,11 +717,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.init_block
                 .expect("declared unconditionally above generate's item loop"),
         );
-        // Re-seed the builder's debug location to `__ql_init`'s own scope: emitting
-        // whatever top-level function came last left it pointing at THAT function's
-        // subprogram, and the verifier rejects an instruction whose `!dbg` scope is a
-        // different function than the one it lives in (mirrors `generate_main_wrapper`'s
-        // own re-seed before its `main` return, same reason).
+        // Re-seed the debug location to `__ql_init`'s own scope: the verifier rejects an
+        // instruction whose `!dbg` scope is a different function than the one it lives in,
+        // and emitting the last top-level function left the builder pointing at its scope.
         self.set_debug_loc(&init_span);
         self.builder
             .build_return(None)

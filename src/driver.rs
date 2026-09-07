@@ -80,6 +80,21 @@ pub struct Checked {
     pub tests_only: bool,
 }
 
+/// The import-linked program together with its source map, before type-checking — what
+/// [`front_end_source`]'s lex/parse/link half produces on its own, for a caller that needs
+/// the linked program regardless of whether it type-checks. The language server's
+/// definition, references, and rename read this: all three walk [`ast::Program`] alone
+/// (never [`typechecker::TypeTable`]), so a type error elsewhere in the file does not stop
+/// them.
+pub struct Linked {
+    /// The import-linked program.
+    pub program: ast::Program,
+    /// Every file the program was assembled from, as in [`Checked::sources`].
+    pub sources: SourceMap,
+    /// As in [`Checked::tests_only`].
+    pub tests_only: bool,
+}
+
 /// What the front end does with a file's top-level `describe` blocks (see
 /// [`ast::TEST_BLOCK_MARKER`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +168,17 @@ pub fn front_end_source(
     front_end_source_reporting(file, source, tests, &Status::silent())
 }
 
+/// [`Linked`] over source text supplied by the caller — the lex/parse/link half of
+/// [`front_end_source`], for a caller that needs the linked program without requiring it to
+/// type-check. Always silent, for the reason [`front_end_source`] is.
+pub fn link_source(
+    file: &Path,
+    source: String,
+    tests: TestBlocks,
+) -> Result<Linked, FrontEndError> {
+    link_source_reporting(file, source, tests, &Status::silent())
+}
+
 /// [`front_end_source`] / the tail of [`front_end_reporting`] once source text is in hand:
 /// lex, parse, resolve `<<` imports, and type-check, announcing each stage through `status`.
 fn front_end_source_reporting(
@@ -161,6 +187,51 @@ fn front_end_source_reporting(
     tests: TestBlocks,
     status: &Status,
 ) -> Result<Checked, FrontEndError> {
+    let Linked {
+        program,
+        sources,
+        tests_only,
+    } = link_source_reporting(file, source, tests, status)?;
+
+    status.stage(Stage::Checking);
+    let mut checker = typechecker::TypeChecker::new();
+    let types = match checker.check_program(&program) {
+        Ok(types) => types,
+        Err(error) => {
+            return Err(FrontEndError {
+                diagnostic: Box::new(error.diagnostic()),
+                sources,
+            });
+        }
+    };
+    let matcher_hovers = checker.take_matcher_hovers();
+
+    // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
+    // reached, and the taint / force-set for value-returning primitives. Reads no types and
+    // adds none, so the check above is unaffected. (A call's own location is not part of this:
+    // codegen reads it from the source map, the same way every other located report does.)
+    let defer = crate::deferral::analyze(&program);
+
+    Ok(Checked {
+        program,
+        types,
+        matcher_hovers,
+        sources: Rc::new(sources),
+        defer,
+        tests_only,
+    })
+}
+
+/// The lex/parse/link stages shared by [`front_end_source_reporting`] (which continues on
+/// into type-checking) and [`link_source`] (which stops here, for a caller — the language
+/// server's definition, references, and rename — that needs the linked program whether or
+/// not it type-checks).
+fn link_source_reporting(
+    file: &Path,
+    source: String,
+    tests: TestBlocks,
+    status: &Status,
+) -> Result<Linked, FrontEndError> {
     let path = file.display().to_string();
     status.stage(Stage::Lexing);
     let tokens = lexer::Lexer::tokenize(&source).map_err(|e| {
@@ -237,31 +308,9 @@ fn front_end_source_reporting(
         });
     }
 
-    status.stage(Stage::Checking);
-    let mut checker = typechecker::TypeChecker::new();
-    let types = match checker.check_program(&program) {
-        Ok(types) => types,
-        Err(error) => {
-            return Err(FrontEndError {
-                diagnostic: Box::new(error.diagnostic()),
-                sources,
-            });
-        }
-    };
-    let matcher_hovers = checker.take_matcher_hovers();
-
-    // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
-    // reached, and the taint / force-set for value-returning primitives. Reads no types and
-    // adds none, so the check above is unaffected. (A call's own location is not part of this:
-    // codegen reads it from the source map, the same way every other located report does.)
-    let defer = crate::deferral::analyze(&program);
-
-    Ok(Checked {
+    Ok(Linked {
         program,
-        types,
-        matcher_hovers,
-        sources: Rc::new(sources),
-        defer,
+        sources,
         tests_only,
     })
 }

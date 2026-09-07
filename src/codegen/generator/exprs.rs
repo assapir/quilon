@@ -98,8 +98,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 // Otherwise a top-level/module global (e.g. core.io's `stdout`/`stderr`, or
                 // any top-level `name = <value>` / `name := <value>`). The load type comes
-                // from the oracle, not `get_initializer` — a computed global is
-                // zero-initialized, so its initializer's own shape would be meaningless.
+                // from the oracle, not `get_initializer` — a computed global's initializer
+                // is a zero value, not its real shape.
                 if let Some(global) = self.module.get_global(name) {
                     let ty = self.oracle_value_type(expression)?;
                     return self
