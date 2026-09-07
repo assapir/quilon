@@ -7,9 +7,7 @@ use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
 
 /// A `write` file descriptor as the non-negative whole number it must be, or the message
-/// saying why it is not. `fd` reaches here as the `Num` it was written, since `write`
-/// takes no other type — a fraction, NaN, an infinity, a negative descriptor, or one past
-/// what a C `int` holds are all refused alike.
+/// saying why it is not.
 fn check_write_fd(fd: f64) -> Result<i32, String> {
     if fd.fract() != 0.0 || fd < 0.0 || fd > i32::MAX as f64 {
         return Err(format!(

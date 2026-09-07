@@ -24,10 +24,24 @@ fn a_user_file_calling_color_enabled_directly_is_undefined() {
 }
 
 #[test]
+fn a_mismatched_call_is_still_undefined_not_a_no_matching_overload() {
+    // A wrong-typed or wrong-arity call must not fall through to overload resolution,
+    // which would report `NoMatchingOverload` and name the intrinsic's real signature.
+    assert_type_error_code(
+        "^ = () -> Num => < __exit(\"x\")  0 >",
+        Code::UndefinedVariable,
+    );
+    assert_type_error_code(
+        "^ = () -> Num => < __exit(1, 2)  0 >",
+        Code::UndefinedVariable,
+    );
+}
+
+#[test]
 fn a_user_files_own_overload_of_the_same_bare_name_is_unaffected() {
-    // `__exit` is not a reserved name — a user file may give it its OWN overload member
-    // at a different signature; only a call matching the COMPILER's own signature is the
-    // intrinsic itself.
+    // `__exit` is not a reserved name — a user file may give it its OWN overload member at
+    // a different signature, which then dispatches normally beside the (still unreachable)
+    // intrinsic.
     let src = "__exit = (message :: Text) -> Text => < message >\n\
                ^ = () -> Num => < __exit(\"spreadsheet gremlin\").length >";
     let tokens = quilon::lexer::Lexer::tokenize(src).expect("lexing failed");

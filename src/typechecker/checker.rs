@@ -637,11 +637,9 @@ pub struct TypeChecker {
     // restored around a nested declaration's own check so it still names the right
     // function afterward.
     pending_return_type: Option<(String, Span)>,
-    // Whether the top-level declaration currently being checked is the corelib's own (see
-    // `ast::FunctionDeclaration::from_corelib`), toggled the same way `env`'s
-    // `enforce_reserved_names` is. A bare `__`-prefixed compiler intrinsic (`__exit`,
-    // `__color_enabled`, `core.test`'s registry primitives) is reachable by name only
-    // there — `core.test`'s own harness is built on it — and undefined everywhere else.
+    // Whether the top-level declaration currently being checked is the corelib's own
+    // (`FunctionDeclaration::from_corelib`) — a bare `__`-prefixed intrinsic resolves only
+    // there.
     checking_corelib_declaration: bool,
 }
 

@@ -515,34 +515,22 @@ impl TypeChecker {
             });
         }
 
-        // A bare `__`-prefixed name is the compiler's own internal-primitive surface
-        // (`__exit`, `__color_enabled`, `core.test`'s registry primitives) — reachable by
-        // name only from the corelib, which is what `core.test`'s harness is built on;
-        // undefined everywhere else, same as any other name only the corelib defines. A
-        // user file may still give the SAME bare name its own overload member (closed
-        // sets are for the module-qualified built-ins only, `core.io.write` and the
-        // rest); only a call whose argument types match the compiler's OWN signature
-        // exactly is the intrinsic itself.
+        // A bare `__`-prefixed name is the compiler's own internal-primitive surface,
+        // undefined outside the corelib at ANY argument types — never falling through to
+        // `NoMatchingOverload`, which would leak the intrinsic's real signature.
+        // `add_builtin_overloads` seeds exactly one member per such name up front, so a set
+        // still that size has no user-declared member of the same bare name to dispatch to.
         if let Expression::Identifier { name, .. } = function
             && !member_call
             && name.starts_with("__")
             && !self.checking_corelib_declaration
-            && let Some(builtin_params) = crate::ast::builtin_parameters(name)
+            && crate::ast::builtin_parameters(name).is_some()
+            && self.overloads.get(name).is_none_or(|set| set.len() <= 1)
         {
-            let arg_types: Vec<Type> = arguments
-                .iter()
-                .enumerate()
-                .map(|(i, argument)| match (i, &first_ty) {
-                    (0, Some(ty)) => Ok(ty.clone()),
-                    _ => self.infer_expression(argument),
-                })
-                .collect::<Result<_, _>>()?;
-            if crate::ast::parameters_accept(builtin_params, &arg_types, types_match) {
-                return Err(TypeError::UndefinedVariable {
-                    name: name.clone(),
-                    span: span.clone(),
-                });
-            }
+            return Err(TypeError::UndefinedVariable {
+                name: name.clone(),
+                span: span.clone(),
+            });
         }
 
         // Overload-set dispatch: if `function` names an overload set (a user overload set

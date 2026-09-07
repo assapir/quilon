@@ -161,9 +161,10 @@ All notable changes to Quilon are documented here.
   `^ = () -> Num => < __exit(3) 0 >` used to pass `quilon check`, reaching `__exit`,
   `__color_enabled`, and the rest of the compiler's internal `__`-prefixed primitives
   (`core.test`'s own harness is built on them) from ordinary code. A call to one of these
-  from outside the corelib is now the ordinary undefined-name diagnostic (`QN300`); the
-  corelib itself, and a user's own differently-typed overload of the same bare name,
-  are unaffected.
+  from outside the corelib is now the ordinary undefined-name diagnostic (`QN300`), at
+  any argument types — never the `NoMatchingOverload` that would have named the
+  intrinsic's real signature. The corelib itself is unaffected, and a user file that
+  gives the same bare name its own overload member reaches that member as normal.
 
 - **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
   `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's

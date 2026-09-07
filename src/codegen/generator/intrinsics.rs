@@ -73,9 +73,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .i32_type()
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __write_bytes(double fd, i8* ptr, i64 len, Site* site) — raw write,
-            // backs `write`. `fd` arrives as the Num it is; the runtime itself validates
-            // it is a whole number of 0 or more, reporting at `site` (the call's own
-            // location) and terminating otherwise.
+            // backs `write`; the runtime validates `fd` and reports at `site` (QN508).
             "__write_bytes" => {
                 i64t.fn_type(&[f64t.into(), ptr.into(), i64t.into(), ptr.into()], false)
             }
@@ -590,10 +588,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower the `write(content, fd)` builtin: render `content` through its `` ` ``
     /// operator (the same render path as `print` and string interpolation — a `Text`
     /// renders as itself) and write those bytes to file descriptor `fd` (a `Num`), with no
-    /// trailing newline and no substitution. Yields `Num` (bytes written). `fd` reaches the
-    /// runtime as the `Num` it is, plus this call's own `Site` — the runtime is what
-    /// validates it is a whole number of 0 or more, reporting there and terminating
-    /// otherwise (`QN508`).
+    /// trailing newline and no substitution. Yields `Num` (bytes written).
     pub(super) fn generate_write(
         &mut self,
         args: &[Expression],

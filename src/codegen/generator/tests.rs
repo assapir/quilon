@@ -353,11 +353,8 @@ fn variant(name: &str, fields: Vec<Type>) -> crate::ast::SumVariant {
     }
 }
 
-/// [`generate_checked`], but marking every top-level function as the corelib's own first
-/// — the way `driver::front_end` marks a file it recognizes as one of the bundled corelib
-/// sources (`modules::is_corelib_source`). `__exit` is reachable by bare name only from
-/// there (see the checker's `checking_corelib_declaration`), and this is what a suite
-/// outside that pipeline needs to reach it at all.
+/// [`generate_checked`], but marking every top-level function `from_corelib` first —
+/// `__exit` is reachable by bare name only there.
 fn generate_from_corelib(code: &str) -> Result<String, String> {
     let tokens = Lexer::tokenize(code).unwrap();
     let mut program = parse(&tokens).unwrap();
@@ -375,15 +372,9 @@ fn generate_from_corelib(code: &str) -> Result<String, String> {
     codegen.generate(&program)
 }
 
-/// `__exit`'s own code conversion clamps the same way the entry point's does (see
-/// `saturating_i32`): the exit-code tests in `tests/run_test.rs` run `^`'s own clamp end
-/// to end, but `__exit` is corelib-only surface (the checker now rejects a call to it from
-/// a user file, `tests/intrinsic_privacy_test.rs`), so its own conversion can only be
-/// exercised from a corelib-style context — this generates it directly instead. Every
-/// argument here is a compile-time constant, so LLVM's own constant folder collapses the
-/// whole clamp-then-convert sequence down to the literal `i32` the call ends up passing —
-/// which is the clamped value itself, read straight out of the IR rather than inferred
-/// from its shape.
+/// `__exit` is corelib-only surface, so this is the only way left to exercise its clamp.
+/// Every argument is a compile-time constant, so LLVM's constant folder reduces the whole
+/// clamp-then-convert sequence to the literal `i32` the call passes.
 #[test]
 fn exit_code_conversion_clamps_nan_and_infinities() {
     for (code, expected) in [
