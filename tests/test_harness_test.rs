@@ -533,14 +533,22 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.io.eprint",
         "core.io.write",
         "@readStdin",
-        // core.test: the harness, the summary, the state and the lifecycle.
+        // core.test: the harness, the summary, the state (its `:=` globals and the
+        // helpers that read/write them) and the lifecycle.
         "core.test.failAt",
+        "core.test.passedCases",
+        "core.test.failedCases",
+        "core.test.openSuiteNames",
+        "core.test.pathTo",
         "core.test.casesPassed",
         "core.test.casesFailed",
         "core.test.nestingDepth",
         "core.test.enterSuite",
+        "core.test.popSuite",
         "core.test.leaveSuite",
         "core.test.caseFailing",
+        "core.test.countPass",
+        "core.test.countFailure",
         "core.test.finishCase",
         "core.test.runSuite",
         "core.test.describe",
