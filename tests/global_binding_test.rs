@@ -136,6 +136,29 @@ fn deep_immutability_still_fires_across_a_global() {
 }
 
 #[test]
+fn a_global_initializer_using_a_match_expression_is_accepted() {
+    let src = concat!(
+        "Size = Small / Large\n",
+        "chosen = Large\n",
+        "factor = chosen ?\n",
+        "  | Small => 1\n",
+        "  | Large => 2\n",
+        "^ = () -> Num => < factor * 7 >",
+    );
+    assert_exit(src, 14);
+}
+
+#[test]
+fn a_global_initializer_using_backtick_interpolation_over_an_array_is_accepted() {
+    let src = concat!(
+        "lotteryNumbers = [7, 13, 21]\n",
+        "banner = \"winners `lotteryNumbers`\"\n",
+        "^ = () -> Num => < banner.size >",
+    );
+    assert_exit(src, 19);
+}
+
+#[test]
 fn a_deferred_value_is_forced_at_a_global_initializer() {
     // A top-level initializer is a strict (forcing) site (`src/deferral.rs`): binding
     // `@readStdin()`'s deferred value straight to a global must still force it before `^`
