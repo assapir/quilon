@@ -111,7 +111,8 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op | ✅ |
-| **Stage 2** — M:N work-stealing scheduler + Boehm GC across threads ([#120]) | ⬜ |
+| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`) and atomic bindings (`@name := …`), the fiber-sharing check ([#120]) | ⬜ |
+| Trace / explain mode | 💤 (deferred past 1.0) |
 
 ### M7 — Polish 🔨
 
