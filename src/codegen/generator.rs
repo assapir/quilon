@@ -27,7 +27,7 @@ mod assertions;
 mod calls;
 mod closures;
 mod collections;
-mod decls;
+mod declarations;
 mod di;
 mod exprs;
 mod interpolation;

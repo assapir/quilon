@@ -15,7 +15,7 @@ use crate::lexer::Span;
 mod aliasing;
 mod assertions;
 mod calls;
-mod decls;
+mod declarations;
 mod env;
 mod errors;
 mod exprs;
