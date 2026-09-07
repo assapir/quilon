@@ -6,7 +6,6 @@
 base = 10
 doubled = base * 2
 
-^ = () -> Num => <
+^ = () -> $ => <
   assert(doubled, equals(20))
-  doubled
 >
