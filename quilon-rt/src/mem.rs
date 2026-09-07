@@ -53,6 +53,7 @@ pub extern "C" fn __gc_init() {
 /// `GC_add_roots` takes an EXCLUSIVE upper bound (`high_address_plus_1`), so `ptr + bytes`
 /// — one past the region's last byte — is passed, not `ptr + bytes - 1`. A non-positive
 /// `bytes` registers nothing.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
     if bytes <= 0 {
