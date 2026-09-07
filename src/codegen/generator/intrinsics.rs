@@ -46,6 +46,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__render_c_string" => ptr.fn_type(&[ptr.into(), i64t.into()], false),
             // void __gc_init() — initialize the Boehm GC.
             "__gc_init" => void.fn_type(&[], false),
+            // void __gc_add_root(i8* ptr, i64 bytes) — register a computed top-level
+            // global as an additional GC root, so a heap pointer it holds survives a
+            // collection under the JIT (whose mapped memory Boehm's `.data` scan misses).
+            "__gc_add_root" => void.fn_type(&[ptr.into(), i64t.into()], false),
             // void __exit(i32 code) — terminate the process with `code`. Backs the
             // `__exit(n)` primitive that `core.test`'s `assert` calls to fail. Never
             // returns (the runtime calls libc `exit`).

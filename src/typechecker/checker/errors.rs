@@ -44,7 +44,7 @@ impl TypeError {
             TypeError::ConstructorPatternOnNonSum { .. } => Code::ConstructorPatternOnNonSum,
             TypeError::InvalidEntryPointSignature { .. } => Code::InvalidEntryPointSignature,
             TypeError::InvalidBuiltinArgument { .. } => Code::InvalidBuiltinArgument,
-            TypeError::ComputedGlobalBinding { .. } => Code::ComputedGlobalBinding,
+            TypeError::ExportedMutableGlobal { .. } => Code::ExportedMutableGlobal,
             TypeError::OperatorMustBeMember { .. } => Code::OperatorMustBeMember,
             TypeError::OperatorMemberArity { .. } => Code::OperatorMemberArity,
             TypeError::AssertionNeedsMatcher { .. } => Code::AssertionNeedsMatcher,
@@ -165,8 +165,8 @@ impl TypeError {
                 "use `{}`, which reports and exits, outside a test case",
                 crate::ast::ASSERT
             )),
-            TypeError::ComputedGlobalBinding { .. } => {
-                diagnostic.help("move the computation into `^` or the function that uses it")
+            TypeError::ExportedMutableGlobal { .. } => {
+                diagnostic.help("export a function that reads or writes it instead")
             }
             TypeError::OperatorMustBeMember { operator, .. } => diagnostic.help(format!(
                 "define it inside the type's `{{ }}`, where `it` is the left operand: \
@@ -225,7 +225,7 @@ impl TypeError {
             | TypeError::ConstructorPatternOnNonSum { span, .. }
             | TypeError::InvalidEntryPointSignature { span, .. }
             | TypeError::InvalidBuiltinArgument { span, .. }
-            | TypeError::ComputedGlobalBinding { span, .. }
+            | TypeError::ExportedMutableGlobal { span, .. }
             | TypeError::OperatorMustBeMember { span, .. }
             | TypeError::OperatorMemberArity { span, .. }
             | TypeError::AssertionNeedsMatcher { span, .. }
@@ -669,12 +669,11 @@ impl std::fmt::Display for TypeError {
                      {type_name}, which `{member}({receiver}{rest})` does not look on",
                 )
             }
-            TypeError::ComputedGlobalBinding { name, .. } => {
+            TypeError::ExportedMutableGlobal { name, .. } => {
                 write!(
                     f,
-                    "top-level `{name}` has to be computed, and nothing runs before `^` to \
-                     compute it — a top-level binding holds a Num, Bool or $ literal, or a \
-                     function"
+                    "`>> {name}` exports a mutable (`:=`) global — mutation does not cross a \
+                     module boundary"
                 )
             }
             TypeError::StaticCallNeedsReceiverValue {

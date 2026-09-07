@@ -15,7 +15,7 @@ use crate::lexer::Span;
 mod aliasing;
 mod assertions;
 mod calls;
-mod decls;
+mod declarations;
 mod env;
 mod errors;
 mod exprs;
@@ -284,14 +284,9 @@ pub enum TypeError {
         message: String,
         span: Span,
     },
-    /// A top-level binding's value has to be computed, which there is nowhere to do: a
-    /// module-level binding becomes a global whose initializer must already be a constant,
-    /// and nothing runs before `^` to fill one in. Only a `Num`/`Bool`/`$` literal or a
-    /// function value qualifies. Rejected here (not in codegen) so `quilon check` and
-    /// `quilon run`/`build` agree — reaching codegen produced an internal builder error
-    /// (`UnsetPosition`), or, when the value was a call, a module whose instructions had
-    /// been appended to whatever function was emitted last.
-    ComputedGlobalBinding {
+    /// `>> secretSauce := 0` — a mutable (`:=`) top-level binding was exported. Mutation
+    /// does not cross a module boundary; export a function that reads or writes it instead.
+    ExportedMutableGlobal {
         name: String,
         span: Span,
     },

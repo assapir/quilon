@@ -60,10 +60,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         record_expression: &Expression,
         fields: &[(String, Expression)],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if self.current_function.is_none() {
-            return Err("Global records not yet implemented".to_string());
-        }
-
         // Result layout (ordered fields + types) from the oracle — authoritative for both
         // the struct shape and which slot each name occupies.
         let result_fields: Rc<Vec<(String, Type)>> =
@@ -214,40 +210,35 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Create struct type
         let struct_type = self.context.struct_type(&field_types, false);
 
-        // Create the struct value
-        if self.current_function.is_some() {
-            // GC-allocate the struct (not a stack alloca) so a record VALUE can outlive
-            // the frame that built it — e.g. a record returned from a function or a user
-            // operator overload (`+ = (a :: Vec, b :: Vec) -> Vec => Vec { ... }`). A
-            // stack alloca would dangle once the callee returned.
-            use inkwell::values::AnyValue;
-            let size = struct_type
-                .size_of()
-                .ok_or_else(|| "record struct type has no compile-time size".to_string())?;
-            let alloc_fn = self.get_intrinsic("__alloc")?;
-            let record_ptr = self
+        // GC-allocate the struct (not a stack alloca) so a record VALUE can outlive the
+        // frame that built it — e.g. a record returned from a function, a user operator
+        // overload (`+ = (a :: Vec, b :: Vec) -> Vec => Vec { ... }`), or a top-level
+        // initializer's own frame (`__ql_init`). A stack alloca would dangle once that
+        // frame ended.
+        use inkwell::values::AnyValue;
+        let size = struct_type
+            .size_of()
+            .ok_or_else(|| "record struct type has no compile-time size".to_string())?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let record_ptr = self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "record")
+            .map_err(ctx("Failed to call __alloc for record"))?
+            .as_any_value_enum()
+            .into_pointer_value();
+
+        // Store each field
+        for (i, value) in field_values.iter().enumerate() {
+            let gep = self
                 .builder
-                .build_call(alloc_fn, &[size.into()], "record")
-                .map_err(ctx("Failed to call __alloc for record"))?
-                .as_any_value_enum()
-                .into_pointer_value();
-
-            // Store each field
-            for (i, value) in field_values.iter().enumerate() {
-                let gep = self
-                    .builder
-                    .build_struct_gep(struct_type, record_ptr, i as u32, &format!("field_{}", i))
-                    .map_err(ctx("Failed to build GEP"))?;
-                self.builder
-                    .build_store(gep, *value)
-                    .map_err(ctx("Failed to build store"))?;
-            }
-
-            Ok(record_ptr.into())
-        } else {
-            // For globals, we need constant values
-            Err("Global records not yet implemented".to_string())
+                .build_struct_gep(struct_type, record_ptr, i as u32, &format!("field_{}", i))
+                .map_err(ctx("Failed to build GEP"))?;
+            self.builder
+                .build_store(gep, *value)
+                .map_err(ctx("Failed to build store"))?;
         }
+
+        Ok(record_ptr.into())
     }
 
     pub(super) fn generate_field_access(
