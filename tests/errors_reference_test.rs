@@ -81,6 +81,11 @@ const UNVERIFIABLE: &[(Code, &str)] = &[
         "the checker proves every match exhaustive before codegen sees it — the runtime \
          backstop has no known program that reaches it",
     ),
+    (
+        Code::ComputedGlobalBinding,
+        "retired by #245 — a top-level binding's value may now be computed, so nothing \
+         constructs this variant any more",
+    ),
 ];
 
 fn docs_manifest_relative(path: &str) -> PathBuf {
@@ -425,7 +430,7 @@ fn qn001_not_a_quilon_source() {
 fn unverifiable_codes_are_named_and_explained() {
     assert_eq!(
         UNVERIFIABLE.len(),
-        5,
+        6,
         "the unverifiable list changed size — update this count as part of that change"
     );
     for (code, reason) in UNVERIFIABLE {

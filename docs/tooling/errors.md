@@ -138,6 +138,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN343 | unknown constructor field |
 | QN344 | reserved name |
 | QN345 | record field with a function type |
+| QN346 | mutable global exported |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -821,16 +822,7 @@ The message states the contract; pass an argument that meets it.
 
 ### QN329 — top-level binding that has to be computed
 
-A top-level `=` binding holds a call, an operator, an array, a record, or `Text`. A
-top-level binding becomes a global whose initializer is a constant.
-
-```quilon ignore
-total = 1 + 2
-^ = () -> Num => < total >
-```
-
-Move the computation into `^` or the function that uses it; keep a top-level binding to a
-`Num`, `Bool`, or `$` literal, or a function.
+Retired by #245: a top-level binding's value may now be computed.
 
 ### QN330 — operator defined at the top level
 
@@ -1027,6 +1019,17 @@ Box = { scale :: (Num) -> Num }
 ```
 
 Write `scale` as a method: `scale = (n :: Num) -> Num => < n * 2 >`.
+
+### QN346 — mutable global exported
+
+`>>` marks a top-level `:=` binding. A `:=` global is one mutable cell for the whole
+program; mutation does not cross a module boundary.
+
+```quilon ignore
+>> secretSauce := 0
+```
+
+Export a function that reads or writes it instead.
 
 ## Code generation and build
 

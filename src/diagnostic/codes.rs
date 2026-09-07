@@ -117,6 +117,7 @@ codes! {
     UnknownConstructorField = 343 => "unknown constructor field",
     ReservedName = 344 => "reserved name",
     FunctionTypedField = 345 => "record field with a function type",
+    ExportedMutableGlobal = 346 => "mutable global exported",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",
