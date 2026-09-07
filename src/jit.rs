@@ -132,11 +132,20 @@ pub fn run_program(
     let mut envp: Vec<*const c_char> = env_cstrings.iter().map(|c| c.as_ptr()).collect();
     envp.push(std::ptr::null()); // envp is NULL-terminated
 
-    unsafe {
+    let exit_code = unsafe {
         let main: JitFunction<MainFn> = engine
             .get_function("main")
             .map_err(|_| "Program has no entry point to execute (expected `^`)".to_string())?;
 
-        Ok(main.call(argc, argv.as_ptr(), envp.as_ptr()))
-    }
+        main.call(argc, argv.as_ptr(), envp.as_ptr())
+    };
+
+    // Any computed global this run registered as a GC root (`__gc_add_root`) points into
+    // memory the engine is about to free when it and `context` drop below — a native
+    // build never frees that memory (the process just exits), but a host that runs many
+    // programs in one process, like this one, would otherwise leave a stale root for a
+    // later run's collection to walk into freed memory.
+    quilon_rt::remove_registered_roots();
+
+    Ok(exit_code)
 }

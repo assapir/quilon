@@ -6,6 +6,16 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A top-level binding's initializer runs before `^`, computed like any other
+  expression.** A binding written outside any function may hold a call, an operator, a
+  record, `Text`, or an array — not only a literal or a function value — evaluated once,
+  in file order (an imported module's globals first), seeing only what is defined above
+  it. A `:=` global is one mutable cell for the whole program: a write from any function
+  persists across every later call and every later read. Exporting a `:=` global (`>>
+  counter := 0`) raises
+  [QN329](docs/tooling/errors.md#qn329--mutable-global-exported).
+  `src/typechecker/checker/decls.rs` and `src/codegen/generator/decls.rs` are renamed to
+  `declarations.rs`. See `docs/variables.md`. Closes #245.
 - **`core.http` gains request headers, query params, `Options`/`Patch`, and static request
   constructors.** `Method` gains `Options` and a body-carrying `Patch`. `Headers` (a
   case-insensitive, multi-value name/value store — a repeated name like `X-A: 1` / `X-A: 2`
@@ -165,6 +175,10 @@ All notable changes to Quilon are documented here.
   any argument types — never the `NoMatchingOverload` that would have named the
   intrinsic's real signature. The corelib itself is unaffected, and a user file that
   gives the same bare name its own overload member reaches that member as normal.
+- **A `:=` global's write now persists across calls.** Reassigning a top-level `:=`
+  binding from inside a function stored into a fresh local slot instead of the global —
+  the write was lost on return, so a bumping function called twice returned 11, not 12.
+  See `docs/variables.md`. (#245)
 
 - **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
   `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's

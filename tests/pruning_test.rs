@@ -126,6 +126,20 @@ fn a_helper_called_only_from_a_global_function_value_survives() {
 }
 
 #[test]
+fn a_helper_called_only_from_a_computed_global_initializer_survives() {
+    // A top-level binding's value is itself a root (`ast::reachability`) — nothing else
+    // in the program mentions `triple`, only `total`'s own (computed) initializer does.
+    assert_exit(
+        concat!(
+            "triple = (n :: Num) -> Num => < n * 3 >\n",
+            "total = triple(5)\n",
+            "^ = () -> Num => < total >"
+        ),
+        15,
+    );
+}
+
+#[test]
 fn a_render_override_reached_only_by_interpolation_survives() {
     // The `` ` `` method is never called by name — interpolation lowers to it.
     assert_exit_linked(

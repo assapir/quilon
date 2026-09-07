@@ -33,9 +33,9 @@ fn tool_available(tool: &str) -> bool {
 ///
 /// Some are reached by using the feature they back (`.split` → `__text_split`); others
 /// come with the shape of the program — the entry point's `args`/`env` conversions, the
-/// GC initializer `main` emits, the bounds-check failure path every index carries, and
-/// the exit primitive behind a failed assertion. Interpolation is what pulls in the
-/// number and boolean renderers.
+/// GC initializer `main` emits, the bounds-check failure path every index carries, the
+/// exit primitive behind a failed assertion, and a computed top-level binding's `__ql_init`
+/// GC-root registration. Interpolation is what pulls in the number and boolean renderers.
 const EVERY_INTRINSIC: &str = r#"
 << core.io
 << core.test
@@ -43,7 +43,13 @@ const EVERY_INTRINSIC: &str = r#"
 << core.net
 << core.http
 
+~ __gc_add_root, via `__ql_init`: a top-level binding COMPUTED (not a Num/Bool/$ literal
+~ or a function) is initialized once before `^`, and its global is registered as a GC root.
+linkedGreeting = "linked " + "again"
+
 ^ = (args :: []Text, env :: [|Text => Text|]) -> $ => <
+  assert(linkedGreeting.size > 0, equals(true))
+
   ~ __http_frame_body, via `body()` reading a canned reply.
   assert(http.Response { raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello" }.body(),
     equals("hello"))

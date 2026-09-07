@@ -100,7 +100,7 @@ codes! {
     ConstructorPatternOnNonSum = 326 => "constructor pattern on a non-sum value",
     InvalidEntryPointSignature = 327 => "unsupported `^` signature",
     InvalidBuiltinArgument = 328 => "invalid argument to a built-in",
-    ComputedGlobalBinding = 329 => "top-level binding that has to be computed",
+    ExportedMutableGlobal = 329 => "mutable global exported",
     OperatorMustBeMember = 330 => "operator defined at the top level",
     OperatorMemberArity = 331 => "operator member with the wrong parameter count",
     AssertionNeedsMatcher = 332 => "assertion without a matcher",

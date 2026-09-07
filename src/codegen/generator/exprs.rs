@@ -96,13 +96,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .build_load(*ty, *ptr, name)
                         .map_err(ctx("Failed to build load"));
                 }
-                // Otherwise a top-level/module global constant (e.g. core.io's
-                // `stdout`/`stderr`, or any top-level `name = <const>`).
+                // Otherwise a top-level/module global (e.g. core.io's `stdout`/`stderr`, or
+                // any top-level `name = <value>` / `name := <value>`). The load type comes
+                // from the oracle, not `get_initializer` — a computed global is
+                // zero-initialized, so its initializer's own shape would be meaningless.
                 if let Some(global) = self.module.get_global(name) {
-                    let ty = global
-                        .get_initializer()
-                        .map(|v| v.get_type())
-                        .unwrap_or_else(|| self.context.f64_type().into());
+                    let ty = self.oracle_value_type(expression)?;
                     return self
                         .builder
                         .build_load(ty, global.as_pointer_value(), name)

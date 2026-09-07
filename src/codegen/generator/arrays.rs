@@ -29,10 +29,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Arrays are represented as structs: { ptr data, i64 size }
         // This allows .size field access
 
-        if self.current_function.is_none() {
-            return Err("Global arrays not yet implemented".to_string());
-        }
-
         // A literal containing a `<-` spread (`[<-xs, 4]`) has a runtime-determined size
         // (each spread source contributes its own `.size` elements), so it takes a
         // dedicated GC-allocating path that copies each part in order.
@@ -311,9 +307,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         end: &Expression,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if self.current_function.is_none() {
-            return Err("Range must be in a function".to_string());
-        }
         let f64_type = self.context.f64_type();
         let (lo, step, count) = self.range_bounds(start, end, span)?;
 

@@ -11,8 +11,11 @@ sidebar:
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
 > single-threaded fiber scheduler, the effect-only `@sleep` pause (`core.time`), the
 > deferred-value `@readStdin` (`core.io`), and the networked `@tcpRequest` (`core.net`).
-> Planned: a value-returning network primitive such as `@get`, with which two independent
-> reads finish in max-time; and the multicore (M:N) runtime.
+> Planned for 1.0: a value-returning network primitive such as `@get`, with which two
+> independent reads finish in max-time, and the multicore (M:N) runtime — a work-stealing
+> scheduler running one worker per CPU as reported to the process, the same under
+> `quilon run` and a built binary, with the Boehm GC working across threads and the
+> fiber-sharing check and atomic types enforced.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
 code, and the runtime overlaps independent IO. A function that does IO is written and typed
@@ -37,13 +40,16 @@ output (`print`/`write`), and native calls. Values launched before they are forc
 [overload resolution](../functions/overloading.md) sees `Text`.
 
 **Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the block
-forces and joins everything it launched before returning, and a panic propagates out.
+joins every launch it made before returning, and a launch is never cancelled — every launch
+settles. Once every launch has settled, the faults among them propagate out of the block:
+every fault is reported, in launch order, each naming its launch site.
 
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.
 
-**Determinism.** Pure results are deterministic. The **ordering of side effects** across
-independent deferred IO is unspecified.
+**Determinism.** Pure results are deterministic. A single `print`/`eprint`/`write` call is
+one write — its output is never torn between fibers. The **ordering** of output between
+independent launches stays unspecified.
 
 **A program's entry runs on the fiber scheduler**, so every `@` primitive it reaches
 has a fiber to park on. A pure program pays the scheduler's fixed start-up — a reactor and one
@@ -53,6 +59,25 @@ That seed fiber has an 8 MiB stack, the size of a process stack, and larger than
 *spawned* fiber's; `^` recurses as deeply as on a process stack. The seed stack size is fixed
 independently of `ulimit -s`: the collector scans a parked fiber's stack whole, and the
 seed's size bounds that scan.
+
+## Sharing state across fibers
+
+A value reached through an `=` binding may be shared by fibers freely — proven to carry no
+mutable path, so sharing costs no lock and no copy. A `:=` value reachable from more than one
+fiber is a compile error at the point the second fiber could see it, naming `@` as the fix. A
+top-level `:=` binding follows the same rule.
+
+`T = @{ … }` declares an atomic type: its `:=` setters are the atomic operations, each
+running as one critical section under a readers-writer lock, `=` methods and field reads
+taking the read lock and `:=` setters the write lock. A bare field write from outside an
+atomic value is rejected — mutation goes only through its setters.
+
+`@name := …` declares an atomic binding: a lone scalar whose reassignment — including one
+that reads the binding's own current value, as in `count := count + 1` — executes atomically
+as a whole.
+
+The full specification is locked in
+[issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629).
 
 ## Implemented primitives
 

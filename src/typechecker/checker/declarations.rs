@@ -94,9 +94,17 @@ impl TypeChecker {
                 Item::FunctionDeclaration(declaration) if declaration.name == "^" => {
                     Self::check_entry_point_signature(declaration)?;
                 }
-                // Same reason: a top-level binding that has to be computed passes the
-                // check and then breaks codegen from the inside.
-                Item::VariableDeclaration(declaration) => Self::check_global_binding(declaration)?,
+                // A `:=` global is one mutable cell for the whole program; exporting it
+                // would let a write cross the module boundary, which nothing else in the
+                // language permits. Export a function that reads or writes it instead.
+                Item::VariableDeclaration(declaration)
+                    if declaration.mutable && declaration.exported =>
+                {
+                    return Err(TypeError::ExportedMutableGlobal {
+                        name: declaration.name.clone(),
+                        span: declaration.span.clone(),
+                    });
+                }
                 _ => {}
             }
         }
@@ -144,35 +152,6 @@ impl TypeChecker {
         } else {
             Err(TypeError::InvalidEntryPointSignature {
                 got: parameters,
-                span: declaration.span.clone(),
-            })
-        }
-    }
-
-    /// A top-level binding becomes a global, and a global's initializer has to be a
-    /// constant: there is no code that runs before `^` in which to compute one. So the
-    /// value may be a `Num`, `Bool` or `$` literal, or a function (a lambda binding is
-    /// emitted as a function, not as an initializer) — and nothing else.
-    ///
-    /// Checked here because codegen cannot report it. Codegen builds the value's
-    /// instructions wherever the builder was last left, so `x = 1 + 2` surfaces as the
-    /// internal `Failed to build add: UnsetPosition`, and `x = f(1)` appends a call to the
-    /// function emitted before it — leaving a block with no terminator that fails module
-    /// verification. Neither says anything about the binding, and both reach codegen only
-    /// after passing `quilon check`.
-    pub(super) fn check_global_binding(declaration: &VariableDeclaration) -> Result<(), TypeError> {
-        let constant = matches!(
-            declaration.value,
-            Expression::Number { .. }
-                | Expression::Bool { .. }
-                | Expression::Unit { .. }
-                | Expression::Lambda { .. }
-        );
-        if constant {
-            Ok(())
-        } else {
-            Err(TypeError::ComputedGlobalBinding {
-                name: declaration.name.clone(),
                 span: declaration.span.clone(),
             })
         }
