@@ -30,10 +30,8 @@ unsafe extern "C" {
 }
 
 /// Every range `__gc_add_root` has registered with Boehm and not yet removed, as
-/// `(low_address, high_address_plus_1)` pairs — plain `usize`s, since a `*mut c_void`
-/// is not `Send`. Tracked so [`remove_registered_roots`] can hand each one back to
-/// `GC_remove_roots` individually, rather than clearing Boehm's whole dynamic root set
-/// (which would also discard a range some future, unrelated caller registered).
+/// `(low_address, high_address_plus_1)` `usize` pairs (a `*mut c_void` is not `Send`), so
+/// [`remove_registered_roots`] can remove each one individually rather than the whole set.
 static ADDED_ROOTS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 
 /// Boehm's description of a thread's stack extent, filled in by `GC_get_stack_base`.
@@ -49,19 +47,17 @@ pub extern "C" fn __gc_init() {
     unsafe { GC_init() }
 }
 
-/// Register `bytes` bytes starting at `ptr` as an additional GC root.
-///
-/// Boehm scans `.data` but not memory the JIT maps at run time, so a computed global
-/// registers itself as a root here; harmless (redundant) under a native build.
+/// Register `bytes` bytes starting at `ptr` as an additional GC root: Boehm scans `.data`
+/// but not memory the JIT maps at run time, so a computed global registers itself here
+/// (harmless, redundant, under a native build).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
     if bytes <= 0 {
         return;
     }
-    // `GC_add_roots` takes an EXCLUSIVE upper bound, hence `ptr + bytes` and not `- 1`.
-    // SAFETY: `bytes` is that same global's own LLVM-computed size, so this stays within
-    // (one past) the allocation.
+    // `GC_add_roots` takes an exclusive upper bound. SAFETY: `bytes` is this global's own
+    // LLVM-computed size, so `ptr + bytes` stays within (one past) the allocation.
     let high = unsafe { ptr.add(bytes as usize) };
     unsafe { GC_add_roots(ptr, high) };
     ADDED_ROOTS
@@ -70,15 +66,10 @@ pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
         .push((ptr as usize, high as usize));
 }
 
-/// Remove every root [`__gc_add_root`] has registered and not yet removed.
-///
-/// A root it adds points into a computed global's storage, which for a JIT'd program
-/// is memory the execution engine owns and frees once that program's run returns —
-/// unlike a native build, where the same storage is ordinary process memory that lives
-/// as long as the process does. A host that runs many programs in one process (the
-/// in-process JIT) must call this after each run, once its exit code is in hand and
-/// before the next program allocates: otherwise a later collection walks a root left
-/// over from a finished program into memory the engine has since freed or reused.
+/// Remove every root [`__gc_add_root`] has registered and not yet removed. A root points
+/// into a JIT'd program's storage, which the execution engine frees once that run
+/// returns, so a host running many programs in one process must call this between runs —
+/// otherwise a later collection walks memory the engine has since freed or reused.
 pub fn remove_registered_roots() {
     let mut roots = ADDED_ROOTS.lock().unwrap_or_else(|p| p.into_inner());
     for (low, high) in roots.drain(..) {

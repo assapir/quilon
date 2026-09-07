@@ -392,14 +392,29 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// A `Num`/`Bool`/`$` literal or a lambda becomes an LLVM constant initializer
-    /// directly; anything else needs code to run, so it is zero-initialized here and
-    /// computed once inside `__ql_init` instead (`docs/variables.md`).
+    /// A `Num`/`Bool`/`$`/no-hole-`Text` literal or a lambda becomes an LLVM constant
+    /// initializer directly; anything else needs code to run, so it is zero-initialized
+    /// here and computed once inside `__ql_init` instead (`docs/variables.md`).
     fn generate_top_level_binding(
         &mut self,
         declaration: &VariableDeclaration,
         inferred_qty: &Type,
     ) -> Result<(), String> {
+        // A hole-free `Text` literal parses as `Expression::String` (`ast_parser/exprs.rs`).
+        // `generate_expression` would lower it via `build_text_constant`'s `insertvalue`
+        // instructions, not usable as a global initializer; `constant_text` builds the same
+        // struct as an actual LLVM constant instead.
+        if let Expression::String { value, .. } = &declaration.value {
+            let value = self.constant_text(value);
+            let global = self.module.add_global(
+                value.get_type(),
+                Some(AddressSpace::default()),
+                &declaration.name,
+            );
+            global.set_initializer(&value);
+            return Ok(());
+        }
+
         let constant = matches!(
             declaration.value,
             Expression::Number { .. }
@@ -429,15 +444,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         global.set_initializer(&zeroed(llvm_type));
 
         // Multiple computed globals share one `__ql_init` body, so each initializer resumes
-        // where the previous one left the builder, then restores the caller's position.
+        // where the previous one left the builder.
         let init_function = self
             .init_function
             .expect("`generate` declares `__ql_init` before any top-level item is emitted");
         let init_block = self.init_block.expect(
             "`generate` declares `__ql_init`'s entry block before any top-level item is emitted",
         );
-        let saved_function = self.current_function;
-        let saved_block = self.builder.get_insert_block();
         self.current_function = Some(init_function);
         self.builder.position_at_end(init_block);
 
@@ -464,10 +477,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // blocks past `init_block` — record wherever it left the builder so the NEXT
         // computed global's initializer, and the final `ret void`, continue from there.
         self.init_block = self.builder.get_insert_block();
-        self.current_function = saved_function;
-        if let Some(block) = saved_block {
-            self.builder.position_at_end(block);
-        }
+        self.current_function = None;
 
         Ok(())
     }

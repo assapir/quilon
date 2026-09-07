@@ -18,6 +18,7 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::source_map::SourceMap;
 use quilon::typechecker::{TypeChecker, TypeTable};
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
@@ -224,6 +225,44 @@ fn build_and_run_native_output(tag: &str, src: &str) -> std::process::Output {
 /// Serializes nothing — it only keeps concurrently-running tests from colliding on a
 /// temp-directory name (a single test binary runs its own tests in parallel).
 static SUBPROCESS_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Write `source` to a unique temp `.qn` file (named from `tag`, the pid, and a timestamp)
+/// and return its path.
+pub fn temp_ql(tag: &str, source: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "quilon_{tag}_{}_{}.qn",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, source).expect("write temp .qn");
+    path
+}
+
+/// Run `command`, feeding `input` to its stdin, and return `(exit code, captured stdout)`.
+/// Stdout stays RAW BYTES, not a lossy string decode, for a caller comparing bytes that are
+/// deliberately not valid UTF-8.
+pub fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u8>) {
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn quilon subprocess");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(input)
+        .expect("write to child stdin");
+    let output = child
+        .wait_with_output()
+        .expect("wait for quilon subprocess");
+    (output.status.code(), output.stdout)
+}
 
 /// Whether `tool` is on PATH, for gates that need a linker and skip gracefully without one.
 pub fn tool_available(tool: &str) -> bool {

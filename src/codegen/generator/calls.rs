@@ -505,7 +505,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///
     /// The byte constants are interned by content: a path repeats in every call site of a
     /// file, and at `OptimizationLevel::None` nothing merges duplicate globals later.
-    fn constant_text(&mut self, value: &str) -> BasicValueEnum<'ctx> {
+    pub(super) fn constant_text(&mut self, value: &str) -> BasicValueEnum<'ctx> {
         let bytes = match self.text_constants.get(value) {
             Some(existing) => *existing,
             None => {
