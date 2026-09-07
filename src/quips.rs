@@ -13,26 +13,34 @@ pub const LEXING: &[&str] = &[
     "lexing — splitting hairs",
     "lexing — every symbol counted, no keywords found",
     "lexing — the enemy's gate is down",
+    "lexing — watch for the third",
+    "lexing — every bugger accounted for",
 ];
 
 pub const PARSING: &[&str] = &[
     "parsing — reading between the lines",
     "parsing — seventeen levels of precedence, one at a time",
     "parsing — reading Locke and Demosthenes",
+    "parsing — one mind, two questions",
+    "parsing — separating raman from varelse",
+    "parsing — reading the game behind the game",
 ];
 
 pub const RESOLVING: &[&str] = &[
     "resolving — following every `<<` home",
     "resolving — calling in the jeesh",
     "resolving — the ansible is up",
+    "resolving — finding the right toon",
+    "resolving — one army, many pieces",
 ];
 
 pub const CHECKING: &[&str] = &[
     "checking — trust, but verify",
     "checking — Ok or NotOk, nothing in between",
     "checking — Battle School, final exam",
-    "checking — a Speaker tells the truth, kindly",
+    "checking — there is no teacher but the enemy",
     "checking — Petra-precise, arm by arm",
+    "checking — losing is a powerful teacher",
     "checking — every branch gets its day in court",
 ];
 
@@ -42,6 +50,7 @@ pub const GENERATING: &[&str] = &[
     "generating — Dragon Army takes the field",
     "generating — one hive queen, a thousand workers",
     "generating — Command School: one seat, the whole fleet",
+    "generating — the Little Doctor, but smaller",
     "generating — assembling the pieces LLVM asked for",
 ];
 
@@ -50,7 +59,8 @@ pub const LINKING: &[&str] = &[
     "linking — all the pieces, one piece",
     "linking — the game was real",
     "linking — the ansible finds every module",
-    "linking — Jane never misses a call",
+    "linking — no light-years between modules",
+    "linking — the hive is connected",
     "linking — the last handshake before it runs",
 ];
 
@@ -63,8 +73,7 @@ pub const SUCCESS: &[&str] = &[
     "Ok(binary)",
     "the game was real, and it compiled",
     "the wire is warm and waiting",
-    "Bean would have found a shorter way. This one works.",
-    "Mazer's old trick, still works",
+    "Mazer would have seen it coming",
     "another clean compile, filed and forgotten",
 ];
 
@@ -76,6 +85,7 @@ pub const TESTS_PASSED: &[&str] = &[
     "Battle School: perfect record",
     "trust, verified",
     "Dragon Army, undefeated",
+    "the enemy has been understood",
     "a clean run, nothing to report",
 ];
 
@@ -87,6 +97,7 @@ pub const TESTS_FAILED: &[&str] = &[
     "the enemy's gate is that way",
     "expected, meet got",
     "the battle room has notes",
+    "Dragon Army has lost an arm",
     "read the frame; it says where",
 ];
 
@@ -100,6 +111,7 @@ pub const BANNER: &[&str] = &[
     "not the first design, not the second — call it Third",
     "Graff always had a plan — pick a subcommand",
     "a compiler that answers when spoken to",
+    "welcome to Battle School",
 ];
 
 /// One line from `list`. The same seed picks the same line from every list, so a run

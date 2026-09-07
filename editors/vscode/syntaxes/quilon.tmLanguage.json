@@ -4,20 +4,26 @@
   "scopeName": "source.quilon",
   "patterns": [
     { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#numbers" },
-    { "include": "#constants" },
-    { "include": "#module-lines" },
-    { "include": "#entry-point" },
-    { "include": "#unit" },
-    { "include": "#builtin-types" },
-    { "include": "#type-names" },
-    { "include": "#function-calls" },
-    { "include": "#collection-fences" },
-    { "include": "#operators" },
-    { "include": "#punctuation" }
+    { "include": "#expressions" }
   ],
   "repository": {
+    "expressions": {
+      "comment": "Every non-comment top-level rule, factored out so an interpolation hole (see #strings below) can include this same set without also re-admitting #comments — a hole is an expression, and `~` starts a comment only at statement level, never inside one (src/lexer/token.rs::scan_hole_end treats `~` as ordinary hole content).",
+      "patterns": [
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#constants" },
+        { "include": "#module-lines" },
+        { "include": "#entry-point" },
+        { "include": "#unit" },
+        { "include": "#builtin-types" },
+        { "include": "#type-names" },
+        { "include": "#function-calls" },
+        { "include": "#collection-fences" },
+        { "include": "#operators" },
+        { "include": "#punctuation" }
+      ]
+    },
     "comments": {
       "patterns": [
         {
@@ -31,6 +37,7 @@
       ]
     },
     "strings": {
+      "comment": "A hole is any expression between a pair of backticks (docs/types/text.md#string-interpolation-and-the-render-operator-). `` (doubled) is a literal backtick and opens no hole, so it's listed before the hole-begin rule below — at the same starting position, TextMate's first-listed rule wins regardless of match length. Inside a hole, `patterns` includes #expressions (everything but #comments — a hole is an expression, and `~` never opens a comment inside one), so a nested \"…\" is an ordinary (possibly further-nested) string and a `\"` there cannot close the outer string.",
       "name": "string.quoted.double.quilon",
       "begin": "\"",
       "end": "\"",
@@ -43,7 +50,23 @@
       "patterns": [
         {
           "name": "constant.character.escape.quilon",
+          "match": "``"
+        },
+        {
+          "name": "constant.character.escape.quilon",
           "match": "\\\\."
+        },
+        {
+          "name": "meta.embedded.interpolation.quilon",
+          "begin": "`",
+          "end": "`",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.interpolation.begin.quilon" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.interpolation.end.quilon" }
+          },
+          "patterns": [{ "include": "#expressions" }]
         }
       ]
     },
