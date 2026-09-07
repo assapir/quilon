@@ -165,8 +165,8 @@ that inner occurrence.
 The tables above are the supported surface; the records' other methods are implementation
 detail.
 
-See `examples/http_parse.qn` for reading a reply offline, `examples/http_get.qn` for a live
-GET, and `examples/http_headers.qn` for request headers, query params, and OPTIONS/PATCH.
+See `examples/http.qn` for a live walkthrough: a GET and a transport failure, request
+options and headers, params, every request constructor, and `Method`'s own methods.
 
 The parser's and serialiser's edge cases are covered by the suite that lives in
 `corelib/http.qn` itself, beside the code it tests: the public surface first, the internals it

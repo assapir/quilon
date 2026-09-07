@@ -1,9 +1,23 @@
-~ Request headers, query params, and every constructor of the `core.http` client.
-~ On success the program exits 0.
+~ A live walkthrough of the `core.http` client: a GET matched to a Response, a transport
+~ failure, request options, headers, params, every request constructor (both overloads),
+~ and Method's own methods. On success the program exits 0.
 ~ NOTE: this makes LIVE network calls to example.com:80 when run.
 << core.http
 
 ^ = () -> $ => <
+  ~ A plain GET, matched to its Response, checking status, a non-empty body, and headers.
+  result = http.Request.get("http://example.com/").send()
+  assert(result, isOk())
+  response = result ?
+    | Ok(page) => page
+    | NotOk(_) => http.Response { raw = "" }
+  assert(response.status(), equals(200))
+  assert(response.body().size > 0, equals(true))
+  assert(response.headers().get("Content-Type"), isOk())
+
+  ~ A transport failure comes back as NotOk, not a crash.
+  assert(http.Request.get("http://127.0.0.1:1/").send(), isNotOk())
+
   ~ Build options with headers added one at a time, then a whole map at once.
   options := http.RequestOptions.default()
   options.headers.add("X-Trace", "abc123")
@@ -17,14 +31,12 @@
   assert(request.headers().has("accept"), equals(true))
   assert(request.headers().has("x-absent"), equals(false))
 
-  ~ The one-argument constructor sends a HEAD with no extra headers.
+  ~ A HEAD sent live; the reply's own headers, read the same way.
   headResult = http.Request.head("http://example.com/").send()
   assert(headResult, isOk())
   headResponse = headResult ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
-
-  ~ The live reply's own headers, read the same way.
   assert(headResponse.headers().get("content-type"), isOk())
   assert(headResponse.headers().all("content-type").size > 0, equals(true))
   assert(headResponse.headers().names().size > 0, equals(true))
@@ -47,24 +59,32 @@
   ~ One body, reused for every body-bearing constructor below.
   body = http.Body { content = "{}", contentType = "application/json" }
 
-  ~ An OPTIONS request sent live: example.com answers, whatever status it picks.
-  assert(http.Request.options("http://example.com/").send(), isOk())
-
-  ~ Every remaining constructor sent live: each reaches example.com and gets some reply.
+  ~ Every constructor, both overloads, sent live: each reaches example.com and gets a reply.
+  assert(http.Request.get("http://example.com/").send(), isOk())
+  assert(http.Request.get("http://example.com/", options).send(), isOk())
+  assert(http.Request.head("http://example.com/").send(), isOk())
+  assert(http.Request.head("http://example.com/", options).send(), isOk())
   assert(http.Request.delete("http://example.com/").send(), isOk())
-  assert(http.Request.put("http://example.com/", body).send(), isOk())
-  assert(http.Request.patch("http://example.com/", body).send(), isOk())
-  assert(http.Request.query("http://example.com/", body).send(), isOk())
-
-  ~ The three-argument POST carries explicit options alongside its body.
+  assert(http.Request.delete("http://example.com/", options).send(), isOk())
+  assert(http.Request.options("http://example.com/").send(), isOk())
+  assert(http.Request.options("http://example.com/", options).send(), isOk())
+  assert(http.Request.post("http://example.com/", body).send(), isOk())
   postResult = http.Request.post("http://example.com/", body, options).send()
   assert(postResult, isOk())
   postResponse = postResult ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
   assert(postResponse.status() > 0, equals(true))
+  assert(http.Request.put("http://example.com/", body).send(), isOk())
+  assert(http.Request.put("http://example.com/", body, options).send(), isOk())
+  assert(http.Request.patch("http://example.com/", body).send(), isOk())
+  assert(http.Request.patch("http://example.com/", body, options).send(), isOk())
+  assert(http.Request.query("http://example.com/", body).send(), isOk())
+  assert(http.Request.query("http://example.com/", body, options).send(), isOk())
 
-  ~ PATCH carries a body the same way POST and PUT do.
+  ~ A body-bearing Method's own token and carriesBody, against a nullary Method's.
   patched = http.Patch(body)
   assert(patched.token(), equals("PATCH"))
+  assert(patched.carriesBody(), equals(true))
+  assert(http.Get.carriesBody(), equals(false))
 >
