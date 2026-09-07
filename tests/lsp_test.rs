@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use quilon::lexer::ROOT_FILE;
 use quilon::lsp::analysis::{
     self, CompletionKind, SemanticTokenKind, TestLensKind, check_text, completions_at,
-    definition_at, hover_at, is_identifier, references_at, semantic_tokens, test_lenses,
+    definition_at, hover_at, is_identifier, link_text, references_at, semantic_tokens, test_lenses,
 };
 
 /// A unique temporary directory for a test that needs real files (import resolution).
@@ -226,6 +226,55 @@ fn definition_resolves_across_a_file_import() {
     assert_eq!(definition.start, offset_of(module_text, ">> add", 0));
 
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A program with a type error confined to one line — `doubleUp("kumquat")` — that has
+/// nothing to do with the well-typed call and the parameter right above it. Shared by the
+/// direct-analysis test below and the protocol-level test further down, both checking that
+/// definition/references/rename still answer over this document.
+fn text_with_an_unrelated_type_error() -> &'static str {
+    "<< core.io\n\
+     doubleUp = (n :: Num) -> Num => < n * 2 >\n\
+     ^ = () -> Num => <\n  \
+     io.print(doubleUp(4))\n  \
+     oopsie = doubleUp(\"kumquat\")\n  \
+     0\n>\n"
+}
+
+/// A type error on one call must not stop go-to-definition or find-references from
+/// resolving a name on an unrelated line — `link_text` stops before the type check that
+/// `check_text` runs, so it still answers over the parsed and import-linked program.
+#[test]
+fn definition_and_references_resolve_past_an_unrelated_type_error() {
+    let text = text_with_an_unrelated_type_error();
+    assert!(
+        check_text(Path::new("buffer.qn"), text).is_err(),
+        "the mismatched argument must still be reported"
+    );
+    let linked = link_text(Path::new("buffer.qn"), text)
+        .expect("the document still lexes, parses, and links");
+
+    // `doubleUp` in the first, well-typed call resolves to the top-level function.
+    let definition = definition_at(&linked.program, offset_of(text, "doubleUp(4)", 0))
+        .expect("doubleUp resolves");
+    assert_eq!(definition.start, offset_of(text, "doubleUp = ", 0));
+
+    // `doubleUp` in the mismatched call itself resolves too — the argument that fails to
+    // type-check is not on the name being looked up.
+    let definition = definition_at(&linked.program, offset_of(text, "doubleUp(\"kumquat\")", 0))
+        .expect("doubleUp resolves from the erroring call");
+    assert_eq!(definition.start, offset_of(text, "doubleUp = ", 0));
+
+    // `n` in the parameter's own body resolves to the parameter.
+    let definition =
+        definition_at(&linked.program, offset_of(text, "n * 2", 0)).expect("n resolves");
+    assert_eq!(definition.start, offset_of(text, "n :: Num", 0));
+
+    // References to `n` cover its declaration and its one use.
+    assert_eq!(
+        reference_starts(&linked.program, text, offset_of(text, "n * 2", 0)),
+        vec![offset_of(text, "n :: Num", 0), offset_of(text, "n * 2", 0)]
+    );
 }
 
 // --- Find references ---------------------------------------------------------
@@ -836,6 +885,122 @@ fn rename_on_an_imported_name_answers_an_error_naming_its_file() {
     served.join().expect("the server thread joins");
 
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Definition, references, and rename all answer over a document with a type error on an
+/// unrelated line, while hover — which needs the type table a failing check never
+/// produces — still answers null on that same document.
+#[test]
+fn navigation_answers_on_a_document_with_an_unrelated_type_error() {
+    use serde_json::{Value, json};
+
+    let text = text_with_an_unrelated_type_error();
+    let uri = "file:///buffer.qn";
+
+    let (client, served) = started_session();
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    let diagnostics = lsp_diagnostics_of(lsp_receive(&client));
+    assert_eq!(diagnostics.len(), 1, "the mismatched argument is reported");
+
+    let function_line = text
+        .lines()
+        .position(|line| line.starts_with("doubleUp = "))
+        .expect("the function's own line") as u32;
+    let call_line = text
+        .lines()
+        .position(|line| line.contains("doubleUp(4)"))
+        .expect("the well-typed call's own line") as u32;
+    let call_character = text
+        .lines()
+        .nth(call_line as usize)
+        .unwrap()
+        .find("doubleUp(4)")
+        .unwrap() as u32;
+    let parameter_character = text
+        .lines()
+        .nth(function_line as usize)
+        .unwrap()
+        .find("n * 2")
+        .unwrap() as u32;
+
+    // Go to definition on the well-typed call resolves to the top-level function.
+    client
+        .sender
+        .send(lsp_request(
+            1,
+            "textDocument/definition",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": call_line, "character": call_character } }),
+        ))
+        .unwrap();
+    let definition = lsp_response(lsp_receive(&client));
+    assert_eq!(definition["range"]["start"]["line"], function_line);
+    assert_eq!(definition["range"]["start"]["character"], 0);
+
+    // References on the parameter `n`: its own declaration and its one use.
+    client
+        .sender
+        .send(lsp_request(
+            2,
+            "textDocument/references",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": function_line, "character": parameter_character },
+                "context": { "includeDeclaration": true } }),
+        ))
+        .unwrap();
+    let locations = lsp_response(lsp_receive(&client));
+    let locations = locations.as_array().expect("a location array");
+    assert_eq!(locations.len(), 2);
+
+    // Renaming `n` answers a WorkspaceEdit rewriting both spots.
+    client
+        .sender
+        .send(lsp_request(
+            3,
+            "textDocument/rename",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": function_line, "character": parameter_character },
+                "newName": "count" }),
+        ))
+        .unwrap();
+    let edit = lsp_response(lsp_receive(&client));
+    let edits = edit["changes"][uri]
+        .as_array()
+        .expect("edits for the document");
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().all(|edit| edit["newText"] == "count"));
+
+    // Hover, unlike the three above, needs the type table — it answers null on this same
+    // document.
+    client
+        .sender
+        .send(lsp_request(
+            4,
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": function_line, "character": parameter_character } }),
+        ))
+        .unwrap();
+    let hover = lsp_response(lsp_receive(&client));
+    assert!(hover.is_null());
+
+    client
+        .sender
+        .send(lsp_request(5, "shutdown", Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
 }
 
 /// A `Num + Text` overload mismatch — `Code::NoMatchingOverload` (`QN311`) — carries the

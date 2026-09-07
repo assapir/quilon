@@ -156,6 +156,15 @@ All notable changes to Quilon are documented here.
 
 - **VS Code: a `"` inside a string's interpolation hole keeps the string open, and a hole
   gets its own syntax-highlighting scope.** See the extension's own changelog. Closes #400.
+
+- **Go to definition, find references, and rename answer on a document with a type error
+  anywhere in it.** All three ran `analysis::check_text(...).ok()?`, so a type error on any
+  line of the open document — not just one touching the name under the cursor — collapsed
+  the answer to `null`. Each now reads the parsed, import-linked document instead of the
+  fully type-checked one, so only a document that fails to even parse or link goes
+  unanswered; hover is unchanged, still answering only when the document type-checks. See
+  `docs/tooling/language-server.md`. Closes #393.
+
 - **A `:=` global's write now persists across calls.** Reassigning a top-level `:=`
   binding from inside a function stored into a fresh local slot instead of the global —
   the write was lost on return, so a bumping function called twice returned 11, not 12.

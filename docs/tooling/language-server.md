@@ -5,9 +5,11 @@ title: "Language server"
 # Language server
 
 `quilon lsp` serves the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/)
-over standard input and output. Each answer is one full run of the compiler front end
-(lex → parse → resolve `<<` imports → type-check) over the open document's text as the
-editor last sent it. Imported files are read from disk.
+over standard input and output. Each answer runs the compiler front end (lex → parse →
+resolve `<<` imports → type-check) over the open document's text as the editor last sent
+it. Imported files are read from disk. Go to definition, find references, and rename read
+only the parsed and import-linked document, stopping before the type check; the rest of
+the capabilities below read the full run, type check included.
 
 ```bash
 quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
@@ -20,25 +22,30 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   open document, with the imported file's position in the message. A test file (top-level
   `describe` blocks and no `^`) is checked with its blocks compiled — the code `quilon test`
   runs — so a failure inside a test body is reported.
-- **Go to definition** on an identifier yields the declaration that binds it: a
-  parameter, a block-local binding, a pattern binding, a top-level function or type, or a
-  declaration in an imported file (the location points into that file). A name declared in
-  a bundled module (`core.io`, `core.test`, …) yields no location.
-- **Find references** on an identifier — or on the name in its own declaration — yields
-  every place that binds or reads it: a parameter's declaration and every use in its
-  function, a top-level function's or type's declaration (every member, for an overload
-  set) and every use across the document, a block-local's or pattern binding's declaration
-  and every use in its own scope. Both cover the names an identifier binds: parameters,
-  block-locals, pattern bindings, and top-level functions and types.
-- **Rename** on the same targets as find references rewrites the declaration and every use
-  in one edit. The new name must be a single bare identifier; a target declared in another
-  file answers with a message naming that file, so the rename happens there instead.
+- **Go to definition**, **find references**, and **rename** answer over the parsed and
+  import-linked document — a type error anywhere in the file, related or not to the name
+  under the cursor, does not stop them.
+  - **Go to definition** on an identifier yields the declaration that binds it: a
+    parameter, a block-local binding, a pattern binding, a top-level function or type, or a
+    declaration in an imported file (the location points into that file). A name declared
+    in a bundled module (`core.io`, `core.test`, …) yields no location.
+  - **Find references** on an identifier — or on the name in its own declaration — yields
+    every place that binds or reads it: a parameter's declaration and every use in its
+    function, a top-level function's or type's declaration (every member, for an overload
+    set) and every use across the document, a block-local's or pattern binding's
+    declaration and every use in its own scope. Both cover the names an identifier binds:
+    parameters, block-locals, pattern bindings, and top-level functions and types.
+  - **Rename** on the same targets as find references rewrites the declaration and every
+    use in one edit. The new name must be a single bare identifier; a target declared in
+    another file answers with a message naming that file, so the rename happens there
+    instead.
 - **Hover** yields the inferred type of the smallest expression covering the cursor, from
   the type checker's table: `Num`, `[]Text`, `(Num) -> Num`, a record or sum type's name.
   Over a matcher inside `assert`/`expect` — `equals(...)`, `contains(...)`, `not(...)`,
   `isOk()`, `isNotOk()` — it yields the matcher's own signature and the type it applies to
   instead: `isOk()  matcher over Result`, `equals(Num)  matcher over Num`,
-  `not(equals(Num))  matcher over Num`.
+  `not(equals(Num))  matcher over Num`. Hover answers only when the document type-checks;
+  a type error anywhere in the file answers null.
 - **Completion** (triggered on `.`, and answered on every request regardless of what
   triggered it) offers, depending on where the cursor sits:
   - **A bare name.** Locals and parameters of the enclosing blocks (only bindings ABOVE
