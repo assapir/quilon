@@ -41,8 +41,8 @@ output (`print`/`write`), and native calls. Values launched before they are forc
 
 **Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the block
 joins every launch it made before returning, and a launch is never cancelled — every launch
-settles. Once every launch has settled, a fault among them propagates out of the block: the
-first fault by launch order, reporting its launch site.
+settles. Once every launch has settled, the faults among them propagate out of the block:
+every fault is reported, in launch order, each naming its launch site.
 
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.
