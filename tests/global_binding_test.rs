@@ -10,9 +10,24 @@
 
 mod common;
 use common::{
-    assert_exit, assert_type_error, assert_type_error_code, build_and_run_native, tool_available,
+    assert_exit, assert_exit_linked_from, assert_type_error, assert_type_error_code,
+    build_and_run_native, tool_available,
 };
 use quilon::diagnostic::codes::Code;
+use std::path::Path;
+
+#[test]
+fn a_module_private_mutable_global_is_written_by_the_module_itself() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let src = concat!(
+        "<< \"turnstile.qn\"\n",
+        "^ = () -> Num => <\n",
+        "  turnstile.admit()\n",
+        "  turnstile.admit()\n",
+        ">"
+    );
+    assert_exit_linked_from(src, &fixtures, 2);
+}
 
 #[test]
 fn a_mutable_global_survives_across_calls() {

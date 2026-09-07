@@ -65,4 +65,4 @@ boundary. A function that reads or writes the cell is the export.
 >> counter := 0   ~ error[QN329]: mutable global exported
 ```
 
-(See `examples/globals.qn` and `examples/global_computed.qn`.)
+(See `examples/globals.qn`.)
