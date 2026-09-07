@@ -93,14 +93,15 @@ linkedGreeting = "linked " + "again"
   written = io.write("bytes", io.stdout)
   assert(written, equals(5))
 
-  ~ The test registry, which `core.test`'s describe/it record through, is corelib-only
-  ~ surface now (a bare `__test_*` name, undefined from a user file — see
-  ~ `tests/intrinsic_privacy_test.rs`), so this reaches every registry intrinsic through
-  ~ `core.test`'s own wrappers instead of calling them directly. They are ordinary NESTED
-  ~ calls here, not a top-level test block, so `quilon build` still compiles and links
-  ~ them like any other function call.
+  ~ The test registry — the RENDERING half of the harness's event sink — is corelib-only
+  ~ surface now (a bare `__test_*` name is undefined from a user file — see
+  ~ `tests/intrinsic_privacy_test.rs`), so this reaches every registry intrinsic that
+  ~ still exists through `core.test`'s own wrappers. `nestingDepth`/`casesPassed`/
+  ~ `casesFailed` moved into `core.test`'s own `:=` globals and call no intrinsic
+  ~ anymore, so they are not exercised here. These are ordinary NESTED calls, not a
+  ~ top-level test block, so `quilon build` still compiles and links them like any
+  ~ other function call.
   test.describe("group", () => <
-    assert(test.nestingDepth(), equals(1))
     test.it("case", () => <
       assert(test.caseFailing(), equals(false))
     >)
@@ -113,8 +114,6 @@ linkedGreeting = "linked " + "again"
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")
 
-  assert(test.casesPassed() >= 1, equals(true))
-  assert(test.casesFailed(), equals(0))
   assert(test.reportSummary(), equals(0))
 
   ~ __text_cmp and __text_length.

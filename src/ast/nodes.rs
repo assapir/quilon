@@ -405,22 +405,16 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         parameters: &[Type::Num],
         ret: Type::Bool,
     },
-    // The test registry (see `is_test_registry_intrinsic`): the harness's event sink and
-    // reporter, which `core.test`'s `describe`/`it` and the provided `expect` drive. Enter
-    // (by name, reporting the group) and leave a `describe` group, each yielding the
-    // resulting nesting depth; read that depth without moving it; ask whether a group or a
-    // case is selected for the run; ask whether the running case has already failed; close a
-    // case by name, reporting it and yielding its depth; read the two totals back; and
-    // report the summary, yielding the run's status. `core.test` wraps the read-only ones as
-    // named `.qn` functions, which is what a case reads.
+    // The test registry (see `is_test_registry_intrinsic`): the RENDERING half of the
+    // harness's event sink, which `core.test`'s `describe`/`it` and the provided `expect`
+    // drive. The run's own state — the counters and the open `describe` path — lives in
+    // `:=` globals in `corelib/test.qn`; each of these takes what it needs to render (a
+    // name, the joined path, a depth, a pass/fail flag) as an argument instead of reading it
+    // itself, and reports the event the way the chosen reporter (`--reporter human|json`)
+    // asks. `core.test` wraps the ones a case may read as named `.qn` functions.
     BuiltinOverload {
         name: "__test_suite_enter",
-        parameters: &[Type::Text],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
-        name: "__test_suite_leave",
-        parameters: &[],
+        parameters: &[Type::Text, Type::Text, Type::Num],
         ret: Type::Num,
     },
     BuiltinOverload {
@@ -434,33 +428,18 @@ pub const BUILTIN_OVERLOADS: &[BuiltinOverload] = &[
         ret: Type::Num,
     },
     BuiltinOverload {
-        name: "__test_depth",
-        parameters: &[],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
         name: "__test_case_failing",
         parameters: &[],
         ret: Type::Num,
     },
     BuiltinOverload {
         name: "__test_case_finish",
-        parameters: &[Type::Text],
+        parameters: &[Type::Text, Type::Text, Type::Num, Type::Num],
         ret: Type::Num,
     },
     BuiltinOverload {
         name: "__test_summary",
-        parameters: &[],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
-        name: "__test_passed",
-        parameters: &[],
-        ret: Type::Num,
-    },
-    BuiltinOverload {
-        name: "__test_failed",
-        parameters: &[],
+        parameters: &[Type::Num, Type::Num],
         ret: Type::Num,
     },
 ];
@@ -564,10 +543,11 @@ pub fn matcher_variant(matcher: &str) -> Option<&'static str> {
 /// The prefix marking a test-registry primitive.
 const TEST_REGISTRY_PREFIX: &str = "__test_";
 
-/// Whether `name` is one of the test registry's primitives — the event sink and reporter
-/// behind `core.test`'s `describe` and `it`, listed among the [`BUILTIN_OVERLOADS`] above.
-/// The registry counts, nests, and renders each event per the reporter `quilon test` chose
-/// (see `docs/corelib/test/README.md`).
+/// Whether `name` is one of the test registry's primitives — the rendering half of the
+/// event sink behind `core.test`'s `describe` and `it`, listed among the
+/// [`BUILTIN_OVERLOADS`] above. The counting and nesting live in `.qn` globals; the
+/// registry only renders each event per the reporter `quilon test` chose (see
+/// `docs/corelib/test/README.md`).
 ///
 /// Every one takes `Text` and `Num` arguments only and yields a `Num`, which is what lets
 /// codegen lower the whole family through this one predicate and

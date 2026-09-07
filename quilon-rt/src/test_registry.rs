@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! The test harness's event sink and reporter, driven by `core.test`'s `describe` and `it`
-//! and by the compiler-provided `expect`. It counts and nests, and renders each event the
-//! way the active [`Reporter`] asks — the human report `docs/corelib/test/README.md` shows,
-//! or one JSON object per line for a tool.
+//! The test harness's event sink, driven by `core.test`'s `describe` and `it` and by the
+//! compiler-provided `expect`. This half only RENDERS each event the way the active
+//! [`Reporter`] asks — the human report `docs/corelib/test/README.md` shows, or one JSON
+//! object per line for a tool — taking the name, path, depth, and pass/fail flag it needs
+//! as arguments. The run's own state — the counters and the open `describe` path — lives in
+//! `:=` globals in `corelib/test.qn`, one program-wide cell each: `quilon test` runs one
+//! suite per process and the JIT harness runs each program in its own module, so a global
+//! is already per run and needs no lock.
 //!
-//! The state lives here until it moves into `:=` globals in `corelib/test.qn`. It is per
-//! thread, which keeps parallel runs in one process independent.
+//! Three thread-locals stay here, still per-thread (which keeps parallel runs in one
+//! process independent), because nothing in `.qn` writes them:
+//! - [`CASE_FAILURE`] is written from the compiler-emitted `__expect_failed` path
+//!   (`crate::report`), not from `describe`/`it`.
+//! - [`REPORTER`] and [`SELECTION`] are written by the `quilon test` CLI before the run
+//!   starts, through [`set_reporter`]/[`set_selection`]; the harness itself never sees them.
 //!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
 //! as passed or failed. What ENDS a case at its first failing `expect` is a different
 //! mechanism — [`__test_case_run_guarded`] runs the case's body on its own nested fiber
 //! (`crate::scheduler::run_case_guarded`), which a failing `expect` suspends with the abort
 //! marker (`crate::scheduler::abort_current_case`) to end right there.
-//!
-//! The runner (`quilon test`) configures a run before it starts, through [`set_reporter`]
-//! and [`set_selection`]; the harness never sees the CLI.
 
 use std::cell::{Cell, RefCell};
 use std::os::raw::c_void;
@@ -63,16 +68,15 @@ enum Event<'a> {
 }
 
 thread_local! {
-    /// The names of the open `describe` groups, outermost first.
-    static PATH: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// Cases that ran with no failing `expect`.
-    static PASSED: Cell<i64> = const { Cell::new(0) };
-    /// Cases that had at least one failing `expect`.
-    static FAILED: Cell<i64> = const { Cell::new(0) };
-    /// What the running case's first failing `expect` recorded, if any.
+    /// What the running case's first failing `expect` recorded, if any. Native — see the
+    /// module docs — because it is written from the compiler-emitted `__expect_failed` path,
+    /// not from `.qn`.
     static CASE_FAILURE: RefCell<Option<Failure>> = const { RefCell::new(None) };
+    /// Native — see the module docs — because the `quilon test` CLI writes it before the
+    /// run starts.
     static REPORTER: Cell<Reporter> = const { Cell::new(Reporter::Human) };
-    /// The `/`-joined paths the runner selected; empty selects everything.
+    /// The `/`-joined paths the runner selected; empty selects everything. Native — see the
+    /// module docs — because the `quilon test` CLI writes it before the run starts.
     static SELECTION: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -85,22 +89,6 @@ pub fn set_reporter(reporter: Reporter) {
 /// names joined by `/`. An empty list runs everything.
 pub fn set_selection(paths: Vec<String>) {
     SELECTION.with(|selection| *selection.borrow_mut() = paths);
-}
-
-/// The path of `name` under the open groups.
-fn path_to(name: &str) -> String {
-    PATH.with(|path| {
-        let mut full = path.borrow().join("/");
-        if !full.is_empty() {
-            full.push('/');
-        }
-        full.push_str(name);
-        full
-    })
-}
-
-fn depth() -> usize {
-    PATH.with(|path| path.borrow().len())
 }
 
 /// Whether the selected path `selected` names `path` itself or a suite above it.
@@ -132,55 +120,42 @@ fn colored(text: &str, color: &str) -> String {
     }
 }
 
-/// Open a `describe` group named by `name`/`length`, report it, and yield the resulting
-/// nesting depth (1 for the outermost).
+/// Report a `describe` group opening: `name` (indented by `depth`) for a person, or
+/// `path`/`depth` as a `suite` event for a tool. `depth`/`path` are `.qn`'s own — the count
+/// of groups already open, and `name` joined onto them — computed before it pushes `name`
+/// onto its `openSuiteNames` global.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `name` is null or points to `length` readable bytes.
+/// `name`/`path` are each null or point to their given length of readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_suite_enter(name: *const u8, length: i64) -> f64 {
-    let name = text_str(name, length).into_owned();
+pub extern "C" fn __test_suite_enter(
+    name: *const u8,
+    name_length: i64,
+    path: *const u8,
+    path_length: i64,
+    depth: f64,
+) -> f64 {
+    let name = text_str(name, name_length);
+    let path = text_str(path, path_length);
+    let depth = depth as usize;
     match REPORTER.with(Cell::get) {
-        Reporter::Human => print_line(&format!("{}{name}", "  ".repeat(depth()))),
-        Reporter::Json => emit(&Event::Suite {
-            path: &path_to(&name),
-            depth: depth(),
-        }),
+        Reporter::Human => print_line(&format!("{}{name}", "  ".repeat(depth))),
+        Reporter::Json => emit(&Event::Suite { path: &path, depth }),
     }
-    PATH.with(|path| {
-        path.borrow_mut().push(name);
-        path.borrow().len() as f64
-    })
+    0.0
 }
 
-/// How many `describe` groups are open right now — 0 outside any group, 1 inside an
-/// outermost one. Reads the depth without moving it, which is what a case asking for the
-/// run's state needs (`enter`/`leave` are the harness's, and they move it).
-#[unsafe(no_mangle)]
-pub extern "C" fn __test_depth() -> f64 {
-    depth() as f64
-}
-
-/// Close the innermost `describe` group; yields the remaining nesting depth. An unbalanced
-/// close is a no-op, so the depth cannot go negative.
-#[unsafe(no_mangle)]
-pub extern "C" fn __test_suite_leave() -> f64 {
-    PATH.with(|path| {
-        path.borrow_mut().pop();
-        path.borrow().len() as f64
-    })
-}
-
-/// Whether the group `name` would open is selected: it is (or lies under) a selected path,
-/// or a selected path lies under it. 1 or 0; 1 always when nothing was selected.
+/// Whether the group at `path` is selected: it is (or lies under) a selected path, or a
+/// selected path lies under it. 1 or 0; 1 always when nothing was selected. `path` is
+/// `.qn`'s own — the open `describe` names joined with the group's, in report-path syntax.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `name` is null or points to `length` readable bytes.
+/// `path` is null or points to `length` readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_suite_selected(name: *const u8, length: i64) -> f64 {
-    let path = path_to(&text_str(name, length));
+pub extern "C" fn __test_suite_selected(path: *const u8, length: i64) -> f64 {
+    let path = text_str(path, length);
     SELECTION.with(|selection| {
         let selection = selection.borrow();
         let holds_a_selection = selection.iter().any(|selected| selects(&path, selected));
@@ -188,15 +163,15 @@ pub extern "C" fn __test_suite_selected(name: *const u8, length: i64) -> f64 {
     })
 }
 
-/// Whether the case `name` is selected: it is a selected path, or lies under one. 1 or 0;
-/// 1 always when nothing was selected.
+/// Whether the case at `path` is selected: it is a selected path, or lies under one. 1 or 0;
+/// 1 always when nothing was selected. `path` is `.qn`'s own, in report-path syntax.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `name` is null or points to `length` readable bytes.
+/// `path` is null or points to `length` readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_case_selected(name: *const u8, length: i64) -> f64 {
-    let path = path_to(&text_str(name, length));
+pub extern "C" fn __test_case_selected(path: *const u8, length: i64) -> f64 {
+    let path = text_str(path, length);
     SELECTION.with(|selection| {
         let selection = selection.borrow();
         f64::from(selection.is_empty() || covered(&path, &selection))
@@ -243,53 +218,50 @@ pub extern "C" fn __test_case_run_guarded(function: *const c_void, environment: 
     crate::scheduler::run_case_guarded(function, environment);
 }
 
-/// Close the case named by `name`/`length` that just ran: tally it as passed or failed,
-/// report it, clear the mark for the next one, and yield the depth it sits at.
+/// Report the case named by `name`/`length` that just ran, at report-path `path` and
+/// nesting `depth`, `failed` (0/1) telling human report and JSON `status` alike which way
+/// it went. Clears [`CASE_FAILURE`] for the next case, taking the message/file/line a
+/// failure carries into the JSON event; `.qn` already read `failed` off the same mark
+/// (through [`__test_case_failing`]) before tallying its own counters and calling here.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `name` is null or points to `length` readable bytes.
+/// `name`/`path` are each null or point to their given length of readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_case_finish(name: *const u8, length: i64) -> f64 {
-    let name = text_str(name, length);
+pub extern "C" fn __test_case_finish(
+    name: *const u8,
+    name_length: i64,
+    path: *const u8,
+    path_length: i64,
+    depth: f64,
+    failed: f64,
+) -> f64 {
+    let name = text_str(name, name_length);
+    let path = text_str(path, path_length);
     let failure = CASE_FAILURE.with(|failure| failure.borrow_mut().take());
-    match failure.is_some() {
-        true => FAILED.with(|count| count.set(count.get() + 1)),
-        false => PASSED.with(|count| count.set(count.get() + 1)),
-    }
+    let failed = failed != 0.0;
     match REPORTER.with(Cell::get) {
         Reporter::Human => {
-            let mark = match failure.is_some() {
+            let mark = match failed {
                 true => colored("✗", "31"),
                 false => colored("✓", "32"),
             };
-            print_line(&format!("{}{mark} {name}", "  ".repeat(depth())));
+            print_line(&format!("{}{mark} {name}", "  ".repeat(depth as usize)));
         }
         Reporter::Json => emit(&Event::Case {
-            path: &path_to(&name),
-            status: if failure.is_some() { "fail" } else { "pass" },
+            path: &path,
+            status: if failed { "fail" } else { "pass" },
             failure: failure.as_ref(),
         }),
     }
-    depth() as f64
+    0.0
 }
 
-/// How many cases have passed so far.
+/// Report the run's totals `passed`/`failed` — `.qn`'s own counters — and yield its status:
+/// 0 when every case passed, 1 otherwise.
 #[unsafe(no_mangle)]
-pub extern "C" fn __test_passed() -> f64 {
-    PASSED.with(Cell::get) as f64
-}
-
-/// How many cases have failed so far. Non-zero is what makes a run exit non-zero.
-#[unsafe(no_mangle)]
-pub extern "C" fn __test_failed() -> f64 {
-    FAILED.with(Cell::get) as f64
-}
-
-/// Report the run's totals and yield its status: 0 when every case passed, 1 otherwise.
-#[unsafe(no_mangle)]
-pub extern "C" fn __test_summary() -> f64 {
-    let (passed, failed) = (PASSED.with(Cell::get), FAILED.with(Cell::get));
+pub extern "C" fn __test_summary(passed: f64, failed: f64) -> f64 {
+    let (passed, failed) = (passed as i64, failed as i64);
     match REPORTER.with(Cell::get) {
         Reporter::Human => {
             let tally = format!("{passed} passed, {failed} failed");
@@ -309,14 +281,10 @@ mod tests {
         (name.as_ptr(), name.len() as i64)
     }
 
-    fn enter(name: &str) -> f64 {
-        let (pointer, length) = text(name);
-        __test_suite_enter(pointer, length)
-    }
-
-    fn finish(name: &str) -> f64 {
-        let (pointer, length) = text(name);
-        __test_case_finish(pointer, length)
+    fn finish(name: &str, path: &str, depth: f64, failed: f64) -> f64 {
+        let (name_ptr, name_len) = text(name);
+        let (path_ptr, path_len) = text(path);
+        __test_case_finish(name_ptr, name_len, path_ptr, path_len, depth, failed)
     }
 
     fn a_failure() -> Failure {
@@ -328,76 +296,63 @@ mod tests {
     }
 
     #[test]
-    fn a_case_is_counted_and_reports_the_depth_it_sits_at() {
-        // Three cases across two nesting levels, so the count and the depth cannot be
-        // confused for each other.
-        assert_eq!(enter("outer"), 1.0);
-        assert_eq!(__test_depth(), 1.0, "reading the depth does not move it");
-        assert_eq!(__test_depth(), 1.0);
-        assert_eq!(finish("first"), 1.0, "outermost group: depth 1");
-        assert_eq!(finish("second"), 1.0, "depth does not move between cases");
-        assert_eq!(enter("inner"), 2.0);
-        assert_eq!(finish("third"), 2.0, "nested group: depth 2");
-        assert_eq!(__test_passed(), 3.0, "all three cases counted");
-        assert_eq!(__test_failed(), 0.0, "none of them failed");
-        assert_eq!(__test_suite_leave(), 1.0);
-        assert_eq!(__test_suite_leave(), 0.0);
-    }
-
-    #[test]
-    fn nesting_depth_never_goes_negative() {
-        assert_eq!(__test_suite_leave(), 0.0);
-        assert_eq!(enter("group"), 1.0);
-        assert_eq!(__test_suite_leave(), 0.0);
-        assert_eq!(finish("case"), 0.0);
-    }
-
-    #[test]
-    fn a_failed_case_is_tallied_apart_and_the_flag_does_not_leak() {
+    fn the_failing_mark_does_not_leak_into_the_next_case() {
+        // `CASE_FAILURE` is native — the compiler-emitted `__expect_failed` path writes it —
+        // so this is the one piece of a case's tally still Rust's to verify.
         assert_eq!(__test_case_failing(), 0.0, "a fresh case has not failed");
         mark_case_failed(a_failure());
         assert_eq!(__test_case_failing(), 1.0);
-        // Marking twice still counts one failed case.
+        // Marking twice still leaves one recorded failure.
         mark_case_failed(a_failure());
-        finish("failing");
-        assert_eq!(__test_failed(), 1.0);
-        assert_eq!(__test_passed(), 0.0);
+        finish("failing", "failing", 0.0, 1.0);
         assert_eq!(
             __test_case_failing(),
             0.0,
-            "the next case starts out passing"
+            "closing a case clears the mark for the next one"
         );
-        finish("passing");
-        assert_eq!(__test_passed(), 1.0);
-        assert_eq!(__test_failed(), 1.0);
-        assert_eq!(__test_summary(), 1.0, "a failed case fails the run");
+        finish("passing", "passing", 0.0, 0.0);
+        assert_eq!(__test_case_failing(), 0.0);
     }
 
     #[test]
-    fn a_selection_covers_a_case_by_its_path_or_by_a_suite_above_it() {
+    fn the_summarys_status_is_nonzero_exactly_when_something_failed() {
+        assert_eq!(__test_summary(3.0, 0.0), 0.0, "every case passed");
+        assert_eq!(__test_summary(2.0, 1.0), 1.0, "a failed case fails the run");
+    }
+
+    #[test]
+    fn a_selection_covers_a_path_or_a_suite_above_it() {
+        // Path-joining is `.qn`'s job now (`corelib/test.qn`'s `pathTo`) — these primitives
+        // only compare the path they are handed against the selection.
         set_selection(vec!["outer/inner".to_string(), "outer/direct".to_string()]);
-        let selected = |name: &str| {
-            let (pointer, length) = text(name);
+        let selected = |path: &str| {
+            let (pointer, length) = text(path);
             __test_case_selected(pointer, length)
         };
-        let suite_selected = |name: &str| {
-            let (pointer, length) = text(name);
+        let suite_selected = |path: &str| {
+            let (pointer, length) = text(path);
             __test_suite_selected(pointer, length)
         };
         assert_eq!(suite_selected("outer"), 1.0, "a selection lies under it");
         assert_eq!(suite_selected("other"), 0.0);
-        enter("outer");
-        assert_eq!(selected("direct"), 1.0, "named exactly");
+        assert_eq!(selected("outer/direct"), 1.0, "named exactly");
         assert_eq!(
-            selected("directory"),
+            selected("outer/directory"),
             0.0,
             "a longer name is not a prefix match"
         );
-        assert_eq!(suite_selected("inner"), 1.0, "named exactly");
-        enter("inner");
-        assert_eq!(selected("anything"), 1.0, "under a selected suite");
+        assert_eq!(suite_selected("outer/inner"), 1.0, "named exactly");
+        assert_eq!(
+            selected("outer/inner/anything"),
+            1.0,
+            "under a selected suite"
+        );
         set_selection(Vec::new());
-        assert_eq!(selected("anything"), 1.0, "no selection selects everything");
+        assert_eq!(
+            selected("outer/inner/anything"),
+            1.0,
+            "no selection selects everything"
+        );
     }
 
     #[test]

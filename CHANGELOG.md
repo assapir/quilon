@@ -131,6 +131,13 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **The test harness's run state lives in `corelib/test.qn`, not the runtime.** The pass/fail
+  counters and the open `describe` names are now `:=` globals in `.qn` — one program-wide
+  cell each, since `quilon test` runs one suite per process — rather than thread-locals in
+  `quilon-rt`; the runtime's `__test_*` intrinsics only render the event each is handed
+  (a name, a path, a depth, a pass/fail flag) the way the chosen reporter asks. No observable
+  change: the human and JSON reports are unaffected. See `quilon-rt/src/test_registry.rs`
+  and `corelib/test.qn`.
 - **`core.http`'s `Response.headers()` returns `Headers`, not raw lines.** Reading a
   specific header goes through `headers().get(name)`; `Response.header(name)` is gone. See
   `docs/corelib/http.md`. Closes #370.
