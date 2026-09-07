@@ -1,11 +1,14 @@
 //! `quilon lsp` — the Quilon language server.
 //!
 //! A synchronous server over stdio (the `lsp-server` crate): one loop, one request at a
-//! time, and one full front-end run — the same lex → parse → link → check pipeline every
-//! other subcommand uses — behind each answer. There is no incremental state: the open
-//! documents' text is the only thing the server holds, so every answer reflects the
-//! buffer as the editor last sent it, saved or not.
+//! time, and one fresh front-end run — the same lex → parse → link → check pipeline every
+//! other subcommand uses — behind each answer; definition, references, and rename stop
+//! after link, so a type error elsewhere in the document does not suppress them (see
+//! [`analysis::link_text`]). There is no incremental state: the open documents' text is the
+//! only thing the server holds, so every answer reflects the buffer as the editor last
+//! sent it, saved or not.
 //!
+//! The server answers diagnostics, go to definition, find references,
 //! rename, hover (the expression's inferred type, or — for a matcher inside
 //! `assert`/`expect` — its signature and the type it applies to), completion (triggered on
 //! `.`; see [`analysis::completions_at`]), semantic tokens (block `< >` delimiters versus
@@ -48,7 +51,7 @@ use lsp_types::{
 };
 
 use crate::diagnostic::Label;
-use crate::driver::{Checked, FrontEndError};
+use crate::driver::{Checked, FrontEndError, Linked};
 use crate::lexer::{ROOT_FILE, Span};
 use crate::source_map::{DocumentPositions, SourceMap};
 use analysis::{SemanticTokenKind, TestLensKind};
@@ -327,12 +330,12 @@ impl LanguageServer {
     fn definition(&self, id: RequestId, params: GotoDefinitionParams) -> Response {
         let position_params = params.text_document_position_params;
         let uri = position_params.text_document.uri;
-        let Some((_, positions, offset, checked)) =
-            self.checked_document(&uri, position_params.position)
+        let Some((_, positions, offset, linked)) =
+            self.linked_document(&uri, position_params.position)
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        let Some(span) = analysis::definition_at(&checked.program, offset) else {
+        let Some(span) = analysis::definition_at(&linked.program, offset) else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
 
@@ -341,7 +344,7 @@ impl LanguageServer {
                 uri: uri.clone(),
                 range: range_of(&positions, &span),
             }),
-            false => location_in_other_file(&checked.sources, &span),
+            false => location_in_other_file(&linked.sources, &span),
         };
         match location {
             Some(location) => Response::new_ok(id, location),
@@ -352,12 +355,12 @@ impl LanguageServer {
     fn references(&self, id: RequestId, params: ReferenceParams) -> Response {
         let position_params = params.text_document_position;
         let uri = position_params.text_document.uri;
-        let Some((text, positions, offset, checked)) =
-            self.checked_document(&uri, position_params.position)
+        let Some((text, positions, offset, linked)) =
+            self.linked_document(&uri, position_params.position)
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        match analysis::references_at(&checked.program, text, offset) {
+        match analysis::references_at(&linked.program, text, offset) {
             Some(spans) => {
                 let locations: Vec<Location> = spans
                     .iter()
@@ -382,12 +385,12 @@ impl LanguageServer {
         }
         let position_params = params.text_document_position;
         let uri = position_params.text_document.uri;
-        let Some((text, positions, offset, checked)) =
-            self.checked_document(&uri, position_params.position)
+        let Some((text, positions, offset, linked)) =
+            self.linked_document(&uri, position_params.position)
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        match analysis::references_at(&checked.program, text, offset) {
+        match analysis::references_at(&linked.program, text, offset) {
             Some(spans) if spans.is_empty() => Response::new_ok(id, serde_json::Value::Null),
             Some(spans) => {
                 let edits: Vec<TextEdit> = spans
@@ -409,9 +412,9 @@ impl LanguageServer {
             // file (an imported name) — a real target, just not one it can rewrite here.
             // That second walk only runs for this already-empty-handed path, not on every
             // rename.
-            None => match analysis::declaration_at(&checked.program, offset) {
+            None => match analysis::declaration_at(&linked.program, offset) {
                 Some((name, definition)) if definition.file != ROOT_FILE => {
-                    let message = match checked.sources.locate(&definition) {
+                    let message = match linked.sources.locate(&definition) {
                         Some(location) => {
                             let file_name = Path::new(&location.path)
                                 .file_name()
@@ -545,20 +548,46 @@ impl LanguageServer {
         Some((path, text.as_str()))
     }
 
-    /// The prologue every request naming a document and a cursor position shares: the
-    /// buffer text, its position table, the cursor as a byte offset, and a fresh front-end
-    /// run over it. `None` for a document the client has not opened, one that is not a
-    /// file, or one that does not check clean.
+    /// The part of the prologue every request naming a document and a cursor position
+    /// shares, ahead of running the front end: the buffer text, its position table, and the
+    /// cursor as a byte offset. `None` for a document the client has not opened, or one
+    /// that is not a file. [`Self::checked_document`] and [`Self::linked_document`] each add
+    /// their own front-end run on top.
+    fn document_position(
+        &self,
+        uri: &Uri,
+        position: Position,
+    ) -> Option<(PathBuf, &str, DocumentPositions<'_>, u32)> {
+        let (path, text) = self.document(uri)?;
+        let positions = DocumentPositions::new(text);
+        let offset = positions.byte_offset(position.line, position.character) as u32;
+        Some((path, text, positions, offset))
+    }
+
+    /// [`Self::document_position`], plus a fresh front-end run over the document. `None`
+    /// also when the document does not check clean.
     fn checked_document(
         &self,
         uri: &Uri,
         position: Position,
     ) -> Option<(&str, DocumentPositions<'_>, u32, Checked)> {
-        let (path, text) = self.document(uri)?;
-        let positions = DocumentPositions::new(text);
-        let offset = positions.byte_offset(position.line, position.character) as u32;
+        let (path, text, positions, offset) = self.document_position(uri, position)?;
         let checked = analysis::check_text(&path, text).ok()?;
         Some((text, positions, offset, checked))
+    }
+
+    /// [`Self::checked_document`], stopping once the document lexes, parses, and links —
+    /// without requiring it to type-check. Definition, references, and rename use this: all
+    /// three read only [`Linked::program`], so a type error elsewhere in the document does
+    /// not suppress them. `None` also when the document does not even lex/parse/link.
+    fn linked_document(
+        &self,
+        uri: &Uri,
+        position: Position,
+    ) -> Option<(&str, DocumentPositions<'_>, u32, Linked)> {
+        let (path, text, positions, offset) = self.document_position(uri, position)?;
+        let linked = analysis::link_text(&path, text).ok()?;
+        Some((text, positions, offset, linked))
     }
 }
 

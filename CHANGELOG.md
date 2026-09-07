@@ -144,6 +144,14 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **Go to definition, find references, and rename answer on a document with a type error
+  anywhere in it.** All three ran `analysis::check_text(...).ok()?`, so a type error on any
+  line of the open document — not just one touching the name under the cursor — collapsed
+  the answer to `null`. Each now reads the parsed, import-linked document instead of the
+  fully type-checked one, so only a document that fails to even parse or link goes
+  unanswered; hover is unchanged, still answering only when the document type-checks. See
+  `docs/tooling/language-server.md`. Closes #393.
+
 - **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
   `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's
   8 MiB stack used to die with no message on stderr and exit 139, under both `quilon run`
