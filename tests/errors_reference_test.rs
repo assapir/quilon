@@ -425,7 +425,7 @@ fn qn001_not_a_quilon_source() {
 fn unverifiable_codes_are_named_and_explained() {
     assert_eq!(
         UNVERIFIABLE.len(),
-        6,
+        5,
         "the unverifiable list changed size — update this count as part of that change"
     );
     for (code, reason) in UNVERIFIABLE {
