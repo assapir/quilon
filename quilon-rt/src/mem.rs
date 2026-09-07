@@ -24,6 +24,7 @@ unsafe extern "C" {
     fn GC_register_my_thread(sb: *const GcStackBase) -> i32;
     fn GC_unregister_my_thread() -> i32;
     fn GC_get_stack_base(sb: *mut GcStackBase) -> i32;
+    fn GC_add_roots(low_address: *mut c_void, high_address_plus_1: *mut c_void);
 }
 
 /// Boehm's description of a thread's stack extent, filled in by `GC_get_stack_base`.
@@ -37,6 +38,31 @@ struct GcStackBase {
 pub extern "C" fn __gc_init() {
     // Safe to call more than once; GC_init is idempotent.
     unsafe { GC_init() }
+}
+
+/// Register `bytes` bytes starting at `ptr` as an additional GC root, so the collector
+/// scans it on every collection.
+///
+/// A computed top-level (`:=` or `=`) global lives in the module's `.data` section under a
+/// native build — Boehm scans that already — but under the JIT it lives in memory LLVM
+/// mapped at run time, which `.data` scanning never reaches; without this, a heap pointer
+/// a global holds could be collected out from under it. Called once per computed global,
+/// from `__ql_init`, for both build shapes alike: harmless under native builds, where the
+/// root is already found by the ordinary `.data` scan.
+///
+/// `GC_add_roots` takes an EXCLUSIVE upper bound (`high_address_plus_1`), so `ptr + bytes`
+/// — one past the region's last byte — is passed, not `ptr + bytes - 1`. A non-positive
+/// `bytes` registers nothing.
+#[unsafe(no_mangle)]
+pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
+    if bytes <= 0 {
+        return;
+    }
+    // SAFETY: `ptr` is a global's address (never null) and `bytes` is that global's own
+    // LLVM-computed size, so `ptr.add(bytes as usize)` stays within (one past) the same
+    // allocation.
+    let high = unsafe { ptr.add(bytes as usize) };
+    unsafe { GC_add_roots(ptr, high) };
 }
 
 /// Prepare the collector for threads other than the one that initialized it, and
@@ -415,6 +441,22 @@ mod tests {
     fn the_widest_legal_span_fits_a_count() {
         let widest = 2.0 * MAX_EXACT_NUM + 1.0;
         assert!(widest < i64::MAX as f64, "{widest}");
+    }
+
+    #[test]
+    fn gc_add_root_accepts_a_fresh_allocation() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let p = __alloc(16);
+        __gc_add_root(p, 16);
+    }
+
+    #[test]
+    fn gc_add_root_of_non_positive_size_is_a_no_op() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        __gc_add_root(std::ptr::null_mut(), 0);
+        __gc_add_root(std::ptr::null_mut(), -1);
     }
 
     #[test]

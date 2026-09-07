@@ -266,28 +266,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), String> {
-        // A top-level binding becomes a global, and a global's initializer must already be
-        // a constant — there is no code before `^` in which to compute one. Checked FIRST,
-        // ahead of every oracle read below: this is a pure AST-shape test needing no type
-        // information, and it is the dedicated diagnostic for a caller that builds IR
-        // without checking first (the type checker itself rejects the same program, with a
-        // source location, before codegen ever sees it) — it must run before an oracle read
-        // downstream has a chance to fail first with the generic "not type-checked" error.
-        if self.current_function.is_none()
-            && !matches!(
-                declaration.value,
-                Expression::Number { .. }
-                    | Expression::Bool { .. }
-                    | Expression::Unit { .. }
-                    | Expression::Lambda { .. }
-            )
-        {
-            return Err(format!(
-                "top-level '{}' must hold a Num, Bool or $ literal, or a function",
-                declaration.name
-            ));
-        }
-
         // Check if this is a record literal to track field names. Prefer the oracle's
         // inferred type (authoritative field names/order, and it expands `<-` spreads);
         // a functional-update whose result is a NAMED type also tracks that name so
@@ -342,68 +320,166 @@ impl<'ctx> CodeGenerator<'ctx> {
         // result), track its type/fields so later `name.field` / method calls resolve.
         self.track_named_record_binding(&declaration.name, &inferred_qty);
         self.var_types
-            .insert(declaration.name.clone(), inferred_qty);
+            .insert(declaration.name.clone(), inferred_qty.clone());
+
+        if self.current_function.is_none() {
+            return self.generate_top_level_binding(declaration, &inferred_qty);
+        }
 
         let value = self.generate_expression(&declaration.value)?;
+        let var_type = value.get_type();
 
-        if self.current_function.is_some() {
-            let var_type = value.get_type();
-
-            // Reassignment of an already-bound mutable local (`counter := counter + 1`):
-            // store THROUGH the existing slot rather than allocating a fresh one. This is
-            // what makes a `:=` capture escape-safe — the cell a closure shares is the
-            // very cell later writes target — and it is equivalent to the old realloc for
-            // ordinary straight-line code (reads always go through the latest slot).
-            if declaration.mutable
-                && let Some((slot, _)) = self.variables.get(&declaration.name).copied()
-            {
-                self.builder
-                    .build_store(slot, value)
-                    .map_err(ctx("Failed to build store"))?;
-                return Ok(());
-            }
-
-            // A `:=` local captured by reference by some nested closure lives in a heap
-            // GC cell (a "box"), so the closure and this frame share one mutable cell. Its
-            // `variables` slot is the cell pointer; loads/stores work through it unchanged.
-            let slot = if declaration.mutable && self.boxed_vars.contains(&declaration.name) {
-                self.alloc_box(var_type)?
-            } else {
-                self.create_entry_block_alloca(&declaration.name, var_type)?
-            };
+        // Reassignment of an already-bound mutable local (`counter := counter + 1`):
+        // store THROUGH the existing slot rather than allocating a fresh one. This is
+        // what makes a `:=` capture escape-safe — the cell a closure shares is the
+        // very cell later writes target — and it is equivalent to the old realloc for
+        // ordinary straight-line code (reads always go through the latest slot).
+        if declaration.mutable
+            && let Some((slot, _)) = self.variables.get(&declaration.name).copied()
+        {
             self.builder
                 .build_store(slot, value)
                 .map_err(ctx("Failed to build store"))?;
-            self.variables
-                .insert(declaration.name.clone(), (slot, var_type));
-            // Under `--debug`: narrow the scope from here on, so a debugger paused earlier
-            // in the enclosing block does not list this local before it is bound. Everything
-            // the rest of the block emits — including this variable's own `dbg.declare` —
-            // moves into a fresh nested `DW_TAG_lexical_block` starting at the binding;
-            // `generate_block`'s `end_di_scope` restores the enclosing scope once the block
-            // ends. The value just computed above is unaffected — it was emitted under the
-            // OUTER scope, before the variable existed.
-            self.begin_di_lexical_block(&declaration.span);
-            // Refresh the builder's current location to the new scope right away: an LLVM
-            // lexical block with no instruction attributed to it gets dropped (variable and
-            // all) rather than kept empty, and a binding as a block's LAST statement has no
-            // further codegen of its own to carry the new scope otherwise — the caller's
-            // next instruction (e.g. the function's `ret`) would silently inherit whatever
-            // scope was current before this binding, orphaning both the block and the local.
-            self.set_debug_loc(&declaration.span);
-            // The binding's Quilon type is the one just recorded in `var_types` — borrow it
-            // rather than keeping a separate clone alive across the whole binding.
-            if let Some(qty) = self.var_types.get(&declaration.name) {
-                self.declare_variable(&declaration.name, slot, qty, &declaration.span, None);
-            }
+            return Ok(());
+        }
+
+        // Reassignment of a `:=` GLOBAL from inside a function: store through the SAME
+        // pointer `__ql_init` (or an earlier call) stored into, not a fresh local alloca —
+        // the root-cause fix for a `:=` global's write being lost on return (see
+        // `docs/variables.md` and the counter example in issue #245). The checker only
+        // reaches this declaration shape as a REASSIGNMENT of an existing name (a fresh
+        // `:=` binding sharing a global's name is already rejected — the name is already
+        // bound), so finding no local slot above and a global by this name below is
+        // conclusive, not a guess.
+        if declaration.mutable
+            && let Some(global) = self.module.get_global(&declaration.name)
+        {
+            self.builder
+                .build_store(global.as_pointer_value(), value)
+                .map_err(ctx("Failed to build store"))?;
+            return Ok(());
+        }
+
+        // A `:=` local captured by reference by some nested closure lives in a heap
+        // GC cell (a "box"), so the closure and this frame share one mutable cell. Its
+        // `variables` slot is the cell pointer; loads/stores work through it unchanged.
+        let slot = if declaration.mutable && self.boxed_vars.contains(&declaration.name) {
+            self.alloc_box(var_type)?
         } else {
-            // Global variable
+            self.create_entry_block_alloca(&declaration.name, var_type)?
+        };
+        self.builder
+            .build_store(slot, value)
+            .map_err(ctx("Failed to build store"))?;
+        self.variables
+            .insert(declaration.name.clone(), (slot, var_type));
+        // Under `--debug`: narrow the scope from here on, so a debugger paused earlier
+        // in the enclosing block does not list this local before it is bound. Everything
+        // the rest of the block emits — including this variable's own `dbg.declare` —
+        // moves into a fresh nested `DW_TAG_lexical_block` starting at the binding;
+        // `generate_block`'s `end_di_scope` restores the enclosing scope once the block
+        // ends. The value just computed above is unaffected — it was emitted under the
+        // OUTER scope, before the variable existed.
+        self.begin_di_lexical_block(&declaration.span);
+        // Refresh the builder's current location to the new scope right away: an LLVM
+        // lexical block with no instruction attributed to it gets dropped (variable and
+        // all) rather than kept empty, and a binding as a block's LAST statement has no
+        // further codegen of its own to carry the new scope otherwise — the caller's
+        // next instruction (e.g. the function's `ret`) would silently inherit whatever
+        // scope was current before this binding, orphaning both the block and the local.
+        self.set_debug_loc(&declaration.span);
+        // The binding's Quilon type is the one just recorded in `var_types` — borrow it
+        // rather than keeping a separate clone alive across the whole binding.
+        if let Some(qty) = self.var_types.get(&declaration.name) {
+            self.declare_variable(&declaration.name, slot, qty, &declaration.span, None);
+        }
+
+        Ok(())
+    }
+
+    /// Generate a top-level (module-scope) binding. A `Num`/`Bool`/`$` literal or a lambda
+    /// keeps the existing CONSTANT-initializer path (nothing runs to produce it). Any other
+    /// value is a COMPUTED global (`docs/variables.md`): zero-initialized here at its
+    /// DECLARED (oracle) type, with the value itself computed once inside `__ql_init` (see
+    /// `generate`) — in file order, before `^` — and stored into the global there.
+    /// `inferred_qty` is the type the caller already read out of the oracle.
+    fn generate_top_level_binding(
+        &mut self,
+        declaration: &VariableDeclaration,
+        inferred_qty: &Type,
+    ) -> Result<(), String> {
+        let constant = matches!(
+            declaration.value,
+            Expression::Number { .. }
+                | Expression::Bool { .. }
+                | Expression::Unit { .. }
+                | Expression::Lambda { .. }
+        );
+        if constant {
+            let value = self.generate_expression(&declaration.value)?;
             let global = self.module.add_global(
                 value.get_type(),
                 Some(AddressSpace::default()),
                 &declaration.name,
             );
             global.set_initializer(&value);
+            return Ok(());
+        }
+
+        // The global's LLVM type comes from the oracle's recorded type — never from the
+        // computed value's own LLVM shape — so a global nothing on the `^`-reachable path
+        // ever writes still reads back at its declared type (see the identifier load in
+        // `exprs.rs`). `value_repr_type` (not `type_to_llvm`) matches how
+        // `generate_expression` actually materializes a Record (a pointer) or an Array
+        // (the `{ ptr, i64 }` struct) — the same shape the `build_store` below produces.
+        let llvm_type = self.value_repr_type(inferred_qty)?;
+        let global = self
+            .module
+            .add_global(llvm_type, Some(AddressSpace::default()), &declaration.name);
+        global.set_initializer(&zeroed(llvm_type));
+
+        // Emit the initializer into `__ql_init`, wherever the previous computed global's
+        // initializer (if any) left it — resuming the enclosing top-level item's own
+        // function/builder position afterwards, exactly as it was before this call.
+        let init_function = self
+            .init_function
+            .expect("`generate` declares `__ql_init` before any top-level item is emitted");
+        let init_block = self.init_block.expect(
+            "`generate` declares `__ql_init`'s entry block before any top-level item is emitted",
+        );
+        let saved_function = self.current_function;
+        let saved_block = self.builder.get_insert_block();
+        self.current_function = Some(init_function);
+        self.builder.position_at_end(init_block);
+
+        let value = self.generate_expression(&declaration.value)?;
+        self.builder
+            .build_store(global.as_pointer_value(), value)
+            .map_err(ctx("Failed to build store into computed global"))?;
+
+        // Register the global as an additional GC root: the JIT's mapped memory is
+        // invisible to Boehm's ordinary `.data` scan, so a heap pointer this global holds
+        // (a `Text`, a record, an array) needs one to survive a collection. Redundant but
+        // harmless under a native build, whose `.data` scan already finds it.
+        let gc_add_root = self.get_intrinsic("__gc_add_root")?;
+        let size = llvm_type
+            .size_of()
+            .ok_or_else(|| format!("global `{}` has no compile-time size", declaration.name))?;
+        self.builder
+            .build_call(
+                gc_add_root,
+                &[global.as_pointer_value().into(), size.into()],
+                "",
+            )
+            .map_err(ctx("Failed to call __gc_add_root"))?;
+
+        // An initializer with control flow of its own (an `if`, a `?` match) appends
+        // blocks past `init_block` — record wherever it left the builder so the NEXT
+        // computed global's initializer, and the final `ret void`, continue from there.
+        self.init_block = self.builder.get_insert_block();
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
         }
 
         Ok(())

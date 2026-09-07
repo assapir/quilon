@@ -262,6 +262,14 @@ pub struct CodeGenerator<'ctx> {
     // (see `fills_call_site`). Only such functions are listed, so an ordinary call looks up
     // a miss and copies nothing. (Overloaded callees' parameters come from `overloads`.)
     fn_call_site_arity: HashMap<String, usize>,
+    // `__ql_init`: the function every computed top-level binding's initializer is emitted
+    // into, in file order, and the block a computed global's `generate_expression` builds
+    // into (advanced past whatever blocks that initializer's own control flow added — see
+    // `generate_variable_declaration`'s top-level branch). Declared unconditionally at the
+    // start of `generate`, called first thing inside `__ql_entry` (`emit_entry_dispatch`),
+    // `ret void`-terminated at the end of `generate`. `None` only before `generate` runs.
+    init_function: Option<FunctionValue<'ctx>>,
+    init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -385,6 +393,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             site_globals: HashMap::new(),
             text_constants: HashMap::new(),
             fn_call_site_arity: HashMap::new(),
+            init_function: None,
+            init_block: None,
         };
         codegen.register_builtin_sum_types();
         codegen.register_builtin_record_types();
@@ -674,6 +684,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        // Declare `__ql_init` up front: every computed top-level binding's initializer
+        // (see `generate_variable_declaration`'s top-level branch) is emitted into this
+        // function's entry block, in file order, as the item loop below reaches it.
+        // `emit_entry_dispatch` calls it first thing inside `__ql_entry`. A program with no
+        // computed global still gets one — an empty body that falls straight to `ret void`.
+        let init_type = self.context.void_type().fn_type(&[], false);
+        let init_function = self.module.add_function("__ql_init", init_type, None);
+        let init_span = Span::in_root(0, 0);
+        let init_di_scope = self.begin_di_entry_shim(init_function, &init_span);
+        self.init_block = Some(self.context.append_basic_block(init_function, "entry"));
+        self.init_function = Some(init_function);
+
         // Generate code for all top-level items. Reset the current-function context
         // before each one: a top-level item is never nested, so codegen must not see a
         // stale function left over from the previous top-level declaration (which would make it
@@ -688,6 +710,24 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.current_function = None;
             self.generate_item(item)?;
         }
+
+        // Close `__ql_init` at whatever block its last computed global's initializer left
+        // current — control flow inside an initializer (an `if`, a `?` match) appends
+        // blocks of its own, so this is not necessarily the entry block.
+        self.builder.position_at_end(
+            self.init_block
+                .expect("declared unconditionally above generate's item loop"),
+        );
+        // Re-seed the builder's debug location to `__ql_init`'s own scope: emitting
+        // whatever top-level function came last left it pointing at THAT function's
+        // subprogram, and the verifier rejects an instruction whose `!dbg` scope is a
+        // different function than the one it lives in (mirrors `generate_main_wrapper`'s
+        // own re-seed before its `main` return, same reason).
+        self.set_debug_loc(&init_span);
+        self.builder
+            .build_return(None)
+            .map_err(ctx("Failed to build __ql_init return"))?;
+        self.end_di_scope(init_di_scope);
 
         // Every pre-declared function must have had its body filled in — a leftover means
         // the pre-pass and body emission disagreed on what gets emitted, which would
@@ -851,6 +891,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         envp: inkwell::values::PointerValue<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let i32_type = self.context.i32_type();
+
+        // Every computed top-level binding's initializer runs once, in file order, before
+        // `^` — on the scheduler fiber this thunk itself runs on, so an initializer that
+        // reaches an `@` primitive has a fiber to park on exactly like `^`'s own body does.
+        let init_function = self
+            .init_function
+            .expect("`generate` declares `__ql_init` before any entry wrapper is emitted");
+        self.builder
+            .build_call(init_function, &[], "")
+            .map_err(ctx("Failed to call __ql_init"))?;
+
         // Get the ^ (entry point) function
         let user_entry = self
             .module
