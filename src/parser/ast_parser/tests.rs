@@ -932,6 +932,66 @@ fn test_method_chain_across_lines_still_continues() {
 }
 
 #[test]
+fn test_a_character_glued_to_a_definition_name_is_qn113() {
+    // A binding name (`isEmpty?`), a parameter name (`my-count`, the sole parameter of a
+    // one-line function), a two-hyphen chain, and a record field name each report the new
+    // code — the disallowed character named, and the help's fix specific to that name: a
+    // trailing symbol just drops (`isEmpty`), a `-`-joined continuation folds in camelCase
+    // (`myCount`, chained for `myLongCount`).
+    for (src, fixed) in [
+        ("isEmpty? = () -> Bool => < true >", "isEmpty"),
+        ("f = (my-count) => < my-count >", "myCount"),
+        ("f = (my-long-count) => < my-long-count >", "myLongCount"),
+        ("Point = { x :: Num, y! :: Num }", "y"),
+    ] {
+        let tokens = Lexer::tokenize(src).unwrap();
+        let Err(err) = parse(&tokens) else {
+            panic!("expected `{src}` to be a parse error");
+        };
+        assert_eq!(err.code, Code::NameGluedToSymbol, "source: {src}");
+        assert!(
+            err.message.contains("a name is letters, digits and `_`"),
+            "source: {src}, message: {}",
+            err.message
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some(format!("did you mean `{fixed}`?")).as_deref(),
+            "source: {src}"
+        );
+    }
+}
+
+#[test]
+fn test_a_character_glued_to_a_reference_stays_untouched() {
+    // The new adjacency check applies only where a NAME IS BEING DEFINED — an expression
+    // reading a name is unaffected: `x-1` is still subtraction, and `a?b:c`'s `?` is still
+    // the ternary.
+    let tokens = Lexer::tokenize("f = (x :: Num) -> Num => < x-1 >").unwrap();
+    let program = parse(&tokens).expect("`x-1` in expression position is subtraction");
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a FunctionDeclaration");
+    };
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    assert!(matches!(
+        statements.last(),
+        Some(Statement::Expression(Expression::BinaryOperator {
+            operator: crate::ast::BinaryOperator::Sub,
+            ..
+        }))
+    ));
+
+    let tokens =
+        Lexer::tokenize("f = (a :: Bool, b :: Num, c :: Num) -> Num => < a?b:c >").unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a?b:c in expression position is still the ternary"
+    );
+}
+
+#[test]
 fn test_bare_lambda_body_takes_a_reassignment() {
     // `:=` is the lowest-precedence operator, so a bare (non-block) lambda body may be
     // a whole reassignment, not just its left-hand identifier: `x => n := n + x` reads

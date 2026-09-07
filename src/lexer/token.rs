@@ -188,8 +188,11 @@ pub enum TokenKind {
     #[token("_")]
     Underscore,
 
-    // Identifiers (but not just "_")
-    #[regex(r"_[a-zA-Z0-9_]+|[a-zA-Z][a-zA-Z0-9_]*")]
+    // Identifiers (but not just "_"): a name starts with a Unicode `XID_Start` letter or
+    // `_`, and continues with `XID_Continue` characters and `_` (`XID_Continue` already
+    // includes `_` and every `XID_Start` character, so the continuation class alone covers
+    // both alternatives once a name has a second character).
+    #[regex(r"_[\p{XID_Continue}]+|\p{XID_Start}[\p{XID_Continue}]*")]
     Ident,
 
     // Operators and delimiters

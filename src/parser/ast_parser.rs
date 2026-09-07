@@ -229,6 +229,99 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a name at a DEFINITION or PARAMETER position — a top-level/nested binding,
+    /// a record/sum member, a sum variant, or a parameter — never a reference. Identical
+    /// to `expect_ident` except it also rejects a character glued directly onto the name
+    /// with no whitespace (`isEmpty?`, `my-count`): left alone, that reads on as a stray
+    /// token and fails downstream naming the wrong thing (`expected `=`, found `?`),
+    /// which hides that the name itself is the problem.
+    fn expect_definition_name(&mut self) -> Result<String, ParseError> {
+        let name = self.expect_ident()?;
+        let name_span = self.previous_span();
+        self.reject_glued_name_suffix(&name, &name_span)?;
+        Ok(name)
+    }
+
+    /// The token kinds a definition/parameter name may legitimately be followed by with
+    /// no whitespace at all: `::` (type annotation), `=`/`:=` (binding), `,`/`)` (parameter
+    /// list punctuation), `(` (sum-variant payload or a parenthesized parameter list glued
+    /// to a function name), `{`/`}` (a member block or sum method block), `[`/`]` (an
+    /// array-typed neighbor), `/` (the sum-variant separator), `=>`/`->` (a bare parameter's
+    /// arrow or return type), `.` (reported separately, as a missing-import qualifier), and
+    /// the end of the file. Anything else glued on is a mistake, not a name.
+    fn is_allowed_glued_to_name(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::TypeAnnotation
+                | TokenKind::Assign
+                | TokenKind::MutAssign
+                | TokenKind::Comma
+                | TokenKind::ParenOpen
+                | TokenKind::ParenClose
+                | TokenKind::BraceOpen
+                | TokenKind::BraceClose
+                | TokenKind::BracketOpen
+                | TokenKind::BracketClose
+                | TokenKind::Slash
+                | TokenKind::Arrow
+                | TokenKind::ReturnArrow
+                | TokenKind::Dot
+                | TokenKind::Eof
+        )
+    }
+
+    /// Reject the token right after `name_span` when it starts exactly where `name` ended
+    /// (no whitespace between them) and isn't one of the tokens a name may legitimately be
+    /// glued to (see `is_allowed_glued_to_name`).
+    fn reject_glued_name_suffix(&self, name: &str, name_span: &Span) -> Result<(), ParseError> {
+        let next = self.peek();
+        if next.span.file != name_span.file
+            || next.span.start != name_span.end
+            || Self::is_allowed_glued_to_name(&next.kind)
+        {
+            return Ok(());
+        }
+        let fixed = self.suggested_name_fix(name, name_span.end);
+        Err(ParseError::new(
+            Code::NameGluedToSymbol,
+            next.span.clone(),
+            format!(
+                "a name cannot be followed directly by `{}` — a name is letters, digits \
+                 and `_`",
+                next.text
+            ),
+        )
+        .help(format!("did you mean `{fixed}`?")))
+    }
+
+    /// The corrected spelling `reject_glued_name_suffix` offers for a name glued to a
+    /// disallowed suffix starting at byte `end`: a `-`-joined continuation folds into the
+    /// name camelCase (`my-count` -> `myCount`, chained for further `-word` runs); any other
+    /// glued character (`isEmpty?`) has nothing to fold in, so the fix is the name alone.
+    fn suggested_name_fix(&self, name: &str, end: u32) -> String {
+        let mut fixed = name.to_string();
+        let mut end = end;
+        let mut offset = 0;
+        loop {
+            let separator = self.peek_ahead(offset);
+            if separator.kind != TokenKind::Minus || separator.span.start != end {
+                break;
+            }
+            let word = self.peek_ahead(offset + 1);
+            if word.kind != TokenKind::Ident || word.span.start != separator.span.end {
+                break;
+            }
+            let mut chars = word.text.chars();
+            if let Some(first) = chars.next() {
+                fixed.extend(first.to_uppercase());
+                fixed.push_str(chars.as_str());
+            }
+            end = word.span.end;
+            offset += 2;
+        }
+        fixed
+    }
+
     fn is_at_end(&self) -> bool {
         self.pos >= self.tokens.len() || self.peek().kind == TokenKind::Eof
     }

@@ -52,7 +52,8 @@ Quilon's identity, and the rules that guide its design:
 | `~` | Comment (to end of line) | `~ a note` |
 
 There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is
-[array methods and recursion](expressions/iteration.md). These names are reserved — the
+[array methods and recursion](expressions/iteration.md). A [name](variables.md#names) holds
+letters (any Unicode letter), digits and `_`. These names are reserved — the
 built-in types `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set`; the constructors `Ok`
 and `NotOk`; the receiver `it`; `assert`, `expect`, and the matchers `equals`, `contains`,
 `not`, `isOk`, `isNotOk` — and every other word is free to bind: `if = 5` and a function

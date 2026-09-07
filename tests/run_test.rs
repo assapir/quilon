@@ -7,11 +7,13 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::typechecker::TypeChecker;
 use std::path::Path;
+use std::process::Command;
 
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    build_and_run_native, build_and_run_native_with_stderr, run_program, tool_available,
+    build_and_run_native, build_and_run_native_with_stderr, ensure_runtime_lib, run_program,
+    tool_available,
 };
 
 #[test]
@@ -2539,6 +2541,81 @@ fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
         stderr, "error[QN507]: stack overflow\n",
         "stderr must report the new code and nothing else"
     );
+}
+
+/// A non-ASCII function name, a non-ASCII record field, and a right-to-left local name
+/// (starting with a non-ASCII letter, unlike `größe`) work end to end under the JIT — the
+/// compiler mangles/emits by whatever bytes a name carries, not by an ASCII subset.
+#[test]
+fn run_non_ascii_function_name_and_record_field() {
+    assert_exit(
+        "Punkt = { höhe :: Num }\n\n\
+         größe = (p :: Punkt) -> Num => < p.höhe * 2 >\n\n\
+         ^ = () -> Num => <\n  ףסא = größe(Punkt { höhe = 21 })\n  ףסא\n>",
+        42,
+    );
+}
+
+/// The same program under native AOT, with both supported linkers: the mangled LLVM symbol
+/// for `größe`, the field access into `höhe`, and the right-to-left local `ףסא` have to
+/// survive `clang` and `gcc` linking a real object file, not just the JIT's in-process
+/// symbol resolution.
+#[test]
+fn native_aot_non_ascii_function_name_and_record_field() {
+    let linkers: Vec<&str> = ["clang", "gcc"]
+        .into_iter()
+        .filter(|t| tool_available(t))
+        .collect();
+    if linkers.is_empty() {
+        eprintln!(
+            "skipping native-AOT non-ASCII-name gate: need a linker (`clang` or `gcc`) on PATH"
+        );
+        return;
+    }
+    let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
+    ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
+
+    let src = "Punkt = { höhe :: Num }\n\n\
+               größe = (p :: Punkt) -> Num => < p.höhe * 2 >\n\n\
+               ^ = () -> Num => <\n  ףסא = größe(Punkt { höhe = 21 })\n  ףסא\n>";
+
+    for linker in &linkers {
+        let seq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "quilon_non_ascii_{linker}_{}_{seq}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let file = dir.join("größe.qn");
+        std::fs::write(&file, src).expect("write temp program");
+        let binary = dir.join("größe");
+
+        let build = Command::new(&quilon)
+            .arg("build")
+            .arg(&file)
+            .args(["-o".as_ref(), binary.as_os_str()])
+            .args(["--linker", linker])
+            .output()
+            .expect("spawn quilon build");
+        assert!(
+            build.status.success(),
+            "`quilon build --linker {linker}` failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let run = Command::new(&binary)
+            .output()
+            .expect("run the built executable");
+        assert_eq!(
+            run.status.code(),
+            Some(42),
+            "linker {linker}: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
 }
 
 // --- The `aborts()` matcher: trap a fail-loud exit -------------------------
