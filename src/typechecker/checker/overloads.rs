@@ -27,6 +27,7 @@ impl TypeChecker {
                     ret: Some(Type::Num),
                     result_aliasing: Some(ResultAliasing::default()),
                     is_static: false,
+                    is_builtin: true,
                 },
             );
         }
@@ -38,6 +39,7 @@ impl TypeChecker {
                 ret: Some(Type::Text),
                 result_aliasing: Some(ResultAliasing::default()),
                 is_static: false,
+                is_builtin: true,
             },
         );
 
@@ -60,6 +62,7 @@ impl TypeChecker {
                         ret: Some(Type::Bool),
                         result_aliasing: Some(ResultAliasing::default()),
                         is_static: false,
+                        is_builtin: true,
                     },
                 );
             }
@@ -73,6 +76,7 @@ impl TypeChecker {
                         ret: Some(Type::Bool),
                         result_aliasing: Some(ResultAliasing::default()),
                         is_static: false,
+                        is_builtin: true,
                     },
                 );
             }
@@ -87,6 +91,7 @@ impl TypeChecker {
                     ret: Some(Type::Bool),
                     result_aliasing: Some(ResultAliasing::default()),
                     is_static: false,
+                    is_builtin: true,
                 },
             );
         }
@@ -105,6 +110,7 @@ impl TypeChecker {
                     ret: Some(member.ret.clone()),
                     result_aliasing: Some(ResultAliasing::default()),
                     is_static: false,
+                    is_builtin: true,
                 },
             );
         }
@@ -355,6 +361,7 @@ impl TypeChecker {
                 // checked; until then a call to it is assumed to alias every argument.
                 result_aliasing: None,
                 is_static,
+                is_builtin: false,
             },
         );
         Ok(())

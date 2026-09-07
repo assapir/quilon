@@ -50,3 +50,15 @@ fn a_user_files_own_overload_of_the_same_bare_name_is_unaffected() {
         .check_program(&program)
         .expect("a user's own differently-typed overload of a bare `__` name must compile");
 }
+
+#[test]
+fn a_call_matching_the_builtins_own_signature_is_still_undefined_beside_a_user_overload() {
+    // A user file's own `__exit(Text)` does not open the door to the compiler's own
+    // `__exit(Num)` member: a call shaped like the INTRINSIC's signature must still be
+    // undefined, not dispatch to it.
+    assert_type_error_code(
+        "__exit = (x :: Text) -> Num => < 4 >\n\
+         ^ = () -> Num => < __exit(3) >",
+        Code::UndefinedVariable,
+    );
+}

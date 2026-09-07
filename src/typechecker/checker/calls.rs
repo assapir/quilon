@@ -515,29 +515,36 @@ impl TypeChecker {
             });
         }
 
-        // A bare `__`-prefixed name is the compiler's own internal-primitive surface,
-        // undefined outside the corelib at ANY argument types — never falling through to
-        // `NoMatchingOverload`, which would leak the intrinsic's real signature.
-        // `add_builtin_overloads` seeds exactly one member per such name up front, so a set
-        // still that size has no user-declared member of the same bare name to dispatch to.
-        if let Expression::Identifier { name, .. } = function
-            && !member_call
-            && name.starts_with("__")
-            && !self.checking_corelib_declaration
-            && crate::ast::builtin_parameters(name).is_some()
-            && self.overloads.get(name).is_none_or(|set| set.len() <= 1)
-        {
-            return Err(TypeError::UndefinedVariable {
-                name: name.clone(),
-                span: span.clone(),
-            });
-        }
-
         // Overload-set dispatch: if `function` names an overload set (a user overload set
         // OR a built-in like `now`), resolve it by EXACT argument types.
         if let Expression::Identifier { name, .. } = function
             && self.overloads.contains_key(name)
         {
+            // A bare `__`-prefixed name is the compiler's own internal-primitive surface:
+            // outside the corelib, dispatch only among a user's OWN members of it (hiding
+            // the seeded builtin member for this one call), and a resulting no-match is the
+            // plain undefined-name error, never `NoMatchingOverload` naming the intrinsic's
+            // real signature.
+            if !member_call
+                && name.starts_with("__")
+                && !self.checking_corelib_declaration
+                && crate::ast::builtin_parameters(name).is_some()
+            {
+                let saved = self.overloads.remove(name).unwrap_or_default();
+                self.overloads.insert(
+                    name.to_string(),
+                    saved.iter().filter(|o| !o.is_builtin).cloned().collect(),
+                );
+                let result = self.check_overloaded_call(name, arguments, first_ty.as_ref(), span);
+                self.overloads.insert(name.to_string(), saved);
+                return result.map_err(|error| match error {
+                    TypeError::NoMatchingOverload { .. } => TypeError::UndefinedVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    },
+                    other => other,
+                });
+            }
             return self.check_overloaded_call(name, arguments, first_ty.as_ref(), span);
         }
 

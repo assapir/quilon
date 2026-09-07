@@ -553,6 +553,10 @@ pub struct Overload {
     /// Whether this member is STATIC (never reads `it`), set per member since an
     /// overloaded name's members classify independently.
     pub(crate) is_static: bool,
+    /// Whether the compiler itself seeded this member (`add_builtin_overloads`), rather
+    /// than a user declaration — what a bare `__`-prefixed name's dispatch hides outside
+    /// the corelib (see `check_call`).
+    pub(crate) is_builtin: bool,
 }
 
 /// Whether a declaration sits at the top level of a module or inside some body (a
