@@ -1166,8 +1166,10 @@ reached only through a descriptor the program computes itself.)
 ```quilon ignore
 << core.io
 
-nonsenseFd = 0 / 0
-^ = () -> Num => < io.write("kazoo manifesto", nonsenseFd) >
+^ = () -> Num => <
+  nonsenseFd = 0 / 0
+  io.write("kazoo manifesto", nonsenseFd)
+>
 ```
 
 Pass a whole descriptor of 0 or more.
