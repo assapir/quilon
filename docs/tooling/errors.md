@@ -148,6 +148,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN505 | reading stdin failed |
 | QN506 | empty `from` in `replaceAll` |
 | QN507 | stack overflow |
+| QN508 | invalid write file descriptor |
 
 ## Input
 
@@ -1154,3 +1155,19 @@ deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >
 
 Recurse fewer levels, or write the recursion as a self-tail-call — `n == 0 ? 0 : deep(n -
 1)` — which is lowered to a loop and runs in constant stack.
+
+### QN508 — invalid write file descriptor
+
+A computed `fd` argument to `io.write` was, at run time, something other than a whole
+number of 0 or more — NaN, an infinity, negative, a fraction, or past what a 32-bit
+descriptor holds. (`io.stdout`/`io.stderr` are always whole and non-negative, so this is
+reached only through a descriptor the program computes itself.)
+
+```quilon ignore
+<< core.io
+
+nonsenseFd = 0 / 0
+^ = () -> Num => < io.write("kazoo manifesto", nonsenseFd) >
+```
+
+Pass a whole descriptor of 0 or more.

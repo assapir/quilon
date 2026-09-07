@@ -179,11 +179,19 @@ impl TypeChecker {
         }
 
         // `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE`) — resolved here for
-        // the same reason as the assertions just above.
+        // the same reason as the assertions just above, but only from the corelib
+        // (`core.test`'s own `runCase`): it is `__`-prefixed compiler-internal surface
+        // the same way the `BuiltinOverload` names are, undefined from a user file.
         if let Expression::Identifier { name, .. } = function
             && !member_call
             && crate::ast::is_run_test_case(name)
         {
+            if !self.checking_corelib_declaration {
+                return Err(TypeError::UndefinedVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
             return self.check_run_test_case(arguments, span);
         }
 
@@ -505,6 +513,36 @@ impl TypeChecker {
                 name: name.clone(),
                 span: span.clone(),
             });
+        }
+
+        // A bare `__`-prefixed name is the compiler's own internal-primitive surface
+        // (`__exit`, `__color_enabled`, `core.test`'s registry primitives) — reachable by
+        // name only from the corelib, which is what `core.test`'s harness is built on;
+        // undefined everywhere else, same as any other name only the corelib defines. A
+        // user file may still give the SAME bare name its own overload member (closed
+        // sets are for the module-qualified built-ins only, `core.io.write` and the
+        // rest); only a call whose argument types match the compiler's OWN signature
+        // exactly is the intrinsic itself.
+        if let Expression::Identifier { name, .. } = function
+            && !member_call
+            && name.starts_with("__")
+            && !self.checking_corelib_declaration
+            && let Some(builtin_params) = crate::ast::builtin_parameters(name)
+        {
+            let arg_types: Vec<Type> = arguments
+                .iter()
+                .enumerate()
+                .map(|(i, argument)| match (i, &first_ty) {
+                    (0, Some(ty)) => Ok(ty.clone()),
+                    _ => self.infer_expression(argument),
+                })
+                .collect::<Result<_, _>>()?;
+            if crate::ast::parameters_accept(builtin_params, &arg_types, types_match) {
+                return Err(TypeError::UndefinedVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
         }
 
         // Overload-set dispatch: if `function` names an overload set (a user overload set

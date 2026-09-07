@@ -87,19 +87,18 @@ const EVERY_INTRINSIC: &str = r#"
   written = io.write("bytes", io.stdout)
   assert(written, equals(5))
 
-  ~ The test registry, which `core.test`'s describe/it record through. Called directly,
-  ~ because `quilon test` is the only thing that compiles a `describe` block and this gate
-  ~ is an ordinary program: one group, one case in it, and the total.
-  assert(__test_suite_selected("group"), equals(1))
-  assert(__test_suite_enter("group"), equals(1))
-  assert(__test_depth(), equals(1))
-  assert(__test_case_selected("case"), equals(1))
-  assert(__test_case_failing(), equals(0))
-  ~ __test_case_run_guarded, which `it`'s case body runs through — called directly here,
-  ~ the way the rest of the registry above is (a `describe` block never compiles into an
-  ~ ordinary program).
-  __test_run_case(() => $)
-  assert(__test_case_finish("case"), equals(1))
+  ~ The test registry, which `core.test`'s describe/it record through, is corelib-only
+  ~ surface now (a bare `__test_*` name, undefined from a user file — see
+  ~ `tests/intrinsic_privacy_test.rs`), so this reaches every registry intrinsic through
+  ~ `core.test`'s own wrappers instead of calling them directly. They are ordinary NESTED
+  ~ calls here, not a top-level test block, so `quilon build` still compiles and links
+  ~ them like any other function call.
+  test.describe("group", () => <
+    assert(test.nestingDepth(), equals(1))
+    test.it("case", () => <
+      assert(test.caseFailing(), equals(false))
+    >)
+  >)
   ~ __abort_trap_run and __abort_trap_report, via the `aborts()` matcher — every assertion
   ~ using it emits both, whichever way the assertion itself goes.
   assert(() => xs[9], aborts())
@@ -108,10 +107,9 @@ const EVERY_INTRINSIC: &str = r#"
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")
 
-  assert(__test_passed() >= 1, equals(true))
-  assert(__test_failed(), equals(0))
-  assert(__test_suite_leave(), equals(0))
-  assert(__test_summary(), equals(0))
+  assert(test.casesPassed() >= 1, equals(true))
+  assert(test.casesFailed(), equals(0))
+  assert(test.reportSummary(), equals(0))
 
   ~ __text_cmp and __text_length.
   assert("abc" < "abd", equals(true))

@@ -144,6 +144,27 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **`^`'s exit code and `__exit` clamp a NaN or an infinity instead of converting poison.**
+  `^ = () -> Num => < 0 / 0 >` used to exit 0 under `quilon run` but 1 from a native
+  build, because the raw `f64`-to-`i32` conversion is undefined behavior for NaN and
+  either infinity. The value is now clamped to the 32-bit signed range before converting,
+  so a NaN or -infinity result exits 0 and +infinity exits 255 — consistently between the
+  JIT and a native build. See `docs/modules/entry-point.md`. Closes #211.
+- **`io.write` with a malformed file descriptor fails loud instead of guessing.**
+  `io.write("hi", 0 / 0)` used to write to real stdout from a native build and silently
+  do nothing under the JIT, and a negative descriptor returned 0 with no write. A `fd`
+  that is, at run time, anything other than a whole number of 0 or more (NaN, an
+  infinity, negative, a fraction, or past a 32-bit descriptor's range) now fails loud
+  with a new [`QN508`](docs/tooling/errors.md#qn508--invalid-write-file-descriptor),
+  pointing at the call site. See `docs/corelib/io.md`. Closes #367.
+- **A user file can no longer call a bare compiler-internal primitive by name.**
+  `^ = () -> Num => < __exit(3) 0 >` used to pass `quilon check`, reaching `__exit`,
+  `__color_enabled`, and the rest of the compiler's internal `__`-prefixed primitives
+  (`core.test`'s own harness is built on them) from ordinary code. A call to one of these
+  from outside the corelib is now the ordinary undefined-name diagnostic (`QN300`); the
+  corelib itself, and a user's own differently-typed overload of the same bare name,
+  are unaffected.
+
 - **Deep non-tail recursion is reported as `QN507: stack overflow`, not a bare `SIGSEGV`.**
   `deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >` run past the seed fiber's
   8 MiB stack used to die with no message on stderr and exit 139, under both `quilon run`

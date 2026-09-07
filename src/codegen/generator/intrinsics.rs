@@ -72,8 +72,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__text_cmp" => ctx
                 .i32_type()
                 .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
-            // i64 __write_bytes(i64 fd, i8* ptr, i64 len) — raw write, backs `write`.
-            "__write_bytes" => i64t.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
+            // i64 __write_bytes(double fd, i8* ptr, i64 len, Site* site) — raw write,
+            // backs `write`. `fd` arrives as the Num it is; the runtime itself validates
+            // it is a whole number of 0 or more, reporting at `site` (the call's own
+            // location) and terminating otherwise.
+            "__write_bytes" => {
+                i64t.fn_type(&[f64t.into(), ptr.into(), i64t.into(), ptr.into()], false)
+            }
             // void __print_text_fd(i64 fd, i8* ptr, i64 len) — text + newline to fd.
             "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
             // { ptr, i64 } __num_to_text(double) — render a Num (integer-valued without
@@ -387,10 +392,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         let BasicValueEnum::FloatValue(code_f) = code else {
             return Err("__exit expects a Num exit code".to_string());
         };
-        let code_i32 = self
-            .builder
-            .build_float_to_signed_int(code_f, self.context.i32_type(), "exit_code")
-            .map_err(ctx("Failed to convert __exit code"))?;
+        // Clamped to i32's range before the conversion, so NaN and an infinity convert
+        // instead of poisoning the exit code (see `saturating_i32`).
+        let code_i32 = self.saturating_i32(code_f, "exit_code")?;
         let exit_fn = self.get_intrinsic("__exit")?;
         self.builder
             .build_call(exit_fn, &[code_i32.into()], "")
@@ -586,10 +590,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower the `write(content, fd)` builtin: render `content` through its `` ` ``
     /// operator (the same render path as `print` and string interpolation — a `Text`
     /// renders as itself) and write those bytes to file descriptor `fd` (a `Num`), with no
-    /// trailing newline and no substitution. Yields `Num` (bytes written).
+    /// trailing newline and no substitution. Yields `Num` (bytes written). `fd` reaches the
+    /// runtime as the `Num` it is, plus this call's own `Site` — the runtime is what
+    /// validates it is a whole number of 0 or more, reporting there and terminating
+    /// otherwise (`QN508`).
     pub(super) fn generate_write(
         &mut self,
         args: &[Expression],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 2 {
             return Err(format!(
@@ -599,26 +607,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         let (data, len) = self.render_text_parts(&args[0], "write")?;
         let fd_num = self.generate_expression(&args[1])?;
-        let fd_float = match fd_num {
-            BasicValueEnum::FloatValue(f) => f,
-            other => {
-                return Err(format!(
-                    "write expects a Num fd, got {:?}",
-                    other.get_type()
-                ));
-            }
+        let BasicValueEnum::FloatValue(fd_float) = fd_num else {
+            return Err(format!(
+                "write expects a Num fd, got {:?}",
+                fd_num.get_type()
+            ));
         };
-        let fd_i64 = self
-            .builder
-            .build_float_to_signed_int(fd_float, self.context.i64_type(), "write_fd")
-            .map_err(ctx("Failed to convert fd"))?;
+        let site = self.site_value(span)?;
         let write_fn = self.get_intrinsic("__write_bytes")?;
         use inkwell::values::AnyValue;
         let written = self
             .builder
             .build_call(
                 write_fn,
-                &[fd_i64.into(), data.into(), len.into()],
+                &[fd_float.into(), data.into(), len.into(), site.into()],
                 "write_n",
             )
             .map_err(ctx("Failed to call __write_bytes"))?

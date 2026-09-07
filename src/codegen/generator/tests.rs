@@ -352,3 +352,52 @@ fn variant(name: &str, fields: Vec<Type>) -> crate::ast::SumVariant {
         fields,
     }
 }
+
+/// [`generate_checked`], but marking every top-level function as the corelib's own first
+/// — the way `driver::front_end` marks a file it recognizes as one of the bundled corelib
+/// sources (`modules::is_corelib_source`). `__exit` is reachable by bare name only from
+/// there (see the checker's `checking_corelib_declaration`), and this is what a suite
+/// outside that pipeline needs to reach it at all.
+fn generate_from_corelib(code: &str) -> Result<String, String> {
+    let tokens = Lexer::tokenize(code).unwrap();
+    let mut program = parse(&tokens).unwrap();
+    for item in &mut program.items {
+        if let Item::FunctionDeclaration(declaration) = item {
+            declaration.from_corelib = true;
+        }
+    }
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .unwrap_or_else(|e| panic!("type check failed: {:?}", e));
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+    codegen.set_type_table(types);
+    codegen.generate(&program)
+}
+
+/// `__exit`'s own code conversion clamps the same way the entry point's does (see
+/// `saturating_i32`): the exit-code tests in `tests/run_test.rs` run `^`'s own clamp end
+/// to end, but `__exit` is corelib-only surface (the checker now rejects a call to it from
+/// a user file, `tests/intrinsic_privacy_test.rs`), so its own conversion can only be
+/// exercised from a corelib-style context — this generates it directly instead. Every
+/// argument here is a compile-time constant, so LLVM's own constant folder collapses the
+/// whole clamp-then-convert sequence down to the literal `i32` the call ends up passing —
+/// which is the clamped value itself, read straight out of the IR rather than inferred
+/// from its shape.
+#[test]
+fn exit_code_conversion_clamps_nan_and_infinities() {
+    for (code, expected) in [
+        ("0 / 0", i32::MIN),     // NaN clamps the same as -infinity.
+        ("0 - 1 / 0", i32::MIN), // -infinity.
+        ("1 / 0", i32::MAX),     // +infinity.
+        ("101", 101),            // An ordinary in-range code passes through untouched.
+    ] {
+        let source = format!("go = () -> $ => < __exit({code}) >");
+        let ir = generate_from_corelib(&source)
+            .unwrap_or_else(|e| panic!("codegen failed for `__exit({code})`: {:?}", e));
+        assert!(
+            ir.contains(&format!("call void @__exit(i32 {expected})")),
+            "`__exit({code})` must clamp to {expected}: {ir}"
+        );
+    }
+}

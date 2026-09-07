@@ -54,11 +54,15 @@ impl TypeChecker {
         // below, which codegen has no symbol for.
         for item in &program.items {
             // A program may not bind a reserved name (`ast::reserved_for`); the corelib is
-            // where some of them are defined, so its declarations are exempt.
-            self.env.enforce_reserved_names = !matches!(
+            // where some of them are defined, so its declarations are exempt. A call to a
+            // bare `__`-prefixed compiler intrinsic is corelib-only surface for the same
+            // reason (see `checking_corelib_declaration`).
+            let from_corelib = matches!(
                 item,
                 Item::FunctionDeclaration(declaration) if declaration.from_corelib
             );
+            self.env.enforce_reserved_names = !from_corelib;
+            self.checking_corelib_declaration = from_corelib;
             if let Item::FunctionDeclaration(declaration) = item
                 && self.overloaded_names.contains(&declaration.name)
                 && !declaration.is_inert_corelib_placeholder()

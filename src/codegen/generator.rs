@@ -937,15 +937,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             _ => return Err(unsupported()),
         };
 
-        // Convert result to i32
+        // Convert the result to i32: clamped to the range first, so NaN and an infinity
+        // convert instead of poisoning the exit code (see `saturating_i32`).
         use inkwell::values::AnyValue;
         let return_val = match result.as_any_value_enum() {
-            inkwell::values::AnyValueEnum::FloatValue(f) => {
-                // Convert double to i32
-                self.builder
-                    .build_float_to_signed_int(f, i32_type, "result_int")
-                    .map_err(ctx("Failed to convert result"))?
-            }
+            inkwell::values::AnyValueEnum::FloatValue(f) => self.saturating_i32(f, "result_int")?,
             _ => {
                 // Return 0 if not a numeric result
                 i32_type.const_zero()

@@ -34,6 +34,13 @@ operating system refuses to start a native binary with one. Any other `^` signat
 a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported
 by `check` as well as `run`/`build`.
 
-**Exit code:** when `^`'s body evaluates to a `Num`, that value is the exit code. A body of any other type (e.g. a side-effecting block) exits **0**; an effect-only `main` ends without a trailing `0`. (The implicit 0 applies to `^`; an ordinary function returns its last expression's value.)
+**Exit code:** when `^`'s body evaluates to a `Num`, that value becomes the exit code by
+converting it to a whole number, clamping it to the 32-bit signed range first, then letting
+the operating system keep only its low 8 bits — the usual process-exit convention. NaN and
+negative infinity give **0**; positive infinity gives **255**. `__exit(code)` (the native
+primitive `assert`'s failure and `core.test`'s harness end with) converts its own `code`
+the same way. A body of any other type (e.g. a side-effecting block) exits **0**; an
+effect-only `main` ends without a trailing `0`. (The implicit 0 applies to `^`; an ordinary
+function returns its last expression's value.)
 
 (See `examples/hello_world.qn` and `examples/args.qn`.)

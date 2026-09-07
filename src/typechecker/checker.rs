@@ -637,6 +637,12 @@ pub struct TypeChecker {
     // restored around a nested declaration's own check so it still names the right
     // function afterward.
     pending_return_type: Option<(String, Span)>,
+    // Whether the top-level declaration currently being checked is the corelib's own (see
+    // `ast::FunctionDeclaration::from_corelib`), toggled the same way `env`'s
+    // `enforce_reserved_names` is. A bare `__`-prefixed compiler intrinsic (`__exit`,
+    // `__color_enabled`, `core.test`'s registry primitives) is reachable by name only
+    // there — `core.test`'s own harness is built on it — and undefined everywhere else.
+    checking_corelib_declaration: bool,
 }
 
 impl Default for TypeChecker {
@@ -667,6 +673,7 @@ impl TypeChecker {
             test_depth: 0,
             case_depth: 0,
             pending_return_type: None,
+            checking_corelib_declaration: false,
         };
 
         // Add built-in sum types to the environment
