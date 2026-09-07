@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## What this is
 
-Quilon is a compiler for a statically-typed, **symbol-based** language (`.qn` files) that compiles to native code via LLVM, written in Rust. It is at **0.9 — "stable basics"**: the core works end-to-end (verified by run tests), but it is not feature-complete. **The `docs/` tree (starting at `docs/README.md`) is the authoritative language reference, and `docs/status/feature-matrix.md` the feature matrix** — consult them for what's implemented; don't duplicate that list here.
+Quilon is a compiler for a statically-typed, **symbol-based** language (`.qn` files) that compiles to native code via LLVM, written in Rust. It is at **0.11 — "stable basics"**: the core works end-to-end (verified by run tests), but it is not feature-complete. **The `docs/` tree (starting at `docs/README.md`) is the authoritative language reference, and `docs/status/feature-matrix.md` the feature matrix** — consult them for what's implemented; don't duplicate that list here.
 
 **Planning & process docs (read these when working toward 1.0):**
 - **`docs/ROADMAP.md`** — the authoritative plan: milestone roadmap (M1–M7 + status). Design decisions are recorded in the language reference under `docs/` (see ROADMAP.md's own pointer near the top), and ROADMAP's milestone tables mark each one that is locked. What's decided, done, and next. Do not relitigate a locked decision without asking the user.

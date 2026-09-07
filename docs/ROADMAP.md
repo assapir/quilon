@@ -14,7 +14,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 - **How we build (multi-agent process + rules):** `docs/ORCHESTRATION.md`.
 - **Specific bugs, tasks, and detailed feature specs:** GitHub issues — **not** this file.
 
-0.9.0 is released; the stages below drive toward 1.0.
+0.11.0 is released; the stages below drive toward 1.0.
 
 ## Milestones
 

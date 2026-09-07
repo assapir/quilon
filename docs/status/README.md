@@ -6,7 +6,7 @@ sidebar:
 
 # Status
 
-Where Quilon stands at 0.9.
+Where Quilon stands at 0.11.
 
 - [Feature matrix](feature-matrix.md)
 - [Known limitations](limitations.md)
