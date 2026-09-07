@@ -822,7 +822,13 @@ The message states the contract; pass an argument that meets it.
 
 ### QN329 — top-level binding that has to be computed
 
-Retired by #245: a top-level binding's value may now be computed.
+Retired by #245: a top-level binding's value may now be computed. The program below —
+once rejected under this code — compiles cleanly.
+
+```quilon ignore
+total = 1 + 2
+^ = () -> Num => < total >
+```
 
 ### QN330 — operator defined at the top level
 
