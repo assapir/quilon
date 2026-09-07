@@ -1,0 +1,7 @@
+~ Test fixture: a module-private `:=` global written by the module's own exported function.
+passes := 0
+
+>> admit = () -> Num => <
+  passes := passes + 1
+  passes
+>

@@ -5,9 +5,8 @@
 //! way the active [`Reporter`] asks — the human report `docs/corelib/test/README.md` shows,
 //! or one JSON object per line for a tool.
 //!
-//! The state lives here because a test run needs state that outlives the call recording it,
-//! and Quilon has none to offer: a top-level `:=` binding does not persist across function
-//! calls. It is per thread, which keeps parallel runs in one process independent.
+//! The state lives here until it moves into `:=` globals in `corelib/test.qn`. It is per
+//! thread, which keeps parallel runs in one process independent.
 //!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
 //! as passed or failed. What ENDS a case at its first failing `expect` is a different

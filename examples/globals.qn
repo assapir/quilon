@@ -1,8 +1,8 @@
-~ Top-level bindings. A binding written outside any function becomes a global, and a
-~ global's initializer has to be a constant already: nothing runs before `^` in which to
-~ compute one. So the value may be a `Num`, `Bool` or `$` literal, or a function — and a
-~ computed one (a call, an operator, an array, a record, `Text`) is a compile error that
-~ says so and names the fix. See `examples/global_computed.qn` for the rejected form.
+~ Top-level bindings. A binding written outside any function becomes a global; every
+~ global's initializer runs once, before `^`, in file order, and may use anything defined
+~ above it — a literal, a function, a call, a record, a `Text`. A `:=` global is one
+~ program-wide mutable cell: a write from any function lands in that cell, and every later
+~ read, from any function, on any later call, sees it.
 ~ Every assertion below holds, so the program exits 0.
 << core.test
 
@@ -18,8 +18,25 @@ nothing = $
 ~ right-to-left script.
 ףסא = 12
 
-~ A `:=` binding is mutable wherever it lives; this one is written from inside `^` below.
+~ A Text global.
+greeting = "hello quilon"
+
+Turtle = { shellSize :: Num }
+
+~ A record global.
+pet = Turtle { shellSize = 5 }
+
+~ Computed from the function above it: `scale` is in scope because it comes first in the
+~ file.
+tripled = scale(limit)
+
+~ A `:=` binding is mutable wherever it lives.
 counter := 4
+
+bumpCounter = () -> Num => <
+  counter := counter + 1
+  counter
+>
 
 ^ = () -> $ => <
   assert(limit, equals(10))
@@ -28,8 +45,13 @@ counter := 4
   ~ A top-level function value is called like any other function.
   assert(scale(limit), equals(30))
   assert(ףסא, equals(12))
+  assert(greeting, equals("hello quilon"))
+  assert(pet.shellSize, equals(5))
+  assert(tripled, equals(30))
 
-  ~ Writing a global: the store lands in the one cell, so the read that follows sees it.
-  counter := counter + 1
-  assert(counter, equals(5))
+  ~ Writing a global from a function: the store lands in the one cell, so a second call
+  ~ sees the first call's write.
+  assert(bumpCounter(), equals(5))
+  assert(bumpCounter(), equals(6))
+  assert(counter, equals(6))
 >

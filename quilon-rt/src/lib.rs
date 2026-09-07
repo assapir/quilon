@@ -65,8 +65,9 @@ pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use http::__http_frame_body;
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{
-    __alloc, __alloc_array, __gc_init, __index_fail, __range_endpoint, __render_c_string, GcThread,
-    MAX_EXACT_NUM, check_range_endpoint, register_thread,
+    __alloc, __alloc_array, __gc_add_root, __gc_init, __index_fail, __range_endpoint,
+    __render_c_string, GcThread, MAX_EXACT_NUM, check_range_endpoint, register_thread,
+    remove_registered_roots,
 };
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
@@ -146,6 +147,7 @@ macro_rules! intrinsic_registry {
 
 intrinsic_registry! {
     __gc_init: extern "C" fn(),
+    __gc_add_root: extern "C" fn(*mut c_void, i64),
     __num_to_text: extern "C" fn(f64) -> QlSlice,
     __bool_to_text: extern "C" fn(i64) -> QlSlice,
     __exit: extern "C" fn(c_int) -> !,

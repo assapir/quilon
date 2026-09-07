@@ -50,6 +50,15 @@ c.value := 99                 ~ error: `c` is immutable
 c.bump(5)                     ~ error: `bump` is a setter; `c` is immutable
 ```
 
+## Globals
+
+A top-level `:=` binding is a mutable value like any other `:=` binding: a field write, a
+setter call, or a whole-value reassignment from inside a function reaches the same cell
+every other call sees. The alias rules — [deep immutability](#deep-immutability) included —
+apply across the global boundary exactly as they do between two functions: a global reached
+through `=` is immutable through every alias, and one reached through `:=` is mutable
+through every alias.
+
 ## Deep immutability
 
 `=` freezes the **value**. A value reached through an `=` binding is reachable through

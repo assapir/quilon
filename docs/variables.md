@@ -32,24 +32,37 @@ A bare `_` is the wildcard pattern, never an ordinary name. `true` and `false` a
 lexer's only two reserved words; every other word lexes as an ordinary name, and the
 checker reserves a handful of those (see the [symbol table](README.md#symbols)).
 
-## A top-level binding is a constant or a function
+## A top-level binding is computed before `^`
 
-A binding written outside any function is a **global**. A global's initializer is a
-constant: a `Num`, `Bool` or `$` literal, or a function. Mutable (`:=`) globals follow the
-same rule, and a `:=` global is writable from inside a function like any other.
+A binding written outside any function is a **global**. Every global's initializer runs
+once, before `^`, in file order — an imported module's globals run first, then the
+importer's own, top to bottom. An initializer sees every name defined above it in that
+order and none below it, the same no-hoisting rule an ordinary binding follows.
 
 ```quilon
-limit = 10              ~ fine
-enabled = true          ~ fine
-scale = (n :: Num) => < n * 3 > ~ fine — a function value
-counter := 4            ~ fine — and writable from a function
-
-doubled = limit * 2     ~ error: a computed value
-greeting = "hi"         ~ error: a Text is built at runtime
-sizes = [1, 2]          ~ error: an array is built at runtime
-origin = { x = 0 }      ~ error: a record is built at runtime
+limit = 10                       ~ a literal
+scale = (n :: Num) => < n * 3 >  ~ a function value
+doubled = scale(limit)           ~ computed from what is above
+counter := 0                     ~ a mutable cell, writable from a function
 ```
 
-A rejected binding reports what it is and names the fix: the work moves into the function
-that uses it. A computed binding *inside* a function is ordinary. (See
-`examples/globals.qn` and `examples/global_computed.qn`.)
+A `:=` global is **one cell for the whole program**: every function's write to it lands in
+that cell, and the next read — from any function, on any later call — sees it.
+
+```quilon
+counter := 0
+countSheep = () -> Num => <
+  counter := counter + 1
+  counter
+>
+~ countSheep() then countSheep() returns 2, not 1 twice
+```
+
+`>>` on a `:=` global is a compile error (`QN329`): mutation does not cross a module
+boundary. A function that reads or writes the cell is the export.
+
+```quilon ignore
+>> counter := 0   ~ error[QN329]: mutable global exported
+```
+
+(See `examples/globals.qn`.)

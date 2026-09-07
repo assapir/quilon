@@ -31,6 +31,7 @@ sidebar:
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Deep immutability: `=` freezes the value — aliasing across the `=`/`:=` line (bindings, containers, escaping method/function results, parameter laundering) is a compile error | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
+| Computed top-level bindings: an initializer runs once before `^`, in file order; a `:=` global is one program-wide mutable cell, and exporting one (`>>`) is a compile error | ✅ |
 | Guaranteed self-tail-call optimization (tail self-recursion runs in constant stack) | ✅ |
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`); endpoints must be whole numbers a `Num` holds exactly; consumed directly by an array method it iterates without materializing | ✅ |

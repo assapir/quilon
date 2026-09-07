@@ -121,7 +121,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN326 | constructor pattern on a non-sum value |
 | QN327 | unsupported `^` signature |
 | QN328 | invalid argument to a built-in |
-| QN329 | top-level binding that has to be computed |
+| QN329 | mutable global exported |
 | QN330 | operator defined at the top level |
 | QN331 | operator member with the wrong parameter count |
 | QN332 | assertion without a matcher |
@@ -819,18 +819,16 @@ where a value is required.
 
 The message states the contract; pass an argument that meets it.
 
-### QN329 — top-level binding that has to be computed
+### QN329 — mutable global exported
 
-A top-level `=` binding holds a call, an operator, an array, a record, or `Text`. A
-top-level binding becomes a global whose initializer is a constant.
+`>>` marks a top-level `:=` binding. A `:=` global is one mutable cell for the whole
+program; mutation does not cross a module boundary.
 
 ```quilon ignore
-total = 1 + 2
-^ = () -> Num => < total >
+>> secretSauce := 0
 ```
 
-Move the computation into `^` or the function that uses it; keep a top-level binding to a
-`Num`, `Bool`, or `$` literal, or a function.
+Export a function that reads or writes it instead.
 
 ### QN330 — operator defined at the top level
 
