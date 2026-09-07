@@ -93,19 +93,19 @@ linkedGreeting = "linked " + "again"
   written = io.write("bytes", io.stdout)
   assert(written, equals(5))
 
-  ~ The test registry, which `core.test`'s describe/it record through. Called directly,
+  ~ The test registry — the RENDERING half of the harness's event sink, called directly
   ~ because `quilon test` is the only thing that compiles a `describe` block and this gate
-  ~ is an ordinary program: one group, one case in it, and the total.
+  ~ is an ordinary program. The counting and nesting it used to do live in `core.test`'s own
+  ~ `:=` globals now, so a bare call here just exercises the link with placeholder arguments.
   assert(__test_suite_selected("group"), equals(1))
-  assert(__test_suite_enter("group"), equals(1))
-  assert(__test_depth(), equals(1))
+  __test_suite_enter("group", "group", 0)
   assert(__test_case_selected("case"), equals(1))
   assert(__test_case_failing(), equals(0))
   ~ __test_case_run_guarded, which `it`'s case body runs through — called directly here,
   ~ the way the rest of the registry above is (a `describe` block never compiles into an
   ~ ordinary program).
   __test_run_case(() => $)
-  assert(__test_case_finish("case"), equals(1))
+  __test_case_finish("case", "group/case", 1, 0)
   ~ __abort_trap_run and __abort_trap_report, via the `aborts()` matcher — every assertion
   ~ using it emits both, whichever way the assertion itself goes.
   assert(() => xs[9], aborts())
@@ -114,10 +114,7 @@ linkedGreeting = "linked " + "again"
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")
 
-  assert(__test_passed() >= 1, equals(true))
-  assert(__test_failed(), equals(0))
-  assert(__test_suite_leave(), equals(0))
-  assert(__test_summary(), equals(0))
+  assert(__test_summary(1, 0), equals(0))
 
   ~ __text_cmp and __text_length.
   assert("abc" < "abd", equals(true))

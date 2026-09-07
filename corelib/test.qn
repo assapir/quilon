@@ -37,8 +37,9 @@
 ~   caseFailing()  finishCase(name)                   ask about, then close, a case
 ~
 ~ ── The report ──────────────────────────────────────────────────────────────────────
-~ The lifecycle reports each event through the compiler's test registry, which renders it
-~ the way `quilon test` asked (`--reporter human|json`) and skips what `--only` left out.
+~ The lifecycle counts and nests here, then hands each event to the compiler's test
+~ registry, which only renders it the way `quilon test` asked (`--reporter human|json`);
+~ selection (`--only`) is checked here too, against the path a group or case sits at.
 << core.io
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
@@ -70,16 +71,32 @@
 >
 
 ~ ── The run's state ────────────────────────────────────────────────────────────────
+~ Owned here — the counters and the open `describe` names — rather than in the runtime:
+~ `quilon test` runs one suite per process and the JIT harness runs each program in its own
+~ module, so a `:=` global is already one cell per run and needs no lock. `__test_*` below
+~ takes what it renders as an argument instead of reading it back out of these.
+
+passedCases := 0
+failedCases := 0
+
+~ The names of the open `describe` groups, outermost first.
+openSuiteNames :: []Text := []
+
+~ The report path a `describe`/`it` named `name` sits at under the currently open groups —
+~ the names joined by `/`, `name` last (see docs/corelib/test/README.md's Paths section).
+pathTo = (name :: Text) -> Text => <
+  (openSuiteNames + name).reduce("", (path, segment) => path == "" ? segment : path + "/" + segment)
+>
 
 ~ How many cases have run with no failing `expect`.
->> casesPassed = () -> Num => < __test_passed() >
+>> casesPassed = () -> Num => < passedCases >
 
 ~ How many cases have run with at least one failing `expect`. Non-zero is what makes a
 ~ run exit non-zero.
->> casesFailed = () -> Num => < __test_failed() >
+>> casesFailed = () -> Num => < failedCases >
 
 ~ How many `describe` groups are open: 0 outside any group, 1 inside an outermost one.
->> nestingDepth = () -> Num => < __test_depth() >
+>> nestingDepth = () -> Num => < openSuiteNames.size >
 
 ~ ── The case lifecycle ─────────────────────────────────────────────────────────────
 ~ What `describe` and `it` call, in this order:
@@ -88,19 +105,49 @@
 
 ~ Open the group `name`, reporting it; yields the depth it sits at (1 for an outermost
 ~ group).
->> enterSuite = (name :: Text) -> Num => < __test_suite_enter(name) >
+>> enterSuite = (name :: Text) -> Num => <
+  depth = openSuiteNames.size
+  __test_suite_enter(name, pathTo(name), depth)
+  openSuiteNames := openSuiteNames + name
+  openSuiteNames.size
+>
 
-~ Close the group just entered; yields the depth that remains.
->> leaveSuite = () -> Num => < __test_suite_leave() >
+~ Drop the innermost open group's name — arrays have no built-in pop (see
+~ docs/collections/arrays.md), so this rebuilds the array with `reduce`, keeping every
+~ element short of the last.
+popSuite = () -> $ => <
+  empty :: []Text := []
+  openSuiteNames := openSuiteNames.reduce(
+    empty,
+    (kept, segment) => kept.size < openSuiteNames.size - 1 ? kept + segment : kept
+  )
+  $
+>
+
+~ Close the group just entered; yields the depth that remains. An unbalanced close is a
+~ no-op, so the depth cannot go negative.
+>> leaveSuite = () -> Num => <
+  openSuiteNames.size == 0 ? $ : popSuite()
+  openSuiteNames.size
+>
 
 ~ Whether the case now running has already failed an `expect`. A failing `expect` ends the
 ~ case right there, so this only ever answers for code that runs before one could have
 ~ failed.
 >> caseFailing = () -> Bool => < __test_case_failing() == 1 >
 
+~ Count the case just run against the run's totals.
+countPass = () -> $ => < passedCases := passedCases + 1 $ >
+countFailure = () -> $ => < failedCases := failedCases + 1 $ >
+
 ~ Close the case `name` that just ran, tallying it as passed or failed and reporting it;
 ~ yields the depth it sits at.
->> finishCase = (name :: Text) -> Num => < __test_case_finish(name) >
+>> finishCase = (name :: Text) -> Num => <
+  failed = __test_case_failing() == 1
+  failed ? countFailure() : countPass()
+  __test_case_finish(name, pathTo(name), openSuiteNames.size, failed ? 1 : 0)
+  openSuiteNames.size
+>
 
 ~ ── The harness ────────────────────────────────────────────────────────────────────
 
@@ -115,7 +162,7 @@ runSuite = (name :: Text, body :: () -> $) -> $ => <
 ~ A group of cases, nestable. `body` runs immediately; the group is only there to name
 ~ what it contains. A group the run did not select is passed over, body and all.
 >> describe = (name :: Text, body :: () -> $) -> $ => <
-  __test_suite_selected(name) == 1 ? runSuite(name, body) : $
+  __test_suite_selected(pathTo(name)) == 1 ? runSuite(name, body) : $
 >
 
 ~ A case's run: run its body, then close it. `__test_run_case` ends `body` at its first
@@ -131,10 +178,10 @@ runCase = (name :: Text, body :: () -> $) -> $ => <
 ~ right there — nothing after it runs — so the report says which way the case went and
 ~ the run continues with the next one. A case the run did not select is passed over.
 >> it = (name :: Text, body :: () -> $) -> $ => <
-  __test_case_selected(name) == 1 ? runCase(name, body) : $
+  __test_case_selected(pathTo(name)) == 1 ? runCase(name, body) : $
 >
 
 ~ The run's total, and its status — non-zero when any case failed. The synthesized entry
 ~ point `quilon test` runs ends with this call, so what it returns is what the suite exits
 ~ with.
->> reportSummary = () -> Num => < __test_summary() >
+>> reportSummary = () -> Num => < __test_summary(passedCases, failedCases) >
