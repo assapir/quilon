@@ -262,8 +262,8 @@ fn quilon_run(program: &Path, stdin: Stdio) -> (i32, String) {
     )
 }
 
-/// QN500/QN501/QN502: a fail-loud runtime check reports through the same coded frame a
-/// compile error does — `stderr` carries `error[QNxxx]:` literally — so their reference
+/// QN500/QN501/QN502/QN507: a fail-loud runtime check reports through the same coded frame
+/// a compile error does — `stderr` carries `error[QNxxx]:` literally — so their reference
 /// examples are checked the same way the front-end ones are, just run instead of checked.
 #[test]
 fn runtime_examples_raise_their_own_code() {
@@ -272,6 +272,7 @@ fn runtime_examples_raise_their_own_code() {
         Code::IndexOutOfBounds,
         Code::RangeEndpointNotWhole,
         Code::ReplaceAllEmptyFrom,
+        Code::StackOverflow,
     ] {
         let example = example_for(code)
             .unwrap_or_else(|| panic!("{code}: its reference section has no example"));
@@ -449,6 +450,7 @@ fn every_registered_code_has_a_verification_path() {
         Code::AllocationFailed,
         Code::ReadFailed,
         Code::ReplaceAllEmptyFrom,
+        Code::StackOverflow,
     ];
     let missing: Vec<String> = ALL
         .iter()

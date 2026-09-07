@@ -50,6 +50,7 @@ pub mod process;
 pub mod reactor;
 pub mod report;
 pub mod scheduler;
+pub mod stack_overflow;
 pub mod test_registry;
 pub mod text;
 pub mod time;

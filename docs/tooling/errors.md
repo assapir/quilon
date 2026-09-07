@@ -147,6 +147,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN504 | allocation failed |
 | QN505 | reading stdin failed |
 | QN506 | empty `from` in `replaceAll` |
+| QN507 | stack overflow |
 
 ## Input
 
@@ -1140,3 +1141,16 @@ error.)
 ```
 
 Pass a non-empty `from`.
+
+### QN507 — stack overflow
+
+Recursion deep enough to exhaust a fiber's stack hits its guard page. The report carries
+no source location — the frame that would have named one is itself the exhausted call.
+
+```quilon ignore
+deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >
+^ = () -> Num => < deep(10000000) >
+```
+
+Recurse fewer levels, or write the recursion as a self-tail-call — `n == 0 ? 0 : deep(n -
+1)` — which is lowered to a loop and runs in constant stack.

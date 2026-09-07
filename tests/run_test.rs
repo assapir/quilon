@@ -2524,6 +2524,25 @@ fn run_now_measures_that_sleep_actually_waited() {
     );
 }
 
+/// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
+/// exits 1, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
+/// the crash is real, and a JIT run in-process would take the test harness down with it.
+#[test]
+fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
+    let (code, stderr, _) = run_program(
+        "stack_overflow",
+        "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >",
+    );
+    assert_eq!(
+        code, 1,
+        "a stack overflow must exit with the runtime-error code: {stderr}"
+    );
+    assert_eq!(
+        stderr, "error[QN507]: stack overflow\n",
+        "stderr must report the new code and nothing else"
+    );
+}
+
 /// A non-ASCII function name, a non-ASCII record field, and a right-to-left local name
 /// (starting with a non-ASCII letter, unlike `größe`) work end to end under the JIT — the
 /// compiler mangles/emits by whatever bytes a name carries, not by an ASCII subset.

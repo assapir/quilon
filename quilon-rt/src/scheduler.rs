@@ -14,6 +14,7 @@
 
 use crate::gc;
 use crate::reactor::Reactor;
+use crate::stack_overflow;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 use mio::event::Source;
@@ -38,7 +39,8 @@ const FIBER_STACK_SIZE: usize = 512 * 1024;
 /// process stack default, so `^` recurses about as deeply as it would on one.
 ///
 /// The seed carries the whole user call tree, so it is much larger than a spawned fiber's
-/// stack. A fiber that runs out of stack dies on its guard page with a bare SIGSEGV.
+/// stack. A fiber that runs out of stack faults on its guard page, reported by
+/// [`crate::stack_overflow`] rather than left a bare `SIGSEGV`.
 ///
 /// A fixed size, not the process `RLIMIT_STACK`. The collector pushes a parked fiber's
 /// whole registered range, so a scan costs what the stack MEASURES, not what it uses: on
@@ -88,6 +90,11 @@ struct Fiber {
     /// The fiber's stack base (top of its GC-scannable range); set as Boehm's stack
     /// bottom while this fiber runs. The full range is mirrored in the GC registry.
     stack_high: usize,
+    /// This fiber's guard page, `[guard_low, guard_high)` — the one page a stack
+    /// overflow faults on. Recorded so [`stack_overflow`] can tell such a fault from
+    /// any other while this fiber is the one running.
+    guard_low: usize,
+    guard_high: usize,
 }
 
 struct Scheduler {
@@ -189,29 +196,38 @@ fn suspend_on(yielder: *const FiberYielder, park: Park) {
     CURRENT_YIELDER.set(yielder);
 }
 
-/// Resume `coroutine` (fiber `id`, stack base `high`) with Boehm's stack bottom pointed at
-/// it for the resume's duration, restoring whatever it covered before once the coroutine
-/// yields or returns. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both resume this
-/// way — a fiber is a fiber to the collector whichever loop is driving it.
+/// Resume `coroutine` (fiber `id`, stack base `high`, guard page `[guard_low, guard_high)`)
+/// with Boehm's stack bottom pointed at it and its guard page recorded for
+/// [`stack_overflow`], both restored to whatever they covered before once the coroutine
+/// yields or returns. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both resume
+/// this way — a fiber is a fiber to the collector and to stack-overflow reporting,
+/// whichever loop is driving it.
 fn resume_fiber(
     id: usize,
     high: usize,
+    guard_low: usize,
+    guard_high: usize,
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
     gc::enter_fiber(id, high);
+    let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
     let result = coroutine.resume(());
+    stack_overflow::restore_guard(previous_guard);
     gc::leave_fiber();
     result
 }
 
-/// A freshly allocated fiber stack, and the usable GC-scannable range `[low, high)` within
-/// it. [`spawn_with_stack`] and [`run_case_guarded`]'s nested coroutine both need exactly
-/// this — the range is what [`gc::register`] tracks by fiber id, so computing it once here
-/// is what keeps both callers registering the same way.
+/// A freshly allocated fiber stack, the usable GC-scannable range `[low, high)` within it,
+/// and its guard page's low end, `guard_low` — the page immediately below `low` is where a
+/// stack overflow faults (see `stack_overflow`), so the guard page is `[guard_low, low)`.
+/// [`spawn_with_stack`] and [`run_case_guarded`]'s nested coroutine both need exactly this —
+/// computing it once here is what keeps both callers registering with the GC, and
+/// reporting a stack overflow, the same way.
 struct FiberStackAllocation {
     stack: DefaultStack,
     low: usize,
     high: usize,
+    guard_low: usize,
 }
 
 fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
@@ -224,6 +240,7 @@ fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
         stack,
         low: limit + page_size(),
         high: base,
+        guard_low: limit,
     }
 }
 
@@ -241,7 +258,7 @@ fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCorouti
 /// Spawn `f` as a new fiber and enqueue it, with a stack of `stack_size` bytes.
 fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
     let allocation = allocate_fiber_stack(stack_size);
-    let (low, high) = (allocation.low, allocation.high);
+    let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
     let coroutine = new_fiber(allocation.stack, f);
 
     SCHEDULER.with(|s| {
@@ -253,6 +270,8 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
         scheduler.fibers[id] = Some(Fiber {
             coroutine,
             stack_high: high,
+            guard_low,
+            guard_high: low,
         });
         scheduler.ready.push_back(id);
         gc::register(id, low, high);
@@ -282,7 +301,7 @@ pub(crate) fn run_case_guarded(
     let outer_yielder = current_yielder("run_case_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
-    let (low, high) = (allocation.low, allocation.high);
+    let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
     let mut coroutine = new_fiber(allocation.stack, move || {
         function(environment);
     });
@@ -290,7 +309,7 @@ pub(crate) fn run_case_guarded(
     gc::register(id, low, high);
 
     let aborted = loop {
-        match resume_fiber(id, high, &mut coroutine) {
+        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
             CoroutineResult::Yield(Park::CaseAborted) => break true,
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break false,
@@ -354,7 +373,7 @@ pub(crate) fn run_abort_trap_guarded(
     let outer_yielder = current_yielder("run_abort_trap_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
-    let (low, high) = (allocation.low, allocation.high);
+    let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
     let mut coroutine = new_fiber(allocation.stack, move || {
         function(environment);
     });
@@ -363,7 +382,7 @@ pub(crate) fn run_abort_trap_guarded(
 
     ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
     let outcome = loop {
-        match resume_fiber(id, high, &mut coroutine) {
+        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
             CoroutineResult::Yield(Park::AbortTrapped(exit_code, report)) => {
                 break Some((exit_code, report));
             }
@@ -510,7 +529,13 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .pop_front()
                 .map(|id| (id, scheduler.fibers[id].take().unwrap()))
         }) {
-            let result = resume_fiber(id, fiber.stack_high, &mut fiber.coroutine);
+            let result = resume_fiber(
+                id,
+                fiber.stack_high,
+                fiber.guard_low,
+                fiber.guard_high,
+                &mut fiber.coroutine,
+            );
 
             match result {
                 CoroutineResult::Yield(Park::Sleep(deadline)) => with_scheduler(|scheduler| {
