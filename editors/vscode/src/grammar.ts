@@ -181,11 +181,14 @@ function compile(
 /**
  * Compile a TextMate regex as a JS *sticky* regex with capture indices: `y`
  * anchors a match to `lastIndex` (so probing position-by-position finds the
- * earliest start cleanly and never silently skips ahead), and `d` exposes each
- * group's span so a `match` rule's `captures` can be applied as sub-tokens.
+ * earliest start cleanly and never silently skips ahead), `d` exposes each
+ * group's span so a `match` rule's `captures` can be applied as sub-tokens, and
+ * `u` turns on the `\p{...}` Unicode property escapes the grammar's own
+ * identifier rules use (real Oniguruma, which VS Code runs on, supports those
+ * natively with no flag).
  */
 function sticky(source: string): RegExp {
-  return new RegExp(source, "yd");
+  return new RegExp(source, "yud");
 }
 
 /** Read a rule's `captures` into an index→scope map. */

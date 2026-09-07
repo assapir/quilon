@@ -861,8 +861,8 @@ pub fn completions_at(path: &Path, text: &str, offset: u32) -> Vec<CompletionIte
     }
 }
 
-fn is_ident_char(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+fn is_ident_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 /// `text` with the byte range `[start, end)` deleted.
@@ -874,14 +874,17 @@ fn without(text: &str, start: usize, end: usize) -> String {
 }
 
 /// The byte offset just before `offset` while scanning back over identifier characters —
-/// the start of the (possibly empty) word being typed there.
+/// the start of the (possibly empty) word being typed there. Scans by `char`, not by
+/// byte, so a name holding non-ASCII letters is never cut mid-character.
 fn word_start_before(text: &str, offset: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut i = offset;
-    while i > 0 && is_ident_char(bytes[i - 1]) {
-        i -= 1;
+    let mut start = offset;
+    for (idx, ch) in text[..offset].char_indices().rev() {
+        if !is_ident_char(ch) {
+            break;
+        }
+        start = idx;
     }
-    i
+    start
 }
 
 /// The byte offset of the `.` immediately before `offset`, once any partial member name

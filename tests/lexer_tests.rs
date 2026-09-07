@@ -422,3 +422,40 @@ fn test_parsed_nodes_inherit_their_files_id() {
         spans
     );
 }
+
+#[test]
+fn test_non_ascii_identifiers_lex_as_a_single_name() {
+    // A name starts with a Unicode `XID_Start` letter and continues with `XID_Continue`
+    // characters and `_` — German, Japanese, an accented Latin name, and a right-to-left
+    // Hebrew name (starting with a non-ASCII letter, unlike the others above) all lex as
+    // one `Ident` token, byte spans included.
+    for source in ["größe", "名前", "café", "ףסא"] {
+        let tokens = Lexer::tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident, "source: {source}");
+        assert_eq!(tokens[0].text, source, "source: {source}");
+        assert_eq!(tokens[0].span.start, 0);
+        assert_eq!(tokens[0].span.end, source.len() as u32);
+    }
+
+    // The right-to-left name's exact byte sequence — final PE, SAMEKH, ALEF, each a
+    // 2-byte UTF-8 codepoint — rather than trusting a source-editor round trip.
+    let tokens = Lexer::tokenize("ףסא").unwrap();
+    assert_eq!(
+        tokens[0].text.as_bytes(),
+        [0xD7, 0xA3, 0xD7, 0xA1, 0xD7, 0x90]
+    );
+}
+
+#[test]
+fn test_underscore_led_names_lex_as_one_ident_with_non_ascii_continuations() {
+    // `_` alone stays the wildcard; `_` followed by more characters (ASCII or not) is an
+    // ordinary name.
+    let tokens = Lexer::tokenize("_").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Underscore);
+
+    for source in ["_count", "_größe", "_ףסא"] {
+        let tokens = Lexer::tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident, "source: {source}");
+        assert_eq!(tokens[0].text, source, "source: {source}");
+    }
+}

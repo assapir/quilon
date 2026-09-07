@@ -17,6 +17,16 @@ All notable changes to Quilon are documented here.
   replaces a generated one (`host`/`connection`/`content-type`/`content-length`) of the
   same name, and every generated header line goes on the wire lower-cased. See
   `docs/corelib/http.md`.
+- **Identifiers accept Unicode letters and digits.** A name starts with a letter — any
+  Unicode `XID_Start` letter, ASCII or not — or `_`, and continues with letters, digits and
+  `_` (`XID_Continue`); `größe`, `名前`, `café` and `ףסא` (right-to-left) are ordinary
+  names, case-sensitive with no normalization. See `docs/variables.md#names`.
+- **A disallowed character glued to a name is its own error.** A definition or parameter
+  name immediately followed, with no space, by a character that isn't part of a name
+  (`isEmpty?`, `my-count`) raises
+  [QN113](docs/tooling/errors.md#qn113--disallowed-character-glued-to-a-name), naming the
+  character and the fix, instead of a downstream parse error naming the wrong token. Closes
+  #382.
 - **`core.http` sends HTTP/1.1 and dechunks a `Transfer-Encoding: chunked` reply.** A
   native intrinsic frames the body — chunked, `Content-Length`, or close-delimited — on raw
   bytes, since a boundary can fall inside a multi-byte character where grapheme-indexed

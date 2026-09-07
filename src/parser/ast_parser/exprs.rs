@@ -720,7 +720,7 @@ impl<'a> Parser<'a> {
     /// annotation (or just the name, when untyped) — not the annotation alone.
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let start = self.current_span();
-        let name = self.expect_ident()?;
+        let name = self.expect_definition_name()?;
         let type_annotation = if self.check(&TokenKind::TypeAnnotation) {
             self.advance();
             Some(self.parse_type()?)
