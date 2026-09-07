@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `"` inside a string's interpolation hole keeps the string open, and a hole gets its
+  own scope.** The `strings` grammar rule ended the string at the first `"` inside a
+  `` `hole` ``, mis-coloring the rest of the line; a hole (`meta.embedded.interpolation`,
+  delimited by `punctuation.section.interpolation.begin`/`end`) now re-includes the whole
+  grammar, so a `"` there opens a nested (possibly further-nested) string instead, and a
+  doubled backtick (`` `` ``) is a `constant.character.escape` that opens no hole. Closes
+  #400.
 - **`pnpm run package` no longer fails on a machine without `npm`.** `vsce` only
   recognizes `npm run <hook>` for a `vscode:prepublish` script, so it shelled out to
   `npm` even in this pnpm-only repo. Removed the `vscode:prepublish` script; `package`

@@ -154,6 +154,8 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **VS Code: a `"` inside a string's interpolation hole keeps the string open, and a hole
+  gets its own syntax-highlighting scope.** See the extension's own changelog. Closes #400.
 - **`^`'s exit code and `__exit` clamp a NaN or an infinity instead of converting poison.**
   `^ = () -> Num => < 0 / 0 >` used to exit 0 under `quilon run` but 1 from a native
   build, because the raw `f64`-to-`i32` conversion is undefined behavior for NaN and
