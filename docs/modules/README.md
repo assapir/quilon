@@ -65,6 +65,10 @@ an exported function may call a private sibling, and the importer reaches the ex
 alone — `math.helper` answers ``​`helper` is not exported by `math`​`` for a private
 `helper` and for an absent one alike.
 
+`>>` carries a function, a type, or an `=` binding. A `:=` binding stays private: mutation
+does not cross a module boundary, so a module exports a function that reads or writes it
+instead.
+
 An import is whole and named by the module: the binding carries every export under the
 module's own name. A module that builds on another holds it and delegates (composition):
 

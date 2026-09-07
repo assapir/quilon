@@ -12,6 +12,7 @@ use crate::io::write_to_fd;
 use crate::process::__exit;
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
+use std::sync::Mutex;
 
 // The Boehm GC, compiled from the `vendor/bdwgc` submodule by this crate's build
 // script and linked statically, so a compiled Quilon program carries its own
@@ -24,7 +25,16 @@ unsafe extern "C" {
     fn GC_register_my_thread(sb: *const GcStackBase) -> i32;
     fn GC_unregister_my_thread() -> i32;
     fn GC_get_stack_base(sb: *mut GcStackBase) -> i32;
+    fn GC_add_roots(low_address: *mut c_void, high_address_plus_1: *mut c_void);
+    fn GC_remove_roots(low_address: *mut c_void, high_address_plus_1: *mut c_void);
 }
+
+/// Every range `__gc_add_root` has registered with Boehm and not yet removed, as
+/// `(low_address, high_address_plus_1)` pairs — plain `usize`s, since a `*mut c_void`
+/// is not `Send`. Tracked so [`remove_registered_roots`] can hand each one back to
+/// `GC_remove_roots` individually, rather than clearing Boehm's whole dynamic root set
+/// (which would also discard a range some future, unrelated caller registered).
+static ADDED_ROOTS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 
 /// Boehm's description of a thread's stack extent, filled in by `GC_get_stack_base`.
 #[repr(C)]
@@ -37,6 +47,43 @@ struct GcStackBase {
 pub extern "C" fn __gc_init() {
     // Safe to call more than once; GC_init is idempotent.
     unsafe { GC_init() }
+}
+
+/// Register `bytes` bytes starting at `ptr` as an additional GC root.
+///
+/// Boehm scans `.data` but not memory the JIT maps at run time, so a computed global
+/// registers itself as a root here; harmless (redundant) under a native build.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __gc_add_root(ptr: *mut c_void, bytes: i64) {
+    if bytes <= 0 {
+        return;
+    }
+    // `GC_add_roots` takes an EXCLUSIVE upper bound, hence `ptr + bytes` and not `- 1`.
+    // SAFETY: `bytes` is that same global's own LLVM-computed size, so this stays within
+    // (one past) the allocation.
+    let high = unsafe { ptr.add(bytes as usize) };
+    unsafe { GC_add_roots(ptr, high) };
+    ADDED_ROOTS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push((ptr as usize, high as usize));
+}
+
+/// Remove every root [`__gc_add_root`] has registered and not yet removed.
+///
+/// A root it adds points into a computed global's storage, which for a JIT'd program
+/// is memory the execution engine owns and frees once that program's run returns —
+/// unlike a native build, where the same storage is ordinary process memory that lives
+/// as long as the process does. A host that runs many programs in one process (the
+/// in-process JIT) must call this after each run, once its exit code is in hand and
+/// before the next program allocates: otherwise a later collection walks a root left
+/// over from a finished program into memory the engine has since freed or reused.
+pub fn remove_registered_roots() {
+    let mut roots = ADDED_ROOTS.lock().unwrap_or_else(|p| p.into_inner());
+    for (low, high) in roots.drain(..) {
+        unsafe { GC_remove_roots(low as *mut c_void, high as *mut c_void) };
+    }
 }
 
 /// Prepare the collector for threads other than the one that initialized it, and
@@ -415,6 +462,58 @@ mod tests {
     fn the_widest_legal_span_fits_a_count() {
         let widest = 2.0 * MAX_EXACT_NUM + 1.0;
         assert!(widest < i64::MAX as f64, "{widest}");
+    }
+
+    #[test]
+    fn gc_add_root_accepts_a_fresh_allocation() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let p = __alloc(16);
+        __gc_add_root(p, 16);
+        // `ADDED_ROOTS` is a process-wide list every test in this file shares — leaving
+        // this root registered would leak into whichever GC-touching test runs next.
+        remove_registered_roots();
+    }
+
+    #[test]
+    fn gc_add_root_of_non_positive_size_is_a_no_op() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        __gc_add_root(std::ptr::null_mut(), 0);
+        __gc_add_root(std::ptr::null_mut(), -1);
+    }
+
+    /// A range `__gc_add_root` registers is exactly what `remove_registered_roots` hands
+    /// back to `GC_remove_roots`, and a fresh range registers again cleanly afterward —
+    /// what the JIT harness needs between one program's run and the next.
+    #[test]
+    fn gc_add_root_then_remove_then_add_again_round_trips() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+
+        let first = __alloc(16);
+        __gc_add_root(first, 16);
+        assert_eq!(
+            ADDED_ROOTS.lock().unwrap_or_else(|p| p.into_inner()).len(),
+            1
+        );
+
+        remove_registered_roots();
+        assert!(
+            ADDED_ROOTS
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
+        );
+
+        let second = __alloc(16);
+        __gc_add_root(second, 16);
+        assert_eq!(
+            ADDED_ROOTS.lock().unwrap_or_else(|p| p.into_inner()).len(),
+            1
+        );
+
+        remove_registered_roots();
     }
 
     #[test]

@@ -416,6 +416,15 @@ impl Walker<'_> {
                     self.type_(annotation, &declaration.span)?;
                 }
                 self.expression(&mut declaration.value)?;
+                // `counter := counter + 1` on the module's own global reassigns the
+                // renamed global, not a fresh local of the bare name.
+                if declaration.mutable
+                    && !self.bound_locally(&declaration.name)
+                    && let Some(renamed) = self.renames.get(declaration.name.as_str())
+                {
+                    declaration.name = renamed.clone();
+                    return Ok(());
+                }
                 self.declare(&declaration.name, &declaration.span)
             }
             // …while a local function is in scope for its own body (self-recursion).

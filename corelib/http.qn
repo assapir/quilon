@@ -426,14 +426,10 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
 << core.test
 
 ~ A well-formed CRLF reply with two headers and a five-character body.
-crlfReply = () -> Text => <
-  "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
->
+crlfReply = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello"
 
 ~ The same reply with bare LF endings, as a sloppy server writes it.
-lineFeedReply = () -> Text => <
-  "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5\n\nhello"
->
+lineFeedReply = "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 5\n\nhello"
 
 ~ Read a header, or a marker when it is absent, so a case can assert on plain `Text`.
 headerOr = (response :: Response, name :: Text, fallback :: Text) -> Text => <
@@ -464,10 +460,10 @@ test.describe("validating a reply", () => <
 
 test.describe("the status line", () => <
   test.it("reads the code of a normal reply", () =>
-    expect(parsed(crlfReply()).status(), equals(200)))
+    expect(parsed(crlfReply).status(), equals(200)))
 
   test.it("hands back the whole line, trimmed", () =>
-    expect(parsed(crlfReply()).statusLine(), equals("HTTP/1.1 200 OK")))
+    expect(parsed(crlfReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("accepts HTTP/1.0", () =>
     expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status(), equals(301)))
@@ -497,19 +493,19 @@ test.describe("the status line", () => <
 
 test.describe("headers", () => <
   test.it("finds a header by its exact name", () =>
-    expect(headerOr(parsed(crlfReply()), "Content-Type", "absent"), equals("text/html")))
+    expect(headerOr(parsed(crlfReply), "Content-Type", "absent"), equals("text/html")))
 
   test.it("looks a header up case-insensitively", () =>
-    expect(headerOr(parsed(crlfReply()), "content-type", "absent"), equals("text/html")))
+    expect(headerOr(parsed(crlfReply), "content-type", "absent"), equals("text/html")))
 
   test.it("looks a header up whatever the mix of cases", () =>
-    expect(headerOr(parsed(crlfReply()), "CoNtEnT-tYpE", "absent"), equals("text/html")))
+    expect(headerOr(parsed(crlfReply), "CoNtEnT-tYpE", "absent"), equals("text/html")))
 
   test.it("trims the name it is asked for", () =>
-    expect(headerOr(parsed(crlfReply()), "  Content-Type  ", "absent"), equals("text/html")))
+    expect(headerOr(parsed(crlfReply), "  Content-Type  ", "absent"), equals("text/html")))
 
   test.it("reports an absent header as NotOk", () =>
-    expect(parsed(crlfReply()).headers().get("X-Absent"), isNotOk()))
+    expect(parsed(crlfReply).headers().get("X-Absent"), isNotOk()))
 
   test.it("keeps the first of two headers with one name", () => <
     twice = parsed("HTTP/1.1 200 OK\r\nX-Pick: first\r\nX-Pick: second\r\n\r\n")
@@ -550,7 +546,7 @@ test.describe("headers", () => <
   >)
 
   test.it("lists every header name without the status line", () => <
-    two = parsed(crlfReply())
+    two = parsed(crlfReply)
     expect(two.headers().names().size, equals(2))
     expect(headerOr(two, "content-type", "absent"), equals("text/html"))
   >)
@@ -561,7 +557,7 @@ test.describe("headers", () => <
 
 test.describe("the body", () => <
   test.it("reads the text after the blank line", () =>
-    expect(parsed(crlfReply()).body(), equals("hello")))
+    expect(parsed(crlfReply).body(), equals("hello")))
 
   test.it("reads an empty body as empty", () =>
     expect(parsed("HTTP/1.1 204 No Content\r\nX-A: b\r\n\r\n").body(), equals("")))
@@ -639,19 +635,19 @@ test.describe("the body", () => <
 
 test.describe("line endings", () => <
   test.it("reads a bare-LF reply's status line", () =>
-    expect(parsed(lineFeedReply()).statusLine(), equals("HTTP/1.1 200 OK")))
+    expect(parsed(lineFeedReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("reads a bare-LF reply's status code", () =>
-    expect(parsed(lineFeedReply()).status(), equals(200)))
+    expect(parsed(lineFeedReply).status(), equals(200)))
 
   test.it("reads a bare-LF reply's headers", () => <
-    reply = parsed(lineFeedReply())
+    reply = parsed(lineFeedReply)
     expect(reply.headers().names().size, equals(2))
     expect(headerOr(reply, "content-type", "absent"), equals("text/html"))
   >)
 
   test.it("reads a bare-LF reply's body", () =>
-    expect(parsed(lineFeedReply()).body(), equals("hello")))
+    expect(parsed(lineFeedReply).body(), equals("hello")))
 
   test.it("splits at the first blank line when the body carries a CRLF one", () => <
     ~ LF headers, and a CRLF blank line inside the body: taking CRLF on sight would put
@@ -680,8 +676,8 @@ test.describe("line endings", () => <
   >)
 
   test.it("agrees with the CRLF reply field for field", () => <
-    crlf = parsed(crlfReply())
-    lineFeed = parsed(lineFeedReply())
+    crlf = parsed(crlfReply)
+    lineFeed = parsed(lineFeedReply)
     expect(lineFeed.statusLine(), equals(crlf.statusLine()))
     expect(lineFeed.status(), equals(crlf.status()))
     expect(lineFeed.body(), equals(crlf.body()))

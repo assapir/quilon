@@ -151,6 +151,18 @@ fn test_file_path_import_exported_item_usable() {
 }
 
 #[test]
+fn test_exported_computed_binding_reads_through_the_module_binding() {
+    // A top-level `=` binding may be computed now; `>>` still exports it, and an
+    // importer reads it through the module's own binding — `zoo.penguins`, not `penguins`.
+    let source = r#"
+        << "zoo.qn"
+        ^ = () -> Num => < zoo.penguins >
+    "#;
+    let result = check_with_base(source, &fixtures_dir());
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
 fn test_non_exported_name_is_not_visible() {
     // `secret` exists in mathlib.qn but is not exported -> must NOT resolve, and the
     // error must not distinguish "private" from "nonexistent".
