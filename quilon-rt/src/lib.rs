@@ -67,6 +67,7 @@ pub use io::{__color_enabled, __print_text_fd, __write_bytes};
 pub use mem::{
     __alloc, __alloc_array, __gc_add_root, __gc_init, __index_fail, __range_endpoint,
     __render_c_string, GcThread, MAX_EXACT_NUM, check_range_endpoint, register_thread,
+    remove_registered_roots,
 };
 pub use net::__tcp_request_launch;
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
