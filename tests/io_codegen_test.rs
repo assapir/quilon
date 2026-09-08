@@ -4,16 +4,32 @@
 // that `main` initializes the GC.
 
 use inkwell::context::Context;
+use quilon::ast::Item;
 use quilon::codegen::CodeGenerator;
 use quilon::lexer::Lexer;
 use quilon::parser::parse;
 
 fn gen_ir(source: &str) -> String {
+    gen_ir_marked(source, false)
+}
+
+/// [`gen_ir`], optionally marking every top-level function as the corelib's own first —
+/// the way `driver::front_end` marks a file it recognizes as one of the bundled corelib
+/// sources. A bare `__`-prefixed primitive (`__color_enabled`, `__exit`) is reachable by
+/// name only there.
+fn gen_ir_marked(source: &str, from_corelib: bool) -> String {
     // The sources reach the output built-ins the only way a program can — through
     // `<< core.io` — so the link that resolves the qualified names runs here too.
     let source = format!("<< core.io\n{source}");
     let tokens = Lexer::tokenize(&source).unwrap();
-    let program = parse(&tokens).unwrap();
+    let mut program = parse(&tokens).unwrap();
+    if from_corelib {
+        for item in &mut program.items {
+            if let Item::FunctionDeclaration(declaration) = item {
+                declaration.from_corelib = true;
+            }
+        }
+    }
     let program = quilon::modules::link(program, std::path::Path::new("."), None)
         .expect("import linking failed")
         .0;
@@ -161,8 +177,9 @@ fn main_wrapper_runs_a_pure_entry_on_a_fiber_too() {
 fn color_enabled_lowers_to_the_color_intrinsic() {
     // `__color_enabled(fd)` is an INTERNAL compiler-lowered primitive (like `__exit`, and
     // exported by no module): it becomes a `__color_enabled` call, so `core.test` does not
-    // have to guess at terminal detection in `.qn`.
-    let ir = gen_ir("^ = () -> Num => < __color_enabled(2) ? 1 : 0 >");
+    // have to guess at terminal detection in `.qn`. Reachable by bare name only from the
+    // corelib, so this generates from a corelib-style context (see `gen_ir_marked`).
+    let ir = gen_ir_marked("^ = () -> Num => < __color_enabled(2) ? 1 : 0 >", true);
     assert!(
         ir.contains("declare i64 @__color_enabled(i64)"),
         "__color_enabled must lower to the runtime intrinsic, got:\n{ir}"

@@ -3,22 +3,41 @@
 //! Byte-writing intrinsics backing `write`/`print`/`eprint`, plus the shared
 //! `write_to_fd` raw-syscall helper the fail-loud paths in `core`/`text` reuse.
 
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
 
+/// A `write` file descriptor as the non-negative whole number it must be, or the message
+/// saying why it is not.
+fn check_write_fd(fd: f64) -> Result<i32, String> {
+    if fd.fract() != 0.0 || fd < 0.0 || fd > i32::MAX as f64 {
+        return Err(format!(
+            "write: file descriptor must be a whole number of 0 or more, got {}",
+            crate::mem::format_num(fd)
+        ));
+    }
+    Ok(fd as i32)
+}
+
 /// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
-/// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin.
+/// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin — a
+/// descriptor that is not a whole number of 0 or more is refused loud, reported at `site`
+/// (the call's own location).
 ///
 /// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to at least `len` readable bytes; `fd` is a valid
-/// descriptor (e.g. `stdout`=1, `stderr`=2). The borrowed fd is never closed.
+/// `ptr` is null or points to at least `len` readable bytes; `site` is null or points to
+/// a valid [`QlSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __write_bytes(fd: i64, ptr: *const u8, len: i64) -> i64 {
+pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const QlSite) -> i64 {
+    let fd = match check_write_fd(fd) {
+        Ok(fd) => fd,
+        Err(message) => fail_at(site, codes::WRITE_FD_NOT_WHOLE, &message, RUNTIME_EXIT_CODE),
+    };
     if ptr.is_null() || len <= 0 {
         return 0;
     }
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    write_to_fd(fd, bytes)
+    write_to_fd(fd as i64, bytes)
 }
 
 /// Write `len` bytes from `ptr` to `fd` as human-readable text followed by a newline
@@ -124,10 +143,40 @@ mod tests {
     fn written(bytes: &[u8]) -> Vec<u8> {
         captured(|fd| {
             assert_eq!(
-                __write_bytes(fd, bytes.as_ptr(), bytes.len() as i64),
+                __write_bytes(
+                    fd as f64,
+                    bytes.as_ptr(),
+                    bytes.len() as i64,
+                    std::ptr::null()
+                ),
                 bytes.len() as i64
             );
         })
+    }
+
+    #[test]
+    fn a_whole_non_negative_fd_converts() {
+        assert_eq!(check_write_fd(0.0), Ok(0));
+        assert_eq!(check_write_fd(7.0), Ok(7));
+        assert_eq!(check_write_fd(i32::MAX as f64), Ok(i32::MAX));
+    }
+
+    #[test]
+    fn a_malformed_fd_is_refused() {
+        for (fd, shown) in [
+            (f64::NAN, "NaN"),
+            (f64::NEG_INFINITY, "-inf"),
+            (f64::INFINITY, "inf"),
+            (-1.0, "-1"),
+            (1.5, "1.5"),
+            (i32::MAX as f64 + 1.0, "2147483648"),
+        ] {
+            let message = check_write_fd(fd).expect_err("must be refused");
+            assert_eq!(
+                message,
+                format!("write: file descriptor must be a whole number of 0 or more, got {shown}")
+            );
+        }
     }
 
     #[test]

@@ -93,19 +93,19 @@ linkedGreeting = "linked " + "again"
   written = io.write("bytes", io.stdout)
   assert(written, equals(5))
 
-  ~ The test registry — the RENDERING half of the harness's event sink, called directly
-  ~ because `quilon test` is the only thing that compiles a `describe` block and this gate
-  ~ is an ordinary program. The counting and nesting it used to do live in `core.test`'s own
-  ~ `:=` globals now, so a bare call here just exercises the link with placeholder arguments.
-  assert(__test_suite_selected("group"), equals(1))
-  __test_suite_enter("group", "group", 0)
-  assert(__test_case_selected("case"), equals(1))
-  assert(__test_case_failing(), equals(0))
-  ~ __test_case_run_guarded, which `it`'s case body runs through — called directly here,
-  ~ the way the rest of the registry above is (a `describe` block never compiles into an
-  ~ ordinary program).
-  __test_run_case(() => $)
-  __test_case_finish("case", "group/case", 1, 0)
+  ~ The test registry — the RENDERING half of the harness's event sink — is corelib-only
+  ~ surface now (a bare `__test_*` name is undefined from a user file — see
+  ~ `tests/intrinsic_privacy_test.rs`), so this reaches every registry intrinsic that
+  ~ still exists through `core.test`'s own wrappers. `nestingDepth`/`casesPassed`/
+  ~ `casesFailed` moved into `core.test`'s own `:=` globals and call no intrinsic
+  ~ anymore, so they are not exercised here. These are ordinary NESTED calls, not a
+  ~ top-level test block, so `quilon build` still compiles and links them like any
+  ~ other function call.
+  test.describe("group", () => <
+    test.it("case", () => <
+      assert(test.caseFailing(), equals(false))
+    >)
+  >)
   ~ __abort_trap_run and __abort_trap_report, via the `aborts()` matcher — every assertion
   ~ using it emits both, whichever way the assertion itself goes.
   assert(() => xs[9], aborts())
@@ -114,7 +114,7 @@ linkedGreeting = "linked " + "again"
   ~ primitive, the terminal-color check, and `Text.repeat`.
   1 == 1 ? $ : test.failAt("unreachable")
 
-  assert(__test_summary(1, 0), equals(0))
+  assert(test.reportSummary(), equals(0))
 
   ~ __text_cmp and __text_length.
   assert("abc" < "abd", equals(true))

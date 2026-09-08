@@ -131,6 +131,7 @@ codes! {
     ReadFailed = 505 => "reading stdin failed",
     ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
     StackOverflow = 507 => "stack overflow",
+    WriteFdNotWhole = 508 => "invalid write file descriptor",
 }
 
 impl Code {
@@ -296,5 +297,6 @@ mod tests {
             Code::ReplaceAllEmptyFrom.number()
         );
         assert_eq!(codes::STACK_OVERFLOW, Code::StackOverflow.number());
+        assert_eq!(codes::WRITE_FD_NOT_WHOLE, Code::WriteFdNotWhole.number());
     }
 }

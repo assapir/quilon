@@ -179,11 +179,19 @@ impl TypeChecker {
         }
 
         // `__test_run_case(body)` (see `crate::ast::RUN_TEST_CASE`) — resolved here for
-        // the same reason as the assertions just above.
+        // the same reason as the assertions just above, but only from the corelib
+        // (`core.test`'s own `runCase`): it is `__`-prefixed compiler-internal surface
+        // the same way the `BuiltinOverload` names are, undefined from a user file.
         if let Expression::Identifier { name, .. } = function
             && !member_call
             && crate::ast::is_run_test_case(name)
         {
+            if !self.checking_corelib_declaration {
+                return Err(TypeError::UndefinedVariable {
+                    name: name.clone(),
+                    span: span.clone(),
+                });
+            }
             return self.check_run_test_case(arguments, span);
         }
 
@@ -512,6 +520,31 @@ impl TypeChecker {
         if let Expression::Identifier { name, .. } = function
             && self.overloads.contains_key(name)
         {
+            // A bare `__`-prefixed name is the compiler's own internal-primitive surface:
+            // outside the corelib, dispatch only among a user's OWN members of it (hiding
+            // the seeded builtin member for this one call), and a resulting no-match is the
+            // plain undefined-name error, never `NoMatchingOverload` naming the intrinsic's
+            // real signature.
+            if !member_call
+                && name.starts_with("__")
+                && !self.checking_corelib_declaration
+                && crate::ast::builtin_parameters(name).is_some()
+            {
+                let saved = self.overloads.remove(name).unwrap_or_default();
+                self.overloads.insert(
+                    name.to_string(),
+                    saved.iter().filter(|o| !o.is_builtin).cloned().collect(),
+                );
+                let result = self.check_overloaded_call(name, arguments, first_ty.as_ref(), span);
+                self.overloads.insert(name.to_string(), saved);
+                return result.map_err(|error| match error {
+                    TypeError::NoMatchingOverload { .. } => TypeError::UndefinedVariable {
+                        name: name.clone(),
+                        span: span.clone(),
+                    },
+                    other => other,
+                });
+            }
             return self.check_overloaded_call(name, arguments, first_ty.as_ref(), span);
         }
 
