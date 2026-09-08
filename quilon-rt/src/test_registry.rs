@@ -106,11 +106,11 @@ fn covered(path: &str, selection: &[String]) -> bool {
 
 fn emit(event: &Event) {
     let line = serde_json::to_vec(event).expect("a test event serializes");
-    __print_text_fd(1, line.as_ptr(), line.len() as i64);
+    __print_text_fd(1, line.as_ptr(), line.len() as i64, std::ptr::null());
 }
 
 fn print_line(line: &str) {
-    __print_text_fd(1, line.as_ptr(), line.len() as i64);
+    __print_text_fd(1, line.as_ptr(), line.len() as i64, std::ptr::null());
 }
 
 fn colored(text: &str, color: &str) -> String {

@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 
 /// A program that sends `PING\n` to `address`, matches the `Result`, and asserts the `Ok`
 /// response equals `expected`. The deferred `@tcpRequest` value is forced at the `?` match: a
-/// matching response exits 0, a mismatch trips the assertion (exit 101) — which proves the REAL
+/// matching response exits 0, a mismatch trips the assertion (exit 5) — which proves the REAL
 /// response bytes (not a constant) reached the compare — and a `NotOk` fails outright, which
 /// would flag a connection that should have succeeded.
 fn program(address: &str, expected: &str) -> String {
@@ -43,7 +43,7 @@ fn program(address: &str, expected: &str) -> String {
 
 /// A program that dials `address` (expected to refuse the connection) and passes ONLY if the
 /// exchange comes back as `NotOk` — a `Result` the program matches, not a crash. An `Ok` fails the
-/// assertion (exit 101), proving the failure is delivered as a value.
+/// assertion (exit 5), proving the failure is delivered as a value.
 fn failure_program(address: &str) -> String {
     format!(
         r#"
@@ -137,7 +137,7 @@ fn available_linker() -> Option<&'static str> {
 #[test]
 fn jit_tcp_request_round_trips_and_forces() {
     // Two connections: a matching-response run (exits 0) and a non-matching one (trips the
-    // assertion, exit 101) — the latter proving the forced value is the server's real bytes.
+    // assertion, exit 5) — the latter proving the forced value is the server's real bytes.
     let (address, server) = spawn_pong_server(2);
 
     let match_file = temp_ql("match", &program(&address, "PONG\\n"));
@@ -150,7 +150,7 @@ fn jit_tcp_request_round_trips_and_forces() {
     let mismatch_file = temp_ql("mismatch", &program(&address, "NOPE\\n"));
     assert_eq!(
         jit_run(&mismatch_file),
-        Some(101),
+        Some(5),
         "a non-matching expectation must trip the assertion, proving the real bytes flowed"
     );
 
@@ -213,7 +213,7 @@ fn aot_tcp_request_round_trips_and_forces() {
     let mismatch_binary = build("mismatch", "NOPE\\n");
     assert_eq!(
         run(Command::new(&mismatch_binary)),
-        Some(101),
+        Some(5),
         "native AOT: a non-matching expectation must trip the assertion"
     );
 
@@ -265,7 +265,7 @@ fn jit_tcp_request_reached_from_a_method_gets_a_scheduler() {
     let mismatch_file = temp_ql("method_mismatch", &method_program(&address, "NOPE\\n"));
     assert_eq!(
         jit_run(&mismatch_file),
-        Some(101),
+        Some(5),
         "a non-matching expectation must trip the assertion, proving the real bytes flowed"
     );
 

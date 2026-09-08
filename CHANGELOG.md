@@ -158,6 +158,17 @@ All notable changes to Quilon are documented here.
   match on raw UTF-8 bytes in the runtime (a grapheme boundary is always a byte boundary),
   so the same text is instant. `replaceAll`'s empty-`from` runtime check now reports a
   dedicated `QN506` instead of the generic assertion exit. See `docs/types/text.md`.
+- **BREAKING: a diagnostic's exit code is its `QN` family digit, not always 1.**
+  `quilon run`/`quilon build`/`quilon check`/`quilon compile` used to exit 1 for every
+  diagnostic — a parse error, an unresolved import, a type mismatch, a failed link, and
+  every runtime failure alike — with only a failing `assert`/`expect` standing out at 101.
+  Each now exits with its code's leading digit: 1 for `QN0xx`/`QN1xx` (lexer/parser), 2 for
+  `QN2xx` (imports), 3 for `QN3xx` (type checker), 4 for `QN4xx` (codegen/build), and 5 for
+  `QN5xx` (runtime — `assert`/`expect` included; `101` is gone). A script that greps a
+  `quilon` exit code for "did it fail" is unaffected; one that relied on 1 meaning
+  specifically a type error, or 101 meaning specifically an assertion, needs updating. A
+  program's own `^` return value is unchanged. See
+  [Exit codes](docs/tooling/errors.md#exit-codes). Closes #225.
 
 ### Fixed
 
@@ -183,6 +194,16 @@ All notable changes to Quilon are documented here.
   infinity, negative, a fraction, or past a 32-bit descriptor's range) now fails loud
   with a new [`QN508`](docs/tooling/errors.md#qn508--invalid-write-file-descriptor),
   pointing at the call site. See `docs/corelib/io.md`. Closes #367.
+- **A write to a closed reader fails loud instead of finishing quietly or dying to
+  `SIGPIPE`.** `quilon run program.qn | head -1` used to run to completion and exit 0,
+  silently dropping every line after the reader stopped (the host process ignores
+  `SIGPIPE`, so the dropped write looked like success); a native binary instead died to a
+  bare, message-less `SIGPIPE` (exit 141). A native binary now ignores `SIGPIPE` at
+  startup, so both paths behave alike: `write`/`print`/`eprint` retry an interrupted write
+  (`EINTR`) and otherwise report a new
+  [`QN509`](docs/tooling/errors.md#qn509--write-failed) at the call site and exit 5 — a
+  closed pipe (`EPIPE`), a descriptor naming no open file (`EBADF`), or another I/O error.
+  See `docs/corelib/io.md`. Closes #219.
 - **A user file can no longer call a bare compiler-internal primitive by name.**
   `^ = () -> Num => < __exit(3) 0 >` used to pass `quilon check`, reaching `__exit`,
   `__color_enabled`, and the rest of the compiler's internal `__`-prefixed primitives

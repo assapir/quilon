@@ -136,7 +136,7 @@ fn every_runnable_example_self_asserts() {
 }
 
 /// Every runnable example is self-asserting: it exits 0 under the in-process JIT.
-/// (A failed in-language assertion exits 101, so any regression fails here.)
+/// (A failed in-language assertion exits 5, so any regression fails here.)
 /// Point the process's stdin at `/dev/null` so an example that reads stdin (`@readStdin`)
 /// sees end-of-input immediately and returns `""` instead of blocking on a live terminal.
 /// The examples run in-process (below), so this must be the real fd 0. `/dev/null` reads as
@@ -192,7 +192,7 @@ fn tool_available(tool: &str) -> bool {
 /// BOTH linkers (`clang` and `gcc`) — and all paths must agree. This keeps the JIT
 /// and the two native link paths from silently diverging (e.g. an intrinsic only the
 /// JIT resolves, or a linker-specific break). A failed in-language assertion exits
-/// 101, so a broken example fails the gate naturally.
+/// 5, so a broken example fails the gate naturally.
 /// Skips a linker only if it's genuinely absent on PATH.
 #[test]
 fn runnable_examples_match_across_jit_and_aot() {

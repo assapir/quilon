@@ -1,5 +1,5 @@
 //! Checked array indexing, end to end: an invalid index (out of bounds, negative,
-//! or NaN) must be a CLEAR runtime error — a message on stderr and exit status 1 —
+//! or NaN) must be a CLEAR runtime error — a message on stderr and exit status 5 —
 //! never a raw memory read. The failing path terminates the process, so these tests
 //! drive the real `quilon` binary as a subprocess (an in-process JIT run would take
 //! the test harness down with it).
@@ -31,7 +31,7 @@ fn run(name: &str, source: &str) -> (i32, String) {
 #[test]
 fn out_of_bounds_index_aborts_with_message() {
     let (code, stderr) = run("oob", "^ = () -> Num => <\n  a = [1, 2, 3]\n  a[10]\n>");
-    assert_eq!(code, 1, "OOB index must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "OOB index must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains("index 10 out of bounds for an array of size 3"),
         "stderr must name the index and size, got: {stderr}"
@@ -41,7 +41,7 @@ fn out_of_bounds_index_aborts_with_message() {
 #[test]
 fn negative_index_aborts_with_message() {
     let (code, stderr) = run("neg", "^ = () -> Num => <\n  a = [1, 2, 3]\n  a[0 - 1]\n>");
-    assert_eq!(code, 1, "negative index must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "negative index must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains("index -1 out of bounds for an array of size 3"),
         "stderr must name the index and size, got: {stderr}"
@@ -53,7 +53,7 @@ fn nan_index_aborts_with_message() {
     // Before the check ran on the f64, a NaN index reached `fptosi` — poison, i.e.
     // undefined behavior the moment optimization is enabled.
     let (code, stderr) = run("nan", "^ = () -> Num => <\n  a = [1, 2, 3]\n  a[0 / 0]\n>");
-    assert_eq!(code, 1, "NaN index must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "NaN index must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains("index NaN out of bounds for an array of size 3"),
         "stderr must show the NaN index, got: {stderr}"
@@ -92,7 +92,7 @@ fn an_invalid_index_reports_its_own_location() {
         "located",
         "^ = () -> Num => <\n  a = [1, 2, 3]\n  n = 7\n  a[n]\n>",
     );
-    assert_eq!(code, 1);
+    assert_eq!(code, 5);
     assert!(
         stderr.starts_with("error[QN501]: index 7 out of bounds for an array of size 3\n")
             && stderr.contains(":4:3]"),

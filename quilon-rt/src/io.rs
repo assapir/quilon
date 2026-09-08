@@ -6,6 +6,21 @@
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
 
+/// The symbolic name a report shows for an errno this runtime's writes can plausibly hit —
+/// a closed reader (`EPIPE`), a descriptor with no write end (`EBADF`), a full disk
+/// (`ENOSPC`), or a reset connection (`ECONNRESET`). Anything else falls back to its raw
+/// number, which is still enough for a reader to look up.
+fn errno_name(errno: i32) -> String {
+    match errno {
+        libc::EPIPE => "EPIPE".to_string(),
+        libc::EBADF => "EBADF".to_string(),
+        libc::EIO => "EIO".to_string(),
+        libc::ENOSPC => "ENOSPC".to_string(),
+        libc::ECONNRESET => "ECONNRESET".to_string(),
+        other => format!("errno {other}"),
+    }
+}
+
 /// A `write` file descriptor as the non-negative whole number it must be, or the message
 /// saying why it is not.
 fn check_write_fd(fd: f64) -> Result<i32, String> {
@@ -37,7 +52,10 @@ pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const 
         return 0;
     }
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    write_to_fd(fd as i64, bytes)
+    match write_to_fd(fd as i64, bytes) {
+        Ok(n) => n,
+        Err(message) => fail_at(site, codes::WRITE_FAILED, &message, RUNTIME_EXIT_CODE),
+    }
 }
 
 /// Write `len` bytes from `ptr` to `fd` as human-readable text followed by a newline
@@ -46,28 +64,35 @@ pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const 
 /// `write`) passes bytes through verbatim.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to at least `len` readable bytes.
+/// `ptr` is null or points to at least `len` readable bytes; `site` is null or points to
+/// a valid [`QlSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_text_fd(fd: i64, ptr: *const u8, len: i64) {
+pub extern "C" fn __print_text_fd(fd: i64, ptr: *const u8, len: i64, site: *const QlSite) {
     let rendered = crate::text::text_str(ptr, len);
     // Text and newline in one buffer, so one `print` is one write: on a pipe that keeps a
     // line whole against a concurrent writer, and it costs one allocation either way.
     let mut line = Vec::with_capacity(rendered.len() + 1);
     line.extend_from_slice(rendered.as_bytes());
     line.push(b'\n');
-    write_to_fd(fd, &line);
+    if let Err(message) = write_to_fd(fd, &line) {
+        fail_at(site, codes::WRITE_FAILED, &message, RUNTIME_EXIT_CODE);
+    }
 }
 
-/// Write all `bytes` to descriptor `fd` without closing it. Returns bytes written.
+/// Write all `bytes` to descriptor `fd` without closing it, retrying a partial write and an
+/// interrupted one (`EINTR`) until every byte is placed. Returns bytes written, or a message
+/// naming the errno on any other failure — a closed reader (`EPIPE`) chief among them, since
+/// a native binary ignores `SIGPIPE` at startup (see `__gc_init`) so that failure reaches here
+/// as an error instead of a signal.
 ///
 /// Uses libc `write(2)` directly rather than `std::fs::File`. AOT-linked native
 /// binaries enter through the LLVM-generated C `main`, so the Rust std runtime is
 /// never initialized and std's higher-level I/O does not work there — a raw
 /// syscall does, and resolves identically under the JIT.
-pub(crate) fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
+pub(crate) fn write_to_fd(fd: i64, bytes: &[u8]) -> Result<i64, String> {
     if bytes.is_empty() {
-        return 0;
+        return Ok(0);
     }
     // SAFETY: `fd` is a live descriptor owned by the running program; we only
     // write to it (never close it). `buf`/`count` describe a valid byte slice.
@@ -83,12 +108,26 @@ pub(crate) fn write_to_fd(fd: i64, bytes: &[u8]) -> i64 {
                 bytes.len() - total,
             )
         };
-        if n <= 0 {
+        if n < 0 {
+            let error = std::io::Error::last_os_error();
+            let errno = error.raw_os_error().unwrap_or(0);
+            if errno == libc::EINTR {
+                continue;
+            }
+            // `io::Error`'s own message ends in " (os error N)"; swap that suffix for the
+            // symbolic name a reader actually recognizes.
+            let message = error.to_string();
+            let message = message
+                .strip_suffix(&format!(" (os error {errno})"))
+                .unwrap_or(&message);
+            return Err(format!("write failed: {message} ({})", errno_name(errno)));
+        }
+        if n == 0 {
             break;
         }
         total += n as usize;
     }
-    total as i64
+    Ok(total as i64)
 }
 
 /// Whether colored output is appropriate on file descriptor `fd`: 1 when it is a terminal
@@ -137,7 +176,7 @@ mod tests {
     }
 
     fn printed(bytes: &[u8]) -> Vec<u8> {
-        captured(|fd| __print_text_fd(fd, bytes.as_ptr(), bytes.len() as i64))
+        captured(|fd| __print_text_fd(fd, bytes.as_ptr(), bytes.len() as i64, std::ptr::null()))
     }
 
     fn written(bytes: &[u8]) -> Vec<u8> {
@@ -198,7 +237,7 @@ mod tests {
         // The `{ptr,len}` pair is the whole contract: bytes past `len` are not this Text's.
         let buffer = b"visible/hidden";
         assert_eq!(
-            captured(|fd| __print_text_fd(fd, buffer.as_ptr(), 7)),
+            captured(|fd| __print_text_fd(fd, buffer.as_ptr(), 7, std::ptr::null())),
             b"visible\n"
         );
     }
@@ -206,7 +245,7 @@ mod tests {
     #[test]
     fn a_null_or_empty_text_prints_just_the_newline() {
         assert_eq!(
-            captured(|fd| __print_text_fd(fd, std::ptr::null(), 0)),
+            captured(|fd| __print_text_fd(fd, std::ptr::null(), 0, std::ptr::null())),
             b"\n"
         );
         assert_eq!(printed(b""), b"\n");

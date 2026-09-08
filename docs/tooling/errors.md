@@ -11,6 +11,23 @@ parser, `2` module resolution and linking, `3` type checker, `4` codegen and bui
 runtime, `6` CLI and usage — and the other two run `x00` upward within it. Each code has a
 section below, and `quilon explain QN311` prints that section.
 
+## Exit codes
+
+A diagnostic's process exit code is its family digit: `quilon run`/`quilon build`/`quilon
+check`/`quilon compile` exit with the number below, and a compiled program exits the same
+way for a QN5xx it raises at run time (`assert`/`expect` included).
+
+| Family | Codes | Exit code |
+|--------|-------|-----------|
+| Lexer, parser | QN0xx, QN1xx | 1 |
+| Module resolution and linking | QN2xx | 2 |
+| Type checker | QN3xx | 3 |
+| Codegen and build | QN4xx | 4 |
+| Runtime | QN5xx | 5 |
+
+`quilon test`'s own pass/fail status (not a diagnostic) and clap's usage errors are
+unrelated to this table and keep their existing exit codes.
+
 For the program
 
 ```quilon ignore
@@ -49,8 +66,9 @@ report through — prints the frame `core.test` composes in Quilon: a `path:line
 position line, the message, and a caret run.
 
 Reports are colored when stderr is a terminal, and plain — the same frame with no escape
-sequences — when redirected or under `NO_COLOR` or `TERM=dumb`. A compile error exits 1; a
-failing `assert` exits 101.
+sequences — when redirected or under `NO_COLOR` or `TERM=dumb`. A compile error and a
+failing `assert` each exit with their own code's family digit (see [Exit codes](#exit-codes)
+above) — a type error exits 3, a failing `assert` exits 5.
 
 To stay robust on hostile or machine-generated input, the parser caps how deeply
 expressions nest: more than **128 levels** of parentheses, array/record literals, block
@@ -149,6 +167,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN506 | empty `from` in `replaceAll` |
 | QN507 | stack overflow |
 | QN508 | invalid write file descriptor |
+| QN509 | write failed |
 
 ## Input
 
@@ -1056,7 +1075,7 @@ Install `clang`, or pass `--linker gcc`.
 ### QN500 — assertion failed
 
 An `assert` or `expect` found its value outside what the matcher accepts. `assert` exits
-101; `expect` marks the running case failed and continues.
+5; `expect` marks the running case failed and continues.
 
 ```quilon ignore
 ^ = () -> $ => < assert(2 + 2, equals(5)) >
@@ -1171,3 +1190,18 @@ reached only through a descriptor the program computes itself.)
 ```
 
 Pass a whole descriptor of 0 or more.
+
+### QN509 — write failed
+
+A write that reached the operating system failed there — a closed reader (`EPIPE`), a
+descriptor that names no open file (`EBADF`), or another I/O error the write call reported.
+An interrupted write (`EINTR`) is retried transparently and never reaches here; `write`,
+`print`, and `eprint` all report through this code.
+
+```quilon ignore
+<< core.io
+
+^ = () -> Num => < io.write("smoke signal, delayed", 99) >
+```
+
+Pass a descriptor that names an open file, or a stream something is still reading.

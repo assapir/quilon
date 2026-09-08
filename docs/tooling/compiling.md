@@ -38,7 +38,8 @@ a single closing line — the file, the elapsed time, and a quip:
 The live line draws over itself and clears before the closing line prints; the closing
 line is what scrollback keeps. Off a terminal — a pipe, a redirected log, or a CI run (a
 terminal check, or `CI` set in the environment) — stderr carries the closing line alone.
-`quilon run` writes the program's output; a failure is reported the same way everywhere.
+`quilon run` writes the program's output; a failure is reported the same way everywhere,
+and exits with its code's family digit (see [Exit codes](errors.md#exit-codes)).
 
 - `--quiet` (`-q`, before or after the subcommand) silences status lines. Diagnostics
   print.

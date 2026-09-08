@@ -275,6 +275,7 @@ fn runtime_examples_raise_their_own_code() {
         Code::ReplaceAllEmptyFrom,
         Code::StackOverflow,
         Code::WriteFdNotWhole,
+        Code::WriteFailed,
     ] {
         let example = example_for(code)
             .unwrap_or_else(|| panic!("{code}: its reference section has no example"));
@@ -454,6 +455,7 @@ fn every_registered_code_has_a_verification_path() {
         Code::ReplaceAllEmptyFrom,
         Code::StackOverflow,
         Code::WriteFdNotWhole,
+        Code::WriteFailed,
     ];
     let missing: Vec<String> = ALL
         .iter()

@@ -11,7 +11,7 @@
 ~ `assert` and `expect` are provided by the COMPILER, so they need no import and are not
 ~ defined here. Both take the value under test and a matcher:
 ~
-~   assert(2 + 2, equals(4))    report at YOUR call site and exit 101 on failure
+~   assert(2 + 2, equals(4))    report at YOUR call site and exit 5 on failure
 ~   expect(2 + 2, equals(4))    report, then end the case (tests only) — the suite
 ~                               carries on with the next one
 ~
@@ -43,7 +43,7 @@
 << core.io
 
 ~ Report `message` at `site` — the location of the call that left the `site` argument off —
-~ in the compiler's diagnostic frame, then exit 101.
+~ in the compiler's diagnostic frame, then exit 5.
 >> failAt = (message :: Text, site :: Site) -> $ => <
   color = __color_enabled(io.stderr)
   position = color ? "\e[36m" : ""
@@ -67,7 +67,7 @@
   io.eprint("`frame``gutter` |`plain`")
   io.eprint("`frame``number` |`plain` `site.excerpt`")
   io.eprint("`frame``gutter` |`plain` `lead``problem``carets``plain`")
-  __exit(101)
+  __exit(5)
 >
 
 ~ ── The run's state ────────────────────────────────────────────────────────────────
