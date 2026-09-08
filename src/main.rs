@@ -89,7 +89,7 @@ enum Commands {
 /// The release codenames, matched against the package version.
 const CODENAMES: &str = include_str!("../release-codenames.tsv");
 
-/// `0.10.0 "Demosthenes"` — the version with its codename, when the release table names one —
+/// `0.11.0 "Rackham"` — the version with its codename, when the release table names one —
 /// and, on a line of its own so the first line stays parseable, a quip.
 fn version() -> String {
     let version = env!("CARGO_PKG_VERSION");

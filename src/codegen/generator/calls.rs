@@ -32,7 +32,7 @@ pub(super) enum InfoMember {
     Platform,
     /// Target operating system, spelled the way people say it: `"linux"`, `"macOS"`.
     Os,
-    /// The compiler's own version, e.g. `"0.10.0"`.
+    /// The compiler's own version, e.g. `"0.11.0"`.
     QuilonVersion,
     /// Pointer width in bits, as a `Num`.
     PointerBits,

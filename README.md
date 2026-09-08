@@ -6,7 +6,7 @@
 
 Quilon (`.qn`) has no control-flow keywords — syntax is built from symbols (`^`, `<<`, `>>`, `::`, `=>`, …). It targets native performance through LLVM with a small, unified type system.
 
-> **Status: 0.10.0 — "Demosthenes".** The core language compiles, runs, and is tested end-to-end. What is implemented is listed in the **[feature matrix](./docs/status/feature-matrix.md)**, and what is deferred under **[known limitations](./docs/status/limitations.md)**.
+> **Status: 0.11.0 — "Rackham".** The language and its toolchain — `build`, `run`, `test`, a language server, a VS Code extension — work end-to-end. What is implemented is listed in the **[feature matrix](./docs/status/feature-matrix.md)**, and what is deferred under **[known limitations](./docs/status/limitations.md)**.
 
 ## A taste
 
@@ -94,7 +94,7 @@ Run `./scripts/release.sh` from a clean `main`: it checks the `Cargo.toml`/`quil
 
 ## Vision (aspirational)
 
-Beyond 0.9, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language. The runtime is single-threaded today; the parallel machinery is direction, not delivery.
+Beyond 0.11, the design aims at **implicit parallelism** — sequential-looking code, parallel execution — and a **web-first** systems language. The runtime is single-threaded today; the parallel machinery is direction, not delivery.
 
 ## Contributors
 

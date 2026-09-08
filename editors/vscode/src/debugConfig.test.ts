@@ -173,7 +173,7 @@ test("toLldbConfiguration: no sourceMap when sourceFile is missing", () => {
   const config = toLldbConfiguration({
     name: "n",
     program: "/tmp/app",
-    corelibDir: "/home/user/.cache/quilon/corelib-0.10.0",
+    corelibDir: "/home/user/.cache/quilon/corelib-0.11.0",
   });
   assert.equal(config.sourceMap, undefined);
 });
@@ -183,10 +183,10 @@ test("toLldbConfiguration: adds the corelib sourceMap when both are given", () =
     name: "n",
     program: "/tmp/app",
     sourceFile: "/w/examples/hello.qn",
-    corelibDir: "/home/user/.cache/quilon/corelib-0.10.0",
+    corelibDir: "/home/user/.cache/quilon/corelib-0.11.0",
   });
   assert.deepEqual(config.sourceMap, {
-    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.11.0/corelib",
   });
 });
 
@@ -200,16 +200,16 @@ test("toLldbConfiguration: adds the corelib sourceMap when both are given", () =
 test("corelibSourceMap: maps <source dir>/corelib to <corelibDir>/corelib", () => {
   const map = corelibSourceMap(
     "/w/examples/http_get.qn",
-    "/home/user/.cache/quilon/corelib-0.10.0",
+    "/home/user/.cache/quilon/corelib-0.11.0",
   );
   assert.deepEqual(map, {
-    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+    "/w/examples/corelib": "/home/user/.cache/quilon/corelib-0.11.0/corelib",
   });
 });
 
 test("corelibSourceMap: a different source directory maps its own corelib prefix", () => {
-  const map = corelibSourceMap("/w/tests/suite.qn", "/home/user/.cache/quilon/corelib-0.10.0");
+  const map = corelibSourceMap("/w/tests/suite.qn", "/home/user/.cache/quilon/corelib-0.11.0");
   assert.deepEqual(map, {
-    "/w/tests/corelib": "/home/user/.cache/quilon/corelib-0.10.0/corelib",
+    "/w/tests/corelib": "/home/user/.cache/quilon/corelib-0.11.0/corelib",
   });
 });
