@@ -2,7 +2,7 @@
 
 All notable changes to Quilon are documented here.
 
-## 0.11.0 "Rackham" — 2026-09-07
+## 0.11.0 "Rackham" — 2026-09-08
 
 ### Added
 

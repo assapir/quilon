@@ -420,7 +420,7 @@ impl<'a> LambdaTarget<'a> {
 pub(crate) fn types_match(parameter: &Type, arg: &Type) -> bool {
     match (parameter, arg) {
         // `Generic` is a not-yet-concrete type — only a sum payload binding (the `T` in
-        // `Ok(T)`) produces one, since concrete sum-payload typing is a deferred 0.9
+        // `Ok(T)`) produces one, since concrete sum-payload typing is a deferred
         // feature. For overload dispatch a `Generic` resolves as `Num`, the canonical
         // working payload (numeric payloads are sound end-to-end), so `Ok(x) => x * 2`
         // dispatches `*` to its `(Num, Num)` member. This means an overloaded call on a
