@@ -172,6 +172,14 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **A sum or a record declared inside a function body carries its variants and methods
+  the way a top-level declaration's do.** `Shape = Circle(Num) / Square(Num)` written as a
+  statement inside `^`'s own body used to pass `quilon check` and then fail in codegen —
+  `Circle(6)` raised `Function not found: Circle` — because the sum-variant, operator, and
+  same-name-method-overload registration passes only scanned `program.items`, never a
+  nested `Statement::Item(Item::TypeDeclaration(_))`. They now also walk into every
+  function, method, and lambda body. See `docs/types/README.md#declared-inside-a-body` and
+  `examples/nested_types.qn`. Closes #323.
 - **VS Code: a `"` inside a string's interpolation hole keeps the string open, and a hole
   gets its own syntax-highlighting scope.** See the extension's own changelog. Closes #400.
 - **Go to definition, find references, and rename answer on a document with a type error
