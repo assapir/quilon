@@ -352,3 +352,43 @@ fn variant(name: &str, fields: Vec<Type>) -> crate::ast::SumVariant {
         fields,
     }
 }
+
+/// [`generate_checked`], but marking every top-level function `from_corelib` first —
+/// `__exit` is reachable by bare name only there.
+fn generate_from_corelib(code: &str) -> Result<String, String> {
+    let tokens = Lexer::tokenize(code).unwrap();
+    let mut program = parse(&tokens).unwrap();
+    for item in &mut program.items {
+        if let Item::FunctionDeclaration(declaration) = item {
+            declaration.from_corelib = true;
+        }
+    }
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .unwrap_or_else(|e| panic!("type check failed: {:?}", e));
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context, "test");
+    codegen.set_type_table(types);
+    codegen.generate(&program)
+}
+
+/// `__exit` is corelib-only surface, so this is the only way left to exercise its clamp.
+/// Every argument is a compile-time constant, so LLVM's constant folder reduces the whole
+/// clamp-then-convert sequence to the literal `i32` the call passes.
+#[test]
+fn exit_code_conversion_clamps_nan_and_infinities() {
+    for (code, expected) in [
+        ("0 / 0", i32::MIN),     // NaN clamps the same as -infinity.
+        ("0 - 1 / 0", i32::MIN), // -infinity.
+        ("1 / 0", i32::MAX),     // +infinity.
+        ("101", 101),            // An ordinary in-range code passes through untouched.
+    ] {
+        let source = format!("go = () -> $ => < __exit({code}) >");
+        let ir = generate_from_corelib(&source)
+            .unwrap_or_else(|e| panic!("codegen failed for `__exit({code})`: {:?}", e));
+        assert!(
+            ir.contains(&format!("call void @__exit(i32 {expected})")),
+            "`__exit({code})` must clamp to {expected}: {ir}"
+        );
+    }
+}

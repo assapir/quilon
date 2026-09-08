@@ -548,6 +548,10 @@ pub struct Overload {
     /// Whether this member is STATIC (never reads `it`), set per member since an
     /// overloaded name's members classify independently.
     pub(crate) is_static: bool,
+    /// Whether the compiler itself seeded this member (`add_builtin_overloads`), rather
+    /// than a user declaration — what a bare `__`-prefixed name's dispatch hides outside
+    /// the corelib (see `check_call`).
+    pub(crate) is_builtin: bool,
 }
 
 /// Whether a declaration sits at the top level of a module or inside some body (a
@@ -632,6 +636,10 @@ pub struct TypeChecker {
     // restored around a nested declaration's own check so it still names the right
     // function afterward.
     pending_return_type: Option<(String, Span)>,
+    // Whether the top-level declaration currently being checked is the corelib's own
+    // (`FunctionDeclaration::from_corelib`) — a bare `__`-prefixed intrinsic resolves only
+    // there.
+    checking_corelib_declaration: bool,
 }
 
 impl Default for TypeChecker {
@@ -662,6 +670,7 @@ impl TypeChecker {
             test_depth: 0,
             case_depth: 0,
             pending_return_type: None,
+            checking_corelib_declaration: false,
         };
 
         // Add built-in sum types to the environment

@@ -23,6 +23,11 @@ on the argument's type, calls it, and writes the resulting `Text`. A type become
 by defining that member. Every value renders except a **function** value; printing one is
 a compile error naming the missing member.
 
+`io.write`'s `fd` is a whole number of 0 or more — `io.stdout` and `io.stderr` always are.
+A computed `fd` that at run time is anything else (NaN, an infinity, negative, a fraction,
+or past what a 32-bit descriptor holds) fails loud at the call site with
+[`QN508`](../tooling/errors.md#qn508--invalid-write-file-descriptor).
+
 The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare
 `print` or `write` — at any signature — is an unrelated function beside `io.print`.

@@ -2726,3 +2726,64 @@ fn run_a_trap_inside_a_trap_each_catch_their_own_abort() {
         0,
     );
 }
+
+// --- Exit-code clamp (NaN / an infinity never reaches the raw float-to-int conversion) ----
+//
+// `assert_exit` compares the JIT's raw i32 return with no OS involved, so it is the wrong
+// tool here: `^`'s result is clamped to the 32-bit range in the compiled code, but the
+// LOW-8-BITS narrowing these tests are about is the operating system's own convention,
+// applied only when a process actually exits. `run_program` spawns the real `quilon run`
+// binary, so its reported code is what a user actually sees.
+
+/// `^`'s result is clamped to the 32-bit signed range before it converts to the process's
+/// exit code, so NaN — which the low-bound compare treats as "below the minimum", the same
+/// as -infinity — lands on i32::MIN, whose low 8 bits are 0.
+#[test]
+fn run_entry_point_nan_result_exits_zero() {
+    let (code, stderr, _) = run_program("entry_nan", "^ = () -> Num => < 0 / 0 >");
+    assert_eq!(code, 0, "a NaN result must exit 0, got {code}: {stderr}");
+}
+
+/// -infinity clamps to i32::MIN, whose low 8 bits are 0 — the same as NaN.
+#[test]
+fn run_entry_point_negative_infinity_result_exits_zero() {
+    let (code, stderr, _) = run_program("entry_neg_inf", "^ = () -> Num => < 0 - 1 / 0 >");
+    assert_eq!(
+        code, 0,
+        "a -infinity result must exit 0, got {code}: {stderr}"
+    );
+}
+
+/// +infinity clamps to i32::MAX, whose low 8 bits are 255.
+#[test]
+fn run_entry_point_positive_infinity_result_exits_255() {
+    let (code, stderr, _) = run_program("entry_pos_inf", "^ = () -> Num => < 1 / 0 >");
+    assert_eq!(
+        code, 255,
+        "a +infinity result must exit 255, got {code}: {stderr}"
+    );
+}
+
+/// A value inside i32's range but past a byte is untouched by the clamp — only the OS's
+/// own low-8-bits convention narrows it, exactly as it always did.
+#[test]
+fn run_entry_point_in_range_result_still_wraps_at_a_byte() {
+    let (code, stderr, _) = run_program("entry_in_range", "^ = () -> Num => < 300 >");
+    assert_eq!(code, 44, "300 must exit 44, got {code}: {stderr}");
+}
+
+/// The JIT/AOT parity gate for the clamp: a NaN result must exit 0 from a native build
+/// too, not just under `quilon run` — the clamp lives in codegen, so both paths emit it,
+/// but only a real link+run proves the native one wasn't left on the old `fptosi`.
+#[test]
+fn aot_entry_point_nan_result_exits_zero() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native NaN exit-code check: clang is not on PATH");
+        return;
+    }
+    let (code, _) = build_and_run_native("entry_nan_aot", "^ = () -> Num => < 0 / 0 >");
+    assert_eq!(
+        code, 0,
+        "a native build's NaN result must exit 0, got {code}"
+    );
+}

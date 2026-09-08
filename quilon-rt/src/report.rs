@@ -77,6 +77,7 @@ pub mod codes {
     pub const READ_FAILED: u16 = 505;
     pub const REPLACE_ALL_EMPTY_FROM: u16 = 506;
     pub const STACK_OVERFLOW: u16 = 507;
+    pub const WRITE_FD_NOT_WHOLE: u16 = 508;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants

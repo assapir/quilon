@@ -222,7 +222,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // value — the type checker already rejects `print(f)` (see
                 // `check_renderable_builtin_call`), so it never reaches here.
                 IntrinsicLowering::Print => self.generate_print(function_name, arguments),
-                IntrinsicLowering::Write => self.generate_write(arguments),
+                IntrinsicLowering::Write => self.generate_write(arguments, span),
                 IntrinsicLowering::Now => self.generate_now(),
                 IntrinsicLowering::ColorEnabled => self.generate_color_enabled(arguments),
                 // `__exit(code)` — the single native primitive `core.test` builds on
