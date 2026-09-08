@@ -57,3 +57,22 @@ log = (m :: Text) -> $ => < io.print(m) > ~ a function with a unit result
 
 Arrays (`[]T`) live with the other built-in parametric collections — see
 [`collections/arrays.md`](../collections/arrays.md).
+
+## Declared inside a body
+
+A sum or a record works the same when declared as a statement inside a function, method,
+or lambda body: its variants register as constructors and match targets, and its operator
+and overloaded methods join their overload sets, exactly as a top-level declaration's do.
+Name resolution follows the same top-down rule as every binding — a declaration is visible
+from its own statement to the end of the enclosing body.
+```quilon
+^ = () -> Num => <
+  Weather = Sunny(Num) / Stormy(Num)
+  forecast = Sunny(70)
+  forecast ?
+    | Sunny(degrees) => degrees
+    | Stormy(gustSpeed) => gustSpeed
+>
+```
+[`examples/nested_types.qn`](../../examples/nested_types.qn) declares a nested sum and a
+nested record with an operator member.

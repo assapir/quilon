@@ -1,0 +1,21 @@
+~ Declares a sum type and a record with an operator method as statements inside `^`'s
+~ own body, then constructs, matches, and operates on each. `<< core.test` verifies the
+~ results; on success the program exits 0.
+<< core.test
+
+^ = () -> $ => <
+  Weather = Sunny(Num) / Stormy(Num)
+  forecast = Sunny(70)
+  temperature = forecast ?
+    | Sunny(degrees) => degrees
+    | Stormy(gustSpeed) => gustSpeed
+  assert(temperature, equals(70))
+
+  Wallet = {
+    coins :: Num,
+    + = (other :: Wallet) -> Wallet => < Wallet { coins = it.coins + other.coins } >
+  }
+  pocket = Wallet { coins = 3 }
+  drawer = Wallet { coins = 4 }
+  assert((pocket + drawer).coins, equals(7))
+>
