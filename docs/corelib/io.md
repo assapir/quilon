@@ -30,8 +30,8 @@ or past what a 32-bit descriptor holds) fails loud at the call site with
 
 A write that reaches the operating system and fails there — a closed reader, a descriptor
 naming no open file, or another I/O error — fails loud at the call site with
-[`QN509`](../tooling/errors.md#qn509--write-failed) instead of ending the process silently
-or by signal; this holds for `io.print` and `io.eprint` as well as `io.write`.
+[`QN509`](../tooling/errors.md#qn509--write-failed); this holds for `io.print` and
+`io.eprint` as well as `io.write`.
 
 The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare
