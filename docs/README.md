@@ -6,7 +6,7 @@ title: "Quilon Language Reference"
 
 **Version:** 0.11.0 — "Rackham"
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example in this reference has a passing end-to-end test. Each `examples/*.qn` program is **self-asserting**: it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 101), under both the JIT (`quilon run`) and native AOT.
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example in this reference has a passing end-to-end test. Each `examples/*.qn` program is **self-asserting**: it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 5, [see the exit-code table](tooling/errors.md#exit-codes)), under both the JIT (`quilon run`) and native AOT.
 
 ## Design principles
 

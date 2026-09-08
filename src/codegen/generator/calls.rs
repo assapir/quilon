@@ -221,7 +221,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // default or user override). A function-typed argument is not a renderable
                 // value — the type checker already rejects `print(f)` (see
                 // `check_renderable_builtin_call`), so it never reaches here.
-                IntrinsicLowering::Print => self.generate_print(function_name, arguments),
+                IntrinsicLowering::Print => self.generate_print(function_name, arguments, span),
                 IntrinsicLowering::Write => self.generate_write(arguments, span),
                 IntrinsicLowering::Now => self.generate_now(),
                 IntrinsicLowering::ColorEnabled => self.generate_color_enabled(arguments),

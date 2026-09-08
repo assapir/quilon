@@ -40,11 +40,18 @@ struct GcStackBase {
     mem_base: *mut c_void,
 }
 
-/// Initialize the garbage collector. Emitted as the first call in `main`.
+/// Initialize the garbage collector, and turn off `SIGPIPE`'s default disposition
+/// (terminate the process) so a write to a closed pipe or socket reaches the caller as an
+/// `EPIPE` error instead — the same failure `write_to_fd` already reports loudly under the
+/// JIT, where the host process ignores `SIGPIPE` from the start. Emitted as the first call
+/// in `main`.
 #[unsafe(no_mangle)]
 pub extern "C" fn __gc_init() {
-    // Safe to call more than once; GC_init is idempotent.
-    unsafe { GC_init() }
+    // Safe to call more than once; both calls are idempotent.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        GC_init()
+    }
 }
 
 /// Register `bytes` bytes starting at `ptr` as an additional GC root: Boehm scans `.data`
@@ -199,7 +206,7 @@ fn out_of_memory(size: usize) -> ! {
         line[end..end + part.len()].copy_from_slice(part);
         end += part.len();
     }
-    write_to_fd(2, &line[..end]);
+    let _ = write_to_fd(2, &line[..end]);
     __exit(RUNTIME_EXIT_CODE)
 }
 
@@ -232,7 +239,7 @@ pub(crate) fn alloc_slots<T>(count: usize) -> *mut T {
 }
 
 /// Report an invalid array index — out of bounds, negative, or NaN — at the indexing
-/// expression that asked for it, and terminate with exit status 1: the fail-loud contract of
+/// expression that asked for it, and terminate with exit status 5: the fail-loud contract of
 /// checked `arr[i]` indexing.
 ///
 /// `index` is the ORIGINAL f64 the program computed (pre-truncation), so the message shows
@@ -285,7 +292,7 @@ pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
 }
 
 /// [`check_range_endpoint`] for an end the compiler could not evaluate: the endpoint as an
-/// `i64`, or a report at the range expression and exit status 1.
+/// `i64`, or a report at the range expression and exit status 5.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid [`QlSite`].

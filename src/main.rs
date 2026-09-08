@@ -109,10 +109,11 @@ fn version() -> String {
     format!("{named}\n{}", quips::pick(quips::BANNER))
 }
 
-/// Print `diagnostic` the way every report is printed, and exit 1.
+/// Print `diagnostic` the way every report is printed, and exit with its family digit
+/// (`QN3xx` exits 3, and so on — see [`Code::family`]).
 fn fail(diagnostic: &Diagnostic, sources: &SourceMap, status: &Status) -> ! {
     status.report(diagnostic, sources);
-    std::process::exit(1)
+    std::process::exit(diagnostic.code.family())
 }
 
 /// Run the shared front-end (read → lex → parse → resolve imports → type-check),

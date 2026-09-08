@@ -2290,6 +2290,61 @@ fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
     );
 }
 
+/// A sum type declared inside `^`'s own body: its variants must register the same as a
+/// top-level sum's, so the constructor `Circle(6)` and the match both resolve.
+#[test]
+fn run_nested_sum_type_constructor_and_match_resolve() {
+    assert_exit(
+        r#"
+^ = () -> Num => <
+  Shape = Circle(Num) / Square(Num)
+  s = Circle(6)
+  s ? | Circle(r) => r * r | Square(side) => side * side
+>
+"#,
+        36,
+    );
+}
+
+/// A record with an operator member (`+`) declared inside `^`'s own body: the operator
+/// must join the `+` overload set the same as a top-level record's, so `a + b` dispatches
+/// to it instead of falling through to the built-in `Num`/`Text` addition.
+#[test]
+fn run_nested_record_operator_member_dispatches() {
+    assert_exit(
+        r#"
+^ = () -> Num => <
+  Box = { v :: Num, + = (other :: Box) -> Box => < Box { v = it.v + other.v } > }
+  a = Box { v = 3 }
+  b = Box { v = 4 }
+  (a + b).v
+>
+"#,
+        7,
+    );
+}
+
+/// A record declared inside `^`'s own body with 2+ methods sharing a name at different
+/// signatures: the pair must form an overload set the same as a top-level record's, so
+/// each call resolves by its own argument type rather than colliding on one symbol.
+#[test]
+fn run_nested_record_overloaded_methods_dispatch_by_signature() {
+    assert_exit(
+        r#"
+^ = () -> Num => <
+  Fortuneteller = {
+    hunch :: Num,
+    predict = () -> Num => < it.hunch >,
+    predict = (boost :: Num) -> Num => < it.hunch + boost >
+  }
+  seer = Fortuneteller { hunch = 3 }
+  seer.predict() + seer.predict(4)
+>
+"#,
+        10,
+    );
+}
+
 #[test]
 fn run_line_first_paren_is_new_statement() {
     // Statement-boundary rule end-to-end: without it, `x = f()` followed by the line
@@ -2525,7 +2580,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 }
 
 /// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
-/// exits 1, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
+/// exits 5, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
 /// the crash is real, and a JIT run in-process would take the test harness down with it.
 #[test]
 fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
@@ -2534,7 +2589,7 @@ fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
         "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >",
     );
     assert_eq!(
-        code, 1,
+        code, 5,
         "a stack overflow must exit with the runtime-error code: {stderr}"
     );
     assert_eq!(
@@ -2626,7 +2681,7 @@ fn native_aot_non_ascii_function_name_and_record_field() {
 // in-process — those run as subprocesses, under both the JIT and native AOT, mirroring
 // `tests/assert_test.rs`'s own reasoning for assertion failures.
 
-const ABORTS_FAIL_CODE: i32 = 101;
+const ABORTS_FAIL_CODE: i32 = 5;
 
 /// `aborts()` holds when the lambda ends in a fail-loud exit — here, an out-of-bounds
 /// index. `examples/assert_demo.qn` covers the `Text.replace` contract-check example from

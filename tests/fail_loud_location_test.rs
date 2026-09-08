@@ -28,7 +28,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
         "assertion",
         "<< core.test\n^ = () -> $ => <\n  assert(1, equals(2))\n>\n",
     );
-    assert_eq!(assert_code, 101);
+    assert_eq!(assert_code, 5);
     assert_eq!(
         assert_stderr,
         format!(
@@ -47,7 +47,10 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
         "bounds",
         "^ = () -> Num => <\n  a = [1]\n  n = 9\n  a[n]\n>\n",
     );
-    assert_eq!(bounds_code, 1, "a bounds failure keeps its own exit code");
+    assert_eq!(
+        bounds_code, 5,
+        "a bounds failure exits with the same QN5xx family digit as an assertion"
+    );
     assert_eq!(
         bounds_stderr,
         format!(

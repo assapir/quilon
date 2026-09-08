@@ -872,7 +872,7 @@ mod tests {
             0
         }
         extern "C" fn aborts(_environment: *mut c_void) -> u8 {
-            crate::report::fail_at(ptr::null(), 500, "trapped for a unit test", 101)
+            crate::report::fail_at(ptr::null(), 500, "trapped for a unit test", 5)
         }
 
         on_gc_thread(|| {
@@ -885,7 +885,7 @@ mod tests {
 
                 let outcome = run_abort_trap_guarded(aborts, ptr::null_mut());
                 let (exit_code, report) = outcome.expect("the lambda aborted");
-                assert_eq!(exit_code, 101);
+                assert_eq!(exit_code, 5);
                 assert!(report.contains("trapped for a unit test"));
                 assert!(
                     !abort_trap_active(),
@@ -898,13 +898,13 @@ mod tests {
     #[test]
     fn a_trap_inside_a_trap_catches_its_own_abort_and_keeps_the_reports_apart() {
         extern "C" fn inner_aborts(_environment: *mut c_void) -> u8 {
-            crate::report::fail_at(ptr::null(), 500, "inner", 101)
+            crate::report::fail_at(ptr::null(), 500, "inner", 5)
         }
         extern "C" fn outer(_environment: *mut c_void) -> u8 {
             let inner = run_abort_trap_guarded(inner_aborts, ptr::null_mut());
             assert!(inner.is_some(), "the inner trap must catch its own abort");
             assert!(abort_trap_active(), "the outer trap is still in progress");
-            crate::report::fail_at(ptr::null(), 500, "outer", 101)
+            crate::report::fail_at(ptr::null(), 500, "outer", 5)
         }
 
         on_gc_thread(|| {

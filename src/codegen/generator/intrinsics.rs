@@ -56,7 +56,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__exit" => void.fn_type(&[ctx.i32_type().into()], false),
             // void __index_fail(double index, i64 size, Site* site) — report an invalid
             // array index (out of bounds / negative / NaN) at `site` (the `arr[i]`
-            // expression's own location) and terminate with status 1. Never returns;
+            // expression's own location) and terminate with status 5. Never returns;
             // codegen emits `unreachable` after the call.
             "__index_fail" => void.fn_type(&[f64t.into(), i64t.into(), ptr.into()], false),
             // void __match_fail(Site* site) — report a `?`/`|` match that no arm matched at
@@ -64,7 +64,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // codegen emits `unreachable` after the call.
             "__match_fail" => void.fn_type(&[ptr.into()], false),
             // i64 __range_endpoint(double value, Site* site) — one endpoint of `lo <- hi`
-            // as an i64, or a report at `site` (the range expression) and status 1 for a
+            // as an i64, or a report at `site` (the range expression) and status 5 for a
             // fractional, NaN, or out-of-i64 value.
             "__range_endpoint" => i64t.fn_type(&[f64t.into(), ptr.into()], false),
             // i8* memcpy(i8*, i8*, i64) — libc.
@@ -81,8 +81,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__write_bytes" => {
                 i64t.fn_type(&[f64t.into(), ptr.into(), i64t.into(), ptr.into()], false)
             }
-            // void __print_text_fd(i64 fd, i8* ptr, i64 len) — text + newline to fd.
-            "__print_text_fd" => void.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
+            // void __print_text_fd(i64 fd, i8* ptr, i64 len, Site* site) — text + newline
+            // to fd; the runtime reports a write failure at `site` (QN509) and terminates.
+            "__print_text_fd" => {
+                void.fn_type(&[i64t.into(), ptr.into(), i64t.into(), ptr.into()], false)
+            }
             // { ptr, i64 } __num_to_text(double) — render a Num (integer-valued without
             // decimals, else shortest round-trip). Backs the built-in `` ` `` for Num.
             "__num_to_text" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
@@ -348,11 +351,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// its `` ` `` operator (the same render path as string interpolation), then write it —
     /// followed by a newline — to stdout (`print`, fd 1) or stderr (`eprint`, fd 2). Any
     /// value is printable because every type has a `` ` `` (built-in default or override).
-    /// Yields `$` (Unit), so it composes in expression position.
+    /// A write that fails (a closed reader, chief among them) reports at `span` (the call's
+    /// own location) and terminates; otherwise this yields `$` (Unit), so it composes in
+    /// expression position.
     pub(super) fn generate_print(
         &mut self,
         name: &str,
         args: &[Expression],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if args.len() != 1 {
             return Err(format!(
@@ -364,9 +370,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let fd = if name == "core.io.eprint" { 2 } else { 1 };
         let fd_val = self.context.i64_type().const_int(fd, false);
         let (data, len) = self.render_text_parts(&args[0], "print")?;
+        let site = self.site_value(span)?;
         let print_fn = self.get_intrinsic("__print_text_fd")?;
         self.builder
-            .build_call(print_fn, &[fd_val.into(), data.into(), len.into()], "")
+            .build_call(
+                print_fn,
+                &[fd_val.into(), data.into(), len.into(), site.into()],
+                "",
+            )
             .map_err(ctx("Failed to build print call"))?;
         // `print`/`eprint` yield Unit (`$`); their result is meaningless.
         Ok(self.unit_value().into())

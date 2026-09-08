@@ -14,7 +14,7 @@
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{QlSlice, alloc_slots, alloc_text, format_num};
-use crate::report::{ASSERTION_EXIT_CODE, QlSite, codes, fail_at};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -268,7 +268,7 @@ pub extern "C" fn __text_replace_all(
             site,
             codes::REPLACE_ALL_EMPTY_FROM,
             "replaceAll: `from` must not be empty",
-            ASSERTION_EXIT_CODE,
+            RUNTIME_EXIT_CODE,
         );
     }
     let hay = text_str(hptr, hlen);

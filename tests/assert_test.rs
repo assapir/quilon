@@ -1,8 +1,8 @@
 //! The provided assertions: `assert(actual, matcher)` end-to-end.
 //!
 //! A holding assertion does nothing; a FAILING one prints a located report to stderr and
-//! exits **101** (the Rust-panic convention, distinct from the small result codes examples
-//! use as their normal exit status).
+//! exits **5** (the QN5xx runtime family's own digit, distinct from the small result codes
+//! examples use as their normal exit status).
 //!
 //! The report names the failing call's own `file:line:column` and underlines it, wherever the
 //! call sits — inside a helper, or inside an imported module. Those are the cases under
@@ -21,7 +21,7 @@ use std::process::Command;
 mod common;
 use common::{ensure_runtime_lib, frame, position};
 
-const FAIL_CODE: i32 = 101;
+const FAIL_CODE: i32 = 5;
 
 fn quilon() -> &'static str {
     env!("CARGO_BIN_EXE_quilon")
@@ -567,7 +567,7 @@ fn the_value_under_test_is_evaluated_once() {
 // --- Native AOT parity -----------------------------------------------------
 
 /// The exit-code contract must also hold for native AOT binaries (both linkers): a holding
-/// assertion exits 0, a failing one exits 101 with a located stderr report. This is the path
+/// assertion exits 0, a failing one exits 5 with a located stderr report. This is the path
 /// that would expose a missing runtime symbol (the JIT maps symbols by address and could mask
 /// an AOT link failure).
 #[test]

@@ -18,14 +18,12 @@ use crate::scheduler::{abort_current_case, abort_current_trap, abort_trap_active
 use crate::test_registry::{Failure, mark_case_failed};
 use std::os::raw::c_int;
 
-/// The exit status a failing `assert` leaves — the Rust-panic convention, so a self-verifying
-/// program fails loudly in CI.
-pub const ASSERTION_EXIT_CODE: c_int = 101;
-
-/// The exit status every OTHER fail-loud runtime check leaves — an invalid `arr[i]`, a
-/// failed allocation, a range endpoint that is not a whole number, a match no arm matched,
-/// an `@` primitive that could not do what it was asked.
-pub(crate) const RUNTIME_EXIT_CODE: c_int = 1;
+/// The exit status every fail-loud runtime check leaves — a failing `assert`/`expect`, an
+/// invalid `arr[i]`, a failed allocation, a range endpoint that is not a whole number, a
+/// match no arm matched, an `@` primitive that could not do what it was asked: the QN5xx
+/// family's own digit, matching `diagnostic::codes::Code::family` for every other
+/// pipeline stage.
+pub(crate) const RUNTIME_EXIT_CODE: c_int = 5;
 
 /// A call site as the code generator materializes it — the runtime mirror of the built-in
 /// `Site` record (`file`, `line`, `column`, `excerpt`, `width`), in declaration order.
@@ -78,6 +76,7 @@ pub mod codes {
     pub const REPLACE_ALL_EMPTY_FROM: u16 = 506;
     pub const STACK_OVERFLOW: u16 = 507;
     pub const WRITE_FD_NOT_WHOLE: u16 = 508;
+    pub const WRITE_FAILED: u16 = 509;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants
@@ -145,7 +144,7 @@ pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: 
 /// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
 pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
     let out = render_report(site, code, message, &Style::for_stderr());
-    write_to_fd(2, out.as_bytes());
+    let _ = write_to_fd(2, out.as_bytes());
 }
 
 /// Render the frame [`report_at`] writes to stderr, WITHOUT writing it — the pure half
@@ -186,7 +185,7 @@ fn render_report(site: *const QlSite, code: u16, message: &str, style: &Style) -
 }
 
 /// A failing `assert(actual, matcher)`: report `message` at the assertion's own call site and
-/// terminate with [`ASSERTION_EXIT_CODE`]. Never returns.
+/// terminate with [`RUNTIME_EXIT_CODE`]. Never returns.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
@@ -196,7 +195,7 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
         site,
         codes::ASSERTION_FAILED,
         &message_text(message, length),
-        ASSERTION_EXIT_CODE,
+        RUNTIME_EXIT_CODE,
     )
 }
 

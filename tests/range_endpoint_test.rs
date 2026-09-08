@@ -98,7 +98,7 @@ fn a_computed_endpoint_a_num_cannot_hold_aborts() {
         ),
     ] {
         let (code, stderr, _) = run_program(tag, source);
-        assert_eq!(code, 1, "{tag} must exit 1: {stderr}");
+        assert_eq!(code, 5, "{tag} must exit 5: {stderr}");
         assert!(
             stderr.contains(&expected),
             "{tag} must say why, got: {stderr}"
@@ -111,7 +111,7 @@ fn a_computed_endpoint_a_num_cannot_hold_aborts() {
 #[test]
 fn an_abort_reports_the_range_expression() {
     let (code, stderr, path) = run_program("range_located", NAN_END);
-    assert_eq!(code, 1);
+    assert_eq!(code, 5);
     let expected = format!(
         "error[QN502]: a range endpoint must be a whole number (got NaN)\n{}",
         frame(&position(&path, 2, 7), 2, 7, "  r = 1 <- (0.0 / 0.0)", 15)
@@ -131,7 +131,7 @@ fn a_native_build_refuses_a_computed_endpoint() {
         return;
     }
     let (code, stdout) = build_and_run_native("range_nan_native", NAN_END);
-    assert_eq!(code, 1, "a native build must exit 1 on a NaN end: {stdout}");
+    assert_eq!(code, 5, "a native build must exit 5 on a NaN end: {stdout}");
 }
 
 /// Ends that ARE whole are untouched by any of this — negative, and computed.
@@ -169,7 +169,7 @@ fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
         ),
     ] {
         let (code, stderr, _) = run_program(tag, source);
-        assert_eq!(code, 1, "{tag} must exit 1: {stderr}");
+        assert_eq!(code, 5, "{tag} must exit 5: {stderr}");
         assert!(
             stderr.contains("a range endpoint must be a whole number (got NaN)"),
             "{tag} must say why, got: {stderr}"

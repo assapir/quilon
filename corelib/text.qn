@@ -74,7 +74,7 @@ replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Te
 >
 
 ~ Replace EXACTLY the first `count` occurrences of `from` with `to`, left to right;
-~ `count` truncates toward zero. Fails loudly (exit 101) on an empty `from`, a
+~ `count` truncates toward zero. Fails loudly (exit 5) on an empty `from`, a
 ~ non-positive `count`, or a `count` beyond the occurrences present — no clamp, no no-op.
 replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> Text => <
   from.size == 0 ? test.failAt("replace: ``from`` must not be empty", site) : $
@@ -83,7 +83,7 @@ replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> T
   replaceOnto("", t, from, from.length, to, n, n, site)
 >
 
-~ `count` copies of `t`, back to back; 0 yields `""`. Fails loudly (exit 101) on a
+~ `count` copies of `t`, back to back; 0 yields `""`. Fails loudly (exit 5) on a
 ~ negative, fractional, or non-finite `count` — the checker rejects a literal one at
 ~ compile time, this is the backstop for a computed one.
 repeat = (t :: Text, count :: Num, site :: Site) -> Text => <

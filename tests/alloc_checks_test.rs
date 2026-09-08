@@ -1,5 +1,5 @@
 //! Checked allocation, end to end: an array whose backing store cannot be had must be a
-//! CLEAR runtime error — a message on stderr and exit status 1 — never a one-byte block the
+//! CLEAR runtime error — a message on stderr and exit status 5 — never a one-byte block the
 //! fill then writes past, and never a null `data` pointer paired with a non-zero length. The
 //! failing path terminates the process, so these tests spawn the real `quilon` binary (an
 //! in-process JIT run would take the harness down with it).
@@ -23,7 +23,7 @@ const UNOBTAINABLE_RANGE: &str = "^ = () -> Num => <\n  xs = 1 <- 90071992547409
 #[test]
 fn an_allocation_the_collector_cannot_satisfy_aborts() {
     let (code, stderr, _) = run_program("alloc_oom", UNOBTAINABLE_RANGE);
-    assert_eq!(code, 1, "a failed allocation must exit 1: {stderr}");
+    assert_eq!(code, 5, "a failed allocation must exit 5: {stderr}");
     assert!(
         stderr.contains("out of memory: cannot allocate 72057594037927936 bytes"),
         "stderr must name the size that could not be had, got: {stderr}"
@@ -39,7 +39,7 @@ fn a_native_build_refuses_the_same_size() {
         return;
     }
     let (code, _) = build_and_run_native("alloc_oom_native", UNOBTAINABLE_RANGE);
-    assert_eq!(code, 1, "a native build must exit 1 on the same size");
+    assert_eq!(code, 5, "a native build must exit 5 on the same size");
 }
 
 /// The check is on the size, not on the program: ordinary arrays — a literal, a range, a

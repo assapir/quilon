@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 
 /// A program that binds `@readStdin()` to `line` and asserts it equals `"hello"`. The deferred
 /// value is forced at the `equals` comparison: matching input exits 0, anything else trips
-/// the assertion (exit 101) — which is what proves the real read value reached the compare.
+/// the assertion (exit 5) — which is what proves the real read value reached the compare.
 const ASSERT_READ: &str = r#"
 << core.io
 << core.test
@@ -104,7 +104,7 @@ fn jit_read_forces_at_a_strict_comparison() {
     let (code, _) = jit_run(&file, b"goodbye\n");
     assert_eq!(
         code,
-        Some(101),
+        Some(5),
         "a non-matching @readStdin value must trip the assertion"
     );
 
@@ -170,7 +170,7 @@ fn aot_read_forces_at_a_strict_comparison() {
     let (bad_code, _) = run_with_stdin(Command::new(&binary), b"goodbye\n");
     assert_eq!(
         bad_code,
-        Some(101),
+        Some(5),
         "native AOT: non-matching @readStdin must trip the assertion"
     );
 

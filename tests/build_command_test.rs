@@ -298,7 +298,7 @@ fn default_build_runs_the_tail_recursion_example() {
 }
 
 /// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
-/// exits 1 in a native build too — not a bare, message-less `SIGSEGV`. The JIT/native
+/// exits 5 in a native build too — not a bare, message-less `SIGSEGV`. The JIT/native
 /// paths share the guard-page handler (both run the same generated `main`), so this pins
 /// the native side of the same behavior `run_test.rs` pins for the JIT.
 #[test]
@@ -338,7 +338,7 @@ fn native_build_reports_stack_overflow_not_a_bare_segfault() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert_eq!(
         run.status.code(),
-        Some(1),
+        Some(5),
         "a native stack overflow must exit with the runtime-error code: {stderr}"
     );
     assert_eq!(
@@ -412,6 +412,46 @@ double = (x :: Num) -> Num => < x * 2 >
         optimized_bytes, debug_bytes,
         "a default build and a --debug build produced byte-identical output"
     );
+}
+
+/// A sum type declared inside `^`'s own body must build to a real native binary the same
+/// way a top-level one does: the JIT-only test (`run_test.rs`) does not exercise the
+/// separate object-emission and linking path `quilon build` takes.
+#[test]
+fn nested_sum_type_builds_and_runs_natively() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping nested-sum-type build gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+
+    let src = "\
+^ = () -> Num => <
+  Shape = Circle(Num) / Square(Num)
+  s = Circle(6)
+  s ? | Circle(r) => r * r | Square(side) => side * side
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_nested_sum_build_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let out = dir.join("prog");
+    let mut cmd = Command::new(quilon);
+    cmd.args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(run.status.code(), Some(36), "wrong exit code");
 }
 
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no

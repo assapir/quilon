@@ -1281,7 +1281,7 @@ fn an_assert_in_a_case_is_still_fatal() {
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
 
-    assert_eq!(out.code, 101, "a failing `assert` exits 101");
+    assert_eq!(out.code, 5, "a failing `assert` exits 5");
     assert!(
         !out.stdout.contains("never reached") && !out.stdout.contains("passed,"),
         "a fatal assert must end the run where it failed:\n{}",
