@@ -60,144 +60,53 @@ fn ctx<E: std::fmt::Debug>(what: &'static str) -> impl FnOnce(E) -> String {
     move |e| format!("{what}: {e:?}")
 }
 
-/// Every [`TypeDeclaration`] the program reaches: at the top level, and nested inside any
-/// function, method, or lambda body a sum or a record with methods may be declared in — a
-/// type works the same wherever it is declared. `generate`'s registration pre-passes read
-/// this instead of scanning `program.items` directly so a nested declaration's variants and
-/// overload-set members are registered before codegen runs, exactly like a top-level one's.
-fn all_type_declarations(program: &Program) -> Vec<&TypeDeclaration> {
-    let mut found = Vec::new();
+/// Every [`TypeDeclaration`] the program reaches, top-level and nested inside a body
+/// alike, via the shared [`crate::ast::walk`] traversal.
+fn all_type_declarations<'a>(program: &'a Program) -> Vec<&'a TypeDeclaration> {
+    let mut found: Vec<&'a TypeDeclaration> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::TypeDeclaration(declaration) => Some(declaration),
+            _ => None,
+        })
+        .collect();
+
+    let mut collect_from_blocks = |expression: &'a Expression| -> std::ops::ControlFlow<()> {
+        if let Expression::Block { statements, .. } = expression {
+            for statement in statements {
+                if let crate::ast::Statement::Item(Item::TypeDeclaration(declaration)) = statement {
+                    found.push(declaration);
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    };
     for item in &program.items {
-        collect_type_declarations_in_item(item, &mut found);
+        match item {
+            Item::TypeDeclaration(declaration) => {
+                for method in declaration.type_definition.methods() {
+                    let _ = crate::ast::walk::try_for_each_subexpression(
+                        &method.body,
+                        &mut collect_from_blocks,
+                    );
+                }
+            }
+            Item::FunctionDeclaration(declaration) => {
+                let _ = crate::ast::walk::try_for_each_subexpression(
+                    &declaration.body,
+                    &mut collect_from_blocks,
+                );
+            }
+            Item::VariableDeclaration(declaration) => {
+                let _ = crate::ast::walk::try_for_each_subexpression(
+                    &declaration.value,
+                    &mut collect_from_blocks,
+                );
+            }
+        }
     }
     found
-}
-
-fn collect_type_declarations_in_item<'a>(item: &'a Item, found: &mut Vec<&'a TypeDeclaration>) {
-    match item {
-        Item::TypeDeclaration(declaration) => {
-            found.push(declaration);
-            for method in declaration.type_definition.methods() {
-                collect_type_declarations_in_expression(&method.body, found);
-            }
-        }
-        Item::FunctionDeclaration(declaration) => {
-            collect_type_declarations_in_expression(&declaration.body, found);
-        }
-        Item::VariableDeclaration(declaration) => {
-            collect_type_declarations_in_expression(&declaration.value, found);
-        }
-    }
-}
-
-fn collect_type_declarations_in_expression<'a>(
-    expression: &'a Expression,
-    found: &mut Vec<&'a TypeDeclaration>,
-) {
-    match expression {
-        Expression::Block { statements, .. } => {
-            for statement in statements {
-                match statement {
-                    crate::ast::Statement::Item(item) => {
-                        collect_type_declarations_in_item(item, found)
-                    }
-                    crate::ast::Statement::Expression(e) => {
-                        collect_type_declarations_in_expression(e, found)
-                    }
-                }
-            }
-        }
-        Expression::Lambda { body, .. }
-        | Expression::UnaryOperator {
-            expression: body, ..
-        }
-        | Expression::FieldAccess {
-            expression: body, ..
-        }
-        | Expression::Spread {
-            expression: body, ..
-        } => collect_type_declarations_in_expression(body, found),
-        Expression::If {
-            condition,
-            then,
-            else_,
-            ..
-        } => {
-            collect_type_declarations_in_expression(condition, found);
-            collect_type_declarations_in_expression(then, found);
-            collect_type_declarations_in_expression(else_, found);
-        }
-        Expression::Match {
-            expression, arms, ..
-        } => {
-            collect_type_declarations_in_expression(expression, found);
-            for arm in arms {
-                collect_type_declarations_in_expression(&arm.body, found);
-            }
-        }
-        Expression::BinaryOperator { left, right, .. }
-        | Expression::Range {
-            start: left,
-            end: right,
-            ..
-        }
-        | Expression::FieldAssign {
-            target: left,
-            value: right,
-            ..
-        }
-        | Expression::IndexAssign {
-            target: left,
-            value: right,
-            ..
-        }
-        | Expression::Index {
-            expression: left,
-            index: right,
-            ..
-        } => {
-            collect_type_declarations_in_expression(left, found);
-            collect_type_declarations_in_expression(right, found);
-        }
-        Expression::Call {
-            function,
-            arguments,
-            ..
-        } => {
-            collect_type_declarations_in_expression(function, found);
-            for argument in arguments {
-                collect_type_declarations_in_expression(argument, found);
-            }
-        }
-        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
-            for element in elements {
-                collect_type_declarations_in_expression(element, found);
-            }
-        }
-        Expression::MapLiteral { entries, .. } => {
-            for (key, value) in entries {
-                collect_type_declarations_in_expression(key, found);
-                collect_type_declarations_in_expression(value, found);
-            }
-        }
-        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
-            for (_, value) in fields {
-                collect_type_declarations_in_expression(value, found);
-            }
-        }
-        Expression::Interpolation { parts, .. } => {
-            for part in parts {
-                if let InterpolationPart::Hole(e) = part {
-                    collect_type_declarations_in_expression(e, found);
-                }
-            }
-        }
-        Expression::Identifier { .. }
-        | Expression::Number { .. }
-        | Expression::String { .. }
-        | Expression::Bool { .. }
-        | Expression::Unit { .. } => {}
-    }
 }
 
 /// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
@@ -640,12 +549,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
-        // Every type declaration the program reaches, top-level AND nested inside a
-        // function/method/lambda body alike — a type works the same wherever it is
-        // declared, so the three registration passes below (sum variants, and the two
-        // overload-set kinds a type's methods can form) must see all of them, not just
-        // the top-level ones, and must see them before any function signature below is
-        // pre-declared (a top-level function may take an earlier sum type as a parameter).
+        // Feeds the three registration passes below (sum variants, and the two
+        // overload-set kinds a type's methods can form), top-level and nested alike.
         let type_declarations = all_type_declarations(program);
 
         // Pre-pass: register all user sum-type variants so constructors and pattern

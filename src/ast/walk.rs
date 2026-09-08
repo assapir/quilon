@@ -17,9 +17,9 @@ use std::ops::ControlFlow;
 ///
 /// To visit everything, return `ControlFlow::Continue(())` throughout. To search, break —
 /// the walk then stops instead of traversing the rest.
-pub fn try_for_each_subexpression<B>(
-    expression: &Expression,
-    f: &mut impl FnMut(&Expression) -> ControlFlow<B>,
+pub fn try_for_each_subexpression<'a, B>(
+    expression: &'a Expression,
+    f: &mut impl FnMut(&'a Expression) -> ControlFlow<B>,
 ) -> ControlFlow<B> {
     f(expression)?;
     match expression {
