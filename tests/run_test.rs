@@ -2525,7 +2525,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 }
 
 /// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
-/// exits 1, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
+/// exits 5, rather than dying to a bare, message-less `SIGSEGV`. Spawns a real subprocess:
 /// the crash is real, and a JIT run in-process would take the test harness down with it.
 #[test]
 fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
@@ -2534,7 +2534,7 @@ fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
         "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >",
     );
     assert_eq!(
-        code, 1,
+        code, 5,
         "a stack overflow must exit with the runtime-error code: {stderr}"
     );
     assert_eq!(
@@ -2626,7 +2626,7 @@ fn native_aot_non_ascii_function_name_and_record_field() {
 // in-process — those run as subprocesses, under both the JIT and native AOT, mirroring
 // `tests/assert_test.rs`'s own reasoning for assertion failures.
 
-const ABORTS_FAIL_CODE: i32 = 101;
+const ABORTS_FAIL_CODE: i32 = 5;
 
 /// `aborts()` holds when the lambda ends in a fail-loud exit — here, an out-of-bounds
 /// index. `examples/assert_demo.qn` covers the `Text.replace` contract-check example from

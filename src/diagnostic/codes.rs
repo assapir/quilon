@@ -132,12 +132,24 @@ codes! {
     ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
     StackOverflow = 507 => "stack overflow",
     WriteFdNotWhole = 508 => "invalid write file descriptor",
+    WriteFailed = 509 => "write failed",
 }
 
 impl Code {
     /// The code's number — what `QN012` carries.
     pub fn number(self) -> u16 {
         self as u16
+    }
+
+    /// The pipeline family this code reports from (`3` for a `QN3xx` type error, and so
+    /// on) — also the exit code `quilon run`/`quilon build` leave for it: a diagnostic's
+    /// process exit status is its family digit, with family `0` (the lexer, which shares
+    /// its numbers with no other stage below it) mapped to `1` alongside the parser.
+    pub fn family(self) -> i32 {
+        match self.number() / 100 {
+            0 => 1,
+            family => family as i32,
+        }
     }
 
     /// The code named `text` (`QN012`, or bare `12`), if the registry has it.
@@ -298,5 +310,19 @@ mod tests {
         );
         assert_eq!(codes::STACK_OVERFLOW, Code::StackOverflow.number());
         assert_eq!(codes::WRITE_FD_NOT_WHOLE, Code::WriteFdNotWhole.number());
+        assert_eq!(codes::WRITE_FAILED, Code::WriteFailed.number());
+    }
+
+    /// A diagnostic's exit code is its family digit — the rule `main.rs`'s `fail` applies
+    /// to every code the compiler or a compiled program can raise.
+    #[test]
+    fn a_codes_family_is_its_leading_digit() {
+        assert_eq!(Code::SourceNotReadable.family(), 1);
+        assert_eq!(Code::UnexpectedToken.family(), 1);
+        assert_eq!(Code::UnknownModule.family(), 2);
+        assert_eq!(Code::TypeMismatch.family(), 3);
+        assert_eq!(Code::CodegenFailed.family(), 4);
+        assert_eq!(Code::IndexOutOfBounds.family(), 5);
+        assert_eq!(Code::WriteFailed.family(), 5);
     }
 }

@@ -37,7 +37,7 @@ fn a_nan_fd_aborts_with_qn508() {
         "<< core.io\n\
          ^ = () -> Num => <\n  nonsenseFd = 0 / 0\n  io.write(\"raccoon telegram\", nonsenseFd)\n>\n",
     );
-    assert_eq!(code, 1, "a NaN fd must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "a NaN fd must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains(
             "error[QN508]: write: file descriptor must be a whole number of 0 or more, got NaN"
@@ -53,7 +53,7 @@ fn a_negative_fd_aborts_with_qn508() {
         "<< core.io\n\
          ^ = () -> Num => <\n  wrongWayFd = 0 - 1\n  io.write(\"raccoon telegram\", wrongWayFd)\n>\n",
     );
-    assert_eq!(code, 1, "a negative fd must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "a negative fd must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains(
             "error[QN508]: write: file descriptor must be a whole number of 0 or more, got -1"
@@ -69,7 +69,7 @@ fn a_fractional_fd_aborts_with_qn508() {
         "<< core.io\n\
          ^ = () -> Num => <\n  halfOpenFd = 1 / 2\n  io.write(\"raccoon telegram\", halfOpenFd)\n>\n",
     );
-    assert_eq!(code, 1, "a fractional fd must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "a fractional fd must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains(
             "error[QN508]: write: file descriptor must be a whole number of 0 or more, got 0.5"
@@ -85,7 +85,7 @@ fn an_infinite_fd_aborts_with_qn508() {
         "<< core.io\n\
          ^ = () -> Num => <\n  boundlessFd = 1 / 0\n  io.write(\"raccoon telegram\", boundlessFd)\n>\n",
     );
-    assert_eq!(code, 1, "an infinite fd must exit 1, got {code}: {stderr}");
+    assert_eq!(code, 5, "an infinite fd must exit 5, got {code}: {stderr}");
     assert!(
         stderr.contains(
             "error[QN508]: write: file descriptor must be a whole number of 0 or more, got inf"
@@ -104,5 +104,22 @@ fn a_whole_non_negative_fd_still_writes() {
     assert_eq!(
         code, 0,
         "a valid fd must write normally, got exit {code}: {stderr}"
+    );
+}
+
+/// A whole, non-negative fd that names no OPEN descriptor is a different failure from an
+/// ill-formed one: the number passes `check_write_fd`, so the write itself reaches the OS
+/// and comes back `EBADF` — reported as QN509, not QN508.
+#[test]
+fn a_closed_fd_aborts_with_qn509() {
+    let (code, stderr) = run(
+        "closed",
+        "<< core.io\n\
+         ^ = () -> Num => < io.write(\"message in a bottle\", 99) >\n",
+    );
+    assert_eq!(code, 5, "a closed fd must exit 5, got {code}: {stderr}");
+    assert!(
+        stderr.contains("error[QN509]: write failed: Bad file descriptor (EBADF)"),
+        "stderr must name the new code and the errno, got: {stderr}"
     );
 }

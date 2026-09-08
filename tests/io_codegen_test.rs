@@ -80,15 +80,15 @@ fn print_text_lowers_to_print_text_fd_intrinsic() {
     "#,
     );
     assert!(
-        ir.contains("declare void @__print_text_fd(i64, ptr, i64)"),
-        "expected a (fd, ptr, len) print signature in:\n{ir}"
+        ir.contains("declare void @__print_text_fd(i64, ptr, i64, ptr)"),
+        "expected a (fd, ptr, len, site) print signature in:\n{ir}"
     );
     let call = ir
         .lines()
         .find(|line| line.contains("call void @__print_text_fd"))
         .unwrap_or_else(|| panic!("expected a print call in:\n{ir}"));
     assert!(
-        call.contains("(i64 1, ptr") && call.trim_end().ends_with(", i64 5)"),
+        call.contains("(i64 1, ptr") && call.contains(", i64 5, ptr"),
         "expected stdout and the literal's 5-byte length: {call}"
     );
 }

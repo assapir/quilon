@@ -91,7 +91,7 @@ is rejected.
 `from`; a `replace` `count` that is `<= 0` or exceeds the occurrences present; and a
 negative or fractional `repeat` count. A literal violation is a compile error
 (`"a".replace("a", "b", 0)`, `"aa".replace("a", "b", 5)`). A computed one is a
-[located diagnostic](../tooling/errors.md) at run time, with exit `101`. `replaceAll`
+[located diagnostic](../tooling/errors.md) at run time, with exit `5`. `replaceAll`
 replaces every occurrence; `replace(count)` replaces exactly `count`.
 
 (See `examples/text.qn` and `examples/text_methods.qn`.)

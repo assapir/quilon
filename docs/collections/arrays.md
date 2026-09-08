@@ -29,7 +29,7 @@ type. With none of those available, it is a compile error.
 
 Indexing is **checked**, for a read (`arr[i]`) and an element write (`arr[i] := value`)
 alike. An out-of-bounds, negative, or NaN index is a runtime error naming the read/write
-that failed ([shape](../tooling/errors.md)), with exit status 1. A **fractional** in-range
+that failed ([shape](../tooling/errors.md)), with exit status 5. A **fractional** in-range
 index truncates toward zero: `nums[1.7]` reads `nums[1]`, so index arithmetic like
 `size / 2` indexes directly. For an index that may be out of range,
 [`at(n)`](#array-methods) is the `Ok`/`NotOk` form — see the computed-index case at the

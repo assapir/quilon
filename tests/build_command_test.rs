@@ -298,7 +298,7 @@ fn default_build_runs_the_tail_recursion_example() {
 }
 
 /// Non-tail recursion deep enough to exhaust the seed fiber's stack reports `QN507` and
-/// exits 1 in a native build too — not a bare, message-less `SIGSEGV`. The JIT/native
+/// exits 5 in a native build too — not a bare, message-less `SIGSEGV`. The JIT/native
 /// paths share the guard-page handler (both run the same generated `main`), so this pins
 /// the native side of the same behavior `run_test.rs` pins for the JIT.
 #[test]
@@ -338,7 +338,7 @@ fn native_build_reports_stack_overflow_not_a_bare_segfault() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert_eq!(
         run.status.code(),
-        Some(1),
+        Some(5),
         "a native stack overflow must exit with the runtime-error code: {stderr}"
     );
     assert_eq!(

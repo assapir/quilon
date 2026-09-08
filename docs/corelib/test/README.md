@@ -30,7 +30,7 @@ Two entry points, one vocabulary. They differ in what a FAILURE does:
 
 | Function | On failure |
 |----------|-----------|
-| `assert(actual, matcher) -> $` | Report at the call site and **exit 101**. For examples and ordinary code. |
+| `assert(actual, matcher) -> $` | Report at the call site and **exit 5**. For examples and ordinary code. |
 | `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and end the case — the suite carries on with the next one. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
 
 A holding assertion has no effect. A failure reports in the standard
@@ -92,7 +92,7 @@ the report withheld from stderr while the lambda was trapped, naming what aborte
 
 | Function | Effect |
 |----------|--------|
-| `test.failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `101` — the same frame `assert` uses. Take a trailing [`site :: Site`](../../functions/site.md) and forward it, and the report blames ITS caller. |
+| `test.failAt(message :: Text) -> $` | Report `message` at the caller's location and exit `5` — the same frame `assert` uses. Take a trailing [`site :: Site`](../../functions/site.md) and forward it, and the report blames ITS caller. |
 
 ```quilon
 << core.test

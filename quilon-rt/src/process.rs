@@ -12,10 +12,11 @@ use std::os::raw::{c_char, c_int, c_void};
 /// Terminate the running program with exit status `code`.
 ///
 /// Quilon cannot yet exit/abort mid-program in-language, so the exit primitive lives
-/// here as a generic `__exit(code)`. It backs both a failing assertion (exit 101 — the
-/// Rust-panic convention, deliberately distinct from the small result codes examples
-/// use as their normal exit status) and the runtime's own fail-loud paths. Codegen lowers a `__exit(n)` call to a call of this symbol;
-/// see `CodeGenerator::generate_exit`.
+/// here as a generic `__exit(code)`. It backs both a failing assertion (exit 5 — the
+/// QN5xx runtime family's own digit, deliberately distinct from the small result codes
+/// examples use as their normal exit status) and the runtime's own fail-loud paths.
+/// Codegen lowers a `__exit(n)` call to a call of this symbol; see
+/// `CodeGenerator::generate_exit`.
 ///
 /// While an `aborts()` trap is active, this is withheld the same way `report::fail_at`
 /// withholds its own report — no message accompanies a raw `__exit` (whatever led to it,

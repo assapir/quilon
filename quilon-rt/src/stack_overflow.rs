@@ -140,7 +140,7 @@ extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context:
     );
 
     if low != 0 && fault_address >= low && fault_address < high {
-        crate::io::write_to_fd(2, MESSAGE);
+        let _ = crate::io::write_to_fd(2, MESSAGE);
         // SAFETY: `_exit(2)` neither allocates, locks, nor returns.
         unsafe { libc::_exit(RUNTIME_EXIT_CODE) };
     }
