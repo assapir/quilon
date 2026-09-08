@@ -4,8 +4,8 @@
 ~
 ~ `Text` is conceptually a sequence of graphemes (`Text = []Grapheme`, a grapheme being a
 ~ length-1 `Text`), and the native surface is every operation that is either linear only
-~ in bytes (segmentation, substring search, `split`, `replaceAll`) or needs the byte
-~ representation directly: `length`/`graphemes`/`at`, `indexOf`, grapheme-boundary
+~ in bytes (segmentation, substring search, `split`, `replaceAll`, `replace`) or needs the
+~ byte representation directly: `length`/`graphemes`/`at`, `indexOf`, grapheme-boundary
 ~ `slice`, the whitespace walks (`trimStart`/`trimEnd`), case mapping
 ~ (`toUpper`/`toLower`), comparison, and `+`. Everything else composes from those, here.
 ~
@@ -15,12 +15,7 @@
 ~ the methods it implements, so `text.trim()` keeps working with no import, and member
 ~ syntax is the ONLY way these are reached. Each function takes the receiver as its
 ~ first parameter because that is a method's shape once compiled (`it` is the first
-~ argument); the compiler lowers `t.replace(from, to, n)` to a call of
-~ `core.text.replace(t, from, to, n)`.
-~
-~ The replace walk is an accumulator-shaped self-tail-call, which the compiler lowers to
-~ a loop — its depth never grows with the text (`repeat` instead recurses at log(count)
-~ depth, the cost of doubling).
+~ argument).
 ~
 ~ The module's own suite lives at the bottom (`quilon test corelib/text.qn`), which is
 ~ what `<< core.test` is for.
@@ -53,36 +48,6 @@ contains = (t :: Text, sub :: Text) -> Bool => <
     | NotOk(_) => false
 >
 
-~ The end of a `replace` walk: the text is exhausted with `remaining` replacements still
-~ owed — a `count` beyond the occurrences present, which fails loudly (the whole text
-~ held `count - remaining` of them).
-replaceRemainder = (acc :: Text, rest :: Text, count :: Num, remaining :: Num, site :: Site) -> Text => <
-  remaining > 0
-    ? test.failAt("replace: count `count` exceeds `count - remaining` occurrences", site)
-    : $
-  acc + rest
->
-
-~ `rest` with its first `remaining` occurrences of `from` replaced by `to`, appended to
-~ `acc` — one pass, validating the count as it goes.
-replaceOnto = (acc :: Text, rest :: Text, from :: Text, fromLen :: Num, to :: Text, remaining :: Num, count :: Num, site :: Site) -> Text => <
-  rest.indexOf(from) ?
-    | Ok(i)    => remaining == 0
-      ? acc + rest
-      : replaceOnto(acc + rest.slice(0, i) + to, rest.slice(i + fromLen, rest.size), from, fromLen, to, remaining - 1, count, site)
-    | NotOk(_) => replaceRemainder(acc, rest, count, remaining, site)
->
-
-~ Replace EXACTLY the first `count` occurrences of `from` with `to`, left to right;
-~ `count` truncates toward zero. Fails loudly (exit 5) on an empty `from`, a
-~ non-positive `count`, or a `count` beyond the occurrences present — no clamp, no no-op.
-replace = (t :: Text, from :: Text, to :: Text, count :: Num, site :: Site) -> Text => <
-  from.size == 0 ? test.failAt("replace: ``from`` must not be empty", site) : $
-  n = count - count % 1
-  n >= 1 ? $ : test.failAt("replace: count must be positive, got `n`", site)
-  replaceOnto("", t, from, from.length, to, n, n, site)
->
-
 ~ `count` copies of `t`, back to back; 0 yields `""`. Fails loudly (exit 5) on a
 ~ negative, fractional, or non-finite `count` — the checker rejects a literal one at
 ~ compile time, this is the backstop for a computed one.
@@ -94,9 +59,9 @@ repeat = (t :: Text, count :: Num, site :: Site) -> Text => <
 >
 
 ~ ── The module's own suite ─────────────────────────────────────────────────────────
-~ `aborts()` covers that a fail-loud path (an invalid `replace`/`repeat` request) exits;
-~ the compiler's own subprocess tests (tests/text_methods_test.rs) pin its exit code and
-~ message in full.
+~ `repeat`'s fail-loud contract is exercised in `tests/text_methods_test.rs`, which pins
+~ its exit code and message in full (`replace`/`replaceAll` are native and tested there
+~ entirely, in `quilon-rt/src/text.rs` too).
 
 test.describe("split", () => <
   test.it("splits on the separator", () => <
@@ -149,22 +114,6 @@ test.describe("contains", () => <
     expect("haystack".contains("carrot"), equals(false)))
 
   test.it("contains the empty text", () => expect("x".contains(""), equals(true)))
->)
-
-test.describe("replace", () => <
-  test.it("replaceAll rewrites every occurrence", () =>
-    expect("a-a-a".replaceAll("a", "xx"), equals("xx-xx-xx")))
-
-  test.it("replace rewrites exactly the first count", () =>
-    expect("a-a-a".replace("a", "xx", 2), equals("xx-xx-a")))
-
-  test.it("replaces a multibyte from with a multibyte to", () =>
-    expect("a🌍b🌍c".replaceAll("🌍", "é"), equals("aébéc")))
-
-  test.it("aborts on a non-positive count", () => <
-    zeroCount = 3 - 3
-    expect(() => "a-a-a".replace("a", "b", zeroCount), aborts())
-  >)
 >)
 
 test.describe("repeat", () => <

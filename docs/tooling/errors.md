@@ -164,10 +164,11 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN503 | no arm matched |
 | QN504 | allocation failed |
 | QN505 | reading stdin failed |
-| QN506 | empty `from` in `replaceAll` |
+| QN506 | empty `from` in `replace`/`replaceAll` |
 | QN507 | stack overflow |
 | QN508 | invalid write file descriptor |
 | QN509 | write failed |
+| QN510 | invalid `replace` count |
 
 ## Input
 
@@ -1145,11 +1146,11 @@ error[QN505]: @readStdin failed: Input/output error (os error 5)
 
 Run the program with a readable stdin.
 
-### QN506 — empty `from` in `replaceAll`
+### QN506 — empty `from` in `replace`/`replaceAll`
 
-A computed `from` argument to `Text.replaceAll` was the empty text at run time — an empty
-`from` is an ill-defined request. (A literal empty `from` is instead a compile-time
-error.)
+A computed `from` argument to `Text.replace` or `Text.replaceAll` was the empty text at
+run time — an empty `from` is an ill-defined request. (A literal empty `from` is instead a
+compile-time error.)
 
 ```quilon ignore
 ^ = () -> Num => <
@@ -1205,3 +1206,19 @@ An interrupted write (`EINTR`) is retried transparently and never reaches here; 
 ```
 
 Pass a descriptor that names an open file, or a stream something is still reading.
+
+### QN510 — invalid `replace` count
+
+A computed `count` argument to `Text.replace` was, at run time, either less than 1 once
+truncated toward zero, or greater than the occurrences of `from` actually present in the
+receiver — no clamp, no no-op. (A literal violation of either is instead a compile-time
+error.)
+
+```quilon ignore
+^ = () -> Num => <
+  zeroCount = 3 - 3
+  "a-a-a".replace("a", "b", zeroCount).size
+>
+```
+
+Pass a whole `count` of 1 or more, no greater than the occurrences of `from` present.

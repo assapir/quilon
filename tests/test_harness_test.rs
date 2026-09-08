@@ -578,14 +578,12 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.parsed",
         // core.text, merged implicitly because the client calls composable Text methods
         // (`.trim`/`.contains`) — the implementations those calls lower to, qualified so
-        // they claim no name an importer could write. (The client also calls `.split` and
+        // they claim no name an importer could write. (`repeat` is pulled in transitively
+        // through `core.test`'s own `failAt`. The client also calls `.split` and
         // `.replaceAll`, but those are native primitives now, so they contribute nothing
         // here.)
         "core.text.trim",
         "core.text.contains",
-        "core.text.replace",
-        "core.text.replaceOnto",
-        "core.text.replaceRemainder",
         "core.text.repeat",
         "core.text.copies",
         "core.text.double",
@@ -1542,14 +1540,7 @@ fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
         "corelib/text.qn must pass:\n{}\n{}",
         out.stdout, out.stderr
     );
-    for group in [
-        "split",
-        "trim",
-        "contains",
-        "replace",
-        "repeat",
-        "grapheme access",
-    ] {
+    for group in ["split", "trim", "contains", "repeat", "grapheme access"] {
         assert!(
             out.stdout.contains(group),
             "the `{group}` group is missing from the report:\n{}",
@@ -1557,7 +1548,7 @@ fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("21 passed, 0 failed"),
+        out.stdout.contains("17 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

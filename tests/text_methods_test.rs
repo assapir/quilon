@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod common;
 use common::{
-    assert_exit, assert_type_error, build_and_run_native, run_program_named, tool_available,
+    assert_exit, assert_type_error, build_and_run_native, frame, position, run_program_named,
+    tool_available,
 };
 use std::time::{Duration, Instant};
 
@@ -232,11 +233,12 @@ fn replace_literal_count_over_occurrences_is_a_compile_error() {
 }
 
 // Runtime fail-loud (non-literal, so not caught at compile time) — abort, no silent no-op.
+// Each also carries its own `error[QNxxx]:` code, the way any native fail-loud check does.
 #[test]
 fn replace_runtime_count_zero_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  n = 3 - 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
-        "count must be positive",
+        "error[QN510]: replace: count must be positive",
     );
 }
 
@@ -244,7 +246,7 @@ fn replace_runtime_count_zero_aborts() {
 fn replace_runtime_count_over_occurrences_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
-        "exceeds",
+        "error[QN510]: replace: count 5 exceeds 3 occurrences",
     );
 }
 
@@ -252,7 +254,7 @@ fn replace_runtime_count_over_occurrences_aborts() {
 fn replace_runtime_empty_from_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replace(f, \"x\", 1).size\n>",
-        "must not be empty",
+        "error[QN506]: replace: `from` must not be empty",
     );
 }
 
@@ -260,7 +262,7 @@ fn replace_runtime_empty_from_aborts() {
 fn replace_all_runtime_empty_from_aborts() {
     assert_run_aborts(
         "^ = () -> Num => <\n  f = \"\"\n  \"abc\".replaceAll(f, \"x\").size\n>",
-        "must not be empty",
+        "error[QN506]: replaceAll: `from` must not be empty",
     );
 }
 
@@ -307,29 +309,25 @@ fn repeat_literal_negative_or_fractional_count_is_a_compile_error() {
 /// reader to find which of several `replace`s it was.
 #[test]
 fn a_replace_misuse_reports_its_own_location() {
-    let (code, stderr) = run_and_capture(
+    // The underline covers the CALL — `"a-a-a".replace("a", "b", n)` — not the trailing
+    // `.size` the result feeds into.
+    let run = run_program_named(
+        "replace_misuse.qn",
         "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
     );
-    assert_eq!(code, 5);
-    assert!(
-        stderr.contains(":3:3:\nreplace: count 5 exceeds 3 occurrences"),
-        "the report must locate the call, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("3 |   \"a-a-a\".replace(\"a\", \"b\", n).size"),
-        "the report must show the source line, got: {stderr}"
-    );
-    // The carets cover the CALL — `"a-a-a".replace("a", "b", n)` — not the trailing
-    // `.size` the result feeds into.
-    let carets = stderr
-        .lines()
-        .filter_map(|line| line.rsplit_once('|').map(|(_, rest)| rest.trim()))
-        .find(|rest| rest.starts_with('^'))
-        .unwrap_or_default();
+    assert_eq!(run.code, 5);
     assert_eq!(
-        carets.len(),
-        "\"a-a-a\".replace(\"a\", \"b\", n)".len(),
-        "the caret run must be exactly as wide as the call, got: {stderr}"
+        run.stderr,
+        format!(
+            "error[QN510]: replace: count 5 exceeds 3 occurrences\n{}\n",
+            frame(
+                &position(&run.path, 3, 3),
+                3,
+                3,
+                "  \"a-a-a\".replace(\"a\", \"b\", n).size",
+                "\"a-a-a\".replace(\"a\", \"b\", n)".len()
+            )
+        )
     );
 }
 

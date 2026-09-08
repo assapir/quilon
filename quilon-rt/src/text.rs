@@ -3,9 +3,9 @@
 //! Text intrinsics — the PRIMITIVE floor under the built-in `Text` methods:
 //! segmentation (`length`, `graphemes`, `at`), comparison (`cmp`), the
 //! whitespace walks (`trimStart`/`trimEnd`), case mapping, substring search
-//! (`indexOf`), grapheme-boundary `slice`, and the two byte-linear walks
-//! (`split`, `replaceAll`). The remaining composable methods
-//! (`trim`/`contains`/`replace`/`repeat`) are written in Quilon over these
+//! (`indexOf`), grapheme-boundary `slice`, and the byte-linear walks
+//! (`split`, `replaceAll`, `replace`). The remaining composable methods
+//! (`trim`/`contains`/`repeat`) are written in Quilon over these
 //! (`corelib/text.qn`), so they are deliberately NOT here.
 //! All are UTF-8 correct and grapheme-based where an index/length is
 //! user-visible (matching `Text.length`). A `Text` argument arrives as
@@ -266,7 +266,7 @@ pub extern "C" fn __text_replace_all(
     if from.is_empty() {
         fail_at(
             site,
-            codes::REPLACE_ALL_EMPTY_FROM,
+            codes::REPLACE_EMPTY_FROM,
             "replaceAll: `from` must not be empty",
             RUNTIME_EXIT_CODE,
         );
@@ -274,6 +274,70 @@ pub extern "C" fn __text_replace_all(
     let hay = text_str(hptr, hlen);
     let to = text_str(tptr, tlen);
     alloc_text(hay.replace(&*from, &to).as_bytes())
+}
+
+/// [`__text_replace`]'s pure half: EXACTLY the first `count` occurrences of `from` in
+/// `hay`, replaced by `to`, left to right; `count` truncates toward zero. `Err` names the
+/// runtime code and message for an ill-defined request — an empty `from`, a `count` that
+/// truncates to less than 1, or a `count` past the occurrences `from` actually has (no
+/// clamp, no no-op) — split out so the three failures are testable without a `QlSite` or
+/// `fail_at`'s process exit.
+fn replace_text(hay: &str, from: &str, to: &str, count: f64) -> Result<String, (u16, String)> {
+    if from.is_empty() {
+        return Err((
+            codes::REPLACE_EMPTY_FROM,
+            "replace: `from` must not be empty".to_string(),
+        ));
+    }
+    let count = count.trunc();
+    if count.is_nan() || count < 1.0 {
+        return Err((
+            codes::REPLACE_INVALID_COUNT,
+            format!("replace: count must be positive, got {}", format_num(count)),
+        ));
+    }
+    let occurrences = hay.matches(from).count();
+    if count > occurrences as f64 {
+        return Err((
+            codes::REPLACE_INVALID_COUNT,
+            format!(
+                "replace: count {} exceeds {occurrences} occurrences",
+                format_num(count)
+            ),
+        ));
+    }
+    Ok(hay.replacen(from, to, count as usize))
+}
+
+/// Backs `Text.replace(from, to, count)`, matched on raw bytes for the same reason
+/// [`__text_replace_all`] is. A literal violation of [`replace_text`]'s contract is
+/// instead a compile-time error (`check_replace_literals`), so only a COMPUTED one
+/// reaches this check.
+///
+/// # Safety contract (upheld by the compiler)
+/// `hptr`/`fptr`/`tptr` are null or point to at least `hlen`/`flen`/`tlen` readable
+/// bytes; `site` is null or points to a valid [`QlSite`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_replace(
+    hptr: *const u8,
+    hlen: i64,
+    fptr: *const u8,
+    flen: i64,
+    tptr: *const u8,
+    tlen: i64,
+    count: f64,
+    site: *const QlSite,
+) -> QlSlice {
+    let (hay, from, to) = (
+        text_str(hptr, hlen),
+        text_str(fptr, flen),
+        text_str(tptr, tlen),
+    );
+    match replace_text(&hay, &from, &to, count) {
+        Ok(result) => alloc_text(result.as_bytes()),
+        Err((code, message)) => fail_at(site, code, &message, RUNTIME_EXIT_CODE),
+    }
 }
 
 #[cfg(test)]
@@ -447,5 +511,74 @@ mod tests {
         let started = __text_trim_start(p, l);
         let trimmed = __text_trim_end(started.data as *const u8, started.len);
         assert_eq!(unsafe { slice_str(trimmed) }, "héllo");
+    }
+
+    #[test]
+    fn replace_one_occurrence() {
+        assert_eq!(
+            replace_text("a-a-a", "a", "xx", 1.0),
+            Ok("xx-a-a".to_string())
+        );
+    }
+
+    #[test]
+    fn replace_n_occurrences_left_to_right() {
+        assert_eq!(
+            replace_text("a-a-a", "a", "xx", 2.0),
+            Ok("xx-xx-a".to_string())
+        );
+        assert_eq!(
+            replace_text("a-a-a", "a", "xx", 3.0),
+            Ok("xx-xx-xx".to_string())
+        );
+    }
+
+    #[test]
+    fn replace_count_truncates_toward_zero() {
+        // 2.9 truncates to 2, not 3.
+        assert_eq!(
+            replace_text("a-a-a", "a", "xx", 2.9),
+            Ok("xx-xx-a".to_string())
+        );
+    }
+
+    #[test]
+    fn replace_empty_from_fails() {
+        assert_eq!(
+            replace_text("abc", "", "x", 1.0),
+            Err((
+                codes::REPLACE_EMPTY_FROM,
+                "replace: `from` must not be empty".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn replace_non_positive_count_fails() {
+        assert_eq!(
+            replace_text("abc", "b", "x", 0.0),
+            Err((
+                codes::REPLACE_INVALID_COUNT,
+                "replace: count must be positive, got 0".to_string()
+            ))
+        );
+        assert_eq!(
+            replace_text("abc", "b", "x", -3.0),
+            Err((
+                codes::REPLACE_INVALID_COUNT,
+                "replace: count must be positive, got -3".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn replace_count_over_occurrences_fails() {
+        assert_eq!(
+            replace_text("a-a-a", "a", "b", 5.0),
+            Err((
+                codes::REPLACE_INVALID_COUNT,
+                "replace: count 5 exceeds 3 occurrences".to_string()
+            ))
+        );
     }
 }

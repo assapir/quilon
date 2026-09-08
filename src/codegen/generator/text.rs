@@ -10,13 +10,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a built-in `Text` method call (`args[0]` is the `Text` receiver).
     ///
     /// The PRIMITIVE methods (segmentation, search, slice, the whitespace walks, case
-    /// mapping, `split`, `replaceAll`) lower to their `quilon-rt` intrinsics; the
-    /// COMPOSABLE ones (those [`crate::ast::qn_text_impl`] names) lower to a plain call of
-    /// their `core.text` implementation, with the receiver as the first argument — the
+    /// mapping, `split`, `replaceAll`, `replace`) lower to their `quilon-rt` intrinsics;
+    /// the COMPOSABLE ones (those [`crate::ast::qn_text_impl`] names) lower to a plain call
+    /// of their `core.text` implementation, with the receiver as the first argument — the
     /// module loader merged those functions in exactly because this call appears. The
     /// plain-call machinery fills in the trailing `Site` a composable's fail-loud
-    /// implementation (`repeat`, `replace`) declares; `replaceAll`'s own fail-loud contract
-    /// (an empty `from`) is native, so its call site builds the `Site` itself, the same way
+    /// implementation (`repeat`) declares; `replaceAll`/`replace`'s own fail-loud contracts
+    /// are native, so their call sites build the `Site` themselves, the same way
     /// `at`/`slice`'s index conversion and array indexing's bounds check do.
     pub(super) fn generate_text_method(
         &mut self,
@@ -132,6 +132,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                         from_len.into(),
                         to_ptr.into(),
                         to_len.into(),
+                        site.into(),
+                    ],
+                )
+            }
+            "replace" => {
+                let (from_ptr, from_len) = self.extract_text(&args[1])?;
+                let (to_ptr, to_len) = self.extract_text(&args[2])?;
+                let count = self.generate_expression(&args[3])?;
+                let site = self.site_value(span)?;
+                call_struct(
+                    self,
+                    "__text_replace",
+                    &[
+                        recv_ptr.into(),
+                        recv_len.into(),
+                        from_ptr.into(),
+                        from_len.into(),
+                        to_ptr.into(),
+                        to_len.into(),
+                        count.into(),
                         site.into(),
                     ],
                 )

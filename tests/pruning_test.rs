@@ -221,7 +221,7 @@ fn a_program_without_text_methods_carries_no_core_text() {
 #[test]
 fn only_the_used_text_composables_survive_the_merge() {
     // `.trim()` pulls core.text in, but reachability keeps only trim's implementation —
-    // the unmentioned composables (repeat, replace, …) are pruned back out.
+    // the unmentioned composables (repeat, contains, …) are pruned back out.
     let ir = emit_linked("^ = () -> Num => < \"  x  \".trim().size >\n");
     assert!(
         defines(&ir, "core.text.trim"),
@@ -232,8 +232,8 @@ fn only_the_used_text_composables_survive_the_merge() {
         "`repeat` is used by nothing here"
     );
     assert!(
-        !defines(&ir, "core.text.replace"),
-        "`replace` is used by nothing here"
+        !defines(&ir, "core.text.contains"),
+        "`contains` is used by nothing here"
     );
 }
 
