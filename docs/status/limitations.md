@@ -6,7 +6,7 @@ sidebar:
 
 # Known limitations
 
-0.11 is a stable **core**. The deferred parts:
+The deferred parts:
 
 - **Polymorphism is overloading.** Overloading (ad-hoc, exact-type dispatch) is the polymorphism; type variables are deferred, and the [matchers](../corelib/test/README.md#the-matchers) are compiler-provided. The module system is the built-in `core.*` modules and file-path imports, reached through [qualified access](../modules/README.md); selective import, re-export, and aliasing are deferred.
 - **Closures are monomorphic.** Lexical capture works end-to-end (`=` by value / `:=` by reference; see [Closures](../functions/closures.md#closures--capture-by--value-vs--reference)), including recursion of non-capturing nested functions, capture across nesting levels, and capturing-then-calling another closure. A closure can be passed to a [function-typed parameter](../functions/README.md#function-types--higher-order-functions) and called there, and [returned from a function](../functions/closures.md#returning-a-closure) — its captures live on the GC heap, so they outlive the frame that made them. Deferred (each needs the closure's type threaded through inference): capturing a *polymorphic* value and *generic* closures.
