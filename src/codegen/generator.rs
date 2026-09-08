@@ -60,6 +60,146 @@ fn ctx<E: std::fmt::Debug>(what: &'static str) -> impl FnOnce(E) -> String {
     move |e| format!("{what}: {e:?}")
 }
 
+/// Every [`TypeDeclaration`] the program reaches: at the top level, and nested inside any
+/// function, method, or lambda body a sum or a record with methods may be declared in — a
+/// type works the same wherever it is declared. `generate`'s registration pre-passes read
+/// this instead of scanning `program.items` directly so a nested declaration's variants and
+/// overload-set members are registered before codegen runs, exactly like a top-level one's.
+fn all_type_declarations(program: &Program) -> Vec<&TypeDeclaration> {
+    let mut found = Vec::new();
+    for item in &program.items {
+        collect_type_declarations_in_item(item, &mut found);
+    }
+    found
+}
+
+fn collect_type_declarations_in_item<'a>(item: &'a Item, found: &mut Vec<&'a TypeDeclaration>) {
+    match item {
+        Item::TypeDeclaration(declaration) => {
+            found.push(declaration);
+            for method in declaration.type_definition.methods() {
+                collect_type_declarations_in_expression(&method.body, found);
+            }
+        }
+        Item::FunctionDeclaration(declaration) => {
+            collect_type_declarations_in_expression(&declaration.body, found);
+        }
+        Item::VariableDeclaration(declaration) => {
+            collect_type_declarations_in_expression(&declaration.value, found);
+        }
+    }
+}
+
+fn collect_type_declarations_in_expression<'a>(
+    expression: &'a Expression,
+    found: &mut Vec<&'a TypeDeclaration>,
+) {
+    match expression {
+        Expression::Block { statements, .. } => {
+            for statement in statements {
+                match statement {
+                    crate::ast::Statement::Item(item) => {
+                        collect_type_declarations_in_item(item, found)
+                    }
+                    crate::ast::Statement::Expression(e) => {
+                        collect_type_declarations_in_expression(e, found)
+                    }
+                }
+            }
+        }
+        Expression::Lambda { body, .. }
+        | Expression::UnaryOperator {
+            expression: body, ..
+        }
+        | Expression::FieldAccess {
+            expression: body, ..
+        }
+        | Expression::Spread {
+            expression: body, ..
+        } => collect_type_declarations_in_expression(body, found),
+        Expression::If {
+            condition,
+            then,
+            else_,
+            ..
+        } => {
+            collect_type_declarations_in_expression(condition, found);
+            collect_type_declarations_in_expression(then, found);
+            collect_type_declarations_in_expression(else_, found);
+        }
+        Expression::Match {
+            expression, arms, ..
+        } => {
+            collect_type_declarations_in_expression(expression, found);
+            for arm in arms {
+                collect_type_declarations_in_expression(&arm.body, found);
+            }
+        }
+        Expression::BinaryOperator { left, right, .. }
+        | Expression::Range {
+            start: left,
+            end: right,
+            ..
+        }
+        | Expression::FieldAssign {
+            target: left,
+            value: right,
+            ..
+        }
+        | Expression::IndexAssign {
+            target: left,
+            value: right,
+            ..
+        }
+        | Expression::Index {
+            expression: left,
+            index: right,
+            ..
+        } => {
+            collect_type_declarations_in_expression(left, found);
+            collect_type_declarations_in_expression(right, found);
+        }
+        Expression::Call {
+            function,
+            arguments,
+            ..
+        } => {
+            collect_type_declarations_in_expression(function, found);
+            for argument in arguments {
+                collect_type_declarations_in_expression(argument, found);
+            }
+        }
+        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
+            for element in elements {
+                collect_type_declarations_in_expression(element, found);
+            }
+        }
+        Expression::MapLiteral { entries, .. } => {
+            for (key, value) in entries {
+                collect_type_declarations_in_expression(key, found);
+                collect_type_declarations_in_expression(value, found);
+            }
+        }
+        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
+            for (_, value) in fields {
+                collect_type_declarations_in_expression(value, found);
+            }
+        }
+        Expression::Interpolation { parts, .. } => {
+            for part in parts {
+                if let InterpolationPart::Hole(e) = part {
+                    collect_type_declarations_in_expression(e, found);
+                }
+            }
+        }
+        Expression::Identifier { .. }
+        | Expression::Number { .. }
+        | Expression::String { .. }
+        | Expression::Bool { .. }
+        | Expression::Unit { .. } => {}
+    }
+}
+
 /// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
 /// restore whatever a lambda parameter shadowed: its `variables` entry (alloca + LLVM
 /// type) and its `var_types` entry (Quilon type for overload mangling).
@@ -500,17 +640,23 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
+        // Every type declaration the program reaches, top-level AND nested inside a
+        // function/method/lambda body alike — a type works the same wherever it is
+        // declared, so the three registration passes below (sum variants, and the two
+        // overload-set kinds a type's methods can form) must see all of them, not just
+        // the top-level ones, and must see them before any function signature below is
+        // pre-declared (a top-level function may take an earlier sum type as a parameter).
+        let type_declarations = all_type_declarations(program);
+
         // Pre-pass: register all user sum-type variants so constructors and pattern
         // dispatch resolve regardless of declaration order relative to their uses.
-        for item in &program.items {
-            if let Item::TypeDeclaration(TypeDeclaration {
-                name,
-                type_definition: TypeDefinition::Sum { variants, .. },
-                ..
-            }) = item
-            {
-                self.register_sum_variants(name, variants)?;
+        for declaration in &type_declarations {
+            if let TypeDefinition::Sum { variants, .. } = &declaration.type_definition {
+                self.register_sum_variants(&declaration.name, variants)?;
             }
+        }
+
+        for item in &program.items {
             // `corelib/http.qn` checked directly (its own suite): its bare `frameBody`
             // declaration is the real one, so calls to the bare name lower to the
             // intrinsic too (see `frame_body_from_corelib`).
@@ -576,32 +722,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         // each type's operator members as members of the operator's overload set, with the
         // receiver `it` as the left operand — so `a <op> b` mangles to and dispatches
         // through the same per-signature symbol the member is emitted under.
-        for item in &program.items {
-            if let Item::TypeDeclaration(declaration) = item {
-                let self_type = Type::named_ref(&declaration.name);
-                for method in declaration.type_definition.methods() {
-                    if !is_operator_symbol(&method.name) {
-                        continue;
-                    }
-                    // The `%` hash hook is a UNARY member (`it` only) whose overload takes
-                    // just the receiver; every other operator member is binary (`it` + one
-                    // explicit right operand).
-                    let parameters = if method.name == "%" && method.parameters.is_empty() {
-                        vec![self_type.clone()]
-                    } else if method.parameters.len() == 1 {
-                        vec![
-                            self_type.clone(),
-                            self.parameter_type(&method.parameters[0]),
-                        ]
-                    } else {
-                        continue;
-                    };
-                    let ret = method.return_type.clone().unwrap_or(Type::Num);
-                    self.overloads
-                        .entry(method.name.clone())
-                        .or_default()
-                        .push((parameters, ret));
+        for declaration in &type_declarations {
+            let self_type = Type::named_ref(&declaration.name);
+            for method in declaration.type_definition.methods() {
+                if !is_operator_symbol(&method.name) {
+                    continue;
                 }
+                // The `%` hash hook is a UNARY member (`it` only) whose overload takes
+                // just the receiver; every other operator member is binary (`it` + one
+                // explicit right operand).
+                let parameters = if method.name == "%" && method.parameters.is_empty() {
+                    vec![self_type.clone()]
+                } else if method.parameters.len() == 1 {
+                    vec![
+                        self_type.clone(),
+                        self.parameter_type(&method.parameters[0]),
+                    ]
+                } else {
+                    continue;
+                };
+                let ret = method.return_type.clone().unwrap_or(Type::Num);
+                self.overloads
+                    .entry(method.name.clone())
+                    .or_default()
+                    .push((parameters, ret));
             }
         }
 
@@ -609,39 +753,37 @@ impl<'ctx> CodeGenerator<'ctx> {
         // the type checker's `check_type_methods`), mirrored here the same way a top-level
         // overload set is — registered under a name qualified by its type so it cannot
         // collide with an unrelated top-level or operator overload set.
-        for item in &program.items {
-            if let Item::TypeDeclaration(declaration) = item {
-                let methods = declaration.type_definition.methods();
-                let mut method_name_counts: HashMap<&str, usize> = HashMap::new();
-                for method in methods {
-                    if !is_operator_symbol(&method.name) {
-                        *method_name_counts.entry(method.name.as_str()).or_insert(0) += 1;
-                    }
+        for declaration in &type_declarations {
+            let methods = declaration.type_definition.methods();
+            let mut method_name_counts: HashMap<&str, usize> = HashMap::new();
+            for method in methods {
+                if !is_operator_symbol(&method.name) {
+                    *method_name_counts.entry(method.name.as_str()).or_insert(0) += 1;
                 }
-                for method in methods {
-                    if is_operator_symbol(&method.name)
-                        || method_name_counts
-                            .get(method.name.as_str())
-                            .copied()
-                            .unwrap_or(0)
-                            <= 1
-                    {
-                        continue;
-                    }
-                    let parameters = self.parameter_types(&method.parameters);
-                    // The checker requires every overload member's return annotation
-                    // (`UnannotatedOverloadMember`) before the program reaches codegen.
-                    let ret = method.return_type.clone().ok_or_else(|| {
-                        format!(
-                            "overload member `{}.{}` at {:?} has no return type — it was not type-checked",
-                            declaration.name, method.name, method.span
-                        )
-                    })?;
-                    self.overloads
-                        .entry(format!("{}.{}", declaration.name, method.name))
-                        .or_default()
-                        .push((parameters, ret));
+            }
+            for method in methods {
+                if is_operator_symbol(&method.name)
+                    || method_name_counts
+                        .get(method.name.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                        <= 1
+                {
+                    continue;
                 }
+                let parameters = self.parameter_types(&method.parameters);
+                // The checker requires every overload member's return annotation
+                // (`UnannotatedOverloadMember`) before the program reaches codegen.
+                let ret = method.return_type.clone().ok_or_else(|| {
+                    format!(
+                        "overload member `{}.{}` at {:?} has no return type — it was not type-checked",
+                        declaration.name, method.name, method.span
+                    )
+                })?;
+                self.overloads
+                    .entry(format!("{}.{}", declaration.name, method.name))
+                    .or_default()
+                    .push((parameters, ret));
             }
         }
 
