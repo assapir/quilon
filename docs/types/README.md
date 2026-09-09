@@ -29,7 +29,9 @@ A `Num` is a double, and represents every whole number exactly up to **2^53**
 2^53. Integer results are exact within 2^53. Where a whole number has to be exact, the
 compiler enforces the limit: a
 [range endpoint](../expressions/ranges-and-spread.md#endpoints-are-whole-numbers) past
-it is an error.
+it is an error. A literal is read as the nearest double: `9007199254740993` reads as
+`9007199254740992`, and a literal past the double's range (about 1.8 × 10^308) reads as
+infinity.
 
 ## `Bool`
 `true` / `false` — lowercase literals. A `Bool` *renders* as capitalized `True`/`False` —
