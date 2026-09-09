@@ -207,8 +207,6 @@ impl<'a> Parser<'a> {
         if self.check(kind) {
             self.advance();
             Ok(())
-        } else if let Some(err) = self.stray_block_close_error() {
-            Err(err)
         } else {
             Err(ParseError::new(
                 Code::UnexpectedToken,
@@ -231,8 +229,6 @@ impl<'a> Parser<'a> {
             // Allow ^ as a special function name (entry point)
             self.advance();
             Ok("^".to_string())
-        } else if let Some(err) = self.stray_block_close_error() {
-            Err(err)
         } else {
             Err(ParseError::new(
                 Code::UnexpectedToken,
@@ -242,22 +238,19 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// When the cursor sits on a `>` that only reads as a block close because it ended
-    /// its line, and an earlier such `>` is on record, blame that earlier `>` instead of
-    /// wherever this one derailed the parse — the earlier one is the actual cause.
-    fn stray_block_close_error(&self) -> Option<ParseError> {
-        if !self.check(&TokenKind::BlockClose) {
-            return None;
-        }
-        let span = self.last_line_final_block_close.clone()?;
-        Some(
-            ParseError::new(
+    /// If a block closed early somewhere above (see `parse_block_inner`) and nothing has
+    /// cleared that record since, `err` is the derailment it caused — blame the earlier
+    /// `>` instead. Otherwise `err` stands as raised.
+    pub(super) fn blame_early_block_close(&mut self, err: ParseError) -> ParseError {
+        match self.last_line_final_block_close.take() {
+            Some(span) => ParseError::new(
                 Code::EarlyBlockClose,
                 span,
                 "this `>` closed its block because it ended the line",
             )
             .help("to compare, put the right operand on the same line as `>`"),
-        )
+            None => err,
+        }
     }
 
     /// Parse a name at a DEFINITION or PARAMETER position — a top-level/nested binding,

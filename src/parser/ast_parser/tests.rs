@@ -1106,3 +1106,38 @@ fn test_stray_gt_with_no_earlier_close_keeps_the_plain_message() {
     assert_eq!(err.message, "expected a name, found a block close `>`");
     assert_eq!(err.span.start as usize, 0);
 }
+
+#[test]
+fn test_single_line_body_never_arms_qn115_for_a_later_stray_gt() {
+    // Both bodies here open and close on their own single line, so neither `>` is a
+    // candidate; a later stray `>` should still get the plain QN100 message.
+    let src = "squareIguana = (scale :: Num) -> Num => < scale * scale >\n^ = () -> Num => < squareIguana(4) >\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+    assert_eq!(err.message, "expected a name, found a block close `>`");
+    let stray_gt = src.rfind('>').unwrap();
+    assert_eq!(err.span.start as usize, stray_gt);
+}
+
+#[test]
+fn test_early_close_blames_the_gt_even_when_the_derailment_is_at_a_later_token() {
+    // `pigeonCount >` closes `^`'s body on line 3; the parse only derails afterward, at
+    // the `9` two lines later — QN115 should still blame line 3's `>`, not the `9`.
+    let src = "^ = () -> Num => <\n  pigeonCount = 5\n  pigeonCount >\n  9\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::EarlyBlockClose);
+    assert_eq!(
+        err.message,
+        "this `>` closed its block because it ended the line"
+    );
+    let early_gt = src.rfind("pigeonCount >").unwrap() + "pigeonCount ".len();
+    assert_eq!(err.span.start as usize, early_gt);
+    let (line, _column) = Span::line_col(src, early_gt);
+    assert_eq!(line, 3, "the early `>` sits on line 3 of the source");
+}

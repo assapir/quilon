@@ -22,12 +22,27 @@ impl<'a> Parser<'a> {
         let mut test_blocks = Vec::new();
 
         while !self.is_at_end() {
-            if self.check(&TokenKind::Import) {
-                imports.push(self.parse_import()?);
+            // A block that closed only because it ended its line (see `parse_block_inner`)
+            // leaves the parser here, at the top level, one statement short of where the
+            // writer meant it to be — so this is where a resulting derailment, whatever
+            // token it happens at, gets blamed on that earlier `>` instead of on itself.
+            let armed_before = self.last_line_final_block_close.clone();
+            let result = if self.check(&TokenKind::Import) {
+                self.parse_import().map(|import| imports.push(import))
             } else if self.at_test_block() {
-                test_blocks.push(self.parse_expression()?);
+                self.parse_expression().map(|expr| test_blocks.push(expr))
             } else {
-                items.push(self.parse_item()?);
+                self.parse_item().map(|item| items.push(item))
+            };
+            match result {
+                Ok(()) => {
+                    // This top-level construct neither set nor refreshed the record, so
+                    // any record still standing is stale — parsing moved cleanly past it.
+                    if self.last_line_final_block_close == armed_before {
+                        self.last_line_final_block_close = None;
+                    }
+                }
+                Err(err) => return Err(self.blame_early_block_close(err)),
             }
         }
 
@@ -590,6 +605,7 @@ impl<'a> Parser<'a> {
 
         let start = self.current_span();
         self.expect(&TokenKind::BlockOpen)?;
+        let body_start = self.pos;
 
         let mut statements = Vec::new();
 
@@ -632,11 +648,16 @@ impl<'a> Parser<'a> {
         }
 
         // Remember this `>` if it closed the block only because it ended its line
-        // (something on the same line precedes it) — the candidate a later "found a
-        // block close" error blames when it turns out this one closed too soon.
+        // (something on the same line precedes it) AND the block's `<` opened on an
+        // earlier line — a block that opens and closes on one line (`< x * 2 >`) can
+        // never suffer the early-close problem, so it is never a candidate.
         let closer_span = self.peek().span.clone();
         let closer_first_on_line = self.peek().first_on_line;
-        if self.check(&TokenKind::BlockClose) && !closer_first_on_line {
+        let body_spans_multiple_lines = self.tokens[body_start..self.pos]
+            .iter()
+            .any(|token| token.first_on_line);
+        if self.check(&TokenKind::BlockClose) && !closer_first_on_line && body_spans_multiple_lines
+        {
             self.last_line_final_block_close = Some(closer_span);
         }
         self.expect(&TokenKind::BlockClose)?;
