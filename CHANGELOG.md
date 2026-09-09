@@ -57,6 +57,9 @@ All notable changes to Quilon are documented here.
   at the inner `?`. A ternary in an arm's body, and a match nested inside a block, call
   argument, or ternary branch, keep working as written. See
   `docs/expressions/pattern-matching.md`. Closes #213.
+- **`Result{T, E}` generic-argument braces after `Result` in a type annotation are now
+  a parse error.** The parser previously accepted and silently discarded them; `Result`
+  is monomorphic, so they never had an effect.
 
 ### Fixed
 

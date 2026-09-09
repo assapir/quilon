@@ -475,7 +475,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // resolves as Num for overload dispatch (see the type checker's `types_match`).
         let generic = |n: &str| Type::Generic {
             name: n.to_string(),
-            arguments: vec![],
         };
         self.variant_payloads
             .insert("Ok".to_string(), vec![generic("T")]);

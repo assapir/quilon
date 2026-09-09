@@ -72,17 +72,8 @@ impl<'a> Parser<'a> {
                 // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {
                     self.advance();
-                    let mut arguments = Vec::new();
-
-                    if !self.check(&TokenKind::ParenClose) {
-                        loop {
-                            arguments.push(self.parse_pattern()?);
-                            if !self.check(&TokenKind::Comma) {
-                                break;
-                            }
-                            self.advance();
-                        }
-                    }
+                    let arguments =
+                        self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_pattern)?;
 
                     self.expect(&TokenKind::ParenClose)?;
                     let end = self.previous_span().end;
