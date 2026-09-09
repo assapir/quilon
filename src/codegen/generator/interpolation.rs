@@ -169,8 +169,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call)
     }
 
-    /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` — the
-    /// same header'd global constant `Expression::String` lowering builds.
+    /// Build a `Text` value for the compile-time-constant string `s`.
     pub(super) fn text_literal(&mut self, s: &str) -> Result<BasicValueEnum<'ctx>, String> {
         self.build_text_constant(s)
     }

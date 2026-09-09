@@ -345,17 +345,12 @@ impl<'ctx> DebugInfo<'ctx> {
         self.record_type(name, &[])
     }
 
-    /// `Text` — a `{ ptr data, i64 byte_len }` struct whose `data` points at a
-    /// `TextStorage` (the write-once header: grapheme count, flags, then the UTF-8 bytes)
-    /// rather than at the bytes directly, so `p *t.data` in a debugger shows the count and
-    /// flags alongside the content (`docs/status/abi.md`). Distinct from an array by name
-    /// (`Text`) and by its `data` pointee (`TextStorage`, not `T`).
+    /// `Text` — a `{ ptr data, i64 byte_len }` struct whose `data` points at a named
+    /// `TextStorage` header, so `p *t.data` in a debugger shows the count and flags too.
     pub fn text_type(&self) -> DIType<'ctx> {
         let i64_ty = self.basic_type("i64", 64, DW_ATE_SIGNED);
         let char_ty = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);
-        // A flexible array member (one subscript, `0..0`): the header's fixed part is 16
-        // bytes, and `bytes` names where the content starts without claiming a length
-        // DWARF has no value for.
+        // A zero-length flexible array member: DWARF has no value for the content's length.
         #[allow(clippy::single_range_in_vec_init)]
         let subscripts = [0..0];
         let bytes = self

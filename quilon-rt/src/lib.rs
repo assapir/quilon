@@ -261,24 +261,18 @@ pub(crate) mod test_support {
     // through the GC takes this lock first (mirrors `jit`'s JIT_LOCK).
     pub(crate) static GC_LOCK: Mutex<()> = Mutex::new(());
 
-    /// View a `QlSlice` `Text` result as a `&str` (its GC-owned content bytes, past its
-    /// header). Takes the `QlSlice` by value (it is `Copy`) so the returned `&str` borrows
-    /// the underlying GC buffer, not the (temporary) struct.
+    /// A `QlSlice` `Text` result's content, past its header, as a `&str`.
     pub(crate) unsafe fn slice_str<'a>(s: QlSlice) -> &'a str {
         std::str::from_utf8(byte_slice(s.data as *const u8, s.len)).unwrap()
     }
 
-    /// A `(ptr, len)` `Text` intrinsics can be called with directly: a leaked, properly
-    /// headered buffer over `s`'s bytes — not a real GC allocation, since these run
-    /// without `__gc_init`, but a real header, since `ptr` is what a `Text` value's own
-    /// `data` field would be.
+    /// A `(ptr, len)` `Text` intrinsics can be called with: a leaked buffer with a real
+    /// header (not a real GC allocation, since these run without `__gc_init`).
     pub(crate) fn text_of(s: &str) -> (*const u8, i64) {
         text_of_bytes(s.as_bytes())
     }
 
-    /// [`text_of`] for bytes that need not be valid UTF-8 (an interior NUL, a stray
-    /// non-UTF-8 byte) — the header's grapheme count is only ever meaningful for a
-    /// well-formed `Text`, so callers exercising those cases care about the bytes alone.
+    /// [`text_of`] for bytes that need not be valid UTF-8.
     pub(crate) fn text_of_bytes(bytes: &[u8]) -> (*const u8, i64) {
         let (count, flags) = crate::mem::text_header(bytes);
         let mut buf = Vec::with_capacity(16 + bytes.len());

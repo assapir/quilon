@@ -37,13 +37,8 @@ pub extern "C" fn __bool_to_text(b: i64) -> QlSlice {
     alloc_text(if b != 0 { b"True" } else { b"False" })
 }
 
-/// The grapheme count `alloc_text` wrote into this `Text`'s header. Backs `Text.length` —
-/// O(1), never a walk. `ptr` is the `Text`'s own `data` field (the header), not its bytes.
-///
-/// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points at a header a `quilon-rt` allocator wrote.
-// Exported C-ABI symbol called from generated code; a safe Rust signature is
-// intentional (the contract is upheld by the compiler emitting the call).
+/// Backs `Text.length`: O(1), reading the header rather than walking. `ptr` is the
+/// `Text`'s own `data` field (the header), not its bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_length(ptr: *const u8, len: i64) -> i64 {
@@ -71,13 +66,7 @@ pub extern "C" fn __text_cmp(a: *const u8, alen: i64, b: *const u8, blen: i64) -
     }
 }
 
-/// A `Text`'s `len` content bytes, skipping past its header. Empty for a null/non-positive
-/// `len` — the empty `Text` carries no header to skip. Shared with [`crate::report`],
-/// which reads the `Text` fields of a call site the same way.
-///
-/// # Safety contract (upheld by the compiler)
-/// A non-null `ptr` points at a header a `quilon-rt` allocator wrote, followed by `len`
-/// readable bytes.
+/// A `Text`'s `len` content bytes, past its header (empty for a null/non-positive `len`).
 pub(crate) fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
     if ptr.is_null() || len <= 0 {
         &[]
@@ -136,12 +125,9 @@ pub extern "C" fn __text_contains(hptr: *const u8, hlen: i64, sptr: *const u8, s
     i64::from(hay.contains(&*sub))
 }
 
-/// The GRAPHEME index, at or after grapheme `from`, of the first occurrence of `sub` in
-/// the haystack — or -1 if absent. `from` clamps to `[0, length]`, like `slice`'s bounds.
-/// Shared by [`__text_index_of`] (`from = 0`) and [`__text_index_of_from`]. On an
-/// ASCII-aligned haystack (`hptr` points at a header with that flag set), a byte offset
-/// doubles as its own grapheme index, so both ends of the search skip straight to it —
-/// no grapheme walk.
+/// Shared by [`__text_index_of`] (`from = 0`) and [`__text_index_of_from`]; on an
+/// ASCII-aligned haystack a byte offset doubles as its own grapheme index, so both ends
+/// of the search skip the grapheme walk.
 fn text_find_from(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64, from: i64) -> i64 {
     let (count, flags) = text_header_of(hptr);
     let ascii = text_is_ascii(flags);
@@ -177,7 +163,6 @@ pub extern "C" fn __text_index_of(hptr: *const u8, hlen: i64, sptr: *const u8, s
     text_find_from(hptr, hlen, sptr, slen, 0)
 }
 
-/// [`__text_index_of`], starting the search at grapheme `from` instead of the beginning.
 /// Backs `Text.indexOf(sub, from)`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
@@ -193,10 +178,9 @@ pub extern "C" fn __text_index_of_from(
 
 /// The substring from grapheme `start` (inclusive) to grapheme `end` (exclusive).
 /// Indices count graphemes (like `Text.length`); both are CLAMPED to `[0, length]`
-/// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`. The
-/// result's grapheme count is always `end - start` after clamping — never re-walked — and
-/// on an ASCII-aligned receiver a byte offset doubles as its own grapheme index, so the
-/// whole call is a direct byte-range copy with no grapheme walk at all.
+/// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`. On
+/// an ASCII-aligned receiver a byte offset doubles as its own grapheme index, so the
+/// whole call is a byte-range copy with no grapheme walk.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -> QlSlice {
@@ -257,8 +241,7 @@ pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
 
 /// The grapheme at `index` (0-based), or the EMPTY text when `index` is out of bounds —
 /// a grapheme is never empty, so codegen reads the empty answer as `NotOk`. Backs
-/// `Text.at(index)`, without segmenting past the asked-for grapheme. On an ASCII-aligned
-/// receiver, `index` is its own byte offset — one byte read, no segmentation at all.
+/// `Text.at(index)`. On an ASCII-aligned receiver, `index` is its own byte offset.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
@@ -404,10 +387,7 @@ pub extern "C" fn __text_replace(
     }
 }
 
-/// Concatenate two `Text`s. Backs `+` on `Text` — codegen calls this rather than
-/// memcpy-ing the pieces itself, so the header math (sum the counts, AND the ASCII flags)
-/// happens once, here, instead of in every place `+`/interpolation/`repeat` compose it.
-/// No walk: both operands' counts and flags are already known from their own headers.
+/// Backs `Text` `+`. No walk: both operands' counts/flags are already known.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rlen: i64) -> QlSlice {
@@ -424,10 +404,8 @@ pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rle
     alloc_text_with_header(&bytes, l_count + r_count, i64::from(ascii))
 }
 
-/// `parts.join(separator)`: every piece back to back with `separator` between consecutive
-/// ones. `parts` crosses the FFI as the array ABI codegen emits for `[]Text` — `parts_ptr`
-/// points at `parts_len` contiguous `Text` structs. `[].join(sep)` is `""`. The header sums
-/// each piece's own count (plus the separator's, once per gap) — no walk.
+/// Backs `[]Text.join(separator)`. `parts_ptr` is the array ABI's `data` field:
+/// `parts_len` contiguous `Text` structs.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `parts_ptr` is null or points at `parts_len` contiguous, readable `Text` structs.
@@ -709,8 +687,6 @@ mod tests {
             ))
         );
     }
-
-    // ── Text header: every producer writes the right (graphemeCount, flags) ──────────
 
     #[test]
     fn alloc_text_headers_ascii_multibyte_cluster_and_empty_text() {

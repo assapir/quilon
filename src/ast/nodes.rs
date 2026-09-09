@@ -606,8 +606,7 @@ pub struct Parameter {
 /// resolve the compiler-provided built-in ahead of any user overload or sum
 /// constructor — so this predicate is the single source of truth shared by both passes
 /// (a divergence would be a bug). Method names are lowercase, so they never collide with
-/// (Capitalized) sum-constructor names. (`join` is reserved on every array so the checker
-/// can name `map` in its error on a non-`[]Text` receiver — see `check_array_method`.)
+/// (Capitalized) sum-constructor names. `join` is reserved on every array so its checker error can name `map`.
 pub fn is_array_method(name: &str) -> bool {
     matches!(
         name,

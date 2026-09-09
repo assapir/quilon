@@ -137,8 +137,7 @@ pub extern "C" fn __http_frame_body(
     unsafe { *out = result };
 }
 
-/// Borrow a `Text`'s `len` content bytes at `data`, past its header (empty if
-/// null/non-positive).
+/// Borrow a `Text`'s `len` content bytes at `data`, past its header.
 fn borrow_bytes<'a>(data: *const u8, len: i64) -> &'a [u8] {
     crate::text::byte_slice(data, len)
 }

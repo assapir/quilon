@@ -278,9 +278,7 @@ fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
     ))
 }
 
-/// Copy a `Text`'s `len` content bytes at `data`, past its header, into an owned `Vec`
-/// (empty if null/empty) — so the producer fiber owns its input independent of the
-/// caller's `Text`.
+/// Copy a `Text`'s `len` content bytes at `data`, past its header, into an owned `Vec`.
 fn copy_bytes(data: *const u8, len: i64) -> Vec<u8> {
     crate::text::byte_slice(data, len).to_vec()
 }
@@ -550,8 +548,7 @@ mod tests {
             conn.write_all(b"PONG\n").unwrap();
         });
 
-        // Leaked, headered buffers (`text_of`) rather than plain string pointers, so the
-        // pointers are `usize` (`Send`) across the closure and cast back on the other side.
+        // `*const u8` isn't `Send`, so the pointers cross the closure as `usize`.
         let (address_ptr, address_len) = crate::test_support::text_of(&format!("{addr}"));
         let (request_ptr, request_len) = crate::test_support::text_of("PING\n");
         let (address_ptr, request_ptr) = (address_ptr as usize, request_ptr as usize);

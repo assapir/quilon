@@ -675,8 +675,7 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        // `join` is reserved on every array (see `is_array_method`) so this can name `map`
-        // on the wrong receiver, but it is only ever a real method of `[]Text`.
+        // `join` reaches here for any element type; only `[]Text` is a real method.
         if method == "join" && !matches!(elem_type, Type::Text) {
             return Err(TypeError::InvalidBuiltinArgument {
                 message: format!(
@@ -875,8 +874,7 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
-        // `indexOf` is overloaded on arity (`indexOf(sub)` / `indexOf(sub, from)`), unlike
-        // every other Text method, so it is checked on its own ahead of the table below.
+        // `indexOf` alone is overloaded on arity, so it skips the table below.
         if method == "indexOf" {
             return self.check_index_of(arguments, span);
         }
@@ -921,9 +919,7 @@ impl TypeChecker {
         Ok(result)
     }
 
-    /// Type-check `Text.indexOf`, overloaded on arity: `indexOf(sub)` finds the first
-    /// occurrence; `indexOf(sub, from)` finds the first at or after grapheme `from`. Both
-    /// answer `Ok(Num)`/`NotOk`.
+    /// `indexOf(sub)` or `indexOf(sub, from)`, both answering `Ok(Num)`/`NotOk`.
     fn check_index_of(&mut self, arguments: &[Expression], span: &Span) -> Result<Type, TypeError> {
         let method_args = &arguments[1..];
         let sub = method_args
@@ -1215,8 +1211,7 @@ pub(crate) fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, T
         ),
         ("at", vec![Type::Num], result_of(elem.clone())),
     ];
-    // `join` is a method of `[]Text` alone; listed here only for that receiver so the
-    // language server's completion (which reads this same table) offers it there.
+    // Listed only for `[]Text` so the language server's completion offers it there.
     if matches!(elem, Type::Text) {
         table.push(("join", vec![Type::Text], Type::Text));
     }

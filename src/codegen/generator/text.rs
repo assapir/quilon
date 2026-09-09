@@ -350,8 +350,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.index_of_result(idx)
     }
 
-    /// [`Self::generate_text_index_of`], starting the search at grapheme `from`. Lowers
-    /// `Text.indexOf(sub, from)`.
+    /// Lowers `Text.indexOf(sub, from)`.
     pub(super) fn generate_text_index_of_from(
         &mut self,
         recv_ptr: PointerValue<'ctx>,
@@ -382,10 +381,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.index_of_result(idx)
     }
 
-    /// Turn an `indexOf` intrinsic's grapheme index (or -1) into a `Result` — `Ok(Num idx)`
-    /// when `idx >= 0`, else `NotOk` — using the same `{ i8 tag, f64 }` shape
-    /// `array_at`/`array_find` produce (no -1 sentinel). Shared by `indexOf(sub)` and
-    /// `indexOf(sub, from)`.
+    /// Shared by `indexOf(sub)` and `indexOf(sub, from)`.
     fn index_of_result(
         &mut self,
         idx: inkwell::values::IntValue<'ctx>,
@@ -415,8 +411,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to select indexOf result"))
     }
 
-    /// Lower `[]Text.join(separator)` via the `__text_join` runtime intrinsic. `parts_ptr`/
-    /// `parts_len` are the receiver array's own `{ data, size }` fields.
+    /// Lowers `[]Text.join(separator)`; `parts_ptr`/`parts_len` are the receiver array's own fields.
     pub(super) fn generate_text_join(
         &mut self,
         parts_ptr: PointerValue<'ctx>,
@@ -444,10 +439,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into())
     }
 
-    /// Concatenate two `Text` values via the `__text_concat` runtime intrinsic, which sums
-    /// their headers' counts and ANDs their ASCII flags with no walk — the header math a
-    /// hand-rolled memcpy here would otherwise have to duplicate for `+`, interpolation,
-    /// and every composable method (`repeat`) built over `+`.
+    /// Concatenate two `Text` values via the `__text_concat` runtime intrinsic.
     pub(super) fn generate_text_concat(
         &mut self,
         left: inkwell::values::StructValue<'ctx>,

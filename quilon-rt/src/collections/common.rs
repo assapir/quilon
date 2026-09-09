@@ -95,8 +95,7 @@ impl QlKey {
         }
     }
 
-    /// The content bytes a `Text` key points at, past its header (empty for a null/zero-length
-    /// key).
+    /// The content bytes a `Text` key points at, past its header.
     fn text_bytes(&self) -> &'static [u8] {
         crate::text::byte_slice(self.a as *const u8, self.b as i64)
     }

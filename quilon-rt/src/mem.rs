@@ -312,10 +312,9 @@ pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
 
 /// A Quilon `Text` value (also the representation of an array): `{ ptr data, i64 len }`,
 /// matching the code generator's `ptr_len_struct_type` (`{ i8*, i64 }`). For a `Text`,
-/// `data` points at a [`TEXT_HEADER_BYTES`]-byte header followed by `len` UTF-8 bytes (see
-/// `alloc_text`); for an array, `data` points to `len` contiguous element-representation
-/// values and `len` is the element count. `#[repr(C)]` so the field offsets (ptr at 0, i64
-/// at 8) match what LLVM emits.
+/// `data` points at a header (see `alloc_text_with_header`); for an array, `data` points
+/// to `len` contiguous element-representation values and `len` is the element count.
+/// `#[repr(C)]` so the field offsets (ptr at 0, i64 at 8) match what LLVM emits.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct QlSlice {
@@ -348,11 +347,6 @@ impl QlSlice {
     }
 }
 
-/// Bytes before a `Text`'s content that `data` points AT rather than past: one `i64`
-/// grapheme count, one `i64` flags (bit 0 = every byte ASCII and grapheme-aligned; a
-/// `\r\n` pair breaks that alignment despite being all-ASCII, since it segments as one
-/// grapheme over two bytes). Pointing at the header, not the bytes, is what lets a
-/// debugger's `p *t.data` show both fields.
 pub(crate) const TEXT_HEADER_BYTES: i64 = 16;
 
 const TEXT_ASCII_ALIGNED: i64 = 1;
@@ -361,7 +355,6 @@ pub(crate) fn text_is_ascii(flags: i64) -> bool {
     flags & TEXT_ASCII_ALIGNED != 0
 }
 
-/// The header at `ptr`, or `(0, ASCII)` for a null `data` (the empty `Text`).
 pub(crate) fn text_header_of(ptr: *const u8) -> (i64, i64) {
     if ptr.is_null() {
         return (0, TEXT_ASCII_ALIGNED);
@@ -377,8 +370,6 @@ fn is_ascii_grapheme_aligned(bytes: &[u8]) -> bool {
     bytes.is_ascii() && !bytes.windows(2).any(|pair| pair == b"\r\n")
 }
 
-/// The `(graphemeCount, flags)` header for `bytes`: a linear ASCII scan, plus a Unicode
-/// grapheme walk only when that scan comes back false.
 pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     if is_ascii_grapheme_aligned(bytes) {
         return (bytes.len() as i64, TEXT_ASCII_ALIGNED);
@@ -387,20 +378,19 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     (count, 0)
 }
 
-/// GC-allocate a `Text`: [`TEXT_HEADER_BYTES`] of header (`count`, `flags`), then a copy
-/// of `bytes`. The one place a `Text`'s header is written, so every producer — however it
-/// comes by `count`/`flags` — ends up with the same 16-byte shape in front of its content
-/// (`docs/status/abi.md`). An empty `bytes` allocates nothing, answering with the
-/// null-data empty `Text` instead, so a caller never has to special-case it.
+/// Every `Text` allocation carries [`TEXT_HEADER_BYTES`] (16) bytes before its content:
+/// an `i64` grapheme `count`, then an `i64` `flags` whose bit 0 marks the text ASCII AND
+/// grapheme-aligned — a `\r\n` pair is all-ASCII but segments as one grapheme over two
+/// bytes, so it needs its own condition beyond a plain ASCII check. `data` points AT this
+/// header, not past it, so a debugger's `p *t.data` shows `count`/`flags` alongside the
+/// bytes. Written once, here, for every producer.
 pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QlSlice {
     let len = bytes.len();
     if len == 0 {
         return QlSlice::empty();
     }
     let buf = __alloc(TEXT_HEADER_BYTES + len as i64) as *mut u8;
-    // SAFETY: `__alloc` returned at least `TEXT_HEADER_BYTES + len` writable, 8-byte
-    // aligned bytes (it aborts rather than returning null), and a fresh allocation cannot
-    // overlap `bytes`.
+    // SAFETY: `__alloc` returned at least `TEXT_HEADER_BYTES + len` writable bytes.
     unsafe {
         let header = buf as *mut i64;
         header.write(count);
@@ -413,9 +403,7 @@ pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> Ql
     }
 }
 
-/// [`alloc_text_with_header`] for a producer that already has the exact grapheme `count`
-/// (`slice`'s `end - start`, `join`'s summed counts) but still needs the cheap ASCII scan
-/// for `flags`.
+/// [`alloc_text_with_header`] when `count` is already known (`slice`, `join`).
 pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QlSlice {
     let flags = if is_ascii_grapheme_aligned(bytes) {
         TEXT_ASCII_ALIGNED
@@ -425,8 +413,6 @@ pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QlSlice {
     alloc_text_with_header(bytes, count, flags)
 }
 
-/// GC-allocate a `Text` copy of `bytes`, with a header from [`text_header`]. Outlives the C
-/// `argv`/`envp` buffers a caller may not keep.
 pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     let (count, flags) = text_header(bytes);
     alloc_text_with_header(bytes, count, flags)
@@ -439,19 +425,17 @@ pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
 /// this produces. Not reachable from a `.qn` program.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `data` is a `Text`'s own `data` field: null, or a header followed by `len` readable
-/// bytes.
+/// `data` is a `Text`'s own `data` field (null, or a header followed by `len` bytes).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __render_c_string(data: *const u8, len: i64) -> *const u8 {
     let bytes = crate::text::byte_slice(data, len);
     let buf = __alloc(bytes.len() as i64 + 1) as *mut u8;
     if !bytes.is_empty() {
-        // SAFETY: `__alloc` returned at least `bytes.len() + 1` writable, non-overlapping
-        // bytes.
+        // SAFETY: `__alloc` returned at least `bytes.len() + 1` writable bytes.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len()) };
     }
-    // SAFETY: `buf` has `bytes.len() + 1` bytes; that index is one past the copied data.
+    // SAFETY: `buf` has `bytes.len() + 1` bytes.
     unsafe { *buf.add(bytes.len()) = 0 };
     buf
 }
