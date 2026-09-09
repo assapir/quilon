@@ -491,15 +491,22 @@ fn test_scientific_notation_is_rejected_with_a_plain_decimal_hint() {
 }
 
 #[test]
-fn test_bare_exponent_with_no_digits_reports_the_same_code_without_a_hint() {
+fn test_scientific_notation_with_no_finite_value_has_no_hint() {
     use quilon::diagnostic::codes::Code;
 
-    let error = Lexer::tokenize("1e").expect_err("a bare exponent is still rejected");
-    assert_eq!(error.code, Code::ScientificNotation);
-    assert_eq!(error.message, "scientific notation is not supported");
-    assert_eq!(error.span.start, 0);
-    assert_eq!(error.span.end, 2);
-    assert_eq!(error.span.file, ROOT_FILE);
+    // "1e" has no digits at all to parse; "1e400" overflows `f64` to infinity — neither
+    // has a plain-decimal value worth suggesting.
+    for (source, end) in [("1e", 2), ("1e400", 5)] {
+        let error = Lexer::tokenize(source).expect_err("scientific notation is still rejected");
+        assert_eq!(error.code, Code::ScientificNotation, "source: {source}");
+        assert_eq!(
+            error.message, "scientific notation is not supported",
+            "source: {source}"
+        );
+        assert_eq!(error.span.start, 0, "source: {source}");
+        assert_eq!(error.span.end, end, "source: {source}");
+        assert_eq!(error.span.file, ROOT_FILE, "source: {source}");
+    }
 }
 
 #[test]

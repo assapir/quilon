@@ -145,10 +145,7 @@ pub enum TokenLexError {
     InvalidToken,
     UnterminatedString,
     Bidi(BidiIssue),
-    /// A number glued to `e`/`E`, an optional sign, and (usually) digits — the exponent
-    /// grammar this language does not have. `Some(rendered)` carries the literal's value
-    /// written out in plain decimal, when the exponent parsed to one (a bare `1e` with no
-    /// digits at all does not).
+    /// `Some(rendered)` is the literal's plain-decimal value, when it has one.
     ScientificNotation(Option<String>),
 }
 
@@ -173,11 +170,7 @@ pub enum TokenKind {
     )]
     StrayBidiControl,
 
-    // Literals. The grammar has no exponent, so a plain literal glued to `e`/`E` (`1e9`,
-    // `1.5e-3`) is caught here — its match is strictly longer than the plain-number regex
-    // below would produce at the same position, so it always wins — and turned into
-    // `TokenLexError::ScientificNotation` rather than left to fall apart into a number and
-    // a stray identifier.
+    // Longer than the plain-number regex below at the same position, so it always wins.
     #[regex(r"[0-9]+\.?[0-9]*[eE][+-]?[0-9]*", lex_scientific_notation)]
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
     Number(NumLit),
@@ -437,16 +430,14 @@ impl TokenKind {
     }
 }
 
-/// A number glued to an exponent (`1e9`, `1.5e-3`, a bare `1e`) always fails: this
-/// language's `Num` literal has no exponent syntax. `f64`'s own parser already accepts the
-/// exponent grammar we want to reject, so it doubles as the renderer — a literal it parses
-/// becomes the diagnostic's plain-decimal "write this instead" value; one it cannot (the
-/// exponent has no digits at all, `1e` or `1e+`) reports with no such value.
+/// `f64::parse` already accepts the exponent grammar being rejected, so it doubles as the
+/// renderer for the "write this" hint.
 fn lex_scientific_notation(lex: &mut logos::Lexer<TokenKind>) -> Result<NumLit, TokenLexError> {
     let rendered = lex
         .slice()
         .parse::<f64>()
         .ok()
+        .filter(|value| value.is_finite())
         .map(|value| format!("{value}"));
     Err(TokenLexError::ScientificNotation(rendered))
 }
