@@ -84,7 +84,8 @@ or with `reduce` + `+`.
 ```quilon
 "a,b,c".split(",").join("-")             ~ "a-b-c"
 [1, 2, 3].map(n => "`n`").join(", ")     ~ "1, 2, 3"
-[].join(",")                             ~ ""
+nothing :: []Text = []
+nothing.join(",")                        ~ ""
 ```
 
 The primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
