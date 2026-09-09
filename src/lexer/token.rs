@@ -145,7 +145,6 @@ pub enum TokenLexError {
     InvalidToken,
     UnterminatedString,
     Bidi(BidiIssue),
-    /// `Some(rendered)` is the literal's plain-decimal value, when it has one.
     ScientificNotation(Option<String>),
 }
 
@@ -430,8 +429,6 @@ impl TokenKind {
     }
 }
 
-/// `f64::parse` already accepts the exponent grammar being rejected, so it doubles as the
-/// renderer for the "write this" hint.
 fn lex_scientific_notation(lex: &mut logos::Lexer<TokenKind>) -> Result<NumLit, TokenLexError> {
     let rendered = lex
         .slice()
