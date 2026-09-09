@@ -39,6 +39,7 @@
 //! Quilon binary needs no `libgc` on the machine that runs it.
 
 pub mod abort_trap;
+pub mod bidi;
 pub mod collections;
 pub mod deferred;
 pub mod gc;

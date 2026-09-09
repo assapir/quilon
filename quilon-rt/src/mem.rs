@@ -398,25 +398,6 @@ fn is_ascii_grapheme_aligned(bytes: &[u8]) -> bool {
     bytes.is_ascii() && !bytes.windows(2).any(|pair| pair == b"\r\n")
 }
 
-/// `src/lexer/bidi.rs::classify`'s character set (QN004) — kept in sync by hand.
-fn is_bidi_control(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{202A}'
-            | '\u{202B}'
-            | '\u{202C}'
-            | '\u{202D}'
-            | '\u{202E}'
-            | '\u{2066}'
-            | '\u{2067}'
-            | '\u{2068}'
-            | '\u{2069}'
-            | '\u{200E}'
-            | '\u{200F}'
-            | '\u{061C}'
-    )
-}
-
 /// Every header bit free in the pass a producer already makes over `bytes`.
 pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     if is_ascii_grapheme_aligned(bytes) {
@@ -432,7 +413,7 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     if valid_utf8 {
         flags |= TEXT_VALID_UTF8;
     }
-    if !text.chars().any(is_bidi_control) {
+    if !text.chars().any(crate::bidi::is_bidi_control) {
         flags |= TEXT_NO_BIDI_CONTROLS;
     }
     (count, flags)
