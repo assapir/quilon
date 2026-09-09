@@ -139,12 +139,13 @@ pub enum BidiIssue {
     Outside(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum TokenLexError {
     #[default]
     InvalidToken,
     UnterminatedString,
     Bidi(BidiIssue),
+    ScientificNotation(Option<String>),
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
@@ -168,7 +169,8 @@ pub enum TokenKind {
     )]
     StrayBidiControl,
 
-    // Literals
+    // Longer than the plain-number regex below at the same position, so it always wins.
+    #[regex(r"[0-9]+\.?[0-9]*[eE][+-]?[0-9]*", lex_scientific_notation)]
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
     Number(NumLit),
 
@@ -425,6 +427,16 @@ impl TokenKind {
                 | TokenKind::Not
         )
     }
+}
+
+fn lex_scientific_notation(lex: &mut logos::Lexer<TokenKind>) -> Result<NumLit, TokenLexError> {
+    let rendered = lex
+        .slice()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| format!("{value}"));
+    Err(TokenLexError::ScientificNotation(rendered))
 }
 
 /// Lex a `~` comment (the whole rest of its line, already matched by the regex) and
