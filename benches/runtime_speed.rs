@@ -440,19 +440,22 @@ fn text_join_indexof(iterations: u64) -> String {
     );
     let _ = writeln!(
         src,
-        "countBananas = (t :: Text, from :: Num, found :: Num) -> Num => <"
+        "countOccurrences = (t :: Text, from :: Num, found :: Num) -> Num => <"
     );
-    let _ = writeln!(src, "  t.indexOf(\"an\", from) ?");
-    let _ = writeln!(src, "    | Ok(i)    => countBananas(t, i + 1, found + 1)");
+    let _ = writeln!(src, "  t.indexOf(\"ar\", from) ?");
+    let _ = writeln!(
+        src,
+        "    | Ok(i)    => countOccurrences(t, i + 1, found + 1)"
+    );
     let _ = writeln!(src, "    | NotOk(_) => found");
     let _ = writeln!(src, ">");
     let _ = writeln!(src, "step = (n :: Num, acc :: Num) -> Num => <");
     let _ = writeln!(
         src,
-        "  joined = \"banana,split,rejoins,cleanly\".split(\",\").join(\"-\")"
+        "  joined = \"mercury,venus,earth,mars,jupiter\".split(\",\").join(\"-\")"
     );
     let _ = writeln!(src, "  dashed = joined.replaceAll(\"-\", \"_\")");
-    let _ = writeln!(src, "  hits = countBananas(dashed, 0, 0)");
+    let _ = writeln!(src, "  hits = countOccurrences(dashed, 0, 0)");
     let _ = writeln!(src, "  n == 0 ? acc + hits : step(n - 1, acc + hits)");
     let _ = writeln!(src, ">");
     let _ = writeln!(
