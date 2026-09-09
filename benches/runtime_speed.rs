@@ -36,6 +36,10 @@ const PROGRAMS: &[(&str, &str)] = &[
     ("array_pipeline", "map/filter/reduce over a 2M range"),
     ("text_loop", "400k interpolated strings"),
     ("gc_churn", "3M short-lived arrays"),
+    (
+        "text_join_indexof",
+        "100k rounds of split/join, replace, indexOf(sub, from)",
+    ),
 ];
 
 fn main() {
@@ -343,6 +347,7 @@ fn regenerate() {
         ("array_pipeline", array_pipeline(2_000_000)),
         ("text_loop", text_loop(400_000)),
         ("gc_churn", gc_churn(3_000_000)),
+        ("text_join_indexof", text_join_indexof(100_000)),
     ] {
         let path = dir.join(format!("{stem}.qn"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
@@ -421,6 +426,38 @@ fn gc_churn(iterations: u64) -> String {
     let _ = writeln!(
         src,
         "^ = () -> Num => < churn({iterations}, 0) > 0 ? 0 : 1 >"
+    );
+    src
+}
+
+/// `split`/`join`, `replaceAll`, and an `indexOf(sub, from)` find loop, each iteration —
+/// the operations a write-once Text header exists to make cheap under repeated calls.
+fn text_join_indexof(iterations: u64) -> String {
+    let mut src = String::new();
+    let _ = writeln!(
+        src,
+        "~ split + join, replaceAll, and an indexOf(sub, from) find loop, per iteration."
+    );
+    let _ = writeln!(
+        src,
+        "countBananas = (t :: Text, from :: Num, found :: Num) -> Num => <"
+    );
+    let _ = writeln!(src, "  t.indexOf(\"an\", from) ?");
+    let _ = writeln!(src, "    | Ok(i)    => countBananas(t, i + 1, found + 1)");
+    let _ = writeln!(src, "    | NotOk(_) => found");
+    let _ = writeln!(src, ">");
+    let _ = writeln!(src, "step = (n :: Num, acc :: Num) -> Num => <");
+    let _ = writeln!(
+        src,
+        "  joined = \"banana,split,rejoins,cleanly\".split(\",\").join(\"-\")"
+    );
+    let _ = writeln!(src, "  dashed = joined.replaceAll(\"-\", \"_\")");
+    let _ = writeln!(src, "  hits = countBananas(dashed, 0, 0)");
+    let _ = writeln!(src, "  n == 0 ? acc + hits : step(n - 1, acc + hits)");
+    let _ = writeln!(src, ">");
+    let _ = writeln!(
+        src,
+        "^ = () -> Num => < step({iterations}, 0) > 0 ? 0 : 1 >"
     );
     src
 }

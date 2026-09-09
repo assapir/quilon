@@ -6,6 +6,21 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`Text.length` is O(1), and `slice`/`at`/`indexOf` are O(1) past the search itself on
+  an ASCII text.** Every `Text` now carries a write-once header (grapheme count, an ASCII
+  flag) set at creation, so `length` reads the count directly and the other methods treat
+  a byte offset as its own grapheme index when the flag is set, with no Unicode
+  segmentation walk. See `docs/status/abi.md#text-storage` and
+  `docs/types/text.md#cost`.
+- **`[]Text.join(separator)`, the reverse of `split`.** One native intrinsic: every
+  element back to back with `separator` between consecutive ones; `[].join(sep)` is `""`.
+  `join` is a method of `[]Text` alone — an array of any other element type is a checker
+  error naming `map` as the way there. See `docs/types/text.md` and
+  `docs/collections/arrays.md#array-methods`, and `examples/text_join.qn`.
+- **`Text.indexOf(sub, from)`, a second overload finding the next occurrence.** Returns
+  the first occurrence at or after grapheme index `from` as `Ok(Num)`/`NotOk`; `from`
+  clamps to `[0, length]` like `slice`'s bounds, letting a find loop carry its position
+  forward through repeated calls. See `docs/types/text.md`. Closes #381.
 - **`Text.replace` is a native intrinsic, like `replaceAll`.** Both now report through the
   runtime's own coded frame: an empty `from` (computed, since a literal one is still a
   compile error) is

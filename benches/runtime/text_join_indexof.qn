@@ -1,0 +1,13 @@
+~ split + join, replaceAll, and an indexOf(sub, from) find loop, per iteration.
+countBananas = (t :: Text, from :: Num, found :: Num) -> Num => <
+  t.indexOf("an", from) ?
+    | Ok(i)    => countBananas(t, i + 1, found + 1)
+    | NotOk(_) => found
+>
+step = (n :: Num, acc :: Num) -> Num => <
+  joined = "banana,split,rejoins,cleanly".split(",").join("-")
+  dashed = joined.replaceAll("-", "_")
+  hits = countBananas(dashed, 0, 0)
+  n == 0 ? acc + hits : step(n - 1, acc + hits)
+>
+^ = () -> Num => < step(100000, 0) > 0 ? 0 : 1 >

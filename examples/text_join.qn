@@ -1,0 +1,45 @@
+~ `[]Text.join(separator)` and `indexOf(sub, from)`, verified with `core.test`
+~ assertions: every assertion below holds, so the program runs to completion and
+~ exits 0 (a failing assertion prints to io.stderr and exits 101).
+~   join(separator)          -> Text  (the reverse of split; [].join(sep) is "")
+~   indexOf(sub, from)       -> Ok(Num) grapheme index at or after `from` / NotOk
+<< core.test
+
+~ Counts every occurrence of `sub` in `t`, carrying its search position forward
+~ through `indexOf(sub, from)` instead of re-scanning from the start each time.
+countOccurrences = (t :: Text, sub :: Text, from :: Num, found :: Num) -> Num => <
+  t.indexOf(sub, from) ?
+    | Ok(i)    => countOccurrences(t, sub, i + 1, found + 1)
+    | NotOk(_) => found
+>
+
+^ = () -> $ => <
+  ~ split -> join round trip: rejoining split's own pieces with the same separator
+  ~ reconstructs the original text.
+  fields = "wombat,koala,quokka".split(",")
+  assert(fields.join(","), equals("wombat,koala,quokka"))
+
+  ~ join with a different separator, and with none at all.
+  assert(fields.join(" & "), equals("wombat & koala & quokka"))
+  assert(fields.join(""), equals("wombatkoalaquokka"))
+
+  ~ join composes with map: render each element to Text first.
+  assert([1, 2, 3].map(n => "`n`").join("-"), equals("1-2-3"))
+
+  ~ an empty array joins to the empty text, whatever the separator.
+  none :: []Text = []
+  assert(none.join(", "), equals(""))
+
+  ~ indexOf(sub, from) finds the occurrence at or after `from`, letting a find loop
+  ~ carry its position forward instead of recomputing indices from byte 0 each time.
+  sentence = "a quokka and a koala and a wombat share one paragraph"
+  assert(countOccurrences(sentence, "and", 0, 0), equals(2))
+
+  ~ searching past the last occurrence finds none; a negative `from` clamps to 0,
+  ~ same as `slice`'s bounds.
+  assert(sentence.indexOf("and", 100), isNotOk())
+  first = sentence.indexOf("and", 0 - 5) ?
+    | Ok(i)    => i
+    | NotOk(_) => 0 - 1
+  assert(first, equals(sentence.indexOf("and") ? | Ok(i) => i | NotOk(_) => 0 - 1))
+>

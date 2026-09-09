@@ -14,14 +14,14 @@ sidebar:
 | `Num`, arithmetic, comparison, logical, ternary | ✅ |
 | `Text` built-in: literals, `+`, `.size`, `.length` | ✅ |
 | `Text` comparison: `==`/`!=` (equality), `<`/`<=`/`>`/`>=` (lexicographic) | ✅ |
-| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`slice`/`at`/`graphemes`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
+| `Text` methods: `split`/`trim`/`trimStart`/`trimEnd`/`replaceAll`/`replace`/`repeat`/`contains`/`indexOf`/`indexOf(sub, from)`/`slice`/`at`/`graphemes`/`toUpper`/`toLower` (chainable; grapheme-based) | ✅ |
 | `Text = []Grapheme` model: `at`/`graphemes` grapheme access, and the composable methods self-hosted in Quilon (`corelib/text.qn`) over the native primitive floor | ✅ |
 | Ad-hoc overloading: same-named typed definitions, exact-type dispatch | ✅ |
 | Operator overloading as a type member (`+`, comparisons, … with `it` the left operand); built-ins as overloads; 2+ same-named methods on one type form an overload set | ✅ |
 | `Bool` | ✅ |
 | `Unit` type / value (`$`) | ✅ |
 | Arrays: literals, `.size`, `[index]`, in-place element write `arr[i] := v` on a `:=`-bound array | ✅ |
-| Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined) | ✅ |
+| Array methods: `map`/`filter`/`reduce`/`each`/`find`/`at` (chainable; lambda args inlined); `join` (`[]Text` only, the reverse of `Text.split`) | ✅ |
 | Array `+`: concat `[]T + []T`, append `[]T + T`, prepend `T + []T` → new `[]T` (non-mutating) | ✅ |
 | Maps `[\|K => V\|]`: literals, `.size`, `get` (safe, `Result`; no bracket indexing)/`has`/`keys`/`values`/`each`; `set`/`remove` are setters (in-place, `:=`-bound receiver); keys Num/Text/Bool or a user type | ✅ |
 | Sets `[\|T\|]`: literals, `.size`, `has`/`items`/`each`, algebra `+`/`-`/`+-` (union/difference/intersection, non-mutating); `add`/`remove` are setters (in-place, `:=`-bound receiver) | ✅ |

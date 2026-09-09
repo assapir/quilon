@@ -51,6 +51,7 @@ freely chainable. User-visible indices and lengths are **grapheme-based**, match
 | `replace(from :: Text, to :: Text, count :: Num)` | `Text` | replace **exactly** the first `count` occurrences (left→right); `count` truncates toward zero |
 | `contains(sub :: Text)` | `Bool` | whether `sub` occurs in the text |
 | `indexOf(sub :: Text)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence (`Ok`), or `NotOk` when absent |
+| `indexOf(sub :: Text, from :: Num)` | `Ok(Num)` / `NotOk` | grapheme index of the first occurrence at or after `from`, letting a find loop carry its position forward; `from` clamps to `[0, length]` like `slice`'s bounds |
 | `slice(start :: Num, end :: Num)` | `Text` | substring over grapheme indices `[start, end)`; out-of-range indices **clamp** to bounds, and `end ≤ start` yields `""` |
 | `at(index :: Num)` | `Ok(Text)` / `NotOk` | the grapheme at `index` (a length-1 `Text`, multi-codepoint clusters kept whole), `NotOk` out of bounds — mirroring array [`.at`](../collections/arrays.md#array-methods) |
 | `graphemes()` | `[]Text` | every grapheme cluster in order, one length-1 `Text` each (`""` → `[]`); composes with the array methods |
@@ -77,7 +78,14 @@ These methods are **reserved on `Text`**, like the [array methods](../collection
 are on arrays: on a `Text` receiver the built-in wins over a same-named user overload on
 another type. `split`/`graphemes` yield a plain `[]Text`, which composes with `.size`, `[i]`, the
 [array methods](../collections/arrays.md#array-methods), and array `+`. A `[]Text` collapses
-to a `Text` with `reduce` + `+`.
+to a `Text` with [`join`](../collections/arrays.md#array-methods) (the reverse of `split`)
+or with `reduce` + `+`.
+
+```quilon
+"a,b,c".split(",").join("-")             ~ "a-b-c"
+[1, 2, 3].map(n => "`n`").join(", ")     ~ "1, 2, 3"
+[].join(",")                             ~ ""
+```
 
 The primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
 `slice`, `split`, `replaceAll`, `replace`, `trimStart`/`trimEnd`, `toUpper`/`toLower`,
@@ -99,7 +107,22 @@ A literal violation is a compile error (`"a".replace("a", "b", 0)`,
 at run time, with exit `5`. `replaceAll` replaces every occurrence; `replace(count)`
 replaces exactly `count`.
 
-(See `examples/text.qn` and `examples/text_methods.qn`.)
+(See `examples/text.qn`, `examples/text_methods.qn`, and `examples/text_join.qn`.)
+
+## Cost
+
+Every `Text` allocation carries a header set once at creation (see
+[storage layout](../status/abi.md#text-storage)): a grapheme count and a flag marking
+whether the text is ASCII and grapheme-aligned. That header keeps these costs flat under
+repeated calls in a loop:
+
+| Operation | Cost |
+|---|---|
+| `.length` | O(1) always — the header's own count |
+| `slice`, `at`, `indexOf`, `indexOf(sub, from)` | O(1) past the search itself on an ASCII text (a byte offset is its own grapheme index); a grapheme walk on any other text |
+| `+`, `repeat` | O(1) header math (summed counts, ANDed flags); the byte copy is O(result size) |
+| `join` | O(1) header math; the byte copy is O(result size) |
+| `split`, `replaceAll`, `replace`, `trim`/`trimStart`/`trimEnd`, `toUpper`/`toLower`, `graphemes` | O(output size) to build the result, plus one grapheme walk only when the output is not ASCII |
 
 ## String interpolation and the render operator (`` ` ``)
 
