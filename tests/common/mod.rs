@@ -326,8 +326,9 @@ pub fn no_sources() -> Rc<SourceMap> {
     Rc::new(SourceMap::default())
 }
 
-/// Put a freshly built `libquilon_rt.a` next to the compiler binary, where `quilon build`
-/// looks for it before falling back to the embedded copy.
+/// Put a freshly built runtime archive, named `libquilon_rt.bundled.a`, next to the
+/// compiler binary, where `quilon build` looks for it before falling back to the
+/// embedded copy.
 ///
 /// **The placement must be atomic.** Test binaries run concurrently, several of them want
 /// this archive, and they all want it at the same path — so a plain copy truncates the
@@ -355,13 +356,14 @@ pub fn ensure_runtime_lib(bin_dir: &Path) {
     );
 
     let fresh = rt_target.join("debug").join("libquilon_rt.a");
-    let dest = bin_dir.join("libquilon_rt.a");
+    let dest = bin_dir.join("libquilon_rt.bundled.a");
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let tmp = bin_dir.join(format!(
-        "libquilon_rt.a.{}.{}.tmp",
+        "libquilon_rt.bundled.a.{}.{}.tmp",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::copy(&fresh, &tmp).expect("copy fresh libquilon_rt.a to a temp file");
-    std::fs::rename(&tmp, &dest).expect("atomically place libquilon_rt.a next to the binary");
+    std::fs::rename(&tmp, &dest)
+        .expect("atomically place libquilon_rt.bundled.a next to the binary");
 }

@@ -14,14 +14,14 @@
 //!    order). libgc must be installed to build/run Quilon (e.g. `libgc-dev` on
 //!    Debian/Ubuntu, `gc` on Arch). CI installs it explicitly.
 //!
-//! 2. Deterministically place `libquilon_rt.a` (issue #38) — `quilon build`
+//! 2. Deterministically place the runtime staticlib (issue #38) — `quilon build`
 //!    links the compiled program against the `quilon-rt` *staticlib*. Cargo only
 //!    *uplifts* a dependency's staticlib to `target/<profile>/` when that crate is
 //!    a primary build target; as a mere dependency of `quilon`, cargo emits it to
-//!    `target/<profile>/deps/libquilon_rt-<hash>.a` and never to the canonical
-//!    `target/<profile>/libquilon_rt.a`. So `cargo build --release` followed by
-//!    `quilon build …` (the documented flow) used to fail: the archive wasn't
-//!    where `quilon build` looks for it.
+//!    `target/<profile>/deps/libquilon_rt-<hash>.a` and never to a fixed name in
+//!    `target/<profile>/`. So `cargo build --release` followed by `quilon build …`
+//!    (the documented flow) used to fail: the archive wasn't where `quilon build`
+//!    looks for it.
 //!
 //!    We can't just copy the `deps/` archive from here: this build script runs
 //!    *before* cargo compiles the `quilon-rt` dependency, so at this point the
@@ -30,13 +30,16 @@
 //!    technique `tests/examples_test.rs` uses; `-p` means the `quilon` bin/build
 //!    script is *not* re-entered, so there is no recursion, and a dedicated
 //!    `--target-dir` avoids deadlocking on the outer build's `target/` lock),
-//!    then copy the freshly emitted `libquilon_rt.a` to the canonical location
-//!    next to where the `quilon` binary lands (baked as `QUILON_RT_LIB` for the
-//!    dev loop), and embed a gzip-compressed copy (baked as `QUILON_RT_GZ`, with
-//!    a `QUILON_RT_KEY` content key) that `src/build.rs` `include_bytes!`s into
-//!    the compiler binary itself — so a *distributed* `quilon` (a bare binary
-//!    download, no archive alongside it) can extract and link the runtime from
-//!    its own embedded copy.
+//!    then copy the freshly emitted archive to `libquilon_rt.bundled.a` next to
+//!    where the `quilon` binary lands (baked as `QUILON_RT_LIB` for the dev
+//!    loop) — a name cargo itself never produces, so a plain `cargo build -p
+//!    quilon-rt` or `cargo build --workspace` (which uplifts its own
+//!    `libquilon_rt.a` to that same directory) can't overwrite it — and embed a
+//!    gzip-compressed copy (baked as `QUILON_RT_GZ`, with a `QUILON_RT_KEY`
+//!    content key) that `src/build.rs` `include_bytes!`s into the compiler
+//!    binary itself — so a *distributed* `quilon` (a bare binary download, no
+//!    archive alongside it) can extract and link the runtime from its own
+//!    embedded copy.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -54,9 +57,9 @@ fn main() {
     place_runtime_staticlib();
 }
 
-/// Build the `quilon-rt` staticlib and copy it to the canonical
-/// `target/<profile>/libquilon_rt.a` (next to the `quilon` binary), then bake
-/// that path into the binary as `QUILON_RT_LIB`.
+/// Build the `quilon-rt` staticlib and copy it to
+/// `target/<profile>/libquilon_rt.bundled.a` (next to the `quilon` binary), then
+/// bake that path into the binary as `QUILON_RT_LIB`.
 fn place_runtime_staticlib() {
     let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env("OUT_DIR"));
@@ -117,12 +120,12 @@ fn place_runtime_staticlib() {
         produced.display()
     );
 
-    let dest = profile_dir.join("libquilon_rt.a");
+    let dest = profile_dir.join("libquilon_rt.bundled.a");
     std::fs::copy(&produced, &dest)
         .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", produced.display(), dest.display()));
 
-    // Bake the canonical path so the copy next to the binary keeps serving the
-    // dev loop (`quilon build` looks there before touching the embedded copy).
+    // Bake the path so the copy next to the binary keeps serving the dev loop
+    // (`quilon build` looks there before touching the embedded copy).
     println!("cargo:rustc-env=QUILON_RT_LIB={}", dest.display());
 
     // Embed support: `src/build.rs` `include_bytes!`s a *gzip-compressed* copy of
