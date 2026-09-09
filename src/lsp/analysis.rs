@@ -7,6 +7,7 @@
 //! the protocol's UTF-16 line/column pairs at the server boundary.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use crate::ast::nodes::{
@@ -14,6 +15,7 @@ use crate::ast::nodes::{
     ModulePath, Parameter, Pattern, Program, RECEIVER, Statement, SumVariant, Type,
     TypeDeclaration, TypeDefinition, display_name, type_label,
 };
+use crate::ast::walk::try_for_each_subexpression;
 use crate::driver::{self, Checked, FrontEndError, Linked, TestBlocks};
 use crate::lexer::{Lexer, ROOT_FILE, Span, Token, TokenKind};
 use crate::parser;
@@ -586,16 +588,19 @@ impl DeclaredNames {
     }
 
     fn collect_expression(&mut self, expression: &Expression) {
-        walk_expressions(expression, &mut |node| match node {
-            Expression::Lambda { parameters, .. } => self.collect_parameters(parameters),
-            Expression::Block { statements, .. } => {
-                for statement in statements {
-                    if let Statement::Item(item) = statement {
-                        self.collect_item_shallow(item);
+        let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |node| {
+            match node {
+                Expression::Lambda { parameters, .. } => self.collect_parameters(parameters),
+                Expression::Block { statements, .. } => {
+                    for statement in statements {
+                        if let Statement::Item(item) = statement {
+                            self.collect_item_shallow(item);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
+            ControlFlow::Continue(())
         });
     }
 
@@ -726,115 +731,6 @@ fn harness_call_kind(function: &Expression) -> Option<TestLensKind> {
         "describe" => Some(TestLensKind::Suite),
         "it" => Some(TestLensKind::Case),
         _ => None,
-    }
-}
-
-// --- Shared expression walk -------------------------------------------------
-
-/// Call `visit` on `expression` and every expression nested anywhere inside it, in
-/// document order.
-fn walk_expressions<'a>(expression: &'a Expression, visit: &mut impl FnMut(&'a Expression)) {
-    visit(expression);
-    match expression {
-        Expression::Call {
-            function,
-            arguments,
-            ..
-        } => {
-            walk_expressions(function, visit);
-            for argument in arguments {
-                walk_expressions(argument, visit);
-            }
-        }
-        Expression::Lambda { body, .. } => walk_expressions(body, visit),
-        Expression::Block { statements, .. } => {
-            for statement in statements {
-                match statement {
-                    Statement::Expression(nested) => walk_expressions(nested, visit),
-                    Statement::Item(item) => match item {
-                        Item::VariableDeclaration(declaration) => {
-                            walk_expressions(&declaration.value, visit)
-                        }
-                        Item::FunctionDeclaration(declaration) => {
-                            walk_expressions(&declaration.body, visit)
-                        }
-                        Item::TypeDeclaration(declaration) => {
-                            for method in declaration.type_definition.methods() {
-                                walk_expressions(&method.body, visit);
-                            }
-                        }
-                    },
-                }
-            }
-        }
-        Expression::BinaryOperator { left, right, .. } => {
-            walk_expressions(left, visit);
-            walk_expressions(right, visit);
-        }
-        Expression::UnaryOperator { expression, .. }
-        | Expression::FieldAccess { expression, .. }
-        | Expression::Spread { expression, .. } => walk_expressions(expression, visit),
-        Expression::FieldAssign { target, value, .. }
-        | Expression::IndexAssign { target, value, .. } => {
-            walk_expressions(target, visit);
-            walk_expressions(value, visit);
-        }
-        Expression::Index {
-            expression, index, ..
-        } => {
-            walk_expressions(expression, visit);
-            walk_expressions(index, visit);
-        }
-        Expression::If {
-            condition,
-            then,
-            else_,
-            ..
-        } => {
-            walk_expressions(condition, visit);
-            walk_expressions(then, visit);
-            walk_expressions(else_, visit);
-        }
-        Expression::Match {
-            expression, arms, ..
-        } => {
-            walk_expressions(expression, visit);
-            for arm in arms {
-                walk_expressions(&arm.body, visit);
-            }
-        }
-        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
-            for element in elements {
-                walk_expressions(element, visit);
-            }
-        }
-        Expression::MapLiteral { entries, .. } => {
-            for (key, value) in entries {
-                walk_expressions(key, visit);
-                walk_expressions(value, visit);
-            }
-        }
-        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
-            for (_, value) in fields {
-                walk_expressions(value, visit);
-            }
-        }
-        Expression::Range { start, end, .. } => {
-            walk_expressions(start, visit);
-            walk_expressions(end, visit);
-        }
-        Expression::Interpolation { parts, .. } => {
-            for part in parts {
-                if let InterpolationPart::Hole(hole) = part {
-                    walk_expressions(hole, visit);
-                }
-            }
-        }
-        Expression::Number { .. }
-        | Expression::String { .. }
-        | Expression::Bool { .. }
-        | Expression::Unit { .. }
-        | Expression::Identifier { .. } => {}
     }
 }
 
@@ -1516,13 +1412,9 @@ fn find_type_declaration_in_expression<'a>(
     expression: &'a Expression,
     type_name: &str,
 ) -> Option<&'a TypeDeclaration> {
-    let mut found = None;
-    walk_expressions(expression, &mut |node| {
-        if found.is_some() {
-            return;
-        }
+    let result = try_for_each_subexpression(expression, &mut |node| {
         let Expression::Block { statements, .. } = node else {
-            return;
+            return ControlFlow::Continue(());
         };
         for statement in statements {
             let Statement::Item(item) = statement else {
@@ -1531,16 +1423,18 @@ fn find_type_declaration_in_expression<'a>(
             if let Item::TypeDeclaration(declaration) = item
                 && declaration.name == type_name
             {
-                found = Some(declaration);
-                return;
+                return ControlFlow::Break(declaration);
             }
             if let Some(inner) = find_type_declaration_in_item(item, type_name) {
-                found = Some(inner);
-                return;
+                return ControlFlow::Break(inner);
             }
         }
+        ControlFlow::Continue(())
     });
-    found
+    match result {
+        ControlFlow::Break(declaration) => Some(declaration),
+        ControlFlow::Continue(()) => None,
+    }
 }
 
 /// A syntax-only analogue of [`type_ending_at`], for before the document has checked at
@@ -1556,14 +1450,15 @@ fn expression_ending_at(program: &Program, end: u32) -> Option<Span> {
         {
             best = Some(span.clone());
         }
+        ControlFlow::<()>::Continue(())
     };
     for item in &program.items {
         for body in item_bodies(item) {
-            walk_expressions(body, &mut consider);
+            let _ = try_for_each_subexpression(body, &mut consider);
         }
     }
     for block in &program.test_blocks {
-        walk_expressions(block, &mut consider);
+        let _ = try_for_each_subexpression(block, &mut consider);
     }
     best
 }

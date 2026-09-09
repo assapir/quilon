@@ -679,15 +679,7 @@ impl TypeChecker {
         // `check_call`, which passes its element type in — no need to re-infer it here.
         let method_args = &arguments[1..];
         let table = array_method_table(&elem_type);
-        let (parameters, result) = method_signature(&table, method);
-
-        if method_args.len() != parameters.len() {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected: parameters.len(),
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
+        let (parameters, result) = method_signature(&table, method, method_args.len(), span)?;
 
         match method {
             "map" => {
@@ -761,15 +753,7 @@ impl TypeChecker {
 
         let method_args = &arguments[1..];
         let table = map_method_table(&key_type, &value_type);
-        let (parameters, result) = method_signature(&table, method);
-
-        if method_args.len() != parameters.len() {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected: parameters.len(),
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
+        let (parameters, result) = method_signature(&table, method, method_args.len(), span)?;
 
         match method {
             "get" | "has" | "set" | "remove" => {
@@ -817,15 +801,7 @@ impl TypeChecker {
 
         let method_args = &arguments[1..];
         let table = set_method_table(&elem_type);
-        let (parameters, result) = method_signature(&table, method);
-
-        if method_args.len() != parameters.len() {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected: parameters.len(),
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
+        let (parameters, result) = method_signature(&table, method, method_args.len(), span)?;
 
         match method {
             "has" | "add" | "remove" => {
@@ -860,15 +836,7 @@ impl TypeChecker {
         // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
         let method_args = &arguments[1..];
         let table = text_method_table();
-        let (parameters, result) = method_signature(&table, method);
-
-        if method_args.len() != parameters.len() {
-            return Err(TypeError::WrongNumberOfArguments {
-                expected: parameters.len(),
-                got: method_args.len(),
-                span: span.clone(),
-            });
-        }
+        let (parameters, result) = method_signature(&table, method, method_args.len(), span)?;
         for (arg, parameter_ty) in method_args.iter().zip(parameters) {
             let arg_type = self.infer_expression(arg)?;
             self.check_type_compatibility(parameter_ty, &arg_type, span)?;
@@ -1196,14 +1164,24 @@ pub(crate) fn set_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Typ
 
 /// One table's entry for `method` — every one of these tables' names is exhaustively
 /// dispatched by its caller's `match`, so a miss here means the dispatch guard in
-/// `check_call` let an unknown name through.
+/// `check_call` let an unknown name through. Also checks `argument_count` against the
+/// entry's arity, since every caller needs that check right after looking the entry up.
 fn method_signature<'a>(
     table: &'a [(&'static str, Vec<Type>, Type)],
     method: &str,
-) -> (&'a [Type], &'a Type) {
+    argument_count: usize,
+    span: &Span,
+) -> Result<(&'a [Type], &'a Type), TypeError> {
     let (_, parameters, result) = table
         .iter()
         .find(|(name, _, _)| *name == method)
         .unwrap_or_else(|| unreachable!("unhandled method {method}"));
-    (parameters, result)
+    if argument_count != parameters.len() {
+        return Err(TypeError::WrongNumberOfArguments {
+            expected: parameters.len(),
+            got: argument_count,
+            span: span.clone(),
+        });
+    }
+    Ok((parameters, result))
 }
