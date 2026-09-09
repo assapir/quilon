@@ -631,6 +631,14 @@ impl<'a> Parser<'a> {
             // or we just continue to the next one
         }
 
+        // Remember this `>` if it closed the block only because it ended its line
+        // (something on the same line precedes it) — the candidate a later "found a
+        // block close" error blames when it turns out this one closed too soon.
+        let closer_span = self.peek().span.clone();
+        let closer_first_on_line = self.peek().first_on_line;
+        if self.check(&TokenKind::BlockClose) && !closer_first_on_line {
+            self.last_line_final_block_close = Some(closer_span);
+        }
         self.expect(&TokenKind::BlockClose)?;
         let span = self.span(start.start, self.previous_span().end);
 

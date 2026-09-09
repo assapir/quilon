@@ -1060,3 +1060,49 @@ fn test_match_nested_in_a_block_in_an_arm_body_stays_legal() {
         "a match nested in a block in an arm's body should still parse: {src}"
     );
 }
+
+#[test]
+fn test_line_final_gt_closes_its_block_early_and_qn115_blames_it() {
+    // `beaverCount >` ends its line, so it closes `tallyLodge`'s block there — QN115 should blame that `>`, not wherever the parse derails two lines later.
+    let src = "tallyLodge = (dam :: Num) -> Num => <\n  beaverCount = 5\n  saplingCount = 3\n  beaverCount >\n  saplingCount\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::EarlyBlockClose);
+    assert_eq!(
+        err.message,
+        "this `>` closed its block because it ended the line"
+    );
+    assert_eq!(
+        err.help.as_deref(),
+        Some("to compare, put the right operand on the same line as `>`")
+    );
+    let early_gt = src.find("beaverCount >").unwrap() + "beaverCount ".len();
+    assert_eq!(err.span.start as usize, early_gt);
+    let (line, _column) = Span::line_col(src, early_gt);
+    assert_eq!(line, 4, "the early `>` sits on line 4 of the source");
+}
+
+#[test]
+fn test_gt_with_operand_on_the_same_line_stays_a_comparison() {
+    let src = "outrankOtter = (river :: Num) -> Bool => <\n  slideCount = 5\n  splashCount = 3\n  slideCount > splashCount\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a `>` with its right operand on the same line should stay greater-than: {src}"
+    );
+}
+
+#[test]
+fn test_stray_gt_with_no_earlier_close_keeps_the_plain_message() {
+    // No block has closed anywhere yet, so QN115 has nothing to blame this `>` on.
+    let src = ">\nhootOwlCall = () -> Num => < 1 >";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+    assert_eq!(err.message, "expected a name, found a block close `>`");
+    assert_eq!(err.span.start as usize, 0);
+}

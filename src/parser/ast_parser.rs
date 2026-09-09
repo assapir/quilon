@@ -56,6 +56,10 @@ pub struct Parser<'a> {
     /// imports are parsed, so (like every other name — the language has no hoisting) an
     /// import qualifies only the code below it.
     module_paths: std::collections::HashMap<String, String>,
+    /// Span of the most recent `>` that closed a block only because it ended its
+    /// line (nothing followed it on the same line) — the earlier `>` a later "found
+    /// a block close" error should blame instead of the token it actually derailed at.
+    last_line_final_block_close: Option<Span>,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -122,6 +126,7 @@ impl<'a> Parser<'a> {
             suppress_lambda: false,
             bare_match_forbidden: false,
             module_paths: std::collections::HashMap::new(),
+            last_line_final_block_close: None,
         }
     }
 
@@ -202,6 +207,8 @@ impl<'a> Parser<'a> {
         if self.check(kind) {
             self.advance();
             Ok(())
+        } else if let Some(err) = self.stray_block_close_error() {
+            Err(err)
         } else {
             Err(ParseError::new(
                 Code::UnexpectedToken,
@@ -224,6 +231,8 @@ impl<'a> Parser<'a> {
             // Allow ^ as a special function name (entry point)
             self.advance();
             Ok("^".to_string())
+        } else if let Some(err) = self.stray_block_close_error() {
+            Err(err)
         } else {
             Err(ParseError::new(
                 Code::UnexpectedToken,
@@ -231,6 +240,24 @@ impl<'a> Parser<'a> {
                 format!("expected a name, found {}", self.peek().kind.describe()),
             ))
         }
+    }
+
+    /// When the cursor sits on a `>` that only reads as a block close because it ended
+    /// its line, and an earlier such `>` is on record, blame that earlier `>` instead of
+    /// wherever this one derailed the parse — the earlier one is the actual cause.
+    fn stray_block_close_error(&self) -> Option<ParseError> {
+        if !self.check(&TokenKind::BlockClose) {
+            return None;
+        }
+        let span = self.last_line_final_block_close.clone()?;
+        Some(
+            ParseError::new(
+                Code::EarlyBlockClose,
+                span,
+                "this `>` closed its block because it ended the line",
+            )
+            .help("to compare, put the right operand on the same line as `>`"),
+        )
     }
 
     /// Parse a name at a DEFINITION or PARAMETER position — a top-level/nested binding,
