@@ -1,17 +1,27 @@
 ~ Built-in `Text` methods, verified with `core.test` assertions: every assertion below
 ~ holds, so the program runs to completion and exits 0 (a failing assertion prints to
-~ io.stderr and exits 101). Methods (grapheme-based where an index/length is user-visible):
+~ io.stderr and exits 5). Methods (grapheme-based where an index/length is user-visible):
 ~   split(sep)                        -> []Text  (empty sep -> graphemes; empties preserved)
+~   join(separator)                   -> Text    ([]Text only; the reverse of split)
 ~   trim() / trimStart() / trimEnd()  -> Text    (strip both / leading / trailing whitespace)
 ~   replaceAll(from, to)              -> Text    (replace every occurrence)
 ~   replace(from, to, count)          -> Text    (exactly the first `count`; count > 0)
 ~   contains(sub)                     -> Bool
 ~   indexOf(sub)                      -> Ok(Num) grapheme index / NotOk   (no -1 sentinel)
+~   indexOf(sub, from)                -> Ok(Num) grapheme index at or after `from` / NotOk
 ~   slice(start, end)                 -> Text    (grapheme indices, clamped; end exclusive)
 ~   at(index)                         -> Ok(Text) the grapheme there / NotOk out of bounds
 ~   graphemes()                       -> []Text  (one length-1 Text per grapheme cluster)
 ~   toUpper() / toLower()             -> Text    (Unicode-aware case mapping)
 << core.test
+
+~ Counts every occurrence of `sub` in `t`, carrying its search position forward
+~ through `indexOf(sub, from)` instead of re-scanning from the start each time.
+countOccurrences = (t :: Text, sub :: Text, from :: Num, found :: Num) -> Num => <
+  t.indexOf(sub, from) ?
+    | Ok(i)    => countOccurrences(t, sub, i + 1, found + 1)
+    | NotOk(_) => found
+>
 
 ^ = () -> $ => <
   ~ split -> []Text; its pieces are genuine Text values.
@@ -25,6 +35,17 @@
   assert("héllo".split("").size, equals(5))
   ~ split on a 4-byte emoji separator.
   assert("a🌍b🌍c".split("🌍").size, equals(3))
+
+  ~ join is the reverse of split: rejoining split's own pieces with the same
+  ~ separator reconstructs the original text; a different separator, or none.
+  assert(parts.join(", "), equals("Hello, World"))
+  assert(parts.join(" & "), equals("Hello & World"))
+  assert(parts.join(""), equals("HelloWorld"))
+  ~ join composes with map: render each element to Text first.
+  assert([1, 2, 3].map(n => "`n`").join("-"), equals("1-2-3"))
+  ~ an empty array joins to the empty text, whatever the separator.
+  none :: []Text = []
+  assert(none.join(", "), equals(""))
 
   ~ trim both sides; trimStart / trimEnd one side only (Unicode whitespace).
   assert("  hi  ".trim(), equals("hi"))
@@ -51,6 +72,18 @@
     | Ok(i)    => i
     | NotOk(_) => 0 - 1
   assert(idx, equals(2))
+
+  ~ indexOf(sub, from) finds the occurrence at or after `from`, letting a find loop
+  ~ carry its position forward — countOccurrences never rescans from the start.
+  sentence = "a quokka and a koala and a wombat share one paragraph"
+  assert(countOccurrences(sentence, "and", 0, 0), equals(2))
+  ~ searching past the last occurrence finds none; a negative `from` clamps to 0,
+  ~ same as `slice`'s bounds.
+  assert(sentence.indexOf("and", 100), isNotOk())
+  first = sentence.indexOf("and", 0 - 5) ?
+    | Ok(i)    => i
+    | NotOk(_) => 0 - 1
+  assert(first, equals(sentence.indexOf("and") ? | Ok(i) => i | NotOk(_) => 0 - 1))
 
   ~ slice over grapheme indices, end exclusive; out-of-range clamps; never splits a
   ~ multibyte codepoint mid-byte.

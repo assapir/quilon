@@ -76,7 +76,7 @@ same-named user function or overload (e.g. a `map` on a `Num`) — it is resolve
 the overload set. `map`/`reduce`/`find` work over every element type (`[]Text` as much as
 `[]Num`); `join` is a method of `[]Text` specifically, reached by mapping any other
 element type to `Text` first (`xs.map(x => "`x`").join(sep)`). (See
-`examples/array_methods.qn` and `examples/text_join.qn`.)
+`examples/array_methods.qn`.)
 
 ## Array concatenation — `+`
 

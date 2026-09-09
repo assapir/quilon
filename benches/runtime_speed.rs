@@ -37,7 +37,7 @@ const PROGRAMS: &[(&str, &str)] = &[
     ("text_loop", "400k interpolated strings"),
     ("gc_churn", "3M short-lived arrays"),
     (
-        "text_join_indexof",
+        "text_methods",
         "100k rounds of split/join, replace, indexOf(sub, from)",
     ),
 ];
@@ -347,7 +347,7 @@ fn regenerate() {
         ("array_pipeline", array_pipeline(2_000_000)),
         ("text_loop", text_loop(400_000)),
         ("gc_churn", gc_churn(3_000_000)),
-        ("text_join_indexof", text_join_indexof(100_000)),
+        ("text_methods", text_methods(100_000)),
     ] {
         let path = dir.join(format!("{stem}.qn"));
         std::fs::write(&path, source).unwrap_or_else(|e| panic!("writing {path:?}: {e}"));
@@ -432,7 +432,7 @@ fn gc_churn(iterations: u64) -> String {
 
 /// `split`/`join`, `replaceAll`, and an `indexOf(sub, from)` find loop, each iteration —
 /// the operations a write-once Text header exists to make cheap under repeated calls.
-fn text_join_indexof(iterations: u64) -> String {
+fn text_methods(iterations: u64) -> String {
     let mut src = String::new();
     let _ = writeln!(
         src,

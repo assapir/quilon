@@ -108,7 +108,7 @@ A literal violation is a compile error (`"a".replace("a", "b", 0)`,
 at run time, with exit `5`. `replaceAll` replaces every occurrence; `replace(count)`
 replaces exactly `count`.
 
-(See `examples/text.qn`, `examples/text_methods.qn`, and `examples/text_join.qn`.)
+(See `examples/text.qn` and `examples/text_methods.qn`.)
 
 ## Cost
 
