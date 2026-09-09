@@ -22,6 +22,10 @@ c = greeting.length          ~ grapheme count   → 7
 - `.length` = grapheme-cluster count (user-perceived characters, full UTF-8).
 - `+` = concatenation.
 
+A grapheme may span the seam a `+` joins: `"e"` followed by a combining accent
+concatenates to a `.length` of 1, matching the same text written as one literal, while
+`.size` sums the two operands' byte lengths regardless.
+
 A literal accepts these escapes: `\n`, `\r`, `\t`, `\"`, `\\`, `\<`, and `\e`. `\<` writes
 a literal `<`, which would otherwise open a block. `\e` is the ESC byte that leads an ANSI
 terminal sequence (`"\e[1m" + text + "\e[0m"`). Any other escape is a lex error.

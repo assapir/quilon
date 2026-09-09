@@ -24,6 +24,10 @@ r.each(x => io.print(x))   ~ a range iterates with `.each` like any array
 Both ends are full `Num` expressions, literal or computed. The direction (ascending or
 descending) is decided at runtime. (See `examples/ranges.qn`.)
 
+Iterating by position — when the body needs the index `i` itself, or more than one array
+in step — is written over a range of indices: `(0 <- xs.size - 1).each(i => …)`, reading
+the element as `xs[i]`.
+
 **Allocation.** A range consumed **directly** by an
 [array method](../collections/arrays.md#array-methods) — the receiver is the range
 expression itself, as in `(1 <- n).each(...)` — iterates its endpoints: `.each` and
