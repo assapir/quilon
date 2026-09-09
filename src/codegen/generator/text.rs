@@ -104,6 +104,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     &[recv_ptr.into(), recv_len.into(), start.into(), end.into()],
                 )
             }
+            "indexOf" if args.len() == 3 => {
+                self.generate_text_index_of_from(recv_ptr, recv_len, &args[1], &args[2])
+            }
             "indexOf" => self.generate_text_index_of(recv_ptr, recv_len, &args[1]),
             "split" => {
                 let (sep_ptr, sep_len) = self.extract_text(&args[1])?;
@@ -344,7 +347,49 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to call __text_index_of"))?
             .as_any_value_enum()
             .into_int_value();
+        self.index_of_result(idx)
+    }
 
+    /// [`Self::generate_text_index_of`], starting the search at grapheme `from`. Lowers
+    /// `Text.indexOf(sub, from)`.
+    pub(super) fn generate_text_index_of_from(
+        &mut self,
+        recv_ptr: PointerValue<'ctx>,
+        recv_len: inkwell::values::IntValue<'ctx>,
+        sub: &Expression,
+        from: &Expression,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let (sp, sl) = self.extract_text(sub)?;
+        let from_i64 = self.text_index_arg(from, "index_of_from")?;
+        let f = self.get_intrinsic("__text_index_of_from")?;
+        let idx = self
+            .builder
+            .build_call(
+                f,
+                &[
+                    recv_ptr.into(),
+                    recv_len.into(),
+                    sp.into(),
+                    sl.into(),
+                    from_i64.into(),
+                ],
+                "txt_index_of_from",
+            )
+            .map_err(ctx("Failed to call __text_index_of_from"))?
+            .as_any_value_enum()
+            .into_int_value();
+        self.index_of_result(idx)
+    }
+
+    /// Turn an `indexOf` intrinsic's grapheme index (or -1) into a `Result` — `Ok(Num idx)`
+    /// when `idx >= 0`, else `NotOk` — using the same `{ i8 tag, f64 }` shape
+    /// `array_at`/`array_find` produce (no -1 sentinel). Shared by `indexOf(sub)` and
+    /// `indexOf(sub, from)`.
+    fn index_of_result(
+        &mut self,
+        idx: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64t = self.context.i64_type();
         let found = self
             .builder
@@ -370,58 +415,59 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to select indexOf result"))
     }
 
-    /// Concatenate two `Text` values into a fresh, GC-allocated buffer and return a new
-    /// `{ ptr, byte_len }` struct. The buffer holds exactly the concatenated bytes — a
-    /// `Text` carries its own length, so nothing reads past it.
+    /// Lower `[]Text.join(separator)` via the `__text_join` runtime intrinsic. `parts_ptr`/
+    /// `parts_len` are the receiver array's own `{ data, size }` fields.
+    pub(super) fn generate_text_join(
+        &mut self,
+        parts_ptr: PointerValue<'ctx>,
+        parts_len: inkwell::values::IntValue<'ctx>,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let (sep_ptr, sep_len) = self.extract_text(&args[1])?;
+        let f = self.get_intrinsic("__text_join")?;
+        Ok(self
+            .builder
+            .build_call(
+                f,
+                &[
+                    parts_ptr.into(),
+                    parts_len.into(),
+                    sep_ptr.into(),
+                    sep_len.into(),
+                ],
+                "txt_join",
+            )
+            .map_err(ctx("Failed to call __text_join"))?
+            .as_any_value_enum()
+            .into_struct_value()
+            .into())
+    }
+
+    /// Concatenate two `Text` values via the `__text_concat` runtime intrinsic, which sums
+    /// their headers' counts and ANDs their ASCII flags with no walk — the header math a
+    /// hand-rolled memcpy here would otherwise have to duplicate for `+`, interpolation,
+    /// and every composable method (`repeat`) built over `+`.
     pub(super) fn generate_text_concat(
         &mut self,
         left: inkwell::values::StructValue<'ctx>,
         right: inkwell::values::StructValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i8t = self.context.i8_type();
-
+        use inkwell::values::AnyValue;
         let (l_ptr, l_len) = self.split_text(left, "l")?;
         let (r_ptr, r_len) = self.split_text(right, "r")?;
-
-        let total = self
+        let f = self.get_intrinsic("__text_concat")?;
+        Ok(self
             .builder
-            .build_int_add(l_len, r_len, "concat_len")
-            .map_err(ctx("Failed to add lengths"))?;
-
-        use inkwell::values::AnyValue;
-        let alloc_fn = self.get_intrinsic("__alloc")?;
-        let dest = self
-            .builder
-            .build_call(alloc_fn, &[total.into()], "concat_buf")
-            .map_err(ctx("Failed to call __alloc"))?
+            .build_call(
+                f,
+                &[l_ptr.into(), l_len.into(), r_ptr.into(), r_len.into()],
+                "concat",
+            )
+            .map_err(ctx("Failed to call __text_concat"))?
             .as_any_value_enum()
-            .into_pointer_value();
-
-        let memcpy_fn = self.get_intrinsic("memcpy")?;
-        self.builder
-            .build_call(memcpy_fn, &[dest.into(), l_ptr.into(), l_len.into()], "")
-            .map_err(ctx("Failed to copy left text"))?;
-        let tail = unsafe {
-            self.builder
-                .build_gep(i8t, dest, &[l_len], "concat_tail")
-                .map_err(ctx("Failed to offset into buffer"))?
-        };
-        self.builder
-            .build_call(memcpy_fn, &[tail.into(), r_ptr.into(), r_len.into()], "")
-            .map_err(ctx("Failed to copy right text"))?;
-
-        let text_ty = self.ptr_len_struct_type();
-        let with_ptr = self
-            .builder
-            .build_insert_value(text_ty.get_undef(), dest, 0, "cat_ptr")
-            .map_err(ctx("Failed to insert concat ptr"))?
-            .into_struct_value();
-        let text = self
-            .builder
-            .build_insert_value(with_ptr, total, 1, "cat_len")
-            .map_err(ctx("Failed to insert concat len"))?
-            .into_struct_value();
-        Ok(text.into())
+            .into_struct_value()
+            .into())
     }
 
     /// Lower a `Text`-vs-`Text` comparison: call `__text_cmp(aptr, alen, bptr, blen)`

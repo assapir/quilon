@@ -169,31 +169,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self::call_result_to_basic(call)
     }
 
-    /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` (mirrors
-    /// `Expression::String` lowering): a global byte constant plus its byte length.
+    /// Build a `Text` `{ptr,i64}` value for the compile-time-constant string `s` — the
+    /// same header'd global constant `Expression::String` lowering builds.
     pub(super) fn text_literal(&mut self, s: &str) -> Result<BasicValueEnum<'ctx>, String> {
-        let global = self
-            .builder
-            .build_global_string_ptr(s, "rstr")
-            .map_err(ctx("Failed to build render literal"))?;
-        let len = self.context.i64_type().const_int(s.len() as u64, false);
-        let text_ty = self.ptr_len_struct_type();
-        let with_ptr = self
-            .builder
-            .build_insert_value(
-                text_ty.get_undef(),
-                global.as_pointer_value(),
-                0,
-                "rtext_ptr",
-            )
-            .map_err(ctx("Failed to insert render ptr"))?
-            .into_struct_value();
-        let text = self
-            .builder
-            .build_insert_value(with_ptr, len, 1, "rtext_len")
-            .map_err(ctx("Failed to insert render len"))?
-            .into_struct_value();
-        Ok(text.into())
+        self.build_text_constant(s)
     }
 
     /// Load `slot` (a `Text`), concatenate `piece` onto it, and store the result back.

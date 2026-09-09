@@ -202,3 +202,10 @@ fn at_index_must_be_num() {
 fn bare_lambda_is_not_a_value() {
     assert_type_error("<< core.io\n^ = () -> Num => <\n  io.print(x => x)\n  0\n>");
 }
+
+/// `join` is a method of `[]Text`; an array of any other element type is rejected —
+/// `[]Num` here — naming `map` as the way to get there.
+#[test]
+fn join_on_a_non_text_array_is_a_type_error() {
+    assert_type_error("^ = () -> Text => <\n  [1, 2, 3].join(\", \")\n>");
+}

@@ -601,14 +601,18 @@ pub struct Parameter {
     pub span: Span,
 }
 
-/// The reserved built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`).
+/// The reserved built-in array methods (`map`/`filter`/`reduce`/`each`/`find`/`at`/`join`).
 /// When the receiver of one of these is an array, both the type checker and codegen
 /// resolve the compiler-provided built-in ahead of any user overload or sum
 /// constructor — so this predicate is the single source of truth shared by both passes
 /// (a divergence would be a bug). Method names are lowercase, so they never collide with
-/// (Capitalized) sum-constructor names.
+/// (Capitalized) sum-constructor names. (`join` is reserved on every array so the checker
+/// can name `map` in its error on a non-`[]Text` receiver — see `check_array_method`.)
 pub fn is_array_method(name: &str) -> bool {
-    matches!(name, "map" | "filter" | "reduce" | "each" | "find" | "at")
+    matches!(
+        name,
+        "map" | "filter" | "reduce" | "each" | "find" | "at" | "join"
+    )
 }
 
 /// The reserved built-in `Text` methods (`split`/`trim`/`replace`/`contains`/

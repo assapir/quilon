@@ -389,6 +389,67 @@ fn index_of_notok_when_absent() {
     );
 }
 
+// ---- indexOf(sub, from) ----------------------------------------------------
+
+#[test]
+fn index_of_from_finds_the_next_occurrence() {
+    // "a-a-a": the first "a" is at 0; searching again from 1 finds the one at 2.
+    assert_exit(
+        "^ = () -> Num => < \"a-a-a\".indexOf(\"a\", 1) ? | Ok(i) => i | NotOk(_) => 99 >",
+        2,
+    );
+}
+
+#[test]
+fn index_of_from_notok_when_absent_after_from() {
+    // "a-a-a" has 5 graphemes; its last "a" is at index 4, so searching from 5 (past it,
+    // but still in bounds) finds none.
+    assert_exit(
+        "^ = () -> Num => < \"a-a-a\".indexOf(\"a\", 5) ? | Ok(_) => 99 | NotOk(_) => 7 >",
+        7,
+    );
+}
+
+#[test]
+fn index_of_from_past_the_end_is_notok() {
+    assert_exit(
+        "^ = () -> Num => < \"abc\".indexOf(\"a\", 100) ? | Ok(_) => 99 | NotOk(_) => 7 >",
+        7,
+    );
+}
+
+#[test]
+fn index_of_from_negative_clamps_to_the_start() {
+    assert_exit(
+        "^ = () -> Num => < \"abc\".indexOf(\"a\", -5) ? | Ok(i) => i | NotOk(_) => 99 >",
+        0,
+    );
+}
+
+#[test]
+fn index_of_from_is_grapheme_based_on_non_ascii_text() {
+    // "héllo": graphemes h(0) é(1) l(2) l(3) o(4); searching for "l" from 3 skips the
+    // first "l" and finds the second.
+    assert_exit(
+        "^ = () -> Num => < \"héllo\".indexOf(\"l\", 3) ? | Ok(i) => i | NotOk(_) => 99 >",
+        3,
+    );
+}
+
+/// A find loop carrying its position forward via `indexOf(sub, from)`: count every
+/// occurrence of "a" in "banana" (3), one search past the last match at a time.
+#[test]
+fn index_of_from_composes_into_a_find_loop() {
+    let src = "\
+countFrom = (t :: Text, sub :: Text, from :: Num, found :: Num) -> Num => <\n\
+  t.indexOf(sub, from) ?\n\
+    | Ok(i)    => countFrom(t, sub, i + 1, found + 1)\n\
+    | NotOk(_) => found\n\
+>\n\
+^ = () -> Num => < countFrom(\"banana\", \"a\", 0, 0) >";
+    assert_exit(src, 3);
+}
+
 // ---- slice ----------------------------------------------------------------
 
 #[test]
@@ -486,6 +547,49 @@ fn split_results_concatenate_via_array_plus() {
     assert_exit(
         "^ = () -> Num => <\n  c = \"a,b\".split(\",\") + \"c,d,e\".split(\",\")\n  c.size * 10 + (c[3] == \"d\" ? 1 : 0)\n>",
         51,
+    );
+}
+
+// ---- join -----------------------------------------------------------------
+
+#[test]
+fn join_with_a_separator() {
+    assert_exit(
+        "^ = () -> Num => < [\"a\", \"b\", \"c\"].join(\", \").length >",
+        7, // "a, b, c"
+    );
+}
+
+#[test]
+fn join_with_an_empty_separator() {
+    assert_exit(
+        "^ = () -> Num => < [\"a\", \"b\", \"c\"].join(\"\").length >",
+        3, // "abc"
+    );
+}
+
+#[test]
+fn join_an_empty_array_is_the_empty_text() {
+    assert_exit(
+        "^ = () -> Num => <\n  none :: []Text = []\n  none.join(\", \") == \"\" ? 100 : 0\n>",
+        100,
+    );
+}
+
+#[test]
+fn join_after_split_round_trips() {
+    assert_exit(
+        "^ = () -> Num => < \"a,b,c\".split(\",\").join(\",\") == \"a,b,c\" ? 1 : 0 >",
+        1,
+    );
+}
+
+#[test]
+fn join_composes_with_map() {
+    // Every array's `[]Text` is joinable, including one `map` produced.
+    assert_exit(
+        "^ = () -> Num => <\n  [1, 2, 3].map(n => \"`n`\").join(\"-\").length\n>",
+        5, // "1-2-3"
     );
 }
 

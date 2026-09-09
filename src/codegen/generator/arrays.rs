@@ -439,7 +439,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.call_rt_int("__range_endpoint", &[value.into(), site.into()])
     }
 
-    /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`).
+    /// Lower a built-in array method call (`map`/`filter`/`reduce`/`each`/`find`/`at`/`join`).
     /// `args[0]` is the receiver array; the rest are the method's arguments (a lambda
     /// for the higher-order forms, a `Num` index for `at`). A method's lambda argument is
     /// a deliberate inline specialization of the general lambda lowering: rather than
@@ -502,6 +502,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             "find" => self.array_find(&args[1], &elem_qty, elem_llvm, data_ptr, size),
             "at" => self.array_at(&args[1], elem_llvm, data_ptr, size),
+            "join" => self.generate_text_join(data_ptr, size, args),
             other => Err(format!("unknown array method `{other}`")),
         }
     }

@@ -564,9 +564,7 @@ mod tests {
 
                 spawn(move || {
                     let forced = __force_text(deferred_ptr);
-                    let bytes = unsafe {
-                        std::slice::from_raw_parts(forced.data as *const u8, forced.len as usize)
-                    };
+                    let bytes = crate::text::byte_slice(forced.data as *const u8, forced.len);
                     *GOT.lock().unwrap() = bytes.to_vec();
                 });
 
@@ -607,9 +605,8 @@ mod tests {
                 spawn(move || {
                     let a = __force_text(deferred_ptr);
                     let b = __force_text(deferred_ptr);
-                    let read = |s: QlSlice| unsafe {
-                        std::slice::from_raw_parts(s.data as *const u8, s.len as usize).to_vec()
-                    };
+                    let read =
+                        |s: QlSlice| crate::text::byte_slice(s.data as *const u8, s.len).to_vec();
                     *FIRST.lock().unwrap() = read(a);
                     *SECOND.lock().unwrap() = read(b);
                 });

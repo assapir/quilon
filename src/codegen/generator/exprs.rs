@@ -16,16 +16,17 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the one that applies. A non-force-site span — every expression in a pure program — lowers
     /// to the call alone, with no force wrapper around it.
     /// A `Text` whose bytes are known while emitting, so they become a global constant.
-    /// Backs both string literals and the `core.info` members.
+    /// Backs string literals, interpolation chunks (`text_literal`), and the `core.info`
+    /// members. The global holds the header (grapheme count, flags) `alloc_text` would
+    /// write for these same bytes, computed here at compile time with the same rule
+    /// (`quilon_rt::mem::text_header`) — so the value's `data` field, the global's own
+    /// address, already points AT a valid header and every read (`.length` included) sees
+    /// exactly what a runtime allocation would have produced.
     pub(super) fn build_text_constant(
         &mut self,
         value: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let global = self
-            .builder
-            .build_global_string_ptr(value, "str")
-            .map_err(ctx("Failed to build string"))?;
-        let data_ptr = global.as_pointer_value();
+        let data_ptr = self.text_header_global(value, "str");
         let len = self.context.i64_type().const_int(value.len() as u64, false);
         let text_ty = self.ptr_len_struct_type();
         let with_ptr = self
@@ -39,6 +40,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to insert text len"))?
             .into_struct_value();
         Ok(text.into())
+    }
+
+    /// The `{ i64 count, i64 flags, [n x i8] bytes }` global constant `build_text_constant`
+    /// and `constant_text` (the `Site.file`/`.excerpt` literals) both point their `Text`'s
+    /// `data` field at.
+    pub(super) fn text_header_global(&mut self, value: &str, name: &str) -> PointerValue<'ctx> {
+        let i64t = self.context.i64_type();
+        let (count, flags) = quilon_rt::mem::text_header(value.as_bytes());
+        let bytes = self.context.const_string(value.as_bytes(), false);
+        let header_ty = self
+            .context
+            .struct_type(&[i64t.into(), i64t.into(), bytes.get_type().into()], false);
+        let initializer = header_ty.const_named_struct(&[
+            i64t.const_int(count as u64, false).into(),
+            i64t.const_int(flags as u64, false).into(),
+            bytes.into(),
+        ]);
+        let global = self.constant_global(header_ty, initializer, name);
+        global.set_alignment(8);
+        global.as_pointer_value()
     }
 
     pub(super) fn generate_expression(
