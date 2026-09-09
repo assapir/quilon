@@ -158,7 +158,8 @@ fn the_runtime_site_mirrors_the_compilers_site_layout() {
         .expect("host target machine");
     let target_data = machine.get_target_data();
 
-    let site = quilon::codegen::site_struct_type(&context).expect("Site lowers to a struct");
+    let site = quilon::codegen::CodeGenerator::site_struct_type(&context)
+        .expect("Site lowers to a struct");
     assert_eq!(
         target_data.get_store_size(&site) as usize,
         std::mem::size_of::<quilon_rt::QlSite>(),
