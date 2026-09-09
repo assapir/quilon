@@ -118,6 +118,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__text_contains" | "__text_index_of" => {
                 i64t.fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false)
             }
+            // i64 __text_index_of_from(i8* hay, i64, i8* sub, i64, i64 from) — grapheme
+            // index at or after `from`, or -1. Backs `Text.indexOf(sub, from)`.
+            "__text_index_of_from" => i64t.fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
+            // { ptr, i64 } __text_concat(i8* l, i64, i8* r, i64) — the two texts back to
+            // back, with a freshly summed/ANDed header. Backs `Text` `+`.
+            "__text_concat" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
+            // { ptr, i64 } __text_join(ptr parts, i64 partsLen, i8* sep, i64) — every
+            // `[]Text` element back to back, `sep` between consecutive ones. Backs
+            // `[]Text.join(sep)`.
+            "__text_join" => self
+                .ptr_len_struct_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into(), i64t.into()], false),
             // i64 __color_enabled(i64 fd) — 1 when `fd` is a terminal that wants color.
             "__color_enabled" => i64t.fn_type(&[i64t.into()], false),
             // { ptr, i64 } __text_slice(i8*, i64, i64 start, i64 end).

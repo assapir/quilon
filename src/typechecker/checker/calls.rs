@@ -675,6 +675,18 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `join` reaches here for any element type; only `[]Text` is a real method.
+        if method == "join" && !matches!(elem_type, Type::Text) {
+            return Err(TypeError::InvalidBuiltinArgument {
+                message: format!(
+                    "join is a method of []Text; an array of {} has no text to join — map \
+                     it to Text first (`xs.map(x => \"`x`\").join(sep)`)",
+                    crate::ast::type_label(&elem_type)
+                ),
+                span: span.clone(),
+            });
+        }
+
         // `arguments[0]` (the receiver array) was already inferred by the dispatch guard in
         // `check_call`, which passes its element type in — no need to re-infer it here.
         let method_args = &arguments[1..];
@@ -735,6 +747,11 @@ impl TypeChecker {
             "at" => {
                 let idx_type = self.infer_expression(&method_args[0])?;
                 self.check_type_compatibility(&parameters[0], &idx_type, span)?;
+                Ok(result.clone())
+            }
+            "join" => {
+                let sep_type = self.infer_expression(&method_args[0])?;
+                self.check_type_compatibility(&parameters[0], &sep_type, span)?;
                 Ok(result.clone())
             }
             other => unreachable!("unhandled array method {other}"),
@@ -857,6 +874,11 @@ impl TypeChecker {
         arguments: &[Expression],
         span: &Span,
     ) -> Result<Type, TypeError> {
+        // `indexOf` alone is overloaded on arity, so it skips the table below.
+        if method == "indexOf" {
+            return self.check_index_of(arguments, span);
+        }
+
         // `arguments[0]` (the receiver Text) was already inferred by the dispatch guard.
         let method_args = &arguments[1..];
         let table = text_method_table();
@@ -895,6 +917,35 @@ impl TypeChecker {
         }
 
         Ok(result)
+    }
+
+    /// `indexOf(sub)` or `indexOf(sub, from)`, both answering `Ok(Num)`/`NotOk`.
+    fn check_index_of(&mut self, arguments: &[Expression], span: &Span) -> Result<Type, TypeError> {
+        let method_args = &arguments[1..];
+        let sub = method_args
+            .first()
+            .ok_or_else(|| TypeError::WrongNumberOfArguments {
+                expected: 1,
+                got: 0,
+                span: span.clone(),
+            })?;
+        let sub_type = self.infer_expression(sub)?;
+        self.check_type_compatibility(&Type::Text, &sub_type, span)?;
+        match method_args.len() {
+            1 => {}
+            2 => {
+                let from_type = self.infer_expression(&method_args[1])?;
+                self.check_type_compatibility(&Type::Num, &from_type, span)?;
+            }
+            got => {
+                return Err(TypeError::WrongNumberOfArguments {
+                    expected: 2,
+                    got,
+                    span: span.clone(),
+                });
+            }
+        }
+        Ok(result_of(Type::Num))
     }
 
     /// Compile-time validation of `replace`/`replaceAll` arguments that are literals — the
@@ -1129,7 +1180,7 @@ fn function_type(parameters: Vec<Type>, return_type: Type) -> Type {
 pub(crate) fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {
     let r = Type::named_ref("R");
     let a = Type::named_ref("A");
-    vec![
+    let mut table = vec![
         (
             "map",
             vec![function_type(vec![elem.clone()], r.clone())],
@@ -1159,7 +1210,12 @@ pub(crate) fn array_method_table(elem: &Type) -> Vec<(&'static str, Vec<Type>, T
             result_of(elem.clone()),
         ),
         ("at", vec![Type::Num], result_of(elem.clone())),
-    ]
+    ];
+    // Listed only for `[]Text` so the language server's completion offers it there.
+    if matches!(elem, Type::Text) {
+        table.push(("join", vec![Type::Text], Type::Text));
+    }
+    table
 }
 
 pub(crate) fn map_method_table(key: &Type, value: &Type) -> Vec<(&'static str, Vec<Type>, Type)> {

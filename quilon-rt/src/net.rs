@@ -278,17 +278,9 @@ fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
     ))
 }
 
-/// Copy `len` bytes at `data` into an owned `Vec` (empty if null/empty), so the producer fiber
-/// owns its input independent of the caller's `Text`.
-///
-/// # Safety contract (upheld by the compiler)
-/// `data` is null, or points to `len` readable bytes for the duration of this call.
+/// Copy a `Text`'s `len` content bytes at `data`, past its header, into an owned `Vec`.
 fn copy_bytes(data: *const u8, len: i64) -> Vec<u8> {
-    if data.is_null() || len <= 0 {
-        return Vec::new();
-    }
-    // SAFETY: the compiler's contract: `len` readable bytes at `data`, valid for this call.
-    unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec()
+    crate::text::byte_slice(data, len).to_vec()
 }
 
 /// Copy `len` bytes at `data` into an owned `String` (empty if null/empty). Invalid UTF-8 is
@@ -556,28 +548,27 @@ mod tests {
             conn.write_all(b"PONG\n").unwrap();
         });
 
-        let address = format!("{addr}");
+        // `*const u8` isn't `Send`, so the pointers cross the closure as `usize`.
+        let (address_ptr, address_len) = crate::test_support::text_of(&format!("{addr}"));
+        let (request_ptr, request_len) = crate::test_support::text_of("PING\n");
+        let (address_ptr, request_ptr) = (address_ptr as usize, request_ptr as usize);
         on_gc_thread(move || {
             run(move || {
                 let mut deferred = blank();
                 __tcp_request_launch(
                     &mut deferred,
-                    address.as_ptr(),
-                    address.len() as i64,
-                    b"PING\n".as_ptr(),
-                    5,
+                    address_ptr as *const u8,
+                    address_len,
+                    request_ptr as *const u8,
+                    request_len,
                 );
                 let deferred_ptr = deferred.slot.data;
                 spawn(move || {
                     let mut forced = blank();
                     __force_result(&mut forced, deferred_ptr);
                     TAG.store(forced.tag as usize, Ordering::SeqCst);
-                    let bytes = unsafe {
-                        std::slice::from_raw_parts(
-                            forced.slot.data as *const u8,
-                            forced.slot.len as usize,
-                        )
-                    };
+                    let bytes =
+                        crate::text::byte_slice(forced.slot.data as *const u8, forced.slot.len);
                     *GOT.lock().unwrap() = bytes.to_vec();
                 });
             });

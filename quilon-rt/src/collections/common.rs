@@ -95,12 +95,9 @@ impl QlKey {
         }
     }
 
-    /// The bytes a `Text` key points at (empty for a null/zero-length key).
-    unsafe fn text_bytes(&self) -> &'static [u8] {
-        if self.a == 0 || self.b == 0 {
-            return &[];
-        }
-        unsafe { std::slice::from_raw_parts(self.a as *const u8, self.b as usize) }
+    /// The content bytes a `Text` key points at, past its header.
+    fn text_bytes(&self) -> &'static [u8] {
+        crate::text::byte_slice(self.a as *const u8, self.b as i64)
     }
 
     /// The canonicalized bits of the `Num` a user key's `%` hook returns for this key.
@@ -116,7 +113,7 @@ impl PartialEq for QlKey {
             return false;
         }
         match self.tag {
-            TAG_TEXT => unsafe { self.text_bytes() == other.text_bytes() },
+            TAG_TEXT => self.text_bytes() == other.text_bytes(),
             TAG_USER => {
                 let eq_fn = self.eq_fn.expect("user key without an `==` member");
                 eq_fn(self.a as *const c_void, other.a as *const c_void) != 0
@@ -132,7 +129,7 @@ impl Hash for QlKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u8(self.tag);
         match self.tag {
-            TAG_TEXT => unsafe { state.write(self.text_bytes()) },
+            TAG_TEXT => state.write(self.text_bytes()),
             TAG_USER => state.write_u64(self.user_hash_bits()),
             _ => state.write_u64(self.a),
         }

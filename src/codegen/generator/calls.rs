@@ -506,20 +506,17 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// The byte constants are interned by content: a path repeats in every call site of a
     /// file, and at `OptimizationLevel::None` nothing merges duplicate globals later.
     pub(super) fn constant_text(&mut self, value: &str) -> BasicValueEnum<'ctx> {
-        let bytes = match self.text_constants.get(value) {
+        let data_ptr = match self.text_constants.get(value) {
             Some(existing) => *existing,
             None => {
-                let bytes = self.context.const_string(value.as_bytes(), true);
-                let global = self.constant_global(bytes.get_type(), bytes, "site.str");
-                global.set_alignment(1);
-                let pointer = global.as_pointer_value();
+                let pointer = self.text_header_global(value, "site.str");
                 self.text_constants.insert(value.to_string(), pointer);
                 pointer
             }
         };
         let len = self.context.i64_type().const_int(value.len() as u64, false);
         self.ptr_len_struct_type()
-            .const_named_struct(&[bytes.into(), len.into()])
+            .const_named_struct(&[data_ptr.into(), len.into()])
             .into()
     }
 
@@ -528,7 +525,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// property call-site immutability rests on) and `unnamed_addr` lets the linker merge
     /// duplicates. Callers set the alignment: LLVM's default for a global is its PREFERRED
     /// alignment, which over-pads small constants emitted in bulk.
-    fn constant_global<T: inkwell::types::BasicType<'ctx>>(
+    pub(super) fn constant_global<T: inkwell::types::BasicType<'ctx>>(
         &self,
         ty: T,
         value: impl inkwell::values::BasicValue<'ctx>,

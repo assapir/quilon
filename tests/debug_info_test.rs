@@ -506,6 +506,22 @@ describe = (p :: Point) -> Num => <
         "expected `Num` emitted as a float base type"
     );
 
+    // `Text`'s `data` field points at a named `TextStorage` header (grapheme count, flags,
+    // then the bytes) rather than at the bytes directly, so `p *t.data` in a debugger shows
+    // both fields without a pretty-printer (docs/status/abi.md).
+    assert!(
+        out.contains("DW_AT_name\t(\"TextStorage\")"),
+        "expected a named `TextStorage` DWARF type describing the Text header"
+    );
+    assert!(
+        out.contains("DW_AT_name\t(\"graphemeCount\")"),
+        "expected `TextStorage` to carry a `graphemeCount` member"
+    );
+    assert!(
+        out.contains("DW_AT_name\t(\"flags\")"),
+        "expected `TextStorage` to carry a `flags` member"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

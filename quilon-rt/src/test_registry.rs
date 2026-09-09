@@ -106,11 +106,13 @@ fn covered(path: &str, selection: &[String]) -> bool {
 
 fn emit(event: &Event) {
     let line = serde_json::to_vec(event).expect("a test event serializes");
-    __print_text_fd(1, line.as_ptr(), line.len() as i64, std::ptr::null());
+    let text = crate::mem::alloc_text(&line);
+    __print_text_fd(1, text.data as *const u8, text.len, std::ptr::null());
 }
 
 fn print_line(line: &str) {
-    __print_text_fd(1, line.as_ptr(), line.len() as i64, std::ptr::null());
+    let text = crate::mem::alloc_text(line.as_bytes());
+    __print_text_fd(1, text.data as *const u8, text.len, std::ptr::null());
 }
 
 fn colored(text: &str, color: &str) -> String {
@@ -278,7 +280,7 @@ mod tests {
     use super::*;
 
     fn text(name: &str) -> (*const u8, i64) {
-        (name.as_ptr(), name.len() as i64)
+        crate::test_support::text_of(name)
     }
 
     fn finish(name: &str, path: &str, depth: f64, failed: f64) -> f64 {

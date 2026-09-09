@@ -10,6 +10,25 @@ All notable changes to Quilon are documented here.
   [QN005](docs/tooling/errors.md#qn005--scientific-notation-literal)** naming the plain
   decimal to write, where the literal used to split into a `1` token and a stray `e9`
   identifier with its own "undefined name" error. See `docs/types/README.md`. Closes #208.
+- **`Text.length` is O(1), and `slice`/`at`/`indexOf` are O(1) past the search itself on
+  an ASCII text.** Every `Text` now carries a write-once header (grapheme count, an ASCII
+  flag) set at creation, so `length` reads the count directly and the other methods treat
+  a byte offset as its own grapheme index when the flag is set, with no Unicode
+  segmentation walk. The header also carries three more free-at-creation facts — valid
+  UTF-8, a compile-time literal, no Unicode bidi control characters — plus a trailing NUL
+  byte after the content, which lets a `--debug` build's C-string thunk hand a debugger
+  the bytes with no copy. A decode (`` ` ``, `print`, every Text-method intrinsic) skips
+  its own UTF-8 validation pass when the header already answers it. See
+  `docs/status/abi.md#text-storage` and `docs/types/text.md#cost`.
+- **`[]Text.join(separator)`, the reverse of `split`.** One native intrinsic: every
+  element back to back with `separator` between consecutive ones; `[].join(sep)` is `""`.
+  `join` is a method of `[]Text` alone — an array of any other element type is a checker
+  error naming `map` as the way there. See `docs/types/text.md` and
+  `docs/collections/arrays.md#array-methods`, and `examples/text_methods.qn`.
+- **`Text.indexOf(sub, from)`, a second overload finding the next occurrence.** Returns
+  the first occurrence at or after grapheme index `from` as `Ok(Num)`/`NotOk`; `from`
+  clamps to `[0, length]` like `slice`'s bounds, letting a find loop carry its position
+  forward through repeated calls. See `docs/types/text.md`. Closes #381.
 - **`Text.replace` is a native intrinsic, like `replaceAll`.** Both now report through the
   runtime's own coded frame: an empty `from` (computed, since a literal one is still a
   compile error) is

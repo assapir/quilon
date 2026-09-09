@@ -39,6 +39,7 @@
 //! Quilon binary needs no `libgc` on the machine that runs it.
 
 pub mod abort_trap;
+pub mod bidi;
 pub mod collections;
 pub mod deferred;
 pub mod gc;
@@ -80,9 +81,10 @@ pub use test_registry::{
     __test_suite_enter, __test_suite_selected, __test_summary,
 };
 pub use text::{
-    __bool_to_text, __num_to_text, __text_at, __text_cmp, __text_contains, __text_graphemes,
-    __text_index_of, __text_length, __text_replace, __text_replace_all, __text_slice, __text_split,
-    __text_to_lower, __text_to_upper, __text_trim_end, __text_trim_start,
+    __bool_to_text, __num_to_text, __text_at, __text_cmp, __text_concat, __text_contains,
+    __text_graphemes, __text_index_of, __text_index_of_from, __text_join, __text_length,
+    __text_replace, __text_replace_all, __text_slice, __text_split, __text_to_lower,
+    __text_to_upper, __text_trim_end, __text_trim_start,
 };
 pub use time::{__now, __sleep};
 
@@ -168,6 +170,9 @@ intrinsic_registry! {
     __text_to_lower: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_contains: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
     __text_index_of: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
+    __text_index_of_from: extern "C" fn(*const u8, i64, *const u8, i64, i64) -> i64,
+    __text_concat: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
+    __text_join: extern "C" fn(*const c_void, i64, *const u8, i64) -> QlSlice,
     __text_slice: extern "C" fn(*const u8, i64, i64, i64) -> QlSlice,
     __text_graphemes: extern "C" fn(*const u8, i64) -> QlSlice,
     __text_at: extern "C" fn(*const u8, i64, i64) -> QlSlice,
@@ -248,7 +253,8 @@ intrinsic_registry! {
 // crate root so a single owner serves every module's test block.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::mem::QlSlice;
+    use crate::mem::{QlSlice, text_header_of};
+    use crate::text::byte_slice;
     use std::sync::Mutex;
 
     // libgc's `GC_init`/`GC_malloc` are not safe to invoke from several threads at
@@ -256,16 +262,32 @@ pub(crate) mod test_support {
     // through the GC takes this lock first (mirrors `jit`'s JIT_LOCK).
     pub(crate) static GC_LOCK: Mutex<()> = Mutex::new(());
 
-    /// View a `QlSlice` `Text` result as a `&str` (its GC-owned bytes). Takes the
-    /// `QlSlice` by value (it is `Copy`) so the returned `&str` borrows the underlying
-    /// GC buffer, not the (temporary) struct.
+    /// A `QlSlice` `Text` result's content, past its header, as a `&str`.
     pub(crate) unsafe fn slice_str<'a>(s: QlSlice) -> &'a str {
-        let bytes = unsafe { std::slice::from_raw_parts(s.data as *const u8, s.len as usize) };
-        std::str::from_utf8(bytes).unwrap()
+        std::str::from_utf8(byte_slice(s.data as *const u8, s.len)).unwrap()
     }
 
+    /// A `(ptr, len)` `Text` intrinsics can be called with: a leaked buffer with a real
+    /// header (not a real GC allocation, since these run without `__gc_init`).
     pub(crate) fn text_of(s: &str) -> (*const u8, i64) {
-        (s.as_ptr(), s.len() as i64)
+        text_of_bytes(s.as_bytes())
+    }
+
+    /// [`text_of`] for bytes that need not be valid UTF-8.
+    pub(crate) fn text_of_bytes(bytes: &[u8]) -> (*const u8, i64) {
+        let (count, flags) = crate::mem::text_header(bytes);
+        let mut buf = Vec::with_capacity(16 + bytes.len() + 1);
+        buf.extend_from_slice(&count.to_ne_bytes());
+        buf.extend_from_slice(&flags.to_ne_bytes());
+        buf.extend_from_slice(bytes);
+        buf.push(0);
+        let leaked: &'static [u8] = Box::leak(buf.into_boxed_slice());
+        (leaked.as_ptr(), bytes.len() as i64)
+    }
+
+    /// The header `text_of` (or a real allocator) wrote at `ptr`.
+    pub(crate) fn header_of(ptr: *const u8) -> (i64, i64) {
+        text_header_of(ptr)
     }
 
     /// Collect a `[]Text` `QlSlice` result into owned `String`s. Shared by the split and

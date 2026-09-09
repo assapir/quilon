@@ -137,16 +137,9 @@ pub extern "C" fn __http_frame_body(
     unsafe { *out = result };
 }
 
-/// Borrow `len` bytes at `data` (empty if null/non-positive).
-///
-/// # Safety contract (upheld by the compiler)
-/// `data` is null, or points to `len` readable bytes for the duration of this call.
+/// Borrow a `Text`'s `len` content bytes at `data`, past its header.
 fn borrow_bytes<'a>(data: *const u8, len: i64) -> &'a [u8] {
-    if data.is_null() || len <= 0 {
-        return &[];
-    }
-    // SAFETY: the compiler's contract: `len` readable bytes at `data`, valid for this call.
-    unsafe { std::slice::from_raw_parts(data, len as usize) }
+    crate::text::byte_slice(data, len)
 }
 
 /// Copy `len` bytes at `data` into an owned `String` (empty if null/empty/invalid UTF-8) — a
@@ -181,22 +174,21 @@ mod tests {
             tag: 0,
             slot: crate::mem::QlSlice::empty(),
         };
+        let (raw_ptr, raw_len) = crate::test_support::text_of_bytes(raw);
+        let (transfer_encoding_ptr, transfer_encoding_len) =
+            crate::test_support::text_of(transfer_encoding);
+        let (content_length_ptr, content_length_len) = crate::test_support::text_of(content_length);
         __http_frame_body(
             &mut out,
-            raw.as_ptr(),
-            raw.len() as i64,
+            raw_ptr,
+            raw_len,
             bodiless as i8,
-            transfer_encoding.as_ptr(),
-            transfer_encoding.len() as i64,
-            content_length.as_ptr(),
-            content_length.len() as i64,
+            transfer_encoding_ptr,
+            transfer_encoding_len,
+            content_length_ptr,
+            content_length_len,
         );
-        let bytes = if out.slot.data.is_null() || out.slot.len <= 0 {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(out.slot.data as *const u8, out.slot.len as usize) }
-                .to_vec()
-        };
+        let bytes = crate::text::byte_slice(out.slot.data as *const u8, out.slot.len).to_vec();
         (out.tag, bytes)
     }
 

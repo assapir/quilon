@@ -33,14 +33,14 @@ fn check_write_fd(fd: f64) -> Result<i32, String> {
     Ok(fd as i32)
 }
 
-/// Write `len` bytes from `ptr` to file descriptor `fd`, returning the number of
-/// bytes written (0 on null/empty/error). Backs the `write(content, fd)` builtin — a
-/// descriptor that is not a whole number of 0 or more is refused loud, reported at `site`
-/// (the call's own location).
+/// Write a rendered `Text`'s `len` content bytes (past its header, at `ptr`) to file
+/// descriptor `fd`, returning the number of bytes written (0 on null/empty/error). Backs
+/// the `write(content, fd)` builtin — a descriptor that is not a whole number of 0 or more
+/// is refused loud, reported at `site` (the call's own location).
 ///
 /// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to at least `len` readable bytes; `site` is null or points to
-/// a valid [`QlSite`].
+/// `ptr` is null or points at a header `quilon-rt` wrote, followed by `len` readable
+/// bytes; `site` is null or points to a valid [`QlSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const QlSite) -> i64 {
@@ -48,10 +48,7 @@ pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const 
         Ok(fd) => fd,
         Err(message) => fail_at(site, codes::WRITE_FD_NOT_WHOLE, &message, RUNTIME_EXIT_CODE),
     };
-    if ptr.is_null() || len <= 0 {
-        return 0;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    let bytes = crate::text::byte_slice(ptr, len);
     match write_to_fd(fd as i64, bytes) {
         Ok(n) => n,
         Err(message) => fail_at(site, codes::WRITE_FAILED, &message, RUNTIME_EXIT_CODE),
@@ -157,6 +154,7 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::text_of_bytes;
 
     /// Run `emit` with a fresh pipe as its target descriptor and return the bytes it wrote.
     /// The payloads here are far below a pipe's buffer, so the write never blocks.
@@ -176,18 +174,15 @@ mod tests {
     }
 
     fn printed(bytes: &[u8]) -> Vec<u8> {
-        captured(|fd| __print_text_fd(fd, bytes.as_ptr(), bytes.len() as i64, std::ptr::null()))
+        let (ptr, len) = text_of_bytes(bytes);
+        captured(|fd| __print_text_fd(fd, ptr, len, std::ptr::null()))
     }
 
     fn written(bytes: &[u8]) -> Vec<u8> {
+        let (ptr, len) = text_of_bytes(bytes);
         captured(|fd| {
             assert_eq!(
-                __write_bytes(
-                    fd as f64,
-                    bytes.as_ptr(),
-                    bytes.len() as i64,
-                    std::ptr::null()
-                ),
+                __write_bytes(fd as f64, ptr, len, std::ptr::null()),
                 bytes.len() as i64
             );
         })
@@ -235,9 +230,9 @@ mod tests {
     #[test]
     fn print_reads_exactly_len_bytes_of_a_longer_buffer() {
         // The `{ptr,len}` pair is the whole contract: bytes past `len` are not this Text's.
-        let buffer = b"visible/hidden";
+        let (ptr, _) = text_of_bytes(b"visible/hidden");
         assert_eq!(
-            captured(|fd| __print_text_fd(fd, buffer.as_ptr(), 7, std::ptr::null())),
+            captured(|fd| __print_text_fd(fd, ptr, 7, std::ptr::null())),
             b"visible\n"
         );
     }

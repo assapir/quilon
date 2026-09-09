@@ -13,7 +13,11 @@
 //! `QlSlice` so it outlives this call and is collected like any heap value. See
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
-use crate::mem::{QlSlice, alloc_slots, alloc_text, format_num};
+use crate::mem::{
+    QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_with_count,
+    alloc_text_with_header, format_num, inherited_flags, text_header_of, text_is_ascii,
+    text_is_valid_utf8, text_no_bidi_controls,
+};
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
@@ -34,24 +38,15 @@ pub extern "C" fn __bool_to_text(b: i64) -> QlSlice {
     alloc_text(if b != 0 { b"True" } else { b"False" })
 }
 
-/// Count the user-perceived characters (Unicode extended grapheme clusters) in a
-/// UTF-8 byte buffer. Backs `Text.length`. Invalid UTF-8 is decoded lossily.
-///
-/// # Safety contract (upheld by the compiler)
-/// `ptr` points to at least `len` readable bytes (or is null with `len <= 0`).
-// Exported C-ABI symbol called from generated code; a safe Rust signature is
-// intentional (the contract is upheld by the compiler emitting the call).
+/// Backs `Text.length`: O(1), reading the header rather than walking. `ptr` is the
+/// `Text`'s own `data` field (the header), not its bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_length(ptr: *const u8, len: i64) -> i64 {
-    if ptr.is_null() || len <= 0 {
+    if len <= 0 {
         return 0;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.graphemes(true).count() as i64,
-        Err(_) => String::from_utf8_lossy(bytes).graphemes(true).count() as i64,
-    }
+    text_header_of(ptr).0
 }
 
 /// Lexicographically compare two UTF-8 byte strings, returning -1, 0, or 1 (like
@@ -72,23 +67,26 @@ pub extern "C" fn __text_cmp(a: *const u8, alen: i64, b: *const u8, blen: i64) -
     }
 }
 
-/// View `len` bytes at `ptr` as a slice (empty for null/non-positive `len`). Shared with
-/// [`crate::report`], which reads the `Text` fields of a call site the same way.
+/// A `Text`'s `len` content bytes, past its header (empty for a null/non-positive `len`).
 pub(crate) fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
     if ptr.is_null() || len <= 0 {
         &[]
     } else {
-        unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+        unsafe { std::slice::from_raw_parts(ptr.add(TEXT_HEADER_BYTES as usize), len as usize) }
     }
 }
 
-/// Decode `len` bytes at `ptr` as UTF-8 (lossily on invalid UTF-8, which a
-/// well-formed Quilon `Text` never is). Shared by all the Text-method intrinsics.
-///
-/// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to at least `len` readable bytes.
+/// Decode `len` bytes at `ptr` as UTF-8, skipping validation when the header's valid-UTF-8
+/// bit already answers it (lossily decoded otherwise). Shared by all the Text-method
+/// intrinsics.
 pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
-    String::from_utf8_lossy(byte_slice(ptr, len))
+    let bytes = byte_slice(ptr, len);
+    if text_is_valid_utf8(text_header_of(ptr).1) {
+        // SAFETY: the header's valid-UTF-8 bit guarantees `bytes` is valid UTF-8.
+        std::borrow::Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        String::from_utf8_lossy(bytes)
+    }
 }
 
 /// Strip leading-only (Unicode) whitespace. Backs `Text.trimStart()`. (`Text.trim()`
@@ -132,6 +130,34 @@ pub extern "C" fn __text_contains(hptr: *const u8, hlen: i64, sptr: *const u8, s
     i64::from(hay.contains(&*sub))
 }
 
+/// Shared by [`__text_index_of`] (`from = 0`) and [`__text_index_of_from`]; on an
+/// ASCII-aligned haystack a byte offset doubles as its own grapheme index, so both ends
+/// of the search skip the grapheme walk.
+fn text_find_from(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64, from: i64) -> i64 {
+    let (count, flags) = text_header_of(hptr);
+    let ascii = text_is_ascii(flags);
+    let hay = text_str(hptr, hlen);
+    let sub = text_str(sptr, slen);
+    let from_byte = if ascii {
+        from.clamp(0, hlen) as usize
+    } else {
+        hay.grapheme_indices(true)
+            .nth(from.clamp(0, count) as usize)
+            .map_or(hay.len(), |(byte_idx, _)| byte_idx)
+    };
+    match hay[from_byte..].find(&*sub) {
+        Some(relative) => {
+            let byte_idx = from_byte + relative;
+            if ascii {
+                byte_idx as i64
+            } else {
+                hay[..byte_idx].graphemes(true).count() as i64
+            }
+        }
+        None => -1,
+    }
+}
+
 /// The GRAPHEME index of the first occurrence of `sub` in the haystack, or -1 if
 /// absent. Backs `Text.indexOf(sub)` — codegen turns -1 into `NotOk` and any other
 /// value into `Ok(idx)`. Grapheme-based to match `Text.length` / `Text.slice`; an
@@ -139,34 +165,52 @@ pub extern "C" fn __text_contains(hptr: *const u8, hlen: i64, sptr: *const u8, s
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_index_of(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> i64 {
-    let hay = text_str(hptr, hlen);
-    let sub = text_str(sptr, slen);
-    match hay.find(&*sub) {
-        // Byte offset -> grapheme index: count the graphemes in the prefix before it.
-        Some(byte_idx) => hay[..byte_idx].graphemes(true).count() as i64,
-        None => -1,
-    }
+    text_find_from(hptr, hlen, sptr, slen, 0)
+}
+
+/// Backs `Text.indexOf(sub, from)`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_index_of_from(
+    hptr: *const u8,
+    hlen: i64,
+    sptr: *const u8,
+    slen: i64,
+    from: i64,
+) -> i64 {
+    text_find_from(hptr, hlen, sptr, slen, from)
 }
 
 /// The substring from grapheme `start` (inclusive) to grapheme `end` (exclusive).
 /// Indices count graphemes (like `Text.length`); both are CLAMPED to `[0, length]`
-/// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`.
+/// (never an error), and `end <= start` yields the empty string. Backs `Text.slice`. On
+/// an ASCII-aligned receiver a byte offset doubles as its own grapheme index, so the
+/// whole call is a byte-range copy with no grapheme walk.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -> QlSlice {
+    let (_, flags) = text_header_of(ptr);
+    if text_is_ascii(flags) {
+        let clamp = |i: i64| i.clamp(0, len);
+        let (lo, hi) = (clamp(start), clamp(end));
+        if hi <= lo {
+            return QlSlice::empty();
+        }
+        let bytes = byte_slice(ptr, len);
+        return alloc_text_with_count(&bytes[lo as usize..hi as usize], hi - lo);
+    }
     let s = text_str(ptr, len);
     // Byte offset where each grapheme starts, plus a trailing sentinel of `s.len()`, so
-    // grapheme index `g` spans bytes `bounds[g]..bounds[g + 1]`. One pass, no String copy;
-    // the result is a zero-copy byte subslice that `alloc_text` copies exactly once.
+    // grapheme index `g` spans bytes `bounds[g]..bounds[g + 1]`.
     let mut bounds: Vec<usize> = s.grapheme_indices(true).map(|(b, _)| b).collect();
     bounds.push(s.len());
     let n = (bounds.len() - 1) as i64;
     let clamp = |i: i64| i.clamp(0, n) as usize;
     let (lo, hi) = (clamp(start), clamp(end));
     if hi <= lo {
-        return alloc_text(&[]);
+        return QlSlice::empty();
     }
-    alloc_text(s[bounds[lo]..bounds[hi]].as_bytes())
+    alloc_text_with_count(s[bounds[lo]..bounds[hi]].as_bytes(), (hi - lo) as i64)
 }
 
 /// Build a `[]Text` (a `QlSlice` over `parts.len()` contiguous `Text` structs — the
@@ -202,16 +246,24 @@ pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
 
 /// The grapheme at `index` (0-based), or the EMPTY text when `index` is out of bounds —
 /// a grapheme is never empty, so codegen reads the empty answer as `NotOk`. Backs
-/// `Text.at(index)`, without segmenting past the asked-for grapheme.
+/// `Text.at(index)`. On an ASCII-aligned receiver, `index` is its own byte offset.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
     if index < 0 {
         return QlSlice::empty();
     }
+    let (_, flags) = text_header_of(ptr);
+    if text_is_ascii(flags) {
+        if index >= len {
+            return QlSlice::empty();
+        }
+        let bytes = byte_slice(ptr, len);
+        return alloc_text_with_count(&bytes[index as usize..index as usize + 1], 1);
+    }
     let s = text_str(ptr, len);
     match s.graphemes(true).nth(index as usize) {
-        Some(grapheme) => alloc_text(grapheme.as_bytes()),
+        Some(grapheme) => alloc_text_with_count(grapheme.as_bytes(), 1),
         None => QlSlice::empty(),
     }
 }
@@ -340,35 +392,100 @@ pub extern "C" fn __text_replace(
     }
 }
 
+/// Backs `Text` `+`. No walk: both operands' counts/flags are already known.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rlen: i64) -> QlSlice {
+    let total = llen.max(0) + rlen.max(0);
+    if total <= 0 {
+        return QlSlice::empty();
+    }
+    let (l_count, l_flags) = text_header_of(lptr);
+    let (r_count, r_flags) = text_header_of(rptr);
+    let ascii = (llen <= 0 || text_is_ascii(l_flags)) && (rlen <= 0 || text_is_ascii(r_flags));
+    let no_bidi = (llen <= 0 || text_no_bidi_controls(l_flags))
+        && (rlen <= 0 || text_no_bidi_controls(r_flags));
+    let mut bytes = Vec::with_capacity(total as usize);
+    bytes.extend_from_slice(byte_slice(lptr, llen));
+    bytes.extend_from_slice(byte_slice(rptr, rlen));
+    alloc_text_with_header(&bytes, l_count + r_count, inherited_flags(ascii, no_bidi))
+}
+
+/// Backs `[]Text.join(separator)`. `parts_ptr` is the array ABI's `data` field:
+/// `parts_len` contiguous `Text` structs.
+///
+/// # Safety contract (upheld by the compiler)
+/// `parts_ptr` is null or points at `parts_len` contiguous, readable `Text` structs.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __text_join(
+    parts_ptr: *const c_void,
+    parts_len: i64,
+    sep_ptr: *const u8,
+    sep_len: i64,
+) -> QlSlice {
+    if parts_ptr.is_null() || parts_len <= 0 {
+        return QlSlice::empty();
+    }
+    // SAFETY: upheld by the caller (see the contract above).
+    let parts =
+        unsafe { std::slice::from_raw_parts(parts_ptr as *const QlSlice, parts_len as usize) };
+    let sep_bytes = byte_slice(sep_ptr, sep_len);
+    let (sep_count, sep_flags) = text_header_of(sep_ptr);
+    let sep_ascii = sep_bytes.is_empty() || text_is_ascii(sep_flags);
+    let sep_no_bidi = sep_bytes.is_empty() || text_no_bidi_controls(sep_flags);
+
+    let mut total_count: i64 = 0;
+    let mut ascii = true;
+    let mut no_bidi = true;
+    let mut joined = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        let part_bytes = byte_slice(part.data as *const u8, part.len);
+        let (count, flags) = text_header_of(part.data as *const u8);
+        total_count += count;
+        ascii &= part_bytes.is_empty() || text_is_ascii(flags);
+        no_bidi &= part_bytes.is_empty() || text_no_bidi_controls(flags);
+        joined.extend_from_slice(part_bytes);
+        if i + 1 < parts.len() {
+            total_count += sep_count;
+            ascii &= sep_ascii;
+            no_bidi &= sep_no_bidi;
+            joined.extend_from_slice(sep_bytes);
+        }
+    }
+    alloc_text_with_header(&joined, total_count, inherited_flags(ascii, no_bidi))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mem::__gc_init;
-    use crate::test_support::{GC_LOCK, slice_str, split_parts, text_of};
+    use crate::test_support::{GC_LOCK, header_of, slice_str, split_parts, text_of};
 
     #[test]
     fn grapheme_count_handles_ascii_and_multibyte() {
-        let ascii = b"hello";
-        assert_eq!(__text_length(ascii.as_ptr(), ascii.len() as i64), 5);
+        let (ap, al) = text_of("hello");
+        assert_eq!(__text_length(ap, al), 5);
 
         // "héllo" — the é is 2 bytes but 1 grapheme.
-        let multibyte = "héllo".as_bytes();
-        assert_eq!(multibyte.len(), 6);
-        assert_eq!(__text_length(multibyte.as_ptr(), multibyte.len() as i64), 5);
+        let (mp, ml) = text_of("héllo");
+        assert_eq!(ml, 6);
+        assert_eq!(__text_length(mp, ml), 5);
     }
 
     #[test]
     fn grapheme_count_handles_emoji_clusters() {
         // Family emoji (ZWJ sequence) is many bytes / codepoints but one grapheme.
-        let family = "👨‍👩‍👧".as_bytes();
-        assert!(family.len() > 4);
-        assert_eq!(__text_length(family.as_ptr(), family.len() as i64), 1);
+        let (fp, fl) = text_of("👨‍👩‍👧");
+        assert!(fl > 4);
+        assert_eq!(__text_length(fp, fl), 1);
     }
 
     #[test]
     fn text_length_null_and_empty_are_zero() {
         assert_eq!(__text_length(std::ptr::null(), 0), 0);
-        assert_eq!(__text_length(b"x".as_ptr(), 0), 0);
+        let (xp, _) = text_of("x");
+        assert_eq!(__text_length(xp, 0), 0);
     }
 
     #[test]
@@ -580,5 +697,170 @@ mod tests {
                 "replace: count 5 exceeds 3 occurrences".to_string()
             ))
         );
+    }
+
+    /// `(count, ascii, valid_utf8, no_bidi)` at `ptr`, so a test states what it means
+    /// rather than the bit pattern.
+    fn header_bits(ptr: *const u8) -> (i64, bool, bool, bool) {
+        let (count, flags) = header_of(ptr);
+        (
+            count,
+            text_is_ascii(flags),
+            text_is_valid_utf8(flags),
+            text_no_bidi_controls(flags),
+        )
+    }
+
+    #[test]
+    fn alloc_text_headers_ascii_multibyte_cluster_and_empty_text() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+
+        let ascii = alloc_text(b"hello");
+        assert_eq!(header_bits(ascii.data as *const u8), (5, true, true, true));
+
+        let multibyte = alloc_text("héllo".as_bytes());
+        assert_eq!(
+            header_bits(multibyte.data as *const u8),
+            (5, false, true, true)
+        );
+
+        // A flag emoji (a regional-indicator pair) is one grapheme cluster over 8 bytes.
+        let flag = alloc_text("🇮🇱".as_bytes());
+        assert_eq!(header_bits(flag.data as *const u8), (1, false, true, true));
+
+        // "e" + a combining acute is one grapheme cluster over 3 bytes.
+        let combining = alloc_text("e\u{0301}".as_bytes());
+        assert_eq!(
+            header_bits(combining.data as *const u8),
+            (1, false, true, true)
+        );
+
+        let empty = alloc_text(b"");
+        assert!(empty.data.is_null());
+        assert_eq!(header_bits(empty.data as *const u8), (0, true, true, true));
+    }
+
+    #[test]
+    fn concat_sums_counts_and_ands_ascii_flags() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (ap, al) = text_of("ab");
+        let (bp, bl) = text_of("cd");
+        let both_ascii = __text_concat(ap, al, bp, bl);
+        assert_eq!(
+            header_bits(both_ascii.data as *const u8),
+            (4, true, true, true)
+        );
+        assert_eq!(unsafe { slice_str(both_ascii) }, "abcd");
+
+        let (ep, el) = text_of("é");
+        let mixed = __text_concat(ap, al, ep, el);
+        assert_eq!(header_bits(mixed.data as *const u8), (3, false, true, true));
+    }
+
+    #[test]
+    fn slice_header_is_the_span_length_with_no_grapheme_walk() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (p, l) = text_of("héllo");
+        let sliced = __text_slice(p, l, 1, 4);
+        let (count, ascii, valid_utf8, _) = header_bits(sliced.data as *const u8);
+        assert_eq!((count, ascii, valid_utf8), (3, false, true));
+
+        let (ap, al) = text_of("hello");
+        assert_eq!(
+            header_bits(__text_slice(ap, al, 1, 4).data as *const u8),
+            (3, true, true, true)
+        );
+    }
+
+    #[test]
+    fn split_pieces_and_replace_carry_correct_headers() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (hp, hl) = text_of("héllo,world");
+        let (comma_p, comma_l) = text_of(",");
+        let parts = __text_split(hp, hl, comma_p, comma_l);
+        let elems =
+            unsafe { std::slice::from_raw_parts(parts.data as *const QlSlice, parts.len as usize) };
+        assert_eq!(
+            header_bits(elems[0].data as *const u8),
+            (5, false, true, true)
+        );
+        assert_eq!(
+            header_bits(elems[1].data as *const u8),
+            (5, true, true, true)
+        );
+
+        let (rp, rl) = text_of("a-a-a");
+        let (from_p, from_l) = text_of("a");
+        let (to_p, to_l) = text_of("é");
+        let replaced_all = __text_replace_all(rp, rl, from_p, from_l, to_p, to_l, std::ptr::null());
+        assert_eq!(
+            header_bits(replaced_all.data as *const u8),
+            (5, false, true, true)
+        );
+
+        let (x_p, x_l) = text_of("x");
+        let replaced = __text_replace(rp, rl, from_p, from_l, x_p, x_l, 1.0, std::ptr::null());
+        assert_eq!(
+            header_bits(replaced.data as *const u8),
+            (5, true, true, true)
+        );
+    }
+
+    #[test]
+    fn join_sums_counts_and_ascii_flags() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (ap, al) = text_of("ab");
+        let (ep, el) = text_of("é");
+        let parts = [
+            QlSlice {
+                data: ap as *const c_void,
+                len: al,
+            },
+            QlSlice {
+                data: ep as *const c_void,
+                len: el,
+            },
+        ];
+        let (sep_p, sep_l) = text_of(",");
+        let joined = __text_join(
+            parts.as_ptr() as *const c_void,
+            parts.len() as i64,
+            sep_p,
+            sep_l,
+        );
+        // "ab" (2) + "," (1) + "é" (1) = 4 graphemes; not ASCII-aligned, since "é" isn't.
+        assert_eq!(
+            header_bits(joined.data as *const u8),
+            (4, false, true, true)
+        );
+        assert_eq!(unsafe { slice_str(joined) }, "ab,é");
+
+        let empty: [QlSlice; 0] = [];
+        let empty_join = __text_join(empty.as_ptr() as *const c_void, 0, sep_p, sep_l);
+        assert!(empty_join.data.is_null());
+    }
+
+    #[test]
+    fn index_of_from_finds_at_or_after_the_given_grapheme() {
+        let (hp, hl) = text_of("a-a-a");
+        let (sp, sl) = text_of("a");
+        assert_eq!(__text_index_of_from(hp, hl, sp, sl, 0), 0);
+        assert_eq!(__text_index_of_from(hp, hl, sp, sl, 1), 2);
+        assert_eq!(__text_index_of_from(hp, hl, sp, sl, 3), 4);
+        // Past the end, or negative, both clamp to a valid search origin rather than fail.
+        assert_eq!(__text_index_of_from(hp, hl, sp, sl, 100), -1);
+        assert_eq!(__text_index_of_from(hp, hl, sp, sl, -5), 0);
+
+        // Non-ASCII haystack: "héllo", searching for "l" from grapheme 3 (the second "l").
+        let (np, nl) = text_of("héllo");
+        let (lp, ll) = text_of("l");
+        assert_eq!(__text_index_of_from(np, nl, lp, ll, 0), 2);
+        assert_eq!(__text_index_of_from(np, nl, lp, ll, 3), 3);
+        assert_eq!(__text_index_of_from(np, nl, lp, ll, 4), -1);
     }
 }

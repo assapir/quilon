@@ -52,6 +52,7 @@ exactly the same way.
 | `each(f)` | **the receiver array** | runs `f` for side effects, then returns the array itself, so it chains; walks indices `0` to `size - 1` over the array's own storage, so a body writing `arr[j] := v` ahead of the walk is read back the moment the walk reaches `j` |
 | `find(predicate)` | `Ok(element)` / `NotOk` | the first element satisfying `predicate`, absent-safe; `predicate` returns `Bool` |
 | `at(n :: Num)` | `Ok(element)` / `NotOk` | checked index as a value — `Ok` in bounds, `NotOk` otherwise (NaN included); a raw `array[n]` out of bounds is a runtime error |
+| `join(separator :: Text)` | `Text` | `[]Text` only — the reverse of [`Text.split`](../types/text.md#text-methods); every element back to back with `separator` between consecutive ones; `[].join(sep)` is `""` |
 
 ```quilon
 nums = [1, 2, 3, 4, 5, 6]
@@ -73,7 +74,9 @@ third = nums.at(2) ?             ~ Ok(3)
 These methods are **reserved on arrays**: on an *array receiver* the built-in wins over a
 same-named user function or overload (e.g. a `map` on a `Num`) — it is resolved ahead of
 the overload set. `map`/`reduce`/`find` work over every element type (`[]Text` as much as
-`[]Num`). (See `examples/array_methods.qn`.)
+`[]Num`); `join` is a method of `[]Text` specifically, reached by mapping any other
+element type to `Text` first (`xs.map(x => "`x`").join(sep)`). (See
+`examples/array_methods.qn`.)
 
 ## Array concatenation — `+`
 

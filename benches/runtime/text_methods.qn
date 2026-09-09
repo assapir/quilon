@@ -1,0 +1,13 @@
+~ split + join, replaceAll, and an indexOf(sub, from) find loop, per iteration.
+countOccurrences = (t :: Text, from :: Num, found :: Num) -> Num => <
+  t.indexOf("ar", from) ?
+    | Ok(i)    => countOccurrences(t, i + 1, found + 1)
+    | NotOk(_) => found
+>
+step = (n :: Num, acc :: Num) -> Num => <
+  joined = "mercury,venus,earth,mars,jupiter".split(",").join("-")
+  dashed = joined.replaceAll("-", "_")
+  hits = countOccurrences(dashed, 0, 0)
+  n == 0 ? acc + hits : step(n - 1, acc + hits)
+>
+^ = () -> Num => < step(100000, 0) > 0 ? 0 : 1 >

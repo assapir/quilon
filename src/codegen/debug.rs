@@ -345,11 +345,27 @@ impl<'ctx> DebugInfo<'ctx> {
         self.record_type(name, &[])
     }
 
-    /// `Text` — a `{ ptr data, i64 byte_len }` struct over a UTF-8 byte buffer.
-    /// Distinct from an array by name (`Text`) and by its `data` pointee (`char`, not `T`).
+    /// `Text` — a `{ ptr data, i64 byte_len }` struct whose `data` points at a named
+    /// `TextStorage` header, so `p *t.data` in a debugger shows the count and flags too.
     pub fn text_type(&self) -> DIType<'ctx> {
+        let i64_ty = self.basic_type("i64", 64, DW_ATE_SIGNED);
         let char_ty = self.basic_type("char", 8, DW_ATE_SIGNED_CHAR);
-        let data = self.pointer_to("", char_ty);
+        // A zero-length flexible array member: DWARF has no value for the content's length.
+        #[allow(clippy::single_range_in_vec_init)]
+        let subscripts = [0..0];
+        let bytes = self
+            .builder
+            .create_array_type(char_ty, 0, 8, &subscripts)
+            .as_type();
+        let storage = self.struct_type(
+            "TextStorage",
+            &[
+                ("graphemeCount", i64_ty),
+                ("flags", i64_ty),
+                ("bytes", bytes),
+            ],
+        );
+        let data = self.pointer_to("", storage);
         let byte_len = self.basic_type("i64", 64, DW_ATE_SIGNED);
         self.struct_type("Text", &[("data", data), ("byte_len", byte_len)])
     }

@@ -253,11 +253,7 @@ pub extern "C" fn __match_fail(site: *const QlSite) -> ! {
 /// A `Text` argument's bytes as a `String`. Length is clamped at 0, and invalid UTF-8 is
 /// replaced rather than aborting: a diagnostic is the wrong place to fail.
 fn message_text(message: *const u8, length: i64) -> String {
-    if message.is_null() || length <= 0 {
-        return String::new();
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(message, length as usize) };
-    String::from_utf8_lossy(bytes).into_owned()
+    crate::text::text_str(message, length).into_owned()
 }
 
 #[cfg(test)]
