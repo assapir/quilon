@@ -350,14 +350,42 @@ impl QlSlice {
 pub(crate) const TEXT_HEADER_BYTES: i64 = 16;
 
 const TEXT_ASCII_ALIGNED: i64 = 1;
+const TEXT_VALID_UTF8: i64 = 2;
+const TEXT_LITERAL: i64 = 4;
+const TEXT_NO_BIDI_CONTROLS: i64 = 8;
 
 pub(crate) fn text_is_ascii(flags: i64) -> bool {
     flags & TEXT_ASCII_ALIGNED != 0
 }
 
+pub(crate) fn text_is_valid_utf8(flags: i64) -> bool {
+    flags & TEXT_VALID_UTF8 != 0
+}
+
+pub(crate) fn text_no_bidi_controls(flags: i64) -> bool {
+    flags & TEXT_NO_BIDI_CONTROLS != 0
+}
+
+/// Flags for a producer (`+`, `join`) whose output is always valid UTF-8 by construction —
+/// a rearrangement of already-validated `Text` content — with `ascii`/`no_bidi` inherited
+/// from its inputs' own headers.
+pub(crate) fn inherited_flags(ascii: bool, no_bidi: bool) -> i64 {
+    let mut flags = TEXT_VALID_UTF8;
+    if ascii {
+        flags |= TEXT_ASCII_ALIGNED;
+    }
+    if no_bidi {
+        flags |= TEXT_NO_BIDI_CONTROLS;
+    }
+    flags
+}
+
 pub(crate) fn text_header_of(ptr: *const u8) -> (i64, i64) {
     if ptr.is_null() {
-        return (0, TEXT_ASCII_ALIGNED);
+        return (
+            0,
+            TEXT_ASCII_ALIGNED | TEXT_VALID_UTF8 | TEXT_NO_BIDI_CONTROLS,
+        );
     }
     // SAFETY: a non-null `data` always points at a header `alloc_text` (or a sibling) wrote.
     unsafe {
@@ -370,27 +398,68 @@ fn is_ascii_grapheme_aligned(bytes: &[u8]) -> bool {
     bytes.is_ascii() && !bytes.windows(2).any(|pair| pair == b"\r\n")
 }
 
-pub fn text_header(bytes: &[u8]) -> (i64, i64) {
-    if is_ascii_grapheme_aligned(bytes) {
-        return (bytes.len() as i64, TEXT_ASCII_ALIGNED);
-    }
-    let count = String::from_utf8_lossy(bytes).graphemes(true).count() as i64;
-    (count, 0)
+/// `src/lexer/bidi.rs::classify`'s character set (QN004) — kept in sync by hand.
+fn is_bidi_control(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{202A}'
+            | '\u{202B}'
+            | '\u{202C}'
+            | '\u{202D}'
+            | '\u{202E}'
+            | '\u{2066}'
+            | '\u{2067}'
+            | '\u{2068}'
+            | '\u{2069}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{061C}'
+    )
 }
 
-/// Every `Text` allocation carries [`TEXT_HEADER_BYTES`] (16) bytes before its content:
-/// an `i64` grapheme `count`, then an `i64` `flags` whose bit 0 marks the text ASCII AND
+/// Every header bit free in the pass a producer already makes over `bytes`.
+pub fn text_header(bytes: &[u8]) -> (i64, i64) {
+    if is_ascii_grapheme_aligned(bytes) {
+        let flags = TEXT_ASCII_ALIGNED | TEXT_VALID_UTF8 | TEXT_NO_BIDI_CONTROLS;
+        return (bytes.len() as i64, flags);
+    }
+    let (text, valid_utf8) = match std::str::from_utf8(bytes) {
+        Ok(s) => (std::borrow::Cow::Borrowed(s), true),
+        Err(_) => (String::from_utf8_lossy(bytes), false),
+    };
+    let count = text.graphemes(true).count() as i64;
+    let mut flags = 0;
+    if valid_utf8 {
+        flags |= TEXT_VALID_UTF8;
+    }
+    if !text.chars().any(is_bidi_control) {
+        flags |= TEXT_NO_BIDI_CONTROLS;
+    }
+    (count, flags)
+}
+
+/// [`text_header`], plus [`TEXT_LITERAL`] — the only place that bit is ever set.
+pub fn literal_header(bytes: &[u8]) -> (i64, i64) {
+    let (count, flags) = text_header(bytes);
+    (count, flags | TEXT_LITERAL)
+}
+
+/// Every `Text` allocation carries [`TEXT_HEADER_BYTES`] (16) bytes before its content,
+/// then a trailing NUL: an `i64` grapheme `count`, an `i64` `flags` (bit 0 ASCII AND
 /// grapheme-aligned — a `\r\n` pair is all-ASCII but segments as one grapheme over two
-/// bytes, so it needs its own condition beyond a plain ASCII check. `data` points AT this
-/// header, not past it, so a debugger's `p *t.data` shows `count`/`flags` alongside the
-/// bytes. Written once, here, for every producer.
+/// bytes, so it needs its own condition; bit 1 valid UTF-8; bit 2 a compile-time literal;
+/// bit 3 free of bidi control characters), the content, then one zero byte a C caller can
+/// read as a NUL terminator with no copy (`__render_c_string`) — free, since `__alloc`
+/// already zeroes. `data` points AT the header, not past it, so a debugger's `p *t.data`
+/// shows every field alongside the bytes. Written once, here, for every producer.
 pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QlSlice {
     let len = bytes.len();
     if len == 0 {
         return QlSlice::empty();
     }
-    let buf = __alloc(TEXT_HEADER_BYTES + len as i64) as *mut u8;
-    // SAFETY: `__alloc` returned at least `TEXT_HEADER_BYTES + len` writable bytes.
+    let buf = __alloc(TEXT_HEADER_BYTES + len as i64 + 1) as *mut u8;
+    // SAFETY: `__alloc` returned at least that many writable bytes, zeroed (the trailing
+    // NUL, at index `len`, needs no write of its own).
     unsafe {
         let header = buf as *mut i64;
         header.write(count);
@@ -403,12 +472,13 @@ pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> Ql
     }
 }
 
-/// [`alloc_text_with_header`] when `count` is already known (`slice`, `join`).
+/// [`alloc_text_with_header`] when `count` is already known (`slice`, `at`) and `bytes` is
+/// a byte-range of an already-decoded `&str`, so it is always valid UTF-8 for free too.
 pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QlSlice {
     let flags = if is_ascii_grapheme_aligned(bytes) {
-        TEXT_ASCII_ALIGNED
+        TEXT_ASCII_ALIGNED | TEXT_VALID_UTF8 | TEXT_NO_BIDI_CONTROLS
     } else {
-        0
+        TEXT_VALID_UTF8
     };
     alloc_text_with_header(bytes, count, flags)
 }
@@ -418,26 +488,23 @@ pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
     alloc_text_with_header(bytes, count, flags)
 }
 
-/// GC-allocate a NUL-terminated copy of the `len` bytes at `data`. Backs every `--debug`
-/// build's `__qn_render$...` thunks (see `CodeGenerator::emit_render_thunk`): a debugger
-/// evaluates a C-ABI call and reads back a `const char*`, not the `{ ptr, i64 }` ABI a
-/// Quilon caller uses, so the thunk hands this a `Text` it just rendered and returns what
-/// this produces. Not reachable from a `.qn` program.
+/// A NUL-terminated view of the `len` bytes at `data`, no copy: every non-empty `Text`
+/// (an allocation or a literal constant) already carries a trailing NUL. Backs every
+/// `--debug` build's `__qn_render$...` thunks (see `CodeGenerator::emit_render_thunk`): a
+/// debugger evaluates a C-ABI call and reads back a `const char*`, not the `{ ptr, i64 }`
+/// ABI a Quilon caller uses. Not reachable from a `.qn` program.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `data` is a `Text`'s own `data` field (null, or a header followed by `len` bytes).
+/// `data` is a `Text`'s own `data` field (null, or a header followed by `len` bytes and a
+/// trailing NUL).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __render_c_string(data: *const u8, len: i64) -> *const u8 {
-    let bytes = crate::text::byte_slice(data, len);
-    let buf = __alloc(bytes.len() as i64 + 1) as *mut u8;
-    if !bytes.is_empty() {
-        // SAFETY: `__alloc` returned at least `bytes.len() + 1` writable bytes.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len()) };
+    if data.is_null() || len <= 0 {
+        return c"".as_ptr().cast();
     }
-    // SAFETY: `buf` has `bytes.len() + 1` bytes.
-    unsafe { *buf.add(bytes.len()) = 0 };
-    buf
+    // SAFETY: upheld by the caller (see the contract above).
+    unsafe { data.add(TEXT_HEADER_BYTES as usize) }
 }
 
 /// Render an `f64` the way Quilon shows a `Num`: whole values without a fractional part
@@ -581,24 +648,20 @@ mod tests {
     }
 
     #[test]
-    fn render_c_string_nul_terminates_a_copy() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
+    fn render_c_string_is_a_view_of_the_texts_own_trailing_nul_no_copy() {
         let (ptr, len) = crate::test_support::text_of("hi");
         let out = __render_c_string(ptr, len);
-        assert!(!out.is_null());
-        // SAFETY: `out` is a fresh GC allocation of `len + 1` bytes this call made.
-        let copied = unsafe { std::slice::from_raw_parts(out, len as usize + 1) };
-        assert_eq!(copied, b"hi\0");
+        assert_eq!(out, unsafe { ptr.add(TEXT_HEADER_BYTES as usize) });
+        // SAFETY: `text_of` appended the same trailing NUL a real allocation carries.
+        let viewed = unsafe { std::slice::from_raw_parts(out, len as usize + 1) };
+        assert_eq!(viewed, b"hi\0");
     }
 
     #[test]
-    fn render_c_string_of_zero_length_is_just_a_nul() {
-        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        __gc_init();
+    fn render_c_string_of_zero_length_is_a_static_empty_string() {
         let out = __render_c_string(std::ptr::null(), 0);
         assert!(!out.is_null());
-        // SAFETY: `out` is a fresh 1-byte GC allocation this call made.
+        // SAFETY: `out` is a static, NUL-terminated C string.
         assert_eq!(unsafe { *out }, 0);
     }
 
@@ -637,5 +700,45 @@ mod tests {
             }
             assert_eq!((*slots.add(2)).len, 0);
         }
+    }
+
+    #[test]
+    fn header_bits_for_ascii_text() {
+        let (_, flags) = text_header(b"hello");
+        assert!(text_is_ascii(flags));
+        assert!(text_is_valid_utf8(flags));
+        assert!(text_no_bidi_controls(flags));
+    }
+
+    #[test]
+    fn header_bits_for_non_ascii_valid_utf8() {
+        let (_, flags) = text_header("héllo".as_bytes());
+        assert!(!text_is_ascii(flags));
+        assert!(text_is_valid_utf8(flags));
+        assert!(text_no_bidi_controls(flags));
+    }
+
+    #[test]
+    fn header_bits_for_invalid_utf8() {
+        let (_, flags) = text_header(b"a\xFFb");
+        assert!(!text_is_ascii(flags));
+        assert!(!text_is_valid_utf8(flags));
+        assert!(text_no_bidi_controls(flags));
+    }
+
+    #[test]
+    fn header_bits_for_a_bidi_control() {
+        let (_, flags) = text_header("a\u{202E}b".as_bytes());
+        assert!(!text_is_ascii(flags));
+        assert!(text_is_valid_utf8(flags));
+        assert!(!text_no_bidi_controls(flags));
+    }
+
+    #[test]
+    fn literal_header_adds_the_literal_bit_on_top_of_text_header() {
+        let (count, flags) = literal_header(b"hi");
+        let (plain_count, plain_flags) = text_header(b"hi");
+        assert_eq!(count, plain_count);
+        assert_eq!(flags, plain_flags | TEXT_LITERAL);
     }
 }

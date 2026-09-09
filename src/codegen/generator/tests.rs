@@ -392,3 +392,19 @@ fn exit_code_conversion_clamps_nan_and_infinities() {
         );
     }
 }
+
+/// A string literal's emitted constant carries the header `literal_header` computes: for
+/// `"hi"` (ASCII, valid UTF-8, no bidi controls, a literal) that's count 2 and every flag
+/// bit set — 1 + 2 + 4 + 8 = 15 — followed by a NUL-terminated byte array.
+#[test]
+fn literal_text_constant_carries_the_literal_bit_and_a_trailing_nul() {
+    let ir = generate_checked("^ = () -> Num => < \"hi\".size >").unwrap();
+    assert!(
+        ir.contains("i64 2, i64 15,"),
+        "expected the literal's header (count 2, flags 15) in the IR:\n{ir}"
+    );
+    assert!(
+        ir.contains("c\"hi\\00\""),
+        "expected a NUL-terminated byte array for the literal's bytes:\n{ir}"
+    );
+}

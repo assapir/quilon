@@ -88,21 +88,32 @@ Quilon type distinguishes them (see the type oracle in
 ## Text storage
 
 Every `Text` allocation carries a write-once, 16-byte header immediately before its
-bytes: an `i64` grapheme count, then an `i64` flags word (bit 0 marks every byte ASCII
-and aligned 1:1 with a grapheme — a `\r\n` pair keeps this bit off, since it segments as
-one grapheme over two bytes; bits 1-63 are reserved, always zero). The value's `data`
-field points AT this header:
+bytes, and a trailing NUL byte after them. The value's `data` field points AT the header:
 
 ```
 Text value: { data: ptr, byteLength: i64 }
-data -> [ graphemeCount: i64 | flags: i64 | byteLength UTF-8 bytes ]
+data -> [ graphemeCount: i64 | flags: i64 | byteLength UTF-8 bytes | 0x00 ]
 ```
 
-The header is filled once, at creation, and stays fixed for the value's whole life. A
-`Text` with a null `data` and `byteLength` `0` is the empty text, with no header behind
-it. `length` reads the header's grapheme count directly, an O(1) read; `slice`/`at`/
-`indexOf` read the ASCII flag and, when it is set, treat a byte offset as its own
-grapheme index, skipping the Unicode segmentation walk a non-ASCII text still takes.
+`flags`, one bit per fact free at creation:
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | ASCII-aligned | every byte is ASCII, and lines up 1:1 with a grapheme (a `\r\n` pair keeps this off — it segments as one grapheme over two bytes) |
+| 1 | Valid UTF-8 | the bytes are valid UTF-8 |
+| 2 | Literal | the compiler's literal emitter produced this constant |
+| 3 | No bidi controls | the bytes carry no Unicode bidirectional control character (the QN004 set) |
+
+Bits 4-63 are reserved, always zero. The header is filled once, at creation, and stays
+fixed for the value's whole life; a `Text` with a null `data` and `byteLength` `0` is the
+empty text, with an all-true header (no content to contradict any bit) and no allocation
+behind it. `length` reads the grapheme count directly, an O(1) read; `slice`/`at`/
+`indexOf` read the ASCII-aligned bit and, when it is set, treat a byte offset as its own
+grapheme index, skipping the Unicode segmentation walk a non-ASCII text still takes; a
+decode (`` ` ``, `print`, every Text-method intrinsic) reads the valid-UTF-8 bit to skip
+its own validation pass. The trailing NUL gives `--debug`'s `__render_c_string` thunk a
+C string to hand a debugger with no copy — `data + 16` for a non-empty text, a static
+empty C string otherwise.
 
 ### Under `--debug`
 
@@ -112,7 +123,7 @@ A `--debug` build describes `data` as a pointer to a named `TextStorage` composi
 
 ```
 (lldb) p *t.data
-(TextStorage) $0 = (graphemeCount = 5, flags = 1, bytes = "héllo")
+(TextStorage) $0 = (graphemeCount = 5, flags = 14, bytes = "héllo")
 ```
 
 ## The runtime boundary

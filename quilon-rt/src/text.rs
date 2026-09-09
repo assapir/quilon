@@ -15,7 +15,8 @@
 
 use crate::mem::{
     QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_with_count,
-    alloc_text_with_header, format_num, text_header_of, text_is_ascii,
+    alloc_text_with_header, format_num, inherited_flags, text_header_of, text_is_ascii,
+    text_is_valid_utf8, text_no_bidi_controls,
 };
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
@@ -75,13 +76,17 @@ pub(crate) fn byte_slice<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
     }
 }
 
-/// Decode `len` bytes at `ptr` as UTF-8 (lossily on invalid UTF-8, which a
-/// well-formed Quilon `Text` never is). Shared by all the Text-method intrinsics.
-///
-/// # Safety contract (upheld by the compiler)
-/// `ptr` is null or points to at least `len` readable bytes.
+/// Decode `len` bytes at `ptr` as UTF-8, skipping validation when the header's valid-UTF-8
+/// bit already answers it (lossily decoded otherwise). Shared by all the Text-method
+/// intrinsics.
 pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str> {
-    String::from_utf8_lossy(byte_slice(ptr, len))
+    let bytes = byte_slice(ptr, len);
+    if text_is_valid_utf8(text_header_of(ptr).1) {
+        // SAFETY: the header's valid-UTF-8 bit guarantees `bytes` is valid UTF-8.
+        std::borrow::Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        String::from_utf8_lossy(bytes)
+    }
 }
 
 /// Strip leading-only (Unicode) whitespace. Backs `Text.trimStart()`. (`Text.trim()`
@@ -398,10 +403,12 @@ pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rle
     let (l_count, l_flags) = text_header_of(lptr);
     let (r_count, r_flags) = text_header_of(rptr);
     let ascii = (llen <= 0 || text_is_ascii(l_flags)) && (rlen <= 0 || text_is_ascii(r_flags));
+    let no_bidi = (llen <= 0 || text_no_bidi_controls(l_flags))
+        && (rlen <= 0 || text_no_bidi_controls(r_flags));
     let mut bytes = Vec::with_capacity(total as usize);
     bytes.extend_from_slice(byte_slice(lptr, llen));
     bytes.extend_from_slice(byte_slice(rptr, rlen));
-    alloc_text_with_header(&bytes, l_count + r_count, i64::from(ascii))
+    alloc_text_with_header(&bytes, l_count + r_count, inherited_flags(ascii, no_bidi))
 }
 
 /// Backs `[]Text.join(separator)`. `parts_ptr` is the array ABI's `data` field:
@@ -426,23 +433,27 @@ pub extern "C" fn __text_join(
     let sep_bytes = byte_slice(sep_ptr, sep_len);
     let (sep_count, sep_flags) = text_header_of(sep_ptr);
     let sep_ascii = sep_bytes.is_empty() || text_is_ascii(sep_flags);
+    let sep_no_bidi = sep_bytes.is_empty() || text_no_bidi_controls(sep_flags);
 
     let mut total_count: i64 = 0;
     let mut ascii = true;
+    let mut no_bidi = true;
     let mut joined = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let part_bytes = byte_slice(part.data as *const u8, part.len);
         let (count, flags) = text_header_of(part.data as *const u8);
         total_count += count;
         ascii &= part_bytes.is_empty() || text_is_ascii(flags);
+        no_bidi &= part_bytes.is_empty() || text_no_bidi_controls(flags);
         joined.extend_from_slice(part_bytes);
         if i + 1 < parts.len() {
             total_count += sep_count;
             ascii &= sep_ascii;
+            no_bidi &= sep_no_bidi;
             joined.extend_from_slice(sep_bytes);
         }
     }
-    alloc_text_with_header(&joined, total_count, i64::from(ascii))
+    alloc_text_with_header(&joined, total_count, inherited_flags(ascii, no_bidi))
 }
 
 #[cfg(test)]
@@ -688,28 +699,46 @@ mod tests {
         );
     }
 
+    /// `(count, ascii, valid_utf8, no_bidi)` at `ptr`, so a test states what it means
+    /// rather than the bit pattern.
+    fn header_bits(ptr: *const u8) -> (i64, bool, bool, bool) {
+        let (count, flags) = header_of(ptr);
+        (
+            count,
+            text_is_ascii(flags),
+            text_is_valid_utf8(flags),
+            text_no_bidi_controls(flags),
+        )
+    }
+
     #[test]
     fn alloc_text_headers_ascii_multibyte_cluster_and_empty_text() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
 
         let ascii = alloc_text(b"hello");
-        assert_eq!(header_of(ascii.data as *const u8), (5, 1));
+        assert_eq!(header_bits(ascii.data as *const u8), (5, true, true, true));
 
         let multibyte = alloc_text("héllo".as_bytes());
-        assert_eq!(header_of(multibyte.data as *const u8), (5, 0));
+        assert_eq!(
+            header_bits(multibyte.data as *const u8),
+            (5, false, true, true)
+        );
 
         // A flag emoji (a regional-indicator pair) is one grapheme cluster over 8 bytes.
         let flag = alloc_text("🇮🇱".as_bytes());
-        assert_eq!(header_of(flag.data as *const u8), (1, 0));
+        assert_eq!(header_bits(flag.data as *const u8), (1, false, true, true));
 
         // "e" + a combining acute is one grapheme cluster over 3 bytes.
         let combining = alloc_text("e\u{0301}".as_bytes());
-        assert_eq!(header_of(combining.data as *const u8), (1, 0));
+        assert_eq!(
+            header_bits(combining.data as *const u8),
+            (1, false, true, true)
+        );
 
         let empty = alloc_text(b"");
         assert!(empty.data.is_null());
-        assert_eq!(header_of(empty.data as *const u8), (0, 1));
+        assert_eq!(header_bits(empty.data as *const u8), (0, true, true, true));
     }
 
     #[test]
@@ -719,12 +748,15 @@ mod tests {
         let (ap, al) = text_of("ab");
         let (bp, bl) = text_of("cd");
         let both_ascii = __text_concat(ap, al, bp, bl);
-        assert_eq!(header_of(both_ascii.data as *const u8), (4, 1));
+        assert_eq!(
+            header_bits(both_ascii.data as *const u8),
+            (4, true, true, true)
+        );
         assert_eq!(unsafe { slice_str(both_ascii) }, "abcd");
 
         let (ep, el) = text_of("é");
         let mixed = __text_concat(ap, al, ep, el);
-        assert_eq!(header_of(mixed.data as *const u8), (3, 0));
+        assert_eq!(header_bits(mixed.data as *const u8), (3, false, true, true));
     }
 
     #[test]
@@ -732,15 +764,14 @@ mod tests {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
         let (p, l) = text_of("héllo");
-        assert_eq!(
-            header_of(__text_slice(p, l, 1, 4).data as *const u8),
-            (3, 0)
-        );
+        let sliced = __text_slice(p, l, 1, 4);
+        let (count, ascii, valid_utf8, _) = header_bits(sliced.data as *const u8);
+        assert_eq!((count, ascii, valid_utf8), (3, false, true));
 
         let (ap, al) = text_of("hello");
         assert_eq!(
-            header_of(__text_slice(ap, al, 1, 4).data as *const u8),
-            (3, 1)
+            header_bits(__text_slice(ap, al, 1, 4).data as *const u8),
+            (3, true, true, true)
         );
     }
 
@@ -753,18 +784,30 @@ mod tests {
         let parts = __text_split(hp, hl, comma_p, comma_l);
         let elems =
             unsafe { std::slice::from_raw_parts(parts.data as *const QlSlice, parts.len as usize) };
-        assert_eq!(header_of(elems[0].data as *const u8), (5, 0));
-        assert_eq!(header_of(elems[1].data as *const u8), (5, 1));
+        assert_eq!(
+            header_bits(elems[0].data as *const u8),
+            (5, false, true, true)
+        );
+        assert_eq!(
+            header_bits(elems[1].data as *const u8),
+            (5, true, true, true)
+        );
 
         let (rp, rl) = text_of("a-a-a");
         let (from_p, from_l) = text_of("a");
         let (to_p, to_l) = text_of("é");
         let replaced_all = __text_replace_all(rp, rl, from_p, from_l, to_p, to_l, std::ptr::null());
-        assert_eq!(header_of(replaced_all.data as *const u8), (5, 0));
+        assert_eq!(
+            header_bits(replaced_all.data as *const u8),
+            (5, false, true, true)
+        );
 
         let (x_p, x_l) = text_of("x");
         let replaced = __text_replace(rp, rl, from_p, from_l, x_p, x_l, 1.0, std::ptr::null());
-        assert_eq!(header_of(replaced.data as *const u8), (5, 1));
+        assert_eq!(
+            header_bits(replaced.data as *const u8),
+            (5, true, true, true)
+        );
     }
 
     #[test]
@@ -791,7 +834,10 @@ mod tests {
             sep_l,
         );
         // "ab" (2) + "," (1) + "é" (1) = 4 graphemes; not ASCII-aligned, since "é" isn't.
-        assert_eq!(header_of(joined.data as *const u8), (4, 0));
+        assert_eq!(
+            header_bits(joined.data as *const u8),
+            (4, false, true, true)
+        );
         assert_eq!(unsafe { slice_str(joined) }, "ab,é");
 
         let empty: [QlSlice; 0] = [];

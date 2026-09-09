@@ -40,8 +40,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// The header'd global constant `build_text_constant` and `constant_text` both use.
     pub(super) fn text_header_global(&mut self, value: &str, name: &str) -> PointerValue<'ctx> {
         let i64t = self.context.i64_type();
-        let (count, flags) = quilon_rt::mem::text_header(value.as_bytes());
-        let bytes = self.context.const_string(value.as_bytes(), false);
+        let (count, flags) = quilon_rt::mem::literal_header(value.as_bytes());
+        let bytes = self.context.const_string(value.as_bytes(), true);
         let header_ty = self
             .context
             .struct_type(&[i64t.into(), i64t.into(), bytes.get_type().into()], false);

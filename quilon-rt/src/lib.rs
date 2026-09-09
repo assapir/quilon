@@ -275,10 +275,11 @@ pub(crate) mod test_support {
     /// [`text_of`] for bytes that need not be valid UTF-8.
     pub(crate) fn text_of_bytes(bytes: &[u8]) -> (*const u8, i64) {
         let (count, flags) = crate::mem::text_header(bytes);
-        let mut buf = Vec::with_capacity(16 + bytes.len());
+        let mut buf = Vec::with_capacity(16 + bytes.len() + 1);
         buf.extend_from_slice(&count.to_ne_bytes());
         buf.extend_from_slice(&flags.to_ne_bytes());
         buf.extend_from_slice(bytes);
+        buf.push(0);
         let leaked: &'static [u8] = Box::leak(buf.into_boxed_slice());
         (leaked.as_ptr(), bytes.len() as i64)
     }
