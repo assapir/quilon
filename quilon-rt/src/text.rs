@@ -14,9 +14,9 @@
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{
-    QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_buffer, alloc_text_with_count,
-    format_num, inherited_flags, text_header_of, text_is_ascii, text_is_valid_utf8,
-    text_no_bidi_controls,
+    GRAPHEME_MERGE_FLOOR, QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_buffer,
+    alloc_text_with_count, format_num, inherited_flags, text_header_of, text_is_ascii,
+    text_is_valid_utf8, text_no_bidi_controls,
 };
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
@@ -395,8 +395,13 @@ pub extern "C" fn __text_replace(
 /// The grapheme count and ASCII-aligned bit for `left ++ right`, correcting for a
 /// grapheme that spans the seam — GB3's CR×LF, a combining mark attaching backward,
 /// regional-indicator pairing — that each side's own header can't see across on its own.
-/// `left`/`right` are each side's decoded content; `graphemes(true).next_back()`/`next()`
-/// examine only the boundary, not a full walk, so this stays cheap even for long operands.
+/// `left`/`right` are each side's decoded content.
+///
+/// A boundary char below [`GRAPHEME_MERGE_FLOOR`] (and not the CR×LF pair) can never
+/// merge with its neighbor, so `chars().next_back()`/`next()` — O(1) on UTF-8, since a
+/// char decodes from at most 4 bytes at either end — answer the overwhelmingly common
+/// case with no grapheme work at all; only a boundary at or above the floor takes the
+/// window path (a combining mark, ZWJ, variation selector, or regional indicator).
 fn seam_corrected(
     left: &str,
     l_count: i64,
@@ -410,6 +415,14 @@ fn seam_corrected(
     }
     if right.is_empty() {
         return (l_count, l_ascii);
+    }
+    let last_char = left.chars().next_back().unwrap_or('\0');
+    let first_char = right.chars().next().unwrap_or('\0');
+    if last_char < GRAPHEME_MERGE_FLOOR
+        && first_char < GRAPHEME_MERGE_FLOOR
+        && !(last_char == '\r' && first_char == '\n')
+    {
+        return (l_count + r_count, l_ascii && r_ascii);
     }
     let left_last = left.graphemes(true).next_back().unwrap_or("");
     let right_first = right.graphemes(true).next().unwrap_or("");
@@ -459,12 +472,16 @@ pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rle
     let (r_count, r_flags) = text_header_of(rptr);
     let l_ascii = llen <= 0 || text_is_ascii(l_flags);
     let r_ascii = rlen <= 0 || text_is_ascii(r_flags);
-    let no_bidi = (llen <= 0 || text_no_bidi_controls(l_flags))
-        && (rlen <= 0 || text_no_bidi_controls(r_flags));
     let (count, ascii) = concat_header(
         (lptr, llen, l_count, l_ascii),
         (rptr, rlen, r_count, r_ascii),
     );
+    // ASCII-aligned text is always free of bidi controls by construction
+    // (`is_ascii_grapheme_aligned` sets both bits together), so the overwhelmingly common
+    // ASCII+ASCII path already has its answer; only a non-ASCII operand needs its bit read.
+    let no_bidi = ascii
+        || ((llen <= 0 || text_no_bidi_controls(l_flags))
+            && (rlen <= 0 || text_no_bidi_controls(r_flags)));
     let (slice, content) =
         alloc_text_buffer(total as usize, count, inherited_flags(ascii, no_bidi));
     let l_bytes = byte_slice(lptr, llen);
@@ -497,18 +514,32 @@ fn join_count_with_seams(
                 text.graphemes(true).next_back().unwrap_or("").to_string(),
             ),
             Some((acc_count, acc_trailing)) => {
-                let right_first = text.graphemes(true).next().unwrap_or("");
-                let mut window = String::with_capacity(acc_trailing.len() + right_first.len());
-                window.push_str(&acc_trailing);
-                window.push_str(right_first);
-                let window_count = window.graphemes(true).count() as i64;
-                let new_count = acc_count + count - 2 + window_count;
-                let new_trailing = if window_count == 1 {
-                    window
+                // Same O(1) gate as `seam_corrected`: a boundary char below
+                // GRAPHEME_MERGE_FLOOR can never merge with its neighbor.
+                let left_last_char = acc_trailing.chars().next_back().unwrap_or('\0');
+                let right_first_char = text.chars().next().unwrap_or('\0');
+                if left_last_char < GRAPHEME_MERGE_FLOOR
+                    && right_first_char < GRAPHEME_MERGE_FLOOR
+                    && !(left_last_char == '\r' && right_first_char == '\n')
+                {
+                    (
+                        acc_count + count,
+                        text.graphemes(true).next_back().unwrap_or("").to_string(),
+                    )
                 } else {
-                    text.graphemes(true).next_back().unwrap_or("").to_string()
-                };
-                (new_count, new_trailing)
+                    let right_first = text.graphemes(true).next().unwrap_or("");
+                    let mut window = String::with_capacity(acc_trailing.len() + right_first.len());
+                    window.push_str(&acc_trailing);
+                    window.push_str(right_first);
+                    let window_count = window.graphemes(true).count() as i64;
+                    let new_count = acc_count + count - 2 + window_count;
+                    let new_trailing = if window_count == 1 {
+                        window
+                    } else {
+                        text.graphemes(true).next_back().unwrap_or("").to_string()
+                    };
+                    (new_count, new_trailing)
+                }
             }
         });
     };
@@ -907,6 +938,21 @@ mod tests {
         let (ep, el) = text_of("é");
         let mixed = __text_concat(ap, al, ep, el);
         assert_eq!(header_bits(mixed.data as *const u8), (3, false, true, true));
+    }
+
+    #[test]
+    fn concat_gate_skips_grapheme_work_when_both_boundary_chars_are_plain_letters() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        // Both operands are non-ASCII (each carries its own accented letter), but the
+        // seam itself sits between two plain letters ('o' | 'w'), below
+        // GRAPHEME_MERGE_FLOOR, so `seam_corrected` takes the O(1) gate, not the window.
+        let (lp, ll) = text_of("héllo");
+        let (rp, rl) = text_of("wörld");
+        let joined = __text_concat(lp, ll, rp, rl);
+        let (want, _) = crate::mem::text_header("héllowörld".as_bytes());
+        assert_eq!(want, 10);
+        assert_eq!(header_of(joined.data as *const u8).0, want);
     }
 
     #[test]

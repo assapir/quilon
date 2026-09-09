@@ -401,6 +401,13 @@ fn is_ascii_grapheme_aligned(bytes: &[u8]) -> bool {
     bytes.is_ascii() && !bytes.contains(&b'\r')
 }
 
+/// Below this code point there are no combining marks, ZWJ sequences, variation
+/// selectors, regional indicators, Hangul jamo, or bidi controls — every char at or
+/// above it is a candidate for merging with a neighbor into one grapheme cluster (or
+/// for being a bidi control); every char below it never is, except `\r` immediately
+/// followed by `\n` (GB3), which sits below this boundary too and needs its own check.
+pub(crate) const GRAPHEME_MERGE_FLOOR: char = '\u{0300}';
+
 /// Every header bit free in the pass a producer already makes over `bytes`.
 pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     if is_ascii_grapheme_aligned(bytes) {
@@ -413,9 +420,7 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     };
     let mut flags = if valid_utf8 { TEXT_VALID_UTF8 } else { 0 };
 
-    // One pass: below U+0300 there are no combining marks, ZWJ, variation selectors,
-    // regional indicators, or bidi controls, so every char is its own grapheme — except a
-    // `\r` immediately followed by `\n` (GB3), which sits below that boundary too.
+    // One pass over every char below GRAPHEME_MERGE_FLOOR: each is its own grapheme.
     let mut char_count: i64 = 0;
     let mut max_char = '\0';
     let mut has_cr = false;
@@ -424,7 +429,7 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
         max_char = max_char.max(ch);
         has_cr |= ch == '\r';
     }
-    if max_char < '\u{0300}' && !has_cr {
+    if max_char < GRAPHEME_MERGE_FLOOR && !has_cr {
         return (char_count, flags | TEXT_NO_BIDI_CONTROLS);
     }
 
