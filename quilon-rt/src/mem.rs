@@ -394,8 +394,11 @@ pub(crate) fn text_header_of(ptr: *const u8) -> (i64, i64) {
     }
 }
 
+/// A lone `\r` disqualifies ASCII-aligned the same as a `\r\n` pair does, trading a
+/// vanishingly rare false negative (a bare `\r`, alone, is still one grapheme's worth of
+/// one byte) for `contains`'s memchr scan over the two-byte window check.
 fn is_ascii_grapheme_aligned(bytes: &[u8]) -> bool {
-    bytes.is_ascii() && !bytes.windows(2).any(|pair| pair == b"\r\n")
+    bytes.is_ascii() && !bytes.contains(&b'\r')
 }
 
 /// Every header bit free in the pass a producer already makes over `bytes`.
@@ -408,11 +411,24 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
         Ok(s) => (std::borrow::Cow::Borrowed(s), true),
         Err(_) => (String::from_utf8_lossy(bytes), false),
     };
-    let count = text.graphemes(true).count() as i64;
-    let mut flags = 0;
-    if valid_utf8 {
-        flags |= TEXT_VALID_UTF8;
+    let mut flags = if valid_utf8 { TEXT_VALID_UTF8 } else { 0 };
+
+    // One pass: below U+0300 there are no combining marks, ZWJ, variation selectors,
+    // regional indicators, or bidi controls, so every char is its own grapheme — except a
+    // `\r` immediately followed by `\n` (GB3), which sits below that boundary too.
+    let mut char_count: i64 = 0;
+    let mut max_char = '\0';
+    let mut has_cr = false;
+    for ch in text.chars() {
+        char_count += 1;
+        max_char = max_char.max(ch);
+        has_cr |= ch == '\r';
     }
+    if max_char < '\u{0300}' && !has_cr {
+        return (char_count, flags | TEXT_NO_BIDI_CONTROLS);
+    }
+
+    let count = text.graphemes(true).count() as i64;
     if !text.chars().any(crate::bidi::is_bidi_control) {
         flags |= TEXT_NO_BIDI_CONTROLS;
     }
@@ -434,23 +450,39 @@ pub fn literal_header(bytes: &[u8]) -> (i64, i64) {
 /// already zeroes. `data` points AT the header, not past it, so a debugger's `p *t.data`
 /// shows every field alongside the bytes. Written once, here, for every producer.
 pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QlSlice {
-    let len = bytes.len();
+    let (slice, content) = alloc_text_buffer(bytes.len(), count, flags);
+    if !content.is_null() {
+        // SAFETY: `content` has room for exactly `bytes.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), content, bytes.len()) };
+    }
+    slice
+}
+
+/// The allocation `alloc_text_with_header` makes, split from the copy: `len` bytes of
+/// header and trailing NUL already written, and a pointer to the `len` content bytes
+/// still to fill — a producer building its content from more than one source (`+`, `join`)
+/// writes each piece straight into place instead of assembling a Vec first. `content` is
+/// null exactly when `len == 0` (the empty text, which needs no buffer).
+pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QlSlice, *mut u8) {
     if len == 0 {
-        return QlSlice::empty();
+        return (QlSlice::empty(), std::ptr::null_mut());
     }
     let buf = __alloc(TEXT_HEADER_BYTES + len as i64 + 1) as *mut u8;
     // SAFETY: `__alloc` returned at least that many writable bytes, zeroed (the trailing
     // NUL, at index `len`, needs no write of its own).
-    unsafe {
+    let content = unsafe {
         let header = buf as *mut i64;
         header.write(count);
         header.add(1).write(flags);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.add(TEXT_HEADER_BYTES as usize), len);
-    }
-    QlSlice {
-        data: buf as *const c_void,
-        len: len as i64,
-    }
+        buf.add(TEXT_HEADER_BYTES as usize)
+    };
+    (
+        QlSlice {
+            data: buf as *const c_void,
+            len: len as i64,
+        },
+        content,
+    )
 }
 
 /// [`alloc_text_with_header`] when `count` is already known (`slice`, `at`) and `bytes` is
@@ -713,6 +745,35 @@ mod tests {
         assert!(!text_is_ascii(flags));
         assert!(text_is_valid_utf8(flags));
         assert!(!text_no_bidi_controls(flags));
+    }
+
+    /// The direct grapheme walk `text_header` falls back to when its below-U+0300 fast
+    /// path does not apply — the reference every fast-path count is checked against.
+    fn walk_count(s: &str) -> i64 {
+        s.graphemes(true).count() as i64
+    }
+
+    #[test]
+    fn below_u0300_fast_path_matches_the_grapheme_walk() {
+        for s in ["äb", "héllo wörld", "日本"] {
+            let (count, _) = text_header(s.as_bytes());
+            assert_eq!(count, walk_count(s), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn a_combining_mark_still_counts_one_grapheme() {
+        // "e" + a combining acute (U+0301, at the fast path's own boundary) is one
+        // grapheme, not two — the fast path must not apply here.
+        let (count, flags) = text_header("e\u{0301}".as_bytes());
+        assert_eq!(count, 1);
+        assert!(text_no_bidi_controls(flags));
+    }
+
+    #[test]
+    fn a_flag_emoji_still_counts_one_grapheme() {
+        let (count, _) = text_header("🇮🇱".as_bytes());
+        assert_eq!(count, 1);
     }
 
     #[test]

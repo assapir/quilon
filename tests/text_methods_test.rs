@@ -943,6 +943,17 @@ fn plus_concatenates_scripts_in_logical_order() {
 }
 
 #[test]
+fn plus_merges_a_grapheme_that_spans_the_concatenation_seam() {
+    // "ab\r" + "\ncd": the `\r`/`\n` at the seam merge into one grapheme cluster (GB3),
+    // so the concatenation is 5 graphemes ("a", "b", "\r\n", "c", "d"), not 6 — and
+    // `slice`/`at` at that grapheme index return the merged pair, not half of it.
+    assert_exit(
+        "^ = () -> Num => <\n  joined = \"ab\\r\" + \"\\ncd\"\n  lengthOk = joined.length == 5 ? 1 : 0\n  sliceOk = joined.slice(2, 3) == \"\\r\\n\" ? 1 : 0\n  atOk = (joined.at(2) ? | Ok(g) => g | NotOk(_) => \"\") == \"\\r\\n\" ? 1 : 0\n  lengthOk * 100 + sliceOk * 10 + atOk\n>",
+        111,
+    );
+}
+
+#[test]
 fn split_a_mixed_direction_sentence_keeps_logical_piece_order() {
     // A mixed sentence with punctuation: the three comma-separated pieces come back in the
     // order they were TYPED — Hebrew, then Arabic, then the Latin word.

@@ -14,9 +14,9 @@
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{
-    QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_with_count,
-    alloc_text_with_header, format_num, inherited_flags, text_header_of, text_is_ascii,
-    text_is_valid_utf8, text_no_bidi_controls,
+    QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_buffer, alloc_text_with_count,
+    format_num, inherited_flags, text_header_of, text_is_ascii, text_is_valid_utf8,
+    text_no_bidi_controls,
 };
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
@@ -392,7 +392,62 @@ pub extern "C" fn __text_replace(
     }
 }
 
-/// Backs `Text` `+`. No walk: both operands' counts/flags are already known.
+/// The grapheme count and ASCII-aligned bit for `left ++ right`, correcting for a
+/// grapheme that spans the seam — GB3's CR×LF, a combining mark attaching backward,
+/// regional-indicator pairing — that each side's own header can't see across on its own.
+/// `left`/`right` are each side's decoded content; `graphemes(true).next_back()`/`next()`
+/// examine only the boundary, not a full walk, so this stays cheap even for long operands.
+fn seam_corrected(
+    left: &str,
+    l_count: i64,
+    l_ascii: bool,
+    right: &str,
+    r_count: i64,
+    r_ascii: bool,
+) -> (i64, bool) {
+    if left.is_empty() {
+        return (r_count, r_ascii);
+    }
+    if right.is_empty() {
+        return (l_count, l_ascii);
+    }
+    let left_last = left.graphemes(true).next_back().unwrap_or("");
+    let right_first = right.graphemes(true).next().unwrap_or("");
+    let mut window = String::with_capacity(left_last.len() + right_first.len());
+    window.push_str(left_last);
+    window.push_str(right_first);
+    let window_count = window.graphemes(true).count() as i64;
+    let count = l_count + r_count - 2 + window_count;
+    let ascii = l_ascii && r_ascii && !(left_last == "\r" && right_first == "\n");
+    (count, ascii)
+}
+
+/// [`seam_corrected`], from a `Text`'s own header pointer/length rather than pre-decoded
+/// content — the fast path both `+` and `join` take: two ASCII-aligned operands never
+/// carry a `\r` at all (`is_ascii_grapheme_aligned`), so their seam can never merge and the
+/// counts add exactly, with no decode.
+fn concat_header(
+    left: (*const u8, i64, i64, bool),
+    right: (*const u8, i64, i64, bool),
+) -> (i64, bool) {
+    let (lptr, llen, l_count, l_ascii) = left;
+    let (rptr, rlen, r_count, r_ascii) = right;
+    if llen <= 0 {
+        return (r_count, r_ascii);
+    }
+    if rlen <= 0 {
+        return (l_count, l_ascii);
+    }
+    if l_ascii && r_ascii {
+        return (l_count + r_count, true);
+    }
+    let left = text_str(lptr, llen);
+    let right = text_str(rptr, rlen);
+    seam_corrected(&left, l_count, l_ascii, &right, r_count, r_ascii)
+}
+
+/// Backs `Text` `+`. No walk on the (overwhelmingly common) ASCII-aligned path; one
+/// allocation either way, filled by two direct copies (no intermediate buffer).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rlen: i64) -> QlSlice {
@@ -402,17 +457,74 @@ pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rle
     }
     let (l_count, l_flags) = text_header_of(lptr);
     let (r_count, r_flags) = text_header_of(rptr);
-    let ascii = (llen <= 0 || text_is_ascii(l_flags)) && (rlen <= 0 || text_is_ascii(r_flags));
+    let l_ascii = llen <= 0 || text_is_ascii(l_flags);
+    let r_ascii = rlen <= 0 || text_is_ascii(r_flags);
     let no_bidi = (llen <= 0 || text_no_bidi_controls(l_flags))
         && (rlen <= 0 || text_no_bidi_controls(r_flags));
-    let mut bytes = Vec::with_capacity(total as usize);
-    bytes.extend_from_slice(byte_slice(lptr, llen));
-    bytes.extend_from_slice(byte_slice(rptr, rlen));
-    alloc_text_with_header(&bytes, l_count + r_count, inherited_flags(ascii, no_bidi))
+    let (count, ascii) = concat_header(
+        (lptr, llen, l_count, l_ascii),
+        (rptr, rlen, r_count, r_ascii),
+    );
+    let (slice, content) =
+        alloc_text_buffer(total as usize, count, inherited_flags(ascii, no_bidi));
+    let l_bytes = byte_slice(lptr, llen);
+    let r_bytes = byte_slice(rptr, rlen);
+    // SAFETY: `content` has room for exactly `l_bytes.len() + r_bytes.len()` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(l_bytes.as_ptr(), content, l_bytes.len());
+        std::ptr::copy_nonoverlapping(r_bytes.as_ptr(), content.add(l_bytes.len()), r_bytes.len());
+    }
+    slice
+}
+
+/// [`seam_corrected`], folded left to right over `[]Text.join`'s pieces and separators —
+/// the same seam a chain of `+` would see at each junction. Only reached when at least one
+/// piece or the separator is not ASCII-aligned (`__text_join`'s own fast path otherwise).
+fn join_count_with_seams(
+    parts: &[QlSlice],
+    sep_ptr: *const u8,
+    sep_len: i64,
+    sep_count: i64,
+) -> i64 {
+    let mut acc: Option<(i64, String)> = None;
+    let mut fold = |text: &str, count: i64| {
+        if text.is_empty() {
+            return;
+        }
+        acc = Some(match acc.take() {
+            None => (
+                count,
+                text.graphemes(true).next_back().unwrap_or("").to_string(),
+            ),
+            Some((acc_count, acc_trailing)) => {
+                let right_first = text.graphemes(true).next().unwrap_or("");
+                let mut window = String::with_capacity(acc_trailing.len() + right_first.len());
+                window.push_str(&acc_trailing);
+                window.push_str(right_first);
+                let window_count = window.graphemes(true).count() as i64;
+                let new_count = acc_count + count - 2 + window_count;
+                let new_trailing = if window_count == 1 {
+                    window
+                } else {
+                    text.graphemes(true).next_back().unwrap_or("").to_string()
+                };
+                (new_count, new_trailing)
+            }
+        });
+    };
+    for (i, part) in parts.iter().enumerate() {
+        let (part_count, _) = text_header_of(part.data as *const u8);
+        fold(&text_str(part.data as *const u8, part.len), part_count);
+        if i + 1 < parts.len() {
+            fold(&text_str(sep_ptr, sep_len), sep_count);
+        }
+    }
+    acc.map_or(0, |(count, _)| count)
 }
 
 /// Backs `[]Text.join(separator)`. `parts_ptr` is the array ABI's `data` field:
-/// `parts_len` contiguous `Text` structs.
+/// `parts_len` contiguous `Text` structs. One allocation, filled by a direct copy per
+/// piece and separator (no intermediate buffer).
 ///
 /// # Safety contract (upheld by the compiler)
 /// `parts_ptr` is null or points at `parts_len` contiguous, readable `Text` structs.
@@ -435,25 +547,63 @@ pub extern "C" fn __text_join(
     let sep_ascii = sep_bytes.is_empty() || text_is_ascii(sep_flags);
     let sep_no_bidi = sep_bytes.is_empty() || text_no_bidi_controls(sep_flags);
 
+    let mut total_len: i64 = 0;
     let mut total_count: i64 = 0;
     let mut ascii = true;
     let mut no_bidi = true;
-    let mut joined = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let part_bytes = byte_slice(part.data as *const u8, part.len);
         let (count, flags) = text_header_of(part.data as *const u8);
+        total_len += part_bytes.len() as i64;
         total_count += count;
         ascii &= part_bytes.is_empty() || text_is_ascii(flags);
         no_bidi &= part_bytes.is_empty() || text_no_bidi_controls(flags);
-        joined.extend_from_slice(part_bytes);
         if i + 1 < parts.len() {
+            total_len += sep_bytes.len() as i64;
             total_count += sep_count;
             ascii &= sep_ascii;
             no_bidi &= sep_no_bidi;
-            joined.extend_from_slice(sep_bytes);
         }
     }
-    alloc_text_with_header(&joined, total_count, inherited_flags(ascii, no_bidi))
+    // Every ASCII-aligned piece and separator carries zero `\r` bytes, so no seam can ever
+    // merge and the naive sum above is already exact; only a non-ASCII join needs the fold.
+    if !ascii {
+        total_count = join_count_with_seams(parts, sep_ptr, sep_len, sep_count);
+    }
+
+    let (slice, content) = alloc_text_buffer(
+        total_len as usize,
+        total_count,
+        inherited_flags(ascii, no_bidi),
+    );
+    let mut offset = 0usize;
+    for (i, part) in parts.iter().enumerate() {
+        if content.is_null() {
+            break; // `total_len == 0`: every piece and separator is empty, nothing to copy.
+        }
+        let part_bytes = byte_slice(part.data as *const u8, part.len);
+        // SAFETY: `content` has room for `total_len` bytes, and `offset` never exceeds it.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                part_bytes.as_ptr(),
+                content.add(offset),
+                part_bytes.len(),
+            )
+        };
+        offset += part_bytes.len();
+        if i + 1 < parts.len() {
+            // SAFETY: same as above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    sep_bytes.as_ptr(),
+                    content.add(offset),
+                    sep_bytes.len(),
+                )
+            };
+            offset += sep_bytes.len();
+        }
+    }
+    slice
 }
 
 #[cfg(test)]
@@ -757,6 +907,83 @@ mod tests {
         let (ep, el) = text_of("é");
         let mixed = __text_concat(ap, al, ep, el);
         assert_eq!(header_bits(mixed.data as *const u8), (3, false, true, true));
+    }
+
+    #[test]
+    fn concat_merges_a_combining_mark_spanning_the_seam() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (lp, ll) = text_of("e");
+        let (rp, rl) = text_of("\u{0301}");
+        let joined = __text_concat(lp, ll, rp, rl);
+        let (want, _) = crate::mem::text_header("e\u{0301}".as_bytes());
+        assert_eq!(want, 1);
+        assert_eq!(header_of(joined.data as *const u8).0, want);
+    }
+
+    #[test]
+    fn concat_merges_cr_lf_spanning_the_seam_and_drops_the_ascii_bit() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (lp, ll) = text_of("\r");
+        let (rp, rl) = text_of("\n");
+        let joined = __text_concat(lp, ll, rp, rl);
+        let (want, want_flags) = crate::mem::text_header("\r\n".as_bytes());
+        assert_eq!(want, 1);
+        let (count, ascii, _, _) = header_bits(joined.data as *const u8);
+        assert_eq!(count, want);
+        assert_eq!(ascii, text_is_ascii(want_flags));
+    }
+
+    #[test]
+    fn concat_across_a_cr_lf_seam_slices_the_merged_grapheme_correctly() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (lp, ll) = text_of("ab\r");
+        let (rp, rl) = text_of("\ncd");
+        let joined = __text_concat(lp, ll, rp, rl);
+        // "ab\r\ncd": graphemes a(0) b(1) [\r\n](2) c(3) d(4) — 5 graphemes, not 6.
+        assert_eq!(header_of(joined.data as *const u8).0, 5);
+        let third = __text_slice(joined.data as *const u8, joined.len, 2, 3);
+        assert_eq!(unsafe { slice_str(third) }, "\r\n");
+        let at2 = __text_at(joined.data as *const u8, joined.len, 2);
+        assert_eq!(unsafe { slice_str(at2) }, "\r\n");
+    }
+
+    #[test]
+    fn concat_pairs_regional_indicators_spanning_the_seam() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (lp, ll) = text_of("🇦");
+        let (rp, rl) = text_of("🇧🇨");
+        let joined = __text_concat(lp, ll, rp, rl);
+        assert_eq!(header_of(joined.data as *const u8).0, 2);
+    }
+
+    #[test]
+    fn join_merges_a_grapheme_spanning_a_part_and_the_separator() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let (ep, el) = text_of("e");
+        let (mp, ml) = text_of("\u{0301}");
+        let parts = [
+            QlSlice {
+                data: ep as *const c_void,
+                len: el,
+            },
+            QlSlice {
+                data: mp as *const c_void,
+                len: ml,
+            },
+        ];
+        let (sep_p, sep_l) = text_of("");
+        let joined = __text_join(
+            parts.as_ptr() as *const c_void,
+            parts.len() as i64,
+            sep_p,
+            sep_l,
+        );
+        assert_eq!(header_of(joined.data as *const u8).0, 1);
     }
 
     #[test]

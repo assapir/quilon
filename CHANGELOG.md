@@ -18,7 +18,10 @@ All notable changes to Quilon are documented here.
   UTF-8, a compile-time literal, no Unicode bidi control characters — plus a trailing NUL
   byte after the content, which lets a `--debug` build's C-string thunk hand a debugger
   the bytes with no copy. A decode (`` ` ``, `print`, every Text-method intrinsic) skips
-  its own UTF-8 validation pass when the header already answers it. See
+  its own UTF-8 validation pass when the header already answers it. `+` and `join` fill
+  one allocation directly (no intermediate buffer), and correct their header for a
+  grapheme that spans the seam — a combining mark, a `\r`/`\n` pair, a paired regional
+  indicator — that neither side's own header can see across on its own. See
   `docs/status/abi.md#text-storage` and `docs/types/text.md#cost`.
 - **`[]Text.join(separator)`, the reverse of `split`.** One native intrinsic: every
   element back to back with `separator` between consecutive ones; `[].join(sep)` is `""`.
