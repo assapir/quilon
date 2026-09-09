@@ -43,6 +43,9 @@ pub struct Parser<'a> {
     /// is a hashable value and is never a function, so lambda detection is suppressed for
     /// the whole key expression while this is set (see `parse_fence_key`).
     suppress_lambda: bool,
+    /// An arm body is the one undelimited position where a nested match's arms would
+    /// be read as ours.
+    bare_match_forbidden: bool,
     /// Every module-path spelling the `<<` lines above the cursor have bound — the short
     /// binding (`http`, a file's stem) and the full dotted path (`core.http`) — mapped to
     /// the module's canonical name. A same-line `Ident (. Ident)* . Ident` chain whose
@@ -117,6 +120,7 @@ impl<'a> Parser<'a> {
             file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
             span_base: 0,
             suppress_lambda: false,
+            bare_match_forbidden: false,
             module_paths: std::collections::HashMap::new(),
         }
     }

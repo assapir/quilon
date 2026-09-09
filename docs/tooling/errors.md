@@ -102,6 +102,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN111 | bare expression as a function body |
 | QN112 | `>>` where two block closers were meant |
 | QN113 | disallowed character glued to a name |
+| QN114 | match used as a match-arm body without parentheses |
 | QN200 | `@` primitive declared outside the corelib |
 | QN201 | missing module |
 | QN202 | private member reached through its module |
@@ -397,6 +398,24 @@ isEmpty? = () -> Bool => < true >
 Drop the character, or fold a `-`-joined continuation into the name: `isEmpty` (not
 `isEmpty?`), `myCount` (not `my-count`). The `help:` line names the fix for the exact name
 at hand.
+
+### QN114 — match used as a match-arm body without parentheses
+
+A match arm's body is itself a match, written bare. The inner match's `|` arm loop reads
+past its own arms and keeps consuming the outer match's, since both use `|` and nothing
+marks where the inner one ends.
+
+```quilon ignore
+Snack = Popcorn(Num) / Pretzel(Num)
+craving = (choice :: Snack, size :: Num) -> Num => < choice ?
+  | Popcorn(n) => size ? | 0 => n | _ => n * 2
+  | Pretzel(n) => n
+>
+```
+
+Parenthesize the nested match: `| Popcorn(n) => (size ? | 0 => n | _ => n * 2)`. A match
+nested inside a block, a call argument, or a ternary branch is already delimited and needs
+no parentheses of its own.
 
 ## Imports
 

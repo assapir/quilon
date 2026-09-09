@@ -16,7 +16,12 @@ impl<'a> Parser<'a> {
 
             let pattern = self.parse_pattern()?;
             self.expect(&TokenKind::Arrow)?;
-            let body = self.parse_expression()?;
+            // Bypasses `parse_expression`'s funnel, which would clear the flag.
+            let previous_bare_match_forbidden = self.bare_match_forbidden;
+            self.bare_match_forbidden = true;
+            let body = self.nested(Self::parse_assignment);
+            self.bare_match_forbidden = previous_bare_match_forbidden;
+            let body = body?;
             let arm_span = self.span(pattern.span().start, body.span().end);
 
             arms.push(crate::ast::MatchArm {
