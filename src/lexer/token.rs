@@ -139,12 +139,17 @@ pub enum BidiIssue {
     Outside(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum TokenLexError {
     #[default]
     InvalidToken,
     UnterminatedString,
     Bidi(BidiIssue),
+    /// A number glued to `e`/`E`, an optional sign, and (usually) digits — the exponent
+    /// grammar this language does not have. `Some(rendered)` carries the literal's value
+    /// written out in plain decimal, when the exponent parsed to one (a bare `1e` with no
+    /// digits at all does not).
+    ScientificNotation(Option<String>),
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
@@ -168,7 +173,12 @@ pub enum TokenKind {
     )]
     StrayBidiControl,
 
-    // Literals
+    // Literals. The grammar has no exponent, so a plain literal glued to `e`/`E` (`1e9`,
+    // `1.5e-3`) is caught here — its match is strictly longer than the plain-number regex
+    // below would produce at the same position, so it always wins — and turned into
+    // `TokenLexError::ScientificNotation` rather than left to fall apart into a number and
+    // a stray identifier.
+    #[regex(r"[0-9]+\.?[0-9]*[eE][+-]?[0-9]*", lex_scientific_notation)]
     #[regex(r"[0-9]+\.?[0-9]*", |lex| lex.slice().parse().ok().map(NumLit))]
     Number(NumLit),
 
@@ -425,6 +435,20 @@ impl TokenKind {
                 | TokenKind::Not
         )
     }
+}
+
+/// A number glued to an exponent (`1e9`, `1.5e-3`, a bare `1e`) always fails: this
+/// language's `Num` literal has no exponent syntax. `f64`'s own parser already accepts the
+/// exponent grammar we want to reject, so it doubles as the renderer — a literal it parses
+/// becomes the diagnostic's plain-decimal "write this instead" value; one it cannot (the
+/// exponent has no digits at all, `1e` or `1e+`) reports with no such value.
+fn lex_scientific_notation(lex: &mut logos::Lexer<TokenKind>) -> Result<NumLit, TokenLexError> {
+    let rendered = lex
+        .slice()
+        .parse::<f64>()
+        .ok()
+        .map(|value| format!("{value}"));
+    Err(TokenLexError::ScientificNotation(rendered))
 }
 
 /// Lex a `~` comment (the whole rest of its line, already matched by the regex) and

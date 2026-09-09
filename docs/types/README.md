@@ -18,6 +18,11 @@ y = 3.14
 z = x + y          ~ mixed arithmetic
 ```
 
+A `Num` literal is digits with an optional fraction (`42`, `3.14`) — plain decimal, written
+out in full. A literal glued to an exponent (`1e9`) is a
+[QN005](../tooling/errors.md#qn005--scientific-notation-literal); write its plain-decimal
+value instead (`1000000000`).
+
 ### The exact-integer limit
 A `Num` is a double, and represents every whole number exactly up to **2^53**
 (`9007199254740992`). Past that, consecutive integers collide — 2^53 + 1 reads back as

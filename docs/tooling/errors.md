@@ -87,6 +87,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN002 | invalid token |
 | QN003 | unterminated string literal |
 | QN004 | misplaced bidirectional control character |
+| QN005 | scientific notation literal |
 | QN100 | unexpected token |
 | QN101 | expression nesting too deep |
 | QN102 | too many parameters |
@@ -227,6 +228,17 @@ x = 1 ‮ + 2
 
 Keep bidirectional controls inside string literals and comments, and close every opener
 before the literal or comment ends.
+
+### QN005 — scientific notation literal
+
+A `Num` literal is glued to `e` or `E`, an optional `+`/`-`, and digits — the exponent
+notation this grammar's literal syntax stops short of.
+
+```quilon ignore
+price = 1.5e-3
+```
+
+Write the value in plain decimal: `price = 0.0015`.
 
 ## Parser
 

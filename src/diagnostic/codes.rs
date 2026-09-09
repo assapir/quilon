@@ -42,6 +42,7 @@ codes! {
     InvalidToken = 2 => "invalid token",
     UnterminatedString = 3 => "unterminated string literal",
     BidiControl = 4 => "misplaced bidirectional control character",
+    ScientificNotation = 5 => "scientific notation literal",
 
     // Family 1 — parser
     UnexpectedToken = 100 => "unexpected token",
