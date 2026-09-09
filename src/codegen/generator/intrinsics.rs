@@ -104,8 +104,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__envp_to_map" => ptr.fn_type(&[ptr.into()], false),
             // Text primitives. A `Text`/`[]Text` result is the `{ ptr, i64 }` struct; a
             // `Text` argument is passed as its (ptr, i64) fields. Only the true primitives
-            // live here — the composable methods (`trim`/`contains`/`replace`/`repeat`)
-            // are Quilon (`corelib/text.qn`). See `quilon-rt`.
+            // live here — the composable methods (`trim`/`contains`/`repeat`) are Quilon
+            // (`corelib/text.qn`). See `quilon-rt`.
             // { ptr, i64 } trimStart / trimEnd / toUpper / toLower / graphemes (i8*, i64);
             // `graphemes` yields a `[]Text` of the grapheme clusters.
             "__text_trim_start" | "__text_trim_end" | "__text_to_upper" | "__text_to_lower"
@@ -144,6 +144,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                     i64t.into(),
                     ptr.into(),
                     i64t.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
+            // { ptr, i64 } __text_replace(i8* hay, i64, i8* from, i64, i8* to, i64, double
+            // count, Site* site) — the first `count` occurrences of `from` replaced by
+            // `to`; `site` is where an empty `from` or an invalid `count` is reported.
+            "__text_replace" => self.ptr_len_struct_type().fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    f64t.into(),
                     ptr.into(),
                 ],
                 false,

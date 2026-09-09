@@ -627,6 +627,7 @@ pub fn is_text_method(name: &str) -> bool {
                 | "slice"
                 | "split"
                 | "replaceAll"
+                | "replace"
                 | "at"
                 | "graphemes"
                 | "toUpper"
@@ -645,7 +646,6 @@ pub fn qn_text_impl(name: &str) -> Option<&'static str> {
     Some(match name {
         "trim" => "core.text.trim",
         "contains" => "core.text.contains",
-        "replace" => "core.text.replace",
         "repeat" => "core.text.repeat",
         _ => return None,
     })

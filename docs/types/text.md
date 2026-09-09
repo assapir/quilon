@@ -80,19 +80,24 @@ another type. `split`/`graphemes` yield a plain `[]Text`, which composes with `.
 to a `Text` with `reduce` + `+`.
 
 The primitives are native: segmentation (`length`/`graphemes`/`at`), `indexOf`,
-`slice`, `split`, `replaceAll`, `trimStart`/`trimEnd`, `toUpper`/`toLower`, comparison,
-and `+`. The composable methods — `trim`, `contains`, `replace`, `repeat` — are ordinary
+`slice`, `split`, `replaceAll`, `replace`, `trimStart`/`trimEnd`, `toUpper`/`toLower`,
+comparison, and `+`. The composable methods — `trim`, `contains`, `repeat` — are ordinary
 Quilon over those (`corelib/text.qn`), merged in by the compiler under its qualified
 names, binding nothing in the program's own scope, when a program uses one. That module
 is the compiler's own: member syntax is the way its methods are reached, and `<< core.text`
 is rejected.
 
 `replace`/`replaceAll`/`repeat` **fail loudly**. Three inputs are rejected: an empty
-`from`; a `replace` `count` that is `<= 0` or exceeds the occurrences present; and a
-negative or fractional `repeat` count. A literal violation is a compile error
-(`"a".replace("a", "b", 0)`, `"aa".replace("a", "b", 5)`). A computed one is a
-[located diagnostic](../tooling/errors.md) at run time, with exit `5`. `replaceAll`
-replaces every occurrence; `replace(count)` replaces exactly `count`.
+`from`, reported as
+[QN506](../tooling/errors.md#qn506--empty-from-in-replacereplaceall); a `replace`
+`count` that is `<= 0` or exceeds the occurrences present, reported as
+[QN510](../tooling/errors.md#qn510--invalid-replace-count); and a negative or
+fractional `repeat` count, reported through `repeat`'s own frame (`repeat` is the one
+composable method left with a fail-loud contract, so its report carries no `QNxxx` code).
+A literal violation is a compile error (`"a".replace("a", "b", 0)`,
+`"aa".replace("a", "b", 5)`). A computed one is a [located diagnostic](../tooling/errors.md)
+at run time, with exit `5`. `replaceAll` replaces every occurrence; `replace(count)`
+replaces exactly `count`.
 
 (See `examples/text.qn` and `examples/text_methods.qn`.)
 

@@ -129,10 +129,11 @@ codes! {
     MatchFailed = 503 => "no arm matched",
     AllocationFailed = 504 => "allocation failed",
     ReadFailed = 505 => "reading stdin failed",
-    ReplaceAllEmptyFrom = 506 => "empty `from` in `replaceAll`",
+    ReplaceEmptyFrom = 506 => "empty `from` in `replace`/`replaceAll`",
     StackOverflow = 507 => "stack overflow",
     WriteFdNotWhole = 508 => "invalid write file descriptor",
     WriteFailed = 509 => "write failed",
+    ReplaceInvalidCount = 510 => "invalid `replace` count",
 }
 
 impl Code {
@@ -304,13 +305,14 @@ mod tests {
         assert_eq!(codes::MATCH_FAILED, Code::MatchFailed.number());
         assert_eq!(codes::ALLOCATION_FAILED, Code::AllocationFailed.number());
         assert_eq!(codes::READ_FAILED, Code::ReadFailed.number());
-        assert_eq!(
-            codes::REPLACE_ALL_EMPTY_FROM,
-            Code::ReplaceAllEmptyFrom.number()
-        );
+        assert_eq!(codes::REPLACE_EMPTY_FROM, Code::ReplaceEmptyFrom.number());
         assert_eq!(codes::STACK_OVERFLOW, Code::StackOverflow.number());
         assert_eq!(codes::WRITE_FD_NOT_WHOLE, Code::WriteFdNotWhole.number());
         assert_eq!(codes::WRITE_FAILED, Code::WriteFailed.number());
+        assert_eq!(
+            codes::REPLACE_INVALID_COUNT,
+            Code::ReplaceInvalidCount.number()
+        );
     }
 
     /// A diagnostic's exit code is its family digit — the rule `main.rs`'s `fail` applies

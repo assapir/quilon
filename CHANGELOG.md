@@ -2,6 +2,19 @@
 
 All notable changes to Quilon are documented here.
 
+## Unreleased
+
+### Added
+
+- **`Text.replace` is a native intrinsic, like `replaceAll`.** Both now report through the
+  runtime's own coded frame: an empty `from` (computed, since a literal one is still a
+  compile error) is
+  [QN506](docs/tooling/errors.md#qn506--empty-from-in-replacereplaceall), naming both
+  methods now that it covers them; a `replace` `count` that is `<= 0` or exceeds the
+  occurrences present is the new
+  [QN510](docs/tooling/errors.md#qn510--invalid-replace-count). See `docs/types/text.md`.
+  Closes #369.
+
 ## 0.11.0 "Rackham" — 2026-09-08
 
 ### Added

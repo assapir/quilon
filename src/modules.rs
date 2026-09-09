@@ -417,8 +417,8 @@ const CORE_INFO: &str = include_str!("../corelib/info.qn");
 /// drift apart from each other.
 pub(crate) const CORELIB_MODULES: &[(&str, &str)] = &[
     ("core.io", CORE_IO),
-    // core.text — the self-hosted composable Text methods (`trim`/`contains`/`replace`/
-    // `repeat`), written in Quilon over the native primitives (which include `split` and
+    // core.text — the self-hosted composable Text methods (`trim`/`contains`/`repeat`),
+    // written in Quilon over the native primitives (which include `split`, `replace`, and
     // `replaceAll`). No program imports it by name: [`link`] merges it implicitly into any
     // program that calls one of those methods, so `Text` still needs no import.
     ("core.text", CORE_TEXT),

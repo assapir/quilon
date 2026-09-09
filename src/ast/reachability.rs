@@ -98,9 +98,9 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
         Expression::Identifier { name, .. } => {
             out.push(name);
             // A Text-method mention reaches the `core.text` function that implements it:
-            // `t.replace(from, to, n)` lowers to a call of `core.text.replace`, whose name
-            // appears nowhere in the source. Over-approximate like everything here — any
-            // mention of `replace` keeps the implementation, Text receiver or not.
+            // `t.trim()` lowers to a call of `core.text.trim`, whose name appears nowhere
+            // in the source. Over-approximate like everything here — any mention of `trim`
+            // keeps the implementation, Text receiver or not.
             if let Some(implementation) = crate::ast::qn_text_impl(name) {
                 out.push(implementation);
             }
