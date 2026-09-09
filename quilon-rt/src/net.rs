@@ -2,8 +2,8 @@
 
 //! Non-blocking TCP for the fiber scheduler.
 //!
-//! [`TcpListener`] and [`TcpStream`] wrap `mio`'s non-blocking sockets and register
-//! them with the reactor's `Poll`. Every op that would block parks the calling fiber
+//! [`TcpStream`] wraps a `mio` non-blocking socket and registers it with the reactor's
+//! `Poll`. Every op that would block parks the calling fiber
 //! (via [`crate::scheduler::park_on_readiness`]) instead of spinning or blocking the OS
 //! thread: it (re)registers the source for the readiness it needs, yields to the
 //! scheduler, and is resumed only when the reactor reports that token ready — exactly
@@ -55,41 +55,6 @@ fn io_loop<S: Source, T>(
             }
             Err(e) => return Err(e),
         }
-    }
-}
-
-/// A non-blocking, reactor-registered TCP listener.
-pub struct TcpListener {
-    inner: mio::net::TcpListener,
-    token: mio::Token,
-}
-
-impl TcpListener {
-    /// Bind and register for read (connection) readiness.
-    pub fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
-        let mut inner = mio::net::TcpListener::bind(addr)?;
-        let token = register_readiness(&mut inner, Interest::READABLE)?;
-        Ok(TcpListener { inner, token })
-    }
-
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.local_addr()
-    }
-
-    /// Accept one connection, parking until a client is ready. The accepted stream is
-    /// registered with the reactor for later read/write parking.
-    pub fn accept(&mut self) -> io::Result<TcpStream> {
-        let (mut inner, _peer) = io_loop(&mut self.inner, self.token, Interest::READABLE, |l| {
-            l.accept()
-        })?;
-        let token = register_readiness(&mut inner, Interest::READABLE)?;
-        Ok(TcpStream { inner, token })
-    }
-}
-
-impl Drop for TcpListener {
-    fn drop(&mut self) {
-        deregister_readiness(&mut self.inner);
     }
 }
 
@@ -307,6 +272,7 @@ mod tests {
     use crate::mem::__alloc;
     use crate::scheduler::{run, sleep, spawn};
     use crate::test_support::GC_LOCK;
+    use std::net::TcpListener;
     use std::os::raw::{c_int, c_void};
     use std::ptr;
     use std::sync::Mutex;
@@ -366,10 +332,6 @@ mod tests {
         done_receiver.recv().unwrap();
     }
 
-    fn loopback() -> SocketAddr {
-        "127.0.0.1:0".parse().unwrap()
-    }
-
     /// Read exactly `buf.len()` bytes, looping over partial reads; errors on early EOF.
     fn read_exact(stream: &mut TcpStream, buf: &mut [u8]) {
         let mut filled = 0;
@@ -382,27 +344,24 @@ mod tests {
 
     #[test]
     fn echo_round_trip_on_one_thread() {
-        static SERVER_DONE: AtomicBool = AtomicBool::new(false);
         static CLIENT_DONE: AtomicBool = AtomicBool::new(false);
         static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-        SERVER_DONE.store(false, Ordering::SeqCst);
         CLIENT_DONE.store(false, Ordering::SeqCst);
         GOT.lock().unwrap().clear();
 
-        on_gc_thread(|| {
-            run(|| {
-                let mut listener = TcpListener::bind(loopback()).unwrap();
-                let addr = listener.local_addr().unwrap();
+        // A blocking std listener on its own OS thread stands in for the peer: accept
+        // one connection and echo back whatever it reads.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4];
+            conn.read_exact(&mut buf).unwrap();
+            conn.write_all(&buf).unwrap();
+        });
 
-                spawn(move || {
-                    let mut conn = listener.accept().unwrap();
-                    let mut buf = [0u8; 4];
-                    read_exact(&mut conn, &mut buf);
-                    // Echo the request straight back.
-                    conn.write_all(&buf).unwrap();
-                    SERVER_DONE.store(true, Ordering::SeqCst);
-                });
-
+        on_gc_thread(move || {
+            run(move || {
                 spawn(move || {
                     let mut stream = TcpStream::connect(addr).unwrap();
                     stream.write_all(b"ping").unwrap();
@@ -414,35 +373,34 @@ mod tests {
             });
         });
 
-        assert!(SERVER_DONE.load(Ordering::SeqCst), "server fiber finished");
+        peer.join().unwrap();
         assert!(CLIENT_DONE.load(Ordering::SeqCst), "client fiber finished");
         assert_eq!(&*GOT.lock().unwrap(), b"ping");
     }
 
     #[test]
     fn reactor_services_sleep_and_socket_together() {
-        // A fiber sleeps while the client/server pair does socket IO: proves one
-        // `Poll::poll` services both the timer and socket readiness.
+        // A fiber sleeps while a client fiber does socket IO against a peer thread:
+        // proves one `Poll::poll` services both the timer and socket readiness.
         static SLEPT: AtomicBool = AtomicBool::new(false);
         static ECHOED: AtomicBool = AtomicBool::new(false);
         SLEPT.store(false, Ordering::SeqCst);
         ECHOED.store(false, Ordering::SeqCst);
 
-        on_gc_thread(|| {
-            run(|| {
-                let mut listener = TcpListener::bind(loopback()).unwrap();
-                let addr = listener.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 5];
+            conn.read_exact(&mut buf).unwrap();
+            conn.write_all(&buf).unwrap();
+        });
 
+        on_gc_thread(move || {
+            run(move || {
                 spawn(|| {
                     sleep(Duration::from_millis(30));
                     SLEPT.store(true, Ordering::SeqCst);
-                });
-
-                spawn(move || {
-                    let mut conn = listener.accept().unwrap();
-                    let mut buf = [0u8; 5];
-                    read_exact(&mut conn, &mut buf);
-                    conn.write_all(&buf).unwrap();
                 });
 
                 spawn(move || {
@@ -459,6 +417,7 @@ mod tests {
             });
         });
 
+        peer.join().unwrap();
         assert!(SLEPT.load(Ordering::SeqCst), "sleeping fiber woke");
         assert!(ECHOED.load(Ordering::SeqCst), "socket echo completed");
     }
@@ -467,21 +426,29 @@ mod tests {
     fn socket_parked_fiber_roots_survive_collection() {
         // A fiber holds the only references to GC allocations on its own stack, then
         // parks on a socket READ (no data yet). While it is socket-parked, a sibling
-        // forces a collection; then it sends data, waking the reader, which verifies
-        // its objects are byte-for-byte intact — proving socket-parked stacks are
-        // scanned exactly like sleep-parked ones.
+        // forces a collection; then the peer sends data, waking the reader, which
+        // verifies its objects are byte-for-byte intact — proving socket-parked stacks
+        // are scanned exactly like sleep-parked ones.
         const N: usize = 32;
         const LEN: usize = 96;
         static VERIFIED: AtomicUsize = AtomicUsize::new(0);
         VERIFIED.store(0, Ordering::SeqCst);
 
-        on_gc_thread(|| {
-            run(|| {
-                let mut listener = TcpListener::bind(loopback()).unwrap();
-                let addr = listener.local_addr().unwrap();
+        // A blocking std listener on its own OS thread stands in for the peer: accept
+        // one connection, wait long enough for the fiber below to allocate and park on
+        // read, then send the two bytes that wake it.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            conn.write_all(b"go").unwrap();
+        });
 
+        on_gc_thread(move || {
+            run(move || {
                 spawn(move || {
-                    let mut conn = listener.accept().unwrap();
+                    let mut stream = TcpStream::connect(addr).unwrap();
                     let mut held = [ptr::null_mut::<u8>(); N];
                     for (i, slot) in held.iter_mut().enumerate() {
                         let p = __alloc(LEN as i64) as *mut u8;
@@ -489,9 +456,9 @@ mod tests {
                         *slot = p;
                     }
                     let held = std::hint::black_box(held);
-                    // Parks here on socket readiness while the client collects.
+                    // Parks here on socket readiness while a sibling fiber collects.
                     let mut buf = [0u8; 2];
-                    read_exact(&mut conn, &mut buf);
+                    read_exact(&mut stream, &mut buf);
                     // Churn the heap to reclaim anything wrongly freed, then verify.
                     for _ in 0..64 {
                         let p = __alloc(LEN as i64) as *mut u8;
@@ -508,16 +475,15 @@ mod tests {
                     VERIFIED.store(ok, Ordering::SeqCst);
                 });
 
-                spawn(move || {
-                    let mut stream = TcpStream::connect(addr).unwrap();
-                    // Let the server accept, allocate, and park on read.
-                    sleep(Duration::from_millis(20));
+                spawn(|| {
+                    // Let the sibling connect, allocate, and park on read.
+                    sleep(Duration::from_millis(10));
                     unsafe { GC_gcollect() };
-                    stream.write_all(b"go").unwrap();
                 });
             });
         });
 
+        peer.join().unwrap();
         assert_eq!(VERIFIED.load(Ordering::SeqCst), N);
     }
 
@@ -529,8 +495,6 @@ mod tests {
         // back.
         use crate::deferred::{__force_result, RESULT_OK_TAG};
         use crate::mem::QlSlice;
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener as StdListener;
 
         // A zeroed `Result` out-parameter for the FFI calls to fill.
         let blank = || QlResult {
@@ -546,7 +510,7 @@ mod tests {
         // A blocking std listener on its own OS thread stands in for a peer: accept one
         // connection, read the request, write a fixed response, then close (close-delimited —
         // dropping the stream is what ends the client's read-to-close).
-        let listener = StdListener::bind("127.0.0.1:0").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();

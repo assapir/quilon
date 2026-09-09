@@ -132,7 +132,7 @@ impl Style {
 pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: c_int) -> ! {
     if abort_trap_active() {
         let report = render_report(site, code, message, &Style::for_stderr());
-        abort_current_trap(exit_code, report);
+        abort_current_trap(report);
     }
     report_at(site, code, message);
     __exit(exit_code)

@@ -36,7 +36,7 @@ pub extern "C" fn __abort_trap_run(function: *const c_void, environment: *mut c_
     // caller's contract, above), which is exactly this signature.
     let function: extern "C" fn(*mut c_void) -> u8 = unsafe { std::mem::transmute(function) };
     match crate::scheduler::run_abort_trap_guarded(function, environment) {
-        Some((_exit_code, report)) => {
+        Some(report) => {
             LAST_REPORT.with(|last| *last.borrow_mut() = report);
             1
         }

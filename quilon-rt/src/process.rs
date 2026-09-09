@@ -30,7 +30,7 @@ use std::os::raw::{c_char, c_int, c_void};
 #[unsafe(no_mangle)]
 pub extern "C" fn __exit(code: c_int) -> ! {
     if crate::scheduler::abort_trap_active() {
-        crate::scheduler::abort_current_trap(code, String::new());
+        crate::scheduler::abort_current_trap(String::new());
     }
     // SAFETY: libc `exit` is always available in a linked C runtime; it terminates
     // the process and never returns.
