@@ -1019,3 +1019,52 @@ fn test_bare_lambda_body_takes_a_reassignment() {
     assert!(declaration.mutable, "`:=` must reassign, not bind fresh");
     assert_eq!(declaration.name, "n");
 }
+
+#[test]
+fn test_unparenthesized_nested_match_as_arm_body_is_qn114() {
+    // An arm's own body is a bare (unparenthesized) match: the inner match's `while
+    // Pipe` loop cannot tell its own arms from the outer match's, so it must be
+    // reported at the inner `?` rather than let the inner loop swallow `| Whirl(n)`.
+    let src = "result = spin ?\n  | Thud(n) => whir ? | Clang => n | _ => 0\n  | Whirl(n) => n";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::NestedMatchNeedsParens);
+    assert_eq!(
+        err.message,
+        "a match used as a match-arm body needs parentheses"
+    );
+    assert_eq!(
+        err.help.as_deref(),
+        Some("wrap the nested match in parentheses: `| pattern => (scrutinee ? | ... )`")
+    );
+    let inner_question = src.find("whir ?").unwrap() + "whir ".len();
+    assert_eq!(err.span.start as usize, inner_question);
+    assert_eq!(err.span.end as usize, inner_question + 1);
+}
+
+#[test]
+fn test_ternary_in_arm_body_stays_legal() {
+    // A ternary is a different construct from a match — the parser tells them apart by
+    // whether `|` follows the `?` — so it stays bare in arm-body position, `:` already
+    // marking where its branches end.
+    let src = "result = spin ?\n  | Thud(n) => n > 0 ? n : 0 - n\n  | Whirl(n) => n";
+    let tokens = Lexer::tokenize(src).unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a ternary as an arm's body should still parse: {src}"
+    );
+}
+
+#[test]
+fn test_match_nested_in_a_block_in_an_arm_body_stays_legal() {
+    // A nested match inside a lambda's `< >` block — itself an arm's whole body — is
+    // already delimited by the block's own close, so it needs no parentheses.
+    let src = "result = spin ?\n  | Thud(n) => (m :: Num) -> Num => < m ? | Clang => 1 | _ => 0 >\n  | Whirl(n) => n";
+    let tokens = Lexer::tokenize(src).unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a match nested in a block in an arm's body should still parse: {src}"
+    );
+}

@@ -19,6 +19,18 @@ All notable changes to Quilon are documented here.
   [QN510](docs/tooling/errors.md#qn510--invalid-replace-count). See `docs/types/text.md`.
   Closes #369.
 
+### Changed
+
+- **BREAKING: a match written as a match arm's body is parenthesized.** An
+  unparenthesized nested match's own `|` arm loop used to consume arms meant for the
+  enclosing match — silently dropping an arm, or reporting the outer match
+  non-exhaustive when a catch-all arm followed. `| pattern => (scrutinee ? | ... )` is
+  now the required form; the compiler reports the new
+  [QN114](docs/tooling/errors.md#qn114--match-used-as-a-match-arm-body-without-parentheses)
+  at the inner `?`. A ternary in an arm's body, and a match nested inside a block, call
+  argument, or ternary branch, keep working as written. See
+  `docs/expressions/pattern-matching.md`. Closes #213.
+
 ## 0.11.0 "Rackham" — 2026-09-08
 
 ### Added

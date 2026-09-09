@@ -1245,6 +1245,17 @@ fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
 }
 
 #[test]
+fn run_parenthesized_nested_match_as_arm_body() {
+    // A match arm's body that is itself a match, parenthesized (QN114 requires this):
+    // the `Waddle` arm never routes through the nested `Mood` match at all, so the exit
+    // code is `Waddle`'s own payload untouched.
+    assert_exit(
+        "Critter = Nibble(Num) / Waddle(Num)\nMood = Excited / Sleepy\njudge = (c :: Critter, m :: Mood) -> Num => < c ?\n  | Nibble(n) => (m ? | Excited => n | Sleepy => 0)\n  | Waddle(n) => n\n>\n^ = () -> Num => < judge(Waddle(7), Excited) >",
+        7,
+    );
+}
+
+#[test]
 fn run_named_record_sum_payload_reads_field() {
     // A named RECORD nested as a sum variant's payload: construct `Box(Point{..})`,
     // match `Box(p)`, and read the record's fields back at their real type. 3 + 4 = 7.
