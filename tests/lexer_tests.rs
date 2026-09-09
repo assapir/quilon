@@ -459,3 +459,65 @@ fn test_underscore_led_names_lex_as_one_ident_with_non_ascii_continuations() {
         assert_eq!(tokens[0].text, source, "source: {source}");
     }
 }
+
+#[test]
+fn test_scientific_notation_is_rejected_with_a_plain_decimal_hint() {
+    use quilon::diagnostic::codes::Code;
+
+    let cases = [
+        (
+            "1e9",
+            "scientific notation is not supported — write 1000000000",
+        ),
+        (
+            "1E9",
+            "scientific notation is not supported — write 1000000000",
+        ),
+        (
+            "1.5e-3",
+            "scientific notation is not supported — write 0.0015",
+        ),
+        ("1e+2", "scientific notation is not supported — write 100"),
+    ];
+
+    for (source, message) in cases {
+        let error = Lexer::tokenize(source).expect_err("scientific notation is rejected");
+        assert_eq!(error.code, Code::ScientificNotation, "source: {source}");
+        assert_eq!(error.message, message, "source: {source}");
+        assert_eq!(error.span.start, 0, "source: {source}");
+        assert_eq!(error.span.end, source.len() as u32, "source: {source}");
+        assert_eq!(error.span.file, ROOT_FILE, "source: {source}");
+    }
+}
+
+#[test]
+fn test_scientific_notation_with_no_finite_value_has_no_hint() {
+    use quilon::diagnostic::codes::Code;
+
+    // "1e" has no digits at all to parse; "1e400" overflows `f64` to infinity — neither
+    // has a plain-decimal value worth suggesting.
+    for (source, end) in [("1e", 2), ("1e400", 5)] {
+        let error = Lexer::tokenize(source).expect_err("scientific notation is still rejected");
+        assert_eq!(error.code, Code::ScientificNotation, "source: {source}");
+        assert_eq!(
+            error.message, "scientific notation is not supported",
+            "source: {source}"
+        );
+        assert_eq!(error.span.start, 0, "source: {source}");
+        assert_eq!(error.span.end, end, "source: {source}");
+        assert_eq!(error.span.file, ROOT_FILE, "source: {source}");
+    }
+}
+
+#[test]
+fn test_names_merely_starting_with_e_stay_identifiers() {
+    // Neither name is glued to a preceding digit, so both keep lexing as plain `Ident`s
+    // rather than being mistaken for a truncated exponent.
+    let tokens = Lexer::tokenize("e9 = 1").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Ident);
+    assert_eq!(tokens[0].text, "e9");
+
+    let tokens = Lexer::tokenize("x = e9").unwrap();
+    assert_eq!(tokens[2].kind, TokenKind::Ident);
+    assert_eq!(tokens[2].text, "e9");
+}

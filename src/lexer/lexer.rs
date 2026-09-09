@@ -74,6 +74,14 @@ impl Lexer {
                         TokenLexError::InvalidToken => {
                             (Code::InvalidToken, format!("invalid token `{text}`"))
                         }
+                        TokenLexError::ScientificNotation(Some(rendered)) => (
+                            Code::ScientificNotation,
+                            format!("scientific notation is not supported — write {rendered}"),
+                        ),
+                        TokenLexError::ScientificNotation(None) => (
+                            Code::ScientificNotation,
+                            "scientific notation is not supported".to_string(),
+                        ),
                     };
                     return Err(LexerError {
                         code,

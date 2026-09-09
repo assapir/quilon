@@ -6,6 +6,10 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A `Num` literal glued to an exponent (`1e9`, `1.5e-3`) raises a dedicated
+  [QN005](docs/tooling/errors.md#qn005--scientific-notation-literal)** naming the plain
+  decimal to write, where the literal used to split into a `1` token and a stray `e9`
+  identifier with its own "undefined name" error. See `docs/types/README.md`. Closes #208.
 - **`Text.replace` is a native intrinsic, like `replaceAll`.** Both now report through the
   runtime's own coded frame: an empty `from` (computed, since a literal one is still a
   compile error) is
