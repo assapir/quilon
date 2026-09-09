@@ -60,6 +60,7 @@ codes! {
     ExportMarkerAsBlockClosers = 112 => "`>>` where two block closers were meant",
     NameGluedToSymbol = 113 => "disallowed character glued to a name",
     NestedMatchNeedsParens = 114 => "match used as a match-arm body without parentheses",
+    EarlyBlockClose = 115 => "a line-final `>` closed a block earlier than intended",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",
