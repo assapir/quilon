@@ -13,11 +13,7 @@ impl<'a> Parser<'a> {
         // sub-expressions all re-enter here, so depth-guarding here bounds the whole
         // expression grammar's recursion — deep nesting fails loud, never crashes.
         //
-        // Every one of those positions is delimited by something other than `|` (a
-        // `)`, a `,`, a `:`, a block's own close), so a match parsed here can never be
-        // mistaken for an enclosing match's arms — clear `bare_match_forbidden` for the
-        // call. `parse_match`'s own arm body is the one caller that bypasses this
-        // funnel (see `parse_match`), so it keeps the flag its caller set.
+        // Every caller here is delimited, so a nested match is unambiguous.
         let previous_bare_match_forbidden = self.bare_match_forbidden;
         self.bare_match_forbidden = false;
         let result = self.nested(Self::parse_assignment);
@@ -96,9 +92,6 @@ impl<'a> Parser<'a> {
 
             // Check if it's pattern match (next token is |) or ternary
             if self.check(&TokenKind::Pipe) {
-                // A match written directly as a match arm's body is ambiguous: its own
-                // arm loop cannot tell where its arms end and the enclosing match's
-                // resume (see `bare_match_forbidden`), so it needs parentheses.
                 if self.bare_match_forbidden {
                     return Err(ParseError::new(
                         Code::NestedMatchNeedsParens,
