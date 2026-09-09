@@ -1210,9 +1210,8 @@ Pass a descriptor that names an open file, or a stream something is still readin
 ### QN510 — invalid `replace` count
 
 A computed `count` argument to `Text.replace` was, at run time, either less than 1 once
-truncated toward zero, or greater than the occurrences of `from` actually present in the
-receiver — no clamp, no no-op. (A literal violation of either is instead a compile-time
-error.)
+truncated toward zero, or greater than the occurrences of `from` present in the
+receiver. A literal violation of either is a compile-time error.
 
 ```quilon ignore
 ^ = () -> Num => <
