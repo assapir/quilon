@@ -220,11 +220,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// A comma-separated list up to (not including) `close`, no trailing comma:
-    /// `if !check(close) { loop { push(parse_one()?); if !check(Comma) break; advance(); } }`.
-    /// Shared by every call/parameter/field/pattern-argument list in the grammar. The
-    /// caller still consumes `close` itself, since the item after it (paren, brace,
-    /// bracket) varies by call site.
+    /// Items up to (not including) `close`, no trailing comma; the caller consumes
+    /// `close`.
     fn parse_comma_separated<T>(
         &mut self,
         close: &TokenKind,
