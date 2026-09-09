@@ -117,7 +117,7 @@ fn main() {
 ///
 /// Two things have to be undone for this to measure a shipped binary rather than a
 /// build tree. The compiler is copied somewhere on its own, because `quilon build` takes
-/// `libquilon_rt.a` from beside the running binary when it is there. And
+/// `libquilon_rt.bundled.a` from beside the running binary when it is there. And
 /// `QUILON_RT_LIB` is cleared from the child's environment: the build script bakes that
 /// override and cargo hands it to anything it runs, so without clearing it the compiler
 /// links straight against the build tree's archive and never consults a cache at all —

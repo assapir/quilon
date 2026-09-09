@@ -31,6 +31,18 @@ All notable changes to Quilon are documented here.
   argument, or ternary branch, keep working as written. See
   `docs/expressions/pattern-matching.md`. Closes #213.
 
+### Fixed
+
+- **A dev-tree `quilon build` now always links one stable runtime archive.** The
+  build script placed the freshly built runtime staticlib at
+  `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a
+  `libquilon_rt.a` to whenever `quilon-rt` is built as a primary target (`cargo
+  build -p quilon-rt`, `cargo build --workspace`) — so a later such build
+  silently swapped in cargo's own differently-compiled archive, adding a few
+  megabytes to every produced binary. The build script's copy is now named
+  `libquilon_rt.bundled.a`, a name cargo never produces, and `quilon build`'s
+  "next to the running binary" lookup looks for that same name. Closes #182.
+
 ## 0.11.0 "Rackham" — 2026-09-08
 
 ### Added

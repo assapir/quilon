@@ -226,8 +226,11 @@ fn extract_archive_into(dir: &Path) -> std::io::Result<PathBuf> {
 /// Resolved, in order:
 ///
 /// 1. `QUILON_RT_LIB` set in the *runtime* environment — developer override.
-/// 2. `libquilon_rt.a` next to the running binary — the dev loop: the cargo
-///    build script places it there, and the test harness drops fresh ones in.
+/// 2. `libquilon_rt.bundled.a` next to the running binary — the dev loop: the
+///    cargo build script places it there (a name distinct from cargo's own
+///    `libquilon_rt.a` uplift, so a bare `cargo build -p quilon-rt` can't
+///    overwrite it), and the test harness drops fresh ones in under the same
+///    name.
 /// 3. The per-user cache: an already-extracted copy keyed to this compiler's
 ///    archive is reused as-is; only on a miss is the embedded (gzip) archive
 ///    decompressed into it — the always-works path for a distributed binary.
@@ -249,7 +252,7 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let local = dir.join("libquilon_rt.a");
+        let local = dir.join("libquilon_rt.bundled.a");
         if local.exists() {
             return Ok(local);
         }

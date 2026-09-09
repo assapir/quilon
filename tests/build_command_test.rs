@@ -3,7 +3,7 @@
 //! no extra command and no test-harness fixup.
 //!
 //! The JIT/AOT parity gate in `examples_test.rs` masks this bug: it builds a
-//! fresh `libquilon_rt.a` and copies it next to the binary itself before running
+//! fresh runtime archive and copies it next to the binary itself before running
 //! `quilon build`. This file deliberately does NOT do that — it relies solely on
 //! what the crate's cargo build script (`/build.rs`) places, which is exactly what
 //! a user gets from a plain `cargo build`.
@@ -42,7 +42,7 @@ fn build_script_bakes_and_places_runtime_staticlib() {
     );
     assert_eq!(
         path.file_name().and_then(|n| n.to_str()),
-        Some("libquilon_rt.a"),
+        Some("libquilon_rt.bundled.a"),
         "baked runtime archive has the wrong name: {baked}"
     );
 }
