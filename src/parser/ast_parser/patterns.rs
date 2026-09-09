@@ -16,7 +16,16 @@ impl<'a> Parser<'a> {
 
             let pattern = self.parse_pattern()?;
             self.expect(&TokenKind::Arrow)?;
-            let body = self.parse_expression()?;
+            // Deliberately bypasses `parse_expression`'s funnel — that funnel clears
+            // `bare_match_forbidden` for every genuinely delimited sub-expression, but
+            // an arm's body is the ONE undelimited position (see the flag's doc) where
+            // an unparenthesized nested match would swallow this match's own following
+            // `|` arms.
+            let previous_bare_match_forbidden = self.bare_match_forbidden;
+            self.bare_match_forbidden = true;
+            let body = self.nested(Self::parse_assignment);
+            self.bare_match_forbidden = previous_bare_match_forbidden;
+            let body = body?;
             let arm_span = self.span(pattern.span().start, body.span().end);
 
             arms.push(crate::ast::MatchArm {

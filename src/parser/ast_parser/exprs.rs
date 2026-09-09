@@ -12,7 +12,17 @@ impl<'a> Parser<'a> {
         // record/constructor field values, block statements, lambda/ternary/spread
         // sub-expressions all re-enter here, so depth-guarding here bounds the whole
         // expression grammar's recursion — deep nesting fails loud, never crashes.
-        self.nested(Self::parse_assignment)
+        //
+        // Every one of those positions is delimited by something other than `|` (a
+        // `)`, a `,`, a `:`, a block's own close), so a match parsed here can never be
+        // mistaken for an enclosing match's arms — clear `bare_match_forbidden` for the
+        // call. `parse_match`'s own arm body is the one caller that bypasses this
+        // funnel (see `parse_match`), so it keeps the flag its caller set.
+        let previous_bare_match_forbidden = self.bare_match_forbidden;
+        self.bare_match_forbidden = false;
+        let result = self.nested(Self::parse_assignment);
+        self.bare_match_forbidden = previous_bare_match_forbidden;
+        result
     }
 
     /// Assignment is the lowest-precedence form. Parse a ternary; if it is a
@@ -82,9 +92,23 @@ impl<'a> Parser<'a> {
         // Check for ? operator - could be ternary or pattern match
         if self.check(&TokenKind::Question) {
             self.advance();
+            let question_span = self.previous_span();
 
             // Check if it's pattern match (next token is |) or ternary
             if self.check(&TokenKind::Pipe) {
+                // A match written directly as a match arm's body is ambiguous: its own
+                // arm loop cannot tell where its arms end and the enclosing match's
+                // resume (see `bare_match_forbidden`), so it needs parentheses.
+                if self.bare_match_forbidden {
+                    return Err(ParseError::new(
+                        Code::NestedMatchNeedsParens,
+                        question_span,
+                        "a match used as a match-arm body needs parentheses",
+                    )
+                    .help(
+                        "wrap the nested match in parentheses: `| pattern => (scrutinee ? | ... )`",
+                    ));
+                }
                 // Pattern match: expression ? | pattern => body | pattern => body
                 return self.parse_match(expression);
             } else {

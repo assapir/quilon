@@ -59,6 +59,7 @@ codes! {
     BodyNotABlock = 111 => "bare expression as a function body",
     ExportMarkerAsBlockClosers = 112 => "`>>` where two block closers were meant",
     NameGluedToSymbol = 113 => "disallowed character glued to a name",
+    NestedMatchNeedsParens = 114 => "match used as a match-arm body without parentheses",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",

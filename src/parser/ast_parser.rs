@@ -43,6 +43,18 @@ pub struct Parser<'a> {
     /// is a hashable value and is never a function, so lambda detection is suppressed for
     /// the whole key expression while this is set (see `parse_fence_key`).
     suppress_lambda: bool,
+    /// Set only around the outermost expression call that parses a match arm's body
+    /// (`parse_match`'s `body = …`), and cleared around every genuinely delimited
+    /// sub-expression `parse_expression` reaches (a paren group, a call argument, a
+    /// block statement, a ternary branch, …). A match arm's own `while Pipe` loop
+    /// cannot tell its own `|` arms from an enclosing match's once it starts consuming
+    /// a nested, unparenthesized match's arms — the inner loop just keeps eating pipes
+    /// meant for the outer one. So a `?` immediately followed by `|` while this is set
+    /// is a parse error (`Code::NestedMatchNeedsParens`) rather than a second call into
+    /// `parse_match`; parenthesizing the nested match delimits it before this flag is
+    /// even read, since the `(` recurses through `parse_expression`, which clears the
+    /// flag for that inner parse.
+    bare_match_forbidden: bool,
     /// Every module-path spelling the `<<` lines above the cursor have bound — the short
     /// binding (`http`, a file's stem) and the full dotted path (`core.http`) — mapped to
     /// the module's canonical name. A same-line `Ident (. Ident)* . Ident` chain whose
@@ -117,6 +129,7 @@ impl<'a> Parser<'a> {
             file: tokens.first().map_or(ROOT_FILE, |t| t.span.file),
             span_base: 0,
             suppress_lambda: false,
+            bare_match_forbidden: false,
             module_paths: std::collections::HashMap::new(),
         }
     }
