@@ -120,6 +120,11 @@ impl TypeChecker {
         std::mem::take(&mut self.matcher_hovers)
     }
 
+    /// The `Err` path's view of the oracle; `Ok` takes the table itself.
+    pub fn take_partial_types(&mut self) -> TypeTable {
+        std::mem::take(&mut self.type_table)
+    }
+
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`, or
     /// `(args :: []Text, env :: [|Text => Text|])`.

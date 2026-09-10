@@ -4,10 +4,12 @@
 
 use std::path::{Path, PathBuf};
 
+use quilon::driver::TestBlocks;
 use quilon::lexer::ROOT_FILE;
 use quilon::lsp::analysis::{
-    self, CompletionKind, SemanticTokenKind, TestLensKind, check_text, completions_at,
-    definition_at, hover_at, is_identifier, link_text, references_at, semantic_tokens, test_lenses,
+    self, CompletionKind, SemanticTokenKind, TestLensKind, check_text, check_views, completions_at,
+    definition_at, hover_at, hover_in_document, is_identifier, link_text, references_at,
+    semantic_tokens, test_lenses,
 };
 
 /// A unique temporary directory for a test that needs real files (import resolution).
@@ -35,6 +37,18 @@ fn check_error(path: &Path, text: &str) -> quilon::driver::FrontEndError {
         Err(error) => error,
         Ok(_) => panic!("the text must not check clean"),
     }
+}
+
+/// A `^` sits beside a `describe`/`it` pair whose one case hands `twice` a `Text`.
+fn beside_its_own_up_with_a_failing_case() -> &'static str {
+    "<< core.test\n\
+     >> twice = (n :: Num) -> Num => < n * 2 >\n\
+     \n\
+     test.describe(\"twice\", () => <\n  \
+     test.it(\"doubles\", () => expect(twice(\"four\"), equals(8)))\n\
+     >)\n\
+     \n\
+     ^ = () -> Num => < twice(1) >\n"
 }
 
 // --- Diagnostics ------------------------------------------------------------
@@ -71,6 +85,45 @@ fn a_test_suite_is_checked_with_its_blocks_compiled() {
     // The same suite with the operands fixed checks clean.
     let clean = text.replace("1 + true", "1 + 1");
     assert!(check_text(Path::new("suite.qn"), &clean).is_ok());
+}
+
+#[test]
+fn a_file_with_both_a_up_and_test_blocks_is_checked_under_both_views() {
+    let text = beside_its_own_up_with_a_failing_case();
+    let views = check_views(Path::new("beside.qn"), text);
+    assert_eq!(views.len(), 2);
+
+    let mut failing: Vec<_> = views
+        .into_iter()
+        .filter_map(|view| view.result.err())
+        .collect();
+    assert_eq!(
+        failing.len(),
+        1,
+        "only the suite view's case has a type error"
+    );
+    let error = failing.remove(0);
+    let span = error.diagnostic.primary_span().expect("a located error");
+    let call = offset_of(text, "twice(\"four\")", 0);
+    assert_eq!(
+        (span.start, span.end),
+        (call, call + "twice(\"four\")".len() as u32)
+    );
+}
+
+#[test]
+fn an_up_alone_or_a_suite_alone_still_gets_exactly_one_view() {
+    let up_only = "^ = () -> Num => < 1 + true >\n";
+    let views = check_views(Path::new("buffer.qn"), up_only);
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].mode, TestBlocks::Erase);
+    assert!(views[0].result.is_err());
+
+    let suite_only = "<< core.test\n\ntest.describe(\"math\", () => <\n  test.it(\"adds\", () => <\n    expect(1 + true, equals(2))\n  >)\n>)\n";
+    let views = check_views(Path::new("suite.qn"), suite_only);
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].mode, TestBlocks::Run);
+    assert!(views[0].result.is_err());
 }
 
 // --- Hover ------------------------------------------------------------------
@@ -168,6 +221,20 @@ fn hover_over_a_matcher_shows_its_signature_and_the_type_it_applies_to() {
     )
     .expect("a hover");
     assert_eq!(argument, "Num");
+}
+
+#[test]
+fn hover_over_a_failing_cases_own_callee_still_answers() {
+    let text = beside_its_own_up_with_a_failing_case();
+    let call = offset_of(text, "twice(\"four\")", 0);
+    let (label, span) = hover_in_document(Path::new("beside.qn"), text, call + 1).expect("a hover");
+    assert_eq!(label, "(Num) -> Num");
+    assert_eq!((span.start, span.end), (call, call + "twice".len() as u32));
+
+    let (label, _) =
+        hover_in_document(Path::new("beside.qn"), text, offset_of(text, "twice(1)", 1))
+            .expect("a hover");
+    assert_eq!(label, "(Num) -> Num");
 }
 
 // --- Go-to-definition -------------------------------------------------------
@@ -1206,6 +1273,101 @@ fn navigation_answers_on_a_document_with_an_unrelated_type_error() {
     client
         .sender
         .send(lsp_request(5, "shutdown", Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
+}
+
+#[test]
+fn a_case_error_beside_a_clean_up_is_published_and_hover_still_answers() {
+    use serde_json::{Value, json};
+
+    let text = beside_its_own_up_with_a_failing_case();
+    let uri = "file:///beside.qn";
+
+    let (client, served) = started_session();
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    let diagnostics = lsp_diagnostics_of(lsp_receive(&client));
+    assert_eq!(diagnostics.len(), 1, "the failing case is reported once");
+    assert_eq!(diagnostics[0]["code"], "QN301");
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 4);
+    assert_eq!(diagnostics[0]["range"]["start"]["character"], 34);
+    assert_eq!(diagnostics[0]["range"]["end"]["line"], 4);
+    assert_eq!(diagnostics[0]["range"]["end"]["character"], 47);
+
+    client
+        .sender
+        .send(lsp_request(
+            1,
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": uri },
+                "position": { "line": 4, "character": 35 } }),
+        ))
+        .unwrap();
+    let hover = lsp_response(lsp_receive(&client));
+    assert!(
+        !hover.is_null(),
+        "hover inside the failing case must answer"
+    );
+    assert_eq!(hover["contents"]["value"], "(Num) -> Num");
+
+    client
+        .sender
+        .send(lsp_request(2, "shutdown", Value::Null))
+        .unwrap();
+    lsp_response(lsp_receive(&client));
+    client
+        .sender
+        .send(lsp_notification("exit", Value::Null))
+        .unwrap();
+    served.join().expect("the server thread joins");
+}
+
+/// A function checked identically by both views is published once, not twice.
+#[test]
+fn an_error_both_views_agree_on_is_published_once() {
+    use serde_json::{Value, json};
+
+    let text = "<< core.test\n\
+                 >> twice = (n :: Num) -> Num => < n + true >\n\
+                 \n\
+                 test.describe(\"twice\", () => <\n  \
+                 test.it(\"doubles\", () => expect(twice(1), equals(2)))\n\
+                 >)\n\
+                 \n\
+                 ^ = () -> Num => < twice(1) >\n";
+    let uri = "file:///shared_error.qn";
+
+    let (client, served) = started_session();
+    client
+        .sender
+        .send(lsp_notification(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "quilon", "version": 1, "text": text } }),
+        ))
+        .unwrap();
+    let diagnostics = lsp_diagnostics_of(lsp_receive(&client));
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "one error above the split, seen identically by both views, is one diagnostic"
+    );
+
+    client
+        .sender
+        .send(lsp_request(1, "shutdown", Value::Null))
         .unwrap();
     lsp_response(lsp_receive(&client));
     client

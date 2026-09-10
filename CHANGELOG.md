@@ -81,6 +81,15 @@ All notable changes to Quilon are documented here.
   across constructors, annotations (a parameter's, a variable's, or a whole-signature
   binding type's), return types, sum payloads, and array/map element types. See
   `docs/tooling/language-server.md`. Closes #399.
+- **The language server checks a file's test bodies even when the file also has a `^`.**
+  A `test.describe`/`test.it` block beside its own `^` used to be erased before checking,
+  the way `check`/`run` erase it — so a type error inside a case went unreported and
+  hover inside it answered null, though the Run/Debug lenses still offered it. Such a file
+  is now checked under both the `check`/`run` view (for its `^`) and the `quilon test`
+  view (for the blocks), publishing both views' diagnostics, deduplicated by span, and
+  answering hover from whichever view reaches the cursor's expression — a failing case
+  still lets hover answer for an earlier expression the same run finished checking. See
+  `docs/tooling/language-server.md`. Closes #394.
 - **Find references and rename follow a `:=`-bound local through its reassignments.**
   A `:=` on a name already in scope reassigns that binding, so the language server's
   resolver now treats one the same way the type checker does — as the same binding a
