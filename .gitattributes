@@ -1,1 +1,2 @@
 *.qn linguist-language=Quilon linguist-detectable=true
+CHANGELOG.md merge=union
