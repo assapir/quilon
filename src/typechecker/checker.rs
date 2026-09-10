@@ -378,6 +378,19 @@ pub enum TypeError {
         got: Type,
         span: Span,
     },
+    /// `@name = value` — an atomic binding declared without `:=`. Atomicity is a property
+    /// of a mutable binding's reassignment; an immutable binding never reassigns.
+    AtomicBindingNotMutable {
+        name: String,
+        span: Span,
+    },
+    /// `@name` at a use site, or on what should be a bare reassignment (`@name := …`
+    /// where `name` is already bound) — `@` marks only the declaring occurrence of an
+    /// atomic binding.
+    AtomicBindingUsedBare {
+        name: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual
@@ -496,6 +509,9 @@ pub struct Symbol {
     /// A payload-less constant (a nullary sum variant value): shared, but with no
     /// writable interior, so every use counts as fresh.
     constant: bool,
+    /// Declared `@name := …`. Recorded here for the Stage 2 fiber-sharing check
+    /// (issue #120) to read later; the single-threaded runtime does nothing with it.
+    atomic: bool,
 }
 
 #[derive(Debug, Clone)]

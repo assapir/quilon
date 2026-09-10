@@ -1,0 +1,27 @@
+~ Atomic bindings (see docs/concurrency/README.md#sharing-state-across-fibers): `@name := …`
+~ declares a mutable binding the same way `:=` does, marked as one Stage 2's fiber-sharing
+~ check will let more than one fiber reach. The runtime is single-threaded until Stage 2, so
+~ today an atomic binding compiles and runs exactly like a `:=` binding — its reassignment is
+~ trivially atomic with only one fiber ever touching it. `@` marks the DECLARATION only; every
+~ read and reassignment after that is bare, the same rule a plain `:=` binding already follows.
+
+@yakShaves := 0     ~ a top-level atomic global — one cell every call below shares
+
+groom = (chore :: Text) -> Text => <
+  yakShaves := yakShaves + 1    ~ bare after its declaration, like any `:=` reassignment
+  chore
+>
+
+^ = () -> Num => <
+  groom("brush the yak")
+  groom("trim the yak")
+  groom("photograph the yak")
+  assert(yakShaves, equals(3))
+
+  ~ The same syntax declares a local, wherever a `:=` declaration is allowed today.
+  @sideQuests := 0
+  sideQuests := sideQuests + 1
+  assert(sideQuests, equals(1))
+
+  0
+>

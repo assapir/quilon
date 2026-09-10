@@ -234,6 +234,17 @@ fn run_mutable_declare_and_reassign() {
 }
 
 #[test]
+fn run_atomic_binding_declares_and_reassigns_like_a_plain_mutable() {
+    // `@name := …` declares an atomic binding; codegen treats it identically to `:=` on
+    // the single-threaded runtime, so incrementing it produces the same exit code a plain
+    // mutable counter would.
+    assert_exit(
+        "^ = () -> Num => <\n  @hits := 0\n  hits := hits + 5\n  hits := hits + 37\n  hits\n>",
+        42,
+    );
+}
+
+#[test]
 fn reassigning_immutable_binding_is_a_type_error() {
     // `x` is immutable (`=`); reassigning it with `:=` must fail type checking.
     let src = "^ = () -> Num => <\n  x = 1\n  x := 2\n  x\n>";

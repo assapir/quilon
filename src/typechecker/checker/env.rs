@@ -45,6 +45,7 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: false,
+                atomic: false,
             },
             span,
         )
@@ -68,6 +69,7 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: true,
+                atomic: false,
             },
             span,
         )
@@ -111,6 +113,7 @@ impl Environment {
             result_aliasing: None,
             setter_receiver: false,
             constant: false,
+            atomic: false,
         }
     }
 
@@ -125,6 +128,7 @@ impl Environment {
             result_aliasing: None,
             setter_receiver: false,
             constant: false,
+            atomic: false,
         };
         let root = self.scopes.first_mut().expect("the root scope exists");
         root.insert(name.to_string(), symbol);
@@ -151,6 +155,7 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: true,
                 constant: false,
+                atomic: false,
             },
             span,
         )
@@ -165,6 +170,7 @@ impl Environment {
         mutable: bool,
         owner: u64,
         value_aliasing: ValueAliasing,
+        atomic: bool,
         span: Span,
     ) -> Result<(), TypeError> {
         self.define_symbol(
@@ -177,6 +183,7 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: false,
+                atomic,
             },
             span,
         )
@@ -228,6 +235,12 @@ impl Environment {
 
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
+    }
+
+    /// Whether `name` was declared with `@name := …` (Stage 2's fiber-sharing check reads
+    /// this; today it is purely descriptive — see `src/typechecker/checker.rs::Symbol`).
+    pub fn is_atomic(&self, name: &str) -> bool {
+        self.lookup(name).map(|s| s.atomic).unwrap_or(false)
     }
 
     /// Update a binding's type (used for function type inference).

@@ -210,6 +210,7 @@ impl TypeChecker {
                     false,
                     self.current_declaration,
                     scrutinee_aliasing.clone(),
+                    false,
                     span.clone(),
                 )?;
                 Ok(())

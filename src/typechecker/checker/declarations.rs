@@ -770,6 +770,26 @@ impl TypeChecker {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), TypeError> {
+        // `@` marks only the declaring occurrence of an atomic binding (see
+        // `docs/concurrency/README.md#sharing-state-across-fibers`): a `=` binding can
+        // never be atomic, and a name already in scope means this `@` sits on what should
+        // be a bare reassignment. Both are checked before any of the value's own work, so
+        // neither is masked by an unrelated problem in the value expression.
+        if declaration.atomic {
+            if !declaration.mutable {
+                return Err(TypeError::AtomicBindingNotMutable {
+                    name: declaration.name.clone(),
+                    span: declaration.span.clone(),
+                });
+            }
+            if self.env.get_type(&declaration.name).is_some() {
+                return Err(TypeError::AtomicBindingUsedBare {
+                    name: declaration.name.clone(),
+                    span: declaration.span.clone(),
+                });
+            }
+        }
+
         // Resolve the annotation FIRST (when present) so an otherwise-uninferable empty
         // collection literal on the right (`xs :: []Text = []`) can take its element type
         // from it — see `infer_expression_expecting`.
@@ -849,6 +869,7 @@ impl TypeChecker {
                     true,
                     self.current_declaration,
                     value_aliasing,
+                    declaration.atomic,
                     declaration.span.clone(),
                 )?;
             }
@@ -860,6 +881,7 @@ impl TypeChecker {
                 false,
                 self.current_declaration,
                 value_aliasing,
+                false,
                 declaration.span.clone(),
             )?;
         }

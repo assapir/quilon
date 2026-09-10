@@ -141,8 +141,12 @@ impl<'a> Parser<'a> {
         // A leaf IO primitive declaration names itself with a fused `@name` (`@sleep`),
         // mirroring the call-site surface. Only the corelib declares these; user code is
         // rejected downstream (the front end refuses an `@` declaration outside a built-in
-        // module). A `@name` is always a function declaration (a primitive takes args).
-        let name = if self.check(&TokenKind::At) {
+        // module). A `@name` is a function declaration UNLESS what follows turns out to be
+        // a value binding (`mutable` below, or the non-function fallback further down) —
+        // an atomic binding (`@name := …`) or its misuse (`@name = …`), disambiguated once
+        // the binding operator is known.
+        let at_marker = self.check(&TokenKind::At);
+        let name = if at_marker {
             self.advance();
             format!("@{}", self.expect_definition_name()?)
         } else {
@@ -183,16 +187,20 @@ impl<'a> Parser<'a> {
         };
 
         // A `:=` binding is always a mutable value binding (or a reassignment of one);
-        // it is never a type or function declaration.
+        // it is never a type or function declaration. `@` here declares an atomic
+        // binding (`@hits := 0`) — the checker verifies `@` sits only on the declaring
+        // occurrence, never on a reassignment.
         if mutable {
+            let declared_name = name.strip_prefix('@').map_or(name.clone(), str::to_string);
             let value = self.parse_expression()?;
             let end = self.previous_span();
             return Ok(Item::VariableDeclaration(VariableDeclaration {
                 mutable: true,
-                name,
+                name: declared_name,
                 type_annotation,
                 value,
                 exported,
+                atomic: at_marker,
                 span: self.span(start.start, end.end),
             }));
         }
@@ -289,15 +297,21 @@ impl<'a> Parser<'a> {
         if is_function {
             self.parse_function_declaration(name, start, type_annotation, exported)
         } else {
+            // `@name = value` reaches here (a non-function value can never be a corelib
+            // primitive): an atomic binding declared without `:=`, which the checker
+            // rejects — `check_variable_declaration` sees `atomic` set on an immutable
+            // binding and names `:=` as the fix.
+            let declared_name = name.strip_prefix('@').map_or(name.clone(), str::to_string);
             let value = self.parse_expression()?;
             let end = self.previous_span();
 
             Ok(Item::VariableDeclaration(VariableDeclaration {
                 mutable,
-                name,
+                name: declared_name,
                 type_annotation,
                 value,
                 exported,
+                atomic: at_marker,
                 span: self.span(start.start, end.end),
             }))
         }
@@ -642,12 +656,22 @@ impl<'a> Parser<'a> {
             // `name :: Type = …` is an annotated binding. `::` at statement start is
             // unambiguously a binding annotation (there is no expression-level `::`), so
             // delegating to `parse_item` keeps block-level bindings identical to top-level.
-            if self.check(&TokenKind::Ident)
+            // `@name := …` is an atomic binding's declaration, recognized the same way so
+            // it lands directly in this block's own statement list (not nested one level
+            // down inside an expression-sugar block, which would scope it away from the
+            // rest of this block — see `parse_assignment`'s doc comment).
+            let plain_binding = self.check(&TokenKind::Ident)
                 && matches!(
                     self.peek_ahead(1).kind,
                     TokenKind::Assign | TokenKind::MutAssign | TokenKind::TypeAnnotation
-                )
-            {
+                );
+            let atomic_binding = self.check(&TokenKind::At)
+                && self.peek_ahead(1).kind == TokenKind::Ident
+                && matches!(
+                    self.peek_ahead(2).kind,
+                    TokenKind::MutAssign | TokenKind::TypeAnnotation
+                );
+            if plain_binding || atomic_binding {
                 // This looks like a declaration. A nested `name = parameters => body` stays an
                 // `Item::FunctionDeclaration`; codegen decides per-declaration whether it is a capturing
                 // CLOSURE or a plain (recursion-capable) local function, based on whether
