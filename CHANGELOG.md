@@ -6,6 +6,20 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A sum type may name itself as a payload, directly (`Tree = Leaf / Node(Tree)`) or
+  through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`), and two variants may
+  carry a different concrete type at the same payload position (`A(Num) / B(Text)`).** A
+  direct self-payload is boxed into a GC cell at construction and unboxed when a pattern
+  binds it; a sum whose positions disagree gets a tag plus storage sized to the widest
+  variant, each variant reading its own fields through a typed view of that storage. A
+  record may also reference itself, or a sum declared above it, directly as a field
+  (`Wagon = { next :: Wagon }`). See `docs/types/sum-types.md`, `docs/status/abi.md`,
+  `examples/tree.qn`, and `examples/linked_list.qn`. Closes #376.
+- **A sum-type payload outside the accepted set (a function type, a type variable, an
+  undeclared name) raises a dedicated
+  [QN346](docs/tooling/errors.md#qn346--unsupported-sum-type-payload)** naming the
+  variant, the payload's position, and the type it resolved to, where the checker used
+  to report the built-ins-only placeholder `TypeMismatch { expected: Num }`.
 - **A `Num` literal glued to an exponent (`1e9`, `1.5e-3`) raises a dedicated
   [QN005](docs/tooling/errors.md#qn005--scientific-notation-literal)** naming the plain
   decimal to write, where the literal used to split into a `1` token and a stray `e9`

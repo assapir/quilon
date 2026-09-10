@@ -1,0 +1,41 @@
+~ A singly linked list: cons, length, reverse, map. `List` names itself directly in
+~ `Cons`'s payload — boxed into a GC cell at construction, unboxed when a pattern
+~ binds it. `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
+
+List = Empty / Cons(Num, List)
+
+length = (l :: List) -> Num => <
+  l ?
+    | Empty      => 0
+    | Cons(_, tail) => 1 + length(tail)
+>
+
+reverse = (l :: List, into :: List) -> List => <
+  l ?
+    | Empty         => into
+    | Cons(head, tail) => reverse(tail, Cons(head, into))
+>
+
+map = (l :: List, f :: (Num) -> Num) -> List => <
+  l ?
+    | Empty            => Empty
+    | Cons(head, tail) => Cons(f(head), map(tail, f))
+>
+
+~ Every value joined by a comma, for a single self-assertion per list.
+render = (l :: List) -> Text => <
+  l ?
+    | Empty            => ""
+    | Cons(head, tail) => (tail ?
+        | Empty      => "`head`"
+        | Cons(_, _) => "`head`,`render(tail)`")
+>
+
+^ = () -> $ => <
+  list = Cons(1, Cons(2, Cons(3, Empty)))
+  assert(length(list), equals(3))
+  assert(render(reverse(list, Empty)), equals("3,2,1"))
+  assert(render(map(list, x => x * 10)), equals("10,20,30"))
+  assert(length(Empty), equals(0))
+>

@@ -12,18 +12,29 @@ as the separator. Variants may be **nullary** or carry a payload:
 Color = Red / Green / Blue                 ~ three nullary variants
 Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 ```
-- **Payloads are built-in scalars or a named record**: `Num`, `Text`, `Bool`, `$`
-  (Unit), or a **record** type declared above the sum. A variant may take several payload
-  fields (e.g. `Rect(Num, Num)`). A `$` payload carries no value — the variant's data is
-  its identity (see `Ok($)` below).
+- **A payload is** `Num`, `Text`, `Bool`, `$` (Unit), a declared record, a declared sum —
+  the enclosing one included — or an array/map of one of those. A variant may take
+  several payload fields (e.g. `Rect(Num, Num)`). A `$` payload carries no value — the
+  variant's data is its identity (see `Ok($)` below).
 - A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
   where `Body` is a record declared **above** the sum. A match arm binds it at its full
-  type, so `Post(b) => b.payload` reads its fields and calls its methods. A payload is a
-  scalar or a record; see `examples/nested_composites.qn` for composing sums with records.
-- At a given payload position, every variant with a concrete (non-`$`) field there agrees
-  on its type, the named-record case included. `$` may coexist with a concrete type at the
-  same position: `Done($) / Pending(Num)` is accepted; `A(Num) / B(Text)` and
-  `Wrap(Body) / Plain(Num)` are rejected.
+  type, so `Post(b) => b.payload` reads its fields and calls its methods. See
+  `examples/nested_composites.qn` for composing sums with records.
+- **Each payload position stands on its own**: one variant's field there may be `Num`
+  while another's is `Text` in the same declaration — `Mixed = A(Num) / B(Text)` and
+  `C(Num, Text)`, sharing neither position with `A`/`B`, all compile. `$` costs nothing
+  extra at a shared position: `Done($) / Pending(Num)` compiles the same way.
+- **A sum may name itself as a payload**, directly (`Tree = Leaf / Node(Tree)`) or
+  through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`). A direct self-payload
+  is a pointer to a GC cell holding the sum value; through an array or map it sits
+  inline, like any other element. See `examples/tree.qn` and `examples/linked_list.qn`.
+- **A record may reference itself, or a sum declared above it, directly as a field**
+  (`Wagon = { next :: Wagon }`); chained field access (`w.next.next`) reads through it
+  like any other record field.
+- **Names resolve top to bottom**: a payload or a record field may name the type it sits
+  on, or anything declared above it. A name declared below is undeclared at that point —
+  the ordinary rule for an undeclared name covers mutual recursion between two types on
+  its own, with nothing extra to check.
 - **Variant (constructor) names are unique per scope**: each variant name belongs to one
   sum type.
 

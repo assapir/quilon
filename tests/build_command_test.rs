@@ -480,10 +480,8 @@ describe = (m :: Mixed) -> Num => <
 >
 ^ = () -> Num => < depth(Node(Node(Leaf))) + describe(A(2)) + describe(B(\"ab\")) >
 ";
-    let dir = std::env::temp_dir().join(format!(
-        "quilon_recursive_sum_build_{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("quilon_recursive_sum_build_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let ql = dir.join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
