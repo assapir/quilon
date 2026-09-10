@@ -284,6 +284,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             // until the promise is fulfilled, then write its `{ i8 tag, {ptr,i64} slot }` value
             // into `out` (memoized). An out-pointer, not an aggregate return (see above).
             "__force_result" => ctx.void_type().fn_type(&[ptr.into(), ptr.into()], false),
+            // void __block_scope_enter() — open a launch registry for a `< >` block that
+            // directly launches at least one value-returning `@` primitive. Emitted at such a
+            // block's entry; every other block emits neither this nor its join.
+            "__block_scope_enter" => void.fn_type(&[], false),
+            // void __block_scope_join() — join the innermost open launch registry
+            // (`allSettled`: every launch in it runs to completion, none cancelled) before the
+            // block's value flows out. Reports every fault among them, in launch order, and
+            // exits 5 if there was at least one. Emitted right before such a block's value is
+            // produced.
+            "__block_scope_join" => void.fn_type(&[], false),
             // i32 __run_fiber_main(ptr entry, i32 argc, ptr argv, ptr envp) — run the
             // generated entry thunk (the C `main` signature) on a scheduler fiber, so any
             // `@` primitive it reaches has a fiber to park on. Returns the exit code.

@@ -73,6 +73,36 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Whether ANY block along `expression`'s tail-position skeleton (a block's last
+    /// statement, both `if` branches, every match arm) directly launches a value-returning
+    /// `@` primitive. Guards the loop lowering above: it re-executes a tail block's IR on
+    /// every iteration through the back-edge rather than calling `generate_block` again, so
+    /// a launch registry opened there would never see its matching join — the whole point of
+    /// [`Self::enter_launch_scope`]/[`Self::exit_launch_scope`] being paired calls around
+    /// ONE evaluation of a block. A function whose loop body would need one falls back to an
+    /// ordinary (stack-growing) recursive call instead, which reaches `generate_block`
+    /// exactly once per invocation like any other call.
+    pub(super) fn tail_position_needs_launch_scope(&self, expression: &Expression) -> bool {
+        match expression {
+            Expression::Block { statements, span } => {
+                self.defer.is_launch_scope(span)
+                    || matches!(
+                        statements.last(),
+                        Some(crate::ast::Statement::Expression(tail))
+                            if self.tail_position_needs_launch_scope(tail)
+                    )
+            }
+            Expression::If { then, else_, .. } => {
+                self.tail_position_needs_launch_scope(then)
+                    || self.tail_position_needs_launch_scope(else_)
+            }
+            Expression::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| self.tail_position_needs_launch_scope(&arm.body)),
+            _ => false,
+        }
+    }
+
     /// Whether `expression` is a direct call that resolves to `self_symbol` with `arity` args —
     /// i.e. the function calling itself. Resolution mirrors `generate_call`'s: a plain
     /// name maps to itself, an overloaded name to its exact mangled member by argument

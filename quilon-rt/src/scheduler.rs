@@ -422,6 +422,69 @@ pub(crate) fn abort_current_trap(report: String) -> ! {
     unreachable!("run_abort_trap_guarded force-resets this coroutine on the abort marker")
 }
 
+/// Run a value-returning `@` primitive's producer — the launch background work behind
+/// [`crate::deferred::launch`] — to completion on a fresh nested fiber, catching a fail-loud
+/// exit reached inside it (an IO error today; a failing `assert` too, once a launched CALL
+/// can run user code) instead of letting it terminate the process: `Err` carries the report
+/// that would otherwise have gone straight to stderr, for the enclosing `< >` block's join
+/// to report once every sibling launch has settled. Reuses [`run_abort_trap_guarded`]'s own
+/// mechanism (the depth counter and [`Park::AbortTrapped`]) rather than a parallel one — a
+/// launch that faults and an `aborts()` lambda that faults are the same event to
+/// `report::fail_at`, only the caller differs. Generic over the producer's own return type,
+/// where `aborts()`'s trap is fixed to its matcher's `u8` C-ABI trampoline.
+///
+/// A park the body causes (`@sleep`, socket readiness, forcing another deferred, …) is
+/// forwarded to the fiber calling this — the same way [`run_case_guarded`] forwards one —
+/// so the scheduler keeps driving it exactly as it would a top-level fiber's. Must be
+/// called from within a fiber (asserts otherwise).
+pub(crate) fn run_launch_guarded<T: 'static>(body: impl FnOnce() -> T + 'static) -> Result<T, String> {
+    let outer_yielder = current_yielder("run_launch_guarded");
+
+    let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
+    let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
+    let mut produced: Option<T> = None;
+    let produced_ptr: *mut Option<T> = &mut produced;
+    let mut coroutine = new_fiber(allocation.stack, move || {
+        let value = body();
+        // SAFETY: `produced` is a local of this function's frame, which does not return
+        // until the loop below has driven this coroutine to completion or force-reset it —
+        // either way, well after this closure could possibly run.
+        unsafe { *produced_ptr = Some(value) };
+    });
+    let id = with_scheduler(|scheduler| scheduler.reserve_id());
+    gc::register(id, low, high);
+
+    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
+    let fault = loop {
+        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
+            CoroutineResult::Yield(Park::AbortTrapped(report)) => break Some(report),
+            CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
+            CoroutineResult::Return(()) => break None,
+        }
+    };
+    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
+    // See `run_case_guarded`'s own comment at the identical line: put the outer yielder
+    // back before returning control to it, or its next park dereferences a dangling one.
+    CURRENT_YIELDER.set(outer_yielder);
+
+    if fault.is_some() {
+        // Safe for the same reason `run_abort_trap_guarded` force-resets its own coroutine:
+        // the fail-loud reporter already moved its outcome into the `Park` value before
+        // suspending, so nothing left on the stack needs to run to observe it.
+        unsafe { coroutine.force_reset() };
+    }
+    gc::unregister(id);
+    drop(coroutine);
+    with_scheduler(|scheduler| scheduler.release_id(id));
+
+    match fault {
+        Some(report) => Err(report),
+        None => Ok(produced.expect(
+            "a launch producer that did not fault must have stored its value before returning",
+        )),
+    }
+}
+
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
 /// be called from within a fiber (panics otherwise).
 pub fn sleep(duration: Duration) {

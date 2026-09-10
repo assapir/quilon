@@ -678,7 +678,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // then rewrites the parameter slots and `br`s back here. The parameter allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(declaration, &symbol)? {
+        let body_value = if self.body_has_self_tail_call(declaration, &symbol)?
+            && !self.tail_position_needs_launch_scope(&declaration.body)
+        {
             let parameter_slots: Vec<PointerValue<'ctx>> = declaration
                 .parameters
                 .iter()

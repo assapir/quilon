@@ -27,8 +27,10 @@
 //! (general process/runtime-lifecycle primitives: `__exit` and the entry-point
 //! `argv`/`envp` conversions), [`test_registry`] (the event renderer behind `quilon test`),
 //! [`abort_trap`] (the `aborts()` matcher — run a lambda on a guarded fiber and report
-//! whether it ended in a fail-loud exit), and [`mem`] (general memory primitives: allocation,
-//! GC, the shared `QlSlice` ABI type, bounds-check and range-endpoint failure). Each `#[no_mangle]`
+//! whether it ended in a fail-loud exit), [`launch_scope`] (a `< >` block's own launch
+//! registry — open on entry, joined before its value flows out), and [`mem`] (general
+//! memory primitives: allocation, GC, the shared `QlSlice` ABI type, bounds-check and
+//! range-endpoint failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
 //!
@@ -45,6 +47,7 @@ pub mod deferred;
 pub mod gc;
 pub mod http;
 pub mod io;
+pub mod launch_scope;
 pub mod mem;
 pub mod net;
 pub mod process;
@@ -65,6 +68,7 @@ pub use collections::{
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use http::__http_frame_body;
 pub use io::{__color_enabled, __print_text_fd, __write_bytes};
+pub use launch_scope::{__block_scope_enter, __block_scope_join};
 pub use mem::{
     __alloc, __alloc_array, __alloc_array_atomic, __alloc_atomic, __gc_add_root, __gc_init,
     __index_fail, __range_endpoint, __render_c_string, GcThread, MAX_EXACT_NUM,
@@ -191,6 +195,8 @@ intrinsic_registry! {
         extern "C" fn(*mut QlResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
     __force_result: extern "C" fn(*mut QlResult, *const c_void),
+    __block_scope_enter: extern "C" fn(),
+    __block_scope_join: extern "C" fn(),
     __run_fiber_main: extern "C" fn(
         extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int,
         c_int,
