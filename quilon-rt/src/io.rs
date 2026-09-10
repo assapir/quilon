@@ -202,8 +202,9 @@ fn call_on_chunk(
 /// reactor readiness between them via [`read_once`]), and call `on_chunk` once per whole,
 /// valid-Text chunk. An incomplete UTF-8 sequence or an incomplete grapheme cluster at the end
 /// of a read is held back and prepended to the next one; a `read_once` that returns `0` (true
-/// EOF) delivers whatever is still held, as-is — one extra syscall a regular file answers at
-/// once, not a background wait.
+/// EOF) delivers whatever is still held — one extra syscall a regular file answers at once, not
+/// a background wait — after checking it is itself valid UTF-8 (a file whose very last bytes
+/// end mid-sequence yields `NotOk` there instead of handing `onChunk` invalid Text).
 fn stream_file(
     path: &str,
     chunk_size: f64,
@@ -238,6 +239,9 @@ fn stream_file(
         };
         if count == 0 {
             if !carry.is_empty() {
+                if std::str::from_utf8(&carry).is_err() {
+                    return QlResult::not_ok("@streamFile read bytes that are not valid UTF-8");
+                }
                 delivered += carry.len() as i64;
                 call_on_chunk(on_chunk, environment, &carry);
             }

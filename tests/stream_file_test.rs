@@ -124,6 +124,27 @@ fn a_non_positive_chunk_size_yields_not_ok() {
 }
 
 #[test]
+fn a_file_ending_inside_a_utf_8_sequence_yields_not_ok() {
+    // The file's last byte (0xC3) is a lone lead byte of a 2-byte sequence with no
+    // continuation byte ever coming: at true EOF that tail is genuinely invalid UTF-8, not
+    // merely incomplete, so it must never reach `onChunk` as a chunk.
+    let file = temp_data_file("truncated_utf8", b"caf\xc3");
+    let src = format!(
+        r#"<< core.io
+
+^ = () -> Num => <
+  @streamFile("{path}", 100, chunk => < true >) ?
+    | Ok(_) => 0
+    | NotOk(_) => 1
+>
+"#,
+        path = file.display(),
+    );
+    assert_exit(&src, 1);
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
 fn a_chunk_edge_inside_a_multi_byte_code_point_never_splits_it() {
     // "e" (precomposed U+00E9, a 2-byte UTF-8 sequence) between plain ASCII: a 2-byte
     // chunkSize forces a read boundary to land inside its bytes on more than one read.
