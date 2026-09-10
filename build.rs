@@ -46,6 +46,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_support/deployment_target.rs");
 
     // Rebuild (and re-place) the staticlib whenever the runtime crate — or a
     // dependency it pins — changes, so a stale `libquilon_rt.a` can never linger
@@ -55,7 +56,17 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
 
     place_runtime_staticlib();
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!(
+            "cargo:rustc-env=QUILON_MACOS_DEPLOYMENT_TARGET={}",
+            macos_deployment_target()
+        );
+    }
 }
+
+// Shared with `quilon-rt/build.rs`, which needs the same lookup for the GC object.
+include!("build_support/deployment_target.rs");
 
 /// Build the `quilon-rt` staticlib and copy it to
 /// `target/<profile>/libquilon_rt.bundled.a` (next to the `quilon` binary), then

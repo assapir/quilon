@@ -107,6 +107,11 @@ All notable changes to Quilon are documented here.
   megabytes to every produced binary. The build script's copy is now named
   `libquilon_rt.bundled.a`, a name cargo never produces, and `quilon build`'s
   "next to the running binary" lookup looks for that same name. Closes #182.
+- **`quilon build` on macOS no longer warns that the runtime archive "was built for newer
+  'macOS' version" than the link.** The Boehm GC object inside `libquilon_rt.a` now
+  carries the same minimum macOS version as the archive's Rust-compiled objects and the
+  produced executable, so all three agree regardless of the SDK or host OS version of the
+  machine that built `quilon`. See `docs/tooling/compiling.md`. Closes #411.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 
