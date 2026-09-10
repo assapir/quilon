@@ -383,11 +383,6 @@ fn references_answer_nothing_for_a_name_declared_in_another_file() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// A local reassigned inside a lambda and again after it — the exact shape from the
-/// language server bug bash: `total := 0`, then `total := total + n` inside a
-/// `.each` callback, then `total := total * 2`, then a final bare read. `:=` on a name
-/// already in scope is a REASSIGNMENT of it (`docs/mutation.md`), so every reassignment
-/// target and every read must resolve to the very same binding as the declaration.
 fn text_reassigning_a_local_through_a_lambda() -> &'static str {
     "^ = () -> Num => <\n  \
      total := 0\n  \
@@ -432,9 +427,7 @@ fn references_follow_a_binding_through_its_reassignments() {
 
 #[test]
 fn a_fresh_mutable_local_in_an_inner_scope_is_its_own_binding() {
-    // Two functions each introduce a fresh `count := …` — neither's scope reaches the
-    // other's, so `:=` here is a declaration in each, not a reassignment: references
-    // from one must never pull in the other's declaration or uses.
+    // Different scopes, so each `:=` declares.
     let text = "one = () -> Num => < count := 1\ncount >\n\
                 two = () -> Num => < count := 2\ncount + count >\n\
                 ^ = () -> Num => < one() + two() >\n";
@@ -469,10 +462,6 @@ fn only_a_bare_name_is_accepted_as_a_rename_target() {
     assert!(!is_identifier(""));
 }
 
-/// Renaming the same reassigned-through-a-lambda binding from
-/// [`text_reassigning_a_local_through_a_lambda`] rewrites the declaration, both
-/// reassignment targets, and both reads in one edit set, leaving a program that still
-/// compiles under its new name.
 #[test]
 fn renaming_a_reassigned_binding_rewrites_every_reassignment_and_read() {
     let text = text_reassigning_a_local_through_a_lambda();
