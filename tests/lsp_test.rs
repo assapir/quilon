@@ -450,6 +450,73 @@ fn references_answer_nothing_for_a_name_declared_in_another_file() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
+fn text_reassigning_a_local_through_a_lambda() -> &'static str {
+    "^ = () -> Num => <\n  \
+     total := 0\n  \
+     [1, 2, 3].each(n => <\n    \
+     total := total + n\n  \
+     >)\n  \
+     total := total * 2\n  \
+     total\n\
+     >\n"
+}
+
+#[test]
+fn references_follow_a_binding_through_its_reassignments() {
+    let text = text_reassigning_a_local_through_a_lambda();
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let expected = vec![
+        offset_of(text, "total := 0", 0),
+        offset_of(text, "total := total + n", 0),
+        offset_of(text, "total + n", 0),
+        offset_of(text, "total := total * 2", 0),
+        offset_of(text, "total * 2", 0),
+        offset_of(text, "total\n>", 0),
+    ];
+
+    // From the declaration...
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total := 0", 0)),
+        expected
+    );
+    // ...from a reassignment's read, inside the lambda...
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total + n", 0)),
+        expected
+    );
+    // ...and from the final read.
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total\n>", 0)),
+        expected
+    );
+}
+
+#[test]
+fn a_fresh_mutable_local_in_an_inner_scope_is_its_own_binding() {
+    // Different scopes, so each `:=` declares.
+    let text = "one = () -> Num => < count := 1\ncount >\n\
+                two = () -> Num => < count := 2\ncount + count >\n\
+                ^ = () -> Num => < one() + two() >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "count := 1", 0)),
+        vec![
+            offset_of(text, "count := 1", 0),
+            offset_of(text, "count >", 0)
+        ]
+    );
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "count := 2", 0)),
+        vec![
+            offset_of(text, "count := 2", 0),
+            offset_of(text, "count + count", 0),
+            offset_of(text, "count + count", 8),
+        ]
+    );
+}
+
 // --- Rename -------------------------------------------------------------------
 
 #[test]
@@ -460,6 +527,27 @@ fn only_a_bare_name_is_accepted_as_a_rename_target() {
     assert!(!is_identifier("a.b"));
     assert!(!is_identifier("two names"));
     assert!(!is_identifier(""));
+}
+
+#[test]
+fn renaming_a_reassigned_binding_rewrites_every_reassignment_and_read() {
+    let text = text_reassigning_a_local_through_a_lambda();
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let mut spans = references_at(&checked.program, text, offset_of(text, "total := 0", 0))
+        .expect("a resolvable target");
+    assert_eq!(spans.len(), 6);
+
+    // Apply the rename the same way `textDocument/rename` does — replace each span's
+    // text with the new name — back to front so earlier spans' offsets stay valid.
+    spans.sort_by_key(|span| span.start);
+    let mut renamed = text.to_string();
+    for span in spans.iter().rev() {
+        renamed.replace_range(span.start as usize..span.end as usize, "sum");
+    }
+
+    assert!(!renamed.contains("total"));
+    check_text(Path::new("buffer.qn"), &renamed).expect("the renamed program still compiles");
 }
 
 // --- Semantic tokens --------------------------------------------------------
