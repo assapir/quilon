@@ -16,7 +16,7 @@ Import with `<< core.io`. See the [corelib index](README.md) and `examples/io.qn
 | `io.write(content, fd :: Num) -> Num` | Render `content` and write those bytes (no newline) to a file descriptor; returns bytes written. Byte-exact: a `Text` renders as itself, and the bytes go out as they are. |
 | `@readStdin() -> Text` | Read one line from stdin (without the trailing newline). A [leaf IO primitive](../concurrency/README.md): it launches the read and returns a **deferred** `Text` forced on first strict use. Yields `""` at end-of-input. |
 | `@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result` | Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk. A [leaf IO primitive](../concurrency/README.md) that runs **strictly**, in program order on the calling fiber, parking between reads so other fibers still overlap. `Ok(bytesRead)` / `NotOk(message)`. |
-| `io.streamFile(path :: Text, onChunk :: (Text) -> Bool) -> Result` | `@streamFile` with a default chunk size the runtime chooses (16 KiB). |
+| `io.streamFile(path :: Text, onChunk :: (Text) -> Bool) -> Result` | `@streamFile` with a default chunk size the runtime chooses (64 KiB). |
 | `io.stdout`, `io.stderr` | The standard file descriptors. |
 
 `io.print`, `io.eprint`, and `io.write` take **anything renderable**: the compiler resolves

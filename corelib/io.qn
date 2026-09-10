@@ -61,7 +61,10 @@
   NotOk("")
 >
 
-~ `@streamFile` with a default chunk size the runtime chooses (16 KiB).
+~ 64 KiB: per-chunk cost is the callback, so a file default is large.
+kb64 = 65536
+
+~ `@streamFile` with a default chunk size the runtime chooses (64 KiB).
 >> streamFile = (path :: Text, onChunk :: (Text) -> Bool) -> Result => <
-  @streamFile(path, 16384, onChunk)
+  @streamFile(path, kb64, onChunk)
 >
