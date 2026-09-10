@@ -1,9 +1,7 @@
-//! End-to-end proof of `@streamFile` — the chunk-callback streaming file read (`core.io`).
-//!
-//! `@streamFile(path, chunkSize, onChunk)` runs STRICTLY, in program order on the calling
-//! fiber (unlike `@readStdin`/`@tcpRequest`'s launch-and-defer): each case here drives it
-//! through the in-process JIT against a real temp file and reads the exit code it computed,
-//! the same pattern `run_test.rs` uses for plain arithmetic.
+//! End-to-end proof of `@streamFile` — the chunk-callback streaming file read (`core.io`),
+//! which runs on the calling fiber, parking between reads. Each case here drives it through
+//! the in-process JIT against a real temp file and reads the exit code it computed, the same
+//! pattern `run_test.rs` uses for plain arithmetic.
 
 mod common;
 use common::assert_exit;
@@ -24,7 +22,11 @@ fn temp_data_file(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
 }
 
 #[test]
-fn whole_small_file_in_one_chunk_yields_ok_with_the_file_size() {
+fn a_small_file_with_a_large_chunk_size_yields_ok_with_the_file_size() {
+    // A chunkSize far bigger than the file: the first read already gets every byte, but the
+    // last grapheme still holds back until a second read confirms end-of-file (one extra
+    // syscall a regular file answers at once) — two chunks, not one, and the full text either
+    // way.
     let file = temp_data_file("whole", b"hello world");
     let src = format!(
         r#"<< core.io
@@ -38,7 +40,7 @@ fn whole_small_file_in_one_chunk_yields_ok_with_the_file_size() {
     true
   >)
   result ?
-    | Ok(bytesRead) => (seen == "hello world" ? 1 : 0) + (bytesRead == 11 ? 2 : 0) + (count == 1 ? 4 : 0)
+    | Ok(bytesRead) => (seen == "hello world" ? 1 : 0) + (bytesRead == 11 ? 2 : 0) + (count == 2 ? 4 : 0)
     | NotOk(_) => 0
 >
 "#,
@@ -140,7 +142,7 @@ fn a_chunk_edge_inside_a_multi_byte_code_point_never_splits_it() {
     true
   >)
   result ?
-    | Ok(bytesRead) => (seen == "ab{e_acute}cd" ? 1 : 0) + (bytesRead == 6 ? 2 : 0) + (count == 3 ? 4 : 0)
+    | Ok(bytesRead) => (seen == "ab{e_acute}cd" ? 1 : 0) + (bytesRead == 6 ? 2 : 0) + (count == 4 ? 4 : 0)
     | NotOk(_) => 0
 >
 "#,
@@ -169,7 +171,7 @@ fn a_chunk_edge_inside_a_grapheme_cluster_never_splits_it() {
     true
   >)
   result ?
-    | Ok(bytesRead) => (seen == "x{combining_e}y" ? 1 : 0) + (bytesRead == 5 ? 2 : 0) + (count == 2 ? 4 : 0) + (seen.length == 3 ? 8 : 0)
+    | Ok(bytesRead) => (seen == "x{combining_e}y" ? 1 : 0) + (bytesRead == 5 ? 2 : 0) + (count == 3 ? 4 : 0) + (seen.length == 3 ? 8 : 0)
     | NotOk(_) => 0
 >
 "#,

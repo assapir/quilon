@@ -688,8 +688,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// once per chunk, in place of the closure's own function pointer (whose direct signature
     /// the runtime never sees). Mirrors `emit_abort_trap_thunk`, minus the varying return type:
     /// `onChunk`'s signature is fixed by `@streamFile`'s own corelib declaration, so nothing
-    /// here depends on the call site.
+    /// here depends on the call site — one definition serves every `@streamFile` call in the
+    /// module, found by name rather than built fresh each time.
     fn emit_stream_file_thunk(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        const NAME: &str = "__stream_file_thunk";
+        if let Some(existing) = self.module.get_function(NAME) {
+            return Ok(existing);
+        }
+
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
         let i8_ty = self.context.i8_type();
@@ -697,9 +703,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let bundle_ty = self.closure_struct_type();
 
         let fn_type = i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
-        let name = format!("__stream_file_thunk_{}", self.lambda_counter);
-        self.lambda_counter += 1;
-        let function = self.module.add_function(&name, fn_type, None);
+        let function = self.module.add_function(NAME, fn_type, None);
         function.set_linkage(inkwell::module::Linkage::Internal);
 
         let suspended = self.suspend_enclosing_function();

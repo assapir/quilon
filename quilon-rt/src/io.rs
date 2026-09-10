@@ -156,11 +156,10 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
 }
 
 /// `@streamFile(path, chunkSize, onChunk)`: read `path` in `chunkSize`-byte reads, calling the
-/// bundled Quilon closure once per whole, valid-Text chunk — STRICTLY, on the calling fiber
-/// (unlike `@readStdin`/`@tcpRequest`'s launch-and-defer): it runs in program order and only
-/// parks (via [`read_once`]) on reactor readiness between reads, so other fibers still overlap.
-/// `on_chunk`/`environment` are the code generator's fixed-shape trampoline over the closure
-/// (see `CodeGenerator::emit_stream_file_thunk`) and the bundled `{ptr,ptr}` closure value it
+/// bundled Quilon closure once per whole, valid-Text chunk. Runs on the calling fiber, parking
+/// (via [`read_once`]) on reactor readiness between reads. `on_chunk`/`environment` are the
+/// code generator's fixed-shape trampoline over the closure (see
+/// `CodeGenerator::emit_stream_file_thunk`) and the bundled `{ptr,ptr}` closure value it
 /// unpacks. Writes `Ok(bytesRead)` (total bytes delivered) into `out` at EOF or once `onChunk`
 /// returns `false`, or `NotOk(message)` on any failure — never fails the process.
 ///
@@ -199,57 +198,36 @@ fn call_on_chunk(
     on_chunk(text.data as *const u8, text.len, environment) != 0
 }
 
-/// `chunkSize` as the positive whole number of bytes it must be, or the message saying why
-/// it is not.
-fn check_chunk_size(chunk_size: f64) -> Result<usize, String> {
-    if chunk_size.fract() != 0.0 || chunk_size <= 0.0 {
-        return Err(format!(
-            "@streamFile: chunkSize must be a positive whole number, got {}",
-            crate::mem::format_num(chunk_size)
-        ));
-    }
-    Ok(chunk_size as usize)
-}
-
 /// The `@streamFile` read loop: open `path`, read it in `chunk_size`-byte reads (parking on
 /// reactor readiness between them via [`read_once`]), and call `on_chunk` once per whole,
-/// valid-Text chunk.
-///
-/// Every chunk handed to `on_chunk` is a whole grapheme cluster prefix: an incomplete UTF-8
-/// sequence or an incomplete grapheme cluster at the end of a read is held back and prepended
-/// to the next read, UNLESS the file's own size (read once, at open) says nothing more will
-/// ever arrive — then everything gathered so far is delivered as one final chunk, without
-/// holding anything back. That size check is skipped (the conservative, always-hold-back path
-/// runs instead, until a `read_once` genuinely returns `0`) for a `path` metadata calls this
-/// on that is not a plain file, or when metadata fails.
+/// valid-Text chunk. An incomplete UTF-8 sequence or an incomplete grapheme cluster at the end
+/// of a read is held back and prepended to the next one; a `read_once` that returns `0` (true
+/// EOF) delivers whatever is still held, as-is — one extra syscall a regular file answers at
+/// once, not a background wait.
 fn stream_file(
     path: &str,
     chunk_size: f64,
     on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8,
     environment: *mut c_void,
 ) -> QlResult {
-    let chunk_size = match check_chunk_size(chunk_size) {
-        Ok(size) => size,
-        Err(message) => return QlResult::not_ok(&message),
-    };
+    if chunk_size.fract() != 0.0 || chunk_size <= 0.0 {
+        return QlResult::not_ok(&format!(
+            "@streamFile: chunkSize must be a positive whole number, got {}",
+            crate::mem::format_num(chunk_size)
+        ));
+    }
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) => {
             return QlResult::not_ok(&format!("@streamFile failed to open {path}: {error}"));
         }
     };
-    let known_size = file
-        .metadata()
-        .ok()
-        .filter(std::fs::Metadata::is_file)
-        .map(|metadata| metadata.len());
     let fd = file.as_raw_fd();
     set_nonblocking(fd);
 
     let mut carry: Vec<u8> = Vec::new();
-    let mut read_so_far: u64 = 0;
     let mut delivered: i64 = 0;
-    let mut buffer = vec![0u8; chunk_size];
+    let mut buffer = vec![0u8; chunk_size as usize];
 
     loop {
         let count = match read_once(fd, &mut buffer) {
@@ -259,44 +237,35 @@ fn stream_file(
             }
         };
         if count == 0 {
-            // True EOF: whatever remains held is delivered as-is, per the documented contract.
             if !carry.is_empty() {
                 delivered += carry.len() as i64;
                 call_on_chunk(on_chunk, environment, &carry);
             }
             return QlResult::ok_num(delivered as f64);
         }
-        read_so_far += count as u64;
         carry.extend_from_slice(&buffer[..count]);
 
-        if known_size.is_some_and(|size| read_so_far >= size) {
-            // Everything the file held when it was opened has now been read: nothing more
-            // will ever arrive, so nothing needs holding back.
-            delivered += carry.len() as i64;
-            call_on_chunk(on_chunk, environment, &carry);
-            return QlResult::ok_num(delivered as f64);
-        }
-
-        let (deliverable, tail) = match split_chunk(&carry) {
-            Ok(pair) => pair,
+        let cut = match split_chunk(&carry) {
+            Ok(cut) => cut,
             Err(message) => return QlResult::not_ok(&message),
         };
-        carry = tail;
-        if deliverable.is_empty() {
+        if cut == 0 {
             continue;
         }
-        delivered += deliverable.len() as i64;
-        if !call_on_chunk(on_chunk, environment, &deliverable) {
+        delivered += cut as i64;
+        let keep_going = call_on_chunk(on_chunk, environment, &carry[..cut]);
+        carry.drain(..cut);
+        if !keep_going {
             return QlResult::ok_num(delivered as f64);
         }
     }
 }
 
-/// Split `buffer` into the whole, valid-Text prefix ready to deliver and the tail bytes to
-/// carry into the next read: an incomplete UTF-8 sequence at the end, then the last grapheme
-/// cluster of what remains — more bytes could still extend either, so both stay held back.
-/// Errors on genuinely invalid UTF-8 (as opposed to merely an incomplete trailing sequence).
-fn split_chunk(buffer: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+/// The end of `buffer`'s whole, valid-Text prefix — ready to deliver — leaving an incomplete
+/// UTF-8 sequence at the end, then the last grapheme cluster of what remains, held back: more
+/// bytes could still extend either. Errors on genuinely invalid UTF-8 (as opposed to merely an
+/// incomplete trailing sequence).
+fn split_chunk(buffer: &[u8]) -> Result<usize, String> {
     let valid_len = match std::str::from_utf8(buffer) {
         Ok(_) => buffer.len(),
         Err(error) => match error.error_len() {
@@ -305,12 +274,11 @@ fn split_chunk(buffer: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
         },
     };
     let valid = std::str::from_utf8(&buffer[..valid_len]).expect("checked above");
-    let cut = valid
+    Ok(valid
         .grapheme_indices(true)
         .next_back()
         .map(|(index, _)| index)
-        .unwrap_or(0);
-    Ok((buffer[..cut].to_vec(), buffer[cut..].to_vec()))
+        .unwrap_or(0))
 }
 
 #[cfg(test)]

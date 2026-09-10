@@ -259,13 +259,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 false,
             ),
             // void __stream_file_run({i8,{ptr,i64}}* out, i8* path,i64, double chunkSize,
-            // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: read `path`
-            // in `chunkSize`-byte reads on the CALLING fiber (parking on readiness between
-            // reads, not launched in the background), calling the code generator's fixed-shape
+            // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: runs on the
+            // calling fiber, parking between reads, calling the code generator's fixed-shape
             // `onChunk` trampoline once per whole, valid-Text chunk with `environment` (the
-            // bundled `{ptr,ptr}` closure) as its last argument. Writes a plain (non-deferred)
-            // `Result` into `out` — `Ok(bytesRead)` or `NotOk(message)` — via an out-pointer,
-            // like `__tcp_request_launch`.
+            // bundled `{ptr,ptr}` closure) as its last argument. Writes a plain `Result` into
+            // `out` via an out-pointer, like `__tcp_request_launch`.
             "__stream_file_run" => ctx.void_type().fn_type(
                 &[
                     ptr.into(),

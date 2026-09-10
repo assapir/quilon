@@ -396,10 +396,9 @@ mod tests {
 
     #[test]
     fn stream_file_result_is_never_a_deferred_value() {
-        // `@streamFile` runs STRICTLY, on the calling fiber (`onChunk` is the caller's own
-        // code, which may mutate a captured `:=` cell) — unlike `@readStdin`/`@tcpRequest`, it
-        // is not in `produces_deferred`, so binding its result produces no force site of its
-        // own: the match on it needs no force, because it was never lazy to begin with.
+        // `@streamFile` runs on the calling fiber: it is not in `produces_deferred`, so binding
+        // its result produces no force site of its own — the match on it needs no force,
+        // because it was never lazy to begin with.
         let src = "<< core.io\n^ = () -> Num => <\n  r = @streamFile(\"f\", 10, chunk => true)\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
         assert_eq!(force_count(src), 0);
     }

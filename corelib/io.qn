@@ -50,20 +50,18 @@
 ~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder.
 >> @readStdin = () -> Text => < "" >
 
-~ Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk. `@streamFile` is a
-~ leaf IO primitive (the `@` marker): unlike `@readStdin`, it runs STRICTLY, in program order
-~ on the calling fiber — `onChunk` is the caller's own code, which may mutate a captured `:=`
-~ cell — parking only between reads, so other fibers still overlap. Every chunk is whole,
-~ valid Text (an incomplete UTF-8 sequence or grapheme cluster at a read's end carries into the
-~ next one); `onChunk` returns `true` to keep reading or `false` to stop and close the file at
-~ once. Yields `Ok(bytesRead)` (the total bytes delivered) at end-of-input or on a stop, or
-~ `NotOk(message)` on any failure (a missing file, a read error, or a `chunkSize` that is not a
+~ Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk — on the calling
+~ fiber, parking only between reads. Every chunk is whole, valid Text (an incomplete UTF-8
+~ sequence or grapheme cluster at a read's end carries into the next one); `onChunk` returns
+~ `true` to keep reading or `false` to stop and close the file at once. Yields `Ok(bytesRead)`
+~ (the total bytes delivered) at end-of-input or on a stop, or `NotOk(message)` on any failure
+~ (a missing file, a read error, invalid UTF-8 in the file, or a `chunkSize` that is not a
 ~ positive whole number) — never fails the program. The body below is an inert placeholder.
 >> @streamFile = (path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result => <
   NotOk("")
 >
 
-~ `@streamFile` with a runtime-chosen default chunk size (currently 16 KiB).
+~ `@streamFile` with a default chunk size the runtime chooses (16 KiB).
 >> streamFile = (path :: Text, onChunk :: (Text) -> Bool) -> Result => <
   @streamFile(path, 16384, onChunk)
 >
