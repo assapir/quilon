@@ -593,9 +593,7 @@ mod tests {
         // this would deadlock; `recv_timeout` turns that into a clear test failure instead of
         // hanging the suite.
         static RESOLVED: AtomicBool = AtomicBool::new(false);
-        static SIBLING_RAN: AtomicBool = AtomicBool::new(false);
         RESOLVED.store(false, Ordering::SeqCst);
-        SIBLING_RAN.store(false, Ordering::SeqCst);
 
         let (sibling_ran_sender, sibling_ran_receiver) = mpsc::channel::<()>();
 
@@ -603,6 +601,8 @@ mod tests {
             run(move || {
                 spawn(move || {
                     let lookup = move |_: &str| {
+                        // Only satisfiable if the sibling below actually ran while this lookup
+                        // was in flight — impossible under the old, fiber-thread-blocking code.
                         sibling_ran_receiver
                             .recv_timeout(Duration::from_secs(5))
                             .expect("sibling fiber never ran while the lookup was in flight");
@@ -614,13 +614,11 @@ mod tests {
                 });
 
                 spawn(move || {
-                    SIBLING_RAN.store(true, Ordering::SeqCst);
                     let _ = sibling_ran_sender.send(());
                 });
             });
         });
 
-        assert!(SIBLING_RAN.load(Ordering::SeqCst), "the sibling fiber ran");
         assert!(RESOLVED.load(Ordering::SeqCst), "the resolve completed");
     }
 }
