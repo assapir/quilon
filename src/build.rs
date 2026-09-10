@@ -34,14 +34,9 @@ pub struct DebugSource<'a> {
     pub file: &'a Path,
 }
 
-/// The triple the object codegen emits against. LLVM's own default triple carries no macOS
-/// version at all in its string form, and the code that fills one in when writing the object
-/// reads the *running* machine's OS version rather than [`MACOS_DEPLOYMENT_TARGET`] — so a
-/// build run on a newer Mac than the one `quilon` itself was built on would otherwise stamp
-/// the object with that newer version, right back into disagreement with the pinned link.
-/// Rewriting the trailing version digits to `macosx<MACOS_DEPLOYMENT_TARGET>` (the product-version
-/// spelling, not `darwin<kernel version>` — the two number lines don't correspond) keeps every
-/// object this compiler emits at the one fixed minimum.
+/// Rewrites the default triple's OS version to `macosx<MACOS_DEPLOYMENT_TARGET>` — the
+/// product-version spelling, not `darwin<kernel version>`, since the two number lines don't
+/// correspond.
 #[cfg(target_os = "macos")]
 fn target_triple() -> TargetTriple {
     let default = TargetMachine::get_default_triple();
@@ -324,17 +319,12 @@ pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "-dead_strip"];
 #[cfg(not(target_os = "macos"))]
 pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "--gc-sections"];
 
-/// The macOS version baked in when this compiler was built (the root build script's
-/// `QUILON_MACOS_DEPLOYMENT_TARGET`, matching what `quilon-rt/build.rs` gave the runtime
-/// archive's GC object), so a produced binary's minimum stays fixed no matter which
-/// machine's OS version `quilon build` later runs on.
+/// The macOS version this compiler was built for (baked in by the root build script).
 #[cfg(target_os = "macos")]
 const MACOS_DEPLOYMENT_TARGET: &str = env!("QUILON_MACOS_DEPLOYMENT_TARGET");
 
-/// Pins the link to [`MACOS_DEPLOYMENT_TARGET`], rather than clang's unpinned default of
-/// the linking machine's own OS version. (`concat!` needs a literal, not a `const` path, so
-/// this reads the same baked-in environment variable a second time rather than referring to
-/// the constant above — both resolve to the identical compile-time value.)
+// `concat!` needs a literal, not a `const` path, so this re-reads the same baked-in
+// environment variable rather than referring to `MACOS_DEPLOYMENT_TARGET` above.
 #[cfg(target_os = "macos")]
 pub const MACOS_VERSION_MIN_ARG: &str = concat!(
     "-mmacosx-version-min=",

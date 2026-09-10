@@ -40,45 +40,15 @@ const GC_DEFINES: &[&str] = &[
     "THREAD_LOCAL_ALLOC",
 ];
 
-/// The macOS version the collector's object is stamped with. `cc` defaults this to the
-/// installed SDK's own version (often newer than what rustc targets), so left alone the GC
-/// object and the rest of the archive disagree and the linker warns about it. An explicit
-/// `MACOSX_DEPLOYMENT_TARGET` wins; otherwise this matches rustc's own default for the target,
-/// which is what the archive's Rust-compiled objects already carry.
-fn macos_deployment_target() -> String {
-    if let Ok(v) = std::env::var("MACOSX_DEPLOYMENT_TARGET") {
-        return v;
-    }
-    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let target = std::env::var("TARGET").unwrap_or_default();
-    let mut command = std::process::Command::new(rustc);
-    command.arg("--print").arg("deployment-target");
-    if !target.is_empty() {
-        command.arg("--target").arg(&target);
-    }
-    let output = command
-        .output()
-        .expect("failed to run `rustc --print deployment-target`");
-    assert!(
-        output.status.success(),
-        "`rustc --print deployment-target` failed"
-    );
-    // Prints `MACOSX_DEPLOYMENT_TARGET=11.0` (the env var name varies by platform,
-    // e.g. `IPHONEOS_DEPLOYMENT_TARGET` for iOS) — the version is everything after the `=`.
-    String::from_utf8(output.stdout)
-        .expect("rustc output is not UTF-8")
-        .trim()
-        .rsplit('=')
-        .next()
-        .expect("unexpected `rustc --print deployment-target` output")
-        .to_string()
-}
+// Shared with the root `build.rs`, which needs the same lookup for the link step.
+include!("../build_support/deployment_target.rs");
 
 fn main() {
     let vendor = Path::new("vendor/bdwgc");
     let single_translation_unit = vendor.join("extra/gc.c");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../build_support/deployment_target.rs");
     println!("cargo:rerun-if-changed={}", vendor.display());
 
     // The collector is a git submodule, so a clone made without it — or a GitHub

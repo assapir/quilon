@@ -46,6 +46,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_support/deployment_target.rs");
 
     // Rebuild (and re-place) the staticlib whenever the runtime crate — or a
     // dependency it pins — changes, so a stale `libquilon_rt.a` can never linger
@@ -64,38 +65,8 @@ fn main() {
     }
 }
 
-/// The macOS version a produced `quilon build` executable is stamped with, baked in at compile
-/// time so it stays fixed no matter which host later runs the distributed `quilon` binary — it
-/// must match what `quilon-rt/build.rs` gives the collector's object, so an explicit
-/// `MACOSX_DEPLOYMENT_TARGET` wins there too; otherwise this is rustc's own default for the
-/// target, which the rest of the runtime archive already carries.
-fn macos_deployment_target() -> String {
-    if let Ok(v) = std::env::var("MACOSX_DEPLOYMENT_TARGET") {
-        return v;
-    }
-    let rustc = env("RUSTC");
-    let target = env("TARGET");
-    let output = Command::new(rustc)
-        .arg("--print")
-        .arg("deployment-target")
-        .arg("--target")
-        .arg(&target)
-        .output()
-        .expect("failed to run `rustc --print deployment-target`");
-    assert!(
-        output.status.success(),
-        "`rustc --print deployment-target` failed"
-    );
-    // Prints `MACOSX_DEPLOYMENT_TARGET=11.0` (the env var name varies by platform,
-    // e.g. `IPHONEOS_DEPLOYMENT_TARGET` for iOS) — the version is everything after the `=`.
-    String::from_utf8(output.stdout)
-        .expect("rustc output is not UTF-8")
-        .trim()
-        .rsplit('=')
-        .next()
-        .expect("unexpected `rustc --print deployment-target` output")
-        .to_string()
-}
+// Shared with `quilon-rt/build.rs`, which needs the same lookup for the GC object.
+include!("build_support/deployment_target.rs");
 
 /// Build the `quilon-rt` staticlib and copy it to
 /// `target/<profile>/libquilon_rt.bundled.a` (next to the `quilon` binary), then
