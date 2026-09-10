@@ -196,14 +196,37 @@ impl Resolver {
 
     fn statement(&mut self, statement: &Statement) {
         match statement {
-            Statement::Item(item) => {
-                // The declaration is in scope for its own body (self-recursion), and for
-                // everything after it in the block.
-                self.bind(item.name(), item.span());
-                self.item(item)
-            }
+            Statement::Item(item) => self.item_statement(item),
             Statement::Expression(expression) => self.expression(expression),
         }
+    }
+
+    /// A block-level item. A `:=` naming a binding already in scope is a REASSIGNMENT of
+    /// that binding (`docs/mutation.md`), not a fresh one — the same rule the checker
+    /// applies (`Environment::get_type` walking the same scope chain this resolver's
+    /// `lookup` does) — so it resolves to the very declaration every other reassignment
+    /// and read of the name resolves to, rather than starting a new chain that breaks
+    /// references and rename at each `:=`. Anything else is a fresh declaration: in scope
+    /// for its own body (self-recursion), and for everything after it in the block.
+    fn item_statement(&mut self, item: &Item) {
+        if let Item::VariableDeclaration(declaration) = item
+            && declaration.mutable
+            && let Some(existing) = self.lookup(&declaration.name)
+        {
+            let target_span = Span::in_file(
+                declaration.span.start,
+                declaration.span.start + declaration.name.len() as u32,
+                declaration.span.file,
+            );
+            self.references.push(Reference {
+                use_span: target_span,
+                declaration: existing,
+            });
+            self.expression(&declaration.value);
+            return;
+        }
+        self.bind(item.name(), item.span());
+        self.item(item)
     }
 
     fn expression(&mut self, expression: &Expression) {
