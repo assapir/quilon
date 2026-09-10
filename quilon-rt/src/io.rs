@@ -188,7 +188,7 @@ pub extern "C" fn __stream_file_run(
 }
 
 /// Call the bundled Quilon closure with one chunk's bytes (built into a proper `Text`, header
-/// included, via [`crate::mem::alloc_text`] — so `chunk.size` counts its graphemes correctly),
+/// included, via [`crate::mem::alloc_text`] — so `chunk.length` counts its graphemes correctly),
 /// returning whether it asked to keep reading (`true`) or stop (`false`).
 fn call_on_chunk(
     on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8,
