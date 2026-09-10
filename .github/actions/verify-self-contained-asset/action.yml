@@ -77,8 +77,17 @@ runs:
           echo "::error::linking examples/hello_world.qn warned about a macOS version mismatch"
           exit 1
         fi
-        cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/quilon"
-        archive="$(ls "$cache_dir"/libquilon_rt-*.a | head -n1)"
+        # `quilon build` links whichever archive it finds first: the bundled copy next to
+        # the binary itself (true for an in-tree build-and-test run) before ever touching
+        # the embedded copy it would otherwise extract to the cache (true for a standalone
+        # release asset, moved away from that bundled copy).
+        bundled="$(dirname "$bin")/libquilon_rt.bundled.a"
+        if [ -f "$bundled" ]; then
+          archive="$bundled"
+        else
+          cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/quilon"
+          archive="$(ls "$cache_dir"/libquilon_rt-*.a | head -n1)"
+        fi
         extract_dir="$(mktemp -d)"
         gc_object="$(ar t "$archive" | grep -- '-gc\.o$')"
         (cd "$extract_dir" && ar x "$archive" "$gc_object")
