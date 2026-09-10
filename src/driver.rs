@@ -26,6 +26,8 @@ use std::rc::Rc;
 pub struct FrontEndError {
     pub diagnostic: Box<Diagnostic>,
     pub sources: SourceMap,
+    /// The oracle's entries up to the failing expression; empty for a failure before checking.
+    pub partial_types: typechecker::TypeTable,
 }
 
 /// The plain report.
@@ -43,6 +45,7 @@ impl FrontEndError {
         Self {
             diagnostic: Box::new(diagnostic),
             sources,
+            partial_types: typechecker::TypeTable::new(),
         }
     }
 }
@@ -138,6 +141,7 @@ pub fn front_end_reporting(
     let unlocated = |code, message| FrontEndError {
         diagnostic: Box::new(Diagnostic::new(code, message)),
         sources: SourceMap::default(),
+        partial_types: typechecker::TypeTable::new(),
     };
     crate::source_extension::require_source(&path)
         .map_err(|message| unlocated(Code::NotAQuilonSource, message))?;
@@ -201,6 +205,7 @@ fn front_end_source_reporting(
             return Err(FrontEndError {
                 diagnostic: Box::new(error.diagnostic()),
                 sources,
+                partial_types: checker.take_partial_types(),
             });
         }
     };
@@ -294,6 +299,7 @@ fn link_source_reporting(
             return Err(FrontEndError {
                 diagnostic: Box::new(Diagnostic::at(error.code, &error.span, error.message)),
                 sources: error.sources,
+                partial_types: typechecker::TypeTable::new(),
             });
         }
     };
@@ -305,6 +311,7 @@ fn link_source_reporting(
         return Err(FrontEndError {
             diagnostic: Box::new(diagnostic),
             sources,
+            partial_types: typechecker::TypeTable::new(),
         });
     }
 
