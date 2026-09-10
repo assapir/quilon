@@ -110,7 +110,7 @@ impl Reactor {
 
     /// A fresh [`ReactorWaker`] sharing this reactor's one `Waker`, for a helper OS thread with
     /// no `Source` of its own to signal a token's completion.
-    pub fn resolver_waker(&self) -> ReactorWaker {
+    pub fn helper_waker(&self) -> ReactorWaker {
         ReactorWaker {
             completed: Arc::clone(&self.completed),
             waker: Arc::clone(&self.waker),

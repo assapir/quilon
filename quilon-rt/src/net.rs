@@ -25,14 +25,14 @@
 
 use crate::deferred::{QlResult, launch_deferred_result};
 use crate::scheduler::{
-    deregister_readiness, park_on_readiness, register_readiness, register_resolver_waker,
+    deregister_readiness, park_on_readiness, register_helper_waker, register_readiness,
     reregister_readiness,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 
 fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
@@ -207,49 +207,46 @@ fn tcp_request(address: &str, request: &[u8]) -> QlResult {
 fn resolve(address: &str) -> io::Result<SocketAddr> {
     match address.parse() {
         Ok(addr) => Ok(addr),
-        Err(_) => resolve_hostname(address, default_lookup),
+        Err(_) => resolve_hostname(address, |address| {
+            // The real DNS lookup: `ToSocketAddrs`'s blocking `getaddrinfo`, erroring if it
+            // names nothing.
+            address.to_socket_addrs()?.next().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint")
+            })
+        }),
     }
 }
 
-/// The real DNS lookup [`resolve_hostname`] runs on its helper thread: [`ToSocketAddrs`]'s
-/// blocking `getaddrinfo`, erroring if it names nothing.
-fn default_lookup(address: &str) -> io::Result<SocketAddr> {
-    address
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint"))
-}
-
-/// Run `lookup` (a hostname resolver — [`default_lookup`] in production, a test double in tests)
-/// on a helper OS thread, and park the calling fiber on a fresh reactor token until the helper
-/// wakes it with the result. `getaddrinfo` has no non-blocking form, so the syscall runs on the
-/// helper thread while the fiber that asked for it is the only thing suspended — every other
-/// fiber, timer, and socket on the scheduler keeps making progress.
+/// Run `lookup` (the real DNS lookup in production, a test double in tests) on a helper OS
+/// thread, and park the calling fiber on a fresh reactor token until the helper wakes it with
+/// the result. `getaddrinfo` has no non-blocking form, so the syscall runs on the helper thread
+/// while the fiber that asked for it is the only thing suspended — every other fiber, timer, and
+/// socket on the scheduler keeps making progress.
 fn resolve_hostname(
     address: &str,
     lookup: impl FnOnce(&str) -> io::Result<SocketAddr> + Send + 'static,
 ) -> io::Result<SocketAddr> {
-    let (token, waker) = register_resolver_waker();
-    let result_slot: Arc<Mutex<Option<io::Result<SocketAddr>>>> = Arc::new(Mutex::new(None));
-    let helper_slot = Arc::clone(&result_slot);
+    let (token, waker) = register_helper_waker();
+    let (result_sender, result_receiver) = mpsc::channel();
     let address = address.to_string();
-    std::thread::spawn(move || {
+    let spawned = std::thread::Builder::new().spawn(move || {
         // Caught rather than left to unwind off the end of the thread: an uncaught panic here
-        // would never call `waker.complete`, leaving the parked fiber stuck forever — worse
-        // than the failure `@tcpRequest` otherwise always turns into a `NotOk`.
+        // would never send a result or wake the reactor, leaving the parked fiber stuck forever
+        // — worse than the failure `@tcpRequest` otherwise always turns into a `NotOk`.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lookup(&address)))
             .unwrap_or_else(|_| Err(io::Error::other("the hostname resolver panicked")));
-        *helper_slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
+        let _ = result_sender.send(result);
         waker.complete(token);
     });
+    // The OS refused a new thread (already exhausted ulimits, say): no fiber has parked on
+    // `token` yet, so failing right here — the same way a `connect`/`write`/`read` failure
+    // does — is what keeps this a `NotOk` rather than the process-aborting panic
+    // `thread::spawn` itself would raise.
+    spawned?;
     park_on_readiness(token);
-    result_slot
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .take()
-        .expect("the resolver helper wakes the reactor only after storing its result")
+    result_receiver
+        .recv()
+        .expect("the resolver helper sends a result before waking the reactor")
 }
 
 /// Read from `stream` until the peer closes the connection, returning every byte received — the

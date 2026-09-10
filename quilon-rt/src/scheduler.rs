@@ -476,8 +476,8 @@ pub(crate) fn register_readiness(
 /// computation, e.g. [`crate::net`]'s hostname resolver), and a [`ReactorWaker`] it uses to
 /// signal that token's completion — see [`ReactorWaker`]'s own docs for why every such helper
 /// shares one reactor `Waker` rather than getting its own.
-pub(crate) fn register_resolver_waker() -> (Token, ReactorWaker) {
-    with_reactor(|reactor| (reactor.alloc_token(), reactor.resolver_waker()))
+pub(crate) fn register_helper_waker() -> (Token, ReactorWaker) {
+    with_reactor(|reactor| (reactor.alloc_token(), reactor.helper_waker()))
 }
 
 /// Change the interest `source` (already registered under `token`) is polled for.
