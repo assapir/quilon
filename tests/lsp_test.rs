@@ -173,7 +173,10 @@ fn hover_over_a_read_of_an_atomic_binding_shows_its_type() {
     assert_eq!(label, "Num");
     assert_eq!(
         (span.start, span.end),
-        (offset_of(text, "hits + 1", 0), offset_of(text, "hits + 1", 4))
+        (
+            offset_of(text, "hits + 1", 0),
+            offset_of(text, "hits + 1", 4)
+        )
     );
 }
 

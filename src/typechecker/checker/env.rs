@@ -170,7 +170,6 @@ impl Environment {
         mutable: bool,
         owner: u64,
         value_aliasing: ValueAliasing,
-        atomic: bool,
         span: Span,
     ) -> Result<(), TypeError> {
         self.define_symbol(
@@ -183,7 +182,7 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: false,
-                atomic,
+                atomic: false,
             },
             span,
         )
@@ -260,6 +259,15 @@ impl Environment {
     pub(super) fn set_result_aliasing(&mut self, name: &str, result_aliasing: ResultAliasing) {
         if let Some(symbol) = self.lookup_mut(name) {
             symbol.result_aliasing = Some(result_aliasing);
+        }
+    }
+
+    /// Mark a just-`define_binding`-ed name atomic (`@name := …`) — a separate step
+    /// rather than another `define_binding` parameter, the same way `set_result_aliasing`
+    /// annotates a binding after the fact instead of growing that constructor further.
+    pub(super) fn mark_atomic(&mut self, name: &str) {
+        if let Some(symbol) = self.lookup_mut(name) {
+            symbol.atomic = true;
         }
     }
 }

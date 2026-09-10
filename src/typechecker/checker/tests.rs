@@ -863,8 +863,8 @@ fn test_atomic_binding_without_mutable_is_rejected() {
 #[test]
 fn test_atomic_binding_reassigned_with_at_marker_is_rejected() {
     // `@` marks the declaration only; a reassignment stays bare.
-    let err = check_ok("^ = () -> Num => <\n  @hits := 0\n  @hits := hits + 1\n  hits\n>")
-        .unwrap_err();
+    let err =
+        check_ok("^ = () -> Num => <\n  @hits := 0\n  @hits := hits + 1\n  hits\n>").unwrap_err();
     assert!(matches!(err, TypeError::AtomicBindingUsedBare { .. }));
 }
 
