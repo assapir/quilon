@@ -60,11 +60,7 @@ pub struct Parser<'a> {
     /// line (nothing followed it on the same line) — the earlier `>` a later "found
     /// a block close" error should blame instead of the token it actually derailed at.
     last_line_final_block_close: Option<Span>,
-    /// Every type name `parse_type` has read off an identifier token so far, in the order
-    /// encountered — see [`Program::type_name_uses`], which this becomes wholesale.
     type_name_uses: Vec<TypeNameUse>,
-    /// Every sum variant's own declaring occurrence read so far — see
-    /// [`Program::variant_declarations`], which this becomes wholesale.
     variant_declarations: Vec<TypeNameUse>,
 }
 

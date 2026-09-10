@@ -177,11 +177,7 @@ impl Resolver {
                 .entry(declaration.name.clone())
                 .or_insert(declaration);
         }
-        // Every sum variant, declared the same way top-level names are — before any body
-        // in the document is walked — off `Program::variant_declarations`, the parser's
-        // own record of each variant's declaring token (a `SumVariant` carries no span of
-        // its own: it also stands for the type checker's resolved value type, which has no
-        // business knowing where in the source it came from).
+        // Variants declare up front too, before any body is walked.
         for declaration in &program.variant_declarations {
             resolver.declare_type_name(&declaration.name, declaration.span.clone(), false);
         }
@@ -191,12 +187,7 @@ impl Resolver {
         for block in &program.test_blocks {
             resolver.expression(block);
         }
-        // Every written type name — a parameter's or return type's annotation, a
-        // variable's, a record field, a sum payload, an array/map element type — resolved
-        // now that every top-level name, variants included, is known. `Program::type_name_uses`
-        // is the parser's own record of each one's token, from the same place it builds a
-        // `Type::Named`: the source of truth for where a type name was written, rather
-        // than a position re-derived from the token stream after the fact.
+        // Resolved last, once every type and variant is known.
         for use_ in &program.type_name_uses {
             resolver.type_use(&use_.name, use_.span.clone());
         }
@@ -290,10 +281,6 @@ impl Resolver {
         self.item(item)
     }
 
-    /// Bind a type or sum variant's own name — global for a top-level one, lexically
-    /// scoped for a local one — the same way [`Self::bind`] binds any other name, so an
-    /// ordinary [`Self::lookup`] finds it from a constructor, an annotation, a pattern, or
-    /// another type's payload naming it right back.
     fn declare_type_name(&mut self, name: &str, span: Span, is_local: bool) {
         let declaration = Declaration {
             name: name.to_string(),
@@ -312,8 +299,6 @@ impl Resolver {
         }
     }
 
-    /// Record a resolved USE of a type or variant name at `span` — a constructor, a
-    /// pattern, or a written type naming it.
     fn type_use(&mut self, name: &str, span: Span) {
         if let Some(declaration) = self.lookup(name) {
             self.references.push(Reference {
@@ -436,9 +421,7 @@ impl Resolver {
         }
     }
 
-    /// Bind every name `pattern` introduces into the current scope, and resolve a
-    /// constructor pattern's own name (`Circle` in `Circle(r)`) against whatever variant
-    /// it names.
+    /// Bind every name `pattern` introduces into the current scope.
     fn pattern_bindings(&mut self, pattern: &Pattern) {
         match pattern {
             Pattern::Identifier { name, span } => self.bind(name, span),
@@ -461,11 +444,7 @@ fn covers(span: &Span, offset: u32) -> bool {
     span.file == ROOT_FILE && span.start <= offset && offset < span.end
 }
 
-/// The span of just `name`'s own token, given the span of a node whose surface syntax
-/// opens exactly on it — a constructor's `Name { … }`, a constructor pattern's
-/// `Name(...)` or bare `Name`. Byte-arithmetic, not a search: the parser always builds
-/// such a span starting at the name's own first byte, and `name` is that same source
-/// text, so its length alone reaches the name's end.
+/// `name`'s own span: the node's span always opens on it.
 fn name_span(name: &str, span: &Span) -> Span {
     Span::in_file(span.start, span.start + name.len() as u32, span.file)
 }

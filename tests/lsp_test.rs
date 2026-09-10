@@ -264,10 +264,7 @@ fn definition_resolves_parameters_locals_and_top_level_functions() {
     assert!(definition_at(&checked.program, offset_of(text, "* 2", 0)).is_none());
 }
 
-/// A record `Point`, a sum `Shape`, and every shape a type or variant name can be
-/// written in: a constructor, a parameter annotation, a declared return type, and a
-/// variant used in both a pattern and a call. Shared by the definition and references
-/// tests below — both read the exact same document.
+/// Shared by the definition and references tests below.
 fn text_with_a_record_and_a_sum() -> &'static str {
     "Point = { x :: Num, y :: Num, norm = () -> Num => < it.x * it.x > }\n\
      Shape = Circle(Num) / Square(Num)\n\
@@ -291,17 +288,14 @@ fn definition_resolves_a_type_name_from_a_constructor_an_annotation_and_a_return
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
     let declaration_start = offset_of(text, "Point = {", 0);
 
-    // `Point` in the parameter annotation.
     let definition = definition_at(&checked.program, offset_of(text, "p :: Point", 5))
         .expect("the annotation resolves");
     assert_eq!(definition.start, declaration_start);
 
-    // `Point` as the declared return type.
     let definition = definition_at(&checked.program, offset_of(text, "-> Point", 3))
         .expect("the return type resolves");
     assert_eq!(definition.start, declaration_start);
 
-    // `Point` in the `Point { … }` constructor.
     let definition = definition_at(&checked.program, offset_of(text, "Point { x = p.x", 0))
         .expect("the constructor resolves");
     assert_eq!(definition.start, declaration_start);
@@ -346,8 +340,6 @@ fn references_to_a_type_cover_every_constructor_annotation_return_type_and_decla
     let text = text_with_a_record_and_a_sum();
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
 
-    // The declaration itself, then every use in written order: `move`'s parameter
-    // annotation, its return type, its own constructor, and the constructor in `^`.
     let expected = vec![
         offset_of(text, "Point = {", 0),
         offset_of(text, "p :: Point", 5),

@@ -12,25 +12,13 @@ pub struct Program {
     /// that runs them in order, and every other command ignores this field, which is what
     /// keeps a test suite out of a release build.
     pub test_blocks: Vec<Expression>,
-    /// Every written occurrence of a type name — a parameter's or return type's
-    /// annotation, a record field, a sum variant's payload, an array's or map's element
-    /// type, wherever `Parser::parse_type` reads a `Type::Named` off an identifier token.
-    /// `Type` itself carries no span (it doubles as the type checker's own value
-    /// representation, cloned and compared far from any source position), so the parser —
-    /// the only place that still has the token — records the occurrence here instead. The
-    /// language server's go-to-definition and find-references read this list rather than
-    /// re-deriving type positions from the token stream.
+    /// Every written type name with its identifier span; `Type` carries none, so the
+    /// parser records them here.
     pub type_name_uses: Vec<TypeNameUse>,
-    /// Every sum variant's own declaring occurrence — `Circle` in `Shape = Circle(Num) /
-    /// Square(Num)` — as the parser encounters it (`Parser::parse_sum_type_declaration`).
-    /// A `SumVariant` carries no span (like `Type`, it doubles as the type checker's own
-    /// value representation), so this is where the language server reads a variant's
-    /// declaration from.
+    /// Each variant's declaring occurrence; `SumVariant` carries no span.
     pub variant_declarations: Vec<TypeNameUse>,
 }
 
-/// One [`Program::type_name_uses`] or [`Program::variant_declarations`] entry: the name
-/// as written and the span of its own identifier token.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeNameUse {
     pub name: String,
