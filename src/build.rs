@@ -15,7 +15,7 @@ use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
 
 use crate::ast::Program;
@@ -32,6 +32,33 @@ use std::rc::Rc;
 /// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
+}
+
+/// The triple the object codegen emits against. LLVM's own default triple carries no macOS
+/// version at all in its string form, and the code that fills one in when writing the object
+/// reads the *running* machine's OS version rather than [`MACOS_DEPLOYMENT_TARGET`] — so a
+/// build run on a newer Mac than the one `quilon` itself was built on would otherwise stamp
+/// the object with that newer version, right back into disagreement with the pinned link.
+/// Rewriting the trailing version digits to `macosx<MACOS_DEPLOYMENT_TARGET>` (the product-version
+/// spelling, not `darwin<kernel version>` — the two number lines don't correspond) keeps every
+/// object this compiler emits at the one fixed minimum.
+#[cfg(target_os = "macos")]
+fn target_triple() -> TargetTriple {
+    let default = TargetMachine::get_default_triple();
+    let default = default
+        .as_str()
+        .to_str()
+        .expect("default target triple is not UTF-8");
+    let prefix = default
+        .split_once("-apple-")
+        .unwrap_or_else(|| panic!("unexpected default target triple on macOS: {default}"))
+        .0;
+    TargetTriple::create(&format!("{prefix}-apple-macosx{MACOS_DEPLOYMENT_TARGET}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn target_triple() -> TargetTriple {
+    TargetMachine::get_default_triple()
 }
 
 /// Emit a native object file for `program` at `obj_path` using LLVM's
@@ -72,7 +99,7 @@ fn emit_object(
     generator.generate(program)?;
     let module = generator.module();
 
-    let triple = TargetMachine::get_default_triple();
+    let triple = target_triple();
     let target =
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
@@ -297,11 +324,17 @@ pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "-dead_strip"];
 #[cfg(not(target_os = "macos"))]
 pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "--gc-sections"];
 
-/// Pins a produced macOS executable's minimum OS version to the one baked in when this
-/// compiler was built (the root build script's `QUILON_MACOS_DEPLOYMENT_TARGET`, matching
-/// what `quilon-rt/build.rs` gave the runtime archive's GC object), rather than clang's
-/// unpinned link default of the linking machine's own OS version — which is what let the
-/// two drift apart and made a produced binary's minimum move with whatever Mac built it.
+/// The macOS version baked in when this compiler was built (the root build script's
+/// `QUILON_MACOS_DEPLOYMENT_TARGET`, matching what `quilon-rt/build.rs` gave the runtime
+/// archive's GC object), so a produced binary's minimum stays fixed no matter which
+/// machine's OS version `quilon build` later runs on.
+#[cfg(target_os = "macos")]
+const MACOS_DEPLOYMENT_TARGET: &str = env!("QUILON_MACOS_DEPLOYMENT_TARGET");
+
+/// Pins the link to [`MACOS_DEPLOYMENT_TARGET`], rather than clang's unpinned default of
+/// the linking machine's own OS version. (`concat!` needs a literal, not a `const` path, so
+/// this reads the same baked-in environment variable a second time rather than referring to
+/// the constant above — both resolve to the identical compile-time value.)
 #[cfg(target_os = "macos")]
 pub const MACOS_VERSION_MIN_ARG: &str = concat!(
     "-mmacosx-version-min=",
