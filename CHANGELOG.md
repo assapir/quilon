@@ -6,6 +6,13 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
+  `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
+  or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is
+  the caller's own code), parking on reactor readiness between reads; `onChunk` returns `true`
+  to keep reading or `false` to stop and close the file at once. Yields `Ok(bytesRead)` or
+  `NotOk(message)`, never fails the program. `io.streamFile(path, onChunk)` is the same call
+  with a default chunk size. See `docs/corelib/io.md` and `docs/concurrency/README.md`.
 - **A `Num` literal glued to an exponent (`1e9`, `1.5e-3`) raises a dedicated
   [QN005](docs/tooling/errors.md#qn005--scientific-notation-literal)** naming the plain
   decimal to write, where the literal used to split into a `1` token and a stray `e9`

@@ -307,7 +307,7 @@ fn split_chunk(buffer: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     let valid = std::str::from_utf8(&buffer[..valid_len]).expect("checked above");
     let cut = valid
         .grapheme_indices(true)
-        .last()
+        .next_back()
         .map(|(index, _)| index)
         .unwrap_or(0);
     Ok((buffer[..cut].to_vec(), buffer[cut..].to_vec()))

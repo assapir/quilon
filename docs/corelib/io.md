@@ -15,6 +15,8 @@ Import with `<< core.io`. See the [corelib index](README.md) and `examples/io.qn
 | `io.eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
 | `io.write(content, fd :: Num) -> Num` | Render `content` and write those bytes (no newline) to a file descriptor; returns bytes written. Byte-exact: a `Text` renders as itself, and the bytes go out as they are. |
 | `@readStdin() -> Text` | Read one line from stdin (without the trailing newline). A [leaf IO primitive](../concurrency/README.md): it launches the read and returns a **deferred** `Text` forced on first strict use. Yields `""` at end-of-input. |
+| `@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result` | Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk. A [leaf IO primitive](../concurrency/README.md) that runs **strictly**, in program order on the calling fiber, parking between reads so other fibers still overlap. `Ok(bytesRead)` / `NotOk(message)`. |
+| `io.streamFile(path :: Text, onChunk :: (Text) -> Bool) -> Result` | `@streamFile` with a runtime-chosen default chunk size (currently 16 KiB). |
 | `io.stdout`, `io.stderr` | The standard file descriptors. |
 
 `io.print`, `io.eprint`, and `io.write` take **anything renderable**: the compiler resolves
@@ -33,10 +35,23 @@ naming no open file, or another I/O error — fails loud at the call site with
 [`QN509`](../tooling/errors.md#qn509--write-failed); this holds for `io.print` and
 `io.eprint` as well as `io.write`.
 
+`@streamFile` delivers every chunk as whole, valid `Text`: an incomplete UTF-8 sequence or
+grapheme cluster at the end of a read is held back and carried into the next one, so a chunk's
+`.length` (grapheme count) is always correct and no chunk splits a grapheme — even a flag
+emoji or a combining accent spanning a read boundary arrives whole, one read later. A chunk
+holds at most `chunkSize` bytes plus a carried tail, and is never empty. `onChunk` returns
+`true` to keep reading or `false` to stop; stopping closes the file at once, and the rest of
+it is never read. It runs on the SAME fiber as its caller, in program order — `onChunk` is the
+caller's own code, free to mutate a captured `:=` cell — parking only between reads, so other
+fibers still make progress. `Ok(bytesRead)` carries the total bytes delivered to `onChunk`, at
+end-of-input or on a stop; `NotOk(message)` covers a missing file, a read error, and a
+`chunkSize` that is not a positive whole number.
+
 The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare
 `print` or `write` — at any signature — is an unrelated function beside `io.print`.
-(`@readStdin`, like every `@` primitive, keeps its bare name once the module is imported.)
+(`@readStdin` and `@streamFile`, like every `@` primitive, keep their bare name once the
+module is imported.)
 
 ```quilon
 << core.io
