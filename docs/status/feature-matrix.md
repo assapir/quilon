@@ -42,6 +42,9 @@ sidebar:
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
+| Sum-type payload is a declared sum — the enclosing one included, directly (`Tree = Leaf / Node(Tree)`, boxed) or through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`, inline) | ✅ |
+| Heterogeneous sum-type payloads: two variants may carry a different concrete type at the same position (`A(Num) / B(Text)`) | ✅ |
+| Record referencing itself, or a sum declared above it, directly as a field (`Wagon = { next :: Wagon }`) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function **and method** boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` parameter or return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
 | Modules: `<< core.io`, `<< core.test`, `<< core.cli`, `<< core.time`, `<< core.info`, `<< core.net`, `<< core.http`, file-path imports, `>>` exports | ✅ |

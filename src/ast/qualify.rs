@@ -359,7 +359,9 @@ impl Walker<'_> {
             Item::TypeDeclaration(declaration) => {
                 let span = declaration.span.clone();
                 match &mut declaration.type_definition {
-                    TypeDefinition::Sum { variants, methods } => {
+                    TypeDefinition::Sum {
+                        variants, methods, ..
+                    } => {
                         for variant in variants {
                             for field in &mut variant.fields {
                                 self.type_(field, &span)?;

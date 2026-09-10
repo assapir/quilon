@@ -59,6 +59,7 @@ impl TypeError {
             TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
+            TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
         }
     }
 
@@ -187,6 +188,11 @@ impl TypeError {
             TypeError::FunctionTypedField { name, .. } => diagnostic.help(format!(
                 "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
             )),
+            TypeError::InvalidPayloadType { .. } => diagnostic.help(
+                "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
+                 array/map of one of those"
+                    .to_string(),
+            ),
             _ => diagnostic,
         }
     }
@@ -239,7 +245,8 @@ impl TypeError {
             | TypeError::MissingConstructorField { span, .. }
             | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. }
-            | TypeError::FunctionTypedField { span, .. } => span,
+            | TypeError::FunctionTypedField { span, .. }
+            | TypeError::InvalidPayloadType { span, .. } => span,
         }
     }
 }
@@ -705,6 +712,19 @@ impl std::fmt::Display for TypeError {
                     f,
                     "field `{name}` cannot have a function type; a function member of a \
                      record is a method"
+                )
+            }
+            TypeError::InvalidPayloadType {
+                variant,
+                position,
+                got,
+                ..
+            } => {
+                write!(
+                    f,
+                    "`{variant}`'s payload {} is {}, which a sum type cannot carry",
+                    position + 1,
+                    type_label(got)
                 )
             }
         }

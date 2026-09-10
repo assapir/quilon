@@ -490,6 +490,7 @@ impl<'a> Parser<'a> {
         use crate::ast::{SumVariant, TypeDefinition};
 
         let mut variants = Vec::new();
+        let mut field_spans = Vec::new();
         loop {
             let variant_name = self.expect_definition_name()?;
             let variant_span = self.previous_span();
@@ -507,14 +508,25 @@ impl<'a> Parser<'a> {
                 span: variant_span,
             });
 
-            // Optional payload-type list: `(Num)` or `(Num, Text)`.
+            // Optional payload-type list: `(Num)` or `(Num, Text)`, each field's span tracked alongside it.
             let mut fields = Vec::new();
+            let mut this_variant_spans = Vec::new();
             if self.check(&TokenKind::ParenOpen) {
                 self.advance();
-                fields = self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_type)?;
+                let parsed = self.parse_comma_separated(&TokenKind::ParenClose, |parser| {
+                    let field_start = parser.peek().span.clone();
+                    let field_type = parser.parse_type()?;
+                    let field_span = parser.span(field_start.start, parser.previous_span().end);
+                    Ok((field_type, field_span))
+                })?;
+                for (field_type, field_span) in parsed {
+                    fields.push(field_type);
+                    this_variant_spans.push(field_span);
+                }
                 self.expect(&TokenKind::ParenClose)?;
             }
 
+            field_spans.push(this_variant_spans);
             variants.push(SumVariant {
                 name: variant_name,
                 fields,
@@ -572,7 +584,11 @@ impl<'a> Parser<'a> {
         let end = self.previous_span();
         Ok(Item::TypeDeclaration(TypeDeclaration {
             name,
-            type_definition: TypeDefinition::Sum { variants, methods },
+            type_definition: TypeDefinition::Sum {
+                variants,
+                field_spans,
+                methods,
+            },
             exported,
             span: self.span(start.start, end.end),
         }))

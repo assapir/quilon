@@ -138,6 +138,8 @@ pub enum TypeDefinition {
     /// operator members) — a sum has no fields, so a field-like entry there is rejected.
     Sum {
         variants: Vec<SumVariant>,
+        /// Each payload type's own span, parallel to `variants[i].fields`.
+        field_spans: Vec<Vec<Span>>,
         methods: Vec<MethodDeclaration>,
     },
     Record {

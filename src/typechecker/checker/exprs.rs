@@ -287,15 +287,16 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
-                    Type::Named {
-                        name: _,
-                        fields,
-                        methods: _,
-                    } => {
-                        // Handle field access on named types
+                    Type::Named { .. } => {
+                        // A field's own type may still be a frozen self-reference placeholder; resolve both ends.
+                        let Type::Named { fields, .. } =
+                            self.resolve_payload_type(&expression_type)
+                        else {
+                            unreachable!("resolve_payload_type preserves the Named variant");
+                        };
                         for (f, t) in fields.iter() {
                             if f == field {
-                                return Ok(t.clone());
+                                return Ok(self.resolve_payload_type(t));
                             }
                         }
                         Err(TypeError::UndefinedVariable {
@@ -544,11 +545,11 @@ impl TypeChecker {
                                 }
                                 provided_fields.insert(field_name.clone());
 
-                                // Find the expected type for this field
+                                // Resolves past a frozen self-reference placeholder (see `resolve_payload_type`).
                                 let expected_type = type_fields
                                     .iter()
                                     .find(|(f, _)| f == field_name)
-                                    .map(|(_, t)| t.clone())
+                                    .map(|(_, t)| self.resolve_payload_type(t))
                                     .ok_or_else(|| TypeError::UnknownConstructorField {
                                         type_name: type_name.clone(),
                                         field: field_name.clone(),

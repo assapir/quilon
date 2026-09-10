@@ -1,0 +1,43 @@
+~ A singly linked list: cons, length, reverse, map, and a rendered form, all as
+~ methods on the sum itself. `List` names itself directly in `Cons`'s payload —
+~ boxed into a GC cell at construction, unboxed when a pattern binds it.
+~ `<< core.test` verifies every result; on success the program exits 0.
+<< core.test
+
+List = Empty / Cons(Num, List) {
+  length = () -> Num => <
+    it ?
+      | Empty         => 0
+      | Cons(_, tail) => 1 + tail.length()
+  >
+
+  reverseOnto = (acc :: List) -> List => <
+    it ?
+      | Empty            => acc
+      | Cons(head, tail) => tail.reverseOnto(Cons(head, acc))
+  >
+
+  reverse = () -> List => < it.reverseOnto(Empty) >
+
+  map = (f :: (Num) -> Num) -> List => <
+    it ?
+      | Empty            => Empty
+      | Cons(head, tail) => Cons(f(head), tail.map(f))
+  >
+
+  ` = () -> Text => <
+    it ?
+      | Empty            => ""
+      | Cons(head, tail) => (tail ?
+          | Empty      => "`head`"
+          | Cons(_, _) => "`head`,`tail`")
+  >
+}
+
+^ = () -> $ => <
+  list = Cons(1, Cons(2, Cons(3, Empty)))
+  assert(list.length(), equals(3))
+  assert("`list.reverse()`", equals("3,2,1"))
+  assert("`list.map(x => x * 10)`", equals("10,20,30"))
+  assert(Empty.length(), equals(0))
+>
