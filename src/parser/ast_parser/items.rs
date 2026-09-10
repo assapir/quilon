@@ -504,15 +504,7 @@ impl<'a> Parser<'a> {
             let mut fields = Vec::new();
             if self.check(&TokenKind::ParenOpen) {
                 self.advance();
-                if !self.check(&TokenKind::ParenClose) {
-                    loop {
-                        fields.push(self.parse_type()?);
-                        if !self.check(&TokenKind::Comma) {
-                            break;
-                        }
-                        self.advance();
-                    }
-                }
+                fields = self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_type)?;
                 self.expect(&TokenKind::ParenClose)?;
             }
 

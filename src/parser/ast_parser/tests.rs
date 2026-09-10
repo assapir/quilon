@@ -91,6 +91,17 @@ fn test_parse_with_type() {
 }
 
 #[test]
+fn test_result_with_generic_arguments_is_a_parse_error() {
+    // `Result` is monomorphic (see `add_builtins` in the type checker); a `{T, E}`
+    // argument list after it is not part of the type grammar.
+    let tokens = Lexer::tokenize("x :: Result{Num, Text} = 42").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `Result{{Num, Text}}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+}
+
+#[test]
 fn test_parse_block_level_annotated_binding() {
     // A `name :: Type = expression` binding INSIDE a `< >` block must parse and carry its
     // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression:

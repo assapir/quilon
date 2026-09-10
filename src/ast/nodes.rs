@@ -1142,7 +1142,6 @@ pub enum Type {
     },
     Generic {
         name: String,
-        arguments: Vec<Type>,
     },
     Function {
         parameters: Vec<Type>,

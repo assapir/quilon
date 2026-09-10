@@ -329,7 +329,6 @@ fn a_payload_slot_prefers_a_concrete_field_over_a_type_variable() {
 
     let generic = Type::Generic {
         name: "T".to_string(),
-        arguments: vec![],
     };
     let slots = codegen
         .payload_slot_types(&[
