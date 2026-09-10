@@ -50,6 +50,8 @@ impl<'a> Parser<'a> {
             imports,
             items,
             test_blocks,
+            type_name_uses: std::mem::take(&mut self.type_name_uses),
+            variant_declarations: std::mem::take(&mut self.variant_declarations),
         })
     }
 
@@ -491,15 +493,20 @@ impl<'a> Parser<'a> {
         let mut field_spans = Vec::new();
         loop {
             let variant_name = self.expect_definition_name()?;
+            let variant_span = self.previous_span();
             if !is_capitalized(&variant_name) {
                 return Err(ParseError::new(
                     Code::VariantNotCapitalized,
-                    self.previous_span(),
+                    variant_span,
                     format!(
                         "sum-type variant `{variant_name}` must start with an uppercase letter"
                     ),
                 ));
             }
+            self.variant_declarations.push(crate::ast::TypeNameUse {
+                name: variant_name.clone(),
+                span: variant_span,
+            });
 
             // Optional payload-type list: `(Num)` or `(Num, Text)`. Each field's own span
             // (start of its type to the end) travels alongside it, for a checker

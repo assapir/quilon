@@ -177,11 +177,19 @@ impl Resolver {
                 .entry(declaration.name.clone())
                 .or_insert(declaration);
         }
+        // Variants declare up front too, before any body is walked.
+        for declaration in &program.variant_declarations {
+            resolver.declare_type_name(&declaration.name, declaration.span.clone(), false);
+        }
         for item in &program.items {
             resolver.item(item);
         }
         for block in &program.test_blocks {
             resolver.expression(block);
+        }
+        // Resolved last, once every type and variant is known.
+        for use_ in &program.type_name_uses {
+            resolver.type_use(&use_.name, use_.span.clone());
         }
         resolver
     }
@@ -273,6 +281,33 @@ impl Resolver {
         self.item(item)
     }
 
+    fn declare_type_name(&mut self, name: &str, span: Span, is_local: bool) {
+        let declaration = Declaration {
+            name: name.to_string(),
+            span,
+            is_local,
+        };
+        self.record(declaration.clone());
+        if is_local {
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.insert(name.to_string(), declaration);
+            }
+        } else {
+            self.top_level
+                .entry(name.to_string())
+                .or_insert(declaration);
+        }
+    }
+
+    fn type_use(&mut self, name: &str, span: Span) {
+        if let Some(declaration) = self.lookup(name) {
+            self.references.push(Reference {
+                use_span: span,
+                declaration,
+            });
+        }
+    }
+
     fn expression(&mut self, expression: &Expression) {
         match expression {
             Expression::Identifier { name, span } => {
@@ -353,7 +388,17 @@ impl Resolver {
                     self.expression(value);
                 }
             }
-            Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
+            Expression::Record { fields, .. } => {
+                for (_, value) in fields {
+                    self.expression(value);
+                }
+            }
+            Expression::Constructor {
+                type_name,
+                fields,
+                span,
+            } => {
+                self.type_use(type_name, name_span(type_name, span));
                 for (_, value) in fields {
                     self.expression(value);
                 }
@@ -380,7 +425,12 @@ impl Resolver {
     fn pattern_bindings(&mut self, pattern: &Pattern) {
         match pattern {
             Pattern::Identifier { name, span } => self.bind(name, span),
-            Pattern::Constructor { arguments, .. } => {
+            Pattern::Constructor {
+                name,
+                arguments,
+                span,
+            } => {
+                self.type_use(name, name_span(name, span));
                 for argument in arguments {
                     self.pattern_bindings(argument);
                 }
@@ -394,10 +444,15 @@ fn covers(span: &Span, offset: u32) -> bool {
     span.file == ROOT_FILE && span.start <= offset && offset < span.end
 }
 
-/// The name and span of the declaration binding the identifier at byte `offset` in the
-/// root document, resolved against the import-linked `program` — so a name an import
-/// supplies resolves to its declaration in the imported module's own file. `None` when
-/// the offset is not on a resolvable identifier.
+/// `name`'s own span: the node's span always opens on it.
+fn name_span(name: &str, span: &Span) -> Span {
+    Span::in_file(span.start, span.start + name.len() as u32, span.file)
+}
+
+/// The name and span of the declaration binding the identifier or type name at byte
+/// `offset` in the root document, resolved against the import-linked `program` — so a
+/// name an import supplies resolves to its declaration in the imported module's own file.
+/// `None` when the offset is not on a resolvable name.
 pub fn declaration_at(program: &Program, offset: u32) -> Option<(String, Span)> {
     Resolver::walk(program)
         .references
@@ -1306,6 +1361,8 @@ fn module_completions(path: &Path, import: &Import) -> Vec<CompletionItem> {
         imports: vec![import.clone()],
         items: Vec::new(),
         test_blocks: Vec::new(),
+        type_name_uses: Vec::new(),
+        variant_declarations: Vec::new(),
     };
     let Ok((linked, _sources)) = crate::modules::link(synthetic, base_dir, Some(path)) else {
         return Vec::new();

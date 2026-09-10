@@ -12,6 +12,17 @@ pub struct Program {
     /// that runs them in order, and every other command ignores this field, which is what
     /// keeps a test suite out of a release build.
     pub test_blocks: Vec<Expression>,
+    /// Every written type name with its identifier span; `Type` carries none, so the
+    /// parser records them here.
+    pub type_name_uses: Vec<TypeNameUse>,
+    /// Each variant's declaring occurrence; `SumVariant` carries no span.
+    pub variant_declarations: Vec<TypeNameUse>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeNameUse {
+    pub name: String,
+    pub span: Span,
 }
 
 /// The resolved name whose top-level call marks test code: `core.test`'s `describe`,

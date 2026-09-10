@@ -54,6 +54,13 @@ runs:
       run: |
         set -euxo pipefail
         brew update
+        # The runner image preinstalls llvm@20 keg-only and already linked; brew
+        # only links one unversioned `llvm@N` at a time, so it leaves llvm@22
+        # installed but unlinked rather than replacing it. Neither one's `bin`
+        # is ever on PATH here (Xcode's clang stays first; `brew --prefix` below
+        # points straight at the formula), so removing the older one costs
+        # nothing and clears the link warning.
+        brew uninstall --ignore-dependencies llvm@20 || true
         brew install llvm@22
         echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 

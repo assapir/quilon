@@ -87,6 +87,14 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **`quilon lsp`'s go to definition and find references now cover a type or sum variant
+  name.** Go to definition on `Point` in a `Point { … }` constructor, a `p :: Point`
+  annotation, or a `-> Point` return type answers `Point`'s own declaration; on a variant
+  name (`Circle` in a pattern or a call) it answers that variant in its sum's declaration.
+  Find references on `Point` lists every one of those uses alongside the declaration,
+  across constructors, annotations (a parameter's, a variable's, or a whole-signature
+  binding type's), return types, sum payloads, and array/map element types. See
+  `docs/tooling/language-server.md`. Closes #399.
 - **The language server checks a file's test bodies even when the file also has a `^`.**
   A `test.describe`/`test.it` block beside its own `^` used to be erased before checking,
   the way `check`/`run` erase it — so a type error inside a case went unreported and
@@ -113,6 +121,11 @@ All notable changes to Quilon are documented here.
   megabytes to every produced binary. The build script's copy is now named
   `libquilon_rt.bundled.a`, a name cargo never produces, and `quilon build`'s
   "next to the running binary" lookup looks for that same name. Closes #182.
+- **`quilon build` on macOS no longer warns that the runtime archive "was built for newer
+  'macOS' version" than the link.** The Boehm GC object inside `libquilon_rt.a` now
+  carries the same minimum macOS version as the archive's Rust-compiled objects and the
+  produced executable, so all three agree regardless of the SDK or host OS version of the
+  machine that built `quilon`. See `docs/tooling/compiling.md`. Closes #411.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

@@ -17,7 +17,11 @@ impl<'a> Parser<'a> {
         // A qualified type — `http.Request` in an annotation — reads as one dotted name;
         // the checker resolves it like any other named reference. Tried first: the chain
         // only matches through an import binding, so no built-in type name is shadowed.
-        if let Some((name, _span)) = self.try_parse_module_member() {
+        if let Some((name, span)) = self.try_parse_module_member() {
+            self.type_name_uses.push(crate::ast::TypeNameUse {
+                name: name.clone(),
+                span,
+            });
             return Ok(crate::ast::Type::named_ref(name));
         }
 
@@ -97,7 +101,12 @@ impl<'a> Parser<'a> {
             // fields; the checker replaces it with the concrete definition.
             other if is_capitalized(other) => {
                 let name = other.to_string();
+                let span = token.span.clone();
                 self.advance();
+                self.type_name_uses.push(crate::ast::TypeNameUse {
+                    name: name.clone(),
+                    span,
+                });
                 Ok(crate::ast::Type::named_ref(name))
             }
             _ => Err(ParseError::new(

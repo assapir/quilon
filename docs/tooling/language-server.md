@@ -32,7 +32,12 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   - **Go to definition** on an identifier yields the declaration that binds it: a
     parameter, a block-local binding, a pattern binding, a top-level function or type, or a
     declaration in an imported file (the location points into that file). A name declared
-    in a bundled module (`core.io`, `core.test`, …) yields no location.
+    in a bundled module (`core.io`, `core.test`, …) yields no location. A type name yields
+    its declaration the same way, from any of the places one is written: a `Point { … }`
+    constructor, a `p :: Point` annotation, a `-> Point` return type, a record field's or
+    sum variant's own payload type, and an array's or map's element type. A sum variant's
+    name (`Circle` in a constructor call or a pattern) yields that variant within its
+    sum's own declaration.
   - **Find references** on an identifier — or on the name in its own declaration — yields
     every place that binds or reads it: a parameter's declaration and every use in its
     function, a top-level function's or type's declaration (every member, for an overload
@@ -41,7 +46,9 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
     parameters, block-locals, pattern bindings, and top-level functions and types. A `:=`
     on a name already in scope reassigns that binding, so a `:=`-bound local's references
     include its declaration, every reassignment of it (a nested lambda's included), and
-    every read.
+    every read. A type's declaration and a sum variant's own name are covered the same
+    way: the result lists the declaration plus every constructor, annotation, return
+    type, sum payload, and array/map element type naming it, anywhere in the document.
   - **Rename** on the same targets as find references rewrites the declaration and every
     use in one edit. The new name must be a single bare identifier; a target declared in
     another file answers with a message naming that file, so the rename happens there

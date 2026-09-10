@@ -40,11 +40,15 @@ const GC_DEFINES: &[&str] = &[
     "THREAD_LOCAL_ALLOC",
 ];
 
+// Shared with the root `build.rs`, which needs the same lookup for the link step.
+include!("../build_support/deployment_target.rs");
+
 fn main() {
     let vendor = Path::new("vendor/bdwgc");
     let single_translation_unit = vendor.join("extra/gc.c");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../build_support/deployment_target.rs");
     println!("cargo:rerun-if-changed={}", vendor.display());
 
     // The collector is a git submodule, so a clone made without it — or a GitHub
@@ -71,6 +75,10 @@ fn main() {
         // Third-party sources: their warnings are upstream's to fix, and this
         // workspace builds with warnings denied.
         .warnings(false);
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build.env("MACOSX_DEPLOYMENT_TARGET", macos_deployment_target());
+    }
 
     for define in GC_DEFINES {
         build.define(define, None);
