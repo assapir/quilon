@@ -55,7 +55,7 @@ A feature/change is not done until **all** of these are true:
   no type from context, a lambda whose parameter type nothing supplies) — inference is the
   language's normal mode and examples show it. Example comments describe **what** the code
   does/demonstrates, **never** design decisions or rationale.
-- **`/code-review` + `/simplify`** run before committing, findings addressed. (When the review skill
+- **`/code-review` + `/ponytail:ponytail-review`** run before committing, findings addressed. (When the review skill
   isn't model-invocable in a given environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 - **No issue/PR references in code.** No source, test, example, or corelib file (`.qn` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — the `docs/` tree and the `README`s — may reference issues; code files may not.)
