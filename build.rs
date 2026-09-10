@@ -55,6 +55,43 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
 
     place_runtime_staticlib();
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!(
+            "cargo:rustc-env=QUILON_MACOS_DEPLOYMENT_TARGET={}",
+            macos_deployment_target()
+        );
+    }
+}
+
+/// The macOS version a produced `quilon build` executable is stamped with, baked in at compile
+/// time so it stays fixed no matter which host later runs the distributed `quilon` binary — it
+/// must match what `quilon-rt/build.rs` gives the collector's object, so an explicit
+/// `MACOSX_DEPLOYMENT_TARGET` wins there too; otherwise this is rustc's own default for the
+/// target, which the rest of the runtime archive already carries.
+fn macos_deployment_target() -> String {
+    if let Ok(v) = std::env::var("MACOSX_DEPLOYMENT_TARGET") {
+        return v;
+    }
+    let rustc = env("RUSTC");
+    let target = env("TARGET");
+    let output = Command::new(rustc)
+        .arg("--print")
+        .arg("deployment-target")
+        .arg("--target")
+        .arg(&target)
+        .output()
+        .expect("failed to run `rustc --print deployment-target`");
+    assert!(
+        output.status.success(),
+        "`rustc --print deployment-target` failed"
+    );
+    String::from_utf8(output.stdout)
+        .expect("rustc output is not UTF-8")
+        .trim()
+        .strip_prefix("deployment_target=")
+        .expect("unexpected `rustc --print deployment-target` output")
+        .to_string()
 }
 
 /// Build the `quilon-rt` staticlib and copy it to

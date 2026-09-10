@@ -163,11 +163,10 @@ jobs:
   # Mirrors release.yml's macos job for a single `--release --bin quilon` link,
   # so a PR catches a release-link regression without running LTO over ~54
   # test/bench binaries the way build-and-test's full `--all-targets` would.
-  # Waits on build-and-test (all legs, macOS included) rather than just gate,
-  # so a broken macOS test run blocks this instead of racing it.
+  # Needs only gate, so this runs in parallel with build-and-test.
   macos-release-link:
     name: macos-release-link
-    needs: build-and-test
+    needs: gate
     runs-on: macos-latest
 
     steps:

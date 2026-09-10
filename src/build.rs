@@ -297,6 +297,17 @@ pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "-dead_strip"];
 #[cfg(not(target_os = "macos"))]
 pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "--gc-sections"];
 
+/// Pins a produced macOS executable's minimum OS version to the one baked in when this
+/// compiler was built (the root build script's `QUILON_MACOS_DEPLOYMENT_TARGET`, matching
+/// what `quilon-rt/build.rs` gave the runtime archive's GC object), rather than clang's
+/// unpinned link default of the linking machine's own OS version — which is what let the
+/// two drift apart and made a produced binary's minimum move with whatever Mac built it.
+#[cfg(target_os = "macos")]
+pub const MACOS_VERSION_MIN_ARG: &str = concat!(
+    "-mmacosx-version-min=",
+    env!("QUILON_MACOS_DEPLOYMENT_TARGET")
+);
+
 /// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
 /// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
 /// the emitted LLVM IR — that a plain archive scan could otherwise drop (nondeterministically,
@@ -361,6 +372,8 @@ pub fn build_native(
         append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
         command.args(SYSTEM_LIBS);
         command.args(DEAD_STRIP_ARGS);
+        #[cfg(target_os = "macos")]
+        command.arg(MACOS_VERSION_MIN_ARG);
         command.arg("-o").arg(out);
 
         let status = command.status().map_err(|e| match e.kind() {
