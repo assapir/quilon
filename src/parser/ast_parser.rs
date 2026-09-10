@@ -56,6 +56,10 @@ pub struct Parser<'a> {
     /// imports are parsed, so (like every other name — the language has no hoisting) an
     /// import qualifies only the code below it.
     module_paths: std::collections::HashMap<String, String>,
+    /// Span of the most recent `>` that closed a block only because it ended its
+    /// line (nothing followed it on the same line) — the earlier `>` a later "found
+    /// a block close" error should blame instead of the token it actually derailed at.
+    last_line_final_block_close: Option<Span>,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -122,6 +126,7 @@ impl<'a> Parser<'a> {
             suppress_lambda: false,
             bare_match_forbidden: false,
             module_paths: std::collections::HashMap::new(),
+            last_line_final_block_close: None,
         }
     }
 
@@ -215,6 +220,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Items up to (not including) `close`, no trailing comma; the caller consumes
+    /// `close`.
+    fn parse_comma_separated<T>(
+        &mut self,
+        close: &TokenKind,
+        mut parse_one: impl FnMut(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<Vec<T>, ParseError> {
+        let mut items = Vec::new();
+        if !self.check(close) {
+            loop {
+                items.push(parse_one(self)?);
+                if !self.check(&TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+        Ok(items)
+    }
+
     fn expect_ident(&mut self) -> Result<String, ParseError> {
         if self.check(&TokenKind::Ident) {
             let name = self.peek().text.clone();
@@ -230,6 +255,21 @@ impl<'a> Parser<'a> {
                 self.peek().span.clone(),
                 format!("expected a name, found {}", self.peek().kind.describe()),
             ))
+        }
+    }
+
+    /// If a block closed early somewhere above (see `parse_block_inner`) and nothing has
+    /// cleared that record since, `err` is the derailment it caused — blame the earlier
+    /// `>` instead. Otherwise `err` stands as raised.
+    pub(super) fn blame_early_block_close(&mut self, err: ParseError) -> ParseError {
+        match self.last_line_final_block_close.take() {
+            Some(span) => ParseError::new(
+                Code::EarlyBlockClose,
+                span,
+                "this `>` closed its block because it ended the line",
+            )
+            .help("to compare, put the right operand on the same line as `>`"),
+            None => err,
         }
     }
 

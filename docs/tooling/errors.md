@@ -103,6 +103,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN112 | `>>` where two block closers were meant |
 | QN113 | disallowed character glued to a name |
 | QN114 | match used as a match-arm body without parentheses |
+| QN115 | a line-final `>` closed a block earlier than intended |
 | QN200 | `@` primitive declared outside the corelib |
 | QN201 | missing module |
 | QN202 | private member reached through its module |
@@ -416,6 +417,24 @@ craving = (choice :: Snack, size :: Num) -> Num => < choice ?
 Parenthesize the nested match: `| Popcorn(n) => (size ? | 0 => n | _ => n * 2)`. A match
 nested inside a block, a call argument, or a ternary branch is already delimited and needs
 no parentheses of its own.
+
+### QN115 — a line-final `>` closed a block earlier than intended
+
+A `>` closes its block when it ends its line — the rule that also settles when it reads
+as the greater-than operator ([the `>` box](../expressions/README.md#expressions)).
+
+```quilon ignore
+mangoTally = (crate :: Num) -> Num => <
+  ripe = 5
+  bruised = 3
+  ripe >
+  bruised
+>
+```
+
+`ripe >` ends its line, so it closes `mangoTally`'s block right there. The report points
+at that `>` — the actual cause — wherever the parse derails further down. To compare, put
+the right operand on the same line as `>`: `ripe > bruised`.
 
 ## Imports
 

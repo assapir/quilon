@@ -47,6 +47,14 @@ All notable changes to Quilon are documented here.
   occurrences present is the new
   [QN510](docs/tooling/errors.md#qn510--invalid-replace-count). See `docs/types/text.md`.
   Closes #369.
+- **A `>` that closes a block early because it ends its line is reported at that `>`.** A
+  line-final `>` inside a block closes the block there, before the statements below it
+  ever run; the resulting parse error used to land wherever the parse then went wrong,
+  several lines past the real cause. The new
+  [QN115](docs/tooling/errors.md#qn115--a-line-final--closed-a-block-earlier-than-intended)
+  points at the `>` that closed the block, with a help to put the right operand on the
+  same line as `>`. See `docs/expressions/README.md`. Part of #212 (the diagnostic; the
+  design question stays open).
 
 ### Changed
 
@@ -59,6 +67,9 @@ All notable changes to Quilon are documented here.
   at the inner `?`. A ternary in an arm's body, and a match nested inside a block, call
   argument, or ternary branch, keep working as written. See
   `docs/expressions/pattern-matching.md`. Closes #213.
+- **`Result{T, E}` generic-argument braces after `Result` in a type annotation are now
+  a parse error.** The parser previously accepted and silently discarded them; `Result`
+  is monomorphic, so they never had an effect.
 
 ### Fixed
 

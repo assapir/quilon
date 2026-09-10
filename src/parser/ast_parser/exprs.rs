@@ -123,74 +123,45 @@ impl<'a> Parser<'a> {
         Ok(expression)
     }
 
-    pub(super) fn parse_logical_or(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_logical_and()?;
+    /// One level of the binary-operator precedence chain: `next` parses an operand at
+    /// the level below, `match_operator` recognizes and consumes this level's operator
+    /// token. Left-associative — shared by every level except `parse_range`, which is
+    /// non-associative and so stays a standalone function.
+    fn parse_binary_level(
+        &mut self,
+        next: fn(&mut Self) -> Result<Expression, ParseError>,
+        match_operator: fn(&mut Self) -> Option<BinaryOperator>,
+    ) -> Result<Expression, ParseError> {
+        let mut left = next(self)?;
 
-        while self.check(&TokenKind::Or) {
-            self.advance();
-            let right = self.parse_logical_and()?;
+        while let Some(operator) = match_operator(self) {
+            let right = next(self)?;
             let span = self.span(left.span().start, right.span().end);
             left = Expression::BinaryOperator {
                 left: Box::new(left),
-                operator: BinaryOperator::Or,
+                operator,
                 right: Box::new(right),
                 span,
             };
         }
 
         Ok(left)
+    }
+
+    pub(super) fn parse_logical_or(&mut self) -> Result<Expression, ParseError> {
+        self.parse_binary_level(Self::parse_logical_and, Self::match_or)
     }
 
     pub(super) fn parse_logical_and(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_equality()?;
-
-        while self.check(&TokenKind::And) {
-            self.advance();
-            let right = self.parse_equality()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::BinaryOperator {
-                left: Box::new(left),
-                operator: BinaryOperator::And,
-                right: Box::new(right),
-                span,
-            };
-        }
-
-        Ok(left)
+        self.parse_binary_level(Self::parse_equality, Self::match_and)
     }
 
     pub(super) fn parse_equality(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_comparison()?;
-
-        while let Some(operator) = self.match_equality() {
-            let right = self.parse_comparison()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::BinaryOperator {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                span,
-            };
-        }
-
-        Ok(left)
+        self.parse_binary_level(Self::parse_comparison, Self::match_equality)
     }
 
     pub(super) fn parse_comparison(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_range()?;
-
-        while let Some(operator) = self.match_comparison() {
-            let right = self.parse_range()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::BinaryOperator {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                span,
-            };
-        }
-
-        Ok(left)
+        self.parse_binary_level(Self::parse_range, Self::match_comparison)
     }
 
     /// Infix range `lo <- hi` → inclusive `[]Num` (see the `Expression::Range` node).
@@ -213,37 +184,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_additive(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_multiplicative()?;
-
-        while let Some(operator) = self.match_additive() {
-            let right = self.parse_multiplicative()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::BinaryOperator {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                span,
-            };
-        }
-
-        Ok(left)
+        self.parse_binary_level(Self::parse_multiplicative, Self::match_additive)
     }
 
     pub(super) fn parse_multiplicative(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_unary()?;
-
-        while let Some(operator) = self.match_multiplicative() {
-            let right = self.parse_unary()?;
-            let span = self.span(left.span().start, right.span().end);
-            left = Expression::BinaryOperator {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                span,
-            };
-        }
-
-        Ok(left)
+        self.parse_binary_level(Self::parse_unary, Self::match_multiplicative)
     }
 
     pub(super) fn parse_unary(&mut self) -> Result<Expression, ParseError> {
@@ -298,16 +243,9 @@ impl<'a> Parser<'a> {
 
                     // Parse arguments
                     let mut arguments = vec![expression]; // receiver is first argument
-
-                    if !self.check(&TokenKind::ParenClose) {
-                        loop {
-                            arguments.push(self.parse_expression()?);
-                            if !self.check(&TokenKind::Comma) {
-                                break;
-                            }
-                            self.advance();
-                        }
-                    }
+                    arguments.extend(
+                        self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?,
+                    );
 
                     self.expect(&TokenKind::ParenClose)?;
                     let span = self.span(arguments[0].span().start, self.previous_span().end);
@@ -345,17 +283,8 @@ impl<'a> Parser<'a> {
             } else if self.check_same_line(&TokenKind::ParenOpen) {
                 // Function call
                 self.advance();
-                let mut arguments = Vec::new();
-
-                if !self.check(&TokenKind::ParenClose) {
-                    loop {
-                        arguments.push(self.parse_expression()?);
-                        if !self.check(&TokenKind::Comma) {
-                            break;
-                        }
-                        self.advance();
-                    }
-                }
+                let arguments =
+                    self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?;
 
                 self.expect(&TokenKind::ParenClose)?;
                 let span = self.span(expression.span().start, self.previous_span().end);
@@ -374,6 +303,24 @@ impl<'a> Parser<'a> {
     }
 
     // Match helper functions
+    fn match_or(&mut self) -> Option<BinaryOperator> {
+        if self.check(&TokenKind::Or) {
+            self.advance();
+            Some(BinaryOperator::Or)
+        } else {
+            None
+        }
+    }
+
+    fn match_and(&mut self) -> Option<BinaryOperator> {
+        if self.check(&TokenKind::And) {
+            self.advance();
+            Some(BinaryOperator::And)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn match_equality(&mut self) -> Option<BinaryOperator> {
         // A trailing `== =`/`!= =` is an operator MEMBER definition (e.g. inside a type's
         // `{ }` block), not `expr == …` — stop so `parse_member_block` picks it up. The
@@ -757,25 +704,16 @@ impl<'a> Parser<'a> {
     /// discriminate on `Expression::Spread`, not on the name. Assumes the opening brace is
     /// already consumed and consumes the closing one.
     pub(super) fn parse_record_fields(&mut self) -> Result<Vec<(String, Expression)>, ParseError> {
-        let mut fields = Vec::new();
-
-        if !self.check(&TokenKind::BraceClose) {
-            loop {
-                if let Some(spread) = self.try_parse_spread()? {
-                    fields.push((String::new(), spread));
-                } else {
-                    let field_name = self.expect_ident()?;
-                    self.expect(&TokenKind::Assign)?;
-                    let value = self.parse_expression()?;
-                    fields.push((field_name, value));
-                }
-
-                if !self.check(&TokenKind::Comma) {
-                    break;
-                }
-                self.advance();
+        let fields = self.parse_comma_separated(&TokenKind::BraceClose, |parser| {
+            if let Some(spread) = parser.try_parse_spread()? {
+                Ok((String::new(), spread))
+            } else {
+                let field_name = parser.expect_ident()?;
+                parser.expect(&TokenKind::Assign)?;
+                let value = parser.parse_expression()?;
+                Ok((field_name, value))
             }
-        }
+        })?;
 
         self.expect(&TokenKind::BraceClose)?;
         Ok(fields)
@@ -794,26 +732,18 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.expect(&TokenKind::BracketOpen)?;
 
-        let mut elements = Vec::new();
-
-        if !self.check(&TokenKind::BracketClose) {
-            loop {
-                // An element beginning with `<-` is a SPREAD: `[<-xs, 4]` splices every
-                // element of `xs` in, then appends `4`. Disambiguated from the infix
-                // range `lo <- hi` by position — a leading `<-` is a spread (see
-                // `try_parse_spread`), so `[1 <- 4]` is a one-element array holding the
-                // range `[1,2,3,4]`, while `[<-xs, 4]` splices xs.
-                if let Some(spread) = self.try_parse_spread()? {
-                    elements.push(spread);
-                } else {
-                    elements.push(self.parse_expression()?);
+        // An element beginning with `<-` is a SPREAD: `[<-xs, 4]` splices every element
+        // of `xs` in, then appends `4`. Disambiguated from the infix range `lo <- hi` by
+        // position — a leading `<-` is a spread (see `try_parse_spread`), so `[1 <- 4]`
+        // is a one-element array holding the range `[1,2,3,4]`, while `[<-xs, 4]`
+        // splices xs.
+        let elements =
+            self.parse_comma_separated(&TokenKind::BracketClose, |parser| {
+                match parser.try_parse_spread()? {
+                    Some(spread) => Ok(spread),
+                    None => parser.parse_expression(),
                 }
-                if !self.check(&TokenKind::Comma) {
-                    break;
-                }
-                self.advance();
-            }
-        }
+            })?;
 
         self.expect(&TokenKind::BracketClose)?;
         let span = self.span(start.start, self.previous_span().end);

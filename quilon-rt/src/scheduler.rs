@@ -76,10 +76,10 @@ enum Park {
     CaseAborted,
     /// An `aborts()` lambda ended in a fail-loud exit: yielded by [`abort_current_trap`] from
     /// wherever that exit is reached (an `assert`/runtime fault via `report::fail_at`, or a
-    /// raw `__exit`), carrying the exit code and the report text withheld from stderr. Only
-    /// ever yielded by a coroutine [`run_abort_trap_guarded`] resumes, and only ever seen by
-    /// that function's own loop — it never reaches [`run`]'s.
-    AbortTrapped(c_int, String),
+    /// raw `__exit`), carrying the report text withheld from stderr. Only ever yielded by a
+    /// coroutine [`run_abort_trap_guarded`] resumes, and only ever seen by that function's own
+    /// loop — it never reaches [`run`]'s.
+    AbortTrapped(String),
 }
 
 type FiberCoroutine = Coroutine<(), Park, (), DefaultStack>;
@@ -361,7 +361,7 @@ pub(crate) fn abort_trap_active() -> bool {
 /// Run an `aborts()` lambda's body — `function(environment)`, the raw parts of its
 /// (possibly wrapped) closure — to completion on a fresh nested fiber, resumed
 /// synchronously right here exactly as [`run_case_guarded`] resumes a case's. Yields the
-/// outcome: whether [`abort_current_trap`] ended it early, and if so, what it recorded.
+/// outcome: whether [`abort_current_trap`] ended it early, and if so, the report it recorded.
 ///
 /// A park the body causes (`@sleep` and the rest) is forwarded to the fiber calling this,
 /// the same way [`run_case_guarded`] forwards one, so the scheduler keeps driving it as it
@@ -369,7 +369,7 @@ pub(crate) fn abort_trap_active() -> bool {
 pub(crate) fn run_abort_trap_guarded(
     function: extern "C" fn(*mut c_void) -> u8,
     environment: *mut c_void,
-) -> Option<(c_int, String)> {
+) -> Option<String> {
     let outer_yielder = current_yielder("run_abort_trap_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
@@ -383,8 +383,8 @@ pub(crate) fn run_abort_trap_guarded(
     ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
     let outcome = loop {
         match resume_fiber(id, high, guard_low, low, &mut coroutine) {
-            CoroutineResult::Yield(Park::AbortTrapped(exit_code, report)) => {
-                break Some((exit_code, report));
+            CoroutineResult::Yield(Park::AbortTrapped(report)) => {
+                break Some(report);
             }
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break None,
@@ -410,15 +410,15 @@ pub(crate) fn run_abort_trap_guarded(
 }
 
 /// End the currently running `aborts()` trap: suspend it with the abort marker (see
-/// [`Park::AbortTrapped`]), carrying `exit_code` and the report withheld from stderr,
-/// through the same thread-local yielder [`sleep`] uses. Never returns —
-/// [`run_abort_trap_guarded`]'s loop force-resets this coroutine once it sees the marker,
-/// so it is never resumed again. Must be called from within a trapped fiber (a fail-loud
-/// exit only ever reaches this while [`abort_trap_active`] is true).
-pub(crate) fn abort_current_trap(exit_code: c_int, report: String) -> ! {
+/// [`Park::AbortTrapped`]), carrying the report withheld from stderr, through the same
+/// thread-local yielder [`sleep`] uses. Never returns — [`run_abort_trap_guarded`]'s loop
+/// force-resets this coroutine once it sees the marker, so it is never resumed again. Must
+/// be called from within a trapped fiber (a fail-loud exit only ever reaches this while
+/// [`abort_trap_active`] is true).
+pub(crate) fn abort_current_trap(report: String) -> ! {
     let yielder = current_yielder("abort_current_trap");
     // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::AbortTrapped(exit_code, report)) };
+    unsafe { (*yielder).suspend(Park::AbortTrapped(report)) };
     unreachable!("run_abort_trap_guarded force-resets this coroutine on the abort marker")
 }
 
@@ -884,8 +884,7 @@ mod tests {
                 assert!(!abort_trap_active(), "the trap ends once it has returned");
 
                 let outcome = run_abort_trap_guarded(aborts, ptr::null_mut());
-                let (exit_code, report) = outcome.expect("the lambda aborted");
-                assert_eq!(exit_code, 5);
+                let report = outcome.expect("the lambda aborted");
                 assert!(report.contains("trapped for a unit test"));
                 assert!(
                     !abort_trap_active(),
@@ -910,7 +909,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 let outcome = run_abort_trap_guarded(outer, ptr::null_mut());
-                let (_, report) = outcome.expect("the outer lambda aborted");
+                let report = outcome.expect("the outer lambda aborted");
                 assert!(report.contains("outer"));
                 assert!(
                     !report.contains("inner"),

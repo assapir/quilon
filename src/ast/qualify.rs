@@ -608,9 +608,7 @@ impl Walker<'_> {
                 .iter_mut()
                 .try_for_each(|(_, field_type)| self.type_(field_type, span)),
             Type::Named { name, .. } => self.type_reference(name, span),
-            Type::Generic { arguments, .. } => arguments
-                .iter_mut()
-                .try_for_each(|argument| self.type_(argument, span)),
+            Type::Generic { .. } => Ok(()),
             Type::Function {
                 parameters,
                 return_type,

@@ -91,6 +91,17 @@ fn test_parse_with_type() {
 }
 
 #[test]
+fn test_result_with_generic_arguments_is_a_parse_error() {
+    // `Result` is monomorphic (see `add_builtins` in the type checker); a `{T, E}`
+    // argument list after it is not part of the type grammar.
+    let tokens = Lexer::tokenize("x :: Result{Num, Text} = 42").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `Result{{Num, Text}}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+}
+
+#[test]
 fn test_parse_block_level_annotated_binding() {
     // A `name :: Type = expression` binding INSIDE a `< >` block must parse and carry its
     // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression:
@@ -1059,4 +1070,85 @@ fn test_match_nested_in_a_block_in_an_arm_body_stays_legal() {
         parse(&tokens).is_ok(),
         "a match nested in a block in an arm's body should still parse: {src}"
     );
+}
+
+#[test]
+fn test_line_final_gt_closes_its_block_early_and_qn115_blames_it() {
+    // `beaverCount >` ends its line, so it closes `tallyLodge`'s block there — QN115 should blame that `>`, not wherever the parse derails two lines later.
+    let src = "tallyLodge = (dam :: Num) -> Num => <\n  beaverCount = 5\n  saplingCount = 3\n  beaverCount >\n  saplingCount\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::EarlyBlockClose);
+    assert_eq!(
+        err.message,
+        "this `>` closed its block because it ended the line"
+    );
+    assert_eq!(
+        err.help.as_deref(),
+        Some("to compare, put the right operand on the same line as `>`")
+    );
+    let early_gt = src.find("beaverCount >").unwrap() + "beaverCount ".len();
+    assert_eq!(err.span.start as usize, early_gt);
+    let (line, _column) = Span::line_col(src, early_gt);
+    assert_eq!(line, 4, "the early `>` sits on line 4 of the source");
+}
+
+#[test]
+fn test_gt_with_operand_on_the_same_line_stays_a_comparison() {
+    let src = "outrankOtter = (river :: Num) -> Bool => <\n  slideCount = 5\n  splashCount = 3\n  slideCount > splashCount\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    assert!(
+        parse(&tokens).is_ok(),
+        "a `>` with its right operand on the same line should stay greater-than: {src}"
+    );
+}
+
+#[test]
+fn test_stray_gt_with_no_earlier_close_keeps_the_plain_message() {
+    // No block has closed anywhere yet, so QN115 has nothing to blame this `>` on.
+    let src = ">\nhootOwlCall = () -> Num => < 1 >";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+    assert_eq!(err.message, "expected a name, found a block close `>`");
+    assert_eq!(err.span.start as usize, 0);
+}
+
+#[test]
+fn test_single_line_body_never_arms_qn115_for_a_later_stray_gt() {
+    // Both bodies here open and close on their own single line, so neither `>` is a
+    // candidate; a later stray `>` should still get the plain QN100 message.
+    let src = "squareIguana = (scale :: Num) -> Num => < scale * scale >\n^ = () -> Num => < squareIguana(4) >\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::UnexpectedToken);
+    assert_eq!(err.message, "expected a name, found a block close `>`");
+    let stray_gt = src.rfind('>').unwrap();
+    assert_eq!(err.span.start as usize, stray_gt);
+}
+
+#[test]
+fn test_early_close_blames_the_gt_even_when_the_derailment_is_at_a_later_token() {
+    // `pigeonCount >` closes `^`'s body on line 3; the parse only derails afterward, at
+    // the `9` two lines later — QN115 should still blame line 3's `>`, not the `9`.
+    let src = "^ = () -> Num => <\n  pigeonCount = 5\n  pigeonCount >\n  9\n>";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::EarlyBlockClose);
+    assert_eq!(
+        err.message,
+        "this `>` closed its block because it ended the line"
+    );
+    let early_gt = src.rfind("pigeonCount >").unwrap() + "pigeonCount ".len();
+    assert_eq!(err.span.start as usize, early_gt);
+    let (line, _column) = Span::line_col(src, early_gt);
+    assert_eq!(line, 3, "the early `>` sits on line 3 of the source");
 }

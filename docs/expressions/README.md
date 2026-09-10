@@ -15,7 +15,9 @@ sidebar:
 > **greater-than when an operand follows it on the same line** — an identifier, a literal,
 > `(`, `[`, `{`, or a prefix `-`/`!`. `a > b`, `f(x > y)`, `a > -b` and `"b" > "a"` are
 > comparisons; a `>` before a `)`, `]`, `}`, `,`, a `~` comment, or the end of the line
-> closes its block. A block-bodied lambda sits inside a call on one line:
+> closes the innermost open block — a `>` meant as a comparison closes its block early
+> when the right operand lands on the next line, so keep it on the `>`'s own line. A
+> block-bodied lambda sits inside a call on one line:
 > ```quilon ignore
 > xs.each(x => <
 >   total := total + x
