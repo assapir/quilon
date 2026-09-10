@@ -185,13 +185,7 @@ impl TypeChecker {
         None
     }
 
-    /// A stored field type — a sum variant's payload, or a record field — may still be
-    /// the ENCLOSING type's own placeholder: frozen with no fields/variants at the point
-    /// its declaration resolved it, since a type cannot embed its own not-yet-complete
-    /// definition (see `check_type_declaration`). Substitute the registered, now-complete
-    /// definition by name — recursing through an array/map — so a value read against this
-    /// field type compares against real fields/variants, matching how the checker
-    /// resolves the SAME name everywhere else it is written out.
+    /// Substitutes a frozen self-reference placeholder (empty fields/variants, from before its own declaration completed) with the registered real type, recursing through array/map.
     pub(super) fn resolve_payload_type(&self, field_type: &Type) -> Type {
         match field_type {
             Type::Sum { name, variants } if variants.is_empty() => self

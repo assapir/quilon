@@ -527,7 +527,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// The target being emitted for. The module carries a triple only when something set one;
     /// with none set the host is the target.
-    fn target_triple(&self) -> String {
+    pub(super) fn target_triple(&self) -> String {
         let module_triple = self.module.get_triple();
         let module_triple = module_triple.as_str().to_string_lossy().to_string();
         if module_triple.is_empty() {
@@ -712,7 +712,7 @@ fn os_name(triple: &str) -> &str {
 
 /// `None` when the target is not registered — the IR-only codegen tests never initialize one,
 /// and fall back to the host they run on.
-fn target_data(triple: &str) -> Option<inkwell::targets::TargetData> {
+pub(super) fn target_data(triple: &str) -> Option<inkwell::targets::TargetData> {
     use inkwell::OptimizationLevel;
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetTriple};
     let triple = TargetTriple::create(triple);

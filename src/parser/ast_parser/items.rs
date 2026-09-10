@@ -508,10 +508,7 @@ impl<'a> Parser<'a> {
                 span: variant_span,
             });
 
-            // Optional payload-type list: `(Num)` or `(Num, Text)`. Each field's own span
-            // (start of its type to the end) travels alongside it, for a checker
-            // diagnostic that points at the offending payload rather than the whole
-            // declaration.
+            // Optional payload-type list: `(Num)` or `(Num, Text)`, each field's span tracked alongside it.
             let mut fields = Vec::new();
             let mut this_variant_spans = Vec::new();
             if self.check(&TokenKind::ParenOpen) {

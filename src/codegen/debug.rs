@@ -431,11 +431,7 @@ impl<'ctx> DebugInfo<'ctx> {
         self.struct_type(name, &members)
     }
 
-    /// A sum type whose variants disagree on a payload position's type (`SumLayout::Union`
-    /// in the code generator): `{ i8 tag, union { A{...}, B{...}, ... } }`, one union
-    /// member per variant, each a struct of that variant's own payload types — mirroring
-    /// codegen's own per-variant body struct, so the tag and payload sit at the same
-    /// offsets/size as the LLVM value.
+    /// `{ i8 tag, union { A{...}, B{...}, ... } }` — mirrors codegen's `SumLayout::Union`.
     pub fn sum_union_type(
         &self,
         name: &str,
@@ -457,9 +453,7 @@ impl<'ctx> DebugInfo<'ctx> {
         self.struct_type(name, &[("tag", tag), ("payload", payload)])
     }
 
-    /// A union of `members`, each starting at offset 0 and sized to the union's own total
-    /// size — the widest member's, laid out the same natural-alignment way [`struct_type`]
-    /// lays out a struct's members.
+    /// A union of `members`, each starting at offset 0.
     fn union_type(&self, name: &str, members: &[(String, DIType<'ctx>)]) -> DIType<'ctx> {
         let root_file = self.root_file();
         let scope = root_file.as_debug_info_scope();

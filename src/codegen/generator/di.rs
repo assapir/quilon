@@ -273,8 +273,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             from_defs.map(Vec::as_slice).unwrap_or(&[])
         };
 
-        // The same decision `build_sum_layout` makes: every variant's concrete field at
-        // each position agrees (`PerPosition`) or not (`Union`) — see `sums::SumLayout`.
+        // Mirrors `build_sum_layout`'s own PerPosition/Union decision.
         if !super::sums::positions_agree(variants) {
             let members: Vec<(String, Vec<(String, DIType<'ctx>)>)> = variants
                 .iter()
@@ -318,10 +317,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         debug.sum_type(name, &slots)
     }
 
-    /// A payload's DWARF slot type: a named-RECORD payload rides in the slot by pointer
-    /// (the record ABI — see `register_sum_variants`/`type_to_llvm`), so its DWARF slot
-    /// is a pointer, not the record struct laid out by value; everything else is its own
-    /// DWARF type. Shared by the per-position and the per-variant-union layouts.
+    /// A payload's DWARF slot: a record rides by pointer (its own ABI), everything else by its own type.
     fn di_payload_slot(&self, debug: &DebugInfo<'ctx>, field_type: &Type) -> DIType<'ctx> {
         match field_type {
             Type::Named { name, .. } if !self.resolves_to_sum(name) => debug.opaque_pointer(),

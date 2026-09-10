@@ -371,9 +371,7 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
-    /// A sum-type variant payload of a type outside the accepted set: `Num`, `Text`,
-    /// `Bool`, `$`, a declared record, a declared sum (the enclosing one included), or
-    /// an array/map of one of those.
+    /// A sum-type variant payload outside the accepted set.
     InvalidPayloadType {
         variant: String,
         position: usize,

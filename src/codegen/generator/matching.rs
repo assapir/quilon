@@ -299,11 +299,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 name, arguments, ..
             } => {
                 // Extract each payload field and bind it to the corresponding sub-pattern.
-                // A `PerPosition` sum's value is `{ i8 tag, payload0, payload1, ... }`, so
-                // payload `i` is struct field `i + 1`; a `Union` sum's payloads come back
-                // through `union_payload_values` instead (see `SumLayout`). Only identifier
-                // sub-patterns bind a name; others (wildcards, nested constructors) are
-                // matched structurally elsewhere.
+                // `union_payload_values` returns `None` for a `PerPosition` sum, whose payload `i` is struct field `i + 1` directly.
                 //
                 // Each payload binding records its Quilon type in `var_types` (the map
                 // that mangles an overloaded call on the binding, e.g.

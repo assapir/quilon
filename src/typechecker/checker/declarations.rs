@@ -192,12 +192,7 @@ impl TypeChecker {
             self.check_method_mutation_contracts(&declaration.name, methods)?;
         }
 
-        // Register (a placeholder for) the type's own name before resolving anything
-        // else below, so a payload or a record field may name the type itself, or any
-        // type declared above it. A sum's placeholder has no variants yet and a
-        // record's carries no fields/methods yet — the same "not yet resolved" marker
-        // `resolve_type` already gives an unregistered name. Both are overwritten with
-        // the real definition once it is built, further down.
+        // Placeholder registered before resolving fields, so a self-reference resolves instead of reading as undeclared; overwritten with the real definition below.
         self.env.define(
             declaration.name.clone(),
             Type::named_ref(&declaration.name),
@@ -220,12 +215,7 @@ impl TypeChecker {
                 field_spans,
                 ..
             } => {
-                // Resolve and validate each variant's payload types. A payload is a
-                // built-in scalar (`Num`/`Text`/`Bool`/`$`), a declared record, a
-                // declared sum (this one included), or an array/map of an accepted
-                // type — checked recursively by `acceptable_payload_type`. Anything
-                // else — a function type, a type variable, an undeclared name — is
-                // `InvalidPayloadType`, pointing at that field's own span.
+                // Anything `acceptable_payload_type` rejects is `InvalidPayloadType`, pointing at that field's own span.
                 let mut resolved_variants = Vec::with_capacity(variants.len());
                 for (variant, spans) in variants.iter().zip(field_spans) {
                     let mut fields = Vec::with_capacity(variant.fields.len());
@@ -334,10 +324,7 @@ impl TypeChecker {
             }
         };
 
-        // Overwrite the placeholder registered above with the real, fully-resolved
-        // type, before checking its methods so a method body may name its own type
-        // (constructing it, an operator returning it). (Sum constructor lookup already
-        // went through `sum_types` above.)
+        // Overwrites the placeholder registered above with the real type.
         self.env.update_type(&declaration.name, type_value.clone());
 
         // `it` binds to the type; operator members register on their operator's overload
@@ -351,11 +338,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Whether `resolved` is a sum-type payload the checker accepts: `Num`, `Text`,
-    /// `Bool`, `$`, a declared record, a declared sum (the enclosing one included, via
-    /// its placeholder in `sum_types` while it is still being built), or an array/map
-    /// of an accepted type. Everything else — a function type, a type variable, an
-    /// undeclared name — is rejected by the caller.
+    /// A sum's accepted payload kinds: `Num`/`Text`/`Bool`/`$`, a declared record or sum (self included, via its `sum_types` placeholder), or an array/map of one.
     fn acceptable_payload_type(&self, resolved: &Type) -> bool {
         match resolved {
             Type::Num | Type::Text | Type::Bool | Type::Unit => true,

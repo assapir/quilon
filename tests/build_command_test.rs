@@ -505,6 +505,44 @@ describe = (m :: Mixed) -> Num => <
     assert_eq!(run.status.code(), Some(6), "wrong exit code");
 }
 
+/// Indexing into a self-referencing array field must build natively too, not just JIT.
+#[test]
+fn self_referencing_array_field_indexing_builds_and_runs_natively() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping self-referencing-array build gate: need a linker on PATH");
+        return;
+    };
+
+    let src = "\
+Wagon = { next :: []Wagon, cargo :: Num }
+^ = () -> Num => <
+  w = Wagon { next = [Wagon { next = [], cargo = 2 }], cargo = 1 }
+  w.next[0].cargo + w.cargo
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_wagon_array_build_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let out = dir.join("prog");
+    let mut cmd = Command::new(quilon);
+    cmd.args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(run.status.code(), Some(3), "wrong exit code");
+}
+
 /// Distributed-binary scenario: a user downloads ONLY the `quilon` binary — no
 /// `libquilon_rt.a` next to it, no build tree on disk. `quilon build` must still
 /// work, by decompressing the runtime archive embedded in the binary itself into

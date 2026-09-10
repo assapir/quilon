@@ -288,11 +288,7 @@ impl TypeChecker {
                         })
                     }
                     Type::Named { .. } => {
-                        // The base's own type may still be the record's placeholder from
-                        // a direct self-reference — frozen with no fields at the point
-                        // its declaration resolved it (see `resolve_payload_type`).
-                        // Resolve it by name before searching, so a chain through a
-                        // self-referencing field (`w.next.cargo`) reaches the real one.
+                        // A field's own type may still be a frozen self-reference placeholder; resolve both ends.
                         let Type::Named { fields, .. } =
                             self.resolve_payload_type(&expression_type)
                         else {
@@ -300,7 +296,7 @@ impl TypeChecker {
                         };
                         for (f, t) in fields.iter() {
                             if f == field {
-                                return Ok(t.clone());
+                                return Ok(self.resolve_payload_type(t));
                             }
                         }
                         Err(TypeError::UndefinedVariable {
@@ -549,10 +545,7 @@ impl TypeChecker {
                                 }
                                 provided_fields.insert(field_name.clone());
 
-                                // Find the expected type for this field, resolving it past
-                                // the enclosing type's own placeholder if it names the
-                                // record's own not-yet-complete self at declaration time
-                                // (see `resolve_payload_type`).
+                                // Resolves past a frozen self-reference placeholder (see `resolve_payload_type`).
                                 let expected_type = type_fields
                                     .iter()
                                     .find(|(f, _)| f == field_name)

@@ -182,14 +182,7 @@ pub struct CodeGenerator<'ctx> {
     // payload's concrete type. (Result's `Ok`/`NotOk` carry `Generic`, which resolves
     // as Num for overloads — see the type checker's `types_match`.)
     variant_payloads: HashMap<String, Vec<Type>>,
-    // Per-sum-type canonical payload layout, keyed by sum-type name — see
-    // `sums::SumLayout` for the two shapes (one shared slot per position, or a tag plus
-    // storage sized to the widest variant) and `sums::positions_agree` for which a sum
-    // gets. USER sum types are entered here as they're declared; the predefined
-    // `Result` is entered up front with a SINGLE canonical `{ptr,i64}` payload slot (see
-    // `register_builtin_sum_types`) so that every Result — whatever its `Ok`/`NotOk`
-    // payload — shares one LLVM shape `{ i8, {ptr,i64} }` and can cross a generic
-    // `(r :: Result)` boundary.
+    // Per-sum-type canonical payload layout, keyed by name — see `sums::SumLayout`.
     sum_layouts: HashMap<String, sums::SumLayout<'ctx>>,
     current_function: Option<FunctionValue<'ctx>>,
     // Names of `:=` (mutable) locals in the CURRENT function that are captured by

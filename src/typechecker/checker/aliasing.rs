@@ -107,11 +107,7 @@ pub(super) fn is_reference_type(ty: &Type) -> bool {
         }
         Type::Sum { variants, .. } => variants.iter().any(|variant| {
             variant.fields.iter().any(|field| match field {
-                // A direct self-reference field is still the enclosing sum's own
-                // placeholder here — frozen with no variants at the point its
-                // declaration resolved it (see `resolve_payload_type`), so there is
-                // nothing to see through. Conservatively a reference: the sound
-                // over-approximation this function already promises.
+                // An unresolved self-reference placeholder: conservatively a reference.
                 Type::Sum { variants, .. } if variants.is_empty() => true,
                 other => is_reference_type(other),
             })

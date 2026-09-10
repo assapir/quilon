@@ -151,3 +151,18 @@ fn invalid_payload_type_names_variant_position_and_type() {
     assert_eq!(error.span().start, field_start);
     assert_eq!(error.span().end, field_start + "Nope".len() as u32);
 }
+
+#[test]
+fn indexing_a_self_referencing_array_field_reaches_the_real_record() {
+    // A read out of an array/map whose element type is a frozen self-reference
+    // placeholder must resolve to the real record, the same way direct field access
+    // does (`Expression::FieldAccess`'s `resolve_payload_type` call).
+    assert_exit(
+        "Wagon = { next :: []Wagon, cargo :: Num }\n\
+         ^ = () -> Num => <\n\
+           w = Wagon { next = [Wagon { next = [], cargo = 2 }], cargo = 1 }\n\
+           w.next[0].cargo + w.cargo\n\
+         >",
+        3,
+    );
+}
