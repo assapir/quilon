@@ -330,12 +330,12 @@ impl LanguageServer {
     fn definition(&self, id: RequestId, params: GotoDefinitionParams) -> Response {
         let position_params = params.text_document_position_params;
         let uri = position_params.text_document.uri;
-        let Some((text, positions, offset, linked)) =
+        let Some((_, positions, offset, linked)) =
             self.linked_document(&uri, position_params.position)
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        let Some(span) = analysis::definition_at(&linked.program, text, offset) else {
+        let Some(span) = analysis::definition_at(&linked.program, offset) else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
 
@@ -412,7 +412,7 @@ impl LanguageServer {
             // file (an imported name) — a real target, just not one it can rewrite here.
             // That second walk only runs for this already-empty-handed path, not on every
             // rename.
-            None => match analysis::declaration_at(&linked.program, text, offset) {
+            None => match analysis::declaration_at(&linked.program, offset) {
                 Some((name, definition)) if definition.file != ROOT_FILE => {
                     let message = match linked.sources.locate(&definition) {
                         Some(location) => {

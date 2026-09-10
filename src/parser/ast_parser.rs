@@ -3,7 +3,7 @@
 use crate::ast::{
     BinaryOperator, Expression, FunctionDeclaration, Import, InterpolationPart, Item,
     MethodDeclaration, ModulePath, Parameter, Program, Statement, TypeDeclaration, TypeDefinition,
-    UnaryOperator, VariableDeclaration,
+    TypeNameUse, UnaryOperator, VariableDeclaration,
 };
 use crate::diagnostic::Code;
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span, StrChunk, Token, TokenKind};
@@ -60,6 +60,12 @@ pub struct Parser<'a> {
     /// line (nothing followed it on the same line) — the earlier `>` a later "found
     /// a block close" error should blame instead of the token it actually derailed at.
     last_line_final_block_close: Option<Span>,
+    /// Every type name `parse_type` has read off an identifier token so far, in the order
+    /// encountered — see [`Program::type_name_uses`], which this becomes wholesale.
+    type_name_uses: Vec<TypeNameUse>,
+    /// Every sum variant's own declaring occurrence read so far — see
+    /// [`Program::variant_declarations`], which this becomes wholesale.
+    variant_declarations: Vec<TypeNameUse>,
 }
 
 /// Maximum recursive-descent nesting depth the parser accepts before it reports a
@@ -127,6 +133,8 @@ impl<'a> Parser<'a> {
             bare_match_forbidden: false,
             module_paths: std::collections::HashMap::new(),
             last_line_final_block_close: None,
+            type_name_uses: Vec::new(),
+            variant_declarations: Vec::new(),
         }
     }
 

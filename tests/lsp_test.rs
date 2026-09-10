@@ -180,21 +180,21 @@ fn definition_resolves_parameters_locals_and_top_level_functions() {
     // `x` in the body resolves to the parameter, at the parameter's own span — the name
     // through its type annotation.
     let definition =
-        definition_at(&checked.program, text, offset_of(text, "x * 2", 0)).expect("x resolves");
+        definition_at(&checked.program, offset_of(text, "x * 2", 0)).expect("x resolves");
     assert_eq!(definition.start, offset_of(text, "x :: Num", 0));
 
     // `y` in the call resolves to the block-local binding.
     let definition =
-        definition_at(&checked.program, text, offset_of(text, "double(y)", 7)).expect("y resolves");
+        definition_at(&checked.program, offset_of(text, "double(y)", 7)).expect("y resolves");
     assert_eq!(definition.start, offset_of(text, "y = 3", 0));
 
     // `double` in the call resolves to the top-level function.
-    let definition = definition_at(&checked.program, text, offset_of(text, "double(y)", 0))
-        .expect("double resolves");
+    let definition =
+        definition_at(&checked.program, offset_of(text, "double(y)", 0)).expect("double resolves");
     assert_eq!(definition.start, 0);
 
     // A position on nothing resolvable answers nothing.
-    assert!(definition_at(&checked.program, text, offset_of(text, "* 2", 0)).is_none());
+    assert!(definition_at(&checked.program, offset_of(text, "* 2", 0)).is_none());
 }
 
 /// A record `Point`, a sum `Shape`, and every shape a type or variant name can be
@@ -225,22 +225,18 @@ fn definition_resolves_a_type_name_from_a_constructor_an_annotation_and_a_return
     let declaration_start = offset_of(text, "Point = {", 0);
 
     // `Point` in the parameter annotation.
-    let definition = definition_at(&checked.program, text, offset_of(text, "p :: Point", 5))
+    let definition = definition_at(&checked.program, offset_of(text, "p :: Point", 5))
         .expect("the annotation resolves");
     assert_eq!(definition.start, declaration_start);
 
     // `Point` as the declared return type.
-    let definition = definition_at(&checked.program, text, offset_of(text, "-> Point", 3))
+    let definition = definition_at(&checked.program, offset_of(text, "-> Point", 3))
         .expect("the return type resolves");
     assert_eq!(definition.start, declaration_start);
 
     // `Point` in the `Point { … }` constructor.
-    let definition = definition_at(
-        &checked.program,
-        text,
-        offset_of(text, "Point { x = p.x", 0),
-    )
-    .expect("the constructor resolves");
+    let definition = definition_at(&checked.program, offset_of(text, "Point { x = p.x", 0))
+        .expect("the constructor resolves");
     assert_eq!(definition.start, declaration_start);
 }
 
@@ -249,9 +245,33 @@ fn definition_resolves_a_variant_name_from_a_pattern_to_its_sum_declaration() {
     let text = text_with_a_record_and_a_sum();
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
 
-    let definition = definition_at(&checked.program, text, offset_of(text, "Circle(r)", 0))
+    let definition = definition_at(&checked.program, offset_of(text, "Circle(r)", 0))
         .expect("the pattern resolves");
     assert_eq!(definition.start, offset_of(text, "Circle(Num)", 0));
+}
+
+#[test]
+fn definition_resolves_a_variables_own_annotation() {
+    let text = "Point = { x :: Num, y :: Num }\n\
+                p :: Point = Point { x = 1, y = 2 }\n\
+                ^ = () -> Num => < p.x >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let definition = definition_at(&checked.program, offset_of(text, "p :: Point", 5))
+        .expect("the variable's annotation resolves");
+    assert_eq!(definition.start, offset_of(text, "Point = {", 0));
+}
+
+#[test]
+fn definition_resolves_a_functions_whole_signature_binding_type() {
+    let text = "Point = { x :: Num, y :: Num }\n\
+                make :: (Num) -> Point = (n) => < Point { x = n, y = n } >\n\
+                ^ = () -> Num => < make(1).x >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let definition = definition_at(&checked.program, offset_of(text, "-> Point", 3))
+        .expect("the binding type's return slot resolves");
+    assert_eq!(definition.start, offset_of(text, "Point = {", 0));
 }
 
 #[test]
@@ -311,7 +331,7 @@ fn definition_resolves_across_a_file_import() {
     let root = directory.join("buffer.qn");
     let checked = check_text(&root, text).expect("checks clean");
 
-    let definition = definition_at(&checked.program, text, offset_of(text, "lib.add", 4))
+    let definition = definition_at(&checked.program, offset_of(text, "lib.add", 4))
         .expect("the imported function resolves");
     assert_ne!(
         definition.file, ROOT_FILE,
@@ -359,23 +379,19 @@ fn definition_and_references_resolve_past_an_unrelated_type_error() {
         .expect("the document still lexes, parses, and links");
 
     // `doubleUp` in the first, well-typed call resolves to the top-level function.
-    let definition = definition_at(&linked.program, text, offset_of(text, "doubleUp(4)", 0))
+    let definition = definition_at(&linked.program, offset_of(text, "doubleUp(4)", 0))
         .expect("doubleUp resolves");
     assert_eq!(definition.start, offset_of(text, "doubleUp = ", 0));
 
     // `doubleUp` in the mismatched call itself resolves too — the argument that fails to
     // type-check is not on the name being looked up.
-    let definition = definition_at(
-        &linked.program,
-        text,
-        offset_of(text, "doubleUp(\"kumquat\")", 0),
-    )
-    .expect("doubleUp resolves from the erroring call");
+    let definition = definition_at(&linked.program, offset_of(text, "doubleUp(\"kumquat\")", 0))
+        .expect("doubleUp resolves from the erroring call");
     assert_eq!(definition.start, offset_of(text, "doubleUp = ", 0));
 
     // `n` in the parameter's own body resolves to the parameter.
     let definition =
-        definition_at(&linked.program, text, offset_of(text, "n * 2", 0)).expect("n resolves");
+        definition_at(&linked.program, offset_of(text, "n * 2", 0)).expect("n resolves");
     assert_eq!(definition.start, offset_of(text, "n :: Num", 0));
 
     // References to `n` cover its declaration and its one use.
@@ -491,6 +507,73 @@ fn references_answer_nothing_for_a_name_declared_in_another_file() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
+fn text_reassigning_a_local_through_a_lambda() -> &'static str {
+    "^ = () -> Num => <\n  \
+     total := 0\n  \
+     [1, 2, 3].each(n => <\n    \
+     total := total + n\n  \
+     >)\n  \
+     total := total * 2\n  \
+     total\n\
+     >\n"
+}
+
+#[test]
+fn references_follow_a_binding_through_its_reassignments() {
+    let text = text_reassigning_a_local_through_a_lambda();
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let expected = vec![
+        offset_of(text, "total := 0", 0),
+        offset_of(text, "total := total + n", 0),
+        offset_of(text, "total + n", 0),
+        offset_of(text, "total := total * 2", 0),
+        offset_of(text, "total * 2", 0),
+        offset_of(text, "total\n>", 0),
+    ];
+
+    // From the declaration...
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total := 0", 0)),
+        expected
+    );
+    // ...from a reassignment's read, inside the lambda...
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total + n", 0)),
+        expected
+    );
+    // ...and from the final read.
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "total\n>", 0)),
+        expected
+    );
+}
+
+#[test]
+fn a_fresh_mutable_local_in_an_inner_scope_is_its_own_binding() {
+    // Different scopes, so each `:=` declares.
+    let text = "one = () -> Num => < count := 1\ncount >\n\
+                two = () -> Num => < count := 2\ncount + count >\n\
+                ^ = () -> Num => < one() + two() >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "count := 1", 0)),
+        vec![
+            offset_of(text, "count := 1", 0),
+            offset_of(text, "count >", 0)
+        ]
+    );
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "count := 2", 0)),
+        vec![
+            offset_of(text, "count := 2", 0),
+            offset_of(text, "count + count", 0),
+            offset_of(text, "count + count", 8),
+        ]
+    );
+}
+
 // --- Rename -------------------------------------------------------------------
 
 #[test]
@@ -501,6 +584,27 @@ fn only_a_bare_name_is_accepted_as_a_rename_target() {
     assert!(!is_identifier("a.b"));
     assert!(!is_identifier("two names"));
     assert!(!is_identifier(""));
+}
+
+#[test]
+fn renaming_a_reassigned_binding_rewrites_every_reassignment_and_read() {
+    let text = text_reassigning_a_local_through_a_lambda();
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let mut spans = references_at(&checked.program, text, offset_of(text, "total := 0", 0))
+        .expect("a resolvable target");
+    assert_eq!(spans.len(), 6);
+
+    // Apply the rename the same way `textDocument/rename` does — replace each span's
+    // text with the new name — back to front so earlier spans' offsets stay valid.
+    spans.sort_by_key(|span| span.start);
+    let mut renamed = text.to_string();
+    for span in spans.iter().rev() {
+        renamed.replace_range(span.start as usize..span.end as usize, "sum");
+    }
+
+    assert!(!renamed.contains("total"));
+    check_text(Path::new("buffer.qn"), &renamed).expect("the renamed program still compiles");
 }
 
 // --- Semantic tokens --------------------------------------------------------

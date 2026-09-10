@@ -78,8 +78,17 @@ All notable changes to Quilon are documented here.
   annotation, or a `-> Point` return type answers `Point`'s own declaration; on a variant
   name (`Circle` in a pattern or a call) it answers that variant in its sum's declaration.
   Find references on `Point` lists every one of those uses alongside the declaration,
-  across constructors, annotations, return types, sum payloads, and array/map element
-  types. See `docs/tooling/language-server.md`. Closes #399.
+  across constructors, annotations (a parameter's, a variable's, or a whole-signature
+  binding type's), return types, sum payloads, and array/map element types. See
+  `docs/tooling/language-server.md`. Closes #399.
+- **Find references and rename follow a `:=`-bound local through its reassignments.**
+  A `:=` on a name already in scope reassigns that binding, so the language server's
+  resolver now treats one the same way the type checker does — as the same binding a
+  nested lambda's reassignment reaches too — where it used to start a fresh, disconnected
+  local at each `:=`, leaving find references and rename seeing only the piece of the
+  chain nearest the cursor. Renaming such a binding now rewrites its declaration, every
+  reassignment, and every read in one edit. See `docs/tooling/language-server.md`.
+  Closes #398.
 - **A dev-tree `quilon build` now always links one stable runtime archive.** The
   build script placed the freshly built runtime staticlib at
   `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a

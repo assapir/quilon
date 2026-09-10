@@ -88,130 +88,10 @@ pub struct Reference {
     pub declaration: Declaration,
 }
 
-/// One capitalized identifier token a written type carries, in the order its surface
-/// syntax puts it: a leaf `Type::Named` is a use to resolve, `Declares` is a sum variant's
-/// own binding occurrence (only ever the first token of its variant's group), and
-/// `Builtin` is `Num`, `Text`, `Bool`, or the fixed `Result` sum — a real identifier
-/// token, but never a reference to resolve.
-enum TypeToken {
-    Named(String),
-    Declares(String),
-    Builtin,
-}
-
-/// `ty`'s own capitalized identifier tokens, in the order they are written: an array,
-/// map, set, or function type contributes none of its own and recurses into its element
-/// types in written order; every other written type is exactly one token wide.
-fn flatten_type(ty: &Type, tokens: &mut Vec<TypeToken>) {
-    match ty {
-        Type::Num | Type::Text | Type::Bool | Type::Sum { .. } => tokens.push(TypeToken::Builtin),
-        Type::Named { name, .. } => tokens.push(TypeToken::Named(name.clone())),
-        Type::Array(element) | Type::Set(element) => flatten_type(element, tokens),
-        Type::Map(key, value) => {
-            flatten_type(key, tokens);
-            flatten_type(value, tokens);
-        }
-        Type::Function {
-            parameters,
-            return_type,
-        } => {
-            for parameter in parameters {
-                flatten_type(parameter, tokens);
-            }
-            flatten_type(return_type, tokens);
-        }
-        // Never produced by the parser as a written type — no token of its own to find.
-        Type::Unit | Type::Record(_) | Type::Generic { .. } => {}
-    }
-}
-
-/// Whether `text` opens with an uppercase letter — Quilon's own type/constructor
-/// convention (see `Parser::is_capitalized`), restated here since a use of it never
-/// leaves the parser.
-fn is_capitalized(text: &str) -> bool {
-    text.chars().next().is_some_and(|c| c.is_uppercase())
-}
-
-/// Every capitalized `Ident` token wholly inside `region`, in source order — in a stretch
-/// of source that carries nothing but written types (a parameter's or return type's
-/// annotation, a record's fields, a sum's variants), this is exactly the flattened
-/// sequence [`flatten_type`] (or a sum's variant-plus-payload grouping) predicts, token
-/// for token.
-fn capitalized_idents_in<'t>(tokens: &'t [Token], region: &Span) -> Vec<&'t Token> {
-    tokens
-        .iter()
-        .filter(|token| {
-            token.kind == TokenKind::Ident
-                && region.start <= token.span.start
-                && token.span.end <= region.end
-                && is_capitalized(&token.text)
-        })
-        .collect()
-}
-
-/// The stretches of a type's member block from `start` to `end` that no method's span
-/// covers — where its fields (a record) or variants (a sum) are written. A type's members
-/// interleave freely (a method may come before the fields it uses), so this can answer
-/// more than one stretch.
-fn member_gaps(start: u32, end: u32, methods: &[MethodDeclaration]) -> Vec<Span> {
-    let mut method_spans: Vec<&Span> = methods.iter().map(|method| &method.span).collect();
-    method_spans.sort_by_key(|span| span.start);
-
-    let mut gaps = Vec::new();
-    let mut cursor = start;
-    for method_span in method_spans {
-        if method_span.start > cursor {
-            gaps.push(Span::in_root(cursor, method_span.start));
-        }
-        cursor = cursor.max(method_span.end);
-    }
-    if cursor < end {
-        gaps.push(Span::in_root(cursor, end));
-    }
-    gaps
-}
-
-/// One group of [`TypeToken`]s per member — a record field's own type flattened, or a
-/// sum variant's declaring name followed by its payload types flattened — in the same
-/// order those members appear in [`TypeDefinition::Record::fields`] /
-/// [`TypeDefinition::Sum::variants`], which is their written order.
-fn member_leaf_groups(definition: &TypeDefinition) -> Vec<Vec<TypeToken>> {
-    match definition {
-        TypeDefinition::Record { fields, .. } => fields
-            .iter()
-            .map(|(_, field_type)| {
-                let mut leaves = Vec::new();
-                flatten_type(field_type, &mut leaves);
-                leaves
-            })
-            .collect(),
-        TypeDefinition::Sum { variants, .. } => variants
-            .iter()
-            .map(|variant| {
-                let mut leaves = vec![TypeToken::Declares(variant.name.clone())];
-                for field in &variant.fields {
-                    flatten_type(field, &mut leaves);
-                }
-                leaves
-            })
-            .collect(),
-    }
-}
-
-/// Which of [`Resolver::type_members`]'s two jobs to do: a sum's variants must all be
-/// declared before ANY body in the document is walked (an ordinary top-level name's
-/// forward-reference leniency, extended to variants), while resolving a member's own
-/// type references must wait until every top-level name — variants included — is known.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TypeMemberPhase {
-    DeclareVariants,
-    ResolveUses,
-}
-
 /// Every name binding and resolved reference in `program`, in one walk. Go-to-definition,
 /// find-references, and rename are all read off this same table — the compiler's own
 /// notion of scope, restated once rather than re-derived per capability.
-pub struct Resolver<'t> {
+pub struct Resolver {
     pub references: Vec<Reference>,
     /// Every declaration the walk binds, root-file ones only — the document a client can
     /// rename or list references in. A top-level name contributes one entry per member of
@@ -223,24 +103,17 @@ pub struct Resolver<'t> {
     top_level: HashMap<String, Declaration>,
     /// The lexical scopes currently open, innermost last.
     scopes: Vec<HashMap<String, Declaration>>,
-    /// The root document's own tokens — a `Type` carries no span of its own, so a type
-    /// name's use (an annotation, a constructor, a sum's payload) is found back in the
-    /// token stream rather than read straight off the AST.
-    tokens: &'t [Token],
 }
 
-impl<'t> Resolver<'t> {
+impl Resolver {
     /// Walk the whole (import-linked) `program` once, recording every reference and
-    /// declaration it contains. `tokens` is the root document's own tokenization —
-    /// [`declaration_at`], [`definition_at`], and [`references_at`] each produce it fresh
-    /// from the buffer text they are answering over.
-    pub fn walk(program: &Program, tokens: &'t [Token]) -> Self {
+    /// declaration it contains.
+    pub fn walk(program: &Program) -> Self {
         let mut resolver = Resolver {
             references: Vec::new(),
             declarations: Vec::new(),
             top_level: HashMap::new(),
             scopes: Vec::new(),
-            tokens,
         };
         for item in &program.items {
             let declaration = Declaration {
@@ -253,15 +126,29 @@ impl<'t> Resolver<'t> {
                 .top_level
                 .entry(declaration.name.clone())
                 .or_insert(declaration);
-            if let Item::TypeDeclaration(declaration) = item {
-                resolver.type_members(declaration, false, TypeMemberPhase::DeclareVariants);
-            }
+        }
+        // Every sum variant, declared the same way top-level names are — before any body
+        // in the document is walked — off `Program::variant_declarations`, the parser's
+        // own record of each variant's declaring token (a `SumVariant` carries no span of
+        // its own: it also stands for the type checker's resolved value type, which has no
+        // business knowing where in the source it came from).
+        for declaration in &program.variant_declarations {
+            resolver.declare_type_name(&declaration.name, declaration.span.clone(), false);
         }
         for item in &program.items {
-            resolver.item(item, false);
+            resolver.item(item);
         }
         for block in &program.test_blocks {
             resolver.expression(block);
+        }
+        // Every written type name — a parameter's or return type's annotation, a
+        // variable's, a record field, a sum payload, an array/map element type — resolved
+        // now that every top-level name, variants included, is known. `Program::type_name_uses`
+        // is the parser's own record of each one's token, from the same place it builds a
+        // `Type::Named`: the source of truth for where a type name was written, rather
+        // than a position re-derived from the token stream after the fact.
+        for use_ in &program.type_name_uses {
+            resolver.type_use(&use_.name, use_.span.clone());
         }
         resolver
     }
@@ -296,62 +183,29 @@ impl<'t> Resolver<'t> {
         }
     }
 
-    /// `is_local` is whether `item` is a block-local statement (its own declaration, and
-    /// (for a sum) its variants, were bound at the statement itself — see [`Self::statement`]
-    /// and [`Self::type_members`]'s `DeclareVariants` phase) rather than a top-level one
-    /// (declared up front in [`Self::walk`], variants included).
-    fn item(&mut self, item: &Item, is_local: bool) {
+    fn item(&mut self, item: &Item) {
         match item {
             Item::VariableDeclaration(declaration) => self.expression(&declaration.value),
             Item::FunctionDeclaration(declaration) => {
-                self.in_function(&declaration.parameters, &declaration.body);
-                if declaration.span.file == ROOT_FILE
-                    && let Some(return_type) = &declaration.return_type
-                {
-                    self.resolve_return_type(
-                        return_type,
-                        &declaration.parameters,
-                        declaration.span.start,
-                        declaration.body.span().start,
-                    );
-                }
+                self.in_function(&declaration.parameters, &declaration.body)
             }
             Item::TypeDeclaration(declaration) => {
-                if is_local {
-                    self.type_members(declaration, true, TypeMemberPhase::DeclareVariants);
-                }
-                self.type_members(declaration, is_local, TypeMemberPhase::ResolveUses);
                 for method in declaration.type_definition.methods() {
                     self.scopes.push(HashMap::new());
                     // The implicit receiver: its "declaration" is the method itself.
                     self.bind(RECEIVER, &method.span);
                     self.in_function(&method.parameters, &method.body);
-                    if method.span.file == ROOT_FILE
-                        && let Some(return_type) = &method.return_type
-                    {
-                        self.resolve_return_type(
-                            return_type,
-                            &method.parameters,
-                            method.span.start,
-                            method.body.span().start,
-                        );
-                    }
                     self.scopes.pop();
                 }
             }
         }
     }
 
-    /// Walk a body with `parameters` in scope, each binding its own name at its own span
-    /// and, when annotated, resolving its written type against the tokens covering that
-    /// same span.
+    /// Walk a body with `parameters` in scope, each binding its own name at its own span.
     fn in_function(&mut self, parameters: &[Parameter], body: &Expression) {
         self.scopes.push(HashMap::new());
         for parameter in parameters {
             self.bind(&parameter.name, &parameter.span);
-            if let Some(annotation) = &parameter.type_annotation {
-                self.resolve_annotation(annotation, &parameter.span);
-            }
         }
         self.expression(body);
         self.scopes.pop();
@@ -359,136 +213,37 @@ impl<'t> Resolver<'t> {
 
     fn statement(&mut self, statement: &Statement) {
         match statement {
-            Statement::Item(item) => {
-                // The declaration is in scope for its own body (self-recursion), and for
-                // everything after it in the block.
-                self.bind(item.name(), item.span());
-                self.item(item, true)
-            }
+            Statement::Item(item) => self.item_statement(item),
             Statement::Expression(expression) => self.expression(expression),
         }
     }
 
-    /// The declaration a written `Type` resolves to, at each of its own capitalized
-    /// identifier tokens found inside `region` — a stretch of source carrying nothing but
-    /// that one type's own syntax (a parameter's annotation, a return type).
-    fn resolve_type_in_region(&mut self, ty: &Type, region: &Span) {
-        let mut leaves = Vec::new();
-        flatten_type(ty, &mut leaves);
-        let idents = capitalized_idents_in(self.tokens, region);
-        if leaves.len() != idents.len() {
+    /// A `:=` on a name already in scope reassigns it, so it resolves to that binding.
+    fn item_statement(&mut self, item: &Item) {
+        if let Item::VariableDeclaration(declaration) = item
+            && declaration.mutable
+            && let Some(existing) = self.lookup(&declaration.name)
+        {
+            let target_span = Span::in_file(
+                declaration.span.start,
+                declaration.span.start + declaration.name.len() as u32,
+                declaration.span.file,
+            );
+            self.references.push(Reference {
+                use_span: target_span,
+                declaration: existing,
+            });
+            self.expression(&declaration.value);
             return;
         }
-        for (leaf, token) in leaves.iter().zip(idents) {
-            if let TypeToken::Named(name) = leaf {
-                self.type_use(name, token.span.clone());
-            }
-        }
+        self.bind(item.name(), item.span());
+        self.item(item)
     }
 
-    /// A parameter's own `:: Type` annotation, bounded by `parameter_span` — the
-    /// parameter's whole span, name through annotation, so the search for the `::` that
-    /// opens it never strays into a sibling parameter.
-    fn resolve_annotation(&mut self, ty: &Type, parameter_span: &Span) {
-        if parameter_span.file != ROOT_FILE {
-            return;
-        }
-        let Some(colon) = self.tokens.iter().find(|token| {
-            token.kind == TokenKind::TypeAnnotation && covers(parameter_span, token.span.start)
-        }) else {
-            return;
-        };
-        let region = Span::in_root(colon.span.end, parameter_span.end);
-        self.resolve_type_in_region(ty, &region);
-    }
-
-    /// A function's or method's own `-> Type` return type. `parameters` excludes it from
-    /// the search for the return arrow — a parameter may itself be annotated with a
-    /// function type, which carries an arrow of its own — and `item_start`/`body_start`
-    /// bound the search to the signature: after the parameter list, before the body.
-    fn resolve_return_type(
-        &mut self,
-        ty: &Type,
-        parameters: &[Parameter],
-        item_start: u32,
-        body_start: u32,
-    ) {
-        let after_parameters = parameters
-            .last()
-            .map(|parameter| parameter.span.end)
-            .unwrap_or(item_start);
-        let Some(arrow) = self.tokens.iter().find(|token| {
-            token.kind == TokenKind::ReturnArrow
-                && token.span.start >= after_parameters
-                && token.span.end <= body_start
-        }) else {
-            return;
-        };
-        let region = Span::in_root(arrow.span.end, body_start);
-        self.resolve_type_in_region(ty, &region);
-    }
-
-    /// A record's field types, or a sum's variant names and their payload types —
-    /// whichever `phase` asks for. Shared by [`Self::walk`] (a top-level sum's variants,
-    /// declared before any body in the document is walked) and [`Self::item`] (a local
-    /// type's variants, declared at its own statement; every type's member type USES,
-    /// resolved once every top-level name is known).
-    fn type_members(
-        &mut self,
-        declaration: &TypeDeclaration,
-        is_local: bool,
-        phase: TypeMemberPhase,
-    ) {
-        if declaration.span.file != ROOT_FILE {
-            return;
-        }
-        let methods = declaration.type_definition.methods();
-        let anchor = match &declaration.type_definition {
-            // A record's members start right after the block's own opening brace.
-            TypeDefinition::Record { .. } => self.tokens.iter().find(|token| {
-                token.kind == TokenKind::BraceOpen && covers(&declaration.span, token.span.start)
-            }),
-            // A sum's variants start right after its own `=` — there is no brace framing
-            // them (only its optional trailing method block gets one).
-            TypeDefinition::Sum { .. } => self.tokens.iter().find(|token| {
-                token.kind == TokenKind::Assign && covers(&declaration.span, token.span.start)
-            }),
-        };
-        let Some(anchor) = anchor else { return };
-
-        let gaps = member_gaps(anchor.span.end, declaration.span.end, methods);
-        let groups = member_leaf_groups(&declaration.type_definition);
-
-        let mut group_index = 0;
-        for gap in &gaps {
-            let idents = capitalized_idents_in(self.tokens, gap);
-            let mut cursor = 0;
-            while group_index < groups.len() {
-                let leaves = &groups[group_index];
-                if cursor + leaves.len() > idents.len() {
-                    break;
-                }
-                for (leaf, token) in leaves.iter().zip(&idents[cursor..cursor + leaves.len()]) {
-                    match (leaf, phase) {
-                        (TypeToken::Declares(name), TypeMemberPhase::DeclareVariants) => {
-                            self.declare_type_name(name, token.span.clone(), is_local);
-                        }
-                        (TypeToken::Named(name), TypeMemberPhase::ResolveUses) => {
-                            self.type_use(name, token.span.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                cursor += leaves.len();
-                group_index += 1;
-            }
-        }
-    }
-
-    /// Bind a sum variant's own name — global for a top-level sum, lexically scoped for a
-    /// local one — the same way [`Self::bind`] binds any other name, so an ordinary
-    /// [`Self::lookup`] finds it from a constructor call, a pattern, or a payload type
-    /// naming it right back.
+    /// Bind a type or sum variant's own name — global for a top-level one, lexically
+    /// scoped for a local one — the same way [`Self::bind`] binds any other name, so an
+    /// ordinary [`Self::lookup`] finds it from a constructor, an annotation, a pattern, or
+    /// another type's payload naming it right back.
     fn declare_type_name(&mut self, name: &str, span: Span, is_local: bool) {
         let declaration = Declaration {
             name: name.to_string(),
@@ -608,14 +363,7 @@ impl<'t> Resolver<'t> {
                 fields,
                 span,
             } => {
-                if span.file == ROOT_FILE
-                    && let Some(token) = self
-                        .tokens
-                        .iter()
-                        .find(|token| token.span.start == span.start)
-                {
-                    self.type_use(type_name, token.span.clone());
-                }
+                self.type_use(type_name, name_span(type_name, span));
                 for (_, value) in fields {
                     self.expression(value);
                 }
@@ -649,14 +397,7 @@ impl<'t> Resolver<'t> {
                 arguments,
                 span,
             } => {
-                if span.file == ROOT_FILE
-                    && let Some(token) = self
-                        .tokens
-                        .iter()
-                        .find(|token| token.span.start == span.start)
-                {
-                    self.type_use(name, token.span.clone());
-                }
+                self.type_use(name, name_span(name, span));
                 for argument in arguments {
                     self.pattern_bindings(argument);
                 }
@@ -670,13 +411,21 @@ fn covers(span: &Span, offset: u32) -> bool {
     span.file == ROOT_FILE && span.start <= offset && offset < span.end
 }
 
+/// The span of just `name`'s own token, given the span of a node whose surface syntax
+/// opens exactly on it — a constructor's `Name { … }`, a constructor pattern's
+/// `Name(...)` or bare `Name`. Byte-arithmetic, not a search: the parser always builds
+/// such a span starting at the name's own first byte, and `name` is that same source
+/// text, so its length alone reaches the name's end.
+fn name_span(name: &str, span: &Span) -> Span {
+    Span::in_file(span.start, span.start + name.len() as u32, span.file)
+}
+
 /// The name and span of the declaration binding the identifier or type name at byte
-/// `offset` in `text`, resolved against the import-linked `program` — so a name an import
-/// supplies resolves to its declaration in the imported module's own file. `None` when
-/// the offset is not on a resolvable name.
-pub fn declaration_at(program: &Program, text: &str, offset: u32) -> Option<(String, Span)> {
-    let tokens = Lexer::tokenize(text).ok()?;
-    Resolver::walk(program, &tokens)
+/// `offset` in the root document, resolved against the import-linked `program` — so a
+/// name an import supplies resolves to its declaration in the imported module's own file.
+/// `None` when the offset is not on a resolvable name.
+pub fn declaration_at(program: &Program, offset: u32) -> Option<(String, Span)> {
+    Resolver::walk(program)
         .references
         .into_iter()
         .find(|reference| covers(&reference.use_span, offset))
@@ -684,8 +433,8 @@ pub fn declaration_at(program: &Program, text: &str, offset: u32) -> Option<(Str
 }
 
 /// The span alone of [`declaration_at`]'s answer — what go-to-definition needs.
-pub fn definition_at(program: &Program, text: &str, offset: u32) -> Option<Span> {
-    declaration_at(program, text, offset).map(|(_, span)| span)
+pub fn definition_at(program: &Program, offset: u32) -> Option<Span> {
+    declaration_at(program, offset).map(|(_, span)| span)
 }
 
 /// The declaration's own name token: the first `Ident` token in `tokens` with the
@@ -710,8 +459,8 @@ fn name_token_span(tokens: &[Token], declaration: &Declaration) -> Option<Span> 
 /// document too. `None` when `offset` is on nothing resolvable, on the receiver `it`
 /// (which has no name token of its own), or on a name declared in another file.
 pub fn references_at(program: &Program, text: &str, offset: u32) -> Option<Vec<Span>> {
+    let resolver = Resolver::walk(program);
     let tokens = Lexer::tokenize(text).ok()?;
-    let resolver = Resolver::walk(program, &tokens);
 
     let target = resolver
         .references
@@ -1583,6 +1332,8 @@ fn module_completions(path: &Path, import: &Import) -> Vec<CompletionItem> {
         imports: vec![import.clone()],
         items: Vec::new(),
         test_blocks: Vec::new(),
+        type_name_uses: Vec::new(),
+        variant_declarations: Vec::new(),
     };
     let Ok((linked, _sources)) = crate::modules::link(synthetic, base_dir, Some(path)) else {
         return Vec::new();

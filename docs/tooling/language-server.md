@@ -39,10 +39,12 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
     function, a top-level function's or type's declaration (every member, for an overload
     set) and every use across the document, a block-local's or pattern binding's
     declaration and every use in its own scope. Both cover the names an identifier binds:
-    parameters, block-locals, pattern bindings, and top-level functions and types. A
-    type's declaration and a sum variant's own name are covered the same way: the result
-    lists the declaration plus every constructor, annotation, return type, sum payload,
-    and array/map element type naming it, anywhere in the document.
+    parameters, block-locals, pattern bindings, and top-level functions and types. A `:=`
+    on a name already in scope reassigns that binding, so a `:=`-bound local's references
+    include its declaration, every reassignment of it (a nested lambda's included), and
+    every read. A type's declaration and a sum variant's own name are covered the same
+    way: the result lists the declaration plus every constructor, annotation, return
+    type, sum payload, and array/map element type naming it, anywhere in the document.
   - **Rename** on the same targets as find references rewrites the declaration and every
     use in one edit. The new name must be a single bare identifier; a target declared in
     another file answers with a message naming that file, so the rename happens there
