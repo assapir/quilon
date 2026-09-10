@@ -199,14 +199,8 @@ fn call_on_chunk(
     on_chunk(text.data as *const u8, text.len, environment) != 0
 }
 
-/// The `@streamFile` read loop: open `path` non-blocking, read it in `chunk_size`-byte reads
-/// (parking, via [`read_once`], exactly when a read reports not ready — a pipe or FIFO; a
-/// regular file's reads return at once), and call `on_chunk` once per whole, valid-Text chunk.
-/// An incomplete UTF-8 sequence or an incomplete grapheme cluster at the end of a read is held
-/// back and prepended to the next one; a `read_once` that returns `0` (true EOF) delivers
-/// whatever is still held, once [`split_chunk`] confirms it is itself valid UTF-8 (a file whose
-/// very last bytes end mid-sequence yields `NotOk` there instead of handing `onChunk` invalid
-/// Text).
+/// The `@streamFile` read loop: read `path` in `chunk_size`-byte reads, parking (via
+/// [`read_once`]) only when a source is not ready, and deliver each [`split_chunk`] cut.
 fn stream_file(
     path: &str,
     chunk_size: f64,
@@ -219,12 +213,9 @@ fn stream_file(
             crate::mem::format_num(chunk_size)
         ));
     }
-    if chunk_size > usize::MAX as f64 {
-        return QlResult::not_ok(&format!(
-            "@streamFile: cannot allocate a {}-byte chunk buffer",
-            crate::mem::format_num(chunk_size)
-        ));
-    }
+    // `as usize` saturates rather than overflows, so a chunkSize past usize::MAX just becomes
+    // usize::MAX here — try_reserve_exact below fails that the same way as any other
+    // allocation it cannot grant.
     let chunk_size = chunk_size as usize;
     let mut buffer: Vec<u8> = Vec::new();
     if buffer.try_reserve_exact(chunk_size).is_err() {
@@ -282,14 +273,9 @@ fn stream_file(
     }
 }
 
-/// The end of `buffer`'s whole, valid-Text prefix — ready to deliver. Not at EOF, that leaves
-/// an incomplete UTF-8 sequence at the end, then the last grapheme cluster of what remains,
-/// held back — more bytes could still extend either. At EOF nothing more can ever arrive, so
-/// the whole valid buffer is the cut, and an incomplete trailing sequence there is genuinely
-/// invalid rather than merely unfinished. Either way, invalid (not just incomplete) UTF-8
-/// anywhere in `buffer` is an error.
+/// The cut is the end of `buffer`'s valid-Text prefix, holding back a trailing grapheme more
+/// bytes could still extend. At EOF nothing more can arrive, so the cut is the whole buffer.
 fn split_chunk(buffer: &[u8], at_eof: bool) -> Result<usize, String> {
-    let not_utf8 = || Err("@streamFile read bytes that are not valid UTF-8".to_string());
     let valid: &str = match std::str::from_utf8(buffer) {
         Ok(valid) => valid,
         Err(error) if !at_eof && error.error_len().is_none() => {
@@ -297,7 +283,7 @@ fn split_chunk(buffer: &[u8], at_eof: bool) -> Result<usize, String> {
             // prefix ahead of it is unambiguous either way.
             std::str::from_utf8(&buffer[..error.valid_up_to()]).expect("checked above")
         }
-        Err(_) => return not_utf8(),
+        Err(_) => return Err("@streamFile read bytes that are not valid UTF-8".to_string()),
     };
     if at_eof {
         return Ok(valid.len());
