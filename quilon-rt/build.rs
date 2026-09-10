@@ -63,10 +63,13 @@ fn macos_deployment_target() -> String {
         output.status.success(),
         "`rustc --print deployment-target` failed"
     );
+    // Prints `MACOSX_DEPLOYMENT_TARGET=11.0` (the env var name varies by platform,
+    // e.g. `IPHONEOS_DEPLOYMENT_TARGET` for iOS) — the version is everything after the `=`.
     String::from_utf8(output.stdout)
         .expect("rustc output is not UTF-8")
         .trim()
-        .strip_prefix("deployment_target=")
+        .rsplit('=')
+        .next()
         .expect("unexpected `rustc --print deployment-target` output")
         .to_string()
 }
