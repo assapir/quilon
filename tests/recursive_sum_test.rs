@@ -153,6 +153,33 @@ fn invalid_payload_type_names_variant_position_and_type() {
 }
 
 #[test]
+fn a_method_on_a_self_referencing_sum_may_call_itself_on_the_payload() {
+    // An annotated method is registered under its own name before its body is
+    // checked, so a self-call through a payload of the same type (or the render
+    // member reached via interpolation) resolves instead of "no such member".
+    assert_exit(
+        "Tree = Leaf / Node(Tree, Num, Tree) {\n\
+           sum = () -> Num => <\n\
+             it ?\n\
+               | Leaf => 0\n\
+               | Node(left, value, right) => left.sum() + value + right.sum()\n\
+           >\n\
+           ` = () -> Text => <\n\
+             it ?\n\
+               | Leaf                => \"Leaf\"\n\
+               | Node(left, value, _) => \"Node(`left`, `value`)\"\n\
+           >\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           tree = Node(Node(Leaf, 1, Leaf), 2, Leaf)\n\
+           assert(\"`tree`\", equals(\"Node(Node(Leaf, 1), 2)\"))\n\
+           tree.sum()\n\
+         >",
+        3,
+    );
+}
+
+#[test]
 fn indexing_a_self_referencing_array_field_reaches_the_real_record() {
     // A read out of an array/map whose element type is a frozen self-reference
     // placeholder must resolve to the real record, the same way direct field access

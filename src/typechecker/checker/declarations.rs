@@ -462,6 +462,21 @@ impl TypeChecker {
             // element type from it (see `infer_expression_expecting`).
             let annotated_return_type = method.return_type.as_ref().map(|t| self.resolve_type(t));
 
+            // Pre-register an annotated method under its own name before checking its
+            // body, so it (or a not-yet-checked sibling calling back into it) resolves a
+            // self-call — the same "a definition is in scope for its own body" rule a
+            // top-level function gets. Overwritten below once the body is checked.
+            if let Some(return_type) = &annotated_return_type {
+                self.methods.insert(
+                    (type_name.to_string(), method.name.clone()),
+                    (
+                        method.parameters.clone(),
+                        return_type.clone(),
+                        method.body.clone(),
+                    ),
+                );
+            }
+
             // Two or more methods sharing a name on the same type form an overload set,
             // dispatched by exact argument type — the rule an operator member already
             // follows (`register_operator_member`), reusing the same registration tail
