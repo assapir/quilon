@@ -7,7 +7,7 @@
 //! type, to prove the general mechanism subsumes the old special case.
 
 mod common;
-use common::{assert_exit, assert_type_error, assert_type_error_code};
+use common::{assert_exit, assert_type_error, assert_type_error_code, assert_type_ok};
 use quilon::diagnostic::codes::Code;
 
 #[test]
@@ -151,19 +151,46 @@ fn non_exhaustive_match_is_rejected() {
 }
 
 #[test]
-fn non_builtin_payload_type_is_rejected() {
-    // Payloads are built-in types only (Num / Text / Bool). A user type as a
-    // payload (here the sum type referencing itself) is rejected.
-    assert_type_error("Tree = Leaf / Node(Tree)");
+fn self_referencing_payload_is_accepted() {
+    // A sum type may name itself directly as a payload (codegen boxes the occurrence
+    // into a GC cell — see `tests/recursive_sum_test.rs` for a full construct/match
+    // round trip).
+    assert_type_ok("Tree = Leaf / Node(Tree)");
 }
 
 #[test]
-fn heterogeneous_payload_position_is_rejected() {
-    // A sum type's payload slot has one shared representation per position, so two
-    // variants disagreeing on a concrete type at the same position (Num vs Text)
-    // would miscompile — the checker rejects it instead. (`$` may still coexist with
-    // a concrete type; that's covered by `user_sum_with_unit_payload`.)
-    assert_type_error("Mixed = A(Num) / B(Text)");
+fn heterogeneous_payload_position_is_accepted() {
+    // Two variants may disagree on a payload position's concrete type (Num vs Text):
+    // each reads its own slot through its own typed view (see
+    // `tests/recursive_sum_test.rs` for a full construct/match round trip).
+    assert_type_ok("Mixed = A(Num) / B(Text)");
+}
+
+#[test]
+fn undeclared_payload_type_is_rejected() {
+    // A payload naming nothing declared is `InvalidPayloadType`, not the old
+    // built-ins-only placeholder message.
+    assert_type_error_code("Mystery = Wrap(Nope) / Empty", Code::InvalidPayloadType);
+}
+
+#[test]
+fn array_of_self_payload_is_accepted() {
+    assert_type_ok("Forest = Leaf(Num) / Branch([]Forest)");
+}
+
+#[test]
+fn map_of_self_payload_is_accepted() {
+    assert_type_ok("Registry = Empty / Node([|Text => Registry|])");
+}
+
+#[test]
+fn record_with_direct_self_field_is_accepted() {
+    assert_type_ok("Wagon = { next :: Wagon, cargo :: Num }");
+}
+
+#[test]
+fn record_referencing_a_sum_declared_above_is_accepted() {
+    assert_type_ok("Shape = Circle(Num) / Square(Num)\nHolder = { shape :: Shape }");
 }
 
 #[test]

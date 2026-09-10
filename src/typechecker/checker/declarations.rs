@@ -187,38 +187,54 @@ impl TypeChecker {
             self.check_method_mutation_contracts(&declaration.name, methods)?;
         }
 
+        // Register (a placeholder for) the type's own name before resolving anything
+        // else below, so a payload or a record field may name the type itself, or any
+        // type declared above it. A sum's placeholder has no variants yet and a
+        // record's carries no fields/methods yet — the same "not yet resolved" marker
+        // `resolve_type` already gives an unregistered name. Both are overwritten with
+        // the real definition once it is built, further down.
+        self.env.define(
+            declaration.name.clone(),
+            Type::named_ref(&declaration.name),
+            false,
+            declaration.span.clone(),
+        )?;
+        if matches!(declaration.type_definition, TypeDefinition::Sum { .. }) {
+            self.sum_types.insert(
+                declaration.name.clone(),
+                Type::Sum {
+                    name: declaration.name.clone(),
+                    variants: Vec::new(),
+                },
+            );
+        }
+
         let type_value = match &declaration.type_definition {
-            TypeDefinition::Sum { variants, .. } => {
-                // Resolve and validate each variant's payload types. A payload is either a
-                // built-in type — `Num` / `Text` / `Bool` / `$` (Unit) — or a NAMED
-                // composite that resolves to an already-declared RECORD (no hoisting, so it
-                // must appear above this declaration). The resolved record carries its
-                // fields, so a later `match Box(p)` binds `p` at its real type and reads
-                // `p.field`. Anything else — an array, a type variable, a nested sum, or an
-                // unknown/non-record name — is rejected. `$` is the canonical "no meaningful
-                // value" payload, e.g. `Ok($)`.
+            TypeDefinition::Sum {
+                variants,
+                field_spans,
+                ..
+            } => {
+                // Resolve and validate each variant's payload types. A payload is a
+                // built-in scalar (`Num`/`Text`/`Bool`/`$`), a declared record, a
+                // declared sum (this one included), or an array/map of an accepted
+                // type — checked recursively by `acceptable_payload_type`. Anything
+                // else — a function type, a type variable, an undeclared name — is
+                // `InvalidPayloadType`, pointing at that field's own span.
                 let mut resolved_variants = Vec::with_capacity(variants.len());
-                for variant in variants {
+                for (variant, spans) in variants.iter().zip(field_spans) {
                     let mut fields = Vec::with_capacity(variant.fields.len());
-                    for field in &variant.fields {
+                    for (position, field) in variant.fields.iter().enumerate() {
                         let resolved = self.resolve_type(field);
-                        let acceptable = match &resolved {
-                            Type::Num | Type::Text | Type::Bool | Type::Unit => true,
-                            // A named payload must resolve to a declared RECORD.
-                            // `resolve_type` maps a sum name to `Type::Sum` (so nested sums
-                            // fall through to the reject arm below) and leaves an unknown
-                            // name as a field-less `Named`; the env lookup distinguishes a
-                            // real record — of any field/method count — from that unknown.
-                            Type::Named { name, .. } => {
-                                matches!(self.env.get_type(name), Some(Type::Named { .. }))
-                            }
-                            _ => false,
-                        };
-                        if !acceptable {
-                            return Err(TypeError::TypeMismatch {
-                                expected: Box::new(Type::Num),
-                                got: Box::new(field.clone()),
-                                span: declaration.span.clone(),
+                        if !self.acceptable_payload_type(&resolved) {
+                            return Err(TypeError::InvalidPayloadType {
+                                variant: variant.name.clone(),
+                                position,
+                                got: resolved,
+                                span: spans
+                                    .get(position)
+                                    .cloned()
+                                    .unwrap_or_else(|| declaration.span.clone()),
                             });
                         }
                         fields.push(resolved);
@@ -227,39 +243,6 @@ impl TypeChecker {
                         name: variant.name.clone(),
                         fields,
                     });
-                }
-
-                // A sum type's payload slots have ONE shared LLVM representation per
-                // position (sized to the widest variant — see codegen). So at each
-                // payload position, every variant that has a field there must agree on
-                // the type, EXCEPT `$` (Unit), which is zero-sized and stored nowhere,
-                // so it may coexist with a concrete type at the same position (e.g.
-                // `A($) / B(Num)`). Heterogeneous concrete types at one position (e.g.
-                // `A(Num) / B(Text)`) would miscompile, so reject them up front.
-                let max_arity = resolved_variants
-                    .iter()
-                    .map(|v| v.fields.len())
-                    .max()
-                    .unwrap_or(0);
-                for pos in 0..max_arity {
-                    let mut concrete: Option<&Type> = None;
-                    for variant in &resolved_variants {
-                        if let Some(field) = variant.fields.get(pos)
-                            && *field != Type::Unit
-                        {
-                            match concrete {
-                                None => concrete = Some(field),
-                                Some(prev) if prev != field => {
-                                    return Err(TypeError::TypeMismatch {
-                                        expected: Box::new(prev.clone()),
-                                        got: Box::new(field.clone()),
-                                        span: declaration.span.clone(),
-                                    });
-                                }
-                                Some(_) => {}
-                            }
-                        }
-                    }
                 }
 
                 // Variant (constructor) names must be unique per scope: both within
@@ -346,15 +329,11 @@ impl TypeChecker {
             }
         };
 
-        // Register the type name in the environment BEFORE checking its methods, so a
-        // method body may name its own type (constructing it, an operator returning it).
-        // (Sum constructor lookup already went through `sum_types` above.)
-        self.env.define(
-            declaration.name.clone(),
-            type_value.clone(),
-            false,
-            declaration.span.clone(),
-        )?;
+        // Overwrite the placeholder registered above with the real, fully-resolved
+        // type, before checking its methods so a method body may name its own type
+        // (constructing it, an operator returning it). (Sum constructor lookup already
+        // went through `sum_types` above.)
+        self.env.update_type(&declaration.name, type_value.clone());
 
         // `it` binds to the type; operator members register on their operator's overload
         // set, every other member becomes a method dispatched by receiver type.
@@ -365,6 +344,24 @@ impl TypeChecker {
         )?;
 
         Ok(())
+    }
+
+    /// Whether `resolved` is a sum-type payload the checker accepts: `Num`, `Text`,
+    /// `Bool`, `$`, a declared record, a declared sum (the enclosing one included, via
+    /// its placeholder in `sum_types` while it is still being built), or an array/map
+    /// of an accepted type. Everything else — a function type, a type variable, an
+    /// undeclared name — is rejected by the caller.
+    fn acceptable_payload_type(&self, resolved: &Type) -> bool {
+        match resolved {
+            Type::Num | Type::Text | Type::Bool | Type::Unit => true,
+            Type::Sum { .. } => true,
+            Type::Named { name, .. } => matches!(self.env.get_type(name), Some(Type::Named { .. })),
+            Type::Array(elem) => self.acceptable_payload_type(elem),
+            Type::Map(key, value) => {
+                self.acceptable_payload_type(key) && self.acceptable_payload_type(value)
+            }
+            _ => false,
+        }
     }
 
     /// Type-check a type's methods (a record's members or a sum's `{ }` block). `self_type`
