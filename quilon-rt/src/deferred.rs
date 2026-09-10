@@ -125,7 +125,7 @@ pub(crate) struct Deferred<T> {
 /// it will hold — stay reachable across any collection while pending.
 ///
 /// A fail-loud condition inside `producer` (an IO error today) does not exit the process from
-/// here: [`crate::scheduler::run_launch_guarded`] catches it and the cell is marked
+/// here: [`crate::scheduler::run_fault_guarded`] catches it and the cell is marked
 /// [`DeferredState::Faulted`] instead — every producer gets this for free, not just the ones
 /// that happen to check for it themselves. The cell also registers its own join with
 /// whatever `< >` block's launch scope is open right now (see `crate::launch_scope`), so
@@ -155,7 +155,7 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
     }
     let address = cell as usize;
     spawn(move || {
-        let outcome = crate::scheduler::run_launch_guarded(producer);
+        let outcome = crate::scheduler::run_fault_guarded(producer);
         // A cell is resolved exactly once; a second resolve would clobber live data (and, once
         // M:N lands, signal a real race). Guard it in debug builds.
         debug_assert!(
