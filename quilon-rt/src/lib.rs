@@ -64,7 +64,7 @@ pub use collections::{
 };
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
 pub use http::__http_frame_body;
-pub use io::{__color_enabled, __print_text_fd, __write_bytes};
+pub use io::{__color_enabled, __print_text_fd, __stream_file_run, __write_bytes};
 pub use mem::{
     __alloc, __alloc_array, __alloc_array_atomic, __alloc_atomic, __gc_add_root, __gc_init,
     __index_fail, __range_endpoint, __render_c_string, GcThread, MAX_EXACT_NUM,
@@ -187,6 +187,7 @@ intrinsic_registry! {
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
     __tcp_request_launch: extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64),
+    __stream_file_run: extern "C" fn(*mut QlResult, *const u8, i64, f64, *const c_void, *mut c_void),
     __http_frame_body:
         extern "C" fn(*mut QlResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
