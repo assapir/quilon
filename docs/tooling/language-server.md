@@ -19,9 +19,13 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
 
 - **Diagnostics** are published on open and on every change. A front-end failure is
   reported at its span. A failure inside an imported module is reported at the top of the
-  open document, with the imported file's position in the message. A test file (top-level
-  `describe` blocks and no `^`) is checked with its blocks compiled — the code `quilon test`
-  runs — so a failure inside a test body is reported.
+  open document, with the imported file's position in the message. A document with
+  top-level `describe` blocks is checked with those blocks compiled — the code `quilon
+  test` runs — so a failure inside a test body is reported. A document with a `^` beside
+  its blocks is checked under both that run and the `check`/`run` view over its `^`, so a
+  failure in either is reported; the two views' diagnostics are published together,
+  deduplicated by span for a failure they both locate at the same place (a broken
+  declaration above the blocks, checked identically by each).
 - **Go to definition**, **find references**, and **rename** answer over the parsed and
   import-linked document — a type error anywhere in the file, related or not to the name
   under the cursor, does not stop them.
@@ -34,7 +38,10 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
     function, a top-level function's or type's declaration (every member, for an overload
     set) and every use across the document, a block-local's or pattern binding's
     declaration and every use in its own scope. Both cover the names an identifier binds:
-    parameters, block-locals, pattern bindings, and top-level functions and types.
+    parameters, block-locals, pattern bindings, and top-level functions and types. A `:=`
+    on a name already in scope reassigns that binding, so a `:=`-bound local's references
+    include its declaration, every reassignment of it (a nested lambda's included), and
+    every read.
   - **Rename** on the same targets as find references rewrites the declaration and every
     use in one edit. The new name must be a single bare identifier; a target declared in
     another file answers with a message naming that file, so the rename happens there
@@ -44,8 +51,12 @@ quilon lsp        # speaks the protocol on stdin/stdout; an editor starts it
   Over a matcher inside `assert`/`expect` — `equals(...)`, `contains(...)`, `not(...)`,
   `isOk()`, `isNotOk()` — it yields the matcher's own signature and the type it applies to
   instead: `isOk()  matcher over Result`, `equals(Num)  matcher over Num`,
-  `not(equals(Num))  matcher over Num`. Hover answers only when the document type-checks;
-  a type error anywhere in the file answers null.
+  `not(equals(Num))  matcher over Num`. A document checked under one view answers from
+  that view's own successful run, so a type error anywhere in it leaves hover null for the
+  whole document. A document with a `^` beside its test blocks answers from whichever of
+  the two views reaches the cursor's expression, and a failing `quilon test` view still
+  answers for an expression it finished checking on the way to its own failure — a sibling
+  case, or the failing one up to its own break point.
 - **Completion** (triggered on `.`, and answered on every request regardless of what
   triggered it) offers, depending on where the cursor sits:
   - **A bare name.** Locals and parameters of the enclosing blocks (only bindings ABOVE

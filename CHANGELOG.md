@@ -23,6 +23,13 @@ All notable changes to Quilon are documented here.
   grapheme that spans the seam — a combining mark, a `\r`/`\n` pair, a paired regional
   indicator — that neither side's own header can see across on its own. See
   `docs/status/abi.md#text-storage` and `docs/types/text.md#cost`.
+- **Text storage and `[]Num`/`[]Bool` array storage are allocated pointer-free.** Neither
+  a `Text`'s header and bytes nor a numeric/boolean array's element storage can ever hold
+  a GC pointer, so both now come from the collector's pointer-free allocator: it never
+  scans that memory looking for a pointer, which is faster and also closes a
+  false-retention hole — a byte pattern living in a `Text` or a `[]Num`/`[]Bool` could
+  previously be misread as a pointer and keep an unrelated object alive. See
+  `docs/status/abi.md#text-storage`.
 - **`[]Text.join(separator)`, the reverse of `split`.** One native intrinsic: every
   element back to back with `separator` between consecutive ones; `[].join(sep)` is `""`.
   `join` is a method of `[]Text` alone — an array of any other element type is a checker
@@ -66,6 +73,23 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **The language server checks a file's test bodies even when the file also has a `^`.**
+  A `test.describe`/`test.it` block beside its own `^` used to be erased before checking,
+  the way `check`/`run` erase it — so a type error inside a case went unreported and
+  hover inside it answered null, though the Run/Debug lenses still offered it. Such a file
+  is now checked under both the `check`/`run` view (for its `^`) and the `quilon test`
+  view (for the blocks), publishing both views' diagnostics, deduplicated by span, and
+  answering hover from whichever view reaches the cursor's expression — a failing case
+  still lets hover answer for an earlier expression the same run finished checking. See
+  `docs/tooling/language-server.md`. Closes #394.
+- **Find references and rename follow a `:=`-bound local through its reassignments.**
+  A `:=` on a name already in scope reassigns that binding, so the language server's
+  resolver now treats one the same way the type checker does — as the same binding a
+  nested lambda's reassignment reaches too — where it used to start a fresh, disconnected
+  local at each `:=`, leaving find references and rename seeing only the piece of the
+  chain nearest the cursor. Renaming such a binding now rewrites its declaration, every
+  reassignment, and every read in one edit. See `docs/tooling/language-server.md`.
+  Closes #398.
 - **A dev-tree `quilon build` now always links one stable runtime archive.** The
   build script placed the freshly built runtime staticlib at
   `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a
