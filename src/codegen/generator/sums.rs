@@ -95,7 +95,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// enclosing sum directly lowers through the ordinary [`Self::value_repr_type`] path,
     /// which — since this sum's own name isn't in `sum_layouts` yet while its layout is
     /// still being computed — falls back to a plain pointer, exactly the GC-boxed
-    /// representation [`Self::coerce_payload`]/[`Self::unbox_if_boxed`] expect.
+    /// representation [`Self::coerce_payload`]/[`Self::unbox_if_boxed`] expect. This
+    /// relies on the caller (`register_sum_variants`) inserting into `sum_layouts` only
+    /// AFTER this returns; inserting a partial entry before calling this would turn a
+    /// self-reference into a wrongly-typed struct instead of the intended pointer.
     pub(super) fn build_sum_layout(
         &self,
         variants: &[crate::ast::SumVariant],
@@ -136,17 +139,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i8_type = self.context.i8_type();
         let tag_val = i8_type.const_int(tag as u64, false);
 
-        if let Some(SumLayout::Union {
-            variant_bodies,
-            widest,
-        }) = self.sum_layouts.get(type_name)
-        {
-            let body_ty = *variant_bodies
-                .get(variant)
-                .ok_or_else(|| format!("unregistered variant `{variant}`"))?;
-            let widest = *widest;
-            return self.generate_union_sum_value(type_name, tag_val, body_ty, widest, args);
-        }
+        // One lookup decides which shape this sum's values take (see `SumLayout`): a
+        // `Union` layout builds and returns immediately, below; a `PerPosition` one (or
+        // an unregistered name, e.g. an IR-only test) carries its slots on to the
+        // tagged-union construction that follows.
+        let registered_layout = match self.sum_layouts.get(type_name) {
+            Some(SumLayout::Union {
+                variant_bodies,
+                widest,
+            }) => {
+                let body_ty = *variant_bodies
+                    .get(variant)
+                    .ok_or_else(|| format!("unregistered variant `{variant}`"))?;
+                let widest = *widest;
+                return self.generate_union_sum_value(type_name, tag_val, body_ty, widest, args);
+            }
+            Some(SumLayout::PerPosition(slots)) => Some(slots.clone()),
+            None => None,
+        };
 
         // Tagged-union value: { i8 tag, slot0, slot1, ... }. Every sum type has a registered
         // canonical layout (`sum_layouts`), so EVERY value of the type shares one struct shape
@@ -163,10 +173,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // For USER slots, Num/Bool payloads are normalized to f64 and a `$` (Unit) payload is
         // stored as a zero of the slot type so the value still matches the slot/return shape
         // (e.g. `Ok($)` packs a zeroed slot) — the bits are never read.
-        let registered_layout = match self.sum_layouts.get(type_name) {
-            Some(SumLayout::PerPosition(slots)) => Some(slots.clone()),
-            _ => None,
-        };
 
         // Determine each payload slot's value. `Result` packs its payload into the one
         // canonical `{ptr,i64}` slot; a user type's slot type is fixed by position from its
@@ -223,6 +229,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(agg.into())
     }
 
+    /// Reinterpret struct `value` as `target`'s type through a memory round-trip: an
+    /// entry-block alloca sized for `alloc_ty` (the wider of the two structs in play, by
+    /// construction — see `SumLayout::Union`), a `store` of `value` at its own type, then
+    /// a `load` back at `target`'s. LLVM's opaque pointers need no shared type at the
+    /// pointer itself for this, only enough allocated bytes and alignment. Shared by
+    /// [`Self::generate_union_sum_value`] (widening a variant's own body up to the sum's
+    /// shared storage) and [`Self::union_payload_values`] (narrowing that storage back
+    /// down to one variant's own view).
+    fn reinterpret_struct(
+        &mut self,
+        value: inkwell::values::StructValue<'ctx>,
+        alloc_ty: StructType<'ctx>,
+        target: StructType<'ctx>,
+        label: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let storage = self.create_entry_block_alloca(label, alloc_ty.into())?;
+        self.builder
+            .build_store(storage, value)
+            .map_err(ctx("Failed to store sum payload"))?;
+        self.builder
+            .build_load(target, storage, label)
+            .map_err(ctx("Failed to reinterpret sum payload"))
+            .map(|v| v.into_struct_value())
+    }
+
     /// Build a `SumLayout::Union` value: this variant's own fields packed into `body_ty`
     /// (its own struct type), then widened to the shared `widest` storage by a memory
     /// round-trip — `store` as `body_ty`, `load` back as `widest` — before tagging.
@@ -250,14 +281,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to insert union payload field"))?
                 .into_struct_value();
         }
-        let storage = self.create_entry_block_alloca("sum_body", widest.into())?;
-        self.builder
-            .build_store(storage, body)
-            .map_err(ctx("Failed to store sum payload"))?;
-        let widened = self
-            .builder
-            .build_load(widest, storage, "sum_body_widened")
-            .map_err(ctx("Failed to widen sum payload"))?;
+        let widened = self.reinterpret_struct(body, widest, widest, "sum_body_widened")?;
 
         let sum_struct = self.sum_struct_type(type_name);
         let mut agg = sum_struct.get_undef();
@@ -295,16 +319,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let widened = self
             .builder
             .build_extract_value(struct_val, 1, "sum_body")
-            .map_err(ctx("Failed to extract sum payload"))?;
-        let storage = self.create_entry_block_alloca("sum_body_view", widened.get_type())?;
-        self.builder
-            .build_store(storage, widened)
-            .map_err(ctx("Failed to store sum payload"))?;
-        let narrow = self
-            .builder
-            .build_load(body_ty, storage, "sum_body_narrow")
-            .map_err(ctx("Failed to narrow sum payload"))?
+            .map_err(ctx("Failed to extract sum payload"))?
             .into_struct_value();
+        let widest = widened.get_type();
+        let narrow = self.reinterpret_struct(widened, widest, body_ty, "sum_body_narrow")?;
         (0..arity)
             .map(|i| {
                 self.builder
@@ -354,7 +372,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // isn't registered in `sum_layouts` yet while ITS OWN layout is being built —
             // lowered to a plain pointer rather than the recursive struct it can't be.
             // GC-box the value and slot the pointer; `unbox_if_boxed` reverses this when
-            // a pattern binds it.
+            // a pattern binds it. The only payload this arm ever sees: a record is
+            // already a pointer at construction (never reaches here as a struct value),
+            // and a Map/Set value is always an opaque pointer too.
             BasicValueEnum::StructValue(_) if slot_ty.is_pointer_type() => {
                 let box_ptr = self.alloc_box(value.get_type())?;
                 self.builder

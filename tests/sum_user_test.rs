@@ -194,6 +194,32 @@ fn record_referencing_a_sum_declared_above_is_accepted() {
 }
 
 #[test]
+fn chained_access_through_a_direct_self_field_reaches_the_real_field() {
+    // `w.next` must carry the record's REAL field list (not the empty placeholder
+    // its own declaration saw), so a further `.cargo` on it type-checks.
+    assert_type_ok(
+        "Wagon = { next :: Wagon, cargo :: Num }\n\
+         cargoOf = (w :: Wagon) -> Num => < w.next.cargo >",
+    );
+}
+
+#[test]
+fn a_direct_self_payload_of_pure_scalars_still_tracks_aliasing() {
+    // A sum recursing only through itself and `Num` (no record/array/map anywhere)
+    // still counts as a reference type: embedding an `=`-bound value into a
+    // `:=`-bound constructor is rejected exactly as it is for any other sum.
+    assert_type_error_code(
+        "Tree = Leaf(Num) / Node(Tree, Tree)\n\
+         t = Leaf(1)\n\
+         ^ = () -> Num => <\n\
+           w := Node(t, Leaf(2))\n\
+           0\n\
+         >",
+        Code::MutableAliasOfImmutable,
+    );
+}
+
+#[test]
 fn duplicate_variant_names_are_rejected() {
     // Variant (constructor) names must be unique per scope — `Red` twice fails.
     assert_type_error("A = Red / Green\nB = Red / Blue");

@@ -287,12 +287,17 @@ impl TypeChecker {
                             span: span.clone(),
                         })
                     }
-                    Type::Named {
-                        name: _,
-                        fields,
-                        methods: _,
-                    } => {
-                        // Handle field access on named types
+                    Type::Named { .. } => {
+                        // The base's own type may still be the record's placeholder from
+                        // a direct self-reference — frozen with no fields at the point
+                        // its declaration resolved it (see `resolve_payload_type`).
+                        // Resolve it by name before searching, so a chain through a
+                        // self-referencing field (`w.next.cargo`) reaches the real one.
+                        let Type::Named { fields, .. } =
+                            self.resolve_payload_type(&expression_type)
+                        else {
+                            unreachable!("resolve_payload_type preserves the Named variant");
+                        };
                         for (f, t) in fields.iter() {
                             if f == field {
                                 return Ok(t.clone());
