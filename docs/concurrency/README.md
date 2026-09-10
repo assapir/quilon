@@ -10,12 +10,12 @@ sidebar:
 
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
 > single-threaded fiber scheduler, the effect-only `@sleep` pause (`core.time`), the
-> deferred-value `@readStdin` (`core.io`), and the networked `@tcpRequest` (`core.net`).
-> Planned for 1.0: a value-returning network primitive such as `@get`, with which two
-> independent reads finish in max-time, and the multicore (M:N) runtime — a work-stealing
-> scheduler running one worker per CPU as reported to the process, the same under
-> `quilon run` and a built binary, with the Boehm GC working across threads and the
-> fiber-sharing check and atomic types enforced.
+> deferred-value `@readStdin` (`core.io`), the networked `@tcpRequest` (`core.net`), and
+> the atomic-binding syntax `@name := …`. Planned for 1.0: a value-returning network
+> primitive such as `@get`, with which two independent reads finish in max-time, and the
+> multicore (M:N) runtime — a work-stealing scheduler running one worker per CPU as
+> reported to the process, the same under `quilon run` and a built binary, with the Boehm
+> GC working across threads and the fiber-sharing check and atomic types enforced.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
 code, and the runtime overlaps independent IO. A function that does IO is written and typed
@@ -72,12 +72,23 @@ running as one critical section under a readers-writer lock, `=` methods and fie
 taking the read lock and `:=` setters the write lock. A bare field write from outside an
 atomic value is rejected — mutation goes only through its setters.
 
-`@name := …` declares an atomic binding: a lone scalar whose reassignment — including one
-that reads the binding's own current value, as in `count := count + 1` — executes atomically
-as a whole.
+`@name := …` declares an **atomic binding** — any type may be bound this way (`@hits := 0`,
+`@open := true`, `@lastPath := "/"`, `@stand := Stand { }`), wherever a `:=` declaration is
+allowed, at the top level and inside a block. `@` marks the declaration only; every read and
+reassignment after it — including one that reads the binding's own current value, as in
+`hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
+already follows. The syntax is available now: it parses and typechecks like a `:=` binding,
+and on today's single-threaded runtime its reassignment is trivially atomic — there is only
+ever one fiber to race with. Mutation *inside* a bound record still follows the record's own
+rules; cross-field invariants belong to an atomic type `T = @{ … }`. Stage 2 turns the marker
+into a real enforcement point: the fiber-sharing check reads it to allow sharing a binding
+the marker covers, where an unmarked `:=` value stays a compile error at the sharing point.
+(See `examples/atomic_binding.qn`.)
 
 The full specification is locked in
-[issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629).
+[issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629), amended
+[2026-09-10](https://github.com/assapir/quilon/issues/120#issuecomment-5619339751) to accept
+any type rather than a scalar alone.
 
 ## Implemented primitives
 

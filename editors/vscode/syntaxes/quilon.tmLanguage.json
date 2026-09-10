@@ -15,6 +15,7 @@
         { "include": "#constants" },
         { "include": "#module-lines" },
         { "include": "#entry-point" },
+        { "include": "#atomic-bindings" },
         { "include": "#unit" },
         { "include": "#builtin-types" },
         { "include": "#type-names" },
@@ -105,6 +106,11 @@
     "entry-point": {
       "name": "keyword.control.entrypoint.quilon",
       "match": "\\^"
+    },
+    "atomic-bindings": {
+      "comment": "`@name := …` declares an atomic binding (docs/concurrency/README.md#sharing-state-across-fibers) — `@` marks the declaration only. Scoping just the `@` (a lookahead past the name, and past an optional `:: Type` annotation, to the `:=` that makes this a declaration rather than a primitive call) keeps a bare use-site read (`hits`) and a real primitive reference (`@sleep(...)`, which this lookahead does not match) unaffected.",
+      "name": "keyword.operator.atomic.quilon",
+      "match": "@(?=[\\p{L}_][\\p{L}\\p{N}_]*\\s*(::[^\\n]*)?:=)"
     },
     "unit": {
       "comment": "The unit type and its sole value are both written `$` (analogous to () in Rust/ML). Highlighted like the other built-in types.",

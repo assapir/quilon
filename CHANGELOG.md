@@ -6,6 +6,20 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The atomic binding syntax `@name := …`** declares a mutable binding wherever a `:=`
+  declaration is allowed, at the top level and inside a block — any type may be bound
+  (`@hits := 0`, `@open := true`, `@stand := Stand { }`). `@` marks the declaration only;
+  every read and reassignment after it is bare, the same declaration/reassignment rule
+  `:=` already has. The runtime is single-threaded until Stage 2, so today an atomic
+  binding compiles and runs exactly like a `:=` binding — the checker records the binding
+  as atomic for Stage 2's fiber-sharing check to read later. Misuse raises
+  [QN347](docs/tooling/errors.md#qn347--atomic-binding-declared-without-) (`@name = value`)
+  or [QN348](docs/tooling/errors.md#qn348--atomic-binding-used-with--after-its-declaration)
+  (`@name` at a use site or on a reassignment). The language server's hover, rename, and
+  go-to-definition treat the declaration correctly, and the VS Code grammar highlights the
+  `@` marker. See `docs/concurrency/README.md#sharing-state-across-fibers`,
+  `docs/variables.md#atomic-bindings`, and `examples/atomic_binding.qn`. Issue #435 point
+  9, issue #120 "3. Atomic bindings" and its 2026-09-10 amendment.
 - **A sum type may name itself as a payload, directly (`Tree = Leaf / Node(Tree)`) or
   through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`), and two variants may
   carry a different concrete type at the same payload position (`A(Num) / B(Text)`).** A

@@ -174,6 +174,39 @@ test("single = stays an immutable-binding operator", () => {
   assert.equal(token.scope, "keyword.operator.assignment.quilon");
 });
 
+test("@ before an atomic binding's declaration gets its own scope", () => {
+  const token = uniqueToken("@hits := 0", "@");
+  assert.equal(token.scope, "keyword.operator.atomic.quilon");
+  // The `:=` right after it still tokenizes as one ordinary mutable-assignment token.
+  assert.equal(
+    uniqueToken("@hits := 0", ":=").scope,
+    "keyword.operator.assignment.mutable.quilon",
+  );
+});
+
+test("@ before a type-annotated atomic binding's declaration still scopes", () => {
+  assert.equal(uniqueToken("@hits :: Num := 0", "@").scope, "keyword.operator.atomic.quilon");
+});
+
+test("a bare read of an atomic binding carries no @ scope", () => {
+  const tokens = grammar.tokenizeLine("hits := hits + 1");
+  assert.equal(
+    tokens.filter((t) => t.scope === "keyword.operator.atomic.quilon").length,
+    0,
+  );
+});
+
+test("@ on a primitive call keeps the call-site behavior, unscoped by the atomic rule", () => {
+  // `@sleep(...)` is a primitive reference, not a declaration — the atomic-binding
+  // lookahead requires a `:=` after the name, which a call's `(` never provides.
+  const tokens = grammar.tokenizeLine("@sleep(1)");
+  assert.equal(
+    tokens.filter((t) => t.scope === "keyword.operator.atomic.quilon").length,
+    0,
+  );
+  assert.equal(uniqueToken("@sleep(1)", "sleep").scope, "entity.name.function.quilon");
+});
+
 test("$ (unit) keeps its builtin-type scope in both type and value position", () => {
   // `f = () -> $ => $`: the `$` return type and the `$` value are both scoped,
   // and the surrounding `->` / `=>` are each still a single operator token.

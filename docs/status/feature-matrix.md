@@ -73,4 +73,4 @@ sidebar:
 | Overloaded or top-level function name passed as a value | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
-| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, and the value-returning `@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |
+| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, the value-returning `@readStdin` (deferred `Text`, forced on use), and the atomic-binding syntax `@name := …` run today; cross-source overlap (networked `@get`) and the multicore runtime — which gives an atomic binding its actual enforcement — are still to come | 🚧 |
