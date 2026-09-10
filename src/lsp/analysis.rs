@@ -41,10 +41,8 @@ pub fn link_text(path: &Path, text: &str) -> Result<Linked, FrontEndError> {
     driver::link_source(path, text.to_string(), test_blocks_for(text))
 }
 
-/// What [`check_text`] and [`link_text`] do with `text`'s top-level `describe` blocks: run
-/// them the way `quilon test` does, or erase them the way every other command does. A
-/// document with BOTH a `^` and test blocks still erases them here — [`check_views`] is the
-/// entry point that checks such a document under both views.
+/// A document with BOTH a `^` and test blocks still erases them here; [`check_views`]
+/// checks that combination under both views.
 fn test_blocks_for(text: &str) -> TestBlocks {
     match document_shape(text) {
         DocumentShape::Suite => TestBlocks::Run,
@@ -52,17 +50,13 @@ fn test_blocks_for(text: &str) -> TestBlocks {
     }
 }
 
-/// The front-end view(s) `text` needs, decided from one parse: whether it has top-level
-/// test blocks, a `^`, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DocumentShape {
-    /// No test blocks: the `check`/`run` view alone.
+    /// No test blocks.
     Program,
-    /// Test blocks and no `^`: the `quilon test` view alone.
+    /// Test blocks and no `^`.
     Suite,
-    /// Both a `^` and test blocks: neither view alone reaches everything in the document —
-    /// erasing the blocks leaves their bodies unseen, and running them drops the file's own
-    /// `^` — so it needs both.
+    /// Both — neither view alone reaches everything in the document.
     Both,
 }
 
@@ -80,19 +74,14 @@ fn document_shape(text: &str) -> DocumentShape {
     }
 }
 
-/// One front-end run over a document, and which of its top-level `describe` blocks that
-/// run compiled. See [`check_views`].
+/// One front-end run over a document, and which view produced it.
 pub struct DocumentCheck {
     pub mode: TestBlocks,
     pub result: Result<Checked, FrontEndError>,
 }
 
-/// The one or two [`DocumentCheck`]s `text` needs, for diagnostics and hover: a document
-/// with both a `^` and top-level test blocks needs the `check`/`run` view (which
-/// type-checks the `^`) AND the `quilon test` view (which type-checks the blocks' bodies,
-/// dropping the file's own `^`) — together the two cover the whole document, where
-/// [`check_text`]'s single view would only ever cover one half. A document with only one of
-/// the two needs only its matching view, same as [`check_text`].
+/// The one or two views `text` needs: a `^`-and-test-blocks document needs both, since
+/// each view erases what the other checks.
 pub fn check_views(path: &Path, text: &str) -> Vec<DocumentCheck> {
     let view = |mode: TestBlocks| DocumentCheck {
         mode,
@@ -105,15 +94,8 @@ pub fn check_views(path: &Path, text: &str) -> Vec<DocumentCheck> {
     }
 }
 
-/// The hover answer at `offset`, from whichever of `text`'s front-end views reaches it.
-/// A `^`-and-test-blocks document tries the `check`/`run` view first, then the `quilon
-/// test` view; whichever of the two even contains the expression at `offset` is the one
-/// that can answer for it, since a document with both drops each view's own half.
-///
-/// A failed `quilon test` view still answers from its own [`FrontEndError::partial_types`]:
-/// one case's type error must not silence hover over an earlier expression the same run
-/// already finished checking. A failed `check`/`run` view answers nothing, matching
-/// `check_text` — a type error anywhere in ordinary code silences hover for the document.
+/// The hover answer at `offset`, from whichever view reaches it; a failing `quilon test`
+/// view still answers from what it finished checking before its break point.
 pub fn hover_in_document(path: &Path, text: &str, offset: u32) -> Option<(String, Span)> {
     check_views(path, text)
         .into_iter()

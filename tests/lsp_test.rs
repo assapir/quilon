@@ -39,9 +39,7 @@ fn check_error(path: &Path, text: &str) -> quilon::driver::FrontEndError {
     }
 }
 
-/// A `^` sits beside a `describe`/`it` pair, and the
-/// one case's own body has a type error — `twice` wants a `Num` and the case hands it a
-/// `Text`.
+/// A `^` sits beside a `describe`/`it` pair whose one case hands `twice` a `Text`.
 fn beside_its_own_up_with_a_failing_case() -> &'static str {
     "<< core.test\n\
      >> twice = (n :: Num) -> Num => < n * 2 >\n\
@@ -91,9 +89,6 @@ fn a_test_suite_is_checked_with_its_blocks_compiled() {
 
 #[test]
 fn a_file_with_both_a_up_and_test_blocks_is_checked_under_both_views() {
-    // Neither view alone reaches everything: the `check`/`run` view erases the blocks
-    // (never seeing the failing case), and the `quilon test` view drops the file's own
-    // `^` (never seeing it). Only the second view has anything to report here.
     let text = beside_its_own_up_with_a_failing_case();
     let views = check_views(Path::new("beside.qn"), text);
     assert_eq!(views.len(), 2);
@@ -118,7 +113,6 @@ fn a_file_with_both_a_up_and_test_blocks_is_checked_under_both_views() {
 
 #[test]
 fn an_up_alone_or_a_suite_alone_still_gets_exactly_one_view() {
-    // The dual-view split above must not touch either shape it does not apply to.
     let up_only = "^ = () -> Num => < 1 + true >\n";
     let views = check_views(Path::new("buffer.qn"), up_only);
     assert_eq!(views.len(), 1);
@@ -231,17 +225,12 @@ fn hover_over_a_matcher_shows_its_signature_and_the_type_it_applies_to() {
 
 #[test]
 fn hover_over_a_failing_cases_own_callee_still_answers() {
-    // The suite view fails on this exact call — `twice` wants a `Num`, the case hands it a
-    // `Text` — yet hovering the callee still answers from what that view finished
-    // inferring before it broke: `twice`'s own type, resolved ahead of the mismatch.
     let text = beside_its_own_up_with_a_failing_case();
     let call = offset_of(text, "twice(\"four\")", 0);
     let (label, span) = hover_in_document(Path::new("beside.qn"), text, call + 1).expect("a hover");
     assert_eq!(label, "(Num) -> Num");
     assert_eq!((span.start, span.end), (call, call + "twice".len() as u32));
 
-    // Past the failing case, the file's own `^` still answers from the OTHER view — the
-    // one the suite view dropped to run the blocks.
     let (label, _) =
         hover_in_document(Path::new("beside.qn"), text, offset_of(text, "twice(1)", 1))
             .expect("a hover");
@@ -1081,10 +1070,6 @@ fn navigation_answers_on_a_document_with_an_unrelated_type_error() {
     served.join().expect("the server thread joins");
 }
 
-/// Driven as a real editor session: a `^` sits beside
-/// a `describe`/`it` pair, and the one case's own body has a type error. The diagnostic
-/// `quilon test` reports on the command line is published at its own protocol position, and
-/// hovering the callee inside that same failing case still answers.
 #[test]
 fn a_case_error_beside_a_clean_up_is_published_and_hover_still_answers() {
     use serde_json::{Value, json};
@@ -1137,9 +1122,7 @@ fn a_case_error_beside_a_clean_up_is_published_and_hover_still_answers() {
     served.join().expect("the server thread joins");
 }
 
-/// A type error above the split — inside a function both views check identically — is
-/// still published once, not once per view: [`quilon::lsp::analysis::check_views`]'s two
-/// results share the same primary span here, and the server deduplicates by it.
+/// A function checked identically by both views is published once, not twice.
 #[test]
 fn an_error_both_views_agree_on_is_published_once() {
     use serde_json::{Value, json};

@@ -26,12 +26,7 @@ use std::rc::Rc;
 pub struct FrontEndError {
     pub diagnostic: Box<Diagnostic>,
     pub sources: SourceMap,
-    /// Whatever the type checker recorded before this failure — every expression it
-    /// finished inferring on the way to the one that errored (see
-    /// [`typechecker::TypeChecker::take_partial_types`]). Empty for a failure at any
-    /// earlier stage (lexing, parsing, import resolution), since checking never started.
-    /// A language server's hover reads this for the `quilon test` view of a suite whose
-    /// case has a type error, so hovering an earlier expression still answers.
+    /// The oracle's entries up to the failing expression; empty for a failure before checking.
     pub partial_types: typechecker::TypeTable,
 }
 

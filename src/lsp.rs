@@ -213,12 +213,7 @@ impl LanguageServer {
         }
     }
 
-    /// The publishDiagnostics notification for the document at `uri`, from a fresh
-    /// front-end run over every view [`analysis::check_views`] says it needs: a document
-    /// with both a `^` and top-level test blocks gets a diagnostic from each view that
-    /// fails, one for its `^` and one for its blocks, deduplicated by span so an error
-    /// both views agree on (anything above the blocks, checked identically by each) is
-    /// reported once rather than twice. Empty when every view checks clean.
+    /// The publishDiagnostics notification for `uri`: one per failing view, deduplicated by span.
     fn diagnostics_for(&self, uri: &Uri) -> Notification {
         let Some((path, text)) = self.document(uri) else {
             return publish(uri.clone(), Vec::new());
