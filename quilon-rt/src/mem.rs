@@ -21,6 +21,10 @@ use unicode_segmentation::UnicodeSegmentation;
 #[link(name = "gc", kind = "static")]
 unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut c_void;
+    // A pointer-free block: the collector never scans it for pointers, so it can never
+    // hold one that keeps an unrelated object alive by accident. Unlike `GC_malloc`, a
+    // fresh block is NOT guaranteed zeroed — see `__alloc_atomic`.
+    fn GC_malloc_atomic(size: usize) -> *mut c_void;
     fn GC_init();
     fn GC_allow_register_threads();
     fn GC_register_my_thread(sb: *const GcStackBase) -> i32;
@@ -151,10 +155,9 @@ fn alloc_fail(message: &str) -> ! {
     )
 }
 
-/// Allocate `size` bytes of GC-managed, zeroed-on-demand memory.
-///
-/// Returns a pointer the collector tracks; callers never free it. A zero size yields a
-/// 1-byte allocation so the result is always a valid, unique-ish pointer.
+/// [`__alloc`]/[`__alloc_atomic`]'s shared body: validate `size`, floor a zero request to
+/// one byte (so the result is always a valid, unique-ish pointer), and hand the count to
+/// whichever of the collector's two entry points the caller picked.
 ///
 /// NEVER returns null, and never quietly shrinks a request. A collector that cannot satisfy
 /// the size aborts here, with the size it could not find; so does a NEGATIVE size, which is
@@ -162,18 +165,34 @@ fn alloc_fail(message: &str) -> ! {
 /// caller then fills as if it were the size it asked for. Handing either back is a
 /// `Text`/array whose `data` is null or too small while its `len` says otherwise, and the
 /// first read turns that into undefined behavior far from the allocation that failed.
-#[unsafe(no_mangle)]
-pub extern "C" fn __alloc(size: i64) -> *mut c_void {
+fn alloc_via(size: i64, gc_malloc: unsafe extern "C" fn(usize) -> *mut c_void) -> *mut c_void {
     if size < 0 {
         alloc_fail(&format!("invalid allocation: {size} bytes"));
     }
     let n = if size == 0 { 1 } else { size as usize };
-    // SAFETY: `GC_malloc` is the collector's allocation entry point; `n` is positive.
-    let block = unsafe { GC_malloc(n) };
+    // SAFETY: `gc_malloc` is one of the collector's allocation entry points; `n` is positive.
+    let block = unsafe { gc_malloc(n) };
     if block.is_null() {
         out_of_memory(n);
     }
     block
+}
+
+/// Allocate `size` bytes of GC-managed, zeroed-on-demand memory that MAY hold GC pointers:
+/// the collector scans it on every collection, so a pointer written anywhere inside keeps
+/// its target alive. The default allocator; [`__alloc_atomic`] is the pointer-free half.
+#[unsafe(no_mangle)]
+pub extern "C" fn __alloc(size: i64) -> *mut c_void {
+    alloc_via(size, GC_malloc)
+}
+
+/// Allocate `size` bytes of GC-managed memory that can NEVER hold a GC pointer: the
+/// collector never scans it, so it can never keep an unrelated object alive by accident.
+/// The trade: a fresh block is NOT zeroed, unlike [`__alloc`] — every byte a caller does
+/// not explicitly write (a NUL terminator, a padded tail) is garbage, not zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn __alloc_atomic(size: i64) -> *mut c_void {
+    alloc_via(size, GC_malloc_atomic)
 }
 
 /// Report an allocation the collector could not satisfy and terminate — WITHOUT allocating.
@@ -211,27 +230,45 @@ fn out_of_memory(size: usize) -> ! {
     __exit(RUNTIME_EXIT_CODE)
 }
 
-/// Allocate the backing store for `count` values of `elem_size` bytes each — the array
-/// allocation, with the size computed HERE so the multiplication is checked.
+/// [`__alloc_array`]/[`__alloc_array_atomic`]'s shared body: `count * elem_size`, checked,
+/// then handed to whichever byte-count allocator the caller picked.
 ///
 /// Left to wrap in the caller, a `count * elem_size` too large for an `i64` lands on a
 /// non-positive size, and the fill that follows writes `count` elements into the one byte
 /// that comes back. A negative operand is reported as what it is, before the multiply turns
 /// it into an overflow.
-#[unsafe(no_mangle)]
-pub extern "C" fn __alloc_array(count: i64, elem_size: i64) -> *mut c_void {
+fn alloc_array_via(
+    count: i64,
+    elem_size: i64,
+    alloc: extern "C" fn(i64) -> *mut c_void,
+) -> *mut c_void {
     if count < 0 || elem_size < 0 {
         alloc_fail(&format!(
             "invalid allocation: {count} elements of {elem_size} bytes each"
         ));
     }
     match count.checked_mul(elem_size) {
-        Some(bytes) => __alloc(bytes),
+        Some(bytes) => alloc(bytes),
         None => alloc_fail(&format!(
             "allocation too large: {count} elements of {elem_size} bytes each exceeds the \
              largest representable size"
         )),
     }
+}
+
+/// Allocate the backing store for `count` values of `elem_size` bytes each, which MAY hold
+/// GC pointers — the array allocation, with the size computed HERE so the multiplication is
+/// checked. [`__alloc_array_atomic`] is the pointer-free half.
+#[unsafe(no_mangle)]
+pub extern "C" fn __alloc_array(count: i64, elem_size: i64) -> *mut c_void {
+    alloc_array_via(count, elem_size, __alloc)
+}
+
+/// [`__alloc_array`], for `count` elements that can NEVER hold a GC pointer (`[]Num`,
+/// `[]Bool`) — see [`__alloc_atomic`] for the trade (not zeroed).
+#[unsafe(no_mangle)]
+pub extern "C" fn __alloc_array_atomic(count: i64, elem_size: i64) -> *mut c_void {
+    alloc_array_via(count, elem_size, __alloc_atomic)
 }
 
 /// GC-allocate room for `count` values of `T`, through the checked array allocation.
@@ -451,9 +488,12 @@ pub fn literal_header(bytes: &[u8]) -> (i64, i64) {
 /// grapheme-aligned — a `\r\n` pair is all-ASCII but segments as one grapheme over two
 /// bytes, so it needs its own condition; bit 1 valid UTF-8; bit 2 a compile-time literal;
 /// bit 3 free of bidi control characters), the content, then one zero byte a C caller can
-/// read as a NUL terminator with no copy (`__render_c_string`) — free, since `__alloc`
-/// already zeroes. `data` points AT the header, not past it, so a debugger's `p *t.data`
-/// shows every field alongside the bytes. Written once, here, for every producer.
+/// read as a NUL terminator with no copy (`__render_c_string`). `Text` bytes never hold a
+/// GC pointer, so the block comes from [`__alloc_atomic`] — unscanned (a stray byte
+/// pattern in a text can never be mistaken for a pointer and keep something else alive)
+/// but NOT zeroed, so the NUL is written explicitly rather than left free. `data` points
+/// AT the header, not past it, so a debugger's `p *t.data` shows every field alongside the
+/// bytes. Written once, here, for every producer.
 pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QlSlice {
     let (slice, content) = alloc_text_buffer(bytes.len(), count, flags);
     if !content.is_null() {
@@ -472,14 +512,17 @@ pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QlSlice,
     if len == 0 {
         return (QlSlice::empty(), std::ptr::null_mut());
     }
-    let buf = __alloc(TEXT_HEADER_BYTES + len as i64 + 1) as *mut u8;
-    // SAFETY: `__alloc` returned at least that many writable bytes, zeroed (the trailing
-    // NUL, at index `len`, needs no write of its own).
+    let buf = __alloc_atomic(TEXT_HEADER_BYTES + len as i64 + 1) as *mut u8;
+    // SAFETY: `__alloc_atomic` returned at least that many writable bytes (UNZEROED), so
+    // the trailing NUL at index `len` — unlike the old `__alloc`-backed buffer — needs an
+    // explicit write of its own; the caller fills the rest (`len` content bytes) next.
     let content = unsafe {
         let header = buf as *mut i64;
         header.write(count);
         header.add(1).write(flags);
-        buf.add(TEXT_HEADER_BYTES as usize)
+        let content = buf.add(TEXT_HEADER_BYTES as usize);
+        content.add(len).write(0);
+        content
     };
     (
         QlSlice {

@@ -177,7 +177,14 @@ linkedGreeting = "linked " + "again"
 /// which AOT-links a `--debug` binary whose emitted thunks call it (so a dropped symbol is
 /// the same undefined-reference link failure there); its own logic is covered directly by
 /// `quilon-rt/src/mem.rs`'s `render_c_string_*` unit tests.
-const UNREACHABLE_FROM_A_PROGRAM: &[&str] = &["__expect_failed", "__render_c_string"];
+/// `__alloc_atomic` backs every `Text` allocation (`alloc_text_buffer`), but codegen never
+/// calls it directly — a `.qn` program's own emitted IR calls `__text_concat`/`__text_join`/
+/// the render intrinsics, which call it from Rust, already linked within `libquilon_rt.a`
+/// itself. Its retention is covered by every `text::tests` unit test that allocates a
+/// `Text` (a dropped symbol there is an undefined reference inside the crate's own build,
+/// long before any `.qn` program is compiled).
+const UNREACHABLE_FROM_A_PROGRAM: &[&str] =
+    &["__expect_failed", "__render_c_string", "__alloc_atomic"];
 
 /// The linkers to exercise: `clang` and `gcc` when present, since what each pulls out of an
 /// archive is a separately observed behaviour and the project supports both.

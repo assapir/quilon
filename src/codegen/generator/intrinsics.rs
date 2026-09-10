@@ -34,11 +34,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         let f64t = ctx.f64_type();
         let void = ctx.void_type();
         let fn_type = match name {
-            // i8* __alloc(i64) — GC-managed allocation.
+            // i8* __alloc(i64) — GC-managed allocation, scanned for pointers.
             "__alloc" => ptr.fn_type(&[i64t.into()], false),
+            // i8* __alloc_atomic(i64) — GC-managed allocation that can never hold a
+            // pointer, so the collector never scans it (and never zeroes it).
+            "__alloc_atomic" => ptr.fn_type(&[i64t.into()], false),
             // i8* __alloc_array(i64 count, i64 elem_size) — GC-managed allocation of an
             // array's backing store, sized by the runtime under an overflow check.
             "__alloc_array" => ptr.fn_type(&[i64t.into(), i64t.into()], false),
+            // i8* __alloc_array_atomic(i64 count, i64 elem_size) — [`__alloc_array`], for
+            // an array whose elements can never hold a pointer (`[]Num`, `[]Bool`).
+            "__alloc_array_atomic" => ptr.fn_type(&[i64t.into(), i64t.into()], false),
             // i8* __render_c_string(i8* data, i64 len) — GC-allocate a NUL-terminated copy
             // of a rendered `Text`'s bytes. Backs every `--debug` build's `__qn_render$...`
             // thunks (see `di.rs::emit_render_thunk`), which a debugger calls expecting a C
