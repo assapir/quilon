@@ -76,6 +76,9 @@ pub fn link(
                     // An imported module's own test blocks are that module's to run, so
                     // only the root program's survive the link.
                     test_blocks: program.test_blocks,
+                    // Only the root document's own matter to the language server.
+                    type_name_uses: program.type_name_uses,
+                    variant_declarations: program.variant_declarations,
                 },
                 loader.sources,
             ))

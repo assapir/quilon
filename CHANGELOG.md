@@ -13,6 +13,20 @@ All notable changes to Quilon are documented here.
   to keep reading or `false` to stop and close the file at once. Yields `Ok(bytesRead)` or
   `NotOk(message)`, never fails the program. `io.streamFile(path, onChunk)` is the same call
   with a default chunk size. See `docs/corelib/io.md` and `docs/concurrency/README.md`.
+- **A sum type may name itself as a payload, directly (`Tree = Leaf / Node(Tree)`) or
+  through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`), and two variants may
+  carry a different concrete type at the same payload position (`A(Num) / B(Text)`).** A
+  direct self-payload is boxed into a GC cell at construction and unboxed when a pattern
+  binds it; a sum whose positions disagree gets a tag plus storage sized to the widest
+  variant, each variant reading its own fields through a typed view of that storage. A
+  record may also reference itself, or a sum declared above it, directly as a field
+  (`Wagon = { next :: Wagon }`). See `docs/types/sum-types.md`, `docs/status/abi.md`,
+  `examples/tree.qn`, and `examples/linked_list.qn`. Closes #376.
+- **A sum-type payload outside the accepted set (a function type, a type variable, an
+  undeclared name) raises a dedicated
+  [QN346](docs/tooling/errors.md#qn346--unsupported-sum-type-payload)** naming the
+  variant, the payload's position, and the type it resolved to, where the checker used
+  to report the built-ins-only placeholder `TypeMismatch { expected: Num }`.
 - **A `Num` literal glued to an exponent (`1e9`, `1.5e-3`) raises a dedicated
   [QN005](docs/tooling/errors.md#qn005--scientific-notation-literal)** naming the plain
   decimal to write, where the literal used to split into a `1` token and a stray `e9`
@@ -80,6 +94,14 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **`quilon lsp`'s go to definition and find references now cover a type or sum variant
+  name.** Go to definition on `Point` in a `Point { … }` constructor, a `p :: Point`
+  annotation, or a `-> Point` return type answers `Point`'s own declaration; on a variant
+  name (`Circle` in a pattern or a call) it answers that variant in its sum's declaration.
+  Find references on `Point` lists every one of those uses alongside the declaration,
+  across constructors, annotations (a parameter's, a variable's, or a whole-signature
+  binding type's), return types, sum payloads, and array/map element types. See
+  `docs/tooling/language-server.md`. Closes #399.
 - **The language server checks a file's test bodies even when the file also has a `^`.**
   A `test.describe`/`test.it` block beside its own `^` used to be erased before checking,
   the way `check`/`run` erase it — so a type error inside a case went unreported and
@@ -106,6 +128,11 @@ All notable changes to Quilon are documented here.
   megabytes to every produced binary. The build script's copy is now named
   `libquilon_rt.bundled.a`, a name cargo never produces, and `quilon build`'s
   "next to the running binary" lookup looks for that same name. Closes #182.
+- **`quilon build` on macOS no longer warns that the runtime archive "was built for newer
+  'macOS' version" than the link.** The Boehm GC object inside `libquilon_rt.a` now
+  carries the same minimum macOS version as the archive's Rust-compiled objects and the
+  produced executable, so all three agree regardless of the SDK or host OS version of the
+  machine that built `quilon`. See `docs/tooling/compiling.md`. Closes #411.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

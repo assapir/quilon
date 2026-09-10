@@ -101,6 +101,16 @@ pub fn assert_type_error(src: &str) {
     );
 }
 
+/// Assert the type checker ACCEPTS `src` (lexing and parsing must succeed too) — the
+/// counterpart of [`assert_type_error`], for a case whose codegen isn't exercised here.
+pub fn assert_type_ok(src: &str) {
+    let tokens = Lexer::tokenize(src).expect("lexing failed");
+    let program = parser::parse(&tokens).expect("parsing failed");
+    if let Err(error) = TypeChecker::new().check_program(&program) {
+        panic!("expected no type error for source:\n{src}\ngot: {error}");
+    }
+}
+
 /// Assert the type checker rejects `src` with exactly `code`.
 pub fn assert_type_error_code(src: &str, code: Code) {
     let tokens = Lexer::tokenize(src).expect("lexing failed");

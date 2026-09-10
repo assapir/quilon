@@ -15,7 +15,7 @@ use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
 
 use crate::ast::Program;
@@ -32,6 +32,28 @@ use std::rc::Rc;
 /// which is the one place a file's path and contents live.
 pub struct DebugSource<'a> {
     pub file: &'a Path,
+}
+
+/// Rewrites the default triple's OS version to `macosx<MACOS_DEPLOYMENT_TARGET>` — the
+/// product-version spelling, not `darwin<kernel version>`, since the two number lines don't
+/// correspond.
+#[cfg(target_os = "macos")]
+fn target_triple() -> TargetTriple {
+    let default = TargetMachine::get_default_triple();
+    let default = default
+        .as_str()
+        .to_str()
+        .expect("default target triple is not UTF-8");
+    let prefix = default
+        .split_once("-apple-")
+        .unwrap_or_else(|| panic!("unexpected default target triple on macOS: {default}"))
+        .0;
+    TargetTriple::create(&format!("{prefix}-apple-macosx{MACOS_DEPLOYMENT_TARGET}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn target_triple() -> TargetTriple {
+    TargetMachine::get_default_triple()
 }
 
 /// Emit a native object file for `program` at `obj_path` using LLVM's
@@ -72,7 +94,7 @@ fn emit_object(
     generator.generate(program)?;
     let module = generator.module();
 
-    let triple = TargetMachine::get_default_triple();
+    let triple = target_triple();
     let target =
         Target::from_triple(&triple).map_err(|e| format!("Failed to look up target: {e}"))?;
     let cpu = TargetMachine::get_host_cpu_name().to_string();
@@ -297,6 +319,18 @@ pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "-dead_strip"];
 #[cfg(not(target_os = "macos"))]
 pub const DEAD_STRIP_ARGS: &[&str] = &["-Xlinker", "--gc-sections"];
 
+/// The macOS version this compiler was built for (baked in by the root build script).
+#[cfg(target_os = "macos")]
+const MACOS_DEPLOYMENT_TARGET: &str = env!("QUILON_MACOS_DEPLOYMENT_TARGET");
+
+// `concat!` needs a literal, not a `const` path, so this re-reads the same baked-in
+// environment variable rather than referring to `MACOS_DEPLOYMENT_TARGET` above.
+#[cfg(target_os = "macos")]
+pub const MACOS_VERSION_MIN_ARG: &str = concat!(
+    "-mmacosx-version-min=",
+    env!("QUILON_MACOS_DEPLOYMENT_TARGET")
+);
+
 /// Append the arguments that link `libquilon_rt.a` (`rt_lib`) into the executable, retaining
 /// the runtime intrinsics — `#[no_mangle]` symbols nothing in Rust calls, referenced only by
 /// the emitted LLVM IR — that a plain archive scan could otherwise drop (nondeterministically,
@@ -361,6 +395,8 @@ pub fn build_native(
         append_runtime_link_args(&mut command, &rt_lib, cfg!(target_os = "macos"));
         command.args(SYSTEM_LIBS);
         command.args(DEAD_STRIP_ARGS);
+        #[cfg(target_os = "macos")]
+        command.arg(MACOS_VERSION_MIN_ARG);
         command.arg("-o").arg(out);
 
         let status = command.status().map_err(|e| match e.kind() {

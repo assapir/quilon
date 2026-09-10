@@ -77,13 +77,22 @@ What each Quilon type is in memory. `ptr` is a pointer, `i64` a 64-bit integer.
 | array | `{ ptr data, i64 size }` at a function boundary; a pointer to that pair inside a body |
 | map, set | one opaque pointer to a GC-allocated runtime structure |
 | record | a struct of its field representations; a *named* record crosses a boundary by pointer |
-| sum type | `{ i8 tag, …payload slots }` — one slot per payload position, sized to the widest variant |
+| sum type | `{ i8 tag, …payload }` — one shared slot per position when every variant agrees there, or a tag plus storage sized to the widest variant when one doesn't (see below) |
 | `Result` | `{ i8 tag, { ptr, i64 } }` — one canonical slot, whatever the payload |
 | function value | `{ ptr fn, ptr env }` — the closure pair |
 
 `Text` and arrays share a shape, and so do records and sums after lowering; the *declared*
 Quilon type distinguishes them (see the type oracle in
 [compiler architecture](architecture.md)).
+
+A sum whose variants agree on every payload position's type keeps one canonical slot per
+position, sized to the widest variant there. A sum with a position where two variants
+carry different concrete types gets a tag plus storage sized to whichever variant's own
+field-by-field struct is widest; each variant reads its fields back through a view of
+that shared storage at its own (narrower) struct type — a memory round-trip, since an
+LLVM pointer carries no type of its own past the store/load that names one. A field
+naming the enclosing sum directly (`Node(Tree)`) is a pointer to a GC cell holding the
+sum value; through an array or map the same field sits inline, like any other element.
 
 ## Text storage
 

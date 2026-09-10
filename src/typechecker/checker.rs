@@ -371,6 +371,13 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// A sum-type variant payload outside the accepted set.
+    InvalidPayloadType {
+        variant: String,
+        position: usize,
+        got: Type,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual

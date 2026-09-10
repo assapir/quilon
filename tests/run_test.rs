@@ -836,14 +836,15 @@ fn a_member_call_never_reaches_an_output_built_in() {
 
 #[test]
 fn an_unknown_member_with_no_function_of_that_name_suggests_nothing() {
-    // A method calling a sibling declared below it (there is no hoisting inside a type)
-    // gets the plain error — pointing at a top-level function that does not exist would
-    // be advice that fails too.
+    // A method calling a sibling declared below it (a self-call, or a call to an
+    // already-checked earlier sibling, resolves; a forward reference still doesn't —
+    // no hoisting inside a type either) gets the plain error — pointing at a
+    // top-level function that does not exist would be advice that fails too.
     let message = common::type_error_message(
-        "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => < n <= 0 ? it.value : it.down(n - 1) >\n}\n^ = () -> Num => < 0 >",
+        "Counter = {\n  value :: Num,\n  down = (n :: Num) -> Num => < n <= 0 ? it.value : it.rest(n - 1) >,\n  rest = (n :: Num) -> Num => < it.down(n) >\n}\n^ = () -> Num => < 0 >",
     );
     assert!(
-        message.contains("Counter has no member `down`") && !message.contains("call it as"),
+        message.contains("Counter has no member `rest`") && !message.contains("call it as"),
         "expected the bare diagnostic with no call-it-as advice, got: {message}"
     );
 }
@@ -1310,15 +1311,18 @@ unwrap = (b :: Boxed) -> Num => <
 }
 
 #[test]
-fn reject_heterogeneous_record_and_num_payload_at_same_position() {
-    // The "consistent payload type per position" invariant holds for named records too: a
-    // record in one variant and a `Num` in another at the same slot is still rejected.
+fn heterogeneous_record_and_num_payload_at_same_position_is_accepted() {
+    // A record in one variant and a `Num` in another at the same payload position:
+    // each variant reads its own field through its own typed view (`SumLayout::Union`).
     let src = r#"
 Point = { x :: Num, y :: Num }
-Bad = Wrap(Point) / Plain(Num)
-^ = () -> Num => < 0 >
+Mixed = Wrap(Point) / Plain(Num)
+^ = () -> Num => <
+  m = Wrap(Point { x = 3, y = 4 })
+  m ? | Wrap(p) => p.x + p.y | Plain(n) => n
+>
 "#;
-    assert_type_error(src);
+    assert_exit(src, 7);
 }
 
 /// An array literal unifies the SAME variant's payload type across every element, not
@@ -1438,15 +1442,18 @@ fn aot_array_of_results_unifies_variant_payloads() {
 }
 
 #[test]
-fn reject_nested_sum_as_sum_payload() {
-    // A named composite payload must be a RECORD. Nesting another SUM as a payload is not
-    // supported and is rejected by the checker.
+fn nested_sum_as_sum_payload_is_accepted() {
+    // A declared sum may be another sum's payload, embedded by value (it is declared
+    // above, so its layout is already known).
     let src = r#"
 Inner = A / B
 Outer = Wrap(Inner) / Bare
-^ = () -> Num => < 0 >
+^ = () -> Num => <
+  o = Wrap(B)
+  o ? | Wrap(inner) => (inner ? | A => 1 | B => 2) | Bare => 0
+>
 "#;
-    assert_type_error(src);
+    assert_exit(src, 2);
 }
 
 #[test]

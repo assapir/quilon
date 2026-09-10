@@ -182,16 +182,8 @@ pub struct CodeGenerator<'ctx> {
     // payload's concrete type. (Result's `Ok`/`NotOk` carry `Generic`, which resolves
     // as Num for overloads — see the type checker's `types_match`.)
     variant_payloads: HashMap<String, Vec<Type>>,
-    // Per-sum-type canonical payload layout (one LLVM type per payload slot), sized to
-    // the widest variant so EVERY value of the type has the same struct shape
-    // `{ i8 tag, slot0, slot1, ... }`. This lets a match arm extract any variant's
-    // payload slots without going out of range, even when the runtime value was built
-    // from a narrower variant. Keyed by sum-type name. USER sum types are entered here
-    // as they're declared; the predefined `Result` is entered up front with a SINGLE
-    // canonical `{ptr,i64}` payload slot (see `register_builtin_sum_types`) so that
-    // every Result — whatever its `Ok`/`NotOk` payload — shares one LLVM shape
-    // `{ i8, {ptr,i64} }` and can cross a generic `(r :: Result)` boundary.
-    sum_layouts: HashMap<String, Vec<BasicTypeEnum<'ctx>>>,
+    // Per-sum-type canonical payload layout, keyed by name — see `sums::SumLayout`.
+    sum_layouts: HashMap<String, sums::SumLayout<'ctx>>,
     current_function: Option<FunctionValue<'ctx>>,
     // Names of `:=` (mutable) locals in the CURRENT function that are captured by
     // reference by some nested closure. These are allocated as heap GC cells (boxes)
@@ -469,7 +461,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The single canonical payload slot: a `{ptr,i64}` big enough for any payload.
         self.sum_layouts.insert(
             "Result".to_string(),
-            vec![self.ptr_len_struct_type().into()],
+            sums::SumLayout::PerPosition(vec![self.ptr_len_struct_type().into()]),
         );
         // Result's payloads are generic (`Ok(T)` / `NotOk(E)`); a `Generic` binding
         // resolves as Num for overload dispatch (see the type checker's `types_match`).
@@ -1079,7 +1071,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .insert(variant.name.clone(), variant.fields.clone());
         }
 
-        let layout = self.payload_slot_types(variants)?;
+        let layout = self.build_sum_layout(variants)?;
         self.sum_layouts.insert(type_name.to_string(), layout);
         Ok(())
     }

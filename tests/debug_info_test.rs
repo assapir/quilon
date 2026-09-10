@@ -632,6 +632,94 @@ Color = Red / Green / Blue
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A sum whose variants disagree on a payload position's type (`Mixed = A(Num) / B(Text)`)
+/// gets the UNION layout (`SumLayout::Union`): `{ i8 tag, union { A{...}, B{...} } }`,
+/// mirroring codegen's own per-variant body struct rather than one shared per-position slot.
+#[test]
+fn debug_build_emits_a_union_layout_for_heterogeneous_sum_payloads() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+
+    let Some(linker) = ["clang", "gcc"].into_iter().find(|t| tool_available(t)) else {
+        eprintln!("skipping union-layout debug test: need a linker on PATH");
+        return;
+    };
+    if !tool_available("llvm-dwarfdump") {
+        eprintln!("skipping union-layout debug test: `llvm-dwarfdump` not on PATH");
+        return;
+    }
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let src = "\
+Mixed = A(Num) / B(Text)
+
+^ = () -> Num => <
+  m :: Mixed = A(7)
+  m ?
+    | A(n) => n
+    | B(t) => t.length
+>
+";
+    let dir = std::env::temp_dir().join(format!("quilon_dbgunion_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let ql = dir.join("mixed.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+    let bin = dir.join("mixed");
+
+    let build = Command::new(quilon)
+        .args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["--debug", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("run quilon build --debug");
+    assert!(
+        build.status.success(),
+        "`quilon build --debug` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).status().expect("run built binary");
+    assert_eq!(run.code(), Some(7), "debug build changed program behavior");
+
+    let info = Command::new("llvm-dwarfdump")
+        .arg("--debug-info")
+        .arg(&bin)
+        .output()
+        .expect("run llvm-dwarfdump --debug-info");
+    let out = String::from_utf8_lossy(&info.stdout);
+
+    assert!(
+        out.contains("DW_TAG_union_type"),
+        "expected a DW_TAG_union_type for Mixed's heterogeneous payload, got:\n{out}"
+    );
+    // The union carries one member per variant, named after it.
+    let payload_union = out
+        .split("DW_AT_name\t(\"Mixed$payload\")")
+        .nth(1)
+        .expect("Mixed$payload union in the dump");
+    let payload_union = &payload_union[..payload_union
+        .find("DW_TAG_union_type")
+        .unwrap_or(payload_union.len())];
+    assert!(
+        payload_union.contains("DW_AT_name\t(\"A\")"),
+        "expected an `A` member in Mixed's payload union, got:\n{payload_union}"
+    );
+    assert!(
+        payload_union.contains("DW_AT_name\t(\"B\")"),
+        "expected a `B` member in Mixed's payload union, got:\n{payload_union}"
+    );
+    // The outer struct still carries the tag member, at offset 0.
+    let mixed = out
+        .split("DW_AT_name\t(\"Mixed\")")
+        .nth(1)
+        .expect("Mixed struct in the dump");
+    let mixed = &mixed[..mixed.find("DW_TAG_structure_type").unwrap_or(mixed.len())];
+    assert!(
+        mixed.contains("DW_AT_name\t(\"tag\")"),
+        "expected Mixed's tagged-struct to carry a `tag` member, got:\n{mixed}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The symbols a binary DEFINES, as `nm` reports them (mirrors `intrinsic_link_test.rs`'s
 /// own helper of the same shape).
 fn defined_symbols(path: &Path) -> std::collections::HashSet<String> {

@@ -63,3 +63,34 @@ runs:
           otool -L "$bin"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Verify macOS deployment target agreement
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        bin="${{ inputs.binary-path }}"
+        rustc --print deployment-target
+        link_log="$(mktemp)"
+        "./$bin" build examples/hello_world.qn -o "$(mktemp -u)" 2>&1 | tee "$link_log"
+        if grep -q 'was built for newer' "$link_log"; then
+          echo "::error::linking examples/hello_world.qn warned about a macOS version mismatch"
+          exit 1
+        fi
+        # `quilon build` links whichever archive it finds first: the bundled copy next to
+        # the binary itself (true for an in-tree build-and-test run) before ever touching
+        # the embedded copy it would otherwise extract to the cache (true for a standalone
+        # release asset, moved away from that bundled copy).
+        bundled="$(dirname "$bin")/libquilon_rt.bundled.a"
+        if [ -f "$bundled" ]; then
+          archive="$bundled"
+        else
+          cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/quilon"
+          archive="$(ls "$cache_dir"/libquilon_rt-*.a | head -n1)"
+        fi
+        # Absolute, since the extraction below `cd`s elsewhere first.
+        archive="$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")"
+        extract_dir="$(mktemp -d)"
+        gc_object="$(ar t "$archive" | grep -- '-gc\.o$')"
+        (cd "$extract_dir" && ar x "$archive" "$gc_object")
+        otool -l "$extract_dir/$gc_object" | grep -A3 -E 'LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION'

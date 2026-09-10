@@ -105,9 +105,13 @@ pub(super) fn is_reference_type(ty: &Type) -> bool {
         Type::Named { .. } | Type::Record(_) | Type::Array(_) | Type::Set(_) | Type::Map(_, _) => {
             true
         }
-        Type::Sum { variants, .. } => variants
-            .iter()
-            .any(|variant| variant.fields.iter().any(is_reference_type)),
+        Type::Sum { variants, .. } => variants.iter().any(|variant| {
+            variant.fields.iter().any(|field| match field {
+                // An unresolved self-reference placeholder: conservatively a reference.
+                Type::Sum { variants, .. } if variants.is_empty() => true,
+                other => is_reference_type(other),
+            })
+        }),
         _ => false,
     }
 }

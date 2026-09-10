@@ -83,8 +83,9 @@ impl TypeChecker {
         }
         let mut arg_types = Vec::with_capacity(args.len());
         for (field_type, arg) in field_types.iter().zip(args.iter()) {
+            let field_type = self.resolve_payload_type(field_type);
             let arg_type = self.infer_expression(arg)?;
-            self.check_type_compatibility(field_type, &arg_type, span)?;
+            self.check_type_compatibility(&field_type, &arg_type, span)?;
             arg_types.push(arg_type);
         }
 
@@ -182,6 +183,30 @@ impl TypeChecker {
             }
         }
         None
+    }
+
+    /// Substitutes a frozen self-reference placeholder (empty fields/variants, from before its own declaration completed) with the registered real type, recursing through array/map.
+    pub(super) fn resolve_payload_type(&self, field_type: &Type) -> Type {
+        match field_type {
+            Type::Sum { name, variants } if variants.is_empty() => self
+                .sum_types
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| field_type.clone()),
+            Type::Named { name, fields, .. } if fields.is_empty() => self
+                .env
+                .get_type(name)
+                .filter(
+                    |resolved| matches!(resolved, Type::Named { fields, .. } if !fields.is_empty()),
+                )
+                .unwrap_or_else(|| field_type.clone()),
+            Type::Array(elem) => Type::Array(Box::new(self.resolve_payload_type(elem))),
+            Type::Map(key, value) => Type::Map(
+                Box::new(self.resolve_payload_type(key)),
+                Box::new(self.resolve_payload_type(value)),
+            ),
+            _ => field_type.clone(),
+        }
     }
 
     /// Resolve a parsed type annotation against registered types. The parser emits an

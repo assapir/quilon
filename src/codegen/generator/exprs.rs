@@ -101,7 +101,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if !self.variables.contains_key(name)
                     && let Some((tag, type_name)) = self.sum_variants.get(name).cloned()
                 {
-                    return self.generate_sum_constructor(tag, &type_name, &[]);
+                    return self.generate_sum_constructor(tag, &type_name, name, &[]);
                 }
                 // Local binding (function-scoped alloca) first.
                 if let Some((ptr, ty)) = self.variables.get(name) {
