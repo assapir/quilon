@@ -234,7 +234,11 @@ fn resolve_hostname(
     let helper_slot = Arc::clone(&result_slot);
     let address = address.to_string();
     std::thread::spawn(move || {
-        let result = lookup(&address);
+        // Caught rather than left to unwind off the end of the thread: an uncaught panic here
+        // would never call `waker.complete`, leaving the parked fiber stuck forever — worse
+        // than the failure `@tcpRequest` otherwise always turns into a `NotOk`.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lookup(&address)))
+            .unwrap_or_else(|_| Err(io::Error::other("the hostname resolver panicked")));
         *helper_slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
@@ -620,5 +624,31 @@ mod tests {
         });
 
         assert!(RESOLVED.load(Ordering::SeqCst), "the resolve completed");
+    }
+
+    #[test]
+    fn a_panicking_lookup_wakes_the_fiber_with_an_error_instead_of_hanging_it() {
+        // A helper thread that panics before storing a result and waking the reactor would
+        // otherwise leave the parked fiber stuck forever; `resolve_hostname` must catch that
+        // and still resolve to an `Err`.
+        static RESOLVED_TO_ERROR: AtomicBool = AtomicBool::new(false);
+        RESOLVED_TO_ERROR.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let lookup = |_: &str| -> io::Result<SocketAddr> {
+                        panic!("a resolver hook that misbehaves");
+                    };
+                    let resolved = resolve_hostname("example.invalid:80", lookup);
+                    RESOLVED_TO_ERROR.store(resolved.is_err(), Ordering::SeqCst);
+                });
+            });
+        });
+
+        assert!(
+            RESOLVED_TO_ERROR.load(Ordering::SeqCst),
+            "a panicking lookup must resolve to an error, not hang the fiber"
+        );
     }
 }
