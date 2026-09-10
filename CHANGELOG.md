@@ -73,6 +73,14 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **Find references and rename follow a `:=`-bound local through its reassignments.**
+  A `:=` on a name already in scope reassigns that binding, so the language server's
+  resolver now treats one the same way the type checker does — as the same binding a
+  nested lambda's reassignment reaches too — where it used to start a fresh, disconnected
+  local at each `:=`, leaving find references and rename seeing only the piece of the
+  chain nearest the cursor. Renaming such a binding now rewrites its declaration, every
+  reassignment, and every read in one edit. See `docs/tooling/language-server.md`.
+  Closes #398.
 - **A dev-tree `quilon build` now always links one stable runtime archive.** The
   build script placed the freshly built runtime staticlib at
   `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a
