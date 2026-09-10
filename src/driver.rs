@@ -26,6 +26,13 @@ use std::rc::Rc;
 pub struct FrontEndError {
     pub diagnostic: Box<Diagnostic>,
     pub sources: SourceMap,
+    /// Whatever the type checker recorded before this failure — every expression it
+    /// finished inferring on the way to the one that errored (see
+    /// [`typechecker::TypeChecker::take_partial_types`]). Empty for a failure at any
+    /// earlier stage (lexing, parsing, import resolution), since checking never started.
+    /// A language server's hover reads this for the `quilon test` view of a suite whose
+    /// case has a type error, so hovering an earlier expression still answers.
+    pub partial_types: typechecker::TypeTable,
 }
 
 /// The plain report.
@@ -43,6 +50,7 @@ impl FrontEndError {
         Self {
             diagnostic: Box::new(diagnostic),
             sources,
+            partial_types: typechecker::TypeTable::new(),
         }
     }
 }
@@ -138,6 +146,7 @@ pub fn front_end_reporting(
     let unlocated = |code, message| FrontEndError {
         diagnostic: Box::new(Diagnostic::new(code, message)),
         sources: SourceMap::default(),
+        partial_types: typechecker::TypeTable::new(),
     };
     crate::source_extension::require_source(&path)
         .map_err(|message| unlocated(Code::NotAQuilonSource, message))?;
@@ -201,6 +210,7 @@ fn front_end_source_reporting(
             return Err(FrontEndError {
                 diagnostic: Box::new(error.diagnostic()),
                 sources,
+                partial_types: checker.take_partial_types(),
             });
         }
     };
@@ -294,6 +304,7 @@ fn link_source_reporting(
             return Err(FrontEndError {
                 diagnostic: Box::new(Diagnostic::at(error.code, &error.span, error.message)),
                 sources: error.sources,
+                partial_types: typechecker::TypeTable::new(),
             });
         }
     };
@@ -305,6 +316,7 @@ fn link_source_reporting(
         return Err(FrontEndError {
             diagnostic: Box::new(diagnostic),
             sources,
+            partial_types: typechecker::TypeTable::new(),
         });
     }
 

@@ -73,6 +73,15 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **The language server checks a file's test bodies even when the file also has a `^`.**
+  A `test.describe`/`test.it` block beside its own `^` used to be erased before checking,
+  the way `check`/`run` erase it — so a type error inside a case went unreported and
+  hover inside it answered null, though the Run/Debug lenses still offered it. Such a file
+  is now checked under both the `check`/`run` view (for its `^`) and the `quilon test`
+  view (for the blocks), publishing both views' diagnostics, deduplicated by span, and
+  answering hover from whichever view reaches the cursor's expression — a failing case
+  still lets hover answer for an earlier expression the same run finished checking. See
+  `docs/tooling/language-server.md`. Closes #394.
 - **A dev-tree `quilon build` now always links one stable runtime archive.** The
   build script placed the freshly built runtime staticlib at
   `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a

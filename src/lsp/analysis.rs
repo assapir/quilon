@@ -42,20 +42,88 @@ pub fn link_text(path: &Path, text: &str) -> Result<Linked, FrontEndError> {
 }
 
 /// What [`check_text`] and [`link_text`] do with `text`'s top-level `describe` blocks: run
-/// them (see [`parses_as_test_suite`]), or erase them, matching every other command.
+/// them the way `quilon test` does, or erase them the way every other command does. A
+/// document with BOTH a `^` and test blocks still erases them here — [`check_views`] is the
+/// entry point that checks such a document under both views.
 fn test_blocks_for(text: &str) -> TestBlocks {
-    match parses_as_test_suite(text) {
-        true => TestBlocks::Run,
-        false => TestBlocks::Erase,
+    match document_shape(text) {
+        DocumentShape::Suite => TestBlocks::Run,
+        DocumentShape::Program | DocumentShape::Both => TestBlocks::Erase,
     }
 }
 
-/// Whether `text` parses as a test suite: top-level test blocks and no `^` entry point.
-fn parses_as_test_suite(text: &str) -> bool {
+/// The front-end view(s) `text` needs, decided from one parse: whether it has top-level
+/// test blocks, a `^`, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentShape {
+    /// No test blocks: the `check`/`run` view alone.
+    Program,
+    /// Test blocks and no `^`: the `quilon test` view alone.
+    Suite,
+    /// Both a `^` and test blocks: neither view alone reaches everything in the document —
+    /// erasing the blocks leaves their bodies unseen, and running them drops the file's own
+    /// `^` — so it needs both.
+    Both,
+}
+
+fn document_shape(text: &str) -> DocumentShape {
     let Some(program) = parse_text(text) else {
-        return false;
+        return DocumentShape::Program;
     };
-    !program.test_blocks.is_empty() && !driver::has_entry_point(&program)
+    match (
+        !program.test_blocks.is_empty(),
+        driver::has_entry_point(&program),
+    ) {
+        (false, _) => DocumentShape::Program,
+        (true, false) => DocumentShape::Suite,
+        (true, true) => DocumentShape::Both,
+    }
+}
+
+/// One front-end run over a document, and which of its top-level `describe` blocks that
+/// run compiled. See [`check_views`].
+pub struct DocumentCheck {
+    pub mode: TestBlocks,
+    pub result: Result<Checked, FrontEndError>,
+}
+
+/// The one or two [`DocumentCheck`]s `text` needs, for diagnostics and hover: a document
+/// with both a `^` and top-level test blocks needs the `check`/`run` view (which
+/// type-checks the `^`) AND the `quilon test` view (which type-checks the blocks' bodies,
+/// dropping the file's own `^`) — together the two cover the whole document, where
+/// [`check_text`]'s single view would only ever cover one half. A document with only one of
+/// the two needs only its matching view, same as [`check_text`].
+pub fn check_views(path: &Path, text: &str) -> Vec<DocumentCheck> {
+    let view = |mode: TestBlocks| DocumentCheck {
+        mode,
+        result: driver::front_end_source(path, text.to_string(), mode),
+    };
+    match document_shape(text) {
+        DocumentShape::Program => vec![view(TestBlocks::Erase)],
+        DocumentShape::Suite => vec![view(TestBlocks::Run)],
+        DocumentShape::Both => vec![view(TestBlocks::Erase), view(TestBlocks::Run)],
+    }
+}
+
+/// The hover answer at `offset`, from whichever of `text`'s front-end views reaches it.
+/// A `^`-and-test-blocks document tries the `check`/`run` view first, then the `quilon
+/// test` view; whichever of the two even contains the expression at `offset` is the one
+/// that can answer for it, since a document with both drops each view's own half.
+///
+/// A failed `quilon test` view still answers from its own [`FrontEndError::partial_types`]:
+/// one case's type error must not silence hover over an earlier expression the same run
+/// already finished checking. A failed `check`/`run` view answers nothing, matching
+/// `check_text` — a type error anywhere in ordinary code silences hover for the document.
+pub fn hover_in_document(path: &Path, text: &str, offset: u32) -> Option<(String, Span)> {
+    check_views(path, text)
+        .into_iter()
+        .find_map(|view| match (view.result, view.mode) {
+            (Ok(checked), _) => hover_at(&checked.types, &checked.matcher_hovers, offset),
+            (Err(error), TestBlocks::Run) => {
+                hover_at(&error.partial_types, &MatcherHoverTable::default(), offset)
+            }
+            (Err(_), TestBlocks::Erase) => None,
+        })
 }
 
 /// The document's own parse (pre-link, names as written), or `None` when it does not lex

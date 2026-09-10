@@ -120,6 +120,18 @@ impl TypeChecker {
         std::mem::take(&mut self.matcher_hovers)
     }
 
+    /// Take whatever the type oracle holds after `check_program` returns `Err`: every
+    /// expression it finished inferring on the way to the one that failed, since nothing
+    /// rolls those entries back once a later one errors. A language server's hover reads
+    /// this for the `quilon test` view of a suite whose case has a type error, so hovering
+    /// an earlier expression — a sibling case, or the failing one up to its own break
+    /// point — still answers rather than the whole file going dark over one bad case.
+    /// Empty once `check_program` has already succeeded, since its `Ok` arm takes the
+    /// table itself.
+    pub fn take_partial_types(&mut self) -> TypeTable {
+        std::mem::take(&mut self.type_table)
+    }
+
     /// The `^` entry point may only take one of these parameter shapes (checked by
     /// TYPE, not by parameter name): `()`, `(args :: []Text)`, or
     /// `(args :: []Text, env :: [|Text => Text|])`.

@@ -34,7 +34,7 @@
 
 pub mod analysis;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
@@ -51,7 +51,7 @@ use lsp_types::{
 };
 
 use crate::diagnostic::Label;
-use crate::driver::{Checked, FrontEndError, Linked};
+use crate::driver::{FrontEndError, Linked};
 use crate::lexer::{ROOT_FILE, Span};
 use crate::source_map::{DocumentPositions, SourceMap};
 use analysis::{SemanticTokenKind, TestLensKind};
@@ -214,15 +214,22 @@ impl LanguageServer {
     }
 
     /// The publishDiagnostics notification for the document at `uri`, from a fresh
-    /// front-end run: empty when the document checks clean.
+    /// front-end run over every view [`analysis::check_views`] says it needs: a document
+    /// with both a `^` and top-level test blocks gets a diagnostic from each view that
+    /// fails, one for its `^` and one for its blocks, deduplicated by span so an error
+    /// both views agree on (anything above the blocks, checked identically by each) is
+    /// reported once rather than twice. Empty when every view checks clean.
     fn diagnostics_for(&self, uri: &Uri) -> Notification {
         let Some((path, text)) = self.document(uri) else {
             return publish(uri.clone(), Vec::new());
         };
-        let diagnostics = match analysis::check_text(&path, text) {
-            Ok(_) => Vec::new(),
-            Err(error) => vec![lsp_diagnostic(&error, uri, text)],
-        };
+        let mut reported_spans = HashSet::new();
+        let diagnostics: Vec<Diagnostic> = analysis::check_views(&path, text)
+            .into_iter()
+            .filter_map(|view| view.result.err())
+            .filter(|error| reported_spans.insert(error.diagnostic.primary_span().cloned()))
+            .map(|error| lsp_diagnostic(&error, uri, text))
+            .collect();
         publish(uri.clone(), diagnostics)
     }
 
@@ -283,12 +290,12 @@ impl LanguageServer {
 
     fn hover(&self, id: RequestId, params: HoverParams) -> Response {
         let position_params = params.text_document_position_params;
-        let Some((_, positions, offset, checked)) =
-            self.checked_document(&position_params.text_document.uri, position_params.position)
+        let Some((path, text, positions, offset)) =
+            self.document_position(&position_params.text_document.uri, position_params.position)
         else {
             return Response::new_ok(id, serde_json::Value::Null);
         };
-        match analysis::hover_at(&checked.types, &checked.matcher_hovers, offset) {
+        match analysis::hover_in_document(&path, text, offset) {
             Some((label, span)) => Response::new_ok(
                 id,
                 Hover {
@@ -303,7 +310,7 @@ impl LanguageServer {
         }
     }
 
-    /// Works on the buffer as typed, unlike [`Self::checked_document`]'s callers:
+    /// Works on the buffer as typed, unlike [`Self::linked_document`]'s callers:
     /// [`analysis::completions_at`] re-derives a checkable document itself.
     fn completion(&self, id: RequestId, params: CompletionParams) -> Response {
         let position_params = params.text_document_position;
@@ -564,19 +571,7 @@ impl LanguageServer {
         Some((path, text, positions, offset))
     }
 
-    /// [`Self::document_position`], plus a fresh front-end run over the document. `None`
-    /// also when the document does not check clean.
-    fn checked_document(
-        &self,
-        uri: &Uri,
-        position: Position,
-    ) -> Option<(&str, DocumentPositions<'_>, u32, Checked)> {
-        let (path, text, positions, offset) = self.document_position(uri, position)?;
-        let checked = analysis::check_text(&path, text).ok()?;
-        Some((text, positions, offset, checked))
-    }
-
-    /// [`Self::checked_document`], stopping once the document lexes, parses, and links —
+    /// [`Self::document_position`], stopping once the document lexes, parses, and links —
     /// without requiring it to type-check. Definition, references, and rename use this: all
     /// three read only [`Linked::program`], so a type error elsewhere in the document does
     /// not suppress them. `None` also when the document does not even lex/parse/link.
