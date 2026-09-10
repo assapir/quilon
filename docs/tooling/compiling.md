@@ -66,7 +66,7 @@ quilon build program.qn --linker gcc      # gcc also supported (CI checks both)
 ./program; echo "exit: $?"
 ```
 `quilon run` (the JIT) always runs unoptimized. On macOS, a built executable's minimum OS
-version equals the Rust toolchain's deployment target that compiled `quilon`.
+version equals the deployment target `quilon` itself was compiled for.
 
 `quilon test <file> --binary <out>` builds the suite into a **native, debuggable
 executable** at `<out>`, without running it — always with DWARF debug info, so a debugger
