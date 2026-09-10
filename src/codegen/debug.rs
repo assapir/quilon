@@ -431,6 +431,75 @@ impl<'ctx> DebugInfo<'ctx> {
         self.struct_type(name, &members)
     }
 
+    /// A sum type whose variants disagree on a payload position's type (`SumLayout::Union`
+    /// in the code generator): `{ i8 tag, union { A{...}, B{...}, ... } }`, one union
+    /// member per variant, each a struct of that variant's own payload types — mirroring
+    /// codegen's own per-variant body struct, so the tag and payload sit at the same
+    /// offsets/size as the LLVM value.
+    pub fn sum_union_type(
+        &self,
+        name: &str,
+        variants: &[(String, Vec<(String, DIType<'ctx>)>)],
+    ) -> DIType<'ctx> {
+        let tag = self.basic_type("i8", 8, DW_ATE_UNSIGNED);
+        let members: Vec<(String, DIType<'ctx>)> = variants
+            .iter()
+            .map(|(variant_name, fields)| {
+                let fields: Vec<(&str, DIType<'ctx>)> =
+                    fields.iter().map(|(n, t)| (n.as_str(), *t)).collect();
+                (
+                    variant_name.clone(),
+                    self.struct_type(variant_name, &fields),
+                )
+            })
+            .collect();
+        let payload = self.union_type(&format!("{name}$payload"), &members);
+        self.struct_type(name, &[("tag", tag), ("payload", payload)])
+    }
+
+    /// A union of `members`, each starting at offset 0 and sized to the union's own total
+    /// size — the widest member's, laid out the same natural-alignment way [`struct_type`]
+    /// lays out a struct's members.
+    fn union_type(&self, name: &str, members: &[(String, DIType<'ctx>)]) -> DIType<'ctx> {
+        let root_file = self.root_file();
+        let scope = root_file.as_debug_info_scope();
+        let mut size_bits = 0u64;
+        let mut align_bits = 8u32;
+        let mut elements = Vec::with_capacity(members.len());
+        for (member_name, member_type) in members {
+            let size = member_type.get_size_in_bits();
+            let align = member_align_bits(*member_type);
+            align_bits = align_bits.max(align);
+            size_bits = size_bits.max(size);
+            let member = self.builder.create_member_type(
+                scope,
+                member_name,
+                root_file,
+                0,
+                size,
+                align,
+                0,
+                DIFlags::PUBLIC,
+                *member_type,
+            );
+            elements.push(member.as_type());
+        }
+        self.builder
+            .create_union_type(
+                self.compile_unit.as_debug_info_scope(),
+                name,
+                root_file,
+                0,
+                align_up(size_bits, align_bits as u64),
+                align_bits,
+                DIFlags::PUBLIC,
+                &elements,
+                0,
+                name,
+            )
+            .as_type()
+    }
+
     /// Build a named DWARF struct from `members`, laying each out at its natural alignment so
     /// the offsets/sizes match LLVM's default (non-packed) struct layout on x86-64. Shared by
     /// every composite builder above.

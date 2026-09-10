@@ -5,14 +5,149 @@
 //! methods run against.
 
 use super::*;
+use inkwell::types::StructType;
+
+/// A sum type's payload layout, decided once from its variants by [`positions_agree`] —
+/// shared by LLVM struct construction (this module) and the DWARF builder (`di.rs`), so
+/// the decision and the resulting shape can never drift between the two.
+///
+/// `PerPosition` is today's shape: one canonical slot per payload position, sized to
+/// whichever variant's field there is widest (`payload_slot_types`) — kept whenever every
+/// variant's concrete field at a position agrees, which is the common case (`Result`, and
+/// most user sums) and the smaller of the two struct shapes.
+///
+/// `Union` is Rust-enum style: each variant's OWN fields form their own LLVM struct
+/// (`variant_bodies`), and the sum's shared storage is `widest` — whichever of those
+/// struct types is largest. A narrower variant's value is WRITTEN as its own struct type
+/// and READ BACK as `widest` (`generate_union_sum_value`); a match arm does the reverse
+/// (`union_payload_values`). LLVM's opaque pointers make this a plain memory round-trip:
+/// a `store`/`load` pair needs no shared type at the pointer itself, only enough allocated
+/// bytes and alignment, which `widest` — the biggest of the candidates — guarantees.
+#[derive(Clone)]
+pub(super) enum SumLayout<'ctx> {
+    PerPosition(Vec<BasicTypeEnum<'ctx>>),
+    Union {
+        variant_bodies: HashMap<String, StructType<'ctx>>,
+        widest: StructType<'ctx>,
+    },
+}
+
+/// Whether every variant's concrete (non-`$`, non-generic) field at each payload
+/// position agrees in type with every other variant's there — the condition under which
+/// a sum keeps ONE canonical slot per position (`SumLayout::PerPosition`); anything else
+/// needs the union layout. The single decision both the LLVM struct builder
+/// (`build_sum_layout`) and the DWARF builder (`di.rs::di_sum_type`) make, so a sum's
+/// debug-info shape can never disagree with the value it describes.
+pub(super) fn positions_agree(variants: &[crate::ast::SumVariant]) -> bool {
+    let arity = variants.iter().map(|v| v.fields.len()).max().unwrap_or(0);
+    (0..arity).all(|position| {
+        let mut concrete: Option<&Type> = None;
+        variants
+            .iter()
+            .all(|variant| match variant.fields.get(position) {
+                Some(field) if *field != Type::Unit && !matches!(field, Type::Generic { .. }) => {
+                    match concrete {
+                        None => {
+                            concrete = Some(field);
+                            true
+                        }
+                        Some(prev) => prev == field,
+                    }
+                }
+                _ => true,
+            })
+    })
+}
+
+/// The C-ABI byte size and alignment LLVM gives `ty` on every architecture Quilon
+/// targets (all LP64: 8-byte pointers/doubles, natural alignment, no packing) — used
+/// only to pick the WIDEST variant body for the union layout, never to build a value.
+fn static_layout(ty: BasicTypeEnum) -> (u64, u64) {
+    match ty {
+        BasicTypeEnum::FloatType(_) | BasicTypeEnum::PointerType(_) => (8, 8),
+        BasicTypeEnum::IntType(int_type) => {
+            let bytes = u64::from(int_type.get_bit_width()).div_ceil(8).max(1);
+            (bytes, bytes)
+        }
+        BasicTypeEnum::StructType(struct_type) => {
+            let mut offset = 0u64;
+            let mut align = 1u64;
+            for index in 0..struct_type.count_fields() {
+                let field = struct_type
+                    .get_field_type_at_index(index)
+                    .expect("index within count_fields");
+                let (field_size, field_align) = static_layout(field);
+                align = align.max(field_align);
+                offset = offset.next_multiple_of(field_align) + field_size;
+            }
+            (offset.next_multiple_of(align), align)
+        }
+        BasicTypeEnum::ArrayType(array_type) => {
+            let (elem_size, elem_align) = static_layout(array_type.get_element_type());
+            (elem_size * u64::from(array_type.len()), elem_align)
+        }
+        BasicTypeEnum::VectorType(_) | BasicTypeEnum::ScalableVectorType(_) => (8, 8),
+    }
+}
 
 impl<'ctx> CodeGenerator<'ctx> {
+    /// Decide and build `variants`' payload layout (see [`SumLayout`]). A field naming the
+    /// enclosing sum directly lowers through the ordinary [`Self::value_repr_type`] path,
+    /// which — since this sum's own name isn't in `sum_layouts` yet while its layout is
+    /// still being computed — falls back to a plain pointer, exactly the GC-boxed
+    /// representation [`Self::coerce_payload`]/[`Self::unbox_if_boxed`] expect.
+    pub(super) fn build_sum_layout(
+        &self,
+        variants: &[crate::ast::SumVariant],
+    ) -> Result<SumLayout<'ctx>, String> {
+        if positions_agree(variants) {
+            return Ok(SumLayout::PerPosition(self.payload_slot_types(variants)?));
+        }
+        let mut variant_bodies = HashMap::with_capacity(variants.len());
+        let mut widest: Option<StructType<'ctx>> = None;
+        let mut widest_size = 0u64;
+        for variant in variants {
+            let field_types: Vec<BasicTypeEnum> = variant
+                .fields
+                .iter()
+                .map(|field| self.value_repr_type(field))
+                .collect::<Result<_, _>>()?;
+            let body = self.context.struct_type(&field_types, false);
+            let (size, _) = static_layout(body.into());
+            if size >= widest_size {
+                widest = Some(body);
+                widest_size = size;
+            }
+            variant_bodies.insert(variant.name.clone(), body);
+        }
+        Ok(SumLayout::Union {
+            widest: widest.unwrap_or_else(|| self.context.struct_type(&[], false)),
+            variant_bodies,
+        })
+    }
+
     pub(super) fn generate_sum_constructor(
         &mut self,
         tag: u8,
         type_name: &str,
+        variant: &str,
         args: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i8_type = self.context.i8_type();
+        let tag_val = i8_type.const_int(tag as u64, false);
+
+        if let Some(SumLayout::Union {
+            variant_bodies,
+            widest,
+        }) = self.sum_layouts.get(type_name)
+        {
+            let body_ty = *variant_bodies
+                .get(variant)
+                .ok_or_else(|| format!("unregistered variant `{variant}`"))?;
+            let widest = *widest;
+            return self.generate_union_sum_value(type_name, tag_val, body_ty, widest, args);
+        }
+
         // Tagged-union value: { i8 tag, slot0, slot1, ... }. Every sum type has a registered
         // canonical layout (`sum_layouts`), so EVERY value of the type shares one struct shape
         // and a match arm can extract any variant's slots without going out of range:
@@ -28,10 +163,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // For USER slots, Num/Bool payloads are normalized to f64 and a `$` (Unit) payload is
         // stored as a zero of the slot type so the value still matches the slot/return shape
         // (e.g. `Ok($)` packs a zeroed slot) — the bits are never read.
-        let i8_type = self.context.i8_type();
-        let registered_layout = self.sum_layouts.get(type_name).cloned();
-
-        let tag_val = i8_type.const_int(tag as u64, false);
+        let registered_layout = match self.sum_layouts.get(type_name) {
+            Some(SumLayout::PerPosition(slots)) => Some(slots.clone()),
+            _ => None,
+        };
 
         // Determine each payload slot's value. `Result` packs its payload into the one
         // canonical `{ptr,i64}` slot; a user type's slot type is fixed by position from its
@@ -88,6 +223,98 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(agg.into())
     }
 
+    /// Build a `SumLayout::Union` value: this variant's own fields packed into `body_ty`
+    /// (its own struct type), then widened to the shared `widest` storage by a memory
+    /// round-trip — `store` as `body_ty`, `load` back as `widest` — before tagging.
+    fn generate_union_sum_value(
+        &mut self,
+        type_name: &str,
+        tag_val: inkwell::values::IntValue<'ctx>,
+        body_ty: StructType<'ctx>,
+        widest: StructType<'ctx>,
+        args: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut field_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            let arg_val = self.generate_expression(arg)?;
+            let slot_ty = body_ty
+                .get_field_type_at_index(i as u32)
+                .ok_or_else(|| format!("payload slot {i} out of range"))?;
+            field_vals.push(self.coerce_payload(arg_val, slot_ty)?);
+        }
+        let mut body = body_ty.get_undef();
+        for (i, value) in field_vals.into_iter().enumerate() {
+            body = self
+                .builder
+                .build_insert_value(body, value, i as u32, "with_field")
+                .map_err(ctx("Failed to insert union payload field"))?
+                .into_struct_value();
+        }
+        let storage = self.create_entry_block_alloca("sum_body", widest.into())?;
+        self.builder
+            .build_store(storage, body)
+            .map_err(ctx("Failed to store sum payload"))?;
+        let widened = self
+            .builder
+            .build_load(widest, storage, "sum_body_widened")
+            .map_err(ctx("Failed to widen sum payload"))?;
+
+        let sum_struct = self.sum_struct_type(type_name);
+        let mut agg = sum_struct.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, tag_val, 0, "with_tag")
+            .map_err(ctx("Failed to insert tag"))?
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, widened, 1, "with_body")
+            .map_err(ctx("Failed to insert payload"))?
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
+    /// Raw (possibly still-boxed) payload values for `variant`'s fields out of a matched
+    /// `struct_val` of sum type `type_name`. A `PerPosition` sum reads its payload
+    /// directly out of the tagged struct's own slots (positions `1..`); a `Union` sum
+    /// reads the shared `widest` body back through a memory round-trip AS the variant's
+    /// own (narrower) struct type — the mirror of [`Self::generate_union_sum_value`].
+    pub(super) fn union_payload_values(
+        &mut self,
+        struct_val: inkwell::values::StructValue<'ctx>,
+        type_name: &str,
+        variant: &str,
+        arity: usize,
+    ) -> Result<Option<Vec<BasicValueEnum<'ctx>>>, String> {
+        let body_ty = match self.sum_layouts.get(type_name) {
+            Some(SumLayout::Union { variant_bodies, .. }) => *variant_bodies
+                .get(variant)
+                .ok_or_else(|| format!("unregistered variant `{variant}`"))?,
+            _ => return Ok(None),
+        };
+        let widened = self
+            .builder
+            .build_extract_value(struct_val, 1, "sum_body")
+            .map_err(ctx("Failed to extract sum payload"))?;
+        let storage = self.create_entry_block_alloca("sum_body_view", widened.get_type())?;
+        self.builder
+            .build_store(storage, widened)
+            .map_err(ctx("Failed to store sum payload"))?;
+        let narrow = self
+            .builder
+            .build_load(body_ty, storage, "sum_body_narrow")
+            .map_err(ctx("Failed to narrow sum payload"))?
+            .into_struct_value();
+        (0..arity)
+            .map(|i| {
+                self.builder
+                    .build_extract_value(narrow, i as u32, "payload")
+                    .map_err(ctx("Failed to extract payload field"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    }
+
     /// The slot type for a Result payload sized to its actual value: a non-`i1` integer
     /// widens to f64 (the canonical numeric payload), everything else keeps its own type.
     pub(super) fn payload_slot_type(&self, value: BasicValueEnum<'ctx>) -> BasicTypeEnum<'ctx> {
@@ -122,12 +349,46 @@ impl<'ctx> CodeGenerator<'ctx> {
             // payload types agree per position, so ANY other mismatch is an internal bug,
             // surfaced rather than silently zeroed.
             BasicValueEnum::IntValue(i) if i.get_type().get_bit_width() == 8 => Ok(zeroed(slot_ty)),
+            // A pointer-typed slot given the sum's own by-value aggregate: the field
+            // names the enclosing sum directly (`Node(Tree)`), which — since that sum
+            // isn't registered in `sum_layouts` yet while ITS OWN layout is being built —
+            // lowered to a plain pointer rather than the recursive struct it can't be.
+            // GC-box the value and slot the pointer; `unbox_if_boxed` reverses this when
+            // a pattern binds it.
+            BasicValueEnum::StructValue(_) if slot_ty.is_pointer_type() => {
+                let box_ptr = self.alloc_box(value.get_type())?;
+                self.builder
+                    .build_store(box_ptr, value)
+                    .map_err(ctx("Failed to box sum payload"))?;
+                Ok(box_ptr.into())
+            }
             other => Err(format!(
                 "internal error: sum-type payload of type {:?} does not fit slot {:?}",
                 other.get_type(),
                 slot_ty
             )),
         }
+    }
+
+    /// Undo [`Self::coerce_payload`]'s box: a `ptr` payload whose bind-site target type is
+    /// a sum loads back through the GC cell as that sum's ordinary by-value aggregate —
+    /// the representation every other value of the type has. A `ptr` target (a record, or
+    /// any other pointer-represented type) is not boxed and passes through unchanged.
+    pub(super) fn unbox_if_boxed(
+        &self,
+        raw: BasicValueEnum<'ctx>,
+        target: Option<&Type>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (BasicValueEnum::PointerValue(ptr), Some(target_ty)) = (raw, target) else {
+            return Ok(raw);
+        };
+        let repr = self.value_repr_type(target_ty)?;
+        if repr.is_pointer_type() {
+            return Ok(raw);
+        }
+        self.builder
+            .build_load(repr, ptr, "unboxed_payload")
+            .map_err(ctx("Failed to unbox payload"))
     }
 
     /// Pack a Result payload `value` into the canonical `{ptr,i64}` slot, so any payload —
@@ -379,7 +640,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub(super) fn sum_struct_type(&self, name: &str) -> inkwell::types::StructType<'ctx> {
         let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
         match self.sum_layouts.get(name) {
-            Some(layout) => field_types.extend(layout.iter().copied()),
+            Some(SumLayout::PerPosition(slots)) => field_types.extend(slots.iter().copied()),
+            Some(SumLayout::Union { widest, .. }) => field_types.push((*widest).into()),
             None => field_types.push(self.context.f64_type().into()),
         }
         self.context.struct_type(&field_types, false)
@@ -390,8 +652,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// into which any payload is packed) — has a registered canonical layout, so this defers
     /// to [`sum_struct_type`], giving `Result` the single shape `{ i8, {ptr,i64} }` whatever
     /// its concrete `Ok`/`NotOk` payload. An UNREGISTERED `Type::Sum` (e.g. an IR-only test
-    /// that skips declaration) is laid out from its variants with [`payload_slot_types`], the
-    /// same rule registration would have applied.
+    /// that skips declaration) is laid out on the fly with [`build_sum_layout`], the same
+    /// rule registration would have applied.
     pub(super) fn sum_value_struct_type(
         &self,
         name: &str,
@@ -401,7 +663,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(self.sum_struct_type(name));
         }
         let mut field_types: Vec<BasicTypeEnum> = vec![self.context.i8_type().into()];
-        field_types.extend(self.payload_slot_types(variants)?);
+        match self.build_sum_layout(variants)? {
+            SumLayout::PerPosition(slots) => field_types.extend(slots),
+            SumLayout::Union { widest, .. } => field_types.push(widest.into()),
+        }
         Ok(self.context.struct_type(&field_types, false))
     }
 

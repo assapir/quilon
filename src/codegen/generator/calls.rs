@@ -296,7 +296,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         if !member_call
             && let Some((tag, type_name)) = self.sum_variants.get(function_name.as_str()).cloned()
         {
-            return self.generate_sum_constructor(tag, &type_name, arguments);
+            return self.generate_sum_constructor(tag, &type_name, function_name, arguments);
         }
 
         // The receiver's method answers the call, and nothing below is consulted: a method

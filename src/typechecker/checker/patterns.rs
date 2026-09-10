@@ -226,7 +226,12 @@ impl TypeChecker {
                     && let Some(variant) = variants.iter().find(|v| &v.name == constructor_name)
                 {
                     for (arg_pattern, field_type) in arguments.iter().zip(variant.fields.iter()) {
-                        self.bind_pattern_vars(arg_pattern, field_type, scrutinee_aliasing)?;
+                        let resolved_field_type = self.resolve_payload_type(field_type);
+                        self.bind_pattern_vars(
+                            arg_pattern,
+                            &resolved_field_type,
+                            scrutinee_aliasing,
+                        )?;
                     }
                 }
                 Ok(())

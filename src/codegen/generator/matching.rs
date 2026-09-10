@@ -299,9 +299,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 name, arguments, ..
             } => {
                 // Extract each payload field and bind it to the corresponding sub-pattern.
-                // The value is `{ i8 tag, payload0, payload1, ... }`, so payload `i` is
-                // struct field `i + 1`. Only identifier sub-patterns bind a name; others
-                // (wildcards, nested constructors) are matched structurally elsewhere.
+                // A `PerPosition` sum's value is `{ i8 tag, payload0, payload1, ... }`, so
+                // payload `i` is struct field `i + 1`; a `Union` sum's payloads come back
+                // through `union_payload_values` instead (see `SumLayout`). Only identifier
+                // sub-patterns bind a name; others (wildcards, nested constructors) are
+                // matched structurally elsewhere.
                 //
                 // Each payload binding records its Quilon type in `var_types` (the map
                 // that mangles an overloaded call on the binding, e.g.
@@ -316,26 +318,40 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if let BasicValueEnum::StructValue(struct_val) = value {
                     let concrete = self.scrutinee_payload_types(scrutinee, name);
                     let declared = self.variant_payloads.get(name).cloned();
-                    // Result stores every payload in one canonical `{ptr,i64}` slot; a bound
-                    // payload must be UNPACKED back to its concrete type (from the oracle).
-                    let is_result = self
+                    let owning_type = self
                         .sum_variants
                         .get(name.as_str())
-                        .is_some_and(|(_, tn)| tn == "Result");
+                        .map(|(_, type_name)| type_name.clone())
+                        .unwrap_or_default();
+                    // Result stores every payload in one canonical `{ptr,i64}` slot; a bound
+                    // payload must be UNPACKED back to its concrete type (from the oracle).
+                    let is_result = owning_type == "Result";
+                    let raw_values = match self.union_payload_values(
+                        struct_val,
+                        &owning_type,
+                        name,
+                        arguments.len(),
+                    )? {
+                        Some(values) => values,
+                        None => (0..arguments.len())
+                            .map(|i| {
+                                self.builder
+                                    .build_extract_value(struct_val, (i + 1) as u32, "payload")
+                                    .map_err(ctx("Failed to extract payload"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    };
                     for (i, arg) in arguments.iter().enumerate() {
                         if let Pattern::Identifier { name: arg_name, .. } = arg {
                             let payload_ty = [&concrete, &declared]
                                 .into_iter()
                                 .filter_map(|src| src.as_ref()?.get(i))
                                 .find(|t| !matches!(t, Type::Generic { .. }));
-                            let raw = self
-                                .builder
-                                .build_extract_value(struct_val, (i + 1) as u32, "payload")
-                                .map_err(ctx("Failed to extract payload"))?;
+                            let raw = raw_values[i];
                             let payload = if is_result {
                                 self.unpack_result_payload(raw, payload_ty)?
                             } else {
-                                raw
+                                self.unbox_if_boxed(raw, payload_ty)?
                             };
                             let alloca =
                                 self.create_entry_block_alloca(arg_name, payload.get_type())?;

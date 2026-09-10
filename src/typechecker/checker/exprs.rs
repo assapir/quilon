@@ -544,11 +544,14 @@ impl TypeChecker {
                                 }
                                 provided_fields.insert(field_name.clone());
 
-                                // Find the expected type for this field
+                                // Find the expected type for this field, resolving it past
+                                // the enclosing type's own placeholder if it names the
+                                // record's own not-yet-complete self at declaration time
+                                // (see `resolve_payload_type`).
                                 let expected_type = type_fields
                                     .iter()
                                     .find(|(f, _)| f == field_name)
-                                    .map(|(_, t)| t.clone())
+                                    .map(|(_, t)| self.resolve_payload_type(t))
                                     .ok_or_else(|| TypeError::UnknownConstructorField {
                                         type_name: type_name.clone(),
                                         field: field_name.clone(),
