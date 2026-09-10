@@ -33,7 +33,8 @@ its IO and returns immediately with a *deferred* value; the caller continues. De
 propagates as the value flows — passed as an argument, stored in a record or array, returned
 from a function — forcing nothing along the way. That threading is the *pipelining*. An
 effect-only or callback-driven `@` primitive (`@sleep`, `@streamFile`) runs in program order
-on the calling fiber, parking on readiness between steps so other fibers still overlap.
+on the calling fiber: `@sleep` parks for its whole duration; `@streamFile` parks when a read
+reports not ready (a pipe or FIFO) — a regular file's reads return at once.
 
 **Forcing happens at the leaves.** A deferred value is forced — the fiber parks until it is
 ready — at a **strict** operation: arithmetic, comparison, pattern match (`?`), IO
@@ -129,10 +130,11 @@ The HTTP client sits on it — framing and parsing happen in ordinary Quilon on 
 `core.io` — **`@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) ->
 Result`** reads `path` in `chunkSize`-byte reads, calling `onChunk` once per whole, valid-Text
 chunk. `onChunk` is the caller's own code, so `@streamFile` runs strictly, in program order on
-the calling fiber, parking on reactor readiness between reads so other fibers still overlap,
-and hands back a plain `Result` once the read finishes or `onChunk` returns `false` to stop.
-`Ok(bytesRead)` carries the total bytes delivered; `NotOk(message)` covers a missing file, a
-read error, or an invalid `chunkSize`. (See `examples/streamFile.qn`.)
+the calling fiber, parking when a read reports not ready (a pipe or FIFO; a regular file's
+reads return at once), and hands back a plain `Result` once the read finishes or `onChunk`
+returns `false` to stop. `Ok(bytesRead)` carries the total bytes delivered; `NotOk(message)`
+covers a missing file, a read error, invalid UTF-8 in the file, and an invalid `chunkSize`.
+(See `examples/streamFile.qn`.)
 
 ## Where it is headed
 

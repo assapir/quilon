@@ -642,16 +642,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Err("@streamFile expects a closure onChunk".to_string());
                 };
 
-                // Bundle the onChunk closure's `{ ptr fn, ptr env }` into the ONE environment
-                // pointer the runtime forwards to the thunk below — the same technique
-                // `aborts()` uses to hand a runtime entry point a closure whose real signature
-                // it does not itself know.
-                let bundle_ty = self.closure_struct_type();
-                let bundle =
-                    self.create_entry_block_alloca("stream_file_bundle", bundle_ty.into())?;
-                self.builder
-                    .build_store(bundle, closure)
-                    .map_err(ctx("Failed to store the onChunk bundle"))?;
+                let bundle = self.bundle_closure(closure, "stream_file_bundle")?;
 
                 let thunk = self.emit_stream_file_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
@@ -700,7 +691,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_ty = self.context.i64_type();
         let i8_ty = self.context.i8_type();
         let text_ty = self.ptr_len_struct_type();
-        let bundle_ty = self.closure_struct_type();
 
         let fn_type = i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
         let function = self.module.add_function(NAME, fn_type, None);
@@ -725,21 +715,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build the chunk Text"))?
             .into_struct_value();
 
-        let loaded = self
-            .builder
-            .build_load(bundle_ty, bundle, "stream_file_bundle")
-            .map_err(ctx("Failed to load the onChunk bundle"))?
-            .into_struct_value();
-        let real_fn = self
-            .builder
-            .build_extract_value(loaded, 0, "real_fn")
-            .map_err(ctx("Failed to extract the onChunk function"))?
-            .into_pointer_value();
-        let real_env = self
-            .builder
-            .build_extract_value(loaded, 1, "real_env")
-            .map_err(ctx("Failed to extract the onChunk environment"))?
-            .into_pointer_value();
+        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "stream_file_bundle")?;
 
         let call_type = self
             .context

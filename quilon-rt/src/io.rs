@@ -4,9 +4,10 @@
 //! raw-syscall helper the fail-loud paths in `core`/`text` reuse, and `@streamFile` — the
 //! chunk-callback file read.
 
-use crate::deferred::{QlResult, read_once, set_nonblocking};
+use crate::deferred::{QlResult, read_once};
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -198,13 +199,14 @@ fn call_on_chunk(
     on_chunk(text.data as *const u8, text.len, environment) != 0
 }
 
-/// The `@streamFile` read loop: open `path`, read it in `chunk_size`-byte reads (parking on
-/// reactor readiness between them via [`read_once`]), and call `on_chunk` once per whole,
-/// valid-Text chunk. An incomplete UTF-8 sequence or an incomplete grapheme cluster at the end
-/// of a read is held back and prepended to the next one; a `read_once` that returns `0` (true
-/// EOF) delivers whatever is still held — one extra syscall a regular file answers at once, not
-/// a background wait — after checking it is itself valid UTF-8 (a file whose very last bytes
-/// end mid-sequence yields `NotOk` there instead of handing `onChunk` invalid Text).
+/// The `@streamFile` read loop: open `path` non-blocking, read it in `chunk_size`-byte reads
+/// (parking, via [`read_once`], exactly when a read reports not ready — a pipe or FIFO; a
+/// regular file's reads return at once), and call `on_chunk` once per whole, valid-Text chunk.
+/// An incomplete UTF-8 sequence or an incomplete grapheme cluster at the end of a read is held
+/// back and prepended to the next one; a `read_once` that returns `0` (true EOF) delivers
+/// whatever is still held, once [`split_chunk`] confirms it is itself valid UTF-8 (a file whose
+/// very last bytes end mid-sequence yields `NotOk` there instead of handing `onChunk` invalid
+/// Text).
 fn stream_file(
     path: &str,
     chunk_size: f64,
@@ -217,18 +219,38 @@ fn stream_file(
             crate::mem::format_num(chunk_size)
         ));
     }
-    let file = match std::fs::File::open(path) {
+    if chunk_size > usize::MAX as f64 {
+        return QlResult::not_ok(&format!(
+            "@streamFile: cannot allocate a {}-byte chunk buffer",
+            crate::mem::format_num(chunk_size)
+        ));
+    }
+    let chunk_size = chunk_size as usize;
+    let mut buffer: Vec<u8> = Vec::new();
+    if buffer.try_reserve_exact(chunk_size).is_err() {
+        return QlResult::not_ok(&format!(
+            "@streamFile: cannot allocate a {chunk_size}-byte chunk buffer"
+        ));
+    }
+    buffer.resize(chunk_size, 0);
+
+    // Non-blocking at open, so a FIFO with no writer never blocks the single-threaded
+    // scheduler waiting for the first byte; `read_once` parks on it exactly like any other
+    // not-yet-ready source.
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(file) => file,
         Err(error) => {
             return QlResult::not_ok(&format!("@streamFile failed to open {path}: {error}"));
         }
     };
     let fd = file.as_raw_fd();
-    set_nonblocking(fd);
 
     let mut carry: Vec<u8> = Vec::new();
     let mut delivered: i64 = 0;
-    let mut buffer = vec![0u8; chunk_size as usize];
 
     loop {
         let count = match read_once(fd, &mut buffer) {
@@ -237,19 +259,14 @@ fn stream_file(
                 return QlResult::not_ok(&format!("@streamFile failed to read {path}: {error}"));
             }
         };
-        if count == 0 {
-            if !carry.is_empty() {
-                if std::str::from_utf8(&carry).is_err() {
-                    return QlResult::not_ok("@streamFile read bytes that are not valid UTF-8");
-                }
-                delivered += carry.len() as i64;
-                call_on_chunk(on_chunk, environment, &carry);
-            }
+        let at_eof = count == 0;
+        if !at_eof {
+            carry.extend_from_slice(&buffer[..count]);
+        } else if carry.is_empty() {
             return QlResult::ok_num(delivered as f64);
         }
-        carry.extend_from_slice(&buffer[..count]);
 
-        let cut = match split_chunk(&carry) {
+        let cut = match split_chunk(&carry, at_eof) {
             Ok(cut) => cut,
             Err(message) => return QlResult::not_ok(&message),
         };
@@ -259,25 +276,32 @@ fn stream_file(
         delivered += cut as i64;
         let keep_going = call_on_chunk(on_chunk, environment, &carry[..cut]);
         carry.drain(..cut);
-        if !keep_going {
+        if at_eof || !keep_going {
             return QlResult::ok_num(delivered as f64);
         }
     }
 }
 
-/// The end of `buffer`'s whole, valid-Text prefix — ready to deliver — leaving an incomplete
-/// UTF-8 sequence at the end, then the last grapheme cluster of what remains, held back: more
-/// bytes could still extend either. Errors on genuinely invalid UTF-8 (as opposed to merely an
-/// incomplete trailing sequence).
-fn split_chunk(buffer: &[u8]) -> Result<usize, String> {
-    let valid_len = match std::str::from_utf8(buffer) {
-        Ok(_) => buffer.len(),
-        Err(error) => match error.error_len() {
-            None => error.valid_up_to(),
-            Some(_) => return Err("@streamFile read bytes that are not valid UTF-8".to_string()),
-        },
+/// The end of `buffer`'s whole, valid-Text prefix — ready to deliver. Not at EOF, that leaves
+/// an incomplete UTF-8 sequence at the end, then the last grapheme cluster of what remains,
+/// held back — more bytes could still extend either. At EOF nothing more can ever arrive, so
+/// the whole valid buffer is the cut, and an incomplete trailing sequence there is genuinely
+/// invalid rather than merely unfinished. Either way, invalid (not just incomplete) UTF-8
+/// anywhere in `buffer` is an error.
+fn split_chunk(buffer: &[u8], at_eof: bool) -> Result<usize, String> {
+    let not_utf8 = || Err("@streamFile read bytes that are not valid UTF-8".to_string());
+    let valid: &str = match std::str::from_utf8(buffer) {
+        Ok(valid) => valid,
+        Err(error) if !at_eof && error.error_len().is_none() => {
+            // Incomplete trailing sequence, and more bytes may still complete it: the valid
+            // prefix ahead of it is unambiguous either way.
+            std::str::from_utf8(&buffer[..error.valid_up_to()]).expect("checked above")
+        }
+        Err(_) => return not_utf8(),
     };
-    let valid = std::str::from_utf8(&buffer[..valid_len]).expect("checked above");
+    if at_eof {
+        return Ok(valid.len());
+    }
     Ok(valid
         .grapheme_indices(true)
         .next_back()

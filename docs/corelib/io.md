@@ -15,7 +15,7 @@ Import with `<< core.io`. See the [corelib index](README.md) and `examples/io.qn
 | `io.eprint(x) -> $` | Same, to stderr. Returns `$` (Unit). |
 | `io.write(content, fd :: Num) -> Num` | Render `content` and write those bytes (no newline) to a file descriptor; returns bytes written. Byte-exact: a `Text` renders as itself, and the bytes go out as they are. |
 | `@readStdin() -> Text` | Read one line from stdin (without the trailing newline). A [leaf IO primitive](../concurrency/README.md): it launches the read and returns a **deferred** `Text` forced on first strict use. Yields `""` at end-of-input. |
-| `@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result` | Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk. A [leaf IO primitive](../concurrency/README.md) that runs **strictly**, in program order on the calling fiber, parking between reads so other fibers still overlap. `Ok(bytesRead)` / `NotOk(message)`. |
+| `@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result` | Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk. A [leaf IO primitive](../concurrency/README.md) that runs **strictly**, in program order on the calling fiber. `Ok(bytesRead)` / `NotOk(message)`. |
 | `io.streamFile(path :: Text, onChunk :: (Text) -> Bool) -> Result` | `@streamFile` with a default chunk size the runtime chooses (64 KiB). |
 | `io.stdout`, `io.stderr` | The standard file descriptors. |
 
@@ -42,10 +42,12 @@ even a flag emoji or a combining accent spanning a read boundary arrives whole, 
 later. A chunk holds at most `chunkSize` bytes plus a carried tail, and holds at least one
 grapheme. `onChunk` returns `true` to keep reading or `false` to stop; stopping closes the
 file at once, and reading ends there. It runs on the same fiber as its caller, in program
-order — `onChunk` is the caller's own code, free to mutate a captured `:=` cell — parking only
-between reads, so other fibers still make progress. `Ok(bytesRead)` carries the total bytes
-delivered to `onChunk`, at end-of-input or on a stop; `NotOk(message)` covers a missing file, a
-read error, invalid UTF-8 in the file, and a `chunkSize` that is not a positive whole number.
+order — `onChunk` is the caller's own code, free to mutate a captured `:=` cell. The fiber
+parks when a read reports not ready (a pipe or FIFO with nothing buffered yet); a regular
+file's reads return at once. `Ok(bytesRead)` carries the total bytes delivered to `onChunk`,
+at end-of-input or on a stop; `NotOk(message)` covers a missing file, a read error, invalid
+UTF-8 in the file, a `chunkSize` that is zero, negative, or fractional, and a `chunkSize` too
+large to allocate a chunk buffer for.
 
 The module's names are reached through its binding, and its
 [overload sets are closed](../modules/README.md#closed-overload-sets): a program's own bare

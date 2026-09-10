@@ -124,6 +124,27 @@ fn a_non_positive_chunk_size_yields_not_ok() {
 }
 
 #[test]
+fn a_chunk_size_too_large_to_allocate_yields_not_ok() {
+    // 1e20 bytes (spelled as a plain decimal — Quilon's lexer rejects `1e20` itself, see
+    // QN005) is not a real allocation any machine grants: this must fail soft (`NotOk`),
+    // never abort the process the way an infallible `Vec` allocation would.
+    let file = temp_data_file("huge_chunksize", b"x");
+    let src = format!(
+        r#"<< core.io
+
+^ = () -> Num => <
+  @streamFile("{path}", 100000000000000000000, chunk => < true >) ?
+    | Ok(_) => 0
+    | NotOk(_) => 1
+>
+"#,
+        path = file.display(),
+    );
+    assert_exit(&src, 1);
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
 fn a_file_ending_inside_a_utf_8_sequence_yields_not_ok() {
     // The file's last byte (0xC3) is a lone lead byte of a 2-byte sequence with no
     // continuation byte ever coming: at true EOF that tail is genuinely invalid UTF-8, not
