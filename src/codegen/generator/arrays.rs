@@ -604,8 +604,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the data pointer. The caller fills it, then builds the struct via `array_struct`.
     ///
     /// The element count and the element size go to the runtime as they are, rather than
-    /// as a product computed here: `__alloc_array` multiplies them under an overflow
-    /// check, which an `i64` `mul` in the emitted code cannot do.
+    /// as a product computed here: `__alloc_array`/`__alloc_array_atomic` multiply them
+    /// under an overflow check, which an `i64` `mul` in the emitted code cannot do.
+    ///
+    /// A `Num` (`f64`) or `Bool` (`i1`) element can never be, or hold, a GC pointer, so
+    /// that storage takes the atomic allocator (unscanned, and so unable to accidentally
+    /// keep some unrelated object alive); every other element repr — `Text`/nested-array
+    /// `{ptr,len}` structs, records, closures — can, and stays on the scanned one.
     pub(super) fn alloc_array_data(
         &mut self,
         elem_llvm: BasicTypeEnum<'ctx>,
@@ -614,7 +619,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let elem_size = elem_llvm
             .size_of()
             .ok_or_else(|| "array element type has no compile-time size".to_string())?;
-        let alloc = self.get_intrinsic("__alloc_array")?;
+        let pointer_free = matches!(elem_llvm, BasicTypeEnum::FloatType(_))
+            || matches!(elem_llvm, BasicTypeEnum::IntType(t) if t.get_bit_width() == 1);
+        let intrinsic = if pointer_free {
+            "__alloc_array_atomic"
+        } else {
+            "__alloc_array"
+        };
+        let alloc = self.get_intrinsic(intrinsic)?;
         use inkwell::values::AnyValue;
         Ok(self
             .builder

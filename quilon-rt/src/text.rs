@@ -892,6 +892,59 @@ mod tests {
         )
     }
 
+    /// The byte right after a `Text` result's content — where every producer must have
+    /// written a NUL explicitly now that the atomic allocator backing it does not zero
+    /// fresh memory for free.
+    fn trailing_byte(t: QlSlice) -> u8 {
+        let content = t.data as *const u8;
+        unsafe { *content.add(TEXT_HEADER_BYTES as usize + t.len as usize) }
+    }
+
+    #[test]
+    fn every_producer_writes_a_trailing_nul_and_reads_back_exactly() {
+        let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+
+        let literal = alloc_text("héllo".as_bytes());
+        assert_eq!(unsafe { slice_str(literal) }, "héllo");
+        assert_eq!(trailing_byte(literal), 0);
+
+        let (ap, al) = text_of("ab");
+        let (bp, bl) = text_of("cd");
+        let concatenated = __text_concat(ap, al, bp, bl);
+        assert_eq!(unsafe { slice_str(concatenated) }, "abcd");
+        assert_eq!(trailing_byte(concatenated), 0);
+
+        let (sep_p, sep_l) = text_of(",");
+        let parts = [
+            QlSlice {
+                data: ap as *const c_void,
+                len: al,
+            },
+            QlSlice {
+                data: bp as *const c_void,
+                len: bl,
+            },
+        ];
+        let joined = __text_join(
+            parts.as_ptr() as *const c_void,
+            parts.len() as i64,
+            sep_p,
+            sep_l,
+        );
+        assert_eq!(unsafe { slice_str(joined) }, "ab,cd");
+        assert_eq!(trailing_byte(joined), 0);
+
+        let (hp, hl) = text_of("héllo");
+        let sliced = __text_slice(hp, hl, 1, 4);
+        assert_eq!(unsafe { slice_str(sliced) }, "éll");
+        assert_eq!(trailing_byte(sliced), 0);
+
+        let at = __text_at(hp, hl, 0);
+        assert_eq!(unsafe { slice_str(at) }, "h");
+        assert_eq!(trailing_byte(at), 0);
+    }
+
     #[test]
     fn alloc_text_headers_ascii_multibyte_cluster_and_empty_text() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());

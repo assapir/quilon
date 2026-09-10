@@ -23,6 +23,13 @@ All notable changes to Quilon are documented here.
   grapheme that spans the seam — a combining mark, a `\r`/`\n` pair, a paired regional
   indicator — that neither side's own header can see across on its own. See
   `docs/status/abi.md#text-storage` and `docs/types/text.md#cost`.
+- **Text storage and `[]Num`/`[]Bool` array storage are allocated pointer-free.** Neither
+  a `Text`'s header and bytes nor a numeric/boolean array's element storage can ever hold
+  a GC pointer, so both now come from the collector's pointer-free allocator: it never
+  scans that memory looking for a pointer, which is faster and also closes a
+  false-retention hole — a byte pattern living in a `Text` or a `[]Num`/`[]Bool` could
+  previously be misread as a pointer and keep an unrelated object alive. See
+  `docs/status/abi.md#text-storage`.
 - **`[]Text.join(separator)`, the reverse of `split`.** One native intrinsic: every
   element back to back with `separator` between consecutive ones; `[].join(sep)` is `""`.
   `join` is a method of `[]Text` alone — an array of any other element type is a checker

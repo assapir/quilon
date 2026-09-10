@@ -115,6 +115,11 @@ its own validation pass. The trailing NUL gives `--debug`'s `__render_c_string` 
 C string to hand a debugger with no copy — `data + 16` for a non-empty text, a static
 empty C string otherwise.
 
+A `Text`'s header and bytes, and a `[]Num`/`[]Bool` array's element storage, are allocated
+pointer-free and unscanned: none of that memory is ever a GC pointer, so the collector
+never walks it looking for one, and a byte pattern living there can never be read as a
+pointer that keeps an unrelated object alive.
+
 ### Under `--debug`
 
 A `--debug` build describes `data` as a pointer to a named `TextStorage` composite
