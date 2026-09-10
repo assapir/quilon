@@ -126,6 +126,12 @@ All notable changes to Quilon are documented here.
   carries the same minimum macOS version as the archive's Rust-compiled objects and the
   produced executable, so all three agree regardless of the SDK or host OS version of the
   machine that built `quilon`. See `docs/tooling/compiling.md`. Closes #411.
+- **`@tcpRequest` resolving a hostname no longer stalls every other fiber on the
+  scheduler.** The DNS lookup now runs on a helper OS thread, which wakes the reactor
+  once it has an answer; the calling fiber parks on that wakeup exactly the way it
+  parks on socket readiness, so a slow lookup no longer blocks a server's other
+  connections, due `@sleep`s, or other in-flight requests. A numeric `host:port` still
+  resolves inline with no thread. See `docs/corelib/net.md`. Closes #434.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

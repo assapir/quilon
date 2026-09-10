@@ -25,12 +25,14 @@
 
 use crate::deferred::{QlResult, launch_deferred_result};
 use crate::scheduler::{
-    deregister_readiness, park_on_readiness, register_readiness, reregister_readiness,
+    deregister_readiness, park_on_readiness, register_readiness, register_resolver_waker,
+    reregister_readiness,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::{Arc, Mutex};
 
 fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
@@ -200,16 +202,50 @@ fn tcp_request(address: &str, request: &[u8]) -> QlResult {
 }
 
 /// Resolve `address` (`host:port`, e.g. `127.0.0.1:8080` or `example.com:80`) to a single
-/// [`SocketAddr`], erroring if it names nothing. Note: [`ToSocketAddrs`] does a BLOCKING DNS
-/// lookup for a hostname on this cooperative fiber thread; a numeric address (what the local
-/// round-trip uses) parses without any network call. Non-blocking DNS is a later refinement — it
-/// needs a resolver that can run off the reactor thread, so a slow lookup still stalls the
-/// scheduler for now.
+/// [`SocketAddr`]. A numeric address parses inline with no network call or thread; a hostname
+/// resolves on [`resolve_hostname`], off the reactor thread.
 fn resolve(address: &str) -> io::Result<SocketAddr> {
+    match address.parse() {
+        Ok(addr) => Ok(addr),
+        Err(_) => resolve_hostname(address, default_lookup),
+    }
+}
+
+/// The real DNS lookup [`resolve_hostname`] runs on its helper thread: [`ToSocketAddrs`]'s
+/// blocking `getaddrinfo`, erroring if it names nothing.
+fn default_lookup(address: &str) -> io::Result<SocketAddr> {
     address
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "address resolved to no endpoint"))
+}
+
+/// Run `lookup` (a hostname resolver — [`default_lookup`] in production, a test double in tests)
+/// on a helper OS thread, and park the calling fiber on a fresh reactor token until the helper
+/// wakes it with the result. `getaddrinfo` has no non-blocking form, so the syscall runs on the
+/// helper thread while the fiber that asked for it is the only thing suspended — every other
+/// fiber, timer, and socket on the scheduler keeps making progress.
+fn resolve_hostname(
+    address: &str,
+    lookup: impl FnOnce(&str) -> io::Result<SocketAddr> + Send + 'static,
+) -> io::Result<SocketAddr> {
+    let (token, waker) = register_resolver_waker();
+    let result_slot: Arc<Mutex<Option<io::Result<SocketAddr>>>> = Arc::new(Mutex::new(None));
+    let helper_slot = Arc::clone(&result_slot);
+    let address = address.to_string();
+    std::thread::spawn(move || {
+        let result = lookup(&address);
+        *helper_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
+        waker.complete(token);
+    });
+    park_on_readiness(token);
+    result_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+        .expect("the resolver helper wakes the reactor only after storing its result")
 }
 
 /// Read from `stream` until the peer closes the connection, returning every byte received — the
@@ -545,5 +581,46 @@ mod tests {
             "Ok variant"
         );
         assert_eq!(&*GOT.lock().unwrap(), b"PONG\n");
+    }
+
+    #[test]
+    fn hostname_resolution_parks_the_fiber_without_blocking_the_scheduler() {
+        // The lookup hook blocks until a sibling fiber on the same scheduler has run and
+        // signaled back over a channel. That rendezvous is only satisfiable if the scheduler
+        // thread stays free to run the sibling while the lookup is in flight — exactly what
+        // running the lookup on a helper thread buys. Under the old code, where the lookup ran
+        // synchronously on the fiber/scheduler thread, the sibling would never get to run and
+        // this would deadlock; `recv_timeout` turns that into a clear test failure instead of
+        // hanging the suite.
+        static RESOLVED: AtomicBool = AtomicBool::new(false);
+        static SIBLING_RAN: AtomicBool = AtomicBool::new(false);
+        RESOLVED.store(false, Ordering::SeqCst);
+        SIBLING_RAN.store(false, Ordering::SeqCst);
+
+        let (sibling_ran_sender, sibling_ran_receiver) = mpsc::channel::<()>();
+
+        on_gc_thread(move || {
+            run(move || {
+                spawn(move || {
+                    let lookup = move |_: &str| {
+                        sibling_ran_receiver
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("sibling fiber never ran while the lookup was in flight");
+                        Ok(SocketAddr::from(([127, 0, 0, 1], 0)))
+                    };
+                    let resolved = resolve_hostname("example.invalid:80", lookup);
+                    assert!(resolved.is_ok(), "the lookup resolved");
+                    RESOLVED.store(true, Ordering::SeqCst);
+                });
+
+                spawn(move || {
+                    SIBLING_RAN.store(true, Ordering::SeqCst);
+                    let _ = sibling_ran_sender.send(());
+                });
+            });
+        });
+
+        assert!(SIBLING_RAN.load(Ordering::SeqCst), "the sibling fiber ran");
+        assert!(RESOLVED.load(Ordering::SeqCst), "the resolve completed");
     }
 }

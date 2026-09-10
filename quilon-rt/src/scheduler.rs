@@ -13,7 +13,7 @@
 //! the `@` leaf IO primitives (e.g. `core.time`'s `@sleep`) have a fiber to park on.
 
 use crate::gc;
-use crate::reactor::Reactor;
+use crate::reactor::{Reactor, ReactorWaker};
 use crate::stack_overflow;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -470,6 +470,14 @@ pub(crate) fn register_readiness(
         reactor.register(source, token, interest)?;
         Ok(token)
     })
+}
+
+/// Allocate a token for a helper OS thread with no `mio` `Source` of its own (a background
+/// computation, e.g. [`crate::net`]'s hostname resolver), and a [`ReactorWaker`] it uses to
+/// signal that token's completion — see [`ReactorWaker`]'s own docs for why every such helper
+/// shares one reactor `Waker` rather than getting its own.
+pub(crate) fn register_resolver_waker() -> (Token, ReactorWaker) {
+    with_reactor(|reactor| (reactor.alloc_token(), reactor.resolver_waker()))
 }
 
 /// Change the interest `source` (already registered under `token`) is polled for.

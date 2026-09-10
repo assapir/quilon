@@ -9,8 +9,8 @@
 ~ `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — the
 ~ message names the failing stage and the address. Network failure never crashes the program;
 ~ match the `Result` to handle it. The response is capped at 16 MiB; a larger one yields `NotOk`.
-~ Note: hostname resolution is a BLOCKING DNS lookup on the fiber thread, so a slow lookup stalls
-~ the scheduler for now (a numeric `host:port` skips it); non-blocking DNS is a later refinement.
+~ Hostname resolution runs on a helper OS thread and parks only the calling fiber until it
+~ answers; a numeric `host:port` resolves inline with no thread at all.
 ~
 ~ `@tcpRequest` is a leaf IO primitive (the `@` marker): calling it launches the exchange in
 ~ the background and hands back a DEFERRED Result immediately — the fiber only waits (forces)
