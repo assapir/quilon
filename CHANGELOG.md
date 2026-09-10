@@ -73,6 +73,13 @@ All notable changes to Quilon are documented here.
 
 ### Fixed
 
+- **`quilon lsp`'s go to definition and find references now cover a type or sum variant
+  name.** Go to definition on `Point` in a `Point { … }` constructor, a `p :: Point`
+  annotation, or a `-> Point` return type answers `Point`'s own declaration; on a variant
+  name (`Circle` in a pattern or a call) it answers that variant in its sum's declaration.
+  Find references on `Point` lists every one of those uses alongside the declaration,
+  across constructors, annotations, return types, sum payloads, and array/map element
+  types. See `docs/tooling/language-server.md`. Closes #399.
 - **A dev-tree `quilon build` now always links one stable runtime archive.** The
   build script placed the freshly built runtime staticlib at
   `target/<profile>/libquilon_rt.a`, the exact path cargo itself uplifts a
