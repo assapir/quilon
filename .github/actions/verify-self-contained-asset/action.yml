@@ -88,6 +88,8 @@ runs:
           cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/quilon"
           archive="$(ls "$cache_dir"/libquilon_rt-*.a | head -n1)"
         fi
+        # Absolute, since the extraction below `cd`s elsewhere first.
+        archive="$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")"
         extract_dir="$(mktemp -d)"
         gc_object="$(ar t "$archive" | grep -- '-gc\.o$')"
         (cd "$extract_dir" && ar x "$archive" "$gc_object")
