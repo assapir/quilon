@@ -532,7 +532,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.io.print",
         "core.io.eprint",
         "core.io.write",
+        "core.io.streamFile",
         "@readStdin",
+        "@streamFile",
         // core.test: the harness, the summary, the state (its `:=` globals and the
         // helpers that read/write them) and the lifecycle.
         "core.test.failAt",
