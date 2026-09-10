@@ -437,7 +437,9 @@ pub(crate) fn abort_current_trap(report: String) -> ! {
 /// forwarded to the fiber calling this — the same way [`run_case_guarded`] forwards one —
 /// so the scheduler keeps driving it exactly as it would a top-level fiber's. Must be
 /// called from within a fiber (asserts otherwise).
-pub(crate) fn run_launch_guarded<T: 'static>(body: impl FnOnce() -> T + 'static) -> Result<T, String> {
+pub(crate) fn run_launch_guarded<T: 'static>(
+    body: impl FnOnce() -> T + 'static,
+) -> Result<T, String> {
     let outer_yielder = current_yielder("run_launch_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);

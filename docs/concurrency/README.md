@@ -40,9 +40,12 @@ output (`print`/`write`), and native calls. Values launched before they are forc
 [overload resolution](../functions/overloading.md) sees `Text`.
 
 **Structured & scoped.** Deferred tasks are scoped to their enclosing `< >` block: the block
-joins every launch it made before returning, and a launch is never cancelled — every launch
-settles. Once every launch has settled, the faults among them propagate out of the block:
-every fault is reported, in launch order, each naming its launch site.
+joins every launch it made directly — including one bound to a name it never reads again —
+before returning, and a launch is never cancelled: every launch settles. Once every launch
+has settled, the faults among them propagate out of the block: every fault is reported, in
+launch order, each naming its own launch site. (See `examples/block_scope_join.qn`.) A
+launch made inside a CALLED function, rather than directly in the block, is not yet joined
+this way — that is cross-function pipelining, still to come.
 
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.

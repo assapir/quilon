@@ -474,8 +474,7 @@ mod tests {
     #[test]
     fn a_launch_inside_a_nested_block_scopes_to_that_block_only() {
         // The outer block launches nothing directly; the launch belongs to the inner block.
-        let src =
-            "<< core.io\n^ = () -> Num => <\n  helper = () => <\n    @readStdin()\n    0\n  >\n  helper()\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  helper = () => <\n    @readStdin()\n    0\n  >\n  helper()\n>";
         let i = info(src);
         assert_eq!(i.launch_scopes.len(), 1);
         // The outer function body itself must not be the marked scope.
