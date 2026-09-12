@@ -623,8 +623,124 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_load(result_ty, out, "tcp_request")
                     .map_err(ctx("Failed to load @tcpRequest result"))
             }
+            "streamFile" => {
+                if arguments.len() != 3 {
+                    return Err(format!(
+                        "@streamFile expects exactly 3 arguments (path, chunkSize, onChunk), got {}",
+                        arguments.len()
+                    ));
+                }
+                let (path_ptr, path_len) = self.extract_text(&arguments[0])?;
+                let BasicValueEnum::FloatValue(chunk_size) =
+                    self.generate_expression(&arguments[1])?
+                else {
+                    return Err("@streamFile expects a Num chunkSize".to_string());
+                };
+                let BasicValueEnum::StructValue(closure) =
+                    self.generate_expression(&arguments[2])?
+                else {
+                    return Err("@streamFile expects a closure onChunk".to_string());
+                };
+
+                let bundle = self.bundle_closure(closure, "stream_file_bundle")?;
+
+                let thunk = self.emit_stream_file_thunk()?;
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+
+                let result_ty = self.sum_struct_type("Result");
+                let out = self.create_entry_block_alloca("stream_file_out", result_ty.into())?;
+                let run = self.get_intrinsic("__stream_file_run")?;
+                self.builder
+                    .build_call(
+                        run,
+                        &[
+                            out.into(),
+                            path_ptr.into(),
+                            path_len.into(),
+                            chunk_size.into(),
+                            thunk_ptr.into(),
+                            bundle.into(),
+                        ],
+                        "",
+                    )
+                    .map_err(ctx("Failed to call @streamFile"))?;
+                self.builder
+                    .build_load(result_ty, out, "stream_file")
+                    .map_err(ctx("Failed to load @streamFile result"))
+            }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
         }
+    }
+
+    /// A top-level trampoline `i8 (ptr chunk_data, i64 chunk_len, ptr bundle) -> i8` that
+    /// unpacks the `{ ptr fn, ptr env }` bundle [`Self::generate_at_primitive`] built for
+    /// `@streamFile`'s `onChunk` and calls it with the chunk as a `Text`, returning its `Bool`
+    /// result zero-extended to `i8` — the fixed-shape entry point `__stream_file_run` calls
+    /// once per chunk, in place of the closure's own function pointer (whose direct signature
+    /// the runtime never sees). Mirrors `emit_abort_trap_thunk`, minus the varying return type:
+    /// `onChunk`'s signature is fixed by `@streamFile`'s own corelib declaration, so nothing
+    /// here depends on the call site — one definition serves every `@streamFile` call in the
+    /// module, found by name rather than built fresh each time.
+    fn emit_stream_file_thunk(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        const NAME: &str = "__stream_file_thunk";
+        if let Some(existing) = self.module.get_function(NAME) {
+            return Ok(existing);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i8_ty = self.context.i8_type();
+        let text_ty = self.ptr_len_struct_type();
+
+        let fn_type = i8_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
+        let function = self.module.add_function(NAME, fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
+
+        let suspended = self.suspend_enclosing_function();
+        self.current_function = Some(function);
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let chunk_data = function.get_nth_param(0).unwrap().into_pointer_value();
+        let chunk_len = function.get_nth_param(1).unwrap().into_int_value();
+        let bundle = function.get_nth_param(2).unwrap().into_pointer_value();
+
+        let text = self
+            .builder
+            .build_insert_value(text_ty.get_undef(), chunk_data, 0, "chunk_ptr")
+            .map_err(ctx("Failed to build the chunk Text"))?;
+        let text = self
+            .builder
+            .build_insert_value(text, chunk_len, 1, "chunk_len")
+            .map_err(ctx("Failed to build the chunk Text"))?
+            .into_struct_value();
+
+        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "stream_file_bundle")?;
+
+        let call_type = self
+            .context
+            .bool_type()
+            .fn_type(&[text_ty.into(), ptr_ty.into()], false);
+        let call = self
+            .builder
+            .build_indirect_call(
+                call_type,
+                real_fn,
+                &[text.into(), real_env.into()],
+                "stream_file_call",
+            )
+            .map_err(ctx("Failed to call onChunk"))?;
+        let kept_going = Self::call_result_to_basic(call)?.into_int_value();
+        let as_i8 = self
+            .builder
+            .build_int_z_extend(kept_going, i8_ty, "stream_file_kept_going")
+            .map_err(ctx("Failed to widen onChunk's result"))?;
+        self.builder
+            .build_return(Some(&as_i8))
+            .map_err(ctx("Failed to return from the onChunk thunk"))?;
+
+        self.resume_enclosing_function(suspended);
+        Ok(function)
     }
 
     /// Convert a call site's result to a `BasicValueEnum`, erroring if the callee returns

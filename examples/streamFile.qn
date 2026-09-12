@@ -1,0 +1,25 @@
+~ `@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte reads, calling
+~ `onChunk` once per chunk. Every chunk is whole, valid Text — a read boundary never splits a
+~ UTF-8 sequence or a grapheme cluster — so `seen.length` below always counts whole graphemes,
+~ even with a chunkSize (7 bytes) far smaller than the multi-byte content it crosses:
+~ `examples/fixtures/streamFile.txt` opens with a flag emoji (two 4-byte code points, one
+~ grapheme) and a combining accent (two code points, one grapheme). `onChunk` returns `true`
+~ to keep reading, `false` to stop and close the file at once.
+<< core.io
+<< core.test
+
+firstGraphemes = (path :: Text, count :: Num) -> Text => <
+  seen := ""
+  @streamFile(path, 7, chunk => <
+    seen := seen + chunk
+    seen.length < count        ~ true = keep reading; false = stop and close the file
+  >)
+  seen.slice(0, count)
+>
+
+^ = () -> $ => <
+  prefix = firstGraphemes("examples/fixtures/streamFile.txt", 23)
+  assert(prefix.slice(0, 5), equals("Ahoy "))
+  assert(prefix.length, equals(23))
+  assert(prefix.size, equals(32))
+>
