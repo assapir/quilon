@@ -191,7 +191,10 @@ impl<'a> Parser<'a> {
         // binding (`@hits := 0`) — the checker verifies `@` sits only on the declaring
         // occurrence, never on a reassignment.
         if mutable {
-            let declared_name = name.strip_prefix('@').map_or(name.clone(), str::to_string);
+            let declared_name = match name.strip_prefix('@') {
+                Some(bare) => bare.to_string(),
+                None => name,
+            };
             let value = self.parse_expression()?;
             let end = self.previous_span();
             return Ok(Item::VariableDeclaration(VariableDeclaration {
@@ -301,7 +304,10 @@ impl<'a> Parser<'a> {
             // primitive): an atomic binding declared without `:=`, which the checker
             // rejects — `check_variable_declaration` sees `atomic` set on an immutable
             // binding and names `:=` as the fix.
-            let declared_name = name.strip_prefix('@').map_or(name.clone(), str::to_string);
+            let declared_name = match name.strip_prefix('@') {
+                Some(bare) => bare.to_string(),
+                None => name,
+            };
             let value = self.parse_expression()?;
             let end = self.previous_span();
 
