@@ -420,49 +420,10 @@ mod tests {
         assert_eq!(force_count(src), 1);
     }
 
-    /// The number of blocks the analysis marks as launch scopes — the size of
-    /// [`DeferInfo::is_launch_scope`]'s own set.
-    fn launch_scope_count(src: &str) -> usize {
-        let tokens = Lexer::tokenize(src).expect("lex");
-        let program = parser::parse(&tokens).expect("parse");
-        let info = analyze(&program);
-        // `launch_scopes` is private; count through the public predicate over every block
-        // span the program contains, found the same way the parser did (walk the AST).
-        let mut spans = Vec::new();
-        collect_block_spans(&program, &mut spans);
-        spans
-            .into_iter()
-            .filter(|span| info.is_launch_scope(span))
-            .count()
-    }
-
-    fn collect_block_spans(program: &Program, out: &mut Vec<Span>) {
-        fn walk(expression: &Expression, out: &mut Vec<Span>) {
-            if let Expression::Block { statements, span } = expression {
-                out.push(span.clone());
-                for statement in statements {
-                    match statement {
-                        Statement::Expression(e) => walk(e, out),
-                        Statement::Item(Item::VariableDeclaration(v)) => walk(&v.value, out),
-                        Statement::Item(Item::FunctionDeclaration(f)) => walk(&f.body, out),
-                        Statement::Item(Item::TypeDeclaration(_)) => {}
-                    }
-                }
-            }
-        }
-        for item in &program.items {
-            match item {
-                Item::FunctionDeclaration(f) => walk(&f.body, out),
-                Item::VariableDeclaration(v) => walk(&v.value, out),
-                Item::TypeDeclaration(_) => {}
-            }
-        }
-    }
-
     #[test]
     fn a_block_that_directly_launches_is_a_launch_scope() {
         let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  0\n>";
-        assert_eq!(launch_scope_count(src), 1);
+        assert_eq!(info(src).launch_scopes.len(), 1);
     }
 
     #[test]
