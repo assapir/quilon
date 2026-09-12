@@ -81,9 +81,9 @@ atomic value is rejected — mutation goes only through its setters.
 allowed, at the top level and inside a block. `@` marks the declaration only; every read and
 reassignment after it — including one that reads the binding's own current value, as in
 `hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
-already follows. The syntax is available now: it parses and typechecks like a `:=` binding,
-and on today's single-threaded runtime its reassignment is trivially atomic — there is only
-ever one fiber to race with. Mutation *inside* a bound record still follows the record's own
+already follows. It parses and typechecks like a `:=` binding, and on the single-threaded
+runtime its reassignment is trivially atomic — there is only ever one fiber to race with.
+Mutation *inside* a bound record still follows the record's own
 rules; cross-field invariants belong to an atomic type `T = @{ … }`. Stage 2 turns the marker
 into a real enforcement point: the fiber-sharing check reads it to allow sharing a binding
 the marker covers, where an unmarked `:=` value stays a compile error at the sharing point.
@@ -91,8 +91,8 @@ the marker covers, where an unmarked `:=` value stays a compile error at the sha
 
 The full specification is locked in
 [issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629), amended
-[2026-09-10](https://github.com/assapir/quilon/issues/120#issuecomment-5619339751) to accept
-any type rather than a scalar alone.
+[2026-09-10](https://github.com/assapir/quilon/issues/120#issuecomment-5619339751): any type
+may be bound.
 
 ## Implemented primitives
 
