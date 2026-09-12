@@ -339,7 +339,8 @@ mod tests {
         // `x = io.@readStdin()` binds a deferred Text (lazy); the comparison forces it once.
         // Written as the full path — these tests parse in isolation, without the link step
         // that would canonicalize a short `io.@readStdin` the same way.
-        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  x == \"hi\" ? 0 : 1\n>";
+        let src =
+            "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  x == \"hi\" ? 0 : 1\n>";
         // Exactly one force: the `x` read inside the comparison. The binding stays lazy.
         assert_eq!(force_count(src), 1);
     }
@@ -367,8 +368,7 @@ mod tests {
 
     #[test]
     fn read_flows_lazily_through_a_second_binding() {
-        let src =
-            "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
         // Two lazy bindings, forced once at the comparison.
         assert_eq!(force_count(src), 1);
     }

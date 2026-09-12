@@ -1560,7 +1560,10 @@ fn completions_after_an_import_binding_list_its_at_primitives() {
         );
     }
 
-    let read_stdin = items.iter().find(|item| item.label == "@readStdin").unwrap();
+    let read_stdin = items
+        .iter()
+        .find(|item| item.label == "@readStdin")
+        .unwrap();
     assert_eq!(read_stdin.kind, CompletionKind::Function);
 }
 
