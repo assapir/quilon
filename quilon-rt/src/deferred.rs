@@ -154,6 +154,14 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
         );
     }
     let address = cell as usize;
+    // ponytail: `spawn` allocates one 512 KiB fiber stack for the launch, and
+    // `run_fault_guarded` a SECOND for its own nested guard — every launch pays for two
+    // stacks it could run on one, if the guard ran on the spawned fiber directly rather than
+    // a fiber nested inside it. Folding them needs `run`'s own ready-queue loop to gain a
+    // new terminal case (today only `run_case_guarded`/`run_abort_trap_guarded`'s NESTED
+    // loops ever see `Park::AbortTrapped`), which is out of scope here — see the PR body.
+    // Upgrade when launch volume (call-level launch, once every function call can be one)
+    // makes the second stack's cost worth avoiding.
     spawn(move || {
         let outcome = crate::scheduler::run_fault_guarded(producer);
         // A cell is resolved exactly once; a second resolve would clobber live data (and, once

@@ -391,15 +391,21 @@ pub(crate) fn run_fault_guarded<T: 'static>(
     let id = with_scheduler(|scheduler| scheduler.reserve_id());
     gc::register(id, low, high);
 
-    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
+    // Raised only around the ONE call that actually runs the guarded coroutine's code, not
+    // around the whole loop: a park (`suspend_on`, below) hands control back to `run`'s
+    // ready queue, which is then free to resume any OTHER fiber entirely — depth must be
+    // back down before that happens, or an unrelated fiber's own fail-loud exit would be
+    // misread as still inside THIS guard and wrongly trapped instead of exiting.
     let fault = loop {
-        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
+        ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
+        let result = resume_fiber(id, high, guard_low, low, &mut coroutine);
+        ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
+        match result {
             CoroutineResult::Yield(Park::AbortTrapped(report)) => break Some(report),
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break None,
         }
     };
-    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
     // See `run_case_guarded`'s own comment at the identical line: put the outer yielder
     // back before returning control to it, or its next park dereferences a dangling one.
     CURRENT_YIELDER.set(outer_yielder);
@@ -708,7 +714,7 @@ mod tests {
     use std::os::raw::{c_int, c_void};
     use std::sync::Mutex;
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
 
     #[link(name = "gc", kind = "static")]
@@ -918,6 +924,40 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn abort_trap_depth_drops_while_the_guarded_body_only_parks() {
+        // A guarded body that PARKS rather than running straight through: while it merely
+        // waits (sleeping here; a launch's socket/stdin readiness wait is the real case),
+        // depth must NOT still read "inside a trap" — the ready queue is free to run any
+        // OTHER fiber meanwhile, and an unrelated fiber's own fail-loud exit must not be
+        // caught by a trap it has nothing to do with, just because this one hasn't woken up
+        // yet (root cause of a launch that overlaps a plain `assert` elsewhere: without this,
+        // the assert's exit gets wrongly redirected into this trap's machinery instead).
+        extern "C" fn sleeps(_environment: *mut c_void) -> u8 {
+            sleep(Duration::from_millis(20));
+            0
+        }
+        static SEEN_ACTIVE_WHILE_PARKED: AtomicBool = AtomicBool::new(true);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let _ = run_abort_trap_guarded(sleeps, ptr::null_mut());
+                });
+                // Enqueued after the guarded fiber, so the ready queue runs IT first —
+                // straight through to its own park, exactly like the scenario above.
+                spawn(|| {
+                    SEEN_ACTIVE_WHILE_PARKED.store(abort_trap_active(), Ordering::SeqCst);
+                });
+            });
+        });
+
+        assert!(
+            !SEEN_ACTIVE_WHILE_PARKED.load(Ordering::SeqCst),
+            "an unrelated fiber saw the trap as active while the guarded body was only parked"
+        );
     }
 
     #[test]
