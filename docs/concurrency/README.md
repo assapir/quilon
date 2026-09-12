@@ -47,9 +47,7 @@ output (`print`/`write`), and native calls. Values launched before they are forc
 joins every launch it made directly — including one bound to a name it never reads again —
 before returning, and a launch is never cancelled: every launch settles. Once every launch
 has settled, the faults among them propagate out of the block: every fault is reported, in
-launch order, each naming its own launch site. (See `examples/block_scope_join.qn`.) A
-launch made inside a CALLED function, rather than directly in the block, is not yet joined
-this way — that is cross-function pipelining, still to come.
+launch order, each naming its own launch site. (See `examples/block_scope_join.qn`.)
 
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.

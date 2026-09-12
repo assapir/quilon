@@ -89,6 +89,43 @@ pub fn remove_registered_roots() {
     }
 }
 
+/// A GC root over ONE pointer-sized Rust allocation, registered for exactly this guard's
+/// own lifetime — distinct from [`__gc_add_root`]'s bulk-tracked, program-lifetime roots
+/// (a JIT'd program's globals, all removed together by [`remove_registered_roots`]).
+///
+/// For a value the compiled program's own stack slot might stop scanning well before the
+/// runtime is done needing it — e.g. `crate::deferred::launch`'s cell, which a launch
+/// bound to a name the block never reads again can see its OWN alloca dead-store-eliminated
+/// at `-O3`, leaving nothing scanned pointing at the cell between the producer finishing
+/// and the block's join reading it. Pinning it here keeps it reachable regardless of what
+/// the compiled program's own stack still holds.
+pub(crate) struct PinnedPointer {
+    holder: Box<*mut c_void>,
+}
+
+impl PinnedPointer {
+    /// Pin `target` alive: register a GC root over a stable one-word Rust allocation that
+    /// holds `target`'s own address, so Boehm finds it as a live outgoing pointer on every
+    /// collection until this guard drops.
+    pub(crate) fn new(target: *mut c_void) -> Self {
+        let holder = Box::new(target);
+        let address = holder.as_ref() as *const *mut c_void as *mut c_void;
+        // SAFETY: `address` is this Box's own stable heap address (a `Box`'s allocation
+        // never moves once made), valid until `holder` drops; the range is one pointer wide.
+        unsafe { GC_add_roots(address, address.add(std::mem::size_of::<*mut c_void>())) };
+        PinnedPointer { holder }
+    }
+}
+
+impl Drop for PinnedPointer {
+    fn drop(&mut self) {
+        let address = self.holder.as_ref() as *const *mut c_void as *mut c_void;
+        // SAFETY: the exact range `new` registered, still valid (this guard still owns
+        // `holder`, about to be dropped right after).
+        unsafe { GC_remove_roots(address, address.add(std::mem::size_of::<*mut c_void>())) };
+    }
+}
+
 /// Prepare the collector for threads other than the one that initialized it, and
 /// register the calling thread with it until the returned guard is dropped.
 ///

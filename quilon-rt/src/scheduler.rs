@@ -169,6 +169,21 @@ thread_local! {
     /// whether SOME trap is active, since a fail-loud exit always suspends whichever fiber
     /// is actually running (the innermost one), caught by that fiber's own guard loop.
     static ABORT_TRAP_DEPTH: Cell<u32> = const { Cell::new(0) };
+
+    /// The ids of the fibers currently resuming, innermost last — mirrors `gc::enter_fiber`/
+    /// `leave_fiber`'s own nesting (pushed/popped in lockstep, inside [`resume_fiber`]), kept
+    /// as a SEPARATE stack here so other state that must live per FIBER rather than per
+    /// thread (a `< >` block's open launch scopes — see `crate::launch_scope`) has a way to
+    /// ask "which fiber is running right now" without reaching into the GC module's own
+    /// bookkeeping. Several fibers interleave on this one OS thread, so per-thread state
+    /// alone conflates them; per-fiber state keyed by this id does not.
+    static RUNNING_FIBERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The id of the fiber whose own code is executing right now, if this thread is inside a
+/// [`resume_fiber`] call at all (every fiber, including the seed one, is resumed through it).
+pub(crate) fn current_fiber_id() -> Option<usize> {
+    RUNNING_FIBERS.with(|running| running.borrow().last().copied())
 }
 
 /// Run `f` against the active scheduler. A short borrow only — never held across a
@@ -210,9 +225,13 @@ fn resume_fiber(
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
     gc::enter_fiber(id, high);
+    RUNNING_FIBERS.with(|running| running.borrow_mut().push(id));
     let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
     let result = coroutine.resume(());
     stack_overflow::restore_guard(previous_guard);
+    RUNNING_FIBERS.with(|running| {
+        running.borrow_mut().pop();
+    });
     gc::leave_fiber();
     result
 }

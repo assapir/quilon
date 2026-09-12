@@ -143,6 +143,12 @@ pub(crate) struct Deferred<T> {
 /// that happen to check for it themselves. The cell also registers its own join with
 /// whatever `< >` block's launch scope is open right now (see `crate::launch_scope`), so
 /// that block settles it — whether or not its value is ever forced — before returning.
+///
+/// A bound-but-unread launch's own alloca may be dead-store-eliminated once the compiled
+/// program never reads it again (the whole point of joining it is that nothing else has
+/// to), which would leave nothing scanned pointing at `cell` between the producer finishing
+/// and the join reading it — so the cell is [pinned](crate::mem::PinnedPointer) from here
+/// until the registered join thunk has read its final state.
 pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut Deferred<T> {
     let size = std::mem::size_of::<Deferred<T>>();
     let cell = __alloc(size as i64) as *mut Deferred<T>;
@@ -193,7 +199,12 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
         }
         wake_address(address);
     });
-    crate::launch_scope::register(move || unsafe { settle(cell) });
+    let pin = crate::mem::PinnedPointer::new(cell as *mut c_void);
+    crate::launch_scope::register(move || {
+        let outcome = unsafe { settle(cell) };
+        drop(pin); // the cell's final state is read; the runtime no longer needs it pinned
+        outcome
+    });
     cell
 }
 
@@ -219,7 +230,7 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
             // forces still read (memoized).
             DeferredState::Ready(value) => return *value,
             DeferredState::Faulted(report) => {
-                crate::launch_scope::fault_innermost_scope(report.clone())
+                crate::launch_scope::fault_current_fiber(report.clone())
             }
             DeferredState::Pending => park_on_address(address),
         }

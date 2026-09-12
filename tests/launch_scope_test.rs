@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::temp_ql;
+use common::{build_and_run_native_with_stderr, temp_ql, tool_available};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -58,11 +58,11 @@ const ONE_READ_FORCED_DIRECTLY: &str = r#"
 "#;
 
 /// A self-tail-recursive function whose body directly launches: `readCount`'s own body
-/// block needs a launch scope entered and joined once per call, which the loop-lowering
-/// back-edge cannot give it (it re-runs a tail block's IR every iteration without ever
-/// reaching `generate_block` again) — so this only has to run correctly at all to prove the
-/// TCO guard fell back to ordinary recursion. With no input piped, every `@readStdin()`
-/// yields "" (end-of-input) so the total stays 0 regardless of how deep the recursion goes.
+/// block needs a launch scope opened and joined once per CALL, and the loop lowering below
+/// gives it exactly that — a fresh scope entered at the loop header, joined right before
+/// every back-edge (see `generate_block`/`emit_tail_self_call`) — so this still runs as a
+/// genuine constant-stack loop, not a stack-growing recursive call. With no input piped,
+/// every `@readStdin()` yields "" (end-of-input) so the total stays 0 regardless of depth.
 const SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH: &str = r#"
 << core.io
 << core.test
@@ -75,6 +75,44 @@ readCount = (remaining :: Num, total :: Num) -> Num => <
 
 ^ = () -> Num => <
   assert(readCount(3, 0), equals(0))
+  0
+>
+"#;
+
+/// The same shape, but deep enough (20,000 calls) that a stack-growing recursive call would
+/// overflow even the SEED fiber's 8 MiB — let alone a spawned launch fiber's 512 KiB — while
+/// a genuine constant-stack loop runs it in the same bounded space regardless of depth.
+const DEEP_SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH: &str = r#"
+<< core.io
+<< core.test
+
+readCount = (remaining :: Num, total :: Num) -> Num => <
+  line = @readStdin()
+  newTotal = total + line.size
+  remaining <= 1 ? newTotal : readCount(remaining - 1, newTotal)
+>
+
+^ = () -> Num => <
+  assert(readCount(20000, 0), equals(0))
+  0
+>
+"#;
+
+/// An unread launch, then heavy allocation before the block's close settles it. Under a
+/// native (`-O3`) build, `hearsay`'s own alloca — the only thing that would otherwise keep
+/// its deferred cell reachable — has no further use once dead-store elimination sees it is
+/// never read again, so between the read settling and the block's join the cell must stay
+/// reachable some other way, or a collection triggered by the array churn below frees it out
+/// from under the join.
+const UNREAD_LAUNCH_THEN_HEAVY_ALLOCATION: &str = r#"
+<< core.io
+
+^ = () -> Num => <
+  hearsay = @readStdin()
+  (1 <- 100000).each(i => <
+    junk = [i, i, i, i, i, i, i, i]
+    0
+  >)
   0
 >
 "#;
@@ -184,10 +222,35 @@ fn a_directly_forced_fault_reports_and_exits() {
 fn self_tail_recursive_function_with_a_direct_launch_still_runs_correctly() {
     let file = temp_ql("tco_launch", SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH);
     let (code, _, stderr) = run_with_piped_stdin(&file, b"");
+    assert_eq!(code, Some(0), "the loop must still pass: {stderr}");
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn an_unread_launchs_cell_survives_heavy_allocation_until_the_join_reads_it() {
+    if !tool_available("clang") && !tool_available("gcc") {
+        eprintln!("skipping native GC-safety gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    }
+    let (code, _, stderr) =
+        build_and_run_native_with_stderr("unread_gc", UNREAD_LAUNCH_THEN_HEAVY_ALLOCATION);
+    assert_eq!(
+        code, 0,
+        "the unread launch's cell must survive to the join, not be collected: {stderr}"
+    );
+}
+
+#[test]
+fn self_tail_recursive_function_with_a_direct_launch_runs_in_constant_stack() {
+    let file = temp_ql(
+        "deep_tco_launch",
+        DEEP_SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH,
+    );
+    let (code, _, stderr) = run_with_piped_stdin(&file, b"");
     assert_eq!(
         code,
         Some(0),
-        "the fallback recursion must still pass: {stderr}"
+        "20,000 calls must still pass in bounded stack, not overflow: {stderr}"
     );
     let _ = std::fs::remove_file(&file);
 }

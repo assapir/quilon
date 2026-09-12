@@ -678,9 +678,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // then rewrites the parameter slots and `br`s back here. The parameter allocas created
         // above are reused as the loop's mutable slots — there is no separate IR shape for
         // recursive vs. non-recursive functions beyond this header + the back-edge.
-        let body_value = if self.body_has_self_tail_call(declaration, &symbol)?
-            && !self.tail_position_needs_launch_scope(&declaration.body)
-        {
+        let body_value = if self.body_has_self_tail_call(declaration, &symbol)? {
             let parameter_slots: Vec<PointerValue<'ctx>> = declaration
                 .parameters
                 .iter()
@@ -696,16 +694,30 @@ impl<'ctx> CodeGenerator<'ctx> {
                 function,
                 parameter_slots,
                 header,
+                body_span: declaration.body.span().clone(),
             });
+            // A self-tail-call IS this block's close for the iteration taking it: if the
+            // body directly launches, a fresh registry opens here (re-executed once per
+            // iteration through the back-edge below) and `emit_tail_self_call` joins it
+            // right before branching back — the loop pays for this exactly like an
+            // ordinary recursive call would, once per call, never once per PROCESS.
+            self.enter_launch_scope(declaration.body.span())?;
             // Emit the body in tail-aware mode. A `None` result means every tail exit was a
             // self-call (e.g. an unconditional `f(...)` body, or a match all of whose arms
             // tail-recurse): the function never falls through to a normal return, and
             // `generate_tail_expression` has already terminated the current block (with the
-            // back-edge `br`, or an `unreachable`). In that case there is no `ret` to emit.
+            // back-edge `br`, or an `unreachable`). In that case there is no `ret` to emit,
+            // and no join here either — the last iteration to run is always one that took a
+            // back-edge, which already joined its own scope before doing so.
             let result = self.generate_tail_expression(&declaration.body)?;
             self.tco = None;
             match result {
-                Some(v) => v,
+                Some(v) => {
+                    // Falls through to an ordinary return: this IS the final iteration's
+                    // close.
+                    self.exit_launch_scope(declaration.body.span())?;
+                    v
+                }
                 None => {
                     self.end_di_scope(saved_scope);
                     return Ok(());

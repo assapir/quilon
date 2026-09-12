@@ -1,14 +1,8 @@
 ~ Block-scope join (see docs/concurrency/README.md): a `< >` block joins every launch it
-~ made before it returns — `allSettled`, so a launch bound to a name the block never reads
-~ again still runs to completion rather than being left running past the block's own return.
-~
-~ `hearsay` below is exactly that: launched, then never read again. `testimony` is what the
-~ block actually needs. With no input piped (the examples gate points stdin at EOF), both
-~ launches settle to "" — the join runs regardless of what either yields, so a passing exit
-~ code here is evidence the unused launch settled, not proof of any particular value.
+~ made directly before it returns, including one bound to a name it never reads again.
+~ `hearsay` is launched and never read; `testimony` is what the block needs.
 
 << core.io
-<< core.test
 
 ^ = () -> Num => <
   hearsay = @readStdin()          ~ launched — the block joins it even though it goes unread
