@@ -395,10 +395,13 @@ impl<'a> Parser<'a> {
             && self.check_same_line_at(1, &TokenKind::Dot)
     }
 
-    /// The maximal same-line `Ident (. Ident)* ` chain at the cursor, as its segment
-    /// texts. Empty when the cursor is not on an identifier. Same-line only: a `.` that
+    /// The maximal same-line `Ident (. Ident)* (. @ Ident)?` chain at the cursor, as its
+    /// segment texts — an `@` primitive's fused name (`@readStdin`) included, with its `@`,
+    /// as the LAST segment only: a primitive is a leaf, never itself a module to chain
+    /// through. Empty when the cursor is not on an identifier. Same-line only: a `.` that
     /// begins a source line continues an expression as a method chain, never a module
-    /// path. Segment `i` sits at token offset `2*i` (its `.` at `2*i - 1`).
+    /// path. Segment `i` (an ordinary one) sits at token offset `2*i` (its `.` at `2*i -
+    /// 1`); that offset scheme never runs past an `@` segment, since one is always last.
     fn dotted_chain_at_cursor(&self) -> Vec<String> {
         let mut segments = Vec::new();
         if !self.check(&TokenKind::Ident) {
@@ -407,10 +410,17 @@ impl<'a> Parser<'a> {
         segments.push(self.peek().text.clone());
         loop {
             let next = segments.len();
-            if self.check_same_line_at(2 * next - 1, &TokenKind::Dot)
-                && self.check_same_line_at(2 * next, &TokenKind::Ident)
+            let dot = 2 * next - 1;
+            if !self.check_same_line_at(dot, &TokenKind::Dot) {
+                return segments;
+            }
+            if self.check_same_line_at(dot + 1, &TokenKind::Ident) {
+                segments.push(self.peek_ahead(dot + 1).text.clone());
+            } else if self.check_same_line_at(dot + 1, &TokenKind::At)
+                && self.check_same_line_at(dot + 2, &TokenKind::Ident)
             {
-                segments.push(self.peek_ahead(2 * next).text.clone());
+                segments.push(format!("@{}", self.peek_ahead(dot + 2).text));
+                return segments;
             } else {
                 return segments;
             }
@@ -430,11 +440,11 @@ impl<'a> Parser<'a> {
     }
 
     /// If the cursor begins a qualified reference — a dotted chain whose longest proper
-    /// prefix is a module path bound by an import above (`http.send`,
-    /// `core.test.describe`) — consume the path and ONE member segment, returning the
-    /// joined dotted name and its span. Any further `.` continuation is the ordinary
-    /// postfix grammar's (a field or method of the referenced value). `None` leaves the
-    /// cursor untouched: the identifier is an ordinary name.
+    /// prefix is a module path bound by an import above (`http.send`, `core.test.describe`,
+    /// `io.@readStdin`) — consume the path and ONE member segment, returning the joined
+    /// dotted name and its span. Any further `.` continuation is the ordinary postfix
+    /// grammar's (a field or method of the referenced value). `None` leaves the cursor
+    /// untouched: the identifier is an ordinary name.
     fn try_parse_module_member(&mut self) -> Option<(String, Span)> {
         if !self.at_possible_module_chain() {
             return None;
@@ -443,8 +453,10 @@ impl<'a> Parser<'a> {
         let (_, member, prefix_len) = self.resolve_chain(&segments)?;
         let name = format!("{}.{member}", segments[..prefix_len].join("."));
         let start = self.current_span().start;
-        // The prefix's segments and dots, plus the member: 2 * prefix_len + 1.
-        for _ in 0..(2 * prefix_len + 1) {
+        // The prefix's segments and dots (2 * prefix_len), plus the member: 1 token for a
+        // plain name, 2 (`@` then the name) for a primitive's fused one.
+        let member_tokens = if member.starts_with('@') { 2 } else { 1 };
+        for _ in 0..(2 * prefix_len + member_tokens) {
             self.advance();
         }
         let span = self.span(start, self.previous_span().end);

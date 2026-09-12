@@ -14,9 +14,12 @@
 //! with nothing, and the passes downstream (checker, codegen, reachability) see one flat
 //! namespace of unique names and need no notion of modules at all.
 //!
+//! An `@` leaf IO primitive (`@sleep`) is an export like any other: `send` in `core.http`
+//! becomes `core.http.send`, and `@sleep` in `core.time` becomes `core.time.@sleep` —
+//! reached from outside as `time.@sleep(seconds)`, with the `@` marking its provenance as
+//! before.
+//!
 //! What is NOT renamed:
-//! - `@` leaf IO primitives (`@sleep`): the `@` name stays bare and global once its
-//!   module is imported — the sigil already marks its provenance.
 //! - method and field names: they resolve against a receiver, never the top level.
 //! - the built-ins that belong to no module (`Result`/`Ok`/`NotOk`, `assert`, matchers).
 
@@ -166,7 +169,9 @@ impl ModuleScope {
 /// privates included — and rewrite the module's own bodies to match: bare references to
 /// its own top level take the new names, and its dotted references resolve through ITS
 /// import scope. Sum variants rename with their type (`Get` in `core.http` becomes
-/// `core.http.Get`); `@` primitives keep their bare global names.
+/// `core.http.Get`); an `@` primitive renames the same way (`@sleep` becomes
+/// `core.time.@sleep`), so a bare `@sleep(...)` inside `core.time` itself still resolves —
+/// the rename map carries it, exactly like any other own-module reference.
 pub fn qualify_module(
     program: &mut Program,
     fqdn: &str,
@@ -175,9 +180,6 @@ pub fn qualify_module(
     let mut renames: HashMap<String, String> = HashMap::new();
     for item in &program.items {
         let name = item.name();
-        if name.starts_with('@') {
-            continue;
-        }
         renames.insert(name.to_string(), format!("{fqdn}.{name}"));
         if let Item::TypeDeclaration(declaration) = item
             && let TypeDefinition::Sum { variants, .. } = &declaration.type_definition

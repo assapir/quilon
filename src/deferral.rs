@@ -23,13 +23,14 @@ use crate::ast::{Expression, InterpolationPart, Item, MethodDeclaration, Program
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
-/// The corelib name of the value-returning stdin read primitive; `@readStdin()` evaluates to
-/// a deferred `Text`.
-const READ_PRIMITIVE: &str = "@readStdin";
+/// The qualified name of the value-returning stdin read primitive, reached by an importer as
+/// `io.@readStdin()`; the call evaluates to a deferred `Text`.
+const READ_PRIMITIVE: &str = "core.io.@readStdin";
 
-/// The internal name of the request-exchange socket primitive; `@tcpRequest(addr, req)`
-/// evaluates to a deferred `Result` (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
-const TCP_REQUEST_PRIMITIVE: &str = "@tcpRequest";
+/// The qualified name of the request-exchange socket primitive, reached by an importer as
+/// `net.@tcpRequest(addr, req)`; the call evaluates to a deferred `Result`
+/// (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
+const TCP_REQUEST_PRIMITIVE: &str = "core.net.@tcpRequest";
 
 /// The argument count `@tcpRequest` takes (`address`, `requestBytes`).
 const TCP_REQUEST_ARITY: usize = 2;
@@ -335,8 +336,10 @@ mod tests {
 
     #[test]
     fn bound_read_is_deferred_and_forced_at_a_strict_use() {
-        // `x = @readStdin()` binds a deferred Text (lazy); the comparison forces it once.
-        let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  x == \"hi\" ? 0 : 1\n>";
+        // `x = io.@readStdin()` binds a deferred Text (lazy); the comparison forces it once.
+        // Written as the full path — these tests parse in isolation, without the link step
+        // that would canonicalize a short `io.@readStdin` the same way.
+        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  x == \"hi\" ? 0 : 1\n>";
         // Exactly one force: the `x` read inside the comparison. The binding stays lazy.
         assert_eq!(force_count(src), 1);
     }
@@ -344,13 +347,13 @@ mod tests {
     #[test]
     fn read_directly_in_a_strict_slot_forces_at_the_call() {
         // No binding: the `@readStdin()` value is consumed strictly (compared) right away.
-        let src = "<< core.io\n^ = () -> Num => < @readStdin() == \"hi\" ? 0 : 1 >";
+        let src = "<< core.io\n^ = () -> Num => < core.io.@readStdin() == \"hi\" ? 0 : 1 >";
         assert_eq!(force_count(src), 1);
     }
 
     #[test]
     fn read_passed_to_a_call_forces_at_the_argument() {
-        let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  print(x)\n  0\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  print(x)\n  0\n>";
         // The `print(x)` argument is a strict slot: one force.
         assert_eq!(force_count(src), 1);
     }
@@ -358,23 +361,23 @@ mod tests {
     #[test]
     fn a_bound_but_unused_read_is_not_forced() {
         // Launched (eager) but never read strictly: no force site. The launch still runs.
-        let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  0\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  0\n>";
         assert_eq!(force_count(src), 0);
     }
 
     #[test]
     fn read_flows_lazily_through_a_second_binding() {
         let src =
-            "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
+            "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
         // Two lazy bindings, forced once at the comparison.
         assert_eq!(force_count(src), 1);
     }
 
     #[test]
     fn bound_tcp_request_is_deferred_and_forced_at_a_strict_use() {
-        // `r = @tcpRequest(...)` binds a deferred Result (lazy); the match forces it once — the
-        // same shape as a bound `@readStdin`, proving the taint tracks both producers.
-        let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\", \"b\")\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
+        // `r = net.@tcpRequest(...)` binds a deferred Result (lazy); the match forces it once —
+        // the same shape as a bound `@readStdin`, proving the taint tracks both producers.
+        let src = "<< core.net\n^ = () -> Num => <\n  r = core.net.@tcpRequest(\"a:1\", \"b\")\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
         assert_eq!(force_count(src), 1);
     }
 
@@ -382,7 +385,7 @@ mod tests {
     fn tcp_request_with_wrong_arity_is_not_deferred() {
         // A `@tcpRequest` reference that does not fit the primitive's two-argument signature is
         // not treated as a deferred producer: no value flows out deferred, so nothing is forced.
-        let src = "<< core.net\n^ = () -> Num => <\n  r = @tcpRequest(\"a:1\")\n  0\n>";
+        let src = "<< core.net\n^ = () -> Num => <\n  r = core.net.@tcpRequest(\"a:1\")\n  0\n>";
         assert_eq!(force_count(src), 0);
     }
 
@@ -390,7 +393,7 @@ mod tests {
     fn read_through_a_ternary_arm_forces_at_the_result_use() {
         // Ternary arms are lazy carriers: the deferred value survives the `?` and is forced
         // where the ternary's result is used strictly (the outer comparison).
-        let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  chosen = true ? x : \"z\"\n  chosen == \"hi\" ? 0 : 1\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  x = core.io.@readStdin()\n  chosen = true ? x : \"z\"\n  chosen == \"hi\" ? 0 : 1\n>";
         assert_eq!(force_count(src), 1);
     }
 
@@ -408,7 +411,7 @@ mod tests {
         // `@streamFile` is an ordinary call as far as its own arguments go: a deferred `Text`
         // flowing into its `path` argument is forced there, the same as any other call's
         // strict argument slot.
-        let src = "<< core.io\n^ = () -> Num => <\n  p = @readStdin()\n  @streamFile(p, 10, chunk => true)\n  0\n>";
+        let src = "<< core.io\n^ = () -> Num => <\n  p = core.io.@readStdin()\n  @streamFile(p, 10, chunk => true)\n  0\n>";
         assert_eq!(force_count(src), 1);
     }
 }

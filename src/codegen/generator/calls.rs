@@ -180,10 +180,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_run_case(arguments);
         }
 
-        // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
-        // into the name. Handled before every other dispatch — the name is not an
-        // overload/method/constructor. The `@`-identifier span carries the call's launch site.
-        if let Some(primitive) = function_name.strip_prefix('@') {
+        // A leaf `@` IO primitive (`io.@readStdin`, `time.@sleep`), recognized by the `@` the
+        // parser fused into its bare name — carried, qualified or not, by every reference the
+        // link produces (`core.io.@readStdin` reached through the module, or a corelib
+        // module's own bare use of its own primitive). Handled before every other dispatch —
+        // the name is not an overload/method/constructor. The `@`-identifier span carries the
+        // call's launch site.
+        if let Some((_, primitive)) = function_name.rsplit_once('@') {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 

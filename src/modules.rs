@@ -349,12 +349,12 @@ fn canonical_key(path: &Path) -> std::path::PathBuf {
 
 /// The bare names a module's items export: `>>`-marked functions, constants, and types —
 /// plus the variants of an exported sum, which an importer reaches the same qualified way
-/// (`http.Get`). `@` primitives are global once their module is imported, so they are not
-/// part of the qualified surface.
+/// (`http.Get`). An `@` leaf IO primitive is exported the same way: `@readStdin` in
+/// `core.io` is reached as `io.@readStdin`.
 fn exported_names(items: &[Item]) -> HashSet<String> {
     let mut names = HashSet::new();
     for item in items {
-        if !item_is_exported(item) || item.name().starts_with('@') {
+        if !item_is_exported(item) {
             continue;
         }
         names.insert(item.name().to_string());

@@ -1,4 +1,5 @@
-~ core.net — networking primitives. Import with `<< core.net`. The HTTP client sits on this,
+~ core.net — networking primitives. Import with `<< core.net`; reach the primitive through
+~ the `net` binding, `net.@tcpRequest(address, requestBytes)`. The HTTP client sits on this,
 ~ and user code may use the raw request-exchange primitive directly.
 
 ~ Perform a one-shot TCP request exchange: connect to `address` (`host:port`), write

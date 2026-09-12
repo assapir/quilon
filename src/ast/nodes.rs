@@ -216,11 +216,13 @@ pub struct FunctionDeclaration {
 impl FunctionDeclaration {
     /// Whether codegen emits a module function (declaration + body) for this item at all —
     /// false for an inert corelib placeholder of a compiler-provided name, and for an `@`
-    /// leaf IO primitive (both are lowered at their call sites instead). The ONE predicate
-    /// the pre-declaration pass and body emission share, so a declaration is never left
-    /// bodiless by the two drifting apart.
+    /// leaf IO primitive (both are lowered at their call sites instead). A primitive's name
+    /// carries its `@` marker whether or not it has been qualified by an import
+    /// (`core.io.@readStdin` or the bare `@readStdin`), so a `.contains` check catches
+    /// both spellings. The ONE predicate the pre-declaration pass and body emission share,
+    /// so a declaration is never left bodiless by the two drifting apart.
     pub fn emits_module_function(&self) -> bool {
-        !self.is_inert_corelib_placeholder() && !self.name.starts_with('@')
+        !self.is_inert_corelib_placeholder() && !self.name.contains('@')
     }
 }
 
