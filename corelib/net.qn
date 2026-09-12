@@ -9,8 +9,13 @@
 ~ `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — the
 ~ message names the failing stage and the address. Network failure never crashes the program;
 ~ match the `Result` to handle it. The response is capped at 16 MiB; a larger one yields `NotOk`.
-~ Hostname resolution runs on a helper OS thread and parks only the calling fiber until it
-~ answers; a numeric `host:port` resolves inline with no thread at all.
+~ Hostname resolution runs on a resolver thread pool and parks only the calling fiber until it
+~ answers; a numeric `host:port` resolves inline with no thread at all. The pool's base is the
+~ process's CPU count (a minimum of 4); it starts on the first hostname lookup, and its base
+~ threads stay for the rest of the process. Under more concurrent lookups than base threads, the
+~ pool grows by one thread per lookup that finds every existing thread busy, up to 16 threads in
+~ total; a lookup beyond that waits in the queue. A thread beyond the base exits once it finds no
+~ more lookups waiting. Neither the base nor the ceiling is configurable.
 ~
 ~ `@tcpRequest` is a leaf IO primitive (the `@` marker): calling it launches the exchange in
 ~ the background and hands back a DEFERRED Result immediately — the fiber only waits (forces)
