@@ -70,12 +70,13 @@ fn closed_address() -> String {
     address
 }
 
-/// Bind a loopback listener and serve exactly `connections` request exchanges on a background
-/// thread: read the request, write the fixed `PONG\n` response, then close (dropping the stream
-/// closes the connection, which is what ends the client's read-to-close). Returns the `host:port`
-/// address to dial and the server thread's handle.
-fn spawn_pong_server(connections: usize) -> (String, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+/// Bind a listener on `bind_address` and serve exactly `connections` request exchanges on a
+/// background thread: read the request, write the fixed `PONG\n` response, then close (dropping
+/// the stream closes the connection, which is what ends the client's read-to-close). Returns the
+/// bound address (`bind_address`'s host, with the OS-assigned port) and the server thread's
+/// handle.
+fn spawn_pong_server_on(bind_address: &str, connections: usize) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind(bind_address).expect("bind local listener");
     let address = listener.local_addr().expect("local addr").to_string();
     let handle = std::thread::spawn(move || {
         for _ in 0..connections {
@@ -87,6 +88,12 @@ fn spawn_pong_server(connections: usize) -> (String, JoinHandle<()>) {
         }
     });
     (address, handle)
+}
+
+/// Bind a loopback (`127.0.0.1`) listener and serve `connections` exchanges; see
+/// [`spawn_pong_server_on`].
+fn spawn_pong_server(connections: usize) -> (String, JoinHandle<()>) {
+    spawn_pong_server_on("127.0.0.1:0", connections)
 }
 
 /// Write `source` to a unique temp `.qn` file and return its path.
@@ -157,6 +164,30 @@ fn jit_tcp_request_round_trips_and_forces() {
     server.join().expect("server thread");
     let _ = std::fs::remove_file(&match_file);
     let _ = std::fs::remove_file(&mismatch_file);
+}
+
+#[test]
+fn jit_tcp_request_resolves_a_hostname_and_round_trips() {
+    // Same exchange as `jit_tcp_request_round_trips_and_forces`, but dialed by hostname
+    // (`localhost:<port>`) rather than a numeric address, so the DNS-resolution path (now off
+    // the reactor thread) is what this test exercises rather than the numeric parse-only path.
+    // "localhost" resolves to whichever of 127.0.0.1/::1 the machine's resolver prefers, so the
+    // listener binds the IPv6-any address, which the OS also accepts IPv4 connections on
+    // (dual-stack, the Linux default), rather than a specific family that might not be the one
+    // resolution picks.
+    let (address, server) = spawn_pong_server_on("[::]:0", 1);
+    let port = address.rsplit(':').next().expect("address has a port");
+    let hostname_address = format!("localhost:{port}");
+
+    let file = temp_ql("hostname", &program(&hostname_address, "PONG\\n"));
+    assert_eq!(
+        jit_run(&file),
+        Some(0),
+        "@tcpRequest should resolve \"localhost\" and force to the server's response"
+    );
+
+    server.join().expect("server thread");
+    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
