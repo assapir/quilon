@@ -49,6 +49,7 @@ Quilon's identity, and the rules that guide its design:
 | `` ` `` (as a name) | The overloadable **render** operator — a type's `Text` rendering | `` ` = () -> Text => "..." `` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and called from user code | `@sleep(1)` |
+| `@name :=` | [Atomic binding](concurrency/README.md#sharing-state-across-fibers) declaration — `@` marks the declaration only; every read and reassignment after it is bare | `@hits := 0` · `hits := hits + 1` |
 | `~` | Comment (to end of line) | `~ a note` |
 
 There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is

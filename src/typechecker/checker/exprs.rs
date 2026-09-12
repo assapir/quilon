@@ -155,14 +155,25 @@ impl TypeChecker {
             Expression::Bool { .. } => Ok(Type::Bool),
             Expression::Unit { .. } => Ok(Type::Unit),
 
-            Expression::Identifier { name, span } => {
-                self.env
-                    .get_type(name)
-                    .ok_or_else(|| TypeError::UndefinedVariable {
+            Expression::Identifier { name, span } => self.env.get_type(name).ok_or_else(|| {
+                // `@name` reads here when `name` is neither a bound name nor a real `@`
+                // primitive. A binding named `name` (its atomic declaration dropped the
+                // `@`) says this is the friendlier mistake — using the marker at a use
+                // site, or on what should be a bare reassignment — over the generic
+                // "undefined" report a stray primitive-looking name would otherwise get.
+                match name.strip_prefix('@') {
+                    Some(bare) if self.env.get_type(bare).is_some() => {
+                        TypeError::AtomicBindingUsedBare {
+                            name: bare.to_string(),
+                            span: span.clone(),
+                        }
+                    }
+                    _ => TypeError::UndefinedVariable {
                         name: name.clone(),
                         span: span.clone(),
-                    })
-            }
+                    },
+                }
+            }),
 
             Expression::BinaryOperator {
                 left,

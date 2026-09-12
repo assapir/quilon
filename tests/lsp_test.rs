@@ -159,6 +159,28 @@ fn hover_reports_the_smallest_covering_expressions_type() {
 }
 
 #[test]
+fn hover_over_a_read_of_an_atomic_binding_shows_its_type() {
+    // An atomic binding's declaration adds no type-checker machinery of its own — hovering
+    // a read of it answers exactly like hovering a read of a plain `:=` binding.
+    let text = "^ = () -> Num => <\n  @hits := 0\n  hits + 1\n>\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, span) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "hits + 1", 0),
+    )
+    .expect("a hover");
+    assert_eq!(label, "Num");
+    assert_eq!(
+        (span.start, span.end),
+        (
+            offset_of(text, "hits + 1", 0),
+            offset_of(text, "hits + 1", 4)
+        )
+    );
+}
+
+#[test]
 fn hover_over_a_matcher_shows_its_signature_and_the_type_it_applies_to() {
     // `isOk()` — a matcher with no argument, applied to a `Result`.
     let text = "^ = () -> Num => < assert([10, 20].at(0), isOk())\n0 >\n";
@@ -633,6 +655,29 @@ fn a_fresh_mutable_local_in_an_inner_scope_is_its_own_binding() {
     );
 }
 
+#[test]
+fn references_to_an_atomic_binding_cover_its_declaration_and_reassignments() {
+    // `@` marks the declaration only, so the declaration's own name token is `hits` (the
+    // `@` sits one byte before it, outside the token references_at looks for).
+    let text = "^ = () -> Num => <\n  @hits := 0\n  hits := hits + 1\n  hits\n>\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let expected = vec![
+        offset_of(text, "hits := 0", 0),
+        offset_of(text, "hits := hits + 1", 0),
+        offset_of(text, "hits + 1", 0),
+        offset_of(text, "hits\n>", 0),
+    ];
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "hits := 0", 0)),
+        expected
+    );
+    assert_eq!(
+        reference_starts(&checked.program, text, offset_of(text, "hits + 1", 0)),
+        expected
+    );
+}
+
 // --- Rename -------------------------------------------------------------------
 
 #[test]
@@ -663,6 +708,24 @@ fn renaming_a_reassigned_binding_rewrites_every_reassignment_and_read() {
     }
 
     assert!(!renamed.contains("total"));
+    check_text(Path::new("buffer.qn"), &renamed).expect("the renamed program still compiles");
+}
+
+#[test]
+fn renaming_an_atomic_binding_keeps_the_at_marker_on_the_declaration() {
+    let text = "^ = () -> Num => <\n  @hits := 0\n  hits := hits + 1\n  hits\n>\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let mut spans = references_at(&checked.program, text, offset_of(text, "hits := 0", 0))
+        .expect("a resolvable target");
+    spans.sort_by_key(|span| span.start);
+    let mut renamed = text.to_string();
+    for span in spans.iter().rev() {
+        renamed.replace_range(span.start as usize..span.end as usize, "count");
+    }
+
+    assert!(renamed.contains("@count := 0"));
+    assert!(!renamed.contains("hits"));
     check_text(Path::new("buffer.qn"), &renamed).expect("the renamed program still compiles");
 }
 

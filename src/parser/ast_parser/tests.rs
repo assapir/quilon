@@ -84,6 +84,42 @@ fn test_parse_mutable() {
 }
 
 #[test]
+fn test_parse_atomic_binding_top_level() {
+    // `@name := value` declares an atomic binding: the `@` is not part of the name, and
+    // the declaration is otherwise an ordinary mutable `VariableDeclaration`.
+    let tokens = Lexer::tokenize("@hits := 0").unwrap();
+    let program = parse(&tokens).expect("an atomic binding should parse");
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a VariableDeclaration");
+    };
+    assert!(declaration.mutable);
+    assert!(declaration.atomic);
+    assert_eq!(declaration.name, "hits");
+}
+
+#[test]
+fn test_parse_atomic_binding_block_level() {
+    // The same declaration, inside a `< >` block, lands directly in the block's own
+    // statement list (not nested one level down inside an expression-sugar block) so the
+    // binding stays visible to the rest of the block.
+    use crate::ast::{Expression, Statement};
+    let tokens = Lexer::tokenize("^ = () -> Num => <\n  @hits := 0\n  hits\n>").unwrap();
+    let program = parse(&tokens).expect("a block-level atomic binding should parse");
+    let Item::FunctionDeclaration(func) = &program.items[0] else {
+        panic!("expected the `^` function declaration");
+    };
+    let Expression::Block { statements, .. } = &func.body else {
+        panic!("expected a block body");
+    };
+    let Statement::Item(Item::VariableDeclaration(declaration)) = &statements[0] else {
+        panic!("expected the first statement to be an atomic VariableDeclaration");
+    };
+    assert!(declaration.mutable);
+    assert!(declaration.atomic);
+    assert_eq!(declaration.name, "hits");
+}
+
+#[test]
 fn test_parse_with_type() {
     let tokens = Lexer::tokenize("x :: Num = 42").unwrap();
     let result = parse(&tokens);
