@@ -18,6 +18,13 @@ All notable changes to Quilon are documented here.
   background task can register with the enclosing block the same way. See
   `docs/concurrency/README.md`, `examples/block_scope_join.qn`. Part of #120 (the
   block-scope-join half; cross-function pipelining follows in a later change).
+- **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
+  `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
+  or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is
+  the caller's own code), parking on reactor readiness between reads; `onChunk` returns `true`
+  to keep reading or `false` to stop and close the file at once. Yields `Ok(bytesRead)` or
+  `NotOk(message)`, never fails the program. `io.streamFile(path, onChunk)` is the same call
+  with a default chunk size. See `docs/corelib/io.md` and `docs/concurrency/README.md`.
 - **A sum type may name itself as a payload, directly (`Tree = Leaf / Node(Tree)`) or
   through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`), and two variants may
   carry a different concrete type at the same payload position (`A(Num) / B(Text)`).** A

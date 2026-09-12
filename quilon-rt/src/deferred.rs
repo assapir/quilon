@@ -88,6 +88,19 @@ impl QlResult {
             slot: alloc_text(message.as_bytes()),
         }
     }
+
+    /// A ready `Ok(number)` carrying `number` as its `Num` payload — the slot packed the same
+    /// way the code generator's `pack_result_payload` packs a Num (`{ null, bitcast(f64) }`),
+    /// so a Rust-built `Ok(Num)` reads back identically to one `.qn` source constructs.
+    pub(crate) fn ok_num(number: f64) -> QlResult {
+        QlResult {
+            tag: RESULT_OK_TAG,
+            slot: QlSlice {
+                data: ptr::null(),
+                len: number.to_bits() as i64,
+            },
+        }
+    }
 }
 
 /// A deferred value's lifecycle. Carrying the resolved value INSIDE `Ready` makes
@@ -385,61 +398,74 @@ fn read_stdin_line() -> io::Result<Vec<u8>> {
     result
 }
 
-/// Read one line from `fd` into `buffer`, parking the fiber on reactor readiness until a
+/// Read one line from `fd` into `buffer`, parking the fiber (via [`read_once`]) until a
 /// newline arrives or the stream ends. Returns the line WITHOUT its trailing newline (a
 /// trailing `\r` is dropped too). At end-of-input with nothing buffered, returns an empty
 /// `Vec` — the documented end-of-input value (`@read` yields an empty `Text` there). Bytes
 /// past the newline stay in `buffer` for the next call.
-///
-/// The reactor registration is LAZY: it reads first and only registers `fd` (and parks) on the
-/// first `WouldBlock`. So a source that is ready right away — piped data already buffered, or a
-/// non-pollable fd like a redirected file or `/dev/null` that returns data/EOF at once — never
-/// touches `epoll`, which rejects such fds. Only a genuinely-not-ready pollable source (an
-/// empty pipe/tty) is registered and parked on. Registering after a `WouldBlock` loses no
-/// wakeup: adding an already-ready fd to the poll reports it immediately.
 fn read_line_from(fd: i32, buffer: &mut Vec<u8>) -> io::Result<Vec<u8>> {
     if let Some(line) = take_line(buffer) {
         return Ok(line);
     }
     set_nonblocking(fd);
+    let mut chunk = [0u8; 1024];
+    loop {
+        let count = read_once(fd, &mut chunk)?;
+        if count == 0 {
+            // EOF: hand back whatever is buffered (an unterminated final line), or empty.
+            return Ok(std::mem::take(buffer));
+        }
+        buffer.extend_from_slice(&chunk[..count]);
+        if let Some(line) = take_line(buffer) {
+            return Ok(line);
+        }
+    }
+}
+
+/// Read once from `fd` into `buffer`, parking the fiber on reactor readiness (lazily
+/// registered) through any number of `WouldBlock`s, and retrying an interrupted call
+/// (`EINTR`), until data or end-of-input is available. Returns the byte count read (`0` at
+/// EOF). The shared primitive behind every fiber-parking descriptor read: [`read_line_from`]
+/// (stdin, accumulating until a newline) and `@streamFile` (`crate::io`, chunk-buffered) each
+/// build their own loop over it.
+///
+/// The reactor registration is LAZY: it reads first and only registers `fd` (and parks) on the
+/// first `WouldBlock`. So a source that is ready right away — piped data already buffered, a
+/// regular file (always), or a non-pollable fd like `/dev/null` that returns data/EOF at once —
+/// never touches `epoll`, which rejects such fds. Only a genuinely-not-ready pollable source
+/// (an empty pipe/tty) is registered and parked on. Registering after a `WouldBlock` loses no
+/// wakeup: adding an already-ready fd to the poll reports it immediately.
+pub(crate) fn read_once(fd: i32, buffer: &mut [u8]) -> io::Result<usize> {
     let mut source = SourceFd(&fd);
     let mut token: Option<Token> = None;
-    let mut chunk = [0u8; 1024];
     let result = loop {
-        // SAFETY: `read(2)` into a valid, owned buffer of `chunk.len()` bytes.
-        let count = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut c_void, chunk.len()) };
-        if count > 0 {
-            buffer.extend_from_slice(&chunk[..count as usize]);
-            if let Some(line) = take_line(buffer) {
-                break Ok(line);
-            }
-        } else if count == 0 {
-            // EOF: hand back whatever is buffered (an unterminated final line), or empty.
-            break Ok(std::mem::take(buffer));
-        } else {
-            let error = io::Error::last_os_error();
-            match error.kind() {
-                io::ErrorKind::WouldBlock => {
-                    let active = match token {
-                        Some(active) => {
-                            match reregister_readiness(&mut source, active, Interest::READABLE) {
-                                Ok(()) => active,
-                                Err(error) => break Err(error),
-                            }
-                        }
-                        None => match register_readiness(&mut source, Interest::READABLE) {
-                            Ok(active) => {
-                                token = Some(active);
-                                active
-                            }
+        // SAFETY: `read(2)` into a valid, owned buffer of `buffer.len()` bytes.
+        let count = unsafe { libc::read(fd, buffer.as_mut_ptr() as *mut c_void, buffer.len()) };
+        if count >= 0 {
+            break Ok(count as usize);
+        }
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::WouldBlock => {
+                let active = match token {
+                    Some(active) => {
+                        match reregister_readiness(&mut source, active, Interest::READABLE) {
+                            Ok(()) => active,
                             Err(error) => break Err(error),
-                        },
-                    };
-                    park_on_readiness(active);
-                }
-                io::ErrorKind::Interrupted => {}
-                _ => break Err(error),
+                        }
+                    }
+                    None => match register_readiness(&mut source, Interest::READABLE) {
+                        Ok(active) => {
+                            token = Some(active);
+                            active
+                        }
+                        Err(error) => break Err(error),
+                    },
+                };
+                park_on_readiness(active);
             }
+            io::ErrorKind::Interrupted => {}
+            _ => break Err(error),
         }
     };
     if token.is_some() {
@@ -463,7 +489,7 @@ fn take_line(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
 /// Put `fd` into non-blocking mode so a `read` on an empty pipe returns `WouldBlock` and
 /// parks the fiber, rather than blocking the single OS thread. Failure is tolerable — a
 /// still-blocking read simply blocks (functionally fine when nothing else is runnable).
-fn set_nonblocking(fd: i32) {
+pub(crate) fn set_nonblocking(fd: i32) {
     // SAFETY: `fcntl` on a descriptor; a bad fd just returns an error we ignore.
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);

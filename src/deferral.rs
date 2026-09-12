@@ -451,4 +451,22 @@ mod tests {
             "the outer block launches nothing directly"
         );
     }
+
+    #[test]
+    fn stream_file_result_is_never_a_deferred_value() {
+        // `@streamFile` runs on the calling fiber: it is not in `produces_deferred`, so binding
+        // its result produces no force site of its own — the match on it needs no force,
+        // because it was never lazy to begin with.
+        let src = "<< core.io\n^ = () -> Num => <\n  r = @streamFile(\"f\", 10, chunk => true)\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
+        assert_eq!(force_count(src), 0);
+    }
+
+    #[test]
+    fn a_deferred_argument_passed_to_stream_file_is_forced_at_the_argument() {
+        // `@streamFile` is an ordinary call as far as its own arguments go: a deferred `Text`
+        // flowing into its `path` argument is forced there, the same as any other call's
+        // strict argument slot.
+        let src = "<< core.io\n^ = () -> Num => <\n  p = @readStdin()\n  @streamFile(p, 10, chunk => true)\n  0\n>";
+        assert_eq!(force_count(src), 1);
+    }
 }

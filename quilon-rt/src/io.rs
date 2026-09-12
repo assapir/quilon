@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! Byte-writing intrinsics backing `write`/`print`/`eprint`, plus the shared
-//! `write_to_fd` raw-syscall helper the fail-loud paths in `core`/`text` reuse.
+//! Byte-writing intrinsics backing `write`/`print`/`eprint`, the shared `write_to_fd`
+//! raw-syscall helper the fail-loud paths in `core`/`text` reuse, and `@streamFile` — the
+//! chunk-callback file read.
 
+use crate::deferred::{QlResult, read_once};
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::AsRawFd;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The symbolic name a report shows for an errno this runtime's writes can plausibly hit —
 /// a closed reader (`EPIPE`), a descriptor with no write end (`EBADF`), a full disk
@@ -149,6 +154,145 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
         1 => 1,
         _ => 0,
     }
+}
+
+/// `@streamFile(path, chunkSize, onChunk)`: read `path` in `chunkSize`-byte reads, calling the
+/// bundled Quilon closure once per whole, valid-Text chunk. Runs on the calling fiber, parking
+/// (via [`read_once`]) on reactor readiness between reads. `on_chunk`/`environment` are the
+/// code generator's fixed-shape trampoline over the closure (see
+/// `CodeGenerator::emit_stream_file_thunk`) and the bundled `{ptr,ptr}` closure value it
+/// unpacks. Writes `Ok(bytesRead)` (total bytes delivered) into `out` at EOF or once `onChunk`
+/// returns `false`, or `NotOk(message)` on any failure — never fails the process.
+///
+/// # Safety contract (upheld by the compiler)
+/// `out` points to writable storage for one [`QlResult`]; `path_data` is null, or points to
+/// `path_len` readable bytes; `on_chunk` is the function pointer of a live `(ptr,i64,ptr)->i8`
+/// trampoline, called with `environment` as its last argument.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __stream_file_run(
+    out: *mut QlResult,
+    path_data: *const u8,
+    path_len: i64,
+    chunk_size: f64,
+    on_chunk: *const c_void,
+    environment: *mut c_void,
+) {
+    // SAFETY: per the contract, a live `(ptr,i64,ptr) -> i8` trampoline.
+    let on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8 =
+        unsafe { std::mem::transmute(on_chunk) };
+    let path = crate::text::text_str(path_data, path_len).into_owned();
+    let result = stream_file(&path, chunk_size, on_chunk, environment);
+    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    unsafe { *out = result };
+}
+
+/// Call the bundled Quilon closure with one chunk's bytes (built into a proper `Text`, header
+/// included, via [`crate::mem::alloc_text`] — so `chunk.length` counts its graphemes correctly),
+/// returning whether it asked to keep reading (`true`) or stop (`false`).
+fn call_on_chunk(
+    on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8,
+    environment: *mut c_void,
+    bytes: &[u8],
+) -> bool {
+    let text = crate::mem::alloc_text(bytes);
+    on_chunk(text.data as *const u8, text.len, environment) != 0
+}
+
+/// The `@streamFile` read loop: read `path` in `chunk_size`-byte reads, parking (via
+/// [`read_once`]) only when a source is not ready, and deliver each [`split_chunk`] cut.
+fn stream_file(
+    path: &str,
+    chunk_size: f64,
+    on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8,
+    environment: *mut c_void,
+) -> QlResult {
+    if chunk_size.fract() != 0.0 || chunk_size <= 0.0 {
+        return QlResult::not_ok(&format!(
+            "@streamFile: chunkSize must be a positive whole number, got {}",
+            crate::mem::format_num(chunk_size)
+        ));
+    }
+    // `as usize` saturates rather than overflows, so a chunkSize past usize::MAX just becomes
+    // usize::MAX here — try_reserve_exact below fails that the same way as any other
+    // allocation it cannot grant.
+    let chunk_size = chunk_size as usize;
+    let mut buffer: Vec<u8> = Vec::new();
+    if buffer.try_reserve_exact(chunk_size).is_err() {
+        return QlResult::not_ok(&format!(
+            "@streamFile: cannot allocate a {chunk_size}-byte chunk buffer"
+        ));
+    }
+    buffer.resize(chunk_size, 0);
+
+    // Non-blocking at open, so a FIFO with no writer never blocks the single-threaded
+    // scheduler waiting for the first byte; `read_once` parks on it exactly like any other
+    // not-yet-ready source.
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            return QlResult::not_ok(&format!("@streamFile failed to open {path}: {error}"));
+        }
+    };
+    let fd = file.as_raw_fd();
+
+    let mut carry: Vec<u8> = Vec::new();
+    let mut delivered: i64 = 0;
+
+    loop {
+        let count = match read_once(fd, &mut buffer) {
+            Ok(count) => count,
+            Err(error) => {
+                return QlResult::not_ok(&format!("@streamFile failed to read {path}: {error}"));
+            }
+        };
+        let at_eof = count == 0;
+        if !at_eof {
+            carry.extend_from_slice(&buffer[..count]);
+        } else if carry.is_empty() {
+            return QlResult::ok_num(delivered as f64);
+        }
+
+        let cut = match split_chunk(&carry, at_eof) {
+            Ok(cut) => cut,
+            Err(message) => return QlResult::not_ok(&message),
+        };
+        if cut == 0 {
+            continue;
+        }
+        delivered += cut as i64;
+        let keep_going = call_on_chunk(on_chunk, environment, &carry[..cut]);
+        carry.drain(..cut);
+        if at_eof || !keep_going {
+            return QlResult::ok_num(delivered as f64);
+        }
+    }
+}
+
+/// The cut is the end of `buffer`'s valid-Text prefix, holding back a trailing grapheme more
+/// bytes could still extend. At EOF nothing more can arrive, so the cut is the whole buffer.
+fn split_chunk(buffer: &[u8], at_eof: bool) -> Result<usize, String> {
+    let valid: &str = match std::str::from_utf8(buffer) {
+        Ok(valid) => valid,
+        Err(error) if !at_eof && error.error_len().is_none() => {
+            // Incomplete trailing sequence, and more bytes may still complete it: the valid
+            // prefix ahead of it is unambiguous either way.
+            std::str::from_utf8(&buffer[..error.valid_up_to()]).expect("checked above")
+        }
+        Err(_) => return Err("@streamFile read bytes that are not valid UTF-8".to_string()),
+    };
+    if at_eof {
+        return Ok(valid.len());
+    }
+    Ok(valid
+        .grapheme_indices(true)
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or(0))
 }
 
 #[cfg(test)]

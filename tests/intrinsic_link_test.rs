@@ -74,6 +74,11 @@ linkedGreeting = "linked " + "again"
     : true
   assert(reached, equals(true))
 
+  ~ __stream_file_run (the @streamFile leaf IO primitive) and the onChunk thunk it calls
+  ~ through. A missing path is a safe, deterministic NotOk — no real file needed.
+  streamed = @streamFile("/definitely/does/not/exist/quilon-smoke", 10, chunk => true)
+  streamed ? | Ok(_) => assert(false, equals(true)) | NotOk(_) => $
+
   ~ __argv_to_text_array / __envp_to_map come from these parameters existing.
   assert(args.size >= 1, equals(true))
   assert(env.size >= 0, equals(true))
