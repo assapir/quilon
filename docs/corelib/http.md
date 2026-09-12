@@ -8,7 +8,7 @@ sidebar:
 
 Import with `<< core.http`. See the [corelib index](README.md).
 
-An HTTP client written in Quilon over [`core.net`](net.md)'s `@tcpRequest`. The scheme is
+An HTTP client written in Quilon over [`core.net`](net.md)'s `net.@tcpRequest`. The scheme is
 **plain HTTP** — URLs are `http://host[:port]/path` (scheme optional, default port 80). Each
 request opens one connection and sends `Connection: close`, over HTTP/1.1.
 

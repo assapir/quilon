@@ -1,5 +1,6 @@
-~ core.time — time primitives. `@sleep` is a leaf IO primitive (the `@` marker);
-~ `now` is a plain clock read.
+~ core.time — time primitives. `@sleep` is a leaf IO primitive (the `@` marker), reached
+~ through the `time` binding as `time.@sleep(seconds)`; `now` is a plain clock read,
+~ reached as `time.now()`.
 ~ Import with `<< core.time`.
 
 ~ Pause the current fiber for `seconds` seconds (a fractional Num), then continue.

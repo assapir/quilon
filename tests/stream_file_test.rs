@@ -34,7 +34,7 @@ fn a_small_file_with_a_large_chunk_size_yields_ok_with_the_file_size() {
 ^ = () -> Num => <
   seen := ""
   count := 0
-  result = @streamFile("{path}", 1000, chunk => <
+  result = io.@streamFile("{path}", 1000, chunk => <
     seen := seen + chunk
     count := count + 1
     true
@@ -62,7 +62,7 @@ fn on_chunk_returning_false_stops_after_the_first_chunk() {
 ^ = () -> Num => <
   seen := ""
   count := 0
-  result = @streamFile("{path}", 3, chunk => <
+  result = io.@streamFile("{path}", 3, chunk => <
     seen := seen + chunk
     count := count + 1
     false
@@ -93,7 +93,7 @@ fn a_missing_file_yields_not_ok() {
         r#"<< core.io
 
 ^ = () -> Num => <
-  @streamFile("{path}", 10, chunk => < true >) ?
+  io.@streamFile("{path}", 10, chunk => < true >) ?
     | Ok(_) => 0
     | NotOk(_) => 1
 >
@@ -111,7 +111,7 @@ fn a_non_positive_chunk_size_yields_not_ok() {
             r#"<< core.io
 
 ^ = () -> Num => <
-  @streamFile("{path}", {chunk_size}, chunk => < true >) ?
+  io.@streamFile("{path}", {chunk_size}, chunk => < true >) ?
     | Ok(_) => 0
     | NotOk(_) => 1
 >
@@ -133,7 +133,7 @@ fn a_chunk_size_too_large_to_allocate_yields_not_ok() {
         r#"<< core.io
 
 ^ = () -> Num => <
-  @streamFile("{path}", 100000000000000000000, chunk => < true >) ?
+  io.@streamFile("{path}", 100000000000000000000, chunk => < true >) ?
     | Ok(_) => 0
     | NotOk(_) => 1
 >
@@ -154,7 +154,7 @@ fn a_file_ending_inside_a_utf_8_sequence_yields_not_ok() {
         r#"<< core.io
 
 ^ = () -> Num => <
-  @streamFile("{path}", 100, chunk => < true >) ?
+  io.@streamFile("{path}", 100, chunk => < true >) ?
     | Ok(_) => 0
     | NotOk(_) => 1
 >
@@ -178,7 +178,7 @@ fn a_chunk_edge_inside_a_multi_byte_code_point_never_splits_it() {
 ^ = () -> Num => <
   seen := ""
   count := 0
-  result = @streamFile("{path}", 2, chunk => <
+  result = io.@streamFile("{path}", 2, chunk => <
     seen := seen + chunk
     count := count + 1
     true
@@ -207,7 +207,7 @@ fn a_chunk_edge_inside_a_grapheme_cluster_never_splits_it() {
 ^ = () -> Num => <
   seen := ""
   count := 0
-  result = @streamFile("{path}", 2, chunk => <
+  result = io.@streamFile("{path}", 2, chunk => <
     seen := seen + chunk
     count := count + 1
     true

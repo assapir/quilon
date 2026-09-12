@@ -19,17 +19,20 @@
 //! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 
-use crate::ast::{Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement};
+use crate::ast::{
+    Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement, at_primitive_name,
+};
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
-/// The corelib name of the value-returning stdin read primitive; `@readStdin()` evaluates to
-/// a deferred `Text`.
-const READ_PRIMITIVE: &str = "@readStdin";
+/// The bare name of the value-returning stdin read primitive, reached by an importer as
+/// `io.@readStdin()`; the call evaluates to a deferred `Text`.
+const READ_PRIMITIVE: &str = "readStdin";
 
-/// The internal name of the request-exchange socket primitive; `@tcpRequest(addr, req)`
-/// evaluates to a deferred `Result` (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
-const TCP_REQUEST_PRIMITIVE: &str = "@tcpRequest";
+/// The bare name of the request-exchange socket primitive, reached by an importer as
+/// `net.@tcpRequest(addr, req)`; the call evaluates to a deferred `Result`
+/// (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
+const TCP_REQUEST_PRIMITIVE: &str = "tcpRequest";
 
 /// The argument count `@tcpRequest` takes (`address`, `requestBytes`).
 const TCP_REQUEST_ARITY: usize = 2;
@@ -281,16 +284,20 @@ impl Scope {
     }
 }
 
-/// Whether `function`/`arguments` is a call to the `@readStdin` primitive (`@readStdin()`, no arguments).
+/// Whether `function`/`arguments` is a call to the `@readStdin` primitive (`@readStdin()`, no
+/// arguments) — qualified (`io.@readStdin`) or, as inside `core.io` itself, still bare.
 fn is_read_call(function: &Expression, arguments: &[Expression]) -> bool {
-    matches!(function, Expression::Identifier { name, .. } if name == READ_PRIMITIVE)
+    matches!(function, Expression::Identifier { name, .. }
+        if at_primitive_name(name) == Some(READ_PRIMITIVE))
         && arguments.is_empty()
 }
 
 /// Whether `function`/`arguments` is a call to the `@tcpRequest` primitive
-/// (`@tcpRequest(address, requestBytes)`, exactly two arguments).
+/// (`@tcpRequest(address, requestBytes)`, exactly two arguments) — qualified or bare, the
+/// same as [`is_read_call`].
 fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool {
-    matches!(function, Expression::Identifier { name, .. } if name == TCP_REQUEST_PRIMITIVE)
+    matches!(function, Expression::Identifier { name, .. }
+        if at_primitive_name(name) == Some(TCP_REQUEST_PRIMITIVE))
         && arguments.len() == TCP_REQUEST_ARITY
 }
 
@@ -367,6 +374,16 @@ mod tests {
         let src =
             "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  y = x\n  y == \"hi\" ? 0 : 1\n>";
         // Two lazy bindings, forced once at the comparison.
+        assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn a_bare_read_at_the_root_is_still_deferred() {
+        // A root program's own names stay bare — qualify renames nothing there — mirroring
+        // `corelib/io.qn`'s own body, which calls `@readStdin` bare. `at_primitive_name` must
+        // recognize the bare spelling too, or a root-level (or corelib-internal) call would
+        // silently stop being tracked as a deferred producer while codegen still launches it.
+        let src = "^ = () -> Num => < @readStdin() == \"hi\" ? 0 : 1 >";
         assert_eq!(force_count(src), 1);
     }
 

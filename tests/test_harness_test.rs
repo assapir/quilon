@@ -96,7 +96,7 @@ const SLEEP_THEN_FAILING_CASE_SUITE: &str = r#"
 test.describe("case ending after a park", () => <
   test.it("passes without parking", () => expect(1, equals(1)))
   test.it("sleeps then fails", () => <
-    @sleep(0.01)
+    time.@sleep(0.01)
     expect(1, equals(2))
   >)
   test.it("still runs and passes", () => expect(1, equals(1)))
@@ -503,9 +503,9 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The names `<< core.http` puts in a program, pinned EXACTLY. Every one arrives under its
-/// module's qualified name — nothing bare but the `@` primitives — so none can collide with
-/// anything the importer writes, and only the `>>`-exported ones resolve for it.
+/// The names `<< core.http` puts in a program, pinned EXACTLY. Every one — the `@`
+/// primitives included — arrives under its module's qualified name, so none can collide
+/// with anything the importer writes, and only the `>>`-exported ones resolve for it.
 ///
 /// `corelib/http.qn` needs the harness for its own cases and imports it with a plain `<<`,
 /// so the resolver walks into `core.test` (and `core.io` behind it), and the client's own
@@ -534,8 +534,8 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.io.write",
         "core.io.streamFile",
         "core.io.kb64",
-        "@readStdin",
-        "@streamFile",
+        "core.io.@readStdin",
+        "core.io.@streamFile",
         // core.test: the harness, the summary, the state (its `:=` globals and the
         // helpers that read/write them) and the lifecycle.
         "core.test.failAt",
@@ -559,7 +559,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.it",
         "core.test.reportSummary",
         // core.net, and the client itself.
-        "@tcpRequest",
+        "core.net.@tcpRequest",
         "core.http.Body",
         "core.http.Method",
         "core.http.Response",
