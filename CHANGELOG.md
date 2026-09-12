@@ -11,8 +11,8 @@ All notable changes to Quilon are documented here.
   (`@hits := 0`, `@open := true`, `@stand := Stand { }`). `@` marks the declaration only;
   every read and reassignment after it is bare, the same declaration/reassignment rule
   `:=` already has. The runtime is single-threaded until Stage 2, so today an atomic
-  binding compiles and runs exactly like a `:=` binding — the checker records the binding
-  as atomic for Stage 2's fiber-sharing check to read later. Misuse raises
+  binding compiles and runs exactly like a `:=` binding — the AST records the marker for
+  Stage 2's fiber-sharing check to build on. Misuse raises
   [QN347](docs/tooling/errors.md#qn347--atomic-binding-declared-without-) (`@name = value`)
   or [QN348](docs/tooling/errors.md#qn348--atomic-binding-used-with--after-its-declaration)
   (`@name` at a use site or on a reassignment). The language server's hover, rename, and
@@ -20,6 +20,13 @@ All notable changes to Quilon are documented here.
   `@` marker. See `docs/concurrency/README.md#sharing-state-across-fibers`,
   `docs/variables.md#atomic-bindings`, and `examples/atomic_binding.qn`. Issue #435 point
   9, issue #120 "3. Atomic bindings" and its 2026-09-10 amendment.
+- **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
+  `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
+  or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is
+  the caller's own code), parking on reactor readiness between reads; `onChunk` returns `true`
+  to keep reading or `false` to stop and close the file at once. Yields `Ok(bytesRead)` or
+  `NotOk(message)`, never fails the program. `io.streamFile(path, onChunk)` is the same call
+  with a default chunk size. See `docs/corelib/io.md` and `docs/concurrency/README.md`.
 - **A sum type may name itself as a payload, directly (`Tree = Leaf / Node(Tree)`) or
   through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`), and two variants may
   carry a different concrete type at the same payload position (`A(Num) / B(Text)`).** A

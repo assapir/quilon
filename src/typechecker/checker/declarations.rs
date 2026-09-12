@@ -871,9 +871,6 @@ impl TypeChecker {
                     value_aliasing,
                     declaration.span.clone(),
                 )?;
-                if declaration.atomic {
-                    self.env.mark_atomic(&declaration.name);
-                }
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.

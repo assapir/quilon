@@ -10,12 +10,13 @@ sidebar:
 
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
 > single-threaded fiber scheduler, the effect-only `@sleep` pause (`core.time`), the
-> deferred-value `@readStdin` (`core.io`), the networked `@tcpRequest` (`core.net`), and
-> the atomic-binding syntax `@name := …`. Planned for 1.0: a value-returning network
-> primitive such as `@get`, with which two independent reads finish in max-time, and the
-> multicore (M:N) runtime — a work-stealing scheduler running one worker per CPU as
-> reported to the process, the same under `quilon run` and a built binary, with the Boehm
-> GC working across threads and the fiber-sharing check and atomic types enforced.
+> deferred-value `@readStdin` (`core.io`), the networked `@tcpRequest` (`core.net`), the
+> strict, callback-driven `@streamFile` (`core.io`), and the atomic-binding syntax
+> `@name := …`. Planned for 1.0: a value-returning network primitive such as `@get`, with
+> which two independent reads finish in max-time, and the multicore (M:N) runtime — a
+> work-stealing scheduler running one worker per CPU as reported to the process, the same
+> under `quilon run` and a built binary, with the Boehm GC working across threads and the
+> fiber-sharing check and atomic types enforced.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
 code, and the runtime overlaps independent IO. A function that does IO is written and typed
@@ -27,10 +28,13 @@ resolve token. The model is **promise pipelining**.
 transitively calls an `@` primitive is concurrency-capable, with **no propagation** up the
 call chain.
 
-**Deferred values.** Calling an `@` primitive launches the IO and returns immediately with a
-*deferred* value; the caller continues. Deferred-ness propagates as the value flows —
-passed as an argument, stored in a record or array, returned from a function — forcing
-nothing along the way. That threading is the *pipelining*.
+**Deferred values.** A value-returning `@` primitive (`@readStdin`, `@tcpRequest`) launches
+its IO and returns immediately with a *deferred* value; the caller continues. Deferred-ness
+propagates as the value flows — passed as an argument, stored in a record or array, returned
+from a function — forcing nothing along the way. That threading is the *pipelining*. An
+effect-only or callback-driven `@` primitive (`@sleep`, `@streamFile`) runs in program order
+on the calling fiber: `@sleep` parks for its whole duration; `@streamFile` parks when a read
+reports not ready (a pipe or FIFO) — a regular file's reads return at once.
 
 **Forcing happens at the leaves.** A deferred value is forced — the fiber parks until it is
 ready — at a **strict** operation: arithmetic, comparison, pattern match (`?`), IO
@@ -133,6 +137,15 @@ response until the peer closes (close-delimited), and hand back a deferred `Resu
 `Ok(responseBytes)` on success or `NotOk(errorMessage)` on any network failure — forced on use
 like `@readStdin`. A failure is a value to match; the response is capped at 16 MiB.
 The HTTP client sits on it — framing and parsing happen in ordinary Quilon on the forced bytes.
+
+`core.io` — **`@streamFile(path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) ->
+Result`** reads `path` in `chunkSize`-byte reads, calling `onChunk` once per whole, valid-Text
+chunk. `onChunk` is the caller's own code, so `@streamFile` runs strictly, in program order on
+the calling fiber, parking when a read reports not ready (a pipe or FIFO; a regular file's
+reads return at once), and hands back a plain `Result` once the read finishes or `onChunk`
+returns `false` to stop. `Ok(bytesRead)` carries the total bytes delivered; `NotOk(message)`
+covers a missing file, a read error, invalid UTF-8 in the file, and an invalid `chunkSize`.
+(See `examples/streamFile.qn`.)
 
 ## Where it is headed
 

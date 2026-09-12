@@ -6,6 +6,9 @@
 ~   io.eprint(x)          ~ same, to stderr
 ~   @readStdin()          ~ read one line from stdin (Text, without the trailing newline);
 ~                           an `@` primitive keeps its bare name once the module is imported
+~   @streamFile(path, chunkSize, onChunk)   ~ read a file in chunkSize-byte chunks, calling
+~                                             onChunk(chunk) per chunk; Ok(bytesRead)/NotOk(msg)
+~   io.streamFile(path, onChunk)   ~ @streamFile with a runtime-chosen default chunk size
 ~   io.stdout, io.stderr  ~ the standard file descriptors (Num: 1 and 2)
 ~
 ~ Examples:
@@ -46,3 +49,23 @@
 ~ a strict operation reads the bytes (a comparison, `print`, a native call, ...). At
 ~ end-of-input it yields the empty Text `""`. The body below is an inert placeholder.
 >> @readStdin = () -> Text => < "" >
+
+~ Read `path` in `chunkSize`-byte reads, calling `onChunk` once per chunk — on the calling
+~ fiber, parking when a read reports not ready (a pipe or FIFO; a regular file's reads return
+~ at once). Every chunk is whole, valid Text (an incomplete UTF-8 sequence or grapheme cluster
+~ at a read's end carries into the next one); `onChunk` returns `true` to keep reading or
+~ `false` to stop and close the file at once. Yields `Ok(bytesRead)` (the total bytes
+~ delivered) at end-of-input or on a stop, or `NotOk(message)` on any failure (a missing file,
+~ a read error, invalid UTF-8 in the file, a `chunkSize` that is zero, negative, or fractional,
+~ or a `chunkSize` too large to allocate a chunk buffer for) — never fails the program. The
+~ body below is an inert placeholder.
+>> @streamFile = (path :: Text, chunkSize :: Num, onChunk :: (Text) -> Bool) -> Result => <
+  NotOk("")
+>
+
+~ 64 KiB: per-chunk cost is the callback, so a file default is large.
+kb64 = 65536
+
+>> streamFile = (path :: Text, onChunk :: (Text) -> Bool) -> Result => <
+  @streamFile(path, kb64, onChunk)
+>

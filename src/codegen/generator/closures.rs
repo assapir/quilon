@@ -67,6 +67,51 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.context.struct_type(&[ptr.into(), ptr.into()], false)
     }
 
+    /// Store `closure`'s `{ ptr fn, ptr env }` into a fresh alloca (named `label`) and return
+    /// the pointer — the ONE environment pointer a runtime entry point forwards to a
+    /// fixed-shape trampoline that does not itself know the closure's real signature. Shared
+    /// by `aborts()` (`generate_aborts_held`) and `@streamFile` (`generate_at_primitive`), the
+    /// two places a closure crosses into the runtime this way.
+    pub(super) fn bundle_closure(
+        &mut self,
+        closure: inkwell::values::StructValue<'ctx>,
+        label: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let bundle_ty = self.closure_struct_type();
+        let bundle = self.create_entry_block_alloca(label, bundle_ty.into())?;
+        self.builder
+            .build_store(bundle, closure)
+            .map_err(ctx("Failed to store the closure bundle"))?;
+        Ok(bundle)
+    }
+
+    /// The reverse of [`Self::bundle_closure`], run inside the trampoline that unpacks it: load
+    /// the `{ ptr fn, ptr env }` bundle at `bundle` (named `label`) and split it into the real
+    /// function and environment pointers for the indirect call that actually runs the closure.
+    pub(super) fn unpack_closure_bundle(
+        &mut self,
+        bundle: PointerValue<'ctx>,
+        label: &str,
+    ) -> Result<(PointerValue<'ctx>, PointerValue<'ctx>), String> {
+        let bundle_ty = self.closure_struct_type();
+        let loaded = self
+            .builder
+            .build_load(bundle_ty, bundle, label)
+            .map_err(ctx("Failed to load the closure bundle"))?
+            .into_struct_value();
+        let real_fn = self
+            .builder
+            .build_extract_value(loaded, 0, "real_fn")
+            .map_err(ctx("Failed to extract the closure function"))?
+            .into_pointer_value();
+        let real_env = self
+            .builder
+            .build_extract_value(loaded, 1, "real_env")
+            .map_err(ctx("Failed to extract the closure environment"))?
+            .into_pointer_value();
+        Ok((real_fn, real_env))
+    }
+
     /// Allocate a GC-managed heap cell large enough to hold one `ty` value and return the
     /// pointer to it. Used to "box" a `:=` local captured by reference, so the cell
     /// outlives the defining frame and is shared with the closure.

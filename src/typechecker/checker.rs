@@ -509,9 +509,6 @@ pub struct Symbol {
     /// A payload-less constant (a nullary sum variant value): shared, but with no
     /// writable interior, so every use counts as fresh.
     constant: bool,
-    /// Declared `@name := …`. Recorded here for the Stage 2 fiber-sharing check
-    /// (issue #120) to read later; the single-threaded runtime does nothing with it.
-    atomic: bool,
 }
 
 #[derive(Debug, Clone)]

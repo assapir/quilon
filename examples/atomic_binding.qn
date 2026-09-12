@@ -1,9 +1,5 @@
-~ Atomic bindings (see docs/concurrency/README.md#sharing-state-across-fibers): `@name := …`
-~ declares a mutable binding the same way `:=` does, marked as one Stage 2's fiber-sharing
-~ check will let more than one fiber reach. The runtime is single-threaded until Stage 2, so
-~ today an atomic binding compiles and runs exactly like a `:=` binding — its reassignment is
-~ trivially atomic with only one fiber ever touching it. `@` marks the DECLARATION only; every
-~ read and reassignment after that is bare, the same rule a plain `:=` binding already follows.
+~ `@name := …` declares an atomic binding. `@` marks the declaration only; every read and
+~ reassignment after it is bare, the same rule a plain `:=` binding already follows.
 
 @yakShaves := 0     ~ a top-level atomic global — one cell every call below shares
 

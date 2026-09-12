@@ -45,7 +45,6 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: false,
-                atomic: false,
             },
             span,
         )
@@ -69,7 +68,6 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: true,
-                atomic: false,
             },
             span,
         )
@@ -113,7 +111,6 @@ impl Environment {
             result_aliasing: None,
             setter_receiver: false,
             constant: false,
-            atomic: false,
         }
     }
 
@@ -128,7 +125,6 @@ impl Environment {
             result_aliasing: None,
             setter_receiver: false,
             constant: false,
-            atomic: false,
         };
         let root = self.scopes.first_mut().expect("the root scope exists");
         root.insert(name.to_string(), symbol);
@@ -155,7 +151,6 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: true,
                 constant: false,
-                atomic: false,
             },
             span,
         )
@@ -182,7 +177,6 @@ impl Environment {
                 result_aliasing: None,
                 setter_receiver: false,
                 constant: false,
-                atomic: false,
             },
             span,
         )
@@ -236,12 +230,6 @@ impl Environment {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
 
-    /// Whether `name` was declared with `@name := …` (Stage 2's fiber-sharing check reads
-    /// this; today it is purely descriptive — see `src/typechecker/checker.rs::Symbol`).
-    pub fn is_atomic(&self, name: &str) -> bool {
-        self.lookup(name).map(|s| s.atomic).unwrap_or(false)
-    }
-
     /// Update a binding's type (used for function type inference).
     /// Returns `true` if a binding was found and updated.
     pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {
@@ -259,15 +247,6 @@ impl Environment {
     pub(super) fn set_result_aliasing(&mut self, name: &str, result_aliasing: ResultAliasing) {
         if let Some(symbol) = self.lookup_mut(name) {
             symbol.result_aliasing = Some(result_aliasing);
-        }
-    }
-
-    /// Mark a just-`define_binding`-ed name atomic (`@name := …`) — a separate step
-    /// rather than another `define_binding` parameter, the same way `set_result_aliasing`
-    /// annotates a binding after the fact instead of growing that constructor further.
-    pub(super) fn mark_atomic(&mut self, name: &str) {
-        if let Some(symbol) = self.lookup_mut(name) {
-            symbol.atomic = true;
         }
     }
 }
