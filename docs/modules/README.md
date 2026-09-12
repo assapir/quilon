@@ -51,12 +51,13 @@ An import **claims its short name** for the whole file: after `<< core.http`, a 
 named `http` (top-level, local, or a parameter) is an error. And an import binds only the
 code **below it** — like every other name, since the language has no hoisting.
 
-Two spellings stay bare:
+An `@` leaf IO primitive is an export like any other, reached through its module's
+binding with the `@` marker carried into the call: `io.@readStdin()`, `io.@streamFile(path,
+chunkSize, onChunk)`, `time.@sleep(seconds)`, `net.@tcpRequest(address, requestBytes)` — the
+full path (`core.io.@readStdin`) works the same way it does for any other export.
 
-- `@` leaf IO primitives (`@sleep`, `@readStdin`, `@tcpRequest`): importing their module
-  is required, and the `@` name is global — the sigil marks it.
-- The compiler's own surface — `assert`/`expect` and the matchers — which belongs to no
-  module and needs no import.
+One spelling stays bare: the compiler's own surface — `assert`/`expect` and the
+matchers — which belongs to no module and needs no import.
 
 ## Privacy
 

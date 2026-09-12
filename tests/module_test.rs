@@ -63,6 +63,42 @@ fn test_bare_export_name_is_not_in_scope() {
 }
 
 #[test]
+fn test_at_primitive_resolves_through_its_binding() {
+    // An `@` leaf IO primitive is an export like any other: reached through the module's
+    // binding, `@` marker included.
+    let source = r#"
+        << core.io
+        ^ = () -> Num => < io.@readStdin().size >
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_bare_at_primitive_name_is_not_in_scope() {
+    // The bare-after-import special case is gone: `@readStdin` after `<< core.io` is an
+    // undefined name, the same as any other unqualified export.
+    let source = r#"
+        << core.io
+        ^ = () -> Num => < @readStdin().size >
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    let err = result.expect_err("a bare `@readStdin` must not resolve under `<< core.io`");
+    assert!(err.contains("@readStdin"), "unexpected error: {}", err);
+}
+
+#[test]
+fn test_at_primitive_full_path_resolves_too() {
+    // The full path always works, the same escape hatch as any other export.
+    let source = r#"
+        << core.io
+        ^ = () -> Num => < core.io.@readStdin().size >
+    "#;
+    let result = check_with_base(source, Path::new("."));
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
 fn test_text_ops_need_no_import() {
     // Text is a built-in primitive (like Num/arrays): its ops (`+`, `.size`,
     // `.length`) work with NO import.
