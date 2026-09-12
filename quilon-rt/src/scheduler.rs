@@ -169,6 +169,21 @@ thread_local! {
     /// whether SOME trap is active, since a fail-loud exit always suspends whichever fiber
     /// is actually running (the innermost one), caught by that fiber's own guard loop.
     static ABORT_TRAP_DEPTH: Cell<u32> = const { Cell::new(0) };
+
+    /// The ids of the fibers currently resuming, innermost last — mirrors `gc::enter_fiber`/
+    /// `leave_fiber`'s own nesting (pushed/popped in lockstep, inside [`resume_fiber`]), kept
+    /// as a SEPARATE stack here so other state that must live per FIBER rather than per
+    /// thread (a `< >` block's open launch scopes — see `crate::launch_scope`) has a way to
+    /// ask "which fiber is running right now" without reaching into the GC module's own
+    /// bookkeeping. Several fibers interleave on this one OS thread, so per-thread state
+    /// alone conflates them; per-fiber state keyed by this id does not.
+    static RUNNING_FIBERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The id of the fiber whose own code is executing right now, if this thread is inside a
+/// [`resume_fiber`] call at all (every fiber, including the seed one, is resumed through it).
+pub(crate) fn current_fiber_id() -> Option<usize> {
+    RUNNING_FIBERS.with(|running| running.borrow().last().copied())
 }
 
 /// Run `f` against the active scheduler. A short borrow only — never held across a
@@ -210,9 +225,13 @@ fn resume_fiber(
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
     gc::enter_fiber(id, high);
+    RUNNING_FIBERS.with(|running| running.borrow_mut().push(id));
     let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
     let result = coroutine.resume(());
     stack_overflow::restore_guard(previous_guard);
+    RUNNING_FIBERS.with(|running| {
+        running.borrow_mut().pop();
+    });
     gc::leave_fiber();
     result
 }
@@ -358,46 +377,61 @@ pub(crate) fn abort_trap_active() -> bool {
     ABORT_TRAP_DEPTH.get() > 0
 }
 
-/// Run an `aborts()` lambda's body — `function(environment)`, the raw parts of its
-/// (possibly wrapped) closure — to completion on a fresh nested fiber, resumed
-/// synchronously right here exactly as [`run_case_guarded`] resumes a case's. Yields the
-/// outcome: whether [`abort_current_trap`] ended it early, and if so, the report it recorded.
+/// Run `body` to completion on a fresh nested fiber, resumed synchronously right here
+/// exactly as [`run_case_guarded`] resumes a case's, catching a fail-loud exit reached
+/// inside it (`report::fail_at`, or a raw `__exit`) instead of letting it terminate the
+/// process: `Err` carries the report that would otherwise have gone straight to stderr,
+/// `Ok` the value `body` returned. The two current callers — [`run_abort_trap_guarded`]
+/// (the `aborts()` matcher) and [`crate::deferred::launch`] (a value-returning `@`
+/// primitive's background work, so a fault settles instead of exiting mid-launch) — are the
+/// same event to `report::fail_at`; only who is asking differs, so one guarded-fiber
+/// mechanism serves both instead of two copies of this loop.
 ///
-/// A park the body causes (`@sleep` and the rest) is forwarded to the fiber calling this,
-/// the same way [`run_case_guarded`] forwards one, so the scheduler keeps driving it as it
-/// would a top-level fiber's. Must be called from within a fiber (asserts otherwise).
-pub(crate) fn run_abort_trap_guarded(
-    function: extern "C" fn(*mut c_void) -> u8,
-    environment: *mut c_void,
-) -> Option<String> {
-    let outer_yielder = current_yielder("run_abort_trap_guarded");
+/// A park the body causes (`@sleep`, socket readiness, forcing another deferred, …) is
+/// forwarded to the fiber calling this — the same way [`run_case_guarded`] forwards one —
+/// so the scheduler keeps driving it exactly as it would a top-level fiber's. Must be
+/// called from within a fiber (asserts otherwise).
+pub(crate) fn run_fault_guarded<T: 'static>(
+    body: impl FnOnce() -> T + 'static,
+) -> Result<T, String> {
+    let outer_yielder = current_yielder("run_fault_guarded");
 
     let allocation = allocate_fiber_stack(FIBER_STACK_SIZE);
     let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
+    let mut produced: Option<T> = None;
+    let produced_ptr: *mut Option<T> = &mut produced;
     let mut coroutine = new_fiber(allocation.stack, move || {
-        function(environment);
+        let value = body();
+        // SAFETY: `produced` is a local of this function's frame, which does not return
+        // until the loop below has driven this coroutine to completion or force-reset it —
+        // either way, well after this closure could possibly run.
+        unsafe { *produced_ptr = Some(value) };
     });
     let id = with_scheduler(|scheduler| scheduler.reserve_id());
     gc::register(id, low, high);
 
-    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
-    let outcome = loop {
-        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
-            CoroutineResult::Yield(Park::AbortTrapped(report)) => {
-                break Some(report);
-            }
+    // Raised only around the ONE call that actually runs the guarded coroutine's code, not
+    // around the whole loop: a park (`suspend_on`, below) hands control back to `run`'s
+    // ready queue, which is then free to resume any OTHER fiber entirely — depth must be
+    // back down before that happens, or an unrelated fiber's own fail-loud exit would be
+    // misread as still inside THIS guard and wrongly trapped instead of exiting.
+    let fault = loop {
+        ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() + 1);
+        let result = resume_fiber(id, high, guard_low, low, &mut coroutine);
+        ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
+        match result {
+            CoroutineResult::Yield(Park::AbortTrapped(report)) => break Some(report),
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break None,
         }
     };
-    ABORT_TRAP_DEPTH.set(ABORT_TRAP_DEPTH.get() - 1);
     // See `run_case_guarded`'s own comment at the identical line: put the outer yielder
     // back before returning control to it, or its next park dereferences a dangling one.
     CURRENT_YIELDER.set(outer_yielder);
 
-    if outcome.is_some() {
+    if fault.is_some() {
         // Safe for the same reason `run_case_guarded` force-resets its own coroutine: the
-        // only frames left on the trap's stack are Quilon frames (no destructors) and the
+        // only frames left on the stack are Quilon frames (no destructors to run) and the
         // fail-loud reporter, whose outcome it already moved into the `Park` value before
         // suspending.
         unsafe { coroutine.force_reset() };
@@ -406,12 +440,29 @@ pub(crate) fn run_abort_trap_guarded(
     drop(coroutine);
     with_scheduler(|scheduler| scheduler.release_id(id));
 
-    outcome
+    match fault {
+        Some(report) => Err(report),
+        None => Ok(produced
+            .expect("a body that did not fault must have stored its value before returning")),
+    }
+}
+
+/// Run an `aborts()` lambda's body — `function(environment)`, the raw parts of its
+/// (possibly wrapped) closure — through [`run_fault_guarded`]. `Some` (the report) iff
+/// [`abort_current_trap`] ended it early; `None` if it returned normally.
+pub(crate) fn run_abort_trap_guarded(
+    function: extern "C" fn(*mut c_void) -> u8,
+    environment: *mut c_void,
+) -> Option<String> {
+    run_fault_guarded(move || {
+        function(environment);
+    })
+    .err()
 }
 
 /// End the currently running `aborts()` trap: suspend it with the abort marker (see
 /// [`Park::AbortTrapped`]), carrying the report withheld from stderr, through the same
-/// thread-local yielder [`sleep`] uses. Never returns — [`run_abort_trap_guarded`]'s loop
+/// thread-local yielder [`sleep`] uses. Never returns — [`run_fault_guarded`]'s loop
 /// force-resets this coroutine once it sees the marker, so it is never resumed again. Must
 /// be called from within a trapped fiber (a fail-loud exit only ever reaches this while
 /// [`abort_trap_active`] is true).
@@ -419,7 +470,7 @@ pub(crate) fn abort_current_trap(report: String) -> ! {
     let yielder = current_yielder("abort_current_trap");
     // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
     unsafe { (*yielder).suspend(Park::AbortTrapped(report)) };
-    unreachable!("run_abort_trap_guarded force-resets this coroutine on the abort marker")
+    unreachable!("run_fault_guarded force-resets this coroutine on the abort marker")
 }
 
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
@@ -682,7 +733,7 @@ mod tests {
     use std::os::raw::{c_int, c_void};
     use std::sync::Mutex;
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
 
     #[link(name = "gc", kind = "static")]
@@ -892,6 +943,40 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn abort_trap_depth_drops_while_the_guarded_body_only_parks() {
+        // A guarded body that PARKS rather than running straight through: while it merely
+        // waits (sleeping here; a launch's socket/stdin readiness wait is the real case),
+        // depth must NOT still read "inside a trap" — the ready queue is free to run any
+        // OTHER fiber meanwhile, and an unrelated fiber's own fail-loud exit must not be
+        // caught by a trap it has nothing to do with, just because this one hasn't woken up
+        // yet (root cause of a launch that overlaps a plain `assert` elsewhere: without this,
+        // the assert's exit gets wrongly redirected into this trap's machinery instead).
+        extern "C" fn sleeps(_environment: *mut c_void) -> u8 {
+            sleep(Duration::from_millis(20));
+            0
+        }
+        static SEEN_ACTIVE_WHILE_PARKED: AtomicBool = AtomicBool::new(true);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let _ = run_abort_trap_guarded(sleeps, ptr::null_mut());
+                });
+                // Enqueued after the guarded fiber, so the ready queue runs IT first —
+                // straight through to its own park, exactly like the scenario above.
+                spawn(|| {
+                    SEEN_ACTIVE_WHILE_PARKED.store(abort_trap_active(), Ordering::SeqCst);
+                });
+            });
+        });
+
+        assert!(
+            !SEEN_ACTIVE_WHILE_PARKED.load(Ordering::SeqCst),
+            "an unrelated fiber saw the trap as active while the guarded body was only parked"
+        );
     }
 
     #[test]

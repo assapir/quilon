@@ -1,0 +1,12 @@
+~ Block-scope join (see docs/concurrency/README.md): a `< >` block joins every launch it
+~ made directly before it returns, including one bound to a name it never reads again.
+~ `hearsay` is launched and never read; `testimony` is what the block needs.
+
+<< core.io
+
+^ = () -> Num => <
+  hearsay = @readStdin()          ~ launched — the block joins it even though it goes unread
+  testimony = @readStdin()
+  assert(testimony, equals(""))   ~ end-of-input; forces `testimony` (the join settles `hearsay` too)
+  0
+>

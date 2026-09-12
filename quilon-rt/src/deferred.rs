@@ -112,6 +112,10 @@ enum DeferredState<T> {
     Pending,
     /// The producer stored its result.
     Ready(T),
+    /// The producer hit a fail-loud condition instead — the fully rendered report it would
+    /// have written straight to stderr, held here instead so the enclosing block's join can
+    /// report it once every sibling launch has settled (see `crate::launch_scope`).
+    Faulted(String),
 }
 
 /// A deferred value's cell — the generic core every value-returning `@` primitive shares.
@@ -132,6 +136,19 @@ pub(crate) struct Deferred<T> {
 /// The cell is GC-allocated so a GC pointer inside `T` is scanned, and the producer fiber
 /// holds the cell on its own (GC-scanned) stack until it returns, so the cell — and the value
 /// it will hold — stay reachable across any collection while pending.
+///
+/// A fail-loud condition inside `producer` (an IO error today) does not exit the process from
+/// here: [`crate::scheduler::run_fault_guarded`] catches it and the cell is marked
+/// [`DeferredState::Faulted`] instead — every producer gets this for free, not just the ones
+/// that happen to check for it themselves. The cell also registers its own join with
+/// whatever `< >` block's launch scope is open right now (see `crate::launch_scope`), so
+/// that block settles it — whether or not its value is ever forced — before returning.
+///
+/// A bound-but-unread launch's own alloca may be dead-store-eliminated once the compiled
+/// program never reads it again (the whole point of joining it is that nothing else has
+/// to), which would leave nothing scanned pointing at `cell` between the producer finishing
+/// and the join reading it — so the cell is [pinned](crate::mem::PinnedPointer) from here
+/// until the registered join thunk has read its final state.
 pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut Deferred<T> {
     let size = std::mem::size_of::<Deferred<T>>();
     let cell = __alloc(size as i64) as *mut Deferred<T>;
@@ -156,8 +173,16 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
         );
     }
     let address = cell as usize;
+    // ponytail: `spawn` allocates one 512 KiB fiber stack for the launch, and
+    // `run_fault_guarded` a SECOND for its own nested guard — every launch pays for two
+    // stacks it could run on one, if the guard ran on the spawned fiber directly rather than
+    // a fiber nested inside it. Folding them needs `run`'s own ready-queue loop to gain a
+    // new terminal case (today only `run_case_guarded`/`run_abort_trap_guarded`'s NESTED
+    // loops ever see `Park::AbortTrapped`), which is out of scope here — see the PR body.
+    // Upgrade when launch volume (call-level launch, once every function call can be one)
+    // makes the second stack's cost worth avoiding.
     spawn(move || {
-        let value = producer();
+        let outcome = crate::scheduler::run_fault_guarded(producer);
         // A cell is resolved exactly once; a second resolve would clobber live data (and, once
         // M:N lands, signal a real race). Guard it in debug builds.
         debug_assert!(
@@ -167,9 +192,18 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
         // SAFETY: `cell` is still the live cell this closure owns; single-threaded, so storing
         // the result cannot race a force. The assignment drops the prior `Pending` (a no-op).
         unsafe {
-            (*cell).state = DeferredState::Ready(value);
+            (*cell).state = match outcome {
+                Ok(value) => DeferredState::Ready(value),
+                Err(report) => DeferredState::Faulted(report),
+            };
         }
         wake_address(address);
+    });
+    let pin = crate::mem::PinnedPointer::new(cell as *mut c_void);
+    crate::launch_scope::register(move || {
+        let outcome = unsafe { settle(cell) };
+        drop(pin); // the cell's final state is read; the runtime no longer needs it pinned
+        outcome
     });
     cell
 }
@@ -177,6 +211,11 @@ pub(crate) fn launch<T: 'static>(producer: impl FnOnce() -> T + 'static) -> *mut
 /// Force a deferred value: park the current fiber until `cell` is resolved, then return the
 /// value (memoized — a second force is O(1)). `T: Copy` so the value is read out without
 /// disturbing the cell that other forces still read.
+///
+/// A `Faulted` cell never yields a value: reporting it is the enclosing block's join's job
+/// (see `crate::launch_scope`), so a strict force that finds one there reaches that same
+/// join early instead — every sibling launch of the block still settles first, exactly as
+/// the block's own close would settle it.
 ///
 /// # Safety
 /// `cell` is a live deferred for the whole force (the taint pass keeps it reachable to here).
@@ -190,6 +229,28 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
             // `T: Copy`, so this reads the value out without disturbing the cell that other
             // forces still read (memoized).
             DeferredState::Ready(value) => return *value,
+            DeferredState::Faulted(report) => {
+                crate::launch_scope::fault_current_fiber(report.clone())
+            }
+            DeferredState::Pending => park_on_address(address),
+        }
+    }
+}
+
+/// Park until `cell` settles — either outcome, without reading a value out — what a launch's
+/// join needs: it runs to completion whether or not anything ever forces it. `None` if it
+/// resolved to a value, `Some(report)` (the fully rendered fault text) if it faulted.
+///
+/// # Safety
+/// `cell` is a live deferred for the whole wait (the registering `launch` call's own join
+/// thunk is this function's only caller, and it captures nothing that outlives the cell).
+unsafe fn settle<T>(cell: *mut Deferred<T>) -> Option<String> {
+    let address = cell as usize;
+    loop {
+        // SAFETY: `cell` is a live deferred (see the contract).
+        match unsafe { &(*cell).state } {
+            DeferredState::Ready(_) => return None,
+            DeferredState::Faulted(report) => return Some(report.clone()),
             DeferredState::Pending => park_on_address(address),
         }
     }

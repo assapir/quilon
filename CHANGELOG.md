@@ -6,6 +6,18 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A `< >` block joins every launch it made directly (`@readStdin`, `@tcpRequest`) before
+  it returns — `allSettled`, never cancelled — including one bound to a name the block
+  never reads again, which previously only survived by the scheduler draining ready fibers
+  before process exit.** A fault inside a launch (an IO error today) no longer exits the
+  process at the fault: it is recorded on the launch's own cell, its sibling launches of
+  the block settle, and then every fault propagates out, reported in launch order, each
+  naming its own launch site — a property of every launch cell (`quilon-rt::launch_scope`),
+  not a `@readStdin`-only special case. The registry is keyed by block, not by value, so a
+  future primitive whose result is ready at once but whose work is a long-running
+  background task can register with the enclosing block the same way. See
+  `docs/concurrency/README.md`, `examples/block_scope_join.qn`. Part of #120 (the
+  block-scope-join half; cross-function pipelining follows in a later change).
 - **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
   `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
   or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is

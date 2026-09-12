@@ -42,12 +42,24 @@ pub struct DeferInfo {
     /// would escape. Empty for pure programs — the whole codegen-visible surface of the
     /// taint analysis.
     force_sites: HashSet<Span>,
+    /// Spans of `< >` blocks that directly launch at least one value-returning `@`
+    /// primitive — the block-scope join's own surface. Codegen opens a launch registry on
+    /// entry to such a block and joins it (`allSettled`) before the block's value flows
+    /// out; every other block (the overwhelming majority) emits neither call. "Directly"
+    /// stops at a nested block or lambda — a launch inside one belongs to THAT scope.
+    launch_scopes: HashSet<Span>,
 }
 
 impl DeferInfo {
     /// Whether the value produced for the expression at `span` must be forced in place.
     pub fn is_force_site(&self, span: &Span) -> bool {
         self.force_sites.contains(span)
+    }
+
+    /// Whether the `< >` block at `span` must open and join a launch registry — it
+    /// directly launches at least one value-returning `@` primitive.
+    pub fn is_launch_scope(&self, span: &Span) -> bool {
+        self.launch_scopes.contains(span)
     }
 }
 
@@ -61,6 +73,7 @@ pub fn analyze(program: &Program) -> DeferInfo {
 
     DeferInfo {
         force_sites: taint.force_sites,
+        launch_scopes: taint.launch_scopes,
     }
 }
 
@@ -68,6 +81,10 @@ pub fn analyze(program: &Program) -> DeferInfo {
 #[derive(Default)]
 struct Taint {
     force_sites: HashSet<Span>,
+    launch_scopes: HashSet<Span>,
+    /// The spans of `< >` blocks currently being visited, innermost last — a launch found
+    /// while this is non-empty belongs to its last entry (see `launch_scopes`'s own doc).
+    block_stack: Vec<Span>,
 }
 
 impl Taint {
@@ -121,7 +138,11 @@ impl Taint {
                 for arg in arguments {
                     self.strict(arg, env);
                 }
-                produces_deferred(function, arguments)
+                let deferred = produces_deferred(function, arguments);
+                if deferred && let Some(scope) = self.block_stack.last() {
+                    self.launch_scopes.insert(scope.clone());
+                }
+                deferred
             }
 
             Expression::BinaryOperator { left, right, .. } => {
@@ -213,7 +234,12 @@ impl Taint {
                 }
                 any
             }
-            Expression::Block { statements, .. } => self.visit_block(statements, env),
+            Expression::Block { statements, span } => {
+                self.block_stack.push(span.clone());
+                let deferred = self.visit_block(statements, env);
+                self.block_stack.pop();
+                deferred
+            }
         }
     }
 
@@ -392,6 +418,38 @@ mod tests {
         // where the ternary's result is used strictly (the outer comparison).
         let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  chosen = true ? x : \"z\"\n  chosen == \"hi\" ? 0 : 1\n>";
         assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn a_block_that_directly_launches_is_a_launch_scope() {
+        let src = "<< core.io\n^ = () -> Num => <\n  x = @readStdin()\n  0\n>";
+        assert_eq!(info(src).launch_scopes.len(), 1);
+    }
+
+    #[test]
+    fn a_pure_block_is_not_a_launch_scope() {
+        let i = info("^ = () -> Num => < 1 + 2 * 3 >");
+        assert!(i.launch_scopes.is_empty());
+    }
+
+    #[test]
+    fn a_launch_inside_a_nested_block_scopes_to_that_block_only() {
+        // The outer block launches nothing directly; the launch belongs to the inner block.
+        let src = "<< core.io\n^ = () -> Num => <\n  helper = () => <\n    @readStdin()\n    0\n  >\n  helper()\n>";
+        let i = info(src);
+        assert_eq!(i.launch_scopes.len(), 1);
+        // The outer function body itself must not be the marked scope.
+        let program = {
+            let tokens = Lexer::tokenize(src).expect("lex");
+            parser::parse(&tokens).expect("parse")
+        };
+        let Item::FunctionDeclaration(entry) = &program.items[0] else {
+            panic!("expected the entry function");
+        };
+        assert!(
+            !i.is_launch_scope(entry.body.span()),
+            "the outer block launches nothing directly"
+        );
     }
 
     #[test]
