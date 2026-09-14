@@ -21,7 +21,7 @@ const ASSERT_READ: &str = r#"
 << core.test
 
 ^ = () -> Num => <
-  line = @readStdin()
+  line = io.@readStdin()
   assert(line, equals("hello"))
   0
 >
@@ -33,7 +33,7 @@ const ECHO_READ: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  io.print(@readStdin())
+  io.print(io.@readStdin())
   0
 >
 "#;
@@ -46,8 +46,8 @@ const TWO_READS: &str = r#"
 << core.test
 
 ^ = () -> Num => <
-  first = @readStdin()
-  second = @readStdin()
+  first = io.@readStdin()
+  second = io.@readStdin()
   assert(first, equals("hello"))
   assert(second, equals("world"))
   0
@@ -61,7 +61,7 @@ const WRITE_THEN_PRINT: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  line = @readStdin()
+  line = io.@readStdin()
   io.write(line, io.stdout)
   io.print(line)
   0

@@ -411,6 +411,30 @@ fn definition_resolves_across_a_file_import() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
+/// Go to definition on `io.@readStdin` — an `@` leaf IO primitive reached through its
+/// module's binding — answers the primitive's own declaration in `core.io`'s bundled
+/// source, the same way it would for an ordinary export like `io.print`.
+#[test]
+fn definition_resolves_an_at_primitive_through_its_binding() {
+    let text = "<< core.io\n^ = () -> Num => <\n  io.@readStdin()\n  0\n>\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+
+    let definition = definition_at(&checked.program, offset_of(text, "@readStdin", 0))
+        .expect("the primitive resolves");
+    assert_ne!(
+        definition.file, ROOT_FILE,
+        "the definition is in core.io's own source"
+    );
+    let corelib_text = checked
+        .sources
+        .get_text(definition.file)
+        .expect("the corelib source is in the source map");
+    assert!(
+        corelib_text[definition.start as usize..].starts_with(">> @readStdin"),
+        "the definition must point at the primitive's own declaration"
+    );
+}
+
 /// A program with a type error confined to one line — `doubleUp("kumquat")` — that has
 /// nothing to do with the well-typed call and the parameter right above it. Shared by the
 /// direct-analysis test below and the protocol-level test further down, both checking that
@@ -1516,6 +1540,31 @@ fn completions_after_an_import_binding_list_the_modules_exports() {
     let get = items.iter().find(|item| item.label == "Get").unwrap();
     assert_eq!(get.kind, CompletionKind::EnumMember);
     assert_eq!(get.detail.as_deref(), Some("Method"));
+}
+
+/// Case 2, an `@` leaf IO primitive: reached through the binding like any other export, so
+/// completion after `io.` lists it alongside the module's ordinary functions, carrying its
+/// `@` marker in the label.
+#[test]
+fn completions_after_an_import_binding_list_its_at_primitives() {
+    let text = "<< core.io\n\n^ = () -> Num => <\n  io.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+
+    for expected in ["print", "@readStdin", "@streamFile"] {
+        assert!(
+            labels.contains(expected),
+            "missing `{expected}`: {labels:?}"
+        );
+    }
+
+    let read_stdin = items
+        .iter()
+        .find(|item| item.label == "@readStdin")
+        .unwrap();
+    assert_eq!(read_stdin.kind, CompletionKind::Function);
 }
 
 /// Case 3, a user record: after `.` on an expression of a user-declared record type, its

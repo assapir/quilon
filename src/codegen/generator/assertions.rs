@@ -176,15 +176,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("`aborts()` reads a zero-parameter lambda".to_string());
         };
         let closure = actual.into_struct_value();
-
-        // Bundle the lambda's own `{ fn, env }` into the ONE environment pointer
-        // `__abort_trap_run` forwards to the trampoline below — the runtime knows nothing
-        // about the lambda's actual signature, only that `function(environment)` runs it.
-        let bundle_ty = self.closure_struct_type();
-        let bundle = self.create_entry_block_alloca("aborts_bundle", bundle_ty.into())?;
-        self.builder
-            .build_store(bundle, closure)
-            .map_err(ctx("Failed to store the aborts lambda's bundle"))?;
+        let bundle = self.bundle_closure(closure, "aborts_bundle")?;
 
         let thunk = self.emit_abort_trap_thunk(return_type)?;
         let thunk_ptr = thunk.as_global_value().as_pointer_value();
@@ -218,7 +210,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn emit_abort_trap_thunk(&mut self, return_type: &Type) -> Result<FunctionValue<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let ret_ty = self.boundary_type(return_type)?;
-        let bundle_ty = self.closure_struct_type();
 
         let fn_type = self.context.i8_type().fn_type(&[ptr_ty.into()], false);
         let name = format!("__aborts_thunk_{}", self.lambda_counter);
@@ -232,21 +223,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(entry);
 
         let bundle = function.get_nth_param(0).unwrap().into_pointer_value();
-        let loaded = self
-            .builder
-            .build_load(bundle_ty, bundle, "aborts_bundle")
-            .map_err(ctx("Failed to load the aborts bundle"))?
-            .into_struct_value();
-        let real_fn = self
-            .builder
-            .build_extract_value(loaded, 0, "real_fn")
-            .map_err(ctx("Failed to extract the real function pointer"))?
-            .into_pointer_value();
-        let real_env = self
-            .builder
-            .build_extract_value(loaded, 1, "real_env")
-            .map_err(ctx("Failed to extract the real environment pointer"))?
-            .into_pointer_value();
+        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "aborts_bundle")?;
 
         let call_type = ret_ty.fn_type(&[ptr_ty.into()], false);
         self.builder

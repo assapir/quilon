@@ -134,6 +134,6 @@ Its on-ramps:
 
 | Item | Status |
 |------|--------|
-| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin and one-shot TCP ship; files remain) |
+| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
 | Native HTTP server on the runtime | ⬜ |

@@ -1374,7 +1374,7 @@ fn module_completions(path: &Path, import: &Import) -> Vec<CompletionItem> {
 
     let mut items = Vec::new();
     for item in &linked.items {
-        if !crate::modules::item_is_exported(item) || item.name().starts_with('@') {
+        if !crate::modules::item_is_exported(item) {
             continue;
         }
         if let Some(short) = item.name().strip_prefix(&prefix) {

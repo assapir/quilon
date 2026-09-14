@@ -220,7 +220,7 @@ impl FunctionDeclaration {
     /// the pre-declaration pass and body emission share, so a declaration is never left
     /// bodiless by the two drifting apart.
     pub fn emits_module_function(&self) -> bool {
-        !self.is_inert_corelib_placeholder() && !self.name.starts_with('@')
+        !self.is_inert_corelib_placeholder() && at_primitive_name(&self.name).is_none()
     }
 }
 
@@ -594,6 +594,14 @@ fn builtin_names() -> impl Iterator<Item = &'static str> {
 /// user at all.
 pub fn is_compiler_provided_name(name: &str) -> bool {
     builtin_names().any(|builtin| builtin == name)
+}
+
+/// The bare name of the `@` leaf IO primitive `name` refers to, whether `name` is qualified
+/// (`core.io.@readStdin`) or, as inside its own corelib module, still bare (`@readStdin`) —
+/// `None` for a name that carries no `@` at all. The one place that reads the `@` marker, so
+/// every consumer treats the qualified and bare spellings alike.
+pub fn at_primitive_name(name: &str) -> Option<&str> {
+    name.rsplit_once('@').map(|(_, primitive)| primitive)
 }
 
 /// The arity the built-in `name` claims, or `None` if the compiler provides no `name`. What

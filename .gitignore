@@ -9,6 +9,7 @@
 
 # Compiled executables (binaries)
 examples/*/
+!examples/fixtures/
 examples/simple
 examples/string_test
 examples/fibonacci

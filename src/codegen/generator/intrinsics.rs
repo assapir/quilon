@@ -258,6 +258,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
                 false,
             ),
+            // void __stream_file_run({i8,{ptr,i64}}* out, i8* path,i64, double chunkSize,
+            // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: runs on the
+            // calling fiber, parking between reads, calling the code generator's fixed-shape
+            // `onChunk` trampoline once per whole, valid-Text chunk with `environment` (the
+            // bundled `{ptr,ptr}` closure) as its last argument. Writes a plain `Result` into
+            // `out` via an out-pointer, like `__tcp_request_launch`.
+            "__stream_file_run" => ctx.void_type().fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    f64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
             // void __http_frame_body({i8,{ptr,i64}}* out, i8* raw,i64, i8 bodiless,
             // i8* transferEncoding,i64, i8* contentLength,i64) — the native `core.http` body
             // framing primitive: locate the head/body blank line on RAW bytes, then dechunk,
