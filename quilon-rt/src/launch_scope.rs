@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! The block-scope join — the runtime half of a `< >` block joining every launch it made
-//! (Quilon issue #120's "scope join", `allSettled`, never cancel).
+//! The block-scope join — the runtime half of a `< >` block joining every launch it made:
+//! `allSettled`, never cancel.
 //!
 //! A block that directly launches at least one value-returning `@` primitive
 //! (`@readStdin`, `@tcpRequest`) opens a launch registry on entry ([`__block_scope_enter`])
