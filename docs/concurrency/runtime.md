@@ -75,8 +75,8 @@ sequenceDiagram
 
 ## Blocking calls
 
-Some calls have no non-blocking form at all — `getaddrinfo` (hostname resolution) today —
-so they cannot park on reactor readiness the way a socket op does. `quilon-rt/src/blocking.rs`
+Some calls have no non-blocking form at all — `getaddrinfo` (hostname resolution) is the one
+this runtime makes — so they cannot park on reactor readiness the way a socket op does. `quilon-rt/src/blocking.rs`
 runs such a call on a helper OS thread instead, through its one entry point,
 `run_blocking(job)`: it queues `job` on the pool, parks the calling fiber on a fresh reactor
 token, and returns once a worker has run it and woken the reactor through the same
