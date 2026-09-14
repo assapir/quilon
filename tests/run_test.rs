@@ -2307,7 +2307,7 @@ fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
         r#"
 << core.time
 ^ = () -> Num => <
-  Fetcher = { url :: Text, run = () -> Num => < @sleep(0.01)  42 > }
+  Fetcher = { url :: Text, run = () -> Num => < time.@sleep(0.01)  42 > }
   f = Fetcher { url = "x" }
   f.run()
 >
@@ -2529,7 +2529,7 @@ fn run_sleep_pauses_then_returns_ready_value() {
         r#"
 << core.time
 ^ = () -> Num => <
-  @sleep(0.01)
+  time.@sleep(0.01)
   6 * 7
 >
 "#,
@@ -2544,9 +2544,9 @@ fn run_multiple_sleeps_run_in_order() {
         r#"
 << core.time
 ^ = () -> Num => <
-  @sleep(0.01)
-  @sleep(0.01)
-  @sleep(0.01)
+  time.@sleep(0.01)
+  time.@sleep(0.01)
+  time.@sleep(0.01)
   5
 >
 "#,
@@ -2560,7 +2560,7 @@ fn run_sleep_through_a_helper_function() {
     assert_exit_linked(
         r#"
 << core.time
-nap = () -> $ => < @sleep(0.01) >
+nap = () -> $ => < time.@sleep(0.01) >
 ^ = () -> Num => <
   nap()
   3
@@ -2577,7 +2577,7 @@ fn run_sleep_inside_each_iteration() {
         r#"
 << core.time
 ^ = () -> Num => <
-  [1, 2].each(n => @sleep(0.005))
+  [1, 2].each(n => time.@sleep(0.005))
   8
 >
 "#,
@@ -2596,7 +2596,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 << core.time
 ^ = () -> Num => <
   start = time.now()
-  @sleep(0.05)
+  time.@sleep(0.05)
   assert(time.now() - start >= 0.05, equals(true))
   0
 >
@@ -2786,7 +2786,7 @@ fn run_aborts_catches_an_abort_reached_after_a_sleep() {
 << core.time
 ^ = () -> $ => <
   xs :: []Num = [1, 2]
-  assert(() => < @sleep(0.01)  xs[9] >, aborts())
+  assert(() => < time.@sleep(0.01)  xs[9] >, aborts())
 >
 "#,
         0,

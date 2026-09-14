@@ -180,10 +180,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_run_case(arguments);
         }
 
-        // A leaf `@` IO primitive (`@sleep`, `@readStdin`), recognized by the `@` the parser fused
-        // into the name. Handled before every other dispatch — the name is not an
-        // overload/method/constructor. The `@`-identifier span carries the call's launch site.
-        if let Some(primitive) = function_name.strip_prefix('@') {
+        // A leaf `@` IO primitive (`io.@readStdin`, `time.@sleep`). Handled before every
+        // other dispatch — the name is not an overload/method/constructor. The
+        // `@`-identifier span carries the call's launch site.
+        if let Some(primitive) = crate::ast::at_primitive_name(function_name) {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 

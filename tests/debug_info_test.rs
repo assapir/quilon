@@ -38,7 +38,7 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
 << core.time
 
 ^ = () -> Num => <
-  @sleep(0)
+  time.@sleep(0)
   0
 >
 ";
@@ -1095,7 +1095,7 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
 << core.time
 
 ^ = () -> Num => <
-  @sleep(0)
+  time.@sleep(0)
   time.now()
   cli.hasFlag([\"-v\"], \"-v\") ? 1 : 0
 >

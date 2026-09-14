@@ -410,7 +410,7 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   send = () -> Result => <
     host = it.authority()
     address = host.contains(":") ? host : host + ":80"
-    @tcpRequest(address, it.wire()) ?
+    net.@tcpRequest(address, it.wire()) ?
       | Ok(responseText) => (Response { raw = responseText }.validate() ?
           | Ok(response)   => response.framingOk(it.method.token() == "HEAD")
           | NotOk(problem) => NotOk(problem))
