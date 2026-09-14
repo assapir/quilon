@@ -54,27 +54,28 @@ linkedGreeting = "linked " + "again"
   assert(http.Response { raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello" }.body(),
     equals("hello"))
 
-  ~ __sleep (the @sleep leaf primitive) and __run_fiber_main (the entry runs on a
+  ~ __sleep (the time.@sleep leaf primitive) and __run_fiber_main (the entry runs on a
   ~ scheduler fiber because an @ primitive is used), and __now (the plain clock read).
-  @sleep(0)
+  time.@sleep(0)
   assert(time.now() >= 0, equals(true))
 
-  ~ __read_launch (the @readStdin leaf primitive) and __force_text (the `.length` reads the
-  ~ deferred Text's bytes, forcing it). Run with empty stdin here, so @readStdin yields "".
-  line = @readStdin()
+  ~ __read_launch (the io.@readStdin leaf primitive) and __force_text (the `.length` reads
+  ~ the deferred Text's bytes, forcing it). Run with empty stdin here, so it yields "".
+  line = io.@readStdin()
   assert(line.length >= 0, equals(true))
 
-  ~ __tcp_request_launch (the internal @tcpRequest socket primitive) and __force_result (the
-  ~ `?` match FORCES the deferred Result). Guarded by a runtime-false condition so codegen
-  ~ EMITS both calls (the link/JIT gate sees the symbols) but it never opens a real connection.
+  ~ __tcp_request_launch (the internal net.@tcpRequest socket primitive) and __force_result
+  ~ (the `?` match FORCES the deferred Result). Guarded by a runtime-false condition so
+  ~ codegen EMITS both calls (the link/JIT gate sees the symbols) but it never opens a real
+  ~ connection.
   reached = args.size > 1000000
-    ? @tcpRequest("127.0.0.1:1", "") ? | Ok(_) => true | NotOk(_) => true
+    ? net.@tcpRequest("127.0.0.1:1", "") ? | Ok(_) => true | NotOk(_) => true
     : true
   assert(reached, equals(true))
 
-  ~ __stream_file_run (the @streamFile leaf IO primitive) and the onChunk thunk it calls
+  ~ __stream_file_run (the io.@streamFile leaf IO primitive) and the onChunk thunk it calls
   ~ through. A missing path is a safe, deterministic NotOk — no real file needed.
-  streamed = @streamFile("/definitely/does/not/exist/quilon-smoke", 10, chunk => true)
+  streamed = io.@streamFile("/definitely/does/not/exist/quilon-smoke", 10, chunk => true)
   streamed ? | Ok(_) => assert(false, equals(true)) | NotOk(_) => $
 
   ~ __argv_to_text_array / __envp_to_map come from these parameters existing.

@@ -219,8 +219,10 @@ pub enum TokenKind {
 
     // Marks a leaf IO primitive in the corelib (`@sleep`, a future `@get`): the only
     // marker in the colorless implicit-futures model. Lexed as its own token; the parser
-    // fuses `@` + the following identifier into the primitive's name (`@sleep`), both at
-    // its corelib declaration and at every call site. Never valid on user declarations.
+    // fuses `@` + the following identifier into the primitive's name (`@sleep`), at its
+    // corelib declaration, a bare call site (a primitive's own module calling itself), and
+    // as the last segment of a qualified call reached through a module binding
+    // (`time.@sleep`). Never valid on user declarations.
     #[token("@")]
     At,
 

@@ -48,7 +48,7 @@ Quilon's identity, and the rules that guide its design:
 | `` ` `` (in a string) | [Interpolation](types/text.md#string-interpolation-and-the-render-operator-) hole · `` `` `` = one literal backtick | `` "hi `user.name`" `` |
 | `` ` `` (as a name) | The overloadable **render** operator — a type's `Text` rendering | `` ` = () -> Text => "..." `` |
 | `? :` | Ternary | `x < 0 ? -x : x` |
-| `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and called from user code | `@sleep(1)` |
+| `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and reached through its module's binding | `time.@sleep(1)` |
 | `~` | Comment (to end of line) | `~ a note` |
 
 There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is

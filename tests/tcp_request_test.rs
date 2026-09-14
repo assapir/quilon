@@ -32,7 +32,7 @@ fn program(address: &str, expected: &str) -> String {
 << core.net
 
 ^ = () -> Num => <
-  @tcpRequest("{address}", "PING\n") ?
+  net.@tcpRequest("{address}", "PING\n") ?
     | Ok(response) => assert(response, equals("{expected}"))
     | NotOk(error) => test.failAt(error)
   0
@@ -52,7 +52,7 @@ fn failure_program(address: &str) -> String {
 << core.net
 
 ^ = () -> Num => <
-  @tcpRequest("{address}", "PING\n") ?
+  net.@tcpRequest("{address}", "PING\n") ?
     | Ok(_)      => test.failAt("expected a connection failure, got Ok")
     | NotOk(_)   => $
   0
@@ -236,7 +236,7 @@ fn method_program(address: &str, expected: &str) -> String {
 Caller = {{
   address :: Text,
 
-  fetch = () -> Result => < @tcpRequest(it.address, "PING\n") >
+  fetch = () -> Result => < net.@tcpRequest(it.address, "PING\n") >
 }}
 
 ^ = () -> Num => <

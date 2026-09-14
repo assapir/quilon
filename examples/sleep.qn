@@ -1,7 +1,7 @@
-~ Concurrency runtime — the `@sleep` leaf IO primitive (see docs/concurrency/README.md).
-~ `@sleep(seconds)` is an effect-only pause: used as a statement it waits right there on
+~ Concurrency runtime — the `time.@sleep` leaf IO primitive (see docs/concurrency/README.md).
+~ `time.@sleep(seconds)` is an effect-only pause: used as a statement it waits right there on
 ~ the current fiber, then execution continues in program order. It carries no value yet —
-~ the deferred-value / overlap story arrives with a value-returning primitive (`@readStdin`).
+~ the deferred-value / overlap story arrives with a value-returning primitive (`io.@readStdin`).
 ~ `time.now()` reads a monotonic clock, so this example VERIFIES the pause actually waited: the
 ~ elapsed time across the sleep is at least the requested duration. Self-asserting via
 ~ core.test; exit 0 = pass.
@@ -15,7 +15,7 @@ now = (scale :: Num) -> Num => < time.now() * scale >
 
 ^ = () -> Num => <
   start = time.now()
-  @sleep(0.05)                    ~ pause ~50ms
+  time.@sleep(0.05)                ~ pause ~50ms
   ~ A sleep waits AT LEAST its duration, so this bound is deterministic (never flaky).
   assert(time.now() - start >= 0.05, equals(true))
   assert(now(1000) - start * 1000 >= 50, equals(true))   ~ the same bound in milliseconds

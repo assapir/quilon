@@ -1,19 +1,19 @@
-~ Deferred values — `@readStdin` (see docs/concurrency/README.md).
-~ `@readStdin()` is a value-returning leaf IO primitive: it LAUNCHES a stdin line read in the
-~ background and hands back a DEFERRED Text immediately. The value threads through the `line`
-~ binding untouched (promise pipelining); the fiber only WAITS (forces) at the first strict
-~ operation that reads its bytes — here the `==` behind `equals`.
+~ Deferred values — `io.@readStdin` (see docs/concurrency/README.md).
+~ `io.@readStdin()` is a value-returning leaf IO primitive: it LAUNCHES a stdin line read in
+~ the background and hands back a DEFERRED Text immediately. The value threads through the
+~ `line` binding untouched (promise pipelining); the fiber only WAITS (forces) at the first
+~ strict operation that reads its bytes — here the `==` behind `equals`.
 ~
-~ With no piped input (as in the examples gate) stdin is at end-of-input, so `@readStdin()`
-~ yields the empty Text "" immediately — the assertion below holds and the program exits 0.
-~ Pipe a line to see the value flow through:
+~ With no piped input (as in the examples gate) stdin is at end-of-input, so
+~ `io.@readStdin()` yields the empty Text "" immediately — the assertion below holds and the
+~ program exits 0. Pipe a line to see the value flow through:
 ~   echo hello | cargo run -- run examples/readStdin.qn   ~ then assert it equals "hello" instead
 
 << core.io
 << core.test
 
 ^ = () -> Num => <
-  line = @readStdin()         ~ launches the read, returns a deferred Text (no wait here)
+  line = io.@readStdin()      ~ launches the read, returns a deferred Text (no wait here)
   assert(line, equals(""))          ~ the comparison FORCES the value; empty at end-of-input
   0
 >

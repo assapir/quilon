@@ -6,7 +6,7 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
-- **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
+- **`io.@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
   `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
   or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is
   the caller's own code), parking on reactor readiness between reads; `onChunk` returns `true`
@@ -79,6 +79,14 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **BREAKING: an `@` leaf IO primitive is reached through its module's binding, like every
+  other export.** `io.@readStdin()`, `io.@streamFile(path, chunkSize, onChunk)`,
+  `time.@sleep(seconds)`, and `net.@tcpRequest(address, requestBytes)` replace the bare
+  `@readStdin()`/`@streamFile(...)`/`@sleep(...)`/`@tcpRequest(...)` a program used to write
+  once it imported the primitive's module; the full path (`core.io.@readStdin`) is the
+  ambiguity escape, the same as for any other export. A bare `@` call after an import is now
+  an undefined-name error. See `docs/modules/README.md` and `docs/concurrency/README.md`.
+  Closes #436.
 - **BREAKING: a match written as a match arm's body is parenthesized.** An
   unparenthesized nested match's own `|` arm loop used to consume arms meant for the
   enclosing match — silently dropping an arm, or reporting the outer match
