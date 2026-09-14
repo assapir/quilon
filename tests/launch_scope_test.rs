@@ -24,8 +24,8 @@ const FIRST_UNUSED_SECOND_ASSERTED: &str = r#"
 << core.test
 
 ^ = () -> Num => <
-  first = @readStdin()
-  second = @readStdin()
+  first = io.@readStdin()
+  second = io.@readStdin()
   assert(second, equals("world"))
   0
 >
@@ -38,8 +38,8 @@ const TWO_UNFORCED_READS: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  first = @readStdin()
-  second = @readStdin()
+  first = io.@readStdin()
+  second = io.@readStdin()
   0
 >
 "#;
@@ -51,7 +51,7 @@ const ONE_READ_FORCED_DIRECTLY: &str = r#"
 << core.test
 
 ^ = () -> Num => <
-  line = @readStdin()
+  line = io.@readStdin()
   assert(line, equals("hello"))
   0
 >
@@ -68,7 +68,7 @@ const SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH: &str = r#"
 << core.test
 
 readCount = (remaining :: Num, total :: Num) -> Num => <
-  line = @readStdin()
+  line = io.@readStdin()
   newTotal = total + line.size
   remaining <= 1 ? newTotal : readCount(remaining - 1, newTotal)
 >
@@ -87,7 +87,7 @@ const DEEP_SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH: &str = r#"
 << core.test
 
 readCount = (remaining :: Num, total :: Num) -> Num => <
-  line = @readStdin()
+  line = io.@readStdin()
   newTotal = total + line.size
   remaining <= 1 ? newTotal : readCount(remaining - 1, newTotal)
 >
@@ -108,7 +108,7 @@ const UNREAD_LAUNCH_THEN_HEAVY_ALLOCATION: &str = r#"
 << core.io
 
 ^ = () -> Num => <
-  hearsay = @readStdin()
+  hearsay = io.@readStdin()
   (1 <- 100000).each(i => <
     junk = [i, i, i, i, i, i, i, i]
     0
@@ -191,7 +191,7 @@ fn faults_from_two_launches_report_in_launch_order() {
     let file = temp_ql("fault_order", TWO_UNFORCED_READS);
     let (code, _, stderr) = run_with_unreadable_stdin(&file);
     assert_eq!(code, Some(5), "a read fault exits 5: {stderr}");
-    // `first = @readStdin()` is line 5, `second = @readStdin()` is line 6 of the source
+    // `first = io.@readStdin()` is line 5, `second = io.@readStdin()` is line 6 of the source
     // above — the first launch's own report must appear before the second's.
     let first_at = stderr
         .find(":5:")

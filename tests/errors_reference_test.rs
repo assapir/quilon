@@ -317,7 +317,7 @@ fn qn504_allocation_failed_example_raises_its_own_code() {
 fn qn505_read_failed_example_raises_its_own_code() {
     let program = write_program(
         "QN505",
-        "<< core.io\n^ = () -> Num => <\n  io.print(@readStdin())\n  0\n>\n",
+        "<< core.io\n^ = () -> Num => <\n  io.print(io.@readStdin())\n  0\n>\n",
     );
     let stdin_dir = temp_dir_for("QN505_stdin");
     let directory_as_stdin = std::fs::File::open(&stdin_dir).expect("open a directory for reading");

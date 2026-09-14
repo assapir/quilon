@@ -51,8 +51,8 @@ sidebar:
 | [Qualified access](../modules/README.md): an import binds its last segment (`io.print`, `http.Request { }`, `\| http.Get =>`); the full path is the ambiguity escape; privates travel with their module but resolve for no importer; imports claim their short names; module overload sets are closed | ✅ |
 | [HTTP client](../corelib/http.md): `<< core.http` — `Method` (including `Options`/`Patch`), `Headers`/`Params`/`RequestOptions`, and the `Request` / `Response` records (`Request.get(url)` and its sibling constructors, `request.send()`, `response.status()` / `.headers()` / `.body()`), written in Quilon over `core.net`; HTTP only, no TLS | ✅ |
 | I/O: `io.print` / `io.eprint` / `io.write` — one rule, over any value the [render `` ` ``](../types/text.md#string-interpolation-and-the-render-operator-) member covers | ✅ |
-| I/O: `@readStdin` — deferred stdin line read, forced on use | ✅ |
-| I/O: `@streamFile` / `io.streamFile` — strict, chunk-callback file read, running on the calling fiber | ✅ |
+| I/O: `io.@readStdin` — deferred stdin line read, forced on use | ✅ |
+| I/O: `io.@streamFile` / `io.streamFile` — strict, chunk-callback file read, running on the calling fiber | ✅ |
 | Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
 | Test harness: [`quilon test`](../corelib/test/README.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
 | [Language server](../tooling/language-server.md): `quilon lsp` — diagnostics on open/change, go-to-definition (imports included), find references, rename, hover with the inferred type, completion (names in scope, module members, expression members), semantic tokens (block `< >` and comparison `<` `>` classified apart), a code lens per test suite and case | 🚧 |
@@ -74,4 +74,4 @@ sidebar:
 | Overloaded or top-level function name passed as a value | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
-| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `@sleep` pause, and the value-returning `@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |
+| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `time.@sleep` pause, and the value-returning `io.@readStdin` (deferred `Text`, forced on use) run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |

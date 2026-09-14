@@ -5,8 +5,8 @@
 << core.io
 
 ^ = () -> Num => <
-  hearsay = @readStdin()          ~ launched — the block joins it even though it goes unread
-  testimony = @readStdin()
+  hearsay = io.@readStdin()       ~ launched — the block joins it even though it goes unread
+  testimony = io.@readStdin()
   assert(testimony, equals(""))   ~ end-of-input; forces `testimony` (the join settles `hearsay` too)
   0
 >

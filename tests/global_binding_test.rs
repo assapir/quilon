@@ -188,12 +188,12 @@ fn a_global_initializer_using_backtick_interpolation_over_an_array_is_accepted()
 
 #[test]
 fn a_deferred_value_is_forced_at_a_global_initializer() {
-    // A top-level initializer is a strict site (`src/deferral.rs`), so `@readStdin()`
+    // A top-level initializer is a strict site (`src/deferral.rs`), so `io.@readStdin()`
     // bound to a global still forces before `^` runs. Spawns the real binary: a deferred
     // read's background fiber can't safely piggyback on a same-process JIT call here.
     let source = concat!(
         "<< core.io\n",
-        "line = @readStdin()\n",
+        "line = io.@readStdin()\n",
         "^ = () -> Num => <\n",
         "  io.print(line)\n",
         "  0\n",

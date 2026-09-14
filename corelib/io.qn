@@ -4,11 +4,10 @@
 ~                           newline); returns the number of bytes written (Num)
 ~   io.print(x)           ~ write x to stdout, with a trailing newline (any renderable value)
 ~   io.eprint(x)          ~ same, to stderr
-~   @readStdin()          ~ read one line from stdin (Text, without the trailing newline);
-~                           an `@` primitive keeps its bare name once the module is imported
-~   @streamFile(path, chunkSize, onChunk)   ~ read a file in chunkSize-byte chunks, calling
-~                                             onChunk(chunk) per chunk; Ok(bytesRead)/NotOk(msg)
-~   io.streamFile(path, onChunk)   ~ @streamFile with a runtime-chosen default chunk size
+~   io.@readStdin()       ~ read one line from stdin (Text, without the trailing newline)
+~   io.@streamFile(path, chunkSize, onChunk)   ~ read a file in chunkSize-byte chunks, calling
+~                                                 onChunk(chunk) per chunk; Ok(bytesRead)/NotOk(msg)
+~   io.streamFile(path, onChunk)   ~ io.@streamFile with a runtime-chosen default chunk size
 ~   io.stdout, io.stderr  ~ the standard file descriptors (Num: 1 and 2)
 ~
 ~ Examples:
