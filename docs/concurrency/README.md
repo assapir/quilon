@@ -83,16 +83,11 @@ reassignment after it — including one that reads the binding's own current val
 `hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
 already follows. It parses and typechecks like a `:=` binding, and on the single-threaded
 runtime its reassignment is trivially atomic — there is only ever one fiber to race with.
-Mutation *inside* a bound record still follows the record's own
-rules; cross-field invariants belong to an atomic type `T = @{ … }`. Stage 2 turns the marker
-into a real enforcement point: the fiber-sharing check reads it to allow sharing a binding
-the marker covers, where an unmarked `:=` value stays a compile error at the sharing point.
-(See `examples/atomic_binding.qn`.)
-
-The full specification is locked in
-[issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629), amended
-[2026-09-10](https://github.com/assapir/quilon/issues/120#issuecomment-5619339751): any type
-may be bound.
+Mutation *inside* a bound record still follows the record's own rules; cross-field
+invariants belong to an atomic type `T = @{ … }`. Stage 2 turns the marker into a real
+enforcement point: the fiber-sharing check reads it to allow sharing a binding the marker
+covers, where an unmarked `:=` value stays a compile error at the sharing point. (See
+`examples/atomic_binding.qn`.)
 
 ## Implemented primitives
 

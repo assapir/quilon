@@ -18,8 +18,8 @@ All notable changes to Quilon are documented here.
   (`@name` at a use site or on a reassignment). The language server's hover, rename, and
   go-to-definition treat the declaration correctly, and the VS Code grammar highlights the
   `@` marker. See `docs/concurrency/README.md#sharing-state-across-fibers`,
-  `docs/variables.md#atomic-bindings`, and `examples/atomic_binding.qn`. Issue #435 point
-  9, issue #120 "3. Atomic bindings" and its 2026-09-10 amendment.
+  `docs/variables.md#atomic-bindings`, and `examples/atomic_binding.qn`. Part of #120 and
+  #435.
 - **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
   `onChunk` once per whole, valid-Text chunk** — no read boundary ever splits a UTF-8 sequence
   or a grapheme cluster. It runs strictly, in program order on the calling fiber (`onChunk` is
