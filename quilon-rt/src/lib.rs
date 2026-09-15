@@ -42,6 +42,7 @@
 
 pub mod abort_trap;
 pub mod bidi;
+pub mod blocking;
 pub mod collections;
 pub mod deferred;
 pub mod gc;

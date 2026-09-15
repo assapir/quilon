@@ -59,7 +59,7 @@ A feature/change is not done until **all** of these are true:
   the fallback where the ponytail skill is absent. (When a review skill isn't model-invocable in a given
   environment, run the equivalent as **read-only** sub-agents.)
 - **Green gate:** `cargo build`, `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-- **No issue/PR references in code.** No source, test, example, or corelib file (`.qn` or `.rs`) may mention a specific issue or PR number — those belong in commit messages and PR bodies only. (Docs — the `docs/` tree and the `README`s — may reference issues; code files may not.)
+- **No issue/PR references in code or the language reference.** No source, test, example, or corelib file (`.qn` or `.rs`), and no page of the language reference under `docs/`, may mention or link to a specific issue or PR number — a design rule that was once cited as "locked in issue N" is stated in the reference as the rule itself. Issue numbers belong only in commit messages, PR bodies, and `CHANGELOG.md` entries (in that file's terse "Closes #N" / "Part of #N" style). (`docs/ROADMAP.md` and this file are process documents, not the reference, and may still link an issue.)
 - **A changelog entry is a deliverable.** Every user-visible change — a language rule, a diagnostic, CLI or tooling behavior, runtime behavior, a fix a user could have hit — adds an entry under `## Unreleased` in `CHANGELOG.md` as part of the same PR, in the file's existing style. An internal refactor with no user-visible effect does not.
 
 **`docs/ROADMAP.md` is maintained by the orchestrator ONLY.** Sub-agents must **not** edit it — not to
