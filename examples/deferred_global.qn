@@ -1,0 +1,16 @@
+~ A deferred value stored into a top-level `:=` binding (see docs/concurrency/README.md).
+~ `crackOpen` stores `io.@readStdin()`'s deferred Text into the global `fortune` and
+~ returns `$` without ever reading it — the store itself never waits. `^`, a separate
+~ function, then reads `fortune`: that read is where the value is finally forced.
+
+<< core.io
+
+fortune := ""
+crackOpen = () -> $ => < fortune := io.@readStdin() >
+
+^ = () -> Num => <
+  crackOpen()
+  io.print(fortune)                                       ~ FORCES the stored read
+  assert(fortune, equals("you will fix a bug that does not exist yet"))
+  0
+>
