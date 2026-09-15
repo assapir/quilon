@@ -201,12 +201,12 @@ impl<'a> Taint<'a> {
             Item::VariableDeclaration(v) => {
                 let scope = self.fresh_scope();
                 let deferred = self.analyze_declaration_value(v, &scope);
-                if v.mutable {
-                    if deferred {
+                if deferred {
+                    if v.mutable {
                         self.mark_global_deferred(&v.name);
+                    } else {
+                        self.force_sites.insert(v.value.span().clone());
                     }
-                } else if deferred {
-                    self.force_sites.insert(v.value.span().clone());
                 }
             }
             Item::TypeDeclaration(t) => {
