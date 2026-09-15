@@ -54,6 +54,24 @@ const TWO_READS: &str = r#"
 >
 "#;
 
+/// The accepted rewrite of the atomic-binding rule that a reassignment's right side may
+/// not force a deferred value (QN349): the read is forced into a plain `=` binding first,
+/// so the atomic binding's own reassignment reads an already-ready value.
+const ATOMIC_REASSIGNMENT_ACCEPTED: &str = r#"
+<< core.io
+
+@hits := 0
+bump = () -> $ => <
+  extra = io.@readStdin().length
+  hits := hits + extra
+>
+
+^ = () -> Num => <
+  bump()
+  hits
+>
+"#;
+
 /// A program that echoes the line it read TWICE — first through `write` (raw bytes, no
 /// newline), then through `print` (rendered, plus a newline). Whatever bytes stdin carried,
 /// the two output paths are visible side by side in one stdout capture.
@@ -197,6 +215,20 @@ fn write_is_byte_verbatim_and_print_renders_the_same_text() {
         rendered,
         "a\0b\u{fffd}c\n".as_bytes(),
         "`print` should render the invalid byte and keep the NUL"
+    );
+
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_atomic_binding_reassignment_may_force_via_a_plain_binding_first() {
+    let file = temp_ql("atomic_reassignment_accepted", ATOMIC_REASSIGNMENT_ACCEPTED);
+    let (code, _) = jit_run(&file, b"ab\n");
+    assert_eq!(
+        code,
+        Some(2),
+        "hits should end at 2: 0 plus the 2-grapheme line's length, forced ahead of the \
+         reassignment"
     );
 
     let _ = std::fs::remove_file(&file);

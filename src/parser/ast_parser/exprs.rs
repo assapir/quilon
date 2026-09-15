@@ -62,19 +62,29 @@ impl<'a> Parser<'a> {
                     value: Box::new(value),
                     span,
                 },
-                Expression::Identifier { name, .. } => Expression::Block {
-                    statements: vec![Statement::Item(Item::VariableDeclaration(
-                        VariableDeclaration {
-                            mutable: true,
-                            name,
-                            type_annotation: None,
-                            value,
-                            exported: false,
-                            span: span.clone(),
-                        },
-                    ))],
-                    span,
-                },
+                Expression::Identifier { name, .. } => {
+                    // `@name := value` here declares an atomic binding, same as at a
+                    // block's statement start (`parse_block_inner`); `name` otherwise
+                    // never carries a leading `@` (see `parse_primary`'s `At` branch).
+                    let (name, atomic) = match name.strip_prefix('@') {
+                        Some(bare) => (bare.to_string(), true),
+                        None => (name, false),
+                    };
+                    Expression::Block {
+                        statements: vec![Statement::Item(Item::VariableDeclaration(
+                            VariableDeclaration {
+                                mutable: true,
+                                name,
+                                type_annotation: None,
+                                value,
+                                exported: false,
+                                atomic,
+                                span: span.clone(),
+                            },
+                        ))],
+                        span,
+                    }
+                }
                 _ => unreachable!("matched above: FieldAccess, Index, or Identifier"),
             });
         }

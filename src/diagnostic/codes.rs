@@ -121,6 +121,9 @@ codes! {
     ReservedName = 344 => "reserved name",
     FunctionTypedField = 345 => "record field with a function type",
     InvalidPayloadType = 346 => "unsupported sum-type payload",
+    AtomicBindingNotMutable = 347 => "atomic binding declared without `:=`",
+    AtomicBindingUsedBare = 348 => "atomic binding used with `@` after its declaration",
+    AtomicReassignmentForced = 349 => "atomic binding reassignment waits on a deferred value",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

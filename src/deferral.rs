@@ -18,9 +18,29 @@
 //! a promise inside the one function body it was born in (this step launches independent IO
 //! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
+//!
+//! The same walk also enforces one rule about `@name := …` atomic bindings (see
+//! `docs/concurrency/README.md#sharing-state-across-fibers`): a reassignment's right side
+//! may not force a deferred value, because forcing parks the fiber mid-statement, and the
+//! statement resumes holding a value read before the park — stale if another fiber wrote
+//! the binding while this one was parked. The force-set this pass already computes is
+//! exactly the set of force points, so the check is "did evaluating the right side add to
+//! `force_sites`", read off the same walk rather than a second one.
+//!
+//! Telling a reassignment of an atomic binding apart from an ordinary one, though, is NOT
+//! this pass's job: only the type checker resolves a `:=` to the specific binding it
+//! targets (`TypeChecker::check_variable_declaration`'s "reassign if the name is already
+//! bound" branch) — this pass's own `Scope` is a much coarser, per-analysis-call
+//! convenience that starts fresh at every named function's body and knows nothing about
+//! which enclosing name is which binding. So `analyze` takes the checker's own answer
+//! ready-made: the span of every `:=` statement the checker resolved as reassigning an
+//! atomic binding (`TypeChecker::take_atomic_reassignments`). The rule becomes "is this
+//! `VariableDeclaration`'s span in that set, and did evaluating its value add to
+//! `force_sites`" — no name resolution of any kind on this side.
 
 use crate::ast::{
-    Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement, at_primitive_name,
+    Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement,
+    VariableDeclaration, at_primitive_name,
 };
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
@@ -66,37 +86,69 @@ impl DeferInfo {
     }
 }
 
+/// A reassignment to an atomic binding whose right side forces a deferred value — the
+/// binding-side twin of the locked rule that an atomic type's setter body may not force.
+#[derive(Debug)]
+pub struct AtomicReassignmentForced {
+    pub name: String,
+    pub span: Span,
+}
+
 /// Analyze `program`: the deferred-value taint and force-set — the whole codegen-visible
-/// surface of the analysis.
-pub fn analyze(program: &Program) -> DeferInfo {
-    let mut taint = Taint::default();
+/// surface of the analysis. `atomic_reassignments` is the type checker's own answer (see
+/// [`crate::typechecker::TypeChecker::take_atomic_reassignments`]) — the span of every
+/// `:=` statement it resolved as reassigning an atomic binding. `Err` names the first one,
+/// in program order, whose right side forces a deferred value.
+pub fn analyze(
+    program: &Program,
+    atomic_reassignments: &HashSet<Span>,
+) -> Result<DeferInfo, AtomicReassignmentForced> {
+    let mut taint = Taint {
+        force_sites: HashSet::new(),
+        launch_scopes: HashSet::new(),
+        block_stack: Vec::new(),
+        atomic_reassignments,
+        violation: None,
+    };
     for item in &program.items {
         taint.analyze_item(item);
     }
 
-    DeferInfo {
-        force_sites: taint.force_sites,
-        launch_scopes: taint.launch_scopes,
+    match taint.violation {
+        Some(violation) => Err(violation),
+        None => Ok(DeferInfo {
+            force_sites: taint.force_sites,
+            launch_scopes: taint.launch_scopes,
+        }),
     }
 }
 
 /// The deferred-value taint accumulator.
-#[derive(Default)]
-struct Taint {
+struct Taint<'a> {
     force_sites: HashSet<Span>,
     launch_scopes: HashSet<Span>,
     /// The spans of `< >` blocks currently being visited, innermost last — a launch found
     /// while this is non-empty belongs to its last entry (see `launch_scopes`'s own doc).
     block_stack: Vec<Span>,
+    /// See [`analyze`].
+    atomic_reassignments: &'a HashSet<Span>,
+    /// The first atomic-reassignment violation found, in program order; later ones are not
+    /// worth collecting; the whole point is to name one concrete fix.
+    violation: Option<AtomicReassignmentForced>,
 }
 
-impl Taint {
+impl Taint<'_> {
     fn analyze_item(&mut self, item: &Item) {
         match item {
             // A function/method body is a strict slot: forcing its result keeps a promise from
             // escaping across the call boundary.
             Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
-            Item::VariableDeclaration(v) => self.strict(&v.value, &Scope::new()),
+            Item::VariableDeclaration(v) => {
+                let scope = Scope::new();
+                if self.analyze_declaration_value(v, &scope) {
+                    self.force_sites.insert(v.value.span().clone());
+                }
+            }
             Item::TypeDeclaration(t) => {
                 for method in t.type_definition.methods() {
                     self.analyze_method(method);
@@ -114,6 +166,34 @@ impl Taint {
         if self.visit(expression, env) {
             self.force_sites.insert(expression.span().clone());
         }
+    }
+
+    /// Record `v` as the atomic-reassignment violation — once, the first one found — when
+    /// its span is one the checker resolved as reassigning an atomic binding, and
+    /// evaluating its value grew `force_sites` past `force_sites_before`: the right side
+    /// forced a deferred value.
+    fn check_atomic_reassignment(&mut self, v: &VariableDeclaration, force_sites_before: usize) {
+        if self.violation.is_none()
+            && self.force_sites.len() > force_sites_before
+            && self.atomic_reassignments.contains(&v.span)
+        {
+            self.violation = Some(AtomicReassignmentForced {
+                name: v.name.clone(),
+                span: v.span.clone(),
+            });
+        }
+    }
+
+    /// Analyze a `:=`/`=` declaration or reassignment's value in `env`, checking along the
+    /// way for the atomic-reassignment violation, and return whether the value is
+    /// delivered to the caller still deferred (a `=`/`:=` binding is itself a lazy carrier
+    /// — see [`Self::visit_block`] — so the caller, not this method, decides whether to
+    /// force it).
+    fn analyze_declaration_value(&mut self, v: &VariableDeclaration, env: &Scope) -> bool {
+        let force_sites_before = self.force_sites.len();
+        let deferred = self.visit(&v.value, env);
+        self.check_atomic_reassignment(v, force_sites_before);
+        deferred
     }
 
     /// Analyze `expression`, recording forces for its own strict children, and return whether its
@@ -256,7 +336,7 @@ impl Taint {
         for (index, statement) in statements.iter().enumerate() {
             match statement {
                 Statement::Item(Item::VariableDeclaration(v)) => {
-                    let deferred = self.visit(&v.value, &local);
+                    let deferred = self.analyze_declaration_value(v, &local);
                     local.bind(v.name.clone(), deferred);
                 }
                 Statement::Item(Item::FunctionDeclaration(f)) => {
@@ -285,8 +365,9 @@ impl Taint {
     }
 }
 
-/// A lexical scope mapping in-scope names to whether they hold a deferred value. Names absent
-/// from the map (parameters, pattern bindings from a forced scrutinee, globals) are ready.
+/// A lexical scope mapping in-scope names to whether they hold a deferred value. Names
+/// absent from the map (parameters, pattern bindings from a forced scrutinee, globals) are
+/// ready.
 #[derive(Clone, Default)]
 struct Scope {
     deferred_names: HashMap<String, bool>,
@@ -342,15 +423,50 @@ mod tests {
     use crate::lexer::Lexer;
     use crate::parser;
 
+    /// Every test below except the atomic-reassignment ones is about plain taint/force-set
+    /// behavior, unaffected by which reassignments (if any) are atomic — an empty set is
+    /// exactly equivalent to "none are". None of these needs the checker at all, matching
+    /// how they worked before the rule existed.
     fn info(src: &str) -> DeferInfo {
         let tokens = Lexer::tokenize(src).expect("lex");
         let program = parser::parse(&tokens).expect("parse");
-        analyze(&program)
+        analyze(&program, &HashSet::new()).expect("expected no atomic-reassignment violation")
     }
 
     /// The number of force sites in the program — the size of the force-set.
     fn force_count(src: &str) -> usize {
         info(src).force_sites.len()
+    }
+
+    /// Lex, parse, link, and check `src`, then run `analyze` with the checker's own
+    /// atomic-reassignment spans — what an atomic-reassignment test needs, since (unlike
+    /// plain force-counting) telling which reassignment is atomic is the checker's job,
+    /// not this pass's. `src` must check cleanly: every `@` primitive is reached through
+    /// its module binding (`io.@readStdin()`), matching what user code actually writes.
+    fn checked(src: &str) -> Result<DeferInfo, AtomicReassignmentForced> {
+        let tokens = Lexer::tokenize(src).expect("lex");
+        let program = parser::parse(&tokens).expect("parse");
+        let (program, _sources) = crate::modules::link(program, std::path::Path::new("."), None)
+            .expect("import linking failed");
+        let mut checker = crate::typechecker::TypeChecker::new();
+        checker
+            .check_program(&program)
+            .expect("type checking failed");
+        let atomic_reassignments = checker.take_atomic_reassignments();
+        analyze(&program, &atomic_reassignments)
+    }
+
+    /// The number of force sites in a checked program expected to raise no violation.
+    fn checked_force_count(src: &str) -> usize {
+        checked(src)
+            .expect("expected no atomic-reassignment violation")
+            .force_sites
+            .len()
+    }
+
+    /// The atomic-reassignment violation a checked program is expected to raise.
+    fn atomic_violation(src: &str) -> AtomicReassignmentForced {
+        checked(src).expect_err("expected an atomic-reassignment violation")
     }
 
     #[test]
@@ -506,5 +622,72 @@ mod tests {
         // strict argument slot.
         let src = "<< core.io\n^ = () -> Num => <\n  p = io.@readStdin()\n  io.@streamFile(p, 10, chunk => true)\n  0\n>";
         assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn atomic_reassignment_forcing_a_deferred_value_is_rejected() {
+        // The maintainer's own example: a top-level atomic global, forced on the right side
+        // of its reassignment from a separate function.
+        let src =
+            "<< core.io\n@hits := 0\nbump = () -> $ => < hits := hits + io.@readStdin().length >";
+        assert_eq!(atomic_violation(src).name, "hits");
+    }
+
+    #[test]
+    fn atomic_reassignment_directly_forcing_a_primitive_call_is_rejected() {
+        let src = "<< core.io\n@hits := 0\nbump = () -> $ => < hits := io.@readStdin().length >";
+        assert_eq!(atomic_violation(src).name, "hits");
+    }
+
+    #[test]
+    fn a_top_level_atomic_reassignment_forcing_a_deferred_value_is_rejected() {
+        // The same rule at the top level, not from inside a separate function.
+        let src = "<< core.io\n@hits := 0\nhits := hits + io.@readStdin().length";
+        assert_eq!(atomic_violation(src).name, "hits");
+    }
+
+    #[test]
+    fn atomic_reassignment_reading_an_already_forced_binding_is_accepted() {
+        // The accepted rewrite: force into a plain binding first, then reassign — the
+        // reassignment's own right side reads an already-ready value.
+        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  extra = io.@readStdin().length\n  hits := hits + extra\n>";
+        assert_eq!(checked_force_count(src), 1);
+    }
+
+    #[test]
+    fn a_plain_mutable_reassignment_may_force_a_deferred_value() {
+        // The rule is atomic-binding-specific: an ordinary `:=` global forcing a deferred
+        // value on its reassignment's right side is untouched.
+        let src = "<< core.io\ncounter := 0\nbump = () -> $ => < counter := counter + io.@readStdin().length >";
+        assert_eq!(checked_force_count(src), 1);
+    }
+
+    #[test]
+    fn a_reassignment_after_a_plain_reassignment_of_the_same_atomic_binding_is_rejected() {
+        // A `:=` declaration and a reassignment are the same AST node; only the checker
+        // tells them apart (by whether the name is already bound), so a bare, non-forcing
+        // reassignment earlier in the function must not make the checker (or this pass)
+        // forget the binding stays atomic for the reassignment after it.
+        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  hits := hits + 1\n  hits := hits + io.@readStdin().length\n>";
+        assert_eq!(atomic_violation(src).name, "hits");
+    }
+
+    #[test]
+    fn a_reassignment_of_an_atomic_global_by_a_same_named_local_looking_declaration_is_rejected() {
+        // `counter := 0` inside `tally` reads as a fresh local at a glance, but Quilon has
+        // no shadowing for a mutable name already in scope: it reassigns the top-level
+        // `@counter` like any other `:=` on an existing name, so the forcing reassignment
+        // after it is rejected the same as any other atomic reassignment.
+        let src = "<< core.io\n@counter := 0\ntally = () -> Num => <\n  counter := 0\n  counter := counter + io.@readStdin().length\n  counter\n>";
+        assert_eq!(atomic_violation(src).name, "counter");
+    }
+
+    #[test]
+    fn an_atomic_reassignment_inside_a_lambdas_block_is_rejected() {
+        // The checker resolves `hits` from inside the `.each` callback's block the same
+        // way it would from any other nested scope, so the rule reaches a reassignment
+        // however deeply it sits inside a lambda, not only a named function's own body.
+        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  (1 <- 3).each(n => < hits := hits + io.@readStdin().length >)\n  $\n>";
+        assert_eq!(atomic_violation(src).name, "hits");
     }
 }

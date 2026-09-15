@@ -30,10 +30,13 @@ fn run_allocating_program() {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tokens = Lexer::tokenize(ALLOCATING_PROGRAM).expect("lexing failed");
     let program = parser::parse(&tokens).expect("parsing failed");
-    let types = TypeChecker::new()
+    let mut checker = TypeChecker::new();
+    let types = checker
         .check_program(&program)
         .expect("type checking failed");
-    let defer = quilon::deferral::analyze(&program);
+    let atomic_reassignments = checker.take_atomic_reassignments();
+    let defer = quilon::deferral::analyze(&program, &atomic_reassignments)
+        .expect("deferral analysis failed");
     let code = jit::run_program(
         &program,
         types,

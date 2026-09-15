@@ -18,6 +18,24 @@ For a record — and for containers holding records — the binding operator gov
 put one value on both sides of the `=`/`:=` line is a compile error (see
 [Deep immutability](mutation.md#deep-immutability)).
 
+## Atomic bindings
+
+`@name := …` declares an **atomic** binding, wherever a `:=` declaration is allowed — at
+the top level and inside a block. `@` marks the declaration only; every read and
+reassignment after it is bare, following the same declaration/reassignment rule a plain
+`:=` binding already has:
+```quilon
+@hits := 0          ~ declares — @ appears here only
+hits := hits + 1     ~ reassign, bare
+hits                 ~ read, bare
+```
+Any type may be bound atomically — `@open := true`, `@lastPath := "/"`, `@stand := Stand
+{ }` all declare the same way. A reassignment's right side may not wait on a deferred
+value — the compiler rejects one that would, naming the fix: force the value into a plain
+`=` binding first, then reassign. See
+[Sharing state across fibers](concurrency/README.md#sharing-state-across-fibers) for what
+"atomic" means and what the compiler does with the marker.
+
 ## Names
 
 A name starts with a letter — any Unicode letter, ASCII or not — or `_`, and continues with

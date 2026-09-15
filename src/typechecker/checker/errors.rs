@@ -60,6 +60,8 @@ impl TypeError {
             TypeError::ReservedName { .. } => Code::ReservedName,
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
+            TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
+            TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
         }
     }
 
@@ -193,6 +195,13 @@ impl TypeError {
                  array/map of one of those"
                     .to_string(),
             ),
+            TypeError::AtomicBindingNotMutable { name, .. } => {
+                diagnostic.help(format!("declare it with `:=`: `@{name} := …`"))
+            }
+            TypeError::AtomicBindingUsedBare { name, .. } => diagnostic.help(format!(
+                "`@` marks the declaration only — read or reassign it bare: `{name}`, \
+                 `{name} := …`"
+            )),
             _ => diagnostic,
         }
     }
@@ -246,7 +255,9 @@ impl TypeError {
             | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. }
             | TypeError::FunctionTypedField { span, .. }
-            | TypeError::InvalidPayloadType { span, .. } => span,
+            | TypeError::InvalidPayloadType { span, .. }
+            | TypeError::AtomicBindingNotMutable { span, .. }
+            | TypeError::AtomicBindingUsedBare { span, .. } => span,
         }
     }
 }
@@ -725,6 +736,20 @@ impl std::fmt::Display for TypeError {
                     "`{variant}`'s payload {} is {}, which a sum type cannot carry",
                     position + 1,
                     type_label(got)
+                )
+            }
+            TypeError::AtomicBindingNotMutable { name, .. } => {
+                write!(
+                    f,
+                    "`{name}` is declared with `=` — an atomic binding makes sense only \
+                     for a mutable one"
+                )
+            }
+            TypeError::AtomicBindingUsedBare { name, .. } => {
+                write!(
+                    f,
+                    "`{name}` is used bare after its `@` declaration — `@` marks the \
+                     declaration only"
                 )
             }
         }

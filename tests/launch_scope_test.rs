@@ -15,22 +15,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// Two `@readStdin()` launches, the first bound but never read. Stdin is a single serial
-/// stream (the stdin gate serializes readers), so the SECOND read only sees "world" if the
-/// FIRST one actually ran to completion and consumed "hello" first — proving the unused
-/// launch is not merely dropped.
-const FIRST_UNUSED_SECOND_ASSERTED: &str = r#"
-<< core.io
-<< core.test
-
-^ = () -> Num => <
-  first = io.@readStdin()
-  second = io.@readStdin()
-  assert(second, equals("world"))
-  0
->
-"#;
-
 /// Two `@readStdin()` launches, both bound but never read (never individually forced) — so
 /// the only thing that can join them is the block's own close. Run against a stdin that can
 /// never be read successfully (see `run_with_unreadable_stdin`), both fault.
@@ -162,14 +146,22 @@ fn run_with_unreadable_stdin(file: &Path) -> (Option<i32>, String, String) {
 
 #[test]
 fn a_bound_but_unused_launch_settles_before_the_block_returns() {
-    let file = temp_ql("unused_launch", FIRST_UNUSED_SECOND_ASSERTED);
-    let (code, _, stderr) = run_with_piped_stdin(&file, b"hello\nworld\n");
+    // Drives examples/block_scope_join.qn directly, piping its own sidecar's bytes: the
+    // example's own `interrogate` joins its unread first read before storing the second,
+    // so `^`'s own assertion on the settled "fact" line is what proves it.
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/block_scope_join.qn");
+    let input = std::fs::read(file.with_extension("stdin")).expect("read the example's sidecar");
+    let (code, stdout, stderr) = run_with_piped_stdin(&file, &input);
     assert_eq!(
         code,
         Some(0),
-        "the unused first read must consume \"hello\" before the second reads \"world\": {stderr}"
+        "the unused first read must settle before the second is stored and asserted: {stderr}"
     );
-    let _ = std::fs::remove_file(&file);
+    assert_eq!(
+        stdout.trim_end(),
+        "fact",
+        "the caller must receive the settled second line: {stdout}"
+    );
 }
 
 #[test]
