@@ -1,0 +1,19 @@
+~ Block-scope join: a `< >` block joins every launch it made directly before it returns,
+~ including one bound to a name it never reads again. `interrogate` launches two reads
+~ and hands back only the second; its own block still waits for the first (unread) one
+~ before returning, so the caller receives a settled value.
+
+<< core.io
+
+interrogate = () -> Text => <
+  hearsay = io.@readStdin()       ~ launched, never read: the block joins it before returning
+  testimony = io.@readStdin()
+  testimony
+>
+
+^ = () -> Num => <
+  verdict = interrogate()
+  io.print(verdict)
+  assert(verdict, equals("fact"))
+  0
+>

@@ -262,15 +262,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             let function = tco.function;
             return self.emit_call(function, &new_vals).map(Some);
         }
-        // Snapshot slots + header before the mutable stores (releases the `self.tco`
-        // borrow so the `&mut self` builder calls below are allowed).
+        // Snapshot slots + header + body span before the mutable stores (releases the
+        // `self.tco` borrow so the `&mut self` builder calls below are allowed).
         let slots: Vec<PointerValue<'ctx>> = tco.parameter_slots.clone();
         let header = tco.header;
+        let body_span = tco.body_span.clone();
         for (slot, val) in slots.iter().zip(new_vals) {
             self.builder
                 .build_store(*slot, val)
                 .map_err(ctx("Failed to store tail-call arg"))?;
         }
+        // This back-edge IS this iteration's block close: join whatever it launched
+        // directly before looping back to the header, which opens the NEXT iteration's
+        // scope fresh (a no-op pair for a body that launches nothing).
+        self.exit_launch_scope(&body_span)?;
         self.builder
             .build_unconditional_branch(header)
             .map_err(ctx("Failed to branch to loop header"))?;

@@ -272,7 +272,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Special handling for .size field on arrays
-        if !is_named_record_field && field_name == "size" {
+        //
+        // Skipped for a receiver the taint pass marks as a force site: that identifier may
+        // hold a DEFERRED Text (`{ promise, -1 }`), and reading field 1 straight out of the
+        // alloca below would read the sentinel instead of forcing it — falling through to
+        // the general Text/array branch, which calls `generate_expression` and so forces
+        // there like any other strict use.
+        if !is_named_record_field
+            && field_name == "size"
+            && !self.defer.is_force_site(expression.span())
+        {
             // For arrays (which are structs {ptr, i64}), we need special handling
             // Check if it's an identifier - we can directly work with the alloca
             if let Expression::Identifier { name, .. } = expression

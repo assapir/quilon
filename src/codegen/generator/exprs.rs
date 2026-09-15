@@ -813,6 +813,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Under `--debug`, a `{ }` block introduces a nested lexical scope so its locals nest
         // under a `DW_TAG_lexical_block` rather than the function directly (a no-op otherwise).
         let saved_scope = self.begin_di_lexical_block(span);
+        self.enter_launch_scope(span)?;
         // A block whose last statement is a declaration evaluates to `$` (Unit) — see
         // `docs/expressions/README.md` § Blocks. Default to that value and only overwrite
         // it when a later statement is an expression, so it stands as the block's result
@@ -839,8 +840,38 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
+        self.exit_launch_scope(span)?;
         self.end_di_scope(saved_scope);
         Ok(result)
+    }
+
+    /// If `span`'s block directly launches a value-returning `@` primitive (per the
+    /// deferred-taint pass), open its launch registry — see [`Self::exit_launch_scope`] and
+    /// `quilon-rt::launch_scope`. A no-op (no call emitted) for every other block.
+    pub(super) fn enter_launch_scope(&mut self, span: &Span) -> Result<(), String> {
+        if !self.defer.is_launch_scope(span) {
+            return Ok(());
+        }
+        let enter = self.get_intrinsic("__block_scope_enter")?;
+        self.builder
+            .build_call(enter, &[], "")
+            .map_err(ctx("Failed to call __block_scope_enter"))?;
+        Ok(())
+    }
+
+    /// The join half of [`Self::enter_launch_scope`]: settle every launch this block made
+    /// (`allSettled`, reporting every fault in launch order and exiting 5) before its value
+    /// flows out. Must be called exactly when the matching `enter_launch_scope` call was
+    /// (same `span`), right before the block's result is handed to its own slot.
+    pub(super) fn exit_launch_scope(&mut self, span: &Span) -> Result<(), String> {
+        if !self.defer.is_launch_scope(span) {
+            return Ok(());
+        }
+        let join = self.get_intrinsic("__block_scope_join")?;
+        self.builder
+            .build_call(join, &[], "")
+            .map_err(ctx("Failed to call __block_scope_join"))?;
+        Ok(())
     }
 
     /// Lower an array index `array[index]`. `index_node` is the whole `Expression::Index`
