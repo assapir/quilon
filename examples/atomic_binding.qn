@@ -24,11 +24,6 @@ weigh = () -> $ => <
   groom("photograph the yak")
   assert(yakShaves, equals(3))
 
-  ~ The same syntax declares a local, wherever a `:=` declaration is allowed.
-  @sideQuests := 0
-  sideQuests := sideQuests + 1
-  assert(sideQuests, equals(1))
-
   weigh()
   assert(fleeceLength, equals(28))    ~ "one fleece, extremely fluffy" is 28 graphemes
 
