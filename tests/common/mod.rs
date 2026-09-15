@@ -318,10 +318,13 @@ pub fn front_end(
     let (program, mut sources) =
         quilon::modules::link(program, dir, None).expect("import linking failed");
     sources.set_root(TEST_FILE, src);
-    let types = TypeChecker::new()
+    let mut checker = TypeChecker::new();
+    let types = checker
         .check_program(&program)
         .expect("type checking failed");
-    let defer = deferral::analyze(&program).expect("deferral analysis failed");
+    let atomic_reassignments = checker.take_atomic_reassignments();
+    let defer =
+        deferral::analyze(&program, &atomic_reassignments).expect("deferral analysis failed");
     (program, types, defer, Rc::new(sources))
 }
 

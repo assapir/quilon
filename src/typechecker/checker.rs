@@ -509,6 +509,11 @@ pub struct Symbol {
     /// A payload-less constant (a nullary sum variant value): shared, but with no
     /// writable interior, so every use counts as fresh.
     constant: bool,
+    /// Declared `@name := …`. Read back at every later reassignment of this binding (see
+    /// `check_variable_declaration`'s reassignment branch), which is the only place that
+    /// resolves a `:=` to the specific binding it targets — no other pass reasons about
+    /// names for this.
+    atomic: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -601,6 +606,12 @@ pub struct TypeChecker {
     // The matcher hover side-table (see `MatcherHoverTable`), populated by `check_matcher`
     // and taken by `take_matcher_hovers` — a language server reads it after `check_program`.
     matcher_hovers: MatcherHoverTable,
+    // Spans of reassignments (not the declaring `@` occurrence) to an atomic binding,
+    // populated in `check_variable_declaration` and taken by `take_atomic_reassignments`.
+    // The checker is the only pass that resolves a `:=` to the binding it reassigns (see
+    // that function's "reassign if the name is already bound" branch); the deferral pass
+    // reads this set instead of re-deriving which name is atomic from scratch.
+    atomic_reassignments: std::collections::HashSet<Span>,
     // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
     // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use
     // resolves to the one whose parameter types EXACTLY match the argument types (no
@@ -678,6 +689,7 @@ impl TypeChecker {
             static_methods: std::collections::HashSet::new(),
             type_table: TypeTable::new(),
             matcher_hovers: MatcherHoverTable::new(),
+            atomic_reassignments: std::collections::HashSet::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,

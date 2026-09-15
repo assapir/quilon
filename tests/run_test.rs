@@ -1713,7 +1713,9 @@ fn jit_uses_caller_supplied_argv() {
         "b".to_string(),
         "c".to_string(),
     ];
-    let defer = quilon::deferral::analyze(&program).expect("deferral analysis failed");
+    let atomic_reassignments = checker.take_atomic_reassignments();
+    let defer = quilon::deferral::analyze(&program, &atomic_reassignments)
+        .expect("deferral analysis failed");
     let code = jit::run_program(
         &program,
         types.clone(),
