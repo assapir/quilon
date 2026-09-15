@@ -160,6 +160,9 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN344 | reserved name |
 | QN345 | record field with a function type |
 | QN346 | unsupported sum-type payload |
+| QN347 | atomic binding declared without `:=` |
+| QN348 | atomic binding used with `@` after its declaration |
+| QN349 | atomic binding reassignment waits on a deferred value |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -1111,6 +1114,59 @@ Mystery = Wrap(Nope) / Empty
 
 `Nope` names nothing declared above `Mystery`. A payload is Num, Text, Bool, $, a declared
 record, a declared sum, or an array/map of one of those.
+
+### QN347 — atomic binding declared without `:=`
+
+`@name = value` declares an atomic binding — `@name := value` — with `=` instead. Atomicity
+is a property of a mutable binding's reassignment; an immutable binding never reassigns.
+
+```quilon ignore
+@luckyNumber = 7
+^ = () -> Num => < luckyNumber >
+```
+
+Declare it with `:=`: `@luckyNumber := 7`.
+
+### QN348 — atomic binding used with `@` after its declaration
+
+`@` appears on an atomic binding outside its declaration — reading it, or reassigning it —
+where the bare name is already in scope. `@` marks the declaration only.
+
+```quilon ignore
+^ = () -> Num => <
+  @hits := 0
+  @hits := hits + 1
+>
+```
+
+Read or reassign it bare: `hits := hits + 1`.
+
+### QN349 — atomic binding reassignment waits on a deferred value
+
+An atomic binding's reassignment executes as a whole: its right side forces a deferred
+value — a value-returning `@` primitive's result read strictly (arithmetic, comparison,
+a field, a native call, …) — which would park the fiber mid-statement.
+
+```quilon ignore
+<< core.io
+
+@hits := 0
+bump = () -> $ => < hits := hits + io.@readStdin().length >
+^ = () -> $ => < bump() >
+```
+
+Force the value into a plain `=` binding first, then reassign:
+
+```quilon
+<< core.io
+
+@hits := 0
+bump = () -> $ => <
+  extra = io.@readStdin().length
+  hits := hits + extra
+>
+^ = () -> $ => < bump() >
+```
 
 ## Code generation and build
 

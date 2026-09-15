@@ -186,6 +186,10 @@ pub struct VariableDeclaration {
     pub value: Expression,
     /// `>>`-marked top-level items are exported from their module (Workstream B1).
     pub exported: bool,
+    /// Declared `@name := …` — an atomic binding. Set only on the declaring occurrence
+    /// (see `docs/concurrency/README.md#sharing-state-across-fibers`); codegen treats it
+    /// identically to an ordinary `:=` binding on the single-threaded runtime.
+    pub atomic: bool,
     pub span: Span,
 }
 

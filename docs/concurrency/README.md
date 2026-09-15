@@ -11,11 +11,11 @@ sidebar:
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
 > single-threaded fiber scheduler, the effect-only `time.@sleep` pause (`core.time`), the
 > deferred-value `io.@readStdin` (`core.io`), the networked `net.@tcpRequest` (`core.net`),
-> and the strict, callback-driven `io.@streamFile` (`core.io`).
-> Planned for 1.0: a value-returning network primitive such as `@get`, with which two
-> independent reads finish in max-time, and the multicore (M:N) runtime — a work-stealing
-> scheduler running one worker per CPU as reported to the process, the same under
-> `quilon run` and a built binary, with the Boehm GC working across threads and the
+> the strict, callback-driven `io.@streamFile` (`core.io`), and the atomic-binding syntax
+> `@name := …`. Planned for 1.0: a value-returning network primitive such as `@get`, with
+> which two independent reads finish in max-time, and the multicore (M:N) runtime — a
+> work-stealing scheduler running one worker per CPU as reported to the process, the same
+> under `quilon run` and a built binary, with the Boehm GC working across threads and the
 > fiber-sharing check and atomic types enforced.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
@@ -77,12 +77,17 @@ running as one critical section under a readers-writer lock, `=` methods and fie
 taking the read lock and `:=` setters the write lock. A bare field write from outside an
 atomic value is rejected — mutation goes only through its setters.
 
-`@name := …` declares an atomic binding: a lone scalar whose reassignment — including one
-that reads the binding's own current value, as in `count := count + 1` — executes atomically
-as a whole.
-
-The full specification is locked in
-[issue #120](https://github.com/assapir/quilon/issues/120#issuecomment-5494444629).
+`@name := …` declares an **atomic binding** — any type may be bound this way (`@hits := 0`,
+`@open := true`, `@lastPath := "/"`, `@stand := Stand { }`), wherever a `:=` declaration is
+allowed, at the top level and inside a block. `@` marks the declaration only; every read and
+reassignment after it — including one that reads the binding's own current value, as in
+`hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
+already follows. An atomic binding's reassignment executes as a whole: the right side may
+not wait on a deferred value, so the statement never parks part-way, and the compiler
+rejects one that would (force it into a plain `=` binding first, then reassign). Mutation
+*inside* a bound record still follows the record's own rules; cross-field invariants belong
+to an atomic type `T = @{ … }`. The fiber-sharing check that lets more than one fiber
+reach a marked binding ships with the multicore runtime. (See `examples/atomic_binding.qn`.)
 
 ## Implemented primitives
 

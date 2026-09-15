@@ -120,6 +120,14 @@ impl TypeChecker {
         std::mem::take(&mut self.matcher_hovers)
     }
 
+    /// Take the spans of reassignments to an atomic binding — see
+    /// `check_variable_declaration`'s reassignment branch. The deferral pass reads this
+    /// set to decide, for each `VariableDeclaration` it visits, whether the no-force rule
+    /// applies to it.
+    pub fn take_atomic_reassignments(&mut self) -> std::collections::HashSet<Span> {
+        std::mem::take(&mut self.atomic_reassignments)
+    }
+
     /// The `Err` path's view of the oracle; `Ok` takes the table itself.
     pub fn take_partial_types(&mut self) -> TypeTable {
         std::mem::take(&mut self.type_table)
@@ -770,6 +778,26 @@ impl TypeChecker {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), TypeError> {
+        // `@` marks only the declaring occurrence of an atomic binding (see
+        // `docs/concurrency/README.md#sharing-state-across-fibers`): a `=` binding can
+        // never be atomic, and a name already in scope means this `@` sits on what should
+        // be a bare reassignment. Both are checked before any of the value's own work, so
+        // neither is masked by an unrelated problem in the value expression.
+        if declaration.atomic {
+            if !declaration.mutable {
+                return Err(TypeError::AtomicBindingNotMutable {
+                    name: declaration.name.clone(),
+                    span: declaration.span.clone(),
+                });
+            }
+            if self.env.get_type(&declaration.name).is_some() {
+                return Err(TypeError::AtomicBindingUsedBare {
+                    name: declaration.name.clone(),
+                    span: declaration.span.clone(),
+                });
+            }
+        }
+
         // Resolve the annotation FIRST (when present) so an otherwise-uninferable empty
         // collection literal on the right (`xs :: []Text = []`) can take its element type
         // from it — see `infer_expression_expecting`.
@@ -842,6 +870,12 @@ impl TypeChecker {
             if let Some(existing_type) = self.env.get_type(&declaration.name) {
                 // Reassignment: the new value must match the binding's type.
                 self.check_type_compatibility(&existing_type, &final_type, &declaration.span)?;
+                // This is the one place a `:=` resolves to the specific binding it
+                // reassigns — record it here, once, for the deferral pass's no-force rule
+                // to read back rather than re-deriving which name is atomic on its own.
+                if self.env.is_atomic(&declaration.name) {
+                    self.atomic_reassignments.insert(declaration.span.clone());
+                }
             } else {
                 self.env.define_binding(
                     declaration.name.clone(),
@@ -851,6 +885,9 @@ impl TypeChecker {
                     value_aliasing,
                     declaration.span.clone(),
                 )?;
+                if declaration.atomic {
+                    self.env.mark_atomic(&declaration.name);
+                }
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.

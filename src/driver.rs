@@ -210,12 +210,38 @@ fn front_end_source_reporting(
         }
     };
     let matcher_hovers = checker.take_matcher_hovers();
+    let atomic_reassignments = checker.take_atomic_reassignments();
 
     // Deferred-value analysis (post-typecheck, pre-codegen): whether an `@` primitive is
     // reached, and the taint / force-set for value-returning primitives. Reads no types and
     // adds none, so the check above is unaffected. (A call's own location is not part of this:
     // codegen reads it from the source map, the same way every other located report does.)
-    let defer = crate::deferral::analyze(&program);
+    // It also raises the one error this pass can find: an atomic binding's reassignment
+    // forcing a deferred value on its right side — the force-set it already computes is
+    // exactly the set of force points, so this reads that set rather than walking twice.
+    // Which reassignment is atomic is the checker's own answer (`atomic_reassignments`
+    // above): only it resolves a `:=` to the specific binding it targets.
+    let defer = match crate::deferral::analyze(&program, &atomic_reassignments) {
+        Ok(defer) => defer,
+        Err(violation) => {
+            return Err(FrontEndError {
+                diagnostic: Box::new(
+                    Diagnostic::at(
+                        Code::AtomicReassignmentForced,
+                        &violation.span,
+                        format!(
+                            "`{}`'s reassignment must not wait on a deferred value — an \
+                             atomic binding's reassignment executes as a whole",
+                            violation.name
+                        ),
+                    )
+                    .help("bind the forced value first with a plain `=` binding, then reassign"),
+                ),
+                sources,
+                partial_types: types,
+            });
+        }
+    };
 
     Ok(Checked {
         program,

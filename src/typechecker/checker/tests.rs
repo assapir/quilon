@@ -830,3 +830,57 @@ fn test_named_update_refuses_a_source_that_cannot_fill_the_type() {
     .unwrap_err();
     assert!(matches!(short, TypeError::TypeMismatch { .. }));
 }
+
+#[test]
+fn test_atomic_binding_typechecks_like_a_plain_mutable_one() {
+    // `@name := …` accepts any type, and behaves exactly like `:=` on the single-threaded
+    // runtime — declared, reassigned bare, and read bare.
+    assert!(
+        check_ok(
+            "@hits := 0\n\
+             bump = () -> Num => < hits := hits + 1\n  hits >\n\
+             ^ = () -> Num => < bump()\n  bump()\n  hits >"
+        )
+        .is_ok()
+    );
+    // A block-local atomic binding of a record value.
+    assert!(
+        check_ok(
+            "Stand = { open :: Bool }\n\
+             ^ = () -> Bool => <\n  @stand := Stand { open = true }\n  stand.open\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_atomic_binding_without_mutable_is_rejected() {
+    // `@name = value` — atomic makes sense only for a mutable binding.
+    let err = check_ok("@hits = 0\n^ = () -> Num => < hits >").unwrap_err();
+    assert!(matches!(err, TypeError::AtomicBindingNotMutable { .. }));
+}
+
+#[test]
+fn test_atomic_binding_reassigned_with_at_marker_is_rejected() {
+    // `@` marks the declaration only; a reassignment stays bare.
+    let err =
+        check_ok("^ = () -> Num => <\n  @hits := 0\n  @hits := hits + 1\n  hits\n>").unwrap_err();
+    assert!(matches!(err, TypeError::AtomicBindingUsedBare { .. }));
+}
+
+#[test]
+fn test_atomic_binding_read_with_at_marker_is_rejected() {
+    // `@name` at a use site, once `name` is an atomic binding, names the same mistake as a
+    // `@`-marked reassignment rather than the generic "undefined name" a stray `@`-prefixed
+    // primitive reference would otherwise get.
+    let err = check_ok("@hits := 0\n^ = () -> Num => < @hits >").unwrap_err();
+    assert!(matches!(err, TypeError::AtomicBindingUsedBare { .. }));
+}
+
+#[test]
+fn test_an_unrelated_at_prefixed_name_still_reports_undefined() {
+    // No binding named `bogus` exists, atomic or otherwise, so a stray `@bogus` keeps the
+    // ordinary "undefined name" report.
+    let err = check_ok("^ = () -> Num => < @bogus() >").unwrap_err();
+    assert!(matches!(err, TypeError::UndefinedVariable { .. }));
+}
