@@ -49,7 +49,8 @@ A feature/change is not done until **all** of these are true:
   compiled program's exit code via JIT and native AOT.
 - **An example** — every new language feature ships a runnable `examples/*.qn`, wired into the
   examples gate (`tests/examples_test.rs`) so it compiles + runs + asserts an exit code under JIT and
-  native AOT (clang **and** gcc), and referenced exactly once from the language reference under `docs/`. (The user is
+  native AOT (clang **and** gcc), and referenced exactly once from the language reference under `docs/`
+  (one that reads stdin gets a sidecar `examples/<name>.stdin` piped to it on every path). (The user is
   emphatic: examples are mandatory, never stripped.) Write examples the way a user would: **no
   type annotation on a binding unless the compiler needs it** (an empty collection literal with
   no type from context, a lambda whose parameter type nothing supplies) — inference is the
