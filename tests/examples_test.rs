@@ -2,6 +2,10 @@
 //! every runnable one is SELF-ASSERTING — it verifies its own results in-language
 //! (via `<< core.test`) and exits 0. Running under `cargo test`, this is the CI gate
 //! that stops examples from rotting as the language evolves.
+//!
+//! An example that reads stdin gets its own input via a sidecar: `examples/<name>.stdin`
+//! next to `examples/<name>.qn` supplies that example's stdin bytes on every path below
+//! (JIT and each native binary); an example with no sidecar keeps seeing end-of-input.
 
 use quilon::driver::front_end;
 use quilon::jit;
@@ -11,6 +15,12 @@ use std::process::Command;
 mod common;
 use common::JIT_LOCK;
 use common::ensure_runtime_lib;
+use common::run_with_stdin;
+
+/// The sidecar stdin bytes for `path`, if `examples/<name>.stdin` exists next to it.
+fn sidecar_stdin(path: &Path) -> Option<Vec<u8>> {
+    std::fs::read(path.with_extension("stdin")).ok()
+}
 
 fn examples_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
@@ -135,8 +145,8 @@ fn every_runnable_example_self_asserts() {
     }
 }
 
-/// Every runnable example is self-asserting: it exits 0 under the in-process JIT.
-/// (A failed in-language assertion exits 5, so any regression fails here.)
+/// Every runnable example without a stdin sidecar is self-asserting: it exits 0 under the
+/// in-process JIT. (A failed in-language assertion exits 5, so any regression fails here.)
 /// Point the process's stdin at `/dev/null` so an example that reads stdin (`@readStdin`)
 /// sees end-of-input immediately and returns `""` instead of blocking on a live terminal.
 /// The examples run in-process (below), so this must be the real fd 0. `/dev/null` reads as
@@ -159,20 +169,36 @@ fn silence_stdin() {
 #[test]
 fn runnable_examples_exit_zero() {
     let _guard = JIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    // Examples run in-process, so guarantee EOF stdin here (an example may `@readStdin`).
+    // Examples run in-process, so guarantee EOF stdin here for any without a sidecar.
     silence_stdin();
+    let quilon = env!("CARGO_BIN_EXE_quilon");
     for path in runnable_examples() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let checked = front_end(&path).unwrap_or_else(|e| panic!("{name} failed to compile: {e}"));
-        let code = jit::run_program(
-            &checked.program,
-            checked.types,
-            checked.defer,
-            checked.sources,
-            &["program".to_string()],
-        )
-        .unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
-        assert_eq!(code, 0, "{name}: self-asserting example did not exit 0");
+        if let Some(input) = sidecar_stdin(&path) {
+            // A sidecar's bytes belong on the example's real stdin, which the in-process
+            // JIT above never sees (it always reads the silenced fd 0) — run this one as a
+            // `quilon run` subprocess instead, with the bytes piped in.
+            let mut command = Command::new(quilon);
+            command.args(["run", path.to_str().unwrap()]);
+            let (code, _) = run_with_stdin(command, &input);
+            assert_eq!(
+                code,
+                Some(0),
+                "{name}: self-asserting example did not exit 0"
+            );
+        } else {
+            let checked =
+                front_end(&path).unwrap_or_else(|e| panic!("{name} failed to compile: {e}"));
+            let code = jit::run_program(
+                &checked.program,
+                checked.types,
+                checked.defer,
+                checked.sources,
+                &["program".to_string()],
+            )
+            .unwrap_or_else(|e| panic!("{name} failed to run: {e}"));
+            assert_eq!(code, 0, "{name}: self-asserting example did not exit 0");
+        }
     }
 }
 
@@ -214,15 +240,15 @@ fn runnable_examples_match_across_jit_and_aot() {
 
     for src in runnable_examples() {
         let name = src.file_name().unwrap().to_string_lossy().to_string();
+        // A sidecar's bytes go to stdin on every path below; with none, stdin closes at
+        // once (an example that reads stdin, e.g. `@readStdin`, sees end-of-input).
+        let input = sidecar_stdin(&src).unwrap_or_default();
 
-        // In-process JIT: every self-asserting example exits 0. Feed EOF stdin so an example
-        // that reads stdin (`@readStdin`) returns `""` immediately instead of blocking.
-        let jit = Command::new(quilon)
-            .args(["run", src.to_str().unwrap()])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("run quilon run");
-        let jit_code = jit.status.code().unwrap_or(-1);
+        // In-process JIT: every self-asserting example exits 0.
+        let mut jit_command = Command::new(quilon);
+        jit_command.args(["run", src.to_str().unwrap()]);
+        let (jit_code, _) = run_with_stdin(jit_command, &input);
+        let jit_code = jit_code.unwrap_or(-1);
         assert_eq!(jit_code, 0, "{name}: JIT exit code wrong (expected 0)");
 
         // Native AOT via each available linker (`quilon build --linker ...`).
@@ -239,11 +265,8 @@ fn runnable_examples_match_across_jit_and_aot() {
                 String::from_utf8_lossy(&build.stderr)
             );
 
-            let native = Command::new(&bin)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .unwrap_or_else(|e| panic!("run native binary {}: {e}", bin.display()));
-            let native_code = native.status.code().unwrap_or(-1);
+            let (native_code, _) = run_with_stdin(Command::new(&bin), &input);
+            let native_code = native_code.unwrap_or(-1);
             assert_eq!(
                 native_code, 0,
                 "{name}: native AOT ({linker}) exit code wrong (expected 0)"
@@ -288,12 +311,10 @@ fn runnable_examples_build_and_run_with_debug_info() {
             String::from_utf8_lossy(&build.stderr)
         );
 
-        let native = Command::new(&bin)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .unwrap_or_else(|e| panic!("run native binary {}: {e}", bin.display()));
+        let input = sidecar_stdin(&src).unwrap_or_default();
+        let (code, _) = run_with_stdin(Command::new(&bin), &input);
         assert_eq!(
-            native.status.code().unwrap_or(-1),
+            code.unwrap_or(-1),
             0,
             "{name}: debug-info build did not exit 0"
         );

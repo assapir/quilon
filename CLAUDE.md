@@ -112,4 +112,4 @@ Classic multi-pass pipeline; `src/driver.rs::front_end` wires the passes for the
 
 - `docs/README.md` + its subfolders — authoritative language reference and syntax; `docs/status/feature-matrix.md` — the ✅/🚧/❌ feature matrix. Keep them in sync when you change language behavior.
 - `README.md` — high-level pitch + aspirational vision (implicit parallelism, deep immutability — not yet built).
-- `examples/*.qn` — runnable programs referenced from the language reference under `docs/`; each is exercised by the test suite. The `.ll`/`.o`/binary artifacts alongside them are gitignored.
+- `examples/*.qn` — runnable programs referenced from the language reference under `docs/`; each is exercised by the test suite. The `.ll`/`.o`/binary artifacts alongside them are gitignored. An example that reads stdin gets its own input from a sidecar file, `examples/<name>.stdin`, piped to it on every path the gate runs.

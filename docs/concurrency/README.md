@@ -115,7 +115,6 @@ strict operation reads its bytes. At end-of-input it yields `""`. (See
   assert(line, equals(""))     ~ the comparison FORCES it; "" at end-of-input (no piped input)
   0
 >
-~ pipe a line to see a real value flow:  echo hello | quilon run examples/readStdin.qn
 ```
 
 Binding `line` returns at once; the force is the `==` behind `equals`. `print`/`eprint`
