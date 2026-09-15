@@ -128,6 +128,15 @@ impl TypeChecker {
         std::mem::take(&mut self.atomic_reassignments)
     }
 
+    /// Take the spans of reassignments to a top-level binding — see
+    /// `check_variable_declaration`'s reassignment branch. The deferral pass reads this
+    /// set to decide, for each `VariableDeclaration` it visits inside a function body,
+    /// whether the reassignment is a store into a global that its own global-tracking
+    /// rule applies to.
+    pub fn take_top_level_reassignments(&mut self) -> std::collections::HashSet<Span> {
+        std::mem::take(&mut self.top_level_reassignments)
+    }
+
     /// The `Err` path's view of the oracle; `Ok` takes the table itself.
     pub fn take_partial_types(&mut self) -> TypeTable {
         std::mem::take(&mut self.type_table)
@@ -875,6 +884,14 @@ impl TypeChecker {
                 // to read back rather than re-deriving which name is atomic on its own.
                 if self.env.is_atomic(&declaration.name) {
                     self.atomic_reassignments.insert(declaration.span.clone());
+                }
+                // Same idea, for the deferral pass's global-tracking rule: a top-level
+                // binding may be stored a deferred value from any function, so its own
+                // reads anywhere are potential force sites. Recorded here rather than
+                // re-derived by name in that pass, exactly like the atomic case above.
+                if self.env.is_top_level(&declaration.name) {
+                    self.top_level_reassignments
+                        .insert(declaration.span.clone());
                 }
             } else {
                 self.env.define_binding(

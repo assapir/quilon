@@ -35,8 +35,10 @@ fn run_allocating_program() {
         .check_program(&program)
         .expect("type checking failed");
     let atomic_reassignments = checker.take_atomic_reassignments();
-    let defer = quilon::deferral::analyze(&program, &atomic_reassignments)
-        .expect("deferral analysis failed");
+    let top_level_reassignments = checker.take_top_level_reassignments();
+    let defer =
+        quilon::deferral::analyze(&program, &atomic_reassignments, &top_level_reassignments)
+            .expect("deferral analysis failed");
     let code = jit::run_program(
         &program,
         types,
