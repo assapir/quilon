@@ -325,9 +325,7 @@ impl Taint {
             match statement {
                 Statement::Item(Item::VariableDeclaration(v)) => {
                     let deferred = self.analyze_declaration_value(v, &local);
-                    if v.atomic {
-                        local.bind_atomic(v.name.clone(), true);
-                    }
+                    local.bind_atomic(v.name.clone(), v.atomic);
                     local.bind(v.name.clone(), deferred);
                 }
                 Statement::Item(Item::FunctionDeclaration(f)) => {
@@ -383,8 +381,14 @@ impl Scope {
         self.deferred_names.get(name).copied().unwrap_or(false)
     }
 
+    /// Record `name`'s atomicity the first time this scope sees a `:=` declaration of it —
+    /// atomic for `@name := …`, plain otherwise — and leave it alone on every later
+    /// reassignment: unlike deferredness, atomicity is fixed for the binding's lifetime,
+    /// so a later bare reassignment must not flip an atomic name back to plain (nor, the
+    /// other way round, promote a plain one). The first sight also wins over the global
+    /// fallback [`Taint::is_atomic`] reaches for otherwise — see `analyze`.
     fn bind_atomic(&mut self, name: String, atomic: bool) {
-        self.atomic_names.insert(name, atomic);
+        self.atomic_names.entry(name).or_insert(atomic);
     }
 }
 
@@ -575,6 +579,16 @@ mod tests {
         // The rule is atomic-binding-specific: an ordinary `:=` global forcing a deferred
         // value on its reassignment's right side is untouched.
         let src = "<< core.io\ncounter := 0\nbump = () -> $ => < counter := counter + @readStdin().length >";
+        assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn a_local_reassignment_shadowing_an_unrelated_atomic_globals_name_may_force() {
+        // `tally`'s own `counter` is a fresh, plain local — its first declaration inside
+        // `tally`'s block, even though it is not itself atomic, must be recorded so the
+        // reassignment after it is checked against THAT local, not against the unrelated
+        // top-level `@counter` the name happens to collide with.
+        let src = "<< core.io\n@counter := 0\ntally = () -> Num => <\n  counter := 0\n  counter := counter + @readStdin().length\n  counter\n>";
         assert_eq!(force_count(src), 1);
     }
 }
