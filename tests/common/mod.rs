@@ -321,7 +321,7 @@ pub fn front_end(
     let types = TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
-    let defer = deferral::analyze(&program);
+    let defer = deferral::analyze(&program).expect("deferral analysis failed");
     (program, types, defer, Rc::new(sources))
 }
 

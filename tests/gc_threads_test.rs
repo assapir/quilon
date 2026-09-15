@@ -33,7 +33,7 @@ fn run_allocating_program() {
     let types = TypeChecker::new()
         .check_program(&program)
         .expect("type checking failed");
-    let defer = quilon::deferral::analyze(&program);
+    let defer = quilon::deferral::analyze(&program).expect("deferral analysis failed");
     let code = jit::run_program(
         &program,
         types,
