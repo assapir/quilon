@@ -10,14 +10,18 @@ All notable changes to Quilon are documented here.
   declaration is allowed, at the top level and inside a block — any type may be bound
   (`@hits := 0`, `@open := true`, `@stand := Stand { }`). `@` marks the declaration only;
   every read and reassignment after it is bare, the same declaration/reassignment rule
-  `:=` already has. The runtime is single-threaded until Stage 2, so today an atomic
-  binding compiles and runs exactly like a `:=` binding — the AST records the marker for
-  Stage 2's fiber-sharing check to build on. Misuse raises
-  [QN347](docs/tooling/errors.md#qn347--atomic-binding-declared-without-) (`@name = value`)
-  or [QN348](docs/tooling/errors.md#qn348--atomic-binding-used-with--after-its-declaration)
-  (`@name` at a use site or on a reassignment). The language server's hover, rename, and
-  go-to-definition treat the declaration correctly, and the VS Code grammar highlights the
-  `@` marker. See `docs/concurrency/README.md#sharing-state-across-fibers`,
+  `:=` already has. An atomic binding's reassignment executes as a whole: its right side
+  may not wait on a deferred value — the compiler rejects one that would, naming the fix
+  (force the value into a plain `=` binding first, then reassign); the fiber-sharing check
+  that lets more than one fiber reach a marked binding ships with the multicore runtime.
+  Misuse raises
+  [QN347](docs/tooling/errors.md#qn347--atomic-binding-declared-without-) (`@name = value`),
+  [QN348](docs/tooling/errors.md#qn348--atomic-binding-used-with--after-its-declaration)
+  (`@name` at a use site or on a reassignment), or
+  [QN349](docs/tooling/errors.md#qn349--atomic-binding-reassignment-waits-on-a-deferred-value)
+  (a reassignment whose right side forces a deferred value). The language server's hover,
+  rename, and go-to-definition treat the declaration correctly, and the VS Code grammar
+  highlights the `@` marker. See `docs/concurrency/README.md#sharing-state-across-fibers`,
   `docs/variables.md#atomic-bindings`, and `examples/atomic_binding.qn`. Part of #120 and
   #435.
 - **`io.@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling

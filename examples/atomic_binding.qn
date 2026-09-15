@@ -1,11 +1,21 @@
 ~ `@name := …` declares an atomic binding. `@` marks the declaration only; every read and
 ~ reassignment after it is bare, the same rule a plain `:=` binding already follows.
 
+<< core.io
+
 @yakShaves := 0     ~ a top-level atomic global — one cell every call below shares
 
 groom = (chore :: Text) -> Text => <
   yakShaves := yakShaves + 1    ~ bare after its declaration, like any `:=` reassignment
   chore
+>
+
+~ A reassignment's right side may not force a deferred value; force it into a plain
+~ binding first, then reassign.
+@fleeceLength := 0
+weigh = () -> $ => <
+  grams = io.@readStdin().length
+  fleeceLength := fleeceLength + grams
 >
 
 ^ = () -> Num => <
@@ -18,6 +28,9 @@ groom = (chore :: Text) -> Text => <
   @sideQuests := 0
   sideQuests := sideQuests + 1
   assert(sideQuests, equals(1))
+
+  weigh()
+  assert(fleeceLength, equals(0))    ~ no piped input: the read forces to "", length 0
 
   0
 >

@@ -30,7 +30,9 @@ hits := hits + 1     ~ reassign, bare
 hits                 ~ read, bare
 ```
 Any type may be bound atomically — `@open := true`, `@lastPath := "/"`, `@stand := Stand
-{ }` all declare the same way. See
+{ }` all declare the same way. A reassignment's right side may not wait on a deferred
+value — the compiler rejects one that would, naming the fix: force the value into a plain
+`=` binding first, then reassign. See
 [Sharing state across fibers](concurrency/README.md#sharing-state-across-fibers) for what
 "atomic" means and what the compiler does with the marker.
 

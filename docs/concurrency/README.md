@@ -82,13 +82,12 @@ atomic value is rejected — mutation goes only through its setters.
 allowed, at the top level and inside a block. `@` marks the declaration only; every read and
 reassignment after it — including one that reads the binding's own current value, as in
 `hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
-already follows. It parses and typechecks like a `:=` binding, and on the single-threaded
-runtime its reassignment is trivially atomic — there is only ever one fiber to race with.
-Mutation *inside* a bound record still follows the record's own rules; cross-field
-invariants belong to an atomic type `T = @{ … }`. Stage 2 turns the marker into a real
-enforcement point: the fiber-sharing check reads it to allow sharing a binding the marker
-covers, where an unmarked `:=` value stays a compile error at the sharing point. (See
-`examples/atomic_binding.qn`.)
+already follows. An atomic binding's reassignment executes as a whole: the right side may
+not wait on a deferred value, so the statement never parks part-way, and the compiler
+rejects one that would (force it into a plain `=` binding first, then reassign). Mutation
+*inside* a bound record still follows the record's own rules; cross-field invariants belong
+to an atomic type `T = @{ … }`. The fiber-sharing check that lets more than one fiber
+reach a marked binding ships with the multicore runtime. (See `examples/atomic_binding.qn`.)
 
 ## Implemented primitives
 

@@ -232,9 +232,7 @@ fn front_end_source_reporting(
                             violation.name
                         ),
                     )
-                    .help(
-                        "bind the forced value first with a plain `=` binding, then reassign",
-                    ),
+                    .help("bind the forced value first with a plain `=` binding, then reassign"),
                 ),
                 sources,
                 partial_types: types,

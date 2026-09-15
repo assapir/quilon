@@ -124,9 +124,9 @@ impl Taint {
             Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
             Item::VariableDeclaration(v) => {
                 let scope = Scope::new();
-                let force_sites_before = self.force_sites.len();
-                self.strict(&v.value, &scope);
-                self.check_atomic_reassignment(v, &scope, force_sites_before);
+                if self.analyze_declaration_value(v, &scope) {
+                    self.force_sites.insert(v.value.span().clone());
+                }
             }
             Item::TypeDeclaration(t) => {
                 for method in t.type_definition.methods() {
@@ -179,6 +179,18 @@ impl Taint {
                 span: v.span.clone(),
             });
         }
+    }
+
+    /// Analyze a `:=`/`=` declaration or reassignment's value in `env`, checking along the
+    /// way for the atomic-reassignment violation, and return whether the value is
+    /// delivered to the caller still deferred (a `=`/`:=` binding is itself a lazy carrier
+    /// — see [`Self::visit_block`] — so the caller, not this method, decides whether to
+    /// force it).
+    fn analyze_declaration_value(&mut self, v: &VariableDeclaration, env: &Scope) -> bool {
+        let force_sites_before = self.force_sites.len();
+        let deferred = self.visit(&v.value, env);
+        self.check_atomic_reassignment(v, env, force_sites_before);
+        deferred
     }
 
     /// Analyze `expression`, recording forces for its own strict children, and return whether its
@@ -312,9 +324,7 @@ impl Taint {
         for (index, statement) in statements.iter().enumerate() {
             match statement {
                 Statement::Item(Item::VariableDeclaration(v)) => {
-                    let force_sites_before = self.force_sites.len();
-                    let deferred = self.visit(&v.value, &local);
-                    self.check_atomic_reassignment(v, &local, force_sites_before);
+                    let deferred = self.analyze_declaration_value(v, &local);
                     if v.atomic {
                         local.bind_atomic(v.name.clone(), true);
                     }
@@ -534,7 +544,8 @@ mod tests {
     fn atomic_reassignment_forcing_a_deferred_value_is_rejected() {
         // The maintainer's own example: a top-level atomic global, forced on the right side
         // of its reassignment from a separate function.
-        let src = "<< core.io\n@hits := 0\nbump = () -> $ => < hits := hits + @readStdin().length >";
+        let src =
+            "<< core.io\n@hits := 0\nbump = () -> $ => < hits := hits + @readStdin().length >";
         assert_eq!(atomic_violation(src).name, "hits");
     }
 
