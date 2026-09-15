@@ -3,7 +3,7 @@
 
 << core.io
 
-@yakShaves := 0     ~ a top-level atomic global — one cell every call below shares
+@yakShaves := 0     ~ a top-level atomic global; every call below adds to it
 
 groom = (chore :: Text) -> Text => <
   yakShaves := yakShaves + 1    ~ bare after its declaration, like any `:=` reassignment
@@ -30,7 +30,7 @@ weigh = () -> $ => <
   assert(sideQuests, equals(1))
 
   weigh()
-  assert(fleeceLength, equals(0))    ~ no piped input: the read forces to "", length 0
+  assert(fleeceLength, equals(28))    ~ "one fleece, extremely fluffy" is 28 graphemes
 
   0
 >
