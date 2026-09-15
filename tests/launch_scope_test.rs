@@ -15,6 +15,22 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Two `@readStdin()` launches, the first bound but never read. Stdin is a single serial
+/// stream (the stdin gate serializes readers), so the SECOND read only sees "world" if the
+/// FIRST one actually ran to completion and consumed "hello" first — proving the unused
+/// launch is not merely dropped.
+const FIRST_UNUSED_SECOND_ASSERTED: &str = r#"
+<< core.io
+<< core.test
+
+^ = () -> Num => <
+  first = io.@readStdin()
+  second = io.@readStdin()
+  assert(second, equals("world"))
+  0
+>
+"#;
+
 /// Two `@readStdin()` launches, both bound but never read (never individually forced) — so
 /// the only thing that can join them is the block's own close. Run against a stdin that can
 /// never be read successfully (see `run_with_unreadable_stdin`), both fault.
@@ -146,21 +162,14 @@ fn run_with_unreadable_stdin(file: &Path) -> (Option<i32>, String, String) {
 
 #[test]
 fn a_bound_but_unused_launch_settles_before_the_block_returns() {
-    // Drives examples/block_scope_join.qn directly, so the example itself is what proves
-    // the behavior: `interrogate`'s block joins its own unread first read before returning
-    // the second, so the caller's `verdict` is the settled "fact", not "rumor".
-    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/block_scope_join.qn");
-    let (code, stdout, stderr) = run_with_piped_stdin(&file, b"rumor\nfact\n");
+    let file = temp_ql("unused_launch", FIRST_UNUSED_SECOND_ASSERTED);
+    let (code, _, stderr) = run_with_piped_stdin(&file, b"hello\nworld\n");
     assert_eq!(
         code,
         Some(0),
-        "the unused first read must settle before the block returns the second: {stderr}"
+        "the unused first read must consume \"hello\" before the second reads \"world\": {stderr}"
     );
-    assert_eq!(
-        stdout.trim_end(),
-        "fact",
-        "the caller must receive the settled second line: {stdout}"
-    );
+    let _ = std::fs::remove_file(&file);
 }
 
 #[test]

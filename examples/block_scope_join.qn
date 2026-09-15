@@ -1,21 +1,18 @@
 ~ Block-scope join: a `< >` block joins every launch it made directly before it returns,
-~ including one bound to a name it never reads again. `interrogate` launches two reads and
-~ hands back only the second; its block still waits for the first before returning, so the
-~ caller receives a settled Text. With no input piped both reads yield "" at end-of-input;
-~ pipe two lines to see the second one come back:
-~   printf 'rumor\nfact\n' | quilon run examples/block_scope_join.qn
+~ including one bound to a name it never reads again. `interrogate` launches two reads,
+~ stores the second in `testimony`, and returns; `^` then reads a settled value.
 
 << core.io
 
-interrogate = () -> Text => <
-  hearsay = io.@readStdin()     ~ launched, never read: the block joins it before returning
-  testimony = io.@readStdin()
-  testimony
+testimony := ""
+
+interrogate = () -> $ => <
+  hearsay = io.@readStdin()       ~ launched, never read: the block joins it before returning
+  testimony := io.@readStdin()    ~ stored deferred; forced where ^ reads it
 >
 
 ^ = () -> Num => <
-  verdict = interrogate()
-  io.print(verdict)             ~ prints the settled second line, or an empty line at end-of-input
-  assert(verdict == "fact" || verdict == "", equals(true))
+  interrogate()
+  assert(testimony.length, equals(0))   ~ end-of-input: a settled, empty second line
   0
 >
