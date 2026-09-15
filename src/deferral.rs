@@ -749,4 +749,15 @@ mod tests {
         let src = "<< core.io\nlisten = () -> $ => < @testimony := io.@readStdin() >\n^ = () -> Num => <\n  listen()\n  0\n>";
         assert_eq!(checked_force_count(src), 0);
     }
+
+    #[test]
+    fn an_atomic_globals_reassignment_from_a_function_is_accepted_and_forces_at_the_read() {
+        // The exact shape the `block_scope_join` example uses: `testimony` is DECLARED
+        // atomic at the top level, then reassigned bare from `interrogate` with a
+        // deferred value (accepted — the store's own right side forces nothing, so the
+        // atomic-reassignment rule has nothing to reject) and read from `^`, a separate
+        // function, which is where the one force site lands.
+        let src = "<< core.io\n@testimony := \"\"\ninterrogate = () -> $ => < testimony := io.@readStdin() >\n^ = () -> Num => <\n  interrogate()\n  testimony == \"fact\" ? 0 : 1\n>";
+        assert_eq!(checked_force_count(src), 1);
+    }
 }
