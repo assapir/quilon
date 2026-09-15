@@ -222,31 +222,30 @@ fn front_end_source_reporting(
     // exactly the set of force points, so this reads that set rather than walking twice.
     // Which reassignment is atomic is the checker's own answer (`atomic_reassignments`
     // above): only it resolves a `:=` to the specific binding it targets.
-    let defer = match crate::deferral::analyze(
-        &program,
-        &atomic_reassignments,
-        &top_level_reassignments,
-    ) {
-        Ok(defer) => defer,
-        Err(violation) => {
-            return Err(FrontEndError {
-                diagnostic: Box::new(
-                    Diagnostic::at(
-                        Code::AtomicReassignmentForced,
-                        &violation.span,
-                        format!(
-                            "`{}`'s reassignment must not wait on a deferred value — an \
+    let defer =
+        match crate::deferral::analyze(&program, &atomic_reassignments, &top_level_reassignments) {
+            Ok(defer) => defer,
+            Err(violation) => {
+                return Err(FrontEndError {
+                    diagnostic: Box::new(
+                        Diagnostic::at(
+                            Code::AtomicReassignmentForced,
+                            &violation.span,
+                            format!(
+                                "`{}`'s reassignment must not wait on a deferred value — an \
                              atomic binding's reassignment executes as a whole",
-                            violation.name
+                                violation.name
+                            ),
+                        )
+                        .help(
+                            "bind the forced value first with a plain `=` binding, then reassign",
                         ),
-                    )
-                    .help("bind the forced value first with a plain `=` binding, then reassign"),
-                ),
-                sources,
-                partial_types: types,
-            });
-        }
-    };
+                    ),
+                    sources,
+                    partial_types: types,
+                });
+            }
+        };
 
     Ok(Checked {
         program,

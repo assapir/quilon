@@ -890,7 +890,8 @@ impl TypeChecker {
                 // reads anywhere are potential force sites. Recorded here rather than
                 // re-derived by name in that pass, exactly like the atomic case above.
                 if self.env.is_top_level(&declaration.name) {
-                    self.top_level_reassignments.insert(declaration.span.clone());
+                    self.top_level_reassignments
+                        .insert(declaration.span.clone());
                 }
             } else {
                 self.env.define_binding(
