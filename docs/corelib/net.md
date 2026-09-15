@@ -16,8 +16,11 @@ Import with `<< core.net`. See the [corelib index](README.md).
 | `net.@tcpRequest(address :: Text, requestBytes :: Text) -> Result` | One-shot request exchange: connect to `address` (`host:port`), write `requestBytes`, read the response until the peer closes (close-delimited). Yields `Ok(responseBytes)` with the whole response as a `Text` on success, or `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — a failure is a value to match. A value-returning [leaf IO primitive](../concurrency/README.md): the call launches the exchange and hands back a **deferred** `Result`, forced when a strict operation first reads it. |
 
 The response is capped at **16 MiB**; a larger one yields `NotOk`.
-Hostname resolution is a **blocking** DNS lookup on the fiber thread, so a slow lookup stalls the
-scheduler (a numeric `host:port` skips it); non-blocking DNS is a later refinement.
+Hostname resolution runs on the runtime's blocking-call pool and parks only the calling fiber
+until it answers, so it never stalls other fibers, timers, or sockets on the scheduler; a
+numeric `host:port` resolves inline with no thread at all. See
+[Concurrency runtime: blocking calls](../concurrency/runtime.md#blocking-calls) for the pool's
+sizing.
 
 ```quilon
 << core.net
