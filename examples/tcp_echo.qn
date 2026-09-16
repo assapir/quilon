@@ -12,7 +12,7 @@ holler = (connection :: net.Connection) -> $ => <
 >
 
 ^ = () -> $ => <
-  canyon = net.@tcpServe(9047, connection => holler(connection))
+  canyon = net.@tcpServe("127.0.0.1:9047", connection => holler(connection))
   net.@tcpRequest("127.0.0.1:9047", "hellooo") ?
     | Ok(echo) => assert(echo, equals("hellooo"))
     | NotOk(error) => test.failAt(error)

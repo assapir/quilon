@@ -744,7 +744,8 @@ mod tests {
         // `net.@tcpServe`'s own return value (the `Server` handle) is a ready value, never
         // forced — but the accept loop it starts keeps running after the call returns, so the
         // enclosing block still opens and joins a launch scope for it.
-        let src = "<< core.net\n^ = () -> Num => <\n  server = net.@tcpServe(0, h)\n  0\n>";
+        let src =
+            "<< core.net\n^ = () -> Num => <\n  server = net.@tcpServe(\"127.0.0.1:0\", h)\n  0\n>";
         let i = info(src);
         assert_eq!(i.launch_scopes.len(), 1);
         assert_eq!(i.force_sites.len(), 0);

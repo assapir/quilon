@@ -200,7 +200,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         {
             match (type_name.as_str(), function_name.as_str()) {
                 ("core.net.Connection", "close") => {
-                    return self.generate_connection_close(receiver);
+                    return self.generate_connection_close(arguments);
                 }
                 ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
                 _ => {}
@@ -561,6 +561,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         global
     }
 
+    /// Check a call's arity against `expected`, naming `qualified_name` (the primitive's
+    /// full `module.Type.member`-style name, e.g. `core.net.Connection.@read`) in the one
+    /// message every fixed-arity primitive this file adds shares — `receiver` says whether
+    /// `arguments[0]` is a `.`-call's own receiver, subtracted from the count shown (a
+    /// receiver is never one of the primitive's own written arguments). Only for a
+    /// primitive with exactly one valid arity; an overloaded one (`Server.kill`, 0 or 1
+    /// explicit argument) is already arity-checked by overload resolution before codegen
+    /// ever sees it, and has no single `expected` this could name.
+    fn expect_arity(
+        qualified_name: &str,
+        arguments: &[Expression],
+        receiver: bool,
+        expected: usize,
+    ) -> Result<(), String> {
+        let actual = arguments.len() - usize::from(receiver);
+        if actual == expected {
+            return Ok(());
+        }
+        let plural = if expected == 1 { "" } else { "s" };
+        Err(format!(
+            "{qualified_name} expects exactly {expected} argument{plural}, got {actual}"
+        ))
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -689,20 +713,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(ctx("Failed to load @streamFile result"))
             }
             "tcpServe" => {
-                if arguments.len() != 2 {
-                    return Err(format!(
-                        "@tcpServe expects exactly 2 arguments (port, handler), got {}",
-                        arguments.len()
-                    ));
-                }
-                let BasicValueEnum::FloatValue(port) = self.generate_expression(&arguments[0])?
-                else {
-                    return Err("@tcpServe expects a Num port".to_string());
+                const NAME: &str = "core.net.@tcpServe";
+                const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
+                Self::expect_arity(NAME, arguments, false, 2)?;
+                let address_value = self.generate_expression(&arguments[0])?;
+                let BasicValueEnum::StructValue(_) = address_value else {
+                    return Err(format!("{NAME} expects a Text address"));
                 };
+                let (address_ptr, address_len) = self.text_fields(address_value)?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
-                    return Err("@tcpServe expects a closure handler".to_string());
+                    return Err(format!("{NAME} expects a closure handler"));
                 };
 
                 let bundle = self.bundle_closure(closure, "tcp_serve_bundle")?;
@@ -717,44 +739,39 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_call(
                         serve,
                         &[
-                            port.into(),
+                            address_ptr.into(),
+                            address_len.into(),
                             thunk_ptr.into(),
                             bundle.into(),
                             launch_site.into(),
                         ],
                         "tcp_serve",
                     )
-                    .map_err(ctx("Failed to call @tcpServe"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 let handle = Self::call_result_to_basic(call)?;
                 self.build_handle_record(handle)
             }
             // `Connection.@read()`: the receiver (`arguments[0]`) is a `Connection` value;
             // its `handle` field is the id the runtime table keys the connection by.
             "read" => {
-                if arguments.len() != 1 {
-                    return Err(format!(
-                        "@read expects no arguments, got {}",
-                        arguments.len() - 1
-                    ));
-                }
+                const NAME: &str = "core.net.Connection.@read";
+                const CALL_FAILED: &str = "Failed to call core.net.Connection.@read";
+                Self::expect_arity(NAME, arguments, true, 0)?;
                 let handle = self.handle_field(&arguments[0])?;
                 let read = self.get_intrinsic("__connection_read_launch")?;
                 let call = self
                     .builder
                     .build_call(read, &[handle.into()], "connection_read")
-                    .map_err(ctx("Failed to call @read"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 // The result is a DEFERRED `Text` (`{ promise, -1 }`); the force-set decides
                 // where it is forced.
                 Self::call_result_to_basic(call)
             }
             // `Connection.@write(bytes)`: effect-only (`$`).
             "write" => {
-                if arguments.len() != 2 {
-                    return Err(format!(
-                        "@write expects exactly 1 argument (bytes), got {}",
-                        arguments.len() - 1
-                    ));
-                }
+                const NAME: &str = "core.net.Connection.@write";
+                const CALL_FAILED: &str = "Failed to call core.net.Connection.@write";
+                Self::expect_arity(NAME, arguments, true, 1)?;
                 let handle = self.handle_field(&arguments[0])?;
                 let (data_ptr, data_len) = self.extract_text(&arguments[1])?;
                 let write = self.get_intrinsic("__connection_write")?;
@@ -764,7 +781,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         &[handle.into(), data_ptr.into(), data_len.into()],
                         "",
                     )
-                    .map_err(ctx("Failed to call @write"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 Ok(self.unit_value().into())
             }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
@@ -774,30 +791,36 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// `Connection.close()`: close the connection now, if it is not already closed.
     fn generate_connection_close(
         &mut self,
-        receiver: &Expression,
+        arguments: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let handle = self.handle_field(receiver)?;
+        const NAME: &str = "core.net.Connection.close";
+        const CALL_FAILED: &str = "Failed to call core.net.Connection.close";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
         let close = self.get_intrinsic("__connection_close")?;
         self.builder
             .build_call(close, &[handle.into()], "")
-            .map_err(ctx("Failed to call Connection.close"))?;
+            .map_err(ctx(CALL_FAILED))?;
         Ok(self.unit_value().into())
     }
 
     /// `Server.kill(seconds)` / `Server.kill()`: the checker already resolved which of the
     /// two overloaded arities this call is, so `arguments` (receiver plus, optionally, the
     /// explicit `seconds`) is one of exactly those two shapes — a missing `seconds` is the
-    /// default 5-second grace period.
+    /// default 5-second grace period. Overloaded, so no single arity to check here (see
+    /// `expect_arity`'s own doc).
     fn generate_server_kill(
         &mut self,
         arguments: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.kill";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.kill";
         let handle = self.handle_field(&arguments[0])?;
         let seconds = match arguments.get(1) {
             Some(argument) => {
                 let BasicValueEnum::FloatValue(seconds) = self.generate_expression(argument)?
                 else {
-                    return Err("Server.kill expects a Num seconds".to_string());
+                    return Err(format!("{NAME} expects a Num seconds"));
                 };
                 seconds
             }
@@ -806,7 +829,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let kill = self.get_intrinsic("__server_kill")?;
         self.builder
             .build_call(kill, &[handle.into(), seconds.into()], "")
-            .map_err(ctx("Failed to call Server.kill"))?;
+            .map_err(ctx(CALL_FAILED))?;
         Ok(self.unit_value().into())
     }
 

@@ -86,7 +86,7 @@ linkedGreeting = "linked " + "again"
     connection.close()
     $
   >
-  smokeServer = net.@tcpServe(0, connection => respondSmoke(connection))
+  smokeServer = net.@tcpServe("127.0.0.1:0", connection => respondSmoke(connection))
   smokeServer.kill(0.01)
 
   ~ __stream_file_run (the io.@streamFile leaf IO primitive) and the onChunk thunk it calls

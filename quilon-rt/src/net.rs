@@ -25,7 +25,7 @@
 
 use crate::blocking::run_blocking;
 use crate::deferred::{QlResult, launch, launch_deferred_result, launch_deferred_text, settle};
-use crate::mem::{QlSlice, alloc_text, format_num};
+use crate::mem::{QlSlice, alloc_text};
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{
     current_fiber_id, deregister_readiness, park_on_readiness, register_readiness,
@@ -36,7 +36,7 @@ use mio::{Interest, Token};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::os::raw::c_void;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -399,41 +399,37 @@ fn next_handle() -> u64 {
     })
 }
 
-/// A `net.@tcpServe` port argument as the whole `0..=65535` number it must be, or the
-/// message saying why it is not — folded into the same bind-failure report as an OS-level
-/// bind error, since a program has no other channel to hear about either.
-fn parse_port(port: f64) -> Result<u16, String> {
-    if port.fract() != 0.0 || port < 0.0 || port > u16::MAX as f64 {
-        return Err(format!(
-            "port must be a whole number from 0 to 65535, got {}",
-            format_num(port)
-        ));
-    }
-    Ok(port as u16)
-}
-
-/// `net.@tcpServe(port, handler)`: bind `0.0.0.0:port`, listen, and return the `Server`
+/// `net.@tcpServe(address, handler)`: resolve `address` exactly as [`resolve`] resolves
+/// `@tcpRequest`'s own (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a
+/// hostname resolved on the runtime's blocking-call pool — parking the calling fiber, not
+/// the accept loop, until it answers), bind and listen on it, and return the `Server`
 /// handle's id at once — codegen builds the `Server { handle = … }` record around it, the
 /// same way it builds the `Connection` handed to `handler`. The accept loop launches on a
 /// background fiber, registered with whatever `< >` block's launch scope is open right now
 /// (through [`launch`], exactly as a value-returning primitive's producer registers) so
 /// that block's own join keeps it alive without ever forcing a value from this call — this
-/// call's own return is already ready. A bind failure is fatal, reported at `site` through
-/// the same fail-loud path every other unrecoverable runtime check uses.
+/// call's own return is already ready. A bind failure — `address` does not parse or
+/// resolve, the port is missing or out of range, the port is already in use, or
+/// permission is refused — is fatal, reported at `site` through the same fail-loud path
+/// every other unrecoverable runtime check uses, naming `address` as written.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `handler_fn` is a live `(f64, ptr) -> i8` trampoline — codegen's fixed-shape wrapper
-/// (see `CodeGenerator::emit_tcp_serve_handler_thunk`) over the user's `(Connection) -> $`
+/// `address_data` is null, or points to `address_len` readable bytes for the duration of
+/// this call (a `Text`'s live bytes at the call site); `handler_fn` is a live `(f64, ptr)
+/// -> i8` trampoline — codegen's fixed-shape wrapper (see
+/// `CodeGenerator::emit_tcp_serve_handler_thunk`) over the user's `(Connection) -> $`
 /// closure — called with `handler_env` as its second argument; `site` is null or points to
 /// a valid [`QlSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __tcp_serve_launch(
-    port: f64,
+    address_data: *const u8,
+    address_len: i64,
     handler_fn: *const c_void,
     handler_env: *mut c_void,
     site: *const QlSite,
 ) -> f64 {
+    let address = bytes_to_string(address_data, address_len);
     // SAFETY: per the contract, a live `(f64, ptr) -> i8` trampoline.
     let handler_fn: extern "C" fn(f64, *mut c_void) -> u8 =
         unsafe { std::mem::transmute(handler_fn) };
@@ -442,15 +438,14 @@ pub extern "C" fn __tcp_serve_launch(
         fail_at(
             site,
             codes::BIND_FAILED,
-            &format!("@tcpServe: bind 0.0.0.0:{}: {reason}", format_num(port)),
+            &format!("core.net.@tcpServe: bind {address}: {reason}"),
             RUNTIME_EXIT_CODE,
         )
     };
-    let port_number = match parse_port(port) {
-        Ok(number) => number,
-        Err(reason) => bind(reason),
+    let bind_addr = match resolve(&address) {
+        Ok(addr) => addr,
+        Err(error) => bind(error.to_string()),
     };
-    let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port_number);
     let mut listener = match TcpListener::bind(bind_addr) {
         Ok(listener) => listener,
         Err(error) => bind(error.to_string()),
@@ -649,11 +644,20 @@ pub extern "C" fn __connection_close(connection_id: f64) {
 
 /// Wake a server's accept loop out of a parked `accept()` with nothing pending, so it
 /// notices `stopping` promptly instead of waiting for the next real client (which may never
-/// come): connect to the listener's own bound port from loopback. Best-effort — a failure
-/// here just means a genuine client connection (or `Server.kill`'s own grace period ending)
-/// wakes it instead; either way `kill` still [`settle`]s the accept loop before returning.
+/// come): connect to the listener's own bound port from loopback, in the SAME address
+/// family it bound (`127.0.0.1` for an IPv4 listener, `::1` for an IPv6 one) — connecting
+/// in the wrong family fails outright (nothing is listening there), leaving the accept
+/// loop parked forever with no genuine client to wake it either, which is exactly the hang
+/// this match avoids. Best-effort otherwise (a listener bound to one specific non-loopback
+/// interface address is not reachable via loopback at all) — a failure here just means a
+/// genuine client connection (or `Server.kill`'s own grace period ending) wakes it instead;
+/// either way `kill` still [`settle`]s the accept loop before returning.
 fn wake_accept_loop(server: &ServerState) {
-    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server.local_addr.port());
+    let loopback = match server.local_addr.ip() {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+    };
+    let target = SocketAddr::new(loopback, server.local_addr.port());
     let _ = TcpStream::connect(target);
 }
 
@@ -1103,6 +1107,20 @@ mod tests {
         })
     }
 
+    /// `__tcp_serve_launch`'s `address_data`/`address_len` are a `Text`'s own raw fields —
+    /// header included, exactly like `write_connection_bytes`'s below — so every test binds
+    /// through this helper rather than building that pair by hand at each call site.
+    fn launch_test_server(address: &str, handler_fn: extern "C" fn(f64, *mut c_void) -> u8) -> f64 {
+        let (address_ptr, address_len) = crate::test_support::text_of(address);
+        __tcp_serve_launch(
+            address_ptr,
+            address_len,
+            handler_fn as *const c_void,
+            ptr::null_mut(),
+            ptr::null(),
+        )
+    }
+
     /// Force `__connection_read_launch`'s deferred `Text` the way generated code does:
     /// extract the promise from its sentinel-tagged slice and force it.
     fn force_connection_read(connection_id: f64) -> Vec<u8> {
@@ -1125,7 +1143,12 @@ mod tests {
     /// test below connects this way, so a bug that leaves a connection open with nothing
     /// arriving fails the test in a few seconds instead of hanging the run.
     fn connect_with_timeout(addr: SocketAddr) -> std::net::TcpStream {
-        let stream = std::net::TcpStream::connect(addr).expect("connect to the test server");
+        // A bounded `connect_timeout`, not a plain `connect`: an address a listener is
+        // genuinely refusing fails at once, but one silently dropped (a firewalled or
+        // otherwise unreachable address, IPv6 loopback being the one this crate's own
+        // tests have hit) never fails on its own — only a deadline does.
+        let stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+            .expect("connect to the test server");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("set a read timeout");
@@ -1153,12 +1176,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 spawn(|| {
-                    let server_id = __tcp_serve_launch(
-                        0.0,
-                        echo_handler as *const c_void,
-                        ptr::null_mut(),
-                        ptr::null(),
-                    );
+                    let server_id = launch_test_server("127.0.0.1:0", echo_handler);
                     let addr = bound_addr(server_id);
 
                     let clients: Vec<_> = [*b"first-", *b"second"]
@@ -1206,12 +1224,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 spawn(|| {
-                    let server_id = __tcp_serve_launch(
-                        0.0,
-                        forgetful_handler as *const c_void,
-                        ptr::null_mut(),
-                        ptr::null(),
-                    );
+                    let server_id = launch_test_server("127.0.0.1:0", forgetful_handler);
                     let addr = bound_addr(server_id);
 
                     let client = std::thread::spawn(move || {
@@ -1257,12 +1270,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 spawn(|| {
-                    let server_id = __tcp_serve_launch(
-                        0.0,
-                        slow_echo_handler as *const c_void,
-                        ptr::null_mut(),
-                        ptr::null(),
-                    );
+                    let server_id = launch_test_server("127.0.0.1:0", slow_echo_handler);
                     let addr = bound_addr(server_id);
 
                     let client = std::thread::spawn(move || {
@@ -1304,12 +1312,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 spawn(|| {
-                    let server_id = __tcp_serve_launch(
-                        0.0,
-                        stuck_handler as *const c_void,
-                        ptr::null_mut(),
-                        ptr::null(),
-                    );
+                    let server_id = launch_test_server("127.0.0.1:0", stuck_handler);
                     let addr = bound_addr(server_id);
 
                     let client = std::thread::spawn(move || {
@@ -1358,12 +1361,7 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 spawn(|| {
-                    let server_id = __tcp_serve_launch(
-                        0.0,
-                        self_killing_handler as *const c_void,
-                        ptr::null_mut(),
-                        ptr::null(),
-                    );
+                    let server_id = launch_test_server("127.0.0.1:0", self_killing_handler);
                     *SERVER_HANDLE.lock().unwrap() = server_id;
                     let addr = bound_addr(server_id);
 
@@ -1381,6 +1379,61 @@ mod tests {
              period, took {:?}",
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn accept_and_echo_over_ipv6_loopback() {
+        // `net.@tcpServe`'s address argument is `host:port` exactly as `@tcpRequest` takes
+        // it, including a numeric IPv6 literal in brackets. Skips, rather than fails, on a
+        // machine with no IPv6 loopback configured: binding `[::1]:0` there fails with
+        // "address not available", an environment limitation this test cannot fix, and the
+        // runtime's own bind failure is fatal (exits the whole process) — not something a
+        // test could catch and continue past — so this probes with a throwaway std bind
+        // first, never reaching `__tcp_serve_launch` at all if that probe fails.
+        if std::net::TcpListener::bind("[::1]:0").is_err() {
+            eprintln!(
+                "skipping accept_and_echo_over_ipv6_loopback: no IPv6 loopback on this machine"
+            );
+            return;
+        }
+
+        extern "C" fn echo_handler(connection_id: f64, _environment: *mut c_void) -> u8 {
+            let bytes = force_connection_read(connection_id);
+            write_connection_bytes(connection_id, &bytes);
+            0
+        }
+
+        static FINISHED: AtomicBool = AtomicBool::new(false);
+        FINISHED.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = launch_test_server("[::1]:0", echo_handler);
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        stream
+                            .write_all(b"hexagon")
+                            .expect("write the echo message");
+                        let mut echoed = [0u8; 7];
+                        stream.read_exact(&mut echoed).expect("read the echo");
+                        assert_eq!(&echoed, b"hexagon", "the echoed bytes matched");
+                        FINISHED.store(true, Ordering::SeqCst);
+                    });
+
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !FINISHED.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        sleep(Duration::from_millis(5));
+                    }
+                    client.join().expect("client thread panicked");
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
+
+        assert!(FINISHED.load(Ordering::SeqCst), "the IPv6 echo completed");
     }
 
     #[test]

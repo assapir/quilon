@@ -29,9 +29,9 @@ fn free_port() -> u16 {
     port
 }
 
-/// The program under test: a `net.@tcpServe` echo server on `port`, stopped by the word
-/// `quit` on any connection.
-fn program(port: u16) -> String {
+/// The program under test: a `net.@tcpServe` echo server bound to `address` (`host:port`),
+/// stopped by the word `quit` on any connection.
+fn program(address: &str) -> String {
     format!(
         r#"
 << core.net
@@ -46,7 +46,7 @@ respond = (connection :: net.Connection) -> $ => <
 >
 
 ^ = () -> Num => <
-  server := net.@tcpServe({port}, connection => respond(connection))
+  server := net.@tcpServe("{address}", connection => respond(connection))
   0
 >
 "#
@@ -68,22 +68,25 @@ fn temp_ql(tag: &str, source: &str) -> PathBuf {
     path
 }
 
-/// Connect to `port` with a bounded read/write timeout on every op — every client below
-/// dials this way, so a bug that leaves a connection open with nothing arriving fails the
-/// test in a few seconds instead of hanging the run.
-fn connect_with_timeout(port: u16) -> std::io::Result<TcpStream> {
-    let stream = TcpStream::connect(("127.0.0.1", port))?;
+/// Connect to `host:port` with a bounded read/write timeout on every op — every client
+/// below dials this way, so a bug that leaves a connection open with nothing arriving
+/// fails the test in a few seconds instead of hanging the run. `host` is a plain string
+/// (not necessarily numeric — the hostname test connects the same way it binds), resolved
+/// by `TcpStream::connect` itself.
+fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let stream = TcpStream::connect((host, port))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     Ok(stream)
 }
 
-/// Connect to `port`, retrying (bounded) until the server is up — the process under test
-/// needs a moment after starting before `@tcpServe` has actually bound and is accepting.
-fn connect_once_listening(port: u16) -> TcpStream {
+/// Connect to `host:port`, retrying (bounded) until the server is up — the process under
+/// test needs a moment after starting before `@tcpServe` has actually bound and is
+/// accepting.
+fn connect_once_listening(host: &str, port: u16) -> TcpStream {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        match connect_with_timeout(port) {
+        match connect_with_timeout(host, port) {
             Ok(stream) => return stream,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Err(error) => panic!("never managed to connect to the test server: {error}"),
@@ -110,9 +113,9 @@ fn wait_bounded(mut child: Child, timeout: Duration) -> i32 {
     }
 }
 
-/// Drive the echo-then-quit exchange against a server already listening on `port`.
-fn drive_echo_then_quit(port: u16) {
-    let mut echoer = connect_once_listening(port);
+/// Drive the echo-then-quit exchange against a server already listening on `host:port`.
+fn drive_echo_then_quit(host: &str, port: u16) {
+    let mut echoer = connect_once_listening(host, port);
     echoer
         .write_all(b"knock knock")
         .expect("write the echo message");
@@ -126,7 +129,7 @@ fn drive_echo_then_quit(port: u16) {
     );
     drop(echoer);
 
-    let mut quitter = connect_with_timeout(port).expect("connect to send quit");
+    let mut quitter = connect_with_timeout(host, port).expect("connect to send quit");
     quitter.write_all(b"quit").expect("write the quit message");
     drop(quitter);
 }
@@ -134,7 +137,7 @@ fn drive_echo_then_quit(port: u16) {
 #[test]
 fn jit_tcp_serve_echoes_then_kill_stops_the_server() {
     let port = free_port();
-    let file = temp_ql("jit", &program(port));
+    let file = temp_ql("jit", &program(&format!("127.0.0.1:{port}")));
 
     let child = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])
@@ -144,7 +147,34 @@ fn jit_tcp_serve_echoes_then_kill_stops_the_server() {
         .spawn()
         .expect("spawn quilon run");
 
-    drive_echo_then_quit(port);
+    drive_echo_then_quit("127.0.0.1", port);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_tcp_serve_binds_a_hostname() {
+    // `net.@tcpServe` resolves a hostname on the runtime's blocking-call pool exactly the
+    // way `net.@tcpRequest` does — "localhost" is the one every machine running this test
+    // resolves without a real network, and consistently between the server's own bind and
+    // this test's client connect (both run on the same machine, through the same resolver).
+    let port = free_port();
+    let file = temp_ql("jit_hostname", &program(&format!("localhost:{port}")));
+
+    let child = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+
+    drive_echo_then_quit("localhost", port);
 
     assert_eq!(
         wait_bounded(child, Duration::from_secs(15)),
@@ -172,7 +202,7 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
     let port = free_port();
-    let source = temp_ql("aot", &program(port));
+    let source = temp_ql("aot", &program(&format!("127.0.0.1:{port}")));
     let binary = std::env::temp_dir().join(format!("quilon_tcp_serve_aot_{}", std::process::id()));
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
@@ -193,7 +223,7 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
         .spawn()
         .expect("spawn the native AOT server binary");
 
-    drive_echo_then_quit(port);
+    drive_echo_then_quit("127.0.0.1", port);
 
     assert_eq!(
         wait_bounded(child, Duration::from_secs(15)),

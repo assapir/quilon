@@ -1346,19 +1346,21 @@ Pass a whole `count` of 1 or more, no greater than the occurrences of `from` pre
 
 ### QN511 — bind failed
 
-`net.@tcpServe` could not bind and listen on the requested port — the port is already in
-use, or nothing but a privileged process may bind it. Starting a server is the one point
-in the raw TCP layer where failure is fatal; every per-connection failure afterward stays
-inside the running server instead.
+`core.net.@tcpServe` could not resolve or bind the requested address (`host:port`, the
+same form `net.@tcpRequest` accepts) — the address does not parse or resolve, the port is
+missing or out of range, the port is already in use, or nothing but a privileged process
+may bind it. The report names the address exactly as written. Starting a server is the
+one point in the raw TCP layer where failure is fatal; every per-connection failure
+afterward stays inside the running server instead.
 
 ```quilon ignore
 << core.net
 
 ^ = () -> Num => <
-  first = net.@tcpServe(47990, connection => $)
-  second = net.@tcpServe(47990, connection => $)
+  first = net.@tcpServe("127.0.0.1:47990", connection => $)
+  second = net.@tcpServe("127.0.0.1:47990", connection => $)
   0
 >
 ```
 
-Pick a port nothing else on the machine is already bound to.
+Pick an address nothing else on the machine is already bound to.

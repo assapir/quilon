@@ -258,18 +258,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
                 false,
             ),
-            // double __tcp_serve_launch(double port, ptr handlerFn, ptr handlerEnv, Site*
-            // site) — `net.@tcpServe`: bind and listen, launch the accept loop in the
-            // background (registered with the calling block's launch scope directly, never
-            // exposed as a deferred value — this call's own return is ready at once), and
-            // return the `Server` handle's id. `handlerFn` is the code generator's
+            // double __tcp_serve_launch(i8* address, i64 addressLen, ptr handlerFn, ptr
+            // handlerEnv, Site* site) — `net.@tcpServe`: resolve `address` (`host:port`,
+            // exactly as `@tcpRequest` accepts it), bind and listen, launch the accept loop
+            // in the background (registered with the calling block's launch scope directly,
+            // never exposed as a deferred value — this call's own return is ready at once),
+            // and return the `Server` handle's id. `handlerFn` is the code generator's
             // fixed-shape trampoline over the caller's `(Connection) -> $` closure (see
             // `emit_tcp_serve_handler_thunk`), called with `handlerEnv` (the bundled
             // `{ptr,ptr}` closure) as its second argument. A bind failure is fatal, reported
-            // at `site`.
-            "__tcp_serve_launch" => {
-                f64t.fn_type(&[f64t.into(), ptr.into(), ptr.into(), ptr.into()], false)
-            }
+            // at `site`, naming `address` as written.
+            "__tcp_serve_launch" => f64t.fn_type(
+                &[ptr.into(), i64t.into(), ptr.into(), ptr.into(), ptr.into()],
+                false,
+            ),
             // { ptr, i64 } __connection_read_launch(double connectionId) — `Connection`'s
             // `@read`: launch a background read of whatever bytes have arrived and return
             // the DEFERRED Text immediately, forced (via `__force_text`) at its strict-use

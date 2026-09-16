@@ -51,7 +51,7 @@ Quilon, reached through the connection the accept loop hands the handler.
 
 | Function | Effect |
 |----------|--------|
-| `net.@tcpServe(port :: Num, handler :: (Connection) -> $) -> Server` | Bind `0.0.0.0:port`, listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the port is taken, or nothing but a privileged process may bind it — is fatal. |
+| `net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server` | Bind `address` — `host:port`, exactly the form `net.@tcpRequest` accepts (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a hostname resolved the same way, on the runtime's blocking-call pool) — listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the address does not parse or resolve, the port is taken, or nothing but a privileged process may bind it — is fatal, naming the address as written. |
 
 `net.Connection`, the value `handler` is called with, one per accepted peer:
 
@@ -79,7 +79,7 @@ holler = (connection :: net.Connection) -> $ => <
 >
 
 ^ = () -> $ => <
-  canyon = net.@tcpServe(9047, connection => holler(connection))
+  canyon = net.@tcpServe("127.0.0.1:9047", connection => holler(connection))
   net.@tcpRequest("127.0.0.1:9047", "hellooo") ?
     | Ok(echo) => assert(echo, equals("hellooo"))
     | NotOk(error) => test.failAt(error)

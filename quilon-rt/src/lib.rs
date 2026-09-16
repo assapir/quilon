@@ -195,7 +195,8 @@ intrinsic_registry! {
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
     __tcp_request_launch: extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64),
-    __tcp_serve_launch: extern "C" fn(f64, *const c_void, *mut c_void, *const QlSite) -> f64,
+    __tcp_serve_launch:
+        extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QlSite) -> f64,
     __connection_read_launch: extern "C" fn(f64) -> QlSlice,
     __connection_write: extern "C" fn(f64, *const u8, i64),
     __connection_close: extern "C" fn(f64),

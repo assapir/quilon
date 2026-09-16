@@ -53,10 +53,13 @@
   kill = () -> $ => < $ >
 }
 
-~ Bind `0.0.0.0:port`, listen, and return the `Server` handle at once — never deferred. The
-~ accept loop runs as a launch of the calling block, so `^` stays alive while the server
-~ runs; every accepted connection runs `handler` on its own fiber. A bind failure (the port
-~ is taken, or permission is refused) is fatal.
->> @tcpServe = (port :: Num, handler :: (Connection) -> $) -> Server => <
+~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
+~ address, an IPv6 literal in brackets, or a hostname resolved the same way, on the
+~ runtime's blocking-call pool), listen, and return the `Server` handle at once — never
+~ deferred. The accept loop runs as a launch of the calling block, so `^` stays alive
+~ while the server runs; every accepted connection runs `handler` on its own fiber. A
+~ bind failure (the address does not parse or resolve, the port is taken, or permission
+~ is refused) is fatal.
+>> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
   Server { handle = 0 }
 >

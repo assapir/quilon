@@ -146,9 +146,10 @@ returns `false` to stop. `Ok(bytesRead)` carries the total bytes delivered; `Not
 covers a missing file, a read error, invalid UTF-8 in the file, and an invalid `chunkSize`.
 (See `examples/streamFile.qn`.)
 
-`core.net` — **`net.@tcpServe(port :: Num, handler :: (Connection) -> $) -> Server`** binds
-and listens, returning the `Server` handle at once; a server's connections each run on
-their own fiber, so two peers exchanging bytes with it at once make independent progress.
+`core.net` — **`net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server`**
+binds `address` (`host:port`, the same form `net.@tcpRequest` accepts) and listens,
+returning the `Server` handle at once; a server's connections each run on their own
+fiber, so two peers exchanging bytes with it at once make independent progress.
 See [`core.net`'s reference](../corelib/net.md#the-raw-tcp-server-layer) and
 `examples/tcp_echo.qn`.
 
