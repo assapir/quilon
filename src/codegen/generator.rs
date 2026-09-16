@@ -335,6 +335,10 @@ struct Tco<'ctx> {
     /// The loop header — the block a tail self-call branches back to. Positioned right
     /// after the parameter slots are (re)loaded into the `variables` map for the body.
     header: inkwell::basic_block::BasicBlock<'ctx>,
+    /// The function body's own span — what a back-edge (`emit_tail_self_call`) joins as
+    /// this iteration's launch scope before branching back, when the body needs one
+    /// (`is_launch_scope`); a no-op call for every function whose body does not.
+    body_span: Span,
 }
 
 /// Codegen-side view of the type checker's [`TypeTable`] — the "type oracle".

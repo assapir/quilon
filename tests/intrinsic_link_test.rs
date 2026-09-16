@@ -61,6 +61,8 @@ linkedGreeting = "linked " + "again"
 
   ~ __read_launch (the io.@readStdin leaf primitive) and __force_text (the `.length` reads
   ~ the deferred Text's bytes, forcing it). Run with empty stdin here, so it yields "".
+  ~ This launch (and net.@tcpRequest's, below) makes THIS block a launch scope, so its own
+  ~ close reaches __block_scope_enter/__block_scope_join too.
   line = io.@readStdin()
   assert(line.length >= 0, equals(true))
 
