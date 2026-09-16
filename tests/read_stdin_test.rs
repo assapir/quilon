@@ -38,6 +38,39 @@ const ECHO_READ: &str = r#"
 >
 "#;
 
+/// A parrot's overheard line, stored a deferred value into a top-level `:=` binding by one
+/// function (`eavesdrop`) and read — forced — by `^`, a completely separate function. Proves
+/// a store into a global does not force, and a later read of it anywhere does.
+const GLOBAL_STORE_THEN_ASSERT: &str = r#"
+<< core.io
+<< core.test
+
+squawk := ""
+eavesdrop = () -> $ => < squawk := io.@readStdin() >
+
+^ = () -> Num => <
+  eavesdrop()
+  assert(squawk, equals("the parrot has seen everything"))
+  0
+>
+"#;
+
+/// The same global-store shape as [`GLOBAL_STORE_THEN_ASSERT`], but the far-away read is a
+/// `print` rather than a comparison — proving the force-on-read rule reaches every strict
+/// slot, not only `equals`.
+const GLOBAL_STORE_THEN_PRINT: &str = r#"
+<< core.io
+
+rumor := ""
+whisper = () -> $ => < rumor := io.@readStdin() >
+
+^ = () -> Num => <
+  whisper()
+  io.print(rumor)
+  0
+>
+"#;
+
 /// Two `@readStdin()` launches in one scope. They overlap eagerly but stdin is a single serial
 /// stream, so the gate makes them read CONSECUTIVE lines in launch order — `first` then
 /// `second`. Proves concurrent reads neither crash (racing fd 0) nor drop/interleave bytes.
@@ -139,6 +172,86 @@ fn jit_read_forces_at_a_print() {
         "print should force the deferred @readStdin value and echo the line"
     );
     let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_global_store_forces_at_a_read_in_another_function() {
+    let file = temp_ql("global_store_assert", GLOBAL_STORE_THEN_ASSERT);
+
+    // Matching input: `eavesdrop` stores the deferred read into `squawk`; `^`, a separate
+    // function, forces it at the compare → assertion holds.
+    let (code, _) = jit_run(&file, b"the parrot has seen everything\n");
+    assert_eq!(
+        code,
+        Some(0),
+        "a global stored a deferred value by one function should force to the real line \
+         when read by another"
+    );
+
+    // Different input: the same forced value must reach the compare and fail the
+    // assertion — proving the read is the real, forced line, not an unforced sentinel.
+    let (code, _) = jit_run(&file, b"nothing to see here\n");
+    assert_eq!(
+        code,
+        Some(5),
+        "a non-matching line stored through the global must still trip the assertion"
+    );
+
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_global_store_forces_at_a_print_in_another_function() {
+    let file = temp_ql("global_store_print", GLOBAL_STORE_THEN_PRINT);
+    let (code, stdout) = jit_run(&file, b"the walls have ears\n");
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout, b"the walls have ears\n",
+        "print should force the global's deferred value and echo the line stored into it"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn aot_global_store_forces_at_a_read_in_another_function() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping AOT global-store gate: need a linker (`clang` or `gcc`) on PATH");
+        return;
+    };
+
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let source = temp_ql("global_store_assert_aot", GLOBAL_STORE_THEN_ASSERT);
+    let binary =
+        std::env::temp_dir().join(format!("quilon_global_store_aot_{}", std::process::id()));
+
+    let build = Command::new(quilon)
+        .args(["build", source.to_str().unwrap(), "--linker", linker])
+        .args(["-o", binary.to_str().unwrap()])
+        .output()
+        .expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let (ok_code, _) = run_with_stdin(Command::new(&binary), b"the parrot has seen everything\n");
+    assert_eq!(
+        ok_code,
+        Some(0),
+        "native AOT: a matching line stored through the global should pass"
+    );
+    let (bad_code, _) = run_with_stdin(Command::new(&binary), b"nothing to see here\n");
+    assert_eq!(
+        bad_code,
+        Some(5),
+        "native AOT: a non-matching line stored through the global must trip the assertion"
+    );
+
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_file(&binary);
 }
 
 #[test]

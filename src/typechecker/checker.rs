@@ -612,6 +612,13 @@ pub struct TypeChecker {
     // that function's "reassign if the name is already bound" branch); the deferral pass
     // reads this set instead of re-deriving which name is atomic from scratch.
     atomic_reassignments: std::collections::HashSet<Span>,
+    // Spans of reassignments (not the declaring occurrence) to a binding declared at the
+    // TOP LEVEL of the program — atomic or not, a superset of `atomic_reassignments` where
+    // both apply. Populated in `check_variable_declaration` and taken by
+    // `take_top_level_reassignments`; the deferral pass reads this set to decide whether a
+    // local-looking `:=` inside a function body is actually a store into a global, the same
+    // way it reads `atomic_reassignments` for the no-force rule.
+    top_level_reassignments: std::collections::HashSet<Span>,
     // Ad-hoc overload sets, keyed by name (function names AND operator symbols like
     // `"+"`/`"=="`). A name maps to all its candidate signatures; a call/operator use
     // resolves to the one whose parameter types EXACTLY match the argument types (no
@@ -690,6 +697,7 @@ impl TypeChecker {
             type_table: TypeTable::new(),
             matcher_hovers: MatcherHoverTable::new(),
             atomic_reassignments: std::collections::HashSet::new(),
+            top_level_reassignments: std::collections::HashSet::new(),
             overloads: std::collections::HashMap::new(),
             overloaded_names: std::collections::HashSet::new(),
             unannotated_overload_member: None,
