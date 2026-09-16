@@ -554,9 +554,12 @@ fn close_connection(id: u64) {
 /// such borrow: it acts on the descriptor directly, which is what lets it interrupt that
 /// parked read/write rather than deadlock behind it — the parked side typically wakes with
 /// EOF or a write error and finishes on its own; the descriptor itself is only actually
-/// closed once that side (or a later `Connection.close()`) drops the `TcpStream`. A
-/// permanently stuck handler (one that never touches this connection again) leaves that
-/// drop unreachable — accepted here the way every launch on this tier is never cancelled.
+/// closed once that side (or a later `Connection.close()`) drops the `TcpStream`.
+///
+/// ponytail: a permanently stuck handler (one that never touches this connection
+/// again after the shutdown) leaves that drop — and its fiber's stack — unreclaimed
+/// forever; accepted here the way every launch on this tier is never cancelled. A
+/// fiber-cancellation primitive would let this reclaim the stack instead of leaking it.
 fn force_shutdown_connection(id: u64) {
     let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
         return;
@@ -638,9 +641,12 @@ fn wake_accept_loop(server: &ServerState) {
 }
 
 /// Park the calling fiber, in short sleeps, until `server`'s `in_flight` count reaches zero
-/// or `seconds` have elapsed — `Server.kill`'s graceful wait. A tick rather than a wake on
-/// the last handler's own finish: the simplest correct wait, at the cost of up to one tick
-/// of extra latency past the last handler actually finishing.
+/// or `seconds` have elapsed — `Server.kill`'s graceful wait.
+///
+/// ponytail: a fixed-tick poll rather than a wake on the last handler's own finish — the
+/// simplest correct wait, at the cost of up to one tick of latency past the last handler
+/// actually finishing. Upgrade to a `park_on_address`/`wake_address` pair keyed by the
+/// server if that latency ever matters.
 fn wait_for_in_flight(server: &ServerState, seconds: f64) {
     const TICK: Duration = Duration::from_millis(20);
     let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
