@@ -176,6 +176,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN508 | invalid write file descriptor |
 | QN509 | write failed |
 | QN510 | invalid `replace` count |
+| QN511 | bind failed |
 
 ## Input
 
@@ -1340,5 +1341,28 @@ receiver. A literal violation of either is a compile-time error.
   "a-a-a".replace("a", "b", zeroCount).size
 >
 ```
+
+Pass a whole `count` of 1 or more, no greater than the occurrences of `from` present.
+
+### QN511 — bind failed
+
+`net.@tcpServe` could not bind and listen on the requested port — the port is already in
+use, or nothing but a privileged process may bind it. Starting a server is the one point
+in the raw TCP layer where failure is fatal; every per-connection failure afterward stays
+inside the running server instead.
+
+```quilon ignore
+<< core.net
+
+listen = (connection :: net.Connection) -> $ => < $ >
+
+^ = () -> Num => <
+  first = net.@tcpServe(47990, listen)
+  second = net.@tcpServe(47990, listen)
+  0
+>
+```
+
+Pick a port nothing else on the machine is already bound to.
 
 Pass a whole `count` of 1 or more, no greater than the occurrences of `from` present.

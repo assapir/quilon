@@ -241,10 +241,17 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
 /// join needs: it runs to completion whether or not anything ever forces it. `None` if it
 /// resolved to a value, `Some(report)` (the fully rendered fault text) if it faulted.
 ///
+/// `pub(crate)` (rather than the join thunk's own private helper) so a launch whose RETURN
+/// VALUE is never deferred — `net.@tcpServe`'s accept loop, registered directly with
+/// `launch_scope` rather than through [`launch_deferred_text`]/[`launch_deferred_result`] —
+/// can wait out its own background work the same way: `Server.kill` calls this on the accept
+/// loop's cell to know it has actually stopped before returning.
+///
 /// # Safety
 /// `cell` is a live deferred for the whole wait (the registering `launch` call's own join
-/// thunk is this function's only caller, and it captures nothing that outlives the cell).
-unsafe fn settle<T>(cell: *mut Deferred<T>) -> Option<String> {
+/// thunk is one caller; `net`'s server-kill path, holding the pointer `launch` returned, is
+/// the other — neither captures anything that outlives the cell).
+pub(crate) unsafe fn settle<T>(cell: *mut Deferred<T>) -> Option<String> {
     let address = cell as usize;
     loop {
         // SAFETY: `cell` is a live deferred (see the contract).

@@ -141,6 +141,7 @@ codes! {
     WriteFdNotWhole = 508 => "invalid write file descriptor",
     WriteFailed = 509 => "write failed",
     ReplaceInvalidCount = 510 => "invalid `replace` count",
+    BindFailed = 511 => "bind failed",
 }
 
 impl Code {
@@ -320,6 +321,7 @@ mod tests {
             codes::REPLACE_INVALID_COUNT,
             Code::ReplaceInvalidCount.number()
         );
+        assert_eq!(codes::BIND_FAILED, Code::BindFailed.number());
     }
 
     /// A diagnostic's exit code is its family digit — the rule `main.rs`'s `fail` applies
