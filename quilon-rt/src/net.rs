@@ -24,14 +24,22 @@
 //! sleeping one; `tests::socket_parked_fiber_roots_survive_collection` proves it.
 
 use crate::blocking::run_blocking;
-use crate::deferred::{QlResult, launch_deferred_result};
+use crate::deferred::{QlResult, launch, launch_deferred_result, launch_deferred_text, settle};
+use crate::mem::{QlSlice, alloc_text, format_num};
+use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{
-    deregister_readiness, park_on_readiness, register_readiness, reregister_readiness,
+    deregister_readiness, park_on_readiness, register_readiness, reregister_readiness, sleep, spawn,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::os::raw::c_void;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
@@ -131,7 +139,61 @@ impl TcpStream {
     }
 }
 
+impl TcpStream {
+    /// The OS descriptor underneath this stream — read-only, and stable for the stream's
+    /// whole life, so a fiber that does not otherwise touch this `TcpStream` (`Server.kill`,
+    /// forcibly closing a connection its handler fiber may itself be parked inside a read or
+    /// write of) can still act on the connection without a `&mut` that would alias one
+    /// already held across that park.
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.as_raw_fd()
+    }
+
+    /// Wrap an already-connected socket (from [`TcpListener::accept`]) as a
+    /// reactor-registered stream — the server side's counterpart to [`Self::connect`]'s
+    /// client-side handshake, with no handshake of its own left to wait out.
+    fn from_accepted(mut inner: mio::net::TcpStream) -> io::Result<TcpStream> {
+        let token = register_readiness(&mut inner, Interest::READABLE)?;
+        Ok(TcpStream { inner, token })
+    }
+}
+
 impl Drop for TcpStream {
+    fn drop(&mut self) {
+        deregister_readiness(&mut self.inner);
+    }
+}
+
+/// A non-blocking, reactor-registered TCP listener — [`TcpStream`]'s server-side twin,
+/// backing `net.@tcpServe`'s accept loop.
+struct TcpListener {
+    inner: mio::net::TcpListener,
+    token: mio::Token,
+}
+
+impl TcpListener {
+    /// Bind and start listening on `addr`, registered with the reactor for READABLE
+    /// (accept) readiness.
+    fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
+        let mut inner = mio::net::TcpListener::bind(addr)?;
+        let token = register_readiness(&mut inner, Interest::READABLE)?;
+        Ok(TcpListener { inner, token })
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Accept one connection, parking (via [`io_loop`]) until one is ready.
+    fn accept(&mut self) -> io::Result<(TcpStream, SocketAddr)> {
+        let (raw, address) = io_loop(&mut self.inner, self.token, Interest::READABLE, |l| {
+            l.accept()
+        })?;
+        Ok((TcpStream::from_accepted(raw)?, address))
+    }
+}
+
+impl Drop for TcpListener {
     fn drop(&mut self) {
         deregister_readiness(&mut self.inner);
     }
@@ -273,9 +335,350 @@ fn bytes_to_string(data: *const u8, len: i64) -> String {
     String::from_utf8_lossy(&copy_bytes(data, len)).into_owned()
 }
 
+// --- net.@tcpServe: the raw TCP server layer -------------------------------------------
+//
+// The runtime owns only what the language cannot express: accepting connections and
+// running each on its own fiber. `Connection`/`Server` are opaque handles — a `Num` id
+// into the thread-local tables below — with every method compiler-lowered (see
+// `src/codegen/generator/calls.rs`'s `generate_at_primitive` and its `close`/`kill`
+// interception ahead of ordinary method dispatch).
+//
+// `net.@tcpServe`'s accept loop is a launch registered directly with `launch_scope`
+// (through the generic `deferred::launch`, whose own return value — the deferred cell
+// pointer — is kept on `ServerState` rather than exposed to Quilon, since `@tcpServe`'s
+// OWN return value, the `Server` handle, is a ready `Num` built by codegen, never
+// deferred). `Server.kill` settles that same cell before returning, so the enclosing
+// block's own join finds it already done.
+
+/// A connection's own state: the accepted stream (taken on close, so a further read/write
+/// after that reads as "closed" rather than reusing a dropped socket), its raw descriptor
+/// (kept outside the `RefCell` so `Server.kill` can shut it down without contending with a
+/// handler fiber's read/write, which holds the `RefCell` borrow across a park), and the
+/// server's own open-connection set, so closing removes this connection's id from it.
+struct ConnectionState {
+    stream: RefCell<Option<TcpStream>>,
+    raw_fd: RawFd,
+    open_connections: Rc<RefCell<HashSet<u64>>>,
+}
+
+/// A server's own state, reachable both from its accept loop (owns nothing here directly —
+/// the listener lives on the loop's own closure, dropped when it returns) and from
+/// `Server.kill`, run on whichever fiber calls it.
+struct ServerState {
+    stopping: Rc<Cell<bool>>,
+    in_flight: Rc<Cell<usize>>,
+    open_connections: Rc<RefCell<HashSet<u64>>>,
+    /// The accept loop's own deferred cell, from the `deferred::launch` call that started
+    /// it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing block's
+    /// own join (over the SAME cell, registered by that same `launch` call) finds it
+    /// already done.
+    accept_loop: *mut crate::deferred::Deferred<()>,
+    /// Where the listener is actually bound — used to wake the accept loop's own parked
+    /// `accept()` on `kill` (see [`wake_accept_loop`]).
+    local_addr: SocketAddr,
+}
+
+thread_local! {
+    static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
+    static CONNECTIONS: RefCell<HashMap<u64, Rc<ConnectionState>>> = RefCell::new(HashMap::new());
+    static SERVERS: RefCell<HashMap<u64, Rc<ServerState>>> = RefCell::new(HashMap::new());
+}
+
+/// A fresh handle id, never reused — ids are never freed back into a pool, so a stale
+/// `Connection`/`Server` value (one a program held onto past its own close/kill) can never
+/// be confused with a later, unrelated one.
+fn next_handle() -> u64 {
+    NEXT_HANDLE.with(|next| {
+        let id = next.get();
+        next.set(id + 1);
+        id
+    })
+}
+
+/// A `net.@tcpServe` port argument as the whole `0..=65535` number it must be, or the
+/// message saying why it is not — folded into the same bind-failure report as an OS-level
+/// bind error, since a program has no other channel to hear about either.
+fn parse_port(port: f64) -> Result<u16, String> {
+    if port.fract() != 0.0 || port < 0.0 || port > u16::MAX as f64 {
+        return Err(format!(
+            "port must be a whole number from 0 to 65535, got {}",
+            format_num(port)
+        ));
+    }
+    Ok(port as u16)
+}
+
+/// `net.@tcpServe(port, handler)`: bind `0.0.0.0:port`, listen, and return the `Server`
+/// handle's id at once — codegen builds the `Server { handle = … }` record around it, the
+/// same way it builds the `Connection` handed to `handler`. The accept loop launches on a
+/// background fiber, registered with whatever `< >` block's launch scope is open right now
+/// (through [`launch`], exactly as a value-returning primitive's producer registers) so
+/// that block's own join keeps it alive without ever forcing a value from this call — this
+/// call's own return is already ready. A bind failure is fatal, reported at `site` through
+/// the same fail-loud path every other unrecoverable runtime check uses.
+///
+/// # Safety contract (upheld by the compiler)
+/// `handler_fn` is a live `(f64, ptr) -> i8` trampoline — codegen's fixed-shape wrapper
+/// (see `CodeGenerator::emit_tcp_serve_handler_thunk`) over the user's `(Connection) -> $`
+/// closure — called with `handler_env` as its second argument; `site` is null or points to
+/// a valid [`QlSite`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_serve_launch(
+    port: f64,
+    handler_fn: *const c_void,
+    handler_env: *mut c_void,
+    site: *const QlSite,
+) -> f64 {
+    // SAFETY: per the contract, a live `(f64, ptr) -> i8` trampoline.
+    let handler_fn: extern "C" fn(f64, *mut c_void) -> u8 =
+        unsafe { std::mem::transmute(handler_fn) };
+
+    let bind = |reason: String| -> ! {
+        fail_at(
+            site,
+            codes::BIND_FAILED,
+            &format!("@tcpServe: bind 0.0.0.0:{}: {reason}", format_num(port)),
+            RUNTIME_EXIT_CODE,
+        )
+    };
+    let port_number = match parse_port(port) {
+        Ok(number) => number,
+        Err(reason) => bind(reason),
+    };
+    let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port_number);
+    let mut listener = match TcpListener::bind(bind_addr) {
+        Ok(listener) => listener,
+        Err(error) => bind(error.to_string()),
+    };
+    let local_addr = listener.local_addr().unwrap_or(bind_addr);
+
+    let stopping = Rc::new(Cell::new(false));
+    let in_flight = Rc::new(Cell::new(0usize));
+    let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
+
+    let loop_stopping = Rc::clone(&stopping);
+    let loop_in_flight = Rc::clone(&in_flight);
+    let loop_open_connections = Rc::clone(&open_connections);
+    let accept_loop = launch(move || {
+        loop {
+            let stream = match listener.accept() {
+                Ok((stream, _peer)) => stream,
+                // A genuine accept error (not one `kill` caused) ends the loop; connections
+                // already handed to handlers keep running on their own fibers regardless.
+                Err(_) => break,
+            };
+            if loop_stopping.get() {
+                drop(stream);
+                break;
+            }
+            spawn_connection_handler(
+                stream,
+                handler_fn,
+                handler_env,
+                &loop_in_flight,
+                &loop_open_connections,
+            );
+        }
+        // `listener` drops here, deregistering it — the runtime's own "close the listener".
+    });
+
+    let server_id = next_handle();
+    SERVERS.with(|servers| {
+        servers.borrow_mut().insert(
+            server_id,
+            Rc::new(ServerState {
+                stopping,
+                in_flight,
+                open_connections,
+                accept_loop,
+                local_addr,
+            }),
+        );
+    });
+    server_id as f64
+}
+
+/// Register `stream` as an open connection and run `handler_fn` against it on its own
+/// fiber: the accept loop's per-connection half. Auto-closes the connection once the
+/// handler returns (`close-after-handler is the runtime's`, whether or not the handler
+/// closed it itself) and only then leaves `in_flight`, so `Server.kill`'s wait sees this
+/// handler as in-flight for its whole run, not just until its connection closes.
+fn spawn_connection_handler(
+    stream: TcpStream,
+    handler_fn: extern "C" fn(f64, *mut c_void) -> u8,
+    handler_env: *mut c_void,
+    in_flight: &Rc<Cell<usize>>,
+    open_connections: &Rc<RefCell<HashSet<u64>>>,
+) {
+    let id = next_handle();
+    let raw_fd = stream.as_raw_fd();
+    CONNECTIONS.with(|connections| {
+        connections.borrow_mut().insert(
+            id,
+            Rc::new(ConnectionState {
+                stream: RefCell::new(Some(stream)),
+                raw_fd,
+                open_connections: Rc::clone(open_connections),
+            }),
+        );
+    });
+    open_connections.borrow_mut().insert(id);
+    in_flight.set(in_flight.get() + 1);
+
+    let in_flight = Rc::clone(in_flight);
+    spawn(move || {
+        handler_fn(id as f64, handler_env);
+        close_connection(id);
+        in_flight.set(in_flight.get() - 1);
+    });
+}
+
+/// Close connection `id` if it is still open (idempotent: a no-op for one already closed,
+/// by an earlier `Connection.close()` or the runtime's own close-after-handler) — takes the
+/// stream out of its table entry, which drops and deregisters it, and removes `id` from its
+/// server's open-connection set. Reused by `Connection.close()` and the post-handler
+/// auto-close.
+fn close_connection(id: u64) {
+    let Some(state) = CONNECTIONS.with(|connections| connections.borrow_mut().remove(&id)) else {
+        return;
+    };
+    state.open_connections.borrow_mut().remove(&id);
+    state.stream.borrow_mut().take();
+}
+
+/// Shut connection `id` down at the descriptor level, without touching its `RefCell` —
+/// `Server.kill`'s force-close of a connection still open past its grace period, called
+/// from a DIFFERENT fiber than the one whose handler may be parked mid-read/write on this
+/// same connection (holding that `RefCell` borrow across the park). `shutdown(2)` needs no
+/// such borrow: it acts on the descriptor directly, which is what lets it interrupt that
+/// parked read/write rather than deadlock behind it — the parked side typically wakes with
+/// EOF or a write error and finishes on its own; the descriptor itself is only actually
+/// closed once that side (or a later `Connection.close()`) drops the `TcpStream`. A
+/// permanently stuck handler (one that never touches this connection again) leaves that
+/// drop unreachable — accepted here the way every launch on this tier is never cancelled.
+fn force_shutdown_connection(id: u64) {
+    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+        return;
+    };
+    // SAFETY: `raw_fd` names a socket this process owns for as long as the connection's
+    // table entry exists, which this call holds a clone of; `shutdown` only changes the
+    // socket's protocol state, never its descriptor's validity.
+    unsafe {
+        libc::shutdown(state.raw_fd, libc::SHUT_RDWR);
+    }
+}
+
+/// `Connection.@read()`: launch a background read of whatever bytes have arrived and
+/// return the deferred `Text` immediately — the connection's counterpart to `@readStdin`,
+/// sharing the same generic deferral core and force path (`__force_text`). `""` once the
+/// connection is closed (by the peer, `Connection.close()`, or `Server.kill`) — a genuine
+/// read error reads the same way, since `Text` carries no channel to report one and no
+/// per-connection failure is fatal on this layer.
+#[unsafe(no_mangle)]
+pub extern "C" fn __connection_read_launch(connection_id: f64) -> QlSlice {
+    let id = connection_id as u64;
+    launch_deferred_text(move || read_connection_once(id))
+}
+
+/// Read once from connection `id`'s stream, parking on readiness until data or EOF/an error
+/// arrives. `""` when the connection has already closed, at EOF, or on any read error.
+fn read_connection_once(id: u64) -> QlSlice {
+    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+        return alloc_text(&[]);
+    };
+    let mut slot = state.stream.borrow_mut();
+    let Some(stream) = slot.as_mut() else {
+        return alloc_text(&[]);
+    };
+    let mut buffer = [0u8; 4096];
+    match stream.read(&mut buffer) {
+        Ok(count) => alloc_text(&buffer[..count]),
+        Err(_) => alloc_text(&[]),
+    }
+}
+
+/// `Connection.@write(bytes)`: write every byte, parking on writability until all of it is
+/// sent. Effect-only (`-> $`), so a write past a closed connection — or one that fails
+/// partway — is a silent no-op rather than a fault: neither channel this call has (a
+/// missing table entry, a `$` return) can carry a reason, and no per-connection failure is
+/// fatal on this layer.
+///
+/// # Safety contract (upheld by the compiler)
+/// `data` is null, or points to `len` readable bytes for the duration of this call.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __connection_write(connection_id: f64, data: *const u8, len: i64) {
+    let id = connection_id as u64;
+    let bytes = copy_bytes(data, len);
+    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+        return;
+    };
+    let mut slot = state.stream.borrow_mut();
+    let Some(stream) = slot.as_mut() else {
+        return;
+    };
+    let _ = stream.write_all(&bytes);
+}
+
+/// `Connection.close()`: close the connection now, if it is not already closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn __connection_close(connection_id: f64) {
+    close_connection(connection_id as u64);
+}
+
+/// Wake a server's accept loop out of a parked `accept()` with nothing pending, so it
+/// notices `stopping` promptly instead of waiting for the next real client (which may never
+/// come): connect to the listener's own bound port from loopback. Best-effort — a failure
+/// here just means a genuine client connection (or `Server.kill`'s own grace period ending)
+/// wakes it instead; either way `kill` still [`settle`]s the accept loop before returning.
+fn wake_accept_loop(server: &ServerState) {
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server.local_addr.port());
+    let _ = TcpStream::connect(target);
+}
+
+/// Park the calling fiber, in short sleeps, until `server`'s `in_flight` count reaches zero
+/// or `seconds` have elapsed — `Server.kill`'s graceful wait. A tick rather than a wake on
+/// the last handler's own finish: the simplest correct wait, at the cost of up to one tick
+/// of extra latency past the last handler actually finishing.
+fn wait_for_in_flight(server: &ServerState, seconds: f64) {
+    const TICK: Duration = Duration::from_millis(20);
+    let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
+    while server.in_flight.get() > 0 && Instant::now() < deadline {
+        sleep(TICK);
+    }
+}
+
+/// `Server.kill(seconds)`: stop accepting, wait up to `seconds` for in-flight handlers to
+/// finish, force-close any connection still open past that grace period, then settle the
+/// accept loop's own launch so the enclosing block's join finds it already done. Parks the
+/// calling fiber for as long as any of that takes. A no-op on an already-killed or unknown
+/// handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
+    let id = server_id as u64;
+    let Some(server) = SERVERS.with(|servers| servers.borrow_mut().remove(&id)) else {
+        return;
+    };
+    server.stopping.set(true);
+    wake_accept_loop(&server);
+    wait_for_in_flight(&server, seconds);
+    let stuck: Vec<u64> = server.open_connections.borrow().iter().copied().collect();
+    for connection_id in stuck {
+        force_shutdown_connection(connection_id);
+    }
+    // SAFETY: `accept_loop` is the cell `launch` returned for this server's own accept
+    // loop, still reachable through `server` (this function's only owner of it, since the
+    // handle was just removed from `SERVERS` above).
+    unsafe {
+        settle(server.accept_loop);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deferred::__force_text;
     use crate::gc;
     use crate::mem::__alloc;
     use crate::scheduler::{run, sleep, spawn};
@@ -287,7 +690,7 @@ mod tests {
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[link(name = "gc", kind = "static")]
     unsafe extern "C" {
@@ -626,6 +1029,256 @@ mod tests {
         assert_eq!(
             *RESOLVED_ADDRESS.lock().unwrap(),
             Some(SocketAddr::from(([127, 0, 0, 1], 4242)))
+        );
+    }
+
+    // --- net.@tcpServe -------------------------------------------------------------
+
+    /// Where `net.@tcpServe` actually bound `server_id` — a whitebox peek at the private
+    /// table, standing in for the ephemeral port a test client needs (`Server` carries no
+    /// `.port()` a Quilon program could read either).
+    fn bound_addr(server_id: f64) -> SocketAddr {
+        SERVERS.with(|servers| {
+            servers
+                .borrow()
+                .get(&(server_id as u64))
+                .expect("server handle")
+                .local_addr
+        })
+    }
+
+    /// Force `__connection_read_launch`'s deferred `Text` the way generated code does:
+    /// extract the promise from its sentinel-tagged slice and force it.
+    fn force_connection_read(connection_id: f64) -> Vec<u8> {
+        let deferred = __connection_read_launch(connection_id);
+        let forced = __force_text(deferred.data);
+        crate::text::byte_slice(forced.data as *const u8, forced.len).to_vec()
+    }
+
+    /// `__connection_write`'s `data`/`len` are a `Text`'s own raw fields — header included,
+    /// as codegen extracts them from a real `bytes :: Text` argument — so a test calling it
+    /// directly (with no codegen in the loop) builds one the same way `text_of_bytes` builds
+    /// every other low-level `Text` fixture in this crate's tests, rather than handing it a
+    /// bare buffer's pointer.
+    fn write_connection_bytes(connection_id: f64, bytes: &[u8]) {
+        let (ptr, len) = crate::test_support::text_of_bytes(bytes);
+        __connection_write(connection_id, ptr, len);
+    }
+
+    /// A std client with a bounded read/write timeout on every socket op it does — every
+    /// test below connects this way, so a bug that leaves a connection open with nothing
+    /// arriving fails the test in a few seconds instead of hanging the run.
+    fn connect_with_timeout(addr: SocketAddr) -> std::net::TcpStream {
+        let stream = std::net::TcpStream::connect(addr).expect("connect to the test server");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set a read timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("set a write timeout");
+        stream
+    }
+
+    #[test]
+    fn accept_and_handler_per_connection_with_two_concurrent_clients() {
+        // Each accepted connection reads one message and echoes it straight back, then
+        // returns (letting the runtime auto-close it) — proving the accept loop hands each
+        // connection to its OWN fiber, running two clients' exchanges concurrently rather
+        // than serializing them.
+        extern "C" fn echo_handler(connection_id: f64, _environment: *mut c_void) -> u8 {
+            let bytes = force_connection_read(connection_id);
+            write_connection_bytes(connection_id, &bytes);
+            0
+        }
+
+        static FINISHED: AtomicUsize = AtomicUsize::new(0);
+        FINISHED.store(0, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = __tcp_serve_launch(
+                        0.0,
+                        echo_handler as *const c_void,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    );
+                    let addr = bound_addr(server_id);
+
+                    let clients: Vec<_> = [*b"first-", *b"second"]
+                        .into_iter()
+                        .map(|message: [u8; 6]| {
+                            std::thread::spawn(move || {
+                                let mut stream = connect_with_timeout(addr);
+                                stream.write_all(&message).expect("write the message");
+                                let mut echoed = [0u8; 6];
+                                stream.read_exact(&mut echoed).expect("read the echo");
+                                assert_eq!(echoed, message, "the echoed bytes matched");
+                                FINISHED.fetch_add(1, Ordering::SeqCst);
+                            })
+                        })
+                        .collect();
+
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while FINISHED.load(Ordering::SeqCst) < clients.len()
+                        && Instant::now() < deadline
+                    {
+                        sleep(Duration::from_millis(5));
+                    }
+                    for client in clients {
+                        client.join().expect("client thread panicked");
+                    }
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
+
+        assert_eq!(FINISHED.load(Ordering::SeqCst), 2, "both clients finished");
+    }
+
+    #[test]
+    fn a_handler_that_forgets_to_close_still_has_its_connection_closed() {
+        // A handler that returns without ever calling `close()` — the runtime closes the
+        // connection anyway: the client's own read sees EOF rather than hanging.
+        extern "C" fn forgetful_handler(_connection_id: f64, _environment: *mut c_void) -> u8 {
+            0
+        }
+
+        static SAW_EOF: AtomicBool = AtomicBool::new(false);
+        SAW_EOF.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = __tcp_serve_launch(
+                        0.0,
+                        forgetful_handler as *const c_void,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    );
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        let mut buffer = [0u8; 1];
+                        let read = stream
+                            .read(&mut buffer)
+                            .expect("read after the handler returns");
+                        SAW_EOF.store(read == 0, Ordering::SeqCst);
+                    });
+
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !SAW_EOF.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        sleep(Duration::from_millis(5));
+                    }
+                    client.join().expect("client thread panicked");
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
+
+        assert!(
+            SAW_EOF.load(Ordering::SeqCst),
+            "the connection closed on its own"
+        );
+    }
+
+    #[test]
+    fn kill_waits_for_an_in_flight_handler_to_finish_before_closing() {
+        // The handler deliberately runs past `Server.kill`'s own call, inside its grace
+        // period: the client must still get its normal echoed response, proving `kill`
+        // waited for it rather than cutting it off.
+        extern "C" fn slow_echo_handler(connection_id: f64, _environment: *mut c_void) -> u8 {
+            sleep(Duration::from_millis(150));
+            let bytes = force_connection_read(connection_id);
+            write_connection_bytes(connection_id, &bytes);
+            0
+        }
+
+        static ECHOED: AtomicBool = AtomicBool::new(false);
+        ECHOED.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = __tcp_serve_launch(
+                        0.0,
+                        slow_echo_handler as *const c_void,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    );
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        stream.write_all(b"hold on").expect("write the message");
+                        let mut echoed = [0u8; 7];
+                        stream.read_exact(&mut echoed).expect("read the echo");
+                        ECHOED.store(&echoed == b"hold on", Ordering::SeqCst);
+                    });
+
+                    // Give the handler time to accept and start its own sleep before kill
+                    // is called, so kill's grace period genuinely overlaps in-flight work.
+                    sleep(Duration::from_millis(30));
+                    __server_kill(server_id, 5.0);
+                    client.join().expect("client thread panicked");
+                });
+            });
+        });
+
+        assert!(
+            ECHOED.load(Ordering::SeqCst),
+            "kill let the in-flight handler finish and reply"
+        );
+    }
+
+    #[test]
+    fn kill_times_out_and_closes_a_connection_stuck_on_a_read() {
+        // The handler parks forever on a read nothing ever answers; `kill`'s short grace
+        // period elapses without the handler finishing, so it force-closes the connection —
+        // the client's own read sees the connection end rather than hanging.
+        extern "C" fn stuck_handler(connection_id: f64, _environment: *mut c_void) -> u8 {
+            let _ = force_connection_read(connection_id);
+            0
+        }
+
+        static CONNECTION_ENDED: AtomicBool = AtomicBool::new(false);
+        CONNECTION_ENDED.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = __tcp_serve_launch(
+                        0.0,
+                        stuck_handler as *const c_void,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    );
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        // Never writes anything: the handler's read has nothing to answer it.
+                        let mut buffer = [0u8; 1];
+                        let outcome = stream.read(&mut buffer);
+                        // A forced shutdown reads back as EOF (`Ok(0)`) on this platform, or
+                        // a reset — either way the connection did not stay open forever.
+                        let ended = matches!(outcome, Ok(0)) || outcome.is_err();
+                        CONNECTION_ENDED.store(ended, Ordering::SeqCst);
+                    });
+
+                    // Give the handler time to accept and park on its own read before kill's
+                    // short grace period elapses.
+                    sleep(Duration::from_millis(30));
+                    __server_kill(server_id, 0.1);
+                    client.join().expect("client thread panicked");
+                });
+            });
+        });
+
+        assert!(
+            CONNECTION_ENDED.load(Ordering::SeqCst),
+            "the stuck connection was force-closed"
         );
     }
 }
