@@ -28,7 +28,8 @@ use crate::deferred::{QlResult, launch, launch_deferred_result, launch_deferred_
 use crate::mem::{QlSlice, alloc_text, format_num};
 use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{
-    deregister_readiness, park_on_readiness, register_readiness, reregister_readiness, sleep, spawn,
+    current_fiber_id, deregister_readiness, park_on_readiness, register_readiness,
+    reregister_readiness, sleep, spawn,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
@@ -382,6 +383,9 @@ thread_local! {
     static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
     static CONNECTIONS: RefCell<HashMap<u64, Rc<ConnectionState>>> = RefCell::new(HashMap::new());
     static SERVERS: RefCell<HashMap<u64, Rc<ServerState>>> = RefCell::new(HashMap::new());
+    /// Which server's `in_flight` count a currently-running handler fiber counts against,
+    /// keyed by fiber id — see [`wait_for_in_flight`].
+    static HANDLER_FIBER_SERVER: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
 }
 
 /// A fresh handle id, never reused — ids are never freed back into a pool, so a stale
@@ -456,6 +460,10 @@ pub extern "C" fn __tcp_serve_launch(
     let stopping = Rc::new(Cell::new(false));
     let in_flight = Rc::new(Cell::new(0usize));
     let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
+    // This server's identity for `HANDLER_FIBER_SERVER` — the `in_flight` cell's own
+    // address, stable for as long as any clone of it (every one taken below, and the
+    // `ServerState` itself) is alive.
+    let server_identity = Rc::as_ptr(&in_flight) as usize;
 
     let loop_stopping = Rc::clone(&stopping);
     let loop_in_flight = Rc::clone(&in_flight);
@@ -478,6 +486,7 @@ pub extern "C" fn __tcp_serve_launch(
                 handler_env,
                 &loop_in_flight,
                 &loop_open_connections,
+                server_identity,
             );
         }
         // `listener` drops here, deregistering it — the runtime's own "close the listener".
@@ -510,6 +519,7 @@ fn spawn_connection_handler(
     handler_env: *mut c_void,
     in_flight: &Rc<Cell<usize>>,
     open_connections: &Rc<RefCell<HashSet<u64>>>,
+    server_identity: usize,
 ) {
     let id = next_handle();
     let raw_fd = stream.as_raw_fd();
@@ -528,7 +538,14 @@ fn spawn_connection_handler(
 
     let in_flight = Rc::clone(in_flight);
     spawn(move || {
+        // Registered for the whole handler call so `Server.kill`, if THIS handler is the
+        // one that calls it, can tell it is being asked to wait on its own fiber and
+        // exclude it — see `wait_for_in_flight`.
+        let fiber_id = current_fiber_id().expect("a spawned fiber has an id while it runs");
+        HANDLER_FIBER_SERVER
+            .with(|handlers| handlers.borrow_mut().insert(fiber_id, server_identity));
         handler_fn(id as f64, handler_env);
+        HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow_mut().remove(&fiber_id));
         close_connection(id);
         in_flight.set(in_flight.get() - 1);
     });
@@ -640,8 +657,36 @@ fn wake_accept_loop(server: &ServerState) {
     let _ = TcpStream::connect(target);
 }
 
+/// The largest grace period `Server.kill` honors. Far longer than any reasonable use, but
+/// a concrete bound: `seconds` is ordinary Quilon arithmetic (`1.0 / 0.0` is infinity, not
+/// a language error), and `Duration::from_secs_f64` panics on a value that is not finite
+/// or overflows `Duration` — clamping into this range before ever calling it keeps a wild
+/// `seconds` from taking the whole process down with it.
+const MAX_KILL_SECONDS: f64 = 1_000_000_000.0;
+
+/// `seconds` as a `Duration`, never panicking: NaN and a negative value both become "no
+/// wait", and an infinite or overflowing value is capped at [`MAX_KILL_SECONDS`].
+fn kill_grace_period(seconds: f64) -> Duration {
+    let bounded = if seconds.is_nan() {
+        0.0
+    } else if !seconds.is_finite() {
+        if seconds.is_sign_positive() {
+            MAX_KILL_SECONDS
+        } else {
+            0.0
+        }
+    } else {
+        seconds.clamp(0.0, MAX_KILL_SECONDS)
+    };
+    Duration::from_secs_f64(bounded)
+}
+
 /// Park the calling fiber, in short sleeps, until `server`'s `in_flight` count reaches zero
-/// or `seconds` have elapsed — `Server.kill`'s graceful wait.
+/// — or, when the CALLING fiber is itself one of `server`'s own handlers (the deliverable's
+/// own pattern: a handler answers by calling `server.kill()`), until it reaches one, since
+/// that one is this handler's own count and it cannot leave `in_flight` — this call, and so
+/// the handler itself, has not returned yet — until `kill` does. Without this exclusion, a
+/// `kill` called from inside a handler always burns its whole grace period, every time.
 ///
 /// ponytail: a fixed-tick poll rather than a wake on the last handler's own finish — the
 /// simplest correct wait, at the cost of up to one tick of latency past the last handler
@@ -649,8 +694,13 @@ fn wake_accept_loop(server: &ServerState) {
 /// server if that latency ever matters.
 fn wait_for_in_flight(server: &ServerState, seconds: f64) {
     const TICK: Duration = Duration::from_millis(20);
-    let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
-    while server.in_flight.get() > 0 && Instant::now() < deadline {
+    let identity = Rc::as_ptr(&server.in_flight) as usize;
+    let calling_fiber_is_this_servers_own_handler = current_fiber_id().and_then(|fiber_id| {
+        HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow().get(&fiber_id).copied())
+    }) == Some(identity);
+    let floor = usize::from(calling_fiber_is_this_servers_own_handler);
+    let deadline = Instant::now() + kill_grace_period(seconds);
+    while server.in_flight.get() > floor && Instant::now() < deadline {
         sleep(TICK);
     }
 }
@@ -1286,5 +1336,68 @@ mod tests {
             CONNECTION_ENDED.load(Ordering::SeqCst),
             "the stuck connection was force-closed"
         );
+    }
+
+    #[test]
+    fn kill_called_from_its_own_handler_does_not_wait_out_the_whole_grace_period() {
+        // A handler that answers by calling `server.kill(seconds)` on its OWN server — the
+        // deliverable's own pattern — is itself still "in flight" until that call returns,
+        // so without excluding the calling fiber from its own wait, `kill` would always
+        // burn its whole grace period. Proven by timing the whole run: an unfixed wait
+        // would take (at least) the 5-second grace period below; the fix returns almost
+        // at once, since nothing else is in flight.
+        static SERVER_HANDLE: Mutex<f64> = Mutex::new(0.0);
+
+        extern "C" fn self_killing_handler(_connection_id: f64, _environment: *mut c_void) -> u8 {
+            let server_id = *SERVER_HANDLE.lock().unwrap();
+            __server_kill(server_id, 5.0);
+            0
+        }
+
+        let start = Instant::now();
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = __tcp_serve_launch(
+                        0.0,
+                        self_killing_handler as *const c_void,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    );
+                    *SERVER_HANDLE.lock().unwrap() = server_id;
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let _ = connect_with_timeout(addr);
+                    });
+                    client.join().expect("client thread panicked");
+                });
+            });
+        });
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "kill(5) called from inside its own handler must not wait out its grace \
+             period, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn kill_grace_period_never_panics_on_a_non_finite_or_absurd_seconds() {
+        // `seconds` is ordinary Quilon Num arithmetic — `1.0 / 0.0` is infinity, not a
+        // language error — so none of these may reach `Duration::from_secs_f64`'s own
+        // panic conditions (negative, not finite, or overflowing `Duration`).
+        for seconds in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            f64::MAX,
+            0.0,
+            5.0,
+        ] {
+            let _ = kill_grace_period(seconds);
+        }
     }
 }

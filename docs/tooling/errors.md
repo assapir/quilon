@@ -1362,5 +1362,3 @@ inside the running server instead.
 ```
 
 Pick a port nothing else on the machine is already bound to.
-
-Pass a whole `count` of 1 or more, no greater than the occurrences of `from` present.
