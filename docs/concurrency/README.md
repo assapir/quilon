@@ -32,10 +32,13 @@ call chain.
 launches its IO and returns immediately with a *deferred* value; the caller continues.
 Deferred-ness propagates as the value flows — passed as an argument, stored in a record or
 array, returned from a function — forcing nothing along the way. That threading is the
-*pipelining*. An effect-only or callback-driven `@` primitive (`time.@sleep`,
-`io.@streamFile`) runs in program order on the calling fiber: `time.@sleep` parks for its
-whole duration; `io.@streamFile` parks when a read reports not ready (a pipe or FIFO) — a
-regular file's reads return at once.
+*pipelining*. A deferred value stored into a top-level `:=` binding stays deferred there
+too, across whichever function stored it: a read of that binding, from any function, forces
+where the first strict operation needs it (see `examples/deferred_global.qn`). An
+effect-only or callback-driven `@` primitive (`time.@sleep`, `io.@streamFile`) runs in
+program order on the calling fiber: `time.@sleep` parks for its whole duration;
+`io.@streamFile` parks when a read reports not ready (a pipe or FIFO) — a regular file's
+reads return at once.
 
 **Forcing happens at the leaves.** A deferred value is forced — the fiber parks until it is
 ready — at a **strict** operation: arithmetic, comparison, pattern match (`?`), IO

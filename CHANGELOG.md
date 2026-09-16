@@ -185,6 +185,19 @@ All notable changes to Quilon are documented here.
   `host:port` still resolves inline with no thread. See
   `docs/concurrency/runtime.md`. Closes #434.
 
+### Fixed
+
+- **A deferred value stored into a top-level `:=` binding is now forced wherever it is
+  later read, not only inside the function that stored it.** A global reassigned or
+  declared with a value from `io.@readStdin`/`net.@tcpRequest` used to stay untracked once
+  its storing function returned, so a strict read of it elsewhere silently saw an unforced
+  sentinel instead of parking for the real value. The deferral pass now tracks the set of
+  top-level bindings any function stores a deferred value into, computed to a fixed point
+  (a store's deferredness may itself depend on another already-tracked global), and treats
+  a read of one exactly like a read of a deferred local. A store into such a global still
+  never forces — `@testimony := io.@readStdin()` stays accepted. See
+  `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
+
 ## 0.11.0 "Rackham" — 2026-09-08
 
 ### Added

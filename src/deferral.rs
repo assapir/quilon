@@ -19,6 +19,18 @@
 //! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
 //! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
 //!
+//! The one exception to "inside the one function body it was born in" is a top-level `:=`
+//! binding: any function may store a deferred value into it, and any other function may
+//! read it back, so the taint also tracks a program-wide `deferred_globals` set — the
+//! top-level bindings some store has left deferred, whether that store is the declaration's
+//! own initial value or a later reassignment, wherever it sits. A read of a global in that
+//! set is a read of a deferred value like any other, forced at the first strict slot that
+//! needs it; a store into it does not force, so a function may return before its own stored
+//! read completes. A store's deferredness may itself depend on another global already in the
+//! set (`copy := testimony`), so `analyze` runs the walk in rounds, each starting from the
+//! previous round's set and only adding to it, until a round adds nothing — bounded by the
+//! program's number of top-level `:=` bindings, so it always terminates.
+//!
 //! The same walk also enforces one rule about `@name := …` atomic bindings (see
 //! `docs/concurrency/README.md#sharing-state-across-fibers`): a reassignment's right side
 //! may not force a deferred value, because forcing parks the fiber mid-statement, and the
@@ -37,6 +49,14 @@
 //! atomic binding (`TypeChecker::take_atomic_reassignments`). The rule becomes "is this
 //! `VariableDeclaration`'s span in that set, and did evaluating its value add to
 //! `force_sites`" — no name resolution of any kind on this side.
+//!
+//! Telling a reassignment of a TOP-LEVEL binding apart from a fresh local `:=` of the same
+//! name is the identical problem, for the identical reason, so it gets the identical
+//! answer: `analyze` also takes `TypeChecker::take_top_level_reassignments`, the span of
+//! every `:=` statement the checker resolved as reassigning a binding declared at the top
+//! level (atomic or not) — a superset of `atomic_reassignments` where both apply. A
+//! reassignment whose span is in that set feeds `deferred_globals` when its value is
+//! deferred, instead of only the enclosing function's local scope.
 
 use crate::ast::{
     Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement,
@@ -97,33 +117,53 @@ pub struct AtomicReassignmentForced {
 /// Analyze `program`: the deferred-value taint and force-set — the whole codegen-visible
 /// surface of the analysis. `atomic_reassignments` is the type checker's own answer (see
 /// [`crate::typechecker::TypeChecker::take_atomic_reassignments`]) — the span of every
-/// `:=` statement it resolved as reassigning an atomic binding. `Err` names the first one,
-/// in program order, whose right side forces a deferred value.
+/// `:=` statement it resolved as reassigning an atomic binding. `top_level_reassignments`
+/// is the checker's parallel answer for the global-tracking rule (see
+/// [`crate::typechecker::TypeChecker::take_top_level_reassignments`]) — the span of every
+/// `:=` statement it resolved as reassigning a top-level binding, atomic or not. `Err`
+/// names the first atomic-reassignment violation, in program order, whose right side
+/// forces a deferred value.
+///
+/// Runs the walk to a fixed point over `deferred_globals` (see the module doc): each round
+/// starts from the previous round's set, and the round that adds nothing to it is the
+/// answer — its own `force_sites` is what codegen gets, and its own violation (if any) is
+/// what `Err` reports. The set only grows and is bounded by the program's number of
+/// top-level `:=` bindings, so the loop always terminates.
 pub fn analyze(
     program: &Program,
     atomic_reassignments: &HashSet<Span>,
+    top_level_reassignments: &HashSet<Span>,
 ) -> Result<DeferInfo, AtomicReassignmentForced> {
-    let mut taint = Taint {
-        force_sites: HashSet::new(),
-        launch_scopes: HashSet::new(),
-        block_stack: Vec::new(),
-        atomic_reassignments,
-        violation: None,
-    };
-    for item in &program.items {
-        taint.analyze_item(item);
-    }
+    let mut deferred_globals: HashSet<String> = HashSet::new();
+    loop {
+        let mut taint = Taint {
+            force_sites: HashSet::new(),
+            launch_scopes: HashSet::new(),
+            block_stack: Vec::new(),
+            atomic_reassignments,
+            top_level_reassignments,
+            deferred_globals: &deferred_globals,
+            newly_deferred_globals: HashSet::new(),
+            violation: None,
+        };
+        for item in &program.items {
+            taint.analyze_item(item);
+        }
 
-    match taint.violation {
-        Some(violation) => Err(violation),
-        None => Ok(DeferInfo {
-            force_sites: taint.force_sites,
-            launch_scopes: taint.launch_scopes,
-        }),
+        if taint.newly_deferred_globals.is_empty() {
+            return match taint.violation {
+                Some(violation) => Err(violation),
+                None => Ok(DeferInfo {
+                    force_sites: taint.force_sites,
+                    launch_scopes: taint.launch_scopes,
+                }),
+            };
+        }
+        deferred_globals.extend(taint.newly_deferred_globals);
     }
 }
 
-/// The deferred-value taint accumulator.
+/// The deferred-value taint accumulator, for one round of the fixed-point walk.
 struct Taint<'a> {
     force_sites: HashSet<Span>,
     launch_scopes: HashSet<Span>,
@@ -132,21 +172,60 @@ struct Taint<'a> {
     block_stack: Vec<Span>,
     /// See [`analyze`].
     atomic_reassignments: &'a HashSet<Span>,
+    /// See [`analyze`].
+    top_level_reassignments: &'a HashSet<Span>,
+    /// The top-level `:=` bindings known deferred as of the START of this round (a prior
+    /// round's fixed set, read-only here — this round's own findings accumulate
+    /// separately in `newly_deferred_globals` so they take effect next round, not
+    /// mid-walk).
+    deferred_globals: &'a HashSet<String>,
+    /// Top-level `:=` bindings this round found stored a deferred value, over and above
+    /// `deferred_globals` — folded into the set `analyze` starts the next round with.
+    newly_deferred_globals: HashSet<String>,
     /// The first atomic-reassignment violation found, in program order; later ones are not
     /// worth collecting; the whole point is to name one concrete fix.
     violation: Option<AtomicReassignmentForced>,
 }
 
-impl Taint<'_> {
+impl<'a> Taint<'a> {
+    /// A fresh scope for a function/method body, seeing this round's `deferred_globals`.
+    fn fresh_scope(&self) -> Scope<'a> {
+        Scope::new(self.deferred_globals)
+    }
+
+    /// Record that `name` (a top-level `:=` binding) was just stored a deferred value,
+    /// as `newly_deferred_globals` growth ONLY when `name` is not already in this round's
+    /// `deferred_globals` — otherwise a global already known deferred would keep re-adding
+    /// itself every round forever, and the fixed point in `analyze` would never see an
+    /// empty round to stop on.
+    fn mark_global_deferred(&mut self, name: &str) {
+        if !self.deferred_globals.contains(name) {
+            self.newly_deferred_globals.insert(name.to_string());
+        }
+    }
+
     fn analyze_item(&mut self, item: &Item) {
         match item {
             // A function/method body is a strict slot: forcing its result keeps a promise from
             // escaping across the call boundary.
-            Item::FunctionDeclaration(f) => self.strict(&f.body, &Scope::new()),
+            Item::FunctionDeclaration(f) => {
+                let scope = self.fresh_scope();
+                self.strict(&f.body, &scope);
+            }
+            // A top-level `:=` binding's own initial value is a STORE into a global, exactly
+            // like a later reassignment of it (see the module doc): a deferred value there
+            // joins `deferred_globals` rather than being forced here. A top-level `=`
+            // binding is never reassigned, so nothing else ever needs to read it unforced —
+            // forcing it here, once, is enough to keep it always-ready everywhere.
             Item::VariableDeclaration(v) => {
-                let scope = Scope::new();
-                if self.analyze_declaration_value(v, &scope) {
-                    self.force_sites.insert(v.value.span().clone());
+                let scope = self.fresh_scope();
+                let deferred = self.analyze_declaration_value(v, &scope);
+                if deferred {
+                    if v.mutable {
+                        self.mark_global_deferred(&v.name);
+                    } else {
+                        self.force_sites.insert(v.value.span().clone());
+                    }
                 }
             }
             Item::TypeDeclaration(t) => {
@@ -158,11 +237,12 @@ impl Taint<'_> {
     }
 
     fn analyze_method(&mut self, method: &MethodDeclaration) {
-        self.strict(&method.body, &Scope::new());
+        let scope = self.fresh_scope();
+        self.strict(&method.body, &scope);
     }
 
     /// Visit `expression` in a STRICT slot: analyze it, and if its value is deferred, force it here.
-    fn strict(&mut self, expression: &Expression, env: &Scope) {
+    fn strict(&mut self, expression: &Expression, env: &Scope<'a>) {
         if self.visit(expression, env) {
             self.force_sites.insert(expression.span().clone());
         }
@@ -189,7 +269,7 @@ impl Taint<'_> {
     /// delivered to the caller still deferred (a `=`/`:=` binding is itself a lazy carrier
     /// — see [`Self::visit_block`] — so the caller, not this method, decides whether to
     /// force it).
-    fn analyze_declaration_value(&mut self, v: &VariableDeclaration, env: &Scope) -> bool {
+    fn analyze_declaration_value(&mut self, v: &VariableDeclaration, env: &Scope<'a>) -> bool {
         let force_sites_before = self.force_sites.len();
         let deferred = self.visit(&v.value, env);
         self.check_atomic_reassignment(v, force_sites_before);
@@ -199,7 +279,7 @@ impl Taint<'_> {
     /// Analyze `expression`, recording forces for its own strict children, and return whether its
     /// value is delivered to the parent still deferred (i.e. it reached here through lazy
     /// carriers only). The parent decides whether to force it, via [`Self::strict`].
-    fn visit(&mut self, expression: &Expression, env: &Scope) -> bool {
+    fn visit(&mut self, expression: &Expression, env: &Scope<'a>) -> bool {
         match expression {
             Expression::Number { .. }
             | Expression::String { .. }
@@ -329,7 +409,7 @@ impl Taint<'_> {
     /// A block introduces a scope. Bindings carry their value's deferredness (a `=` is lazy);
     /// non-final statement values are discarded (not forced — the launch still runs); the
     /// final expression's value is the block's value, delivered to the block's own slot.
-    fn visit_block(&mut self, statements: &[Statement], env: &Scope) -> bool {
+    fn visit_block(&mut self, statements: &[Statement], env: &Scope<'a>) -> bool {
         let mut local = env.child();
         let last = statements.len().saturating_sub(1);
         let mut result_deferred = false;
@@ -337,10 +417,20 @@ impl Taint<'_> {
             match statement {
                 Statement::Item(Item::VariableDeclaration(v)) => {
                     let deferred = self.analyze_declaration_value(v, &local);
+                    // A reassignment of a TOP-LEVEL binding is a store into a global (see
+                    // the module doc): its deferredness joins `newly_deferred_globals`
+                    // rather than only the local scope, so another function's read of it
+                    // sees the taint too. Telling a reassignment of a global apart from a
+                    // fresh local `:=` of the same name is the checker's job, the same way
+                    // it is for `atomic_reassignments` — see `top_level_reassignments`.
+                    if deferred && self.top_level_reassignments.contains(&v.span) {
+                        self.mark_global_deferred(&v.name);
+                    }
                     local.bind(v.name.clone(), deferred);
                 }
                 Statement::Item(Item::FunctionDeclaration(f)) => {
-                    self.strict(&f.body, &Scope::new());
+                    let scope = self.fresh_scope();
+                    self.strict(&f.body, &scope);
                 }
                 // A block-declared type's methods are analyzed exactly like a
                 // top-level type's (see `analyze_item`): each method body is its own
@@ -366,16 +456,21 @@ impl Taint<'_> {
 }
 
 /// A lexical scope mapping in-scope names to whether they hold a deferred value. Names
-/// absent from the map (parameters, pattern bindings from a forced scrutinee, globals) are
-/// ready.
-#[derive(Clone, Default)]
-struct Scope {
+/// absent from the map (parameters, pattern bindings from a forced scrutinee) are ready,
+/// UNLESS they name a top-level `:=` binding in `deferred_globals` (see the module doc) —
+/// every such name reads as deferred everywhere, not only in the scope it was stored from.
+#[derive(Clone)]
+struct Scope<'a> {
     deferred_names: HashMap<String, bool>,
+    deferred_globals: &'a HashSet<String>,
 }
 
-impl Scope {
-    fn new() -> Self {
-        Scope::default()
+impl<'a> Scope<'a> {
+    fn new(deferred_globals: &'a HashSet<String>) -> Self {
+        Scope {
+            deferred_names: HashMap::new(),
+            deferred_globals,
+        }
     }
 
     fn child(&self) -> Self {
@@ -387,7 +482,10 @@ impl Scope {
     }
 
     fn is_deferred(&self, name: &str) -> bool {
-        self.deferred_names.get(name).copied().unwrap_or(false)
+        self.deferred_names
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| self.deferred_globals.contains(name))
     }
 }
 
@@ -430,7 +528,8 @@ mod tests {
     fn info(src: &str) -> DeferInfo {
         let tokens = Lexer::tokenize(src).expect("lex");
         let program = parser::parse(&tokens).expect("parse");
-        analyze(&program, &HashSet::new()).expect("expected no atomic-reassignment violation")
+        analyze(&program, &HashSet::new(), &HashSet::new())
+            .expect("expected no atomic-reassignment violation")
     }
 
     /// The number of force sites in the program — the size of the force-set.
@@ -439,10 +538,11 @@ mod tests {
     }
 
     /// Lex, parse, link, and check `src`, then run `analyze` with the checker's own
-    /// atomic-reassignment spans — what an atomic-reassignment test needs, since (unlike
-    /// plain force-counting) telling which reassignment is atomic is the checker's job,
-    /// not this pass's. `src` must check cleanly: every `@` primitive is reached through
-    /// its module binding (`io.@readStdin()`), matching what user code actually writes.
+    /// atomic-reassignment and top-level-reassignment spans — what a global-tracking or
+    /// atomic-reassignment test needs, since (unlike plain force-counting) telling which
+    /// reassignment is atomic or top-level is the checker's job, not this pass's. `src`
+    /// must check cleanly: every `@` primitive is reached through its module binding
+    /// (`io.@readStdin()`), matching what user code actually writes.
     fn checked(src: &str) -> Result<DeferInfo, AtomicReassignmentForced> {
         let tokens = Lexer::tokenize(src).expect("lex");
         let program = parser::parse(&tokens).expect("parse");
@@ -453,7 +553,8 @@ mod tests {
             .check_program(&program)
             .expect("type checking failed");
         let atomic_reassignments = checker.take_atomic_reassignments();
-        analyze(&program, &atomic_reassignments)
+        let top_level_reassignments = checker.take_top_level_reassignments();
+        analyze(&program, &atomic_reassignments, &top_level_reassignments)
     }
 
     /// The number of force sites in a checked program expected to raise no violation.
@@ -689,5 +790,55 @@ mod tests {
         // however deeply it sits inside a lambda, not only a named function's own body.
         let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  (1 <- 3).each(n => < hits := hits + io.@readStdin().length >)\n  $\n>";
         assert_eq!(atomic_violation(src).name, "hits");
+    }
+
+    #[test]
+    fn a_global_stored_from_one_function_is_forced_at_a_read_in_another() {
+        // The issue's own reproduction: `testimony` is stored a deferred value inside
+        // `interrogate`, and read from a completely separate function, `^`. Without
+        // cross-function tracking the read sees an unforced sentinel; with it, the read
+        // itself is the one force site.
+        let src = "<< core.io\ntestimony := \"\"\ninterrogate = () -> $ => < testimony := io.@readStdin() >\n^ = () -> Num => <\n  interrogate()\n  testimony == \"fact\" ? 0 : 1\n>";
+        assert_eq!(checked_force_count(src), 1);
+    }
+
+    #[test]
+    fn a_global_never_stored_a_deferred_value_has_no_force_sites_on_its_reads() {
+        // `label` only ever holds a ready value; every read of it stays cost-free, exactly
+        // as it did before this binding was tracked at all.
+        let src = "<< core.io\nlabel := \"steady\"\nshout = () -> $ => < label := label + \"!\" >\n^ = () -> Num => <\n  shout()\n  label == \"steady!\" ? 0 : 1\n>";
+        assert_eq!(checked_force_count(src), 0);
+    }
+
+    #[test]
+    fn a_globals_deferredness_propagating_through_another_global_still_converges() {
+        // `copy`'s own deferredness depends on `testimony`'s already being known
+        // deferred: one round discovers `testimony`, a second discovers that `relay`'s
+        // store into `copy` is therefore deferred too, and only then does a read of
+        // `copy` see it. The fixed point still lands on exactly one force site — at the
+        // read in `^`.
+        let src = "<< core.io\ntestimony := io.@readStdin()\ncopy := \"\"\nrelay = () -> $ => < copy := testimony >\n^ = () -> Num => <\n  relay()\n  copy == \"fact\" ? 0 : 1\n>";
+        assert_eq!(checked_force_count(src), 1);
+    }
+
+    #[test]
+    fn an_atomic_bindings_own_deferred_initial_value_is_accepted_inside_a_function() {
+        // The atomic-reassignment rule only ever applies to a REASSIGNMENT (a name
+        // already bound): an atomic binding's own declaring occurrence is never one, so a
+        // deferred right side is accepted — the maintainer's own top-level example, here
+        // nested inside a function body, and a store, so it forces nothing either way.
+        let src = "<< core.io\nlisten = () -> $ => < @testimony := io.@readStdin() >\n^ = () -> Num => <\n  listen()\n  0\n>";
+        assert_eq!(checked_force_count(src), 0);
+    }
+
+    #[test]
+    fn an_atomic_globals_reassignment_from_a_function_is_accepted_and_forces_at_the_read() {
+        // The exact shape the `block_scope_join` example uses: `testimony` is DECLARED
+        // atomic at the top level, then reassigned bare from `interrogate` with a
+        // deferred value (accepted — the store's own right side forces nothing, so the
+        // atomic-reassignment rule has nothing to reject) and read from `^`, a separate
+        // function, which is where the one force site lands.
+        let src = "<< core.io\n@testimony := \"\"\ninterrogate = () -> $ => < testimony := io.@readStdin() >\n^ = () -> Num => <\n  interrogate()\n  testimony == \"fact\" ? 0 : 1\n>";
+        assert_eq!(checked_force_count(src), 1);
     }
 }

@@ -241,6 +241,13 @@ impl Environment {
         self.lookup(name).map(|s| s.atomic).unwrap_or(false)
     }
 
+    /// Whether `name` is bound in the ROOT scope — the top level of the program, never
+    /// pushed or popped (every function/method/lambda body and pattern arm pushes its own
+    /// scope on top of it, so this is `false` for a name bound anywhere inside one).
+    pub fn is_top_level(&self, name: &str) -> bool {
+        self.scopes[0].contains_key(name)
+    }
+
     /// Update a binding's type (used for function type inference).
     /// Returns `true` if a binding was found and updated.
     pub fn update_type(&mut self, name: &str, new_type: Type) -> bool {
