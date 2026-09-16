@@ -242,7 +242,15 @@ impl<'a> Parser<'a> {
         loop {
             if self.check(&TokenKind::Dot) {
                 self.advance();
-                let field = self.expect_ident()?;
+                // A leaf IO primitive reached through a value (`connection.@read()`): `@`
+                // fuses with the following identifier exactly as it does at a module
+                // chain (`io.@readStdin`) or a primitive's own declaration.
+                let field = if self.check(&TokenKind::At) {
+                    self.advance();
+                    format!("@{}", self.expect_ident()?)
+                } else {
+                    self.expect_ident()?
+                };
 
                 // A same-line `(` makes this a method call: obj.method(args). A
                 // line-first `(` leaves `.field` a plain field access and the `(...)`
