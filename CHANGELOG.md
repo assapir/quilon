@@ -6,6 +6,20 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`net.@tcpServe(port, handler)` is the raw TCP server layer: the runtime accepts
+  connections and runs each `handler` call on its own fiber, and returns the `Server`
+  handle at once — the accept loop is a launch of the enclosing `< >` block, joined by
+  that block's own join, so `^` stays alive while the server runs.** Each accepted
+  connection is a `Connection`, with `connection.@read() -> Text` (a deferred read,
+  `""` once the peer has closed), `connection.@write(bytes) -> $`, and
+  `connection.close() -> $` (a handler that returns without calling it has its
+  connection closed by the runtime). `server.kill(seconds)` (`server.kill()` defaults
+  to 5 seconds) stops accepting, waits for in-flight handlers to finish, force-closes
+  whatever is still open past that grace period, and settles the accept loop before
+  returning. A bind failure raises
+  [QN511](docs/tooling/errors.md#qn511--bind-failed) and exits. See
+  `docs/corelib/net.md#the-raw-tcp-server-layer`,
+  `docs/concurrency/README.md`, and `examples/tcp_echo.qn`. Part of #435.
 - **A `< >` block joins every launch it made directly (`@readStdin`, `@tcpRequest`) before
   it returns — `allSettled`, never cancelled — including one bound to a name the block
   never reads again, which previously only survived by the scheduler draining ready fibers

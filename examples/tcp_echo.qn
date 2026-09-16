@@ -1,0 +1,20 @@
+~ A raw TCP echo server: `net.@tcpServe` starts the accept loop on its own fiber, each
+~ connection gets `holler`'s handler on a fiber of its own, and `^` connects to the server
+~ from inside the same process with `net.@tcpRequest` to prove the round trip, asserts the
+~ echoed bytes, then stops the server with `Server.kill` before returning.
+<< core.net
+<< core.test
+
+holler = (connection :: net.Connection) -> $ => <
+  shout = connection.@read()
+  connection.@write(shout)
+  $
+>
+
+^ = () -> $ => <
+  canyon = net.@tcpServe(9047, connection => holler(connection))
+  net.@tcpRequest("127.0.0.1:9047", "hellooo") ?
+    | Ok(echo) => assert(echo, equals("hellooo"))
+    | NotOk(error) => test.failAt(error)
+  canyon.kill(1)
+>

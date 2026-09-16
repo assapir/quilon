@@ -1354,11 +1354,9 @@ inside the running server instead.
 ```quilon ignore
 << core.net
 
-listen = (connection :: net.Connection) -> $ => < $ >
-
 ^ = () -> Num => <
-  first = net.@tcpServe(47990, listen)
-  second = net.@tcpServe(47990, listen)
+  first = net.@tcpServe(47990, connection => $)
+  second = net.@tcpServe(47990, connection => $)
   0
 >
 ```
