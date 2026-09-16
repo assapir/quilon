@@ -313,10 +313,15 @@ fn measure(cmd: &mut Command) -> Measured {
     std::mem::forget(child);
 
     let exited_ok = waited == pid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+    // `ru_maxrss` is kilobytes on Linux, bytes on macOS (and the BSDs).
+    let maxrss_kb = if cfg!(target_os = "macos") {
+        usage.ru_maxrss / 1024
+    } else {
+        usage.ru_maxrss
+    };
     Measured {
         wall,
-        // `ru_maxrss` is kilobytes on Linux.
-        peak_rss_kb: (waited == pid).then_some(usage.ru_maxrss),
+        peak_rss_kb: (waited == pid).then_some(maxrss_kb),
         ok: exited_ok,
     }
 }
