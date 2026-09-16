@@ -18,7 +18,6 @@ All notable changes to Quilon are documented here.
   background task can register with the enclosing block the same way. See
   `docs/concurrency/README.md`, `examples/block_scope_join.qn`. Part of #120 (the
   block-scope-join half; cross-function pipelining follows in a later change).
-- **`@streamFile(path, chunkSize, onChunk)` reads a file in chunkSize-byte chunks, calling
 - **The atomic binding syntax `@name := …`** declares a mutable binding wherever a `:=`
   declaration is allowed, at the top level and inside a block — any type may be bound
   (`@hits := 0`, `@open := true`, `@stand := Stand { }`). `@` marks the declaration only;

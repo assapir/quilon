@@ -1,19 +1,22 @@
 ~ Block-scope join: a `< >` block joins every launch it made directly before it returns,
-~ including one bound to a name it never reads again. `interrogate` launches two reads
-~ and hands back only the second; its own block still waits for the first (unread) one
-~ before returning, so the caller receives a settled value.
+~ including one bound to a name it never reads again. `interrogate` launches a read it
+~ never uses, then stores a second read into the top-level `testimony`; its own block
+~ still waits for the unread one before returning. `^` calls `interrogate`, then reads
+~ `testimony` itself — a separate function's read of the stored value — which is where
+~ the stored read is finally forced.
 
 << core.io
 
-interrogate = () -> Text => <
+@testimony := ""
+
+interrogate = () -> $ => <
   hearsay = io.@readStdin()       ~ launched, never read: the block joins it before returning
-  testimony = io.@readStdin()
-  testimony
+  testimony := io.@readStdin()
 >
 
 ^ = () -> Num => <
-  verdict = interrogate()
-  io.print(verdict)
-  assert(verdict, equals("fact"))
+  interrogate()
+  io.print(testimony)
+  assert(testimony, equals("fact"))
   0
 >
