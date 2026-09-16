@@ -43,6 +43,9 @@ served an auto-data-parallelism goal the project no longer pursues.
 [#120]: https://github.com/assapir/quilon/issues/120
 [#60]: https://github.com/assapir/quilon/issues/60
 [#49]: https://github.com/assapir/quilon/issues/49
+[#434]: https://github.com/assapir/quilon/issues/434
+[#435]: https://github.com/assapir/quilon/issues/435
+[#445]: https://github.com/assapir/quilon/issues/445
 
 ### M1 — Diagnostics & small wins ✅
 
@@ -110,8 +113,8 @@ and specified in full in [#120]. Built smallest-first:
 
 | Item | Status |
 |------|--------|
-| **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op | ✅ |
-| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`) and atomic bindings (`@name := …`), the fiber-sharing check ([#120]) | ⬜ |
+| **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op; a `< >` block joins every launch it made directly before returning (`allSettled`), every fault reported in launch order naming its launch site; the atomic binding syntax `@name := …`, whose reassignment's right side never waits on a deferred value; a deferred value stored in a top-level `:=` binding stays deferred there and forces on read ([#445]); hostname lookups run on the runtime's blocking-call pool ([#434]) | ✅ |
+| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`); the fiber-sharing check ships with the M8 server, where user code first runs on more than one fiber ([#120]) | ⬜ |
 | Trace / explain mode | 💤 (deferred past 1.0) |
 
 ### M7 — Polish 🔨
@@ -128,12 +131,14 @@ and specified in full in [#120]. Built smallest-first:
 
 ### M8 — Web: a native HTTP server on the runtime ⬜
 
-The **"then web"** half of the north star: a native HTTP server built directly on the M6
-runtime, so many in-flight connections are cheap fibers with their IO overlapped implicitly.
-Its on-ramps:
+The **"then web"** half of the north star: a native HTTP server built on the M6 runtime's
+Stage 1 — one worker, a fiber per connection, one reactor wait covering every connection —
+so many in-flight connections are cheap fibers with their IO overlapped implicitly ([#435]).
+Stage 2 turns that one worker into many without changing server code. Its on-ramps:
 
 | Item | Status |
 |------|--------|
-| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; the whole-file `io.readFile` composition remains) |
+| Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; hostname resolution and regular blocking calls run on the runtime's blocking-call pool ([#434]); the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
-| Native HTTP server on the runtime | ⬜ |
+| Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ⬜ |
+| Native HTTP server on the runtime ([#435]) | ⬜ |
