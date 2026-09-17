@@ -65,7 +65,7 @@ never reads like `Result`'s `Ok`. `Other(Num)` carries any code outside that tab
 | Method | Result |
 |--------|--------|
 | `code() -> Num` | The numeral this status carries on the wire: `OK` → `200`, `Other(n)` → `n`. |
-| `text() -> Text` | The reason phrase this status carries on the wire: `OK` → `"OK"`, `NotFound` → `"Not Found"`, `Other(_)` → `"Unknown"`. |
+| `text() -> Text` | Its reason phrase on the wire: `OK` → `"OK"`, `NotFound` → `"Not Found"`, `Other(_)` → `"Unknown"`. |
 | `Status.parse(code :: Num) -> Status` | The variant a numeric code names — `404` → `NotFound` — or `Other(code)` for a code the table does not carry. Never fails: every `Num` names some `Status`. |
 
 `Status.parse(200).code()` and `OK.code()` agree, and so do `.text()`: `code()`/`text()`
