@@ -631,7 +631,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
 
-        self.take_frame(); // fresh frame: an earlier function's entries are dead
+        self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
         self.boxed_vars = self.compute_boxed_vars(&declaration.body);
         for (i, parameter) in declaration.parameters.iter().enumerate() {
