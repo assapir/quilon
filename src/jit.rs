@@ -104,7 +104,7 @@ pub fn run_program(
     // address. Without this, the generated `main` calls `__gc_init` at a null address
     // and segfaults. The addresses come from the runtime's own registry, so an
     // intrinsic cannot be added there and forgotten here.
-    for (name, address) in crate::runtime::intrinsics::INTRINSICS {
+    for (name, address) in quilon_rt::INTRINSICS {
         if let Some(func) = module.get_function(name) {
             engine.add_global_mapping(&func, *address as usize);
         }
