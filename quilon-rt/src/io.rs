@@ -158,7 +158,7 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
 
 /// `@streamFile(path, chunkSize, onChunk)`: read `path` in `chunkSize`-byte reads, calling the
 /// bundled Quilon closure once per whole, valid-Text chunk. Runs on the calling fiber, parking
-/// (via [`read_once`]) on reactor readiness between reads. `on_chunk`/`environment` are the
+/// (via `read_once`) on reactor readiness between reads. `on_chunk`/`environment` are the
 /// code generator's fixed-shape trampoline over the closure (see
 /// `CodeGenerator::emit_stream_file_thunk`) and the bundled `{ptr,ptr}` closure value it
 /// unpacks. Writes `Ok(bytesRead)` (total bytes delivered) into `out` at EOF or once `onChunk`

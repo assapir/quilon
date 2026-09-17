@@ -2,12 +2,12 @@
 
 //! The runtime's blocking-call pool: run a call with no non-blocking form on a helper OS
 //! thread, and park the calling fiber on a reactor token until the call's result is ready.
-//! [`run_blocking`] is the one entry point; [`crate::net`]'s hostname resolution (`getaddrinfo`
+//! `run_blocking` is the one entry point; [`crate::net`]'s hostname resolution (`getaddrinfo`
 //! has no non-blocking form) is its first caller.
 //!
 //! Sizing: a small set of BASE threads, started lazily on the first call and kept for the rest
 //! of the process (reused across calls — a program that never makes one starts no threads),
-//! plus OVERFLOW threads the pool grows by one at a time, up to [`BLOCKING_POOL_CEILING`]
+//! plus OVERFLOW threads the pool grows by one at a time, up to `BLOCKING_POOL_CEILING`
 //! threads in total, whenever a call arrives with more jobs in flight than the pool currently
 //! has threads for. An overflow thread is temporary: it exits as soon as it finds the job queue
 //! empty, so the pool shrinks back to its base once a burst of concurrent calls drains. Neither

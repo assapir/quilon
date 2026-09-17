@@ -9,7 +9,7 @@
 //! current fiber until the producing fiber has stored the result, then reads it — memoized,
 //! so a second force is O(1).
 //!
-//! [`__read_launch`] backs `@read` (read one line from stdin): it allocates a [`Deferred`],
+//! [`__read_launch`] backs `@read` (read one line from stdin): it allocates a `Deferred`,
 //! spawns a reader fiber that parks on stdin readiness and fills the cell, and returns the
 //! deferred [`QlSlice`] representation. [`__force_text`] is the force: park-until-ready,
 //! then return the stored bytes.
@@ -295,7 +295,7 @@ pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'stat
 }
 
 /// Force a deferred `Result`, writing the resolved `{ tag, slot }` into `out`: the
-/// per-representation C-ABI wrapper over the generic [`force`]. A `Result` is 24 bytes, which the
+/// per-representation C-ABI wrapper over the generic `force`. A `Result` is 24 bytes, which the
 /// C ABI returns via a hidden pointer rather than in registers (unlike the 16-byte `Text`), so
 /// the value is passed back through an out-pointer the code generator supplies — no aggregate
 /// return crosses the FFI boundary. Only the code generator calls this, and only after its force
@@ -303,7 +303,7 @@ pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'stat
 ///
 /// # Safety contract (upheld by the compiler)
 /// `out` points to writable storage for one [`QlResult`]; `deferred_ptr` is the slot `data` of a
-/// deferred `Result` produced by [`launch_deferred_result`] and is still reachable (the taint pass
+/// deferred `Result` produced by `launch_deferred_result` and is still reachable (the taint pass
 /// keeps it live to here).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
@@ -316,7 +316,7 @@ pub extern "C" fn __force_result(out: *mut QlResult, deferred_ptr: *const c_void
 
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred
 /// `Text` immediately (the calling fiber does not park here). A THIN wrapper over the shared
-/// [`launch_deferred_text`], with a stdin-specific producer. `site` is the call's own location,
+/// `launch_deferred_text`, with a stdin-specific producer. `site` is the call's own location,
 /// used to frame a fault report; it may be null if unknown.
 ///
 /// # Safety contract (upheld by the compiler)
@@ -328,7 +328,7 @@ pub extern "C" fn __read_launch(site: *const QlSite) -> QlSlice {
     launch_deferred_text(move || read_stdin_text(site))
 }
 
-/// Force a deferred `Text`: the per-representation C-ABI wrapper over the generic [`force`].
+/// Force a deferred `Text`: the per-representation C-ABI wrapper over the generic `force`.
 /// Only the code generator calls this, and only after its force check saw [`DEFERRED_SENTINEL`],
 /// so `deferred_ptr` is always a live `Text` deferred.
 ///
