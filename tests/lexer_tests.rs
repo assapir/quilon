@@ -116,7 +116,8 @@ fn test_unterminated_string_stops_at_raw_newline() {
     assert_eq!(error.span.start, opening_quote as u32);
     assert_eq!(error.span.end, opening_quote as u32 + 1);
     assert_eq!(error.span.file, ROOT_FILE);
-    assert_eq!(quilon::lexer::Span::line_col(source, opening_quote), (2, 1));
+    let located = quilon::source_map::locate_in("f.qn", source, &error.span);
+    assert_eq!((located.line, located.column), (2, 1));
 }
 
 #[test]

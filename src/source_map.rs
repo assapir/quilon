@@ -34,7 +34,8 @@ impl LineIndex {
     }
 
     /// The 1-based line containing `offset`, and that line's start offset. An offset past
-    /// the end of the text belongs to the last line, as `Span::line_col` also clamps.
+    /// the end of the text belongs to the last line — callers clamp `offset` to the text's
+    /// length before calling this.
     fn line_at(&self, offset: usize) -> (usize, usize) {
         let line = match self.starts.binary_search(&offset) {
             Ok(exact) => exact,
@@ -236,9 +237,11 @@ fn locate_with(lines: &LineIndex, path: &str, source: &str, span: &Span) -> Loca
         ),
     };
 
-    // Characters of this line that begin before `start` — counted the way
-    // `Span::line_col` counts them, so the two never disagree about a column (including for
-    // an offset that lands inside a multi-byte character, where slicing would panic).
+    // Characters of this line that begin before `start`, counted by scalar value (not
+    // byte) so a multi-byte character before `start` advances the column by one — and
+    // comparing against the raw (unfloored) byte offset so an offset that lands inside a
+    // multi-byte character still counts that character, without slicing at it (which would
+    // panic).
     let column = source[line_start..]
         .char_indices()
         .take_while(|(offset, _)| line_start + offset < start)
@@ -276,8 +279,7 @@ fn char_len(source: &str, range: std::ops::Range<usize>) -> usize {
 ///
 /// A span should already fall on boundaries, but it is arithmetic over byte offsets: one
 /// landing inside a multi-byte character must not panic the compiler while it is reporting
-/// something else. Flooring also matches how `Span::line_col` counts (a character counts
-/// once its start is passed), which keeps the two in agreement.
+/// something else.
 fn floor_char_boundary(source: &str, index: usize) -> usize {
     let mut index = index.min(source.len());
     while index > 0 && !source.is_char_boundary(index) {
@@ -306,23 +308,28 @@ mod tests {
         // character `é`, so an offset of 2 is inside it.
         let src = "aé b";
         let inside = locate_in("f.qn", src, &Span::in_root(2, 3));
-        assert_eq!((inside.line, inside.column), (1, Span::line_col(src, 2).1));
+        assert_eq!((inside.line, inside.column), (1, 3));
         assert_eq!(inside.excerpt.as_deref(), Some("aé b"));
     }
 
     #[test]
-    fn locate_agrees_with_the_lexers_line_col() {
-        // The line table and `Span::line_col` must never disagree — a diagnostic and a
-        // `Site` would then point at different places in the same file.
+    fn locate_reports_the_right_line_and_column_across_a_multiline_multibyte_source() {
+        // A sample of positions spanning several lines — one empty, one landing on the
+        // second byte of a multi-byte character (`é`), and one past the end of the source.
         let src = "a = 1\nbé = 2\n\nc = 3";
-        for offset in 0..=src.len() {
-            let loc = locate_in("f.qn", src, &Span::in_root(offset as u32, offset as u32));
-            assert_eq!(
-                (loc.line, loc.column),
-                Span::line_col(src, offset),
-                "disagreement at byte {offset}"
-            );
-        }
+        let at = |offset: u32| {
+            let loc = locate_in("f.qn", src, &Span::in_root(offset, offset));
+            (loc.line, loc.column)
+        };
+        assert_eq!(at(0), (1, 1)); // start of the source
+        assert_eq!(at(4), (1, 5)); // mid first line, the '1'
+        assert_eq!(at(6), (2, 1)); // right after the first newline
+        assert_eq!(at(8), (2, 3)); // inside é's second byte
+        assert_eq!(at(13), (2, 7)); // the newline ending the second line
+        assert_eq!(at(14), (3, 1)); // the empty third line
+        assert_eq!(at(15), (4, 1)); // start of the fourth line
+        assert_eq!(at(src.len() as u32), (4, 6)); // end of the source
+        assert_eq!(at(src.len() as u32 + 5), (4, 6)); // past the end, clamped
     }
 
     #[test]
