@@ -116,7 +116,8 @@ fn test_unterminated_string_stops_at_raw_newline() {
     assert_eq!(error.span.start, opening_quote as u32);
     assert_eq!(error.span.end, opening_quote as u32 + 1);
     assert_eq!(error.span.file, ROOT_FILE);
-    assert_eq!(quilon::lexer::Span::line_col(source, opening_quote), (2, 1));
+    let located = quilon::source_map::locate_in("f.qn", source, &error.span);
+    assert_eq!((located.line, located.column), (2, 1));
 }
 
 #[test]
@@ -285,7 +286,7 @@ fn test_spans_carry_the_file_they_came_from() {
     assert_ne!(root[0].span, module[0].span);
 }
 
-/// Trojan Source guard (CVE-2021-42574 class, see `quilon::lexer::bidi`): a balanced
+/// Trojan Source guard (CVE-2021-42574 class, see `quilon_rt::bidi`): a balanced
 /// isolate inside a string literal lexes normally, and the literal text is preserved
 /// exactly (no reordering, no stripped or injected characters).
 #[test]

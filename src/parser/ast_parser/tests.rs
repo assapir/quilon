@@ -1,6 +1,7 @@
 use super::*;
 use crate::ast::{Statement, Type};
 use crate::lexer::Lexer;
+use crate::source_map::locate_in;
 
 #[test]
 fn test_parse_number() {
@@ -1127,8 +1128,11 @@ fn test_line_final_gt_closes_its_block_early_and_qn115_blames_it() {
     );
     let early_gt = src.find("beaverCount >").unwrap() + "beaverCount ".len();
     assert_eq!(err.span.start as usize, early_gt);
-    let (line, _column) = Span::line_col(src, early_gt);
-    assert_eq!(line, 4, "the early `>` sits on line 4 of the source");
+    assert_eq!(
+        locate_in("test.qn", src, &err.span).line,
+        4,
+        "the early `>` sits on line 4 of the source"
+    );
 }
 
 #[test]
@@ -1185,6 +1189,9 @@ fn test_early_close_blames_the_gt_even_when_the_derailment_is_at_a_later_token()
     );
     let early_gt = src.rfind("pigeonCount >").unwrap() + "pigeonCount ".len();
     assert_eq!(err.span.start as usize, early_gt);
-    let (line, _column) = Span::line_col(src, early_gt);
-    assert_eq!(line, 3, "the early `>` sits on line 3 of the source");
+    assert_eq!(
+        locate_in("test.qn", src, &err.span).line,
+        3,
+        "the early `>` sits on line 3 of the source"
+    );
 }

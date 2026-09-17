@@ -166,6 +166,11 @@ fiber, so two peers exchanging bytes with it at once make independent progress.
 See [`core.net`'s reference](../corelib/net.md#the-raw-tcp-server-layer) and
 `examples/tcp_echo.qn`.
 
+`core.http` — **`http.@serve(address :: Text, handler :: (Request) -> Response) -> Server`**
+is `net.@tcpServe` with `core.http`'s own connection handler filled in, so an HTTP
+server's connections share the same one-fiber-per-connection behavior. See
+[`core.http`'s reference](../corelib/http.md#the-http-server) and `examples/http_server.qn`.
+
 ## Where it is headed
 
 A networked value-returning primitive makes independent launches overlap:

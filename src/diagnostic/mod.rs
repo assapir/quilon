@@ -326,6 +326,7 @@ fn caret_position(excerpt: &str, column: usize, width: usize) -> (usize, usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_map::locate_in;
 
     fn sources(text: &str) -> SourceMap {
         let mut map = SourceMap::default();
@@ -385,27 +386,36 @@ mod tests {
         assert_eq!(visual_range("abc def", &Span::in_root(4, 7)), (4, 7));
     }
 
+    /// A located position is 1-based in both line and column.
     #[test]
-    fn line_col_is_one_based() {
+    fn a_located_position_is_one_based() {
         let src = "ab\ncde\nf";
-        assert_eq!(Span::line_col(src, 0), (1, 1)); // 'a'
-        assert_eq!(Span::line_col(src, 1), (1, 2)); // 'b'
-        assert_eq!(Span::line_col(src, 3), (2, 1)); // 'c' (after first '\n')
-        assert_eq!(Span::line_col(src, 5), (2, 3)); // 'e'
-        assert_eq!(Span::line_col(src, 7), (3, 1)); // 'f'
+        let at = |offset: u32| {
+            let loc = locate_in("f.qn", src, &Span::in_root(offset, offset));
+            (loc.line, loc.column)
+        };
+        assert_eq!(at(0), (1, 1)); // 'a'
+        assert_eq!(at(1), (1, 2)); // 'b'
+        assert_eq!(at(3), (2, 1)); // 'c' (after first '\n')
+        assert_eq!(at(5), (2, 3)); // 'e'
+        assert_eq!(at(7), (3, 1)); // 'f'
     }
 
+    /// A located column counts Unicode scalar values (chars), not bytes.
     #[test]
-    fn line_col_counts_chars_not_bytes() {
+    fn a_located_column_counts_chars_not_bytes() {
         // 'é' is two bytes; the 'x' after it is byte offset 3 but column 3.
         let src = "aéx";
-        assert_eq!(Span::line_col(src, 3), (1, 3));
+        let loc = locate_in("f.qn", src, &Span::in_root(3, 3));
+        assert_eq!((loc.line, loc.column), (1, 3));
     }
 
+    /// A position past the end of the source clamps to the final position.
     #[test]
-    fn line_col_clamps_past_end() {
+    fn a_located_position_clamps_past_end() {
         let src = "ab";
-        assert_eq!(Span::line_col(src, 99), (1, 3));
+        let loc = locate_in("f.qn", src, &Span::in_root(99, 99));
+        assert_eq!((loc.line, loc.column), (1, 3));
     }
 
     #[test]

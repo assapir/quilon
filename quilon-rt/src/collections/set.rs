@@ -11,12 +11,20 @@ use crate::mem::alloc_slots;
 use std::collections::HashSet;
 use std::os::raw::c_void;
 
+/// One snapshot slot: an element's identity pair, kept in one GC-allocated array (see
+/// [`refresh_snapshot`]) instead of two arrays that must be rebuilt, and stay the same
+/// length, in lockstep.
+#[repr(C)]
+struct QlSetEntry {
+    key_a: u64,
+    key_b: u64,
+}
+
 /// GC-managed native set header (element analogue of the map header, with no values).
 #[repr(C)]
 struct QlSet {
     table: HashSet<QlKey, FixedState>,
-    snapshot_a: *const u64,
-    snapshot_b: *const u64,
+    snapshot: *const QlSetEntry,
     len: i64,
 }
 
@@ -27,8 +35,7 @@ unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
             header,
             QlSet {
                 table,
-                snapshot_a: std::ptr::null(),
-                snapshot_b: std::ptr::null(),
+                snapshot: std::ptr::null(),
                 len: 0,
             },
         );
@@ -37,22 +44,25 @@ unsafe fn build_set(table: HashSet<QlKey, FixedState>) -> *mut QlSet {
     header
 }
 
-/// Rebuild `header`'s ordered snapshot arrays and `len` from its current `table`. Called
+/// Rebuild `header`'s ordered snapshot array and `len` from its current `table`. Called
 /// after every in-place mutation (`__set_add`/`__set_remove`).
 unsafe fn refresh_snapshot(header: *mut QlSet) {
     let table = unsafe { &(*header).table };
     let n = table.len();
-    let snapshot_a = alloc_slots::<u64>(n);
-    let snapshot_b = alloc_slots::<u64>(n);
+    let snapshot = alloc_slots::<QlSetEntry>(n);
     for (i, key) in table.iter().enumerate() {
         unsafe {
-            *snapshot_a.add(i) = key.a;
-            *snapshot_b.add(i) = key.b;
+            std::ptr::write(
+                snapshot.add(i),
+                QlSetEntry {
+                    key_a: key.a,
+                    key_b: key.b,
+                },
+            );
         }
     }
     unsafe {
-        (*header).snapshot_a = snapshot_a;
-        (*header).snapshot_b = snapshot_b;
+        (*header).snapshot = snapshot;
         (*header).len = n as i64;
     }
 }
@@ -127,12 +137,12 @@ pub extern "C" fn __set_len(set: *const c_void) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_item_a(set: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(set as *const QlSet)).snapshot_a.add(i as usize) as i64 }
+    unsafe { (*(*(set as *const QlSet)).snapshot.add(i as usize)).key_a as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __set_item_b(set: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(set as *const QlSet)).snapshot_b.add(i as usize) as i64 }
+    unsafe { (*(*(set as *const QlSet)).snapshot.add(i as usize)).key_b as i64 }
 }
 
 #[unsafe(no_mangle)]

@@ -19,6 +19,29 @@ All notable changes to Quilon are documented here.
   [QN350](docs/tooling/errors.md#qn350---value-shared-across-fibers). See
   `docs/concurrency/README.md#sharing-state-across-fibers` and
   `examples/shared_counter.qn`. Part of #435.
+- **`http.@serve(address, handler)` is the HTTP server layer, built on `net.@tcpServe`:
+  its lowering calls that same runtime entry with `core.http`'s own connection handler
+  filled in, so each accepted connection reads its request head, calls `handler` once,
+  writes the reply, and is closed — one response per connection.** `Request` gains the
+  server side of `wire()`, `Request.parse(head) -> Result`, parsing a request line and
+  headers into a `Request` (a body-bearing method's `Body` is always empty — this layer
+  does not read request bodies); a malformed request line or an unrecognized method comes
+  back `NotOk`, `core.http`'s own signal to answer 400 and close. **`Status` is a new
+  exported type: one variant per standard HTTP status code, named from its reason phrase
+  in CamelCase (`OK` spelled exactly that way, so it never reads like `Result`'s `Ok`),
+  plus `Other(Num)` for any other code** — `code()`/`text()` each match over `it`, the
+  same shape `Method.token()` uses; `Status.parse(code)` matches the other way, over the
+  number. **`Response` gains one constructor, `reply`, over six overloads** —
+  `reply(status :: Status)`, `reply(status, body :: Text)`, `reply(status, body, headers ::
+  Headers)`, and the same three with `code :: Num` in place of `status`, each going through
+  `Status.parse` and one shared wire-building function — and `wire()`; every constructor
+  sends only the headers it was given, plus `content-length` (bytes) and
+  `connection: close` — `Response.reply(OK, "x")` sends exactly `HTTP/1.1 200
+  OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`. A handler fault is fatal, like
+  everywhere else in the language; `kill` is `net.Server`'s own method. The client's
+  `Response.status()` now returns `Status` (previously a bare `Num`).
+  See `docs/corelib/http.md#the-http-server`, `docs/corelib/http.md#status`,
+  `docs/concurrency/README.md`, and `examples/http_server.qn`. Part of #435.
 - **`net.@tcpServe(address, handler)` is the raw TCP server layer: the runtime accepts
   connections and runs each `handler` call on its own fiber, and returns the `Server`
   handle at once — the accept loop is a launch of the enclosing `< >` block, joined by

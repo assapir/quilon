@@ -4,18 +4,38 @@
 //! Part of the LLVM code generator; see `super` for the `CodeGenerator` state these
 //! methods run against.
 
+use super::tco::BodyPosition;
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Lower a `match` (`scrutinee ? | pat => body ...`). `match_expression` is the whole
-    /// `Expression::Match` node (used only to look up the match's result type in the oracle);
-    /// `scrutinee` is the value being matched.
+    /// Value-position `match` (`scrutinee ? | pat => body ...`): every arm always yields a
+    /// value (see [`match_position`](CodeGenerator::match_position)'s tail variant for the
+    /// self-tail-call case). `match_expression` is the whole `Expression::Match` node (used
+    /// only to look up the match's result type in the oracle); `scrutinee` is the value being
+    /// matched.
     pub(super) fn generate_match(
         &mut self,
         match_expression: &Expression,
         scrutinee: &Expression,
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        Ok(self
+            .match_position(match_expression, scrutinee, arms, BodyPosition::Value)?
+            .expect("value position always yields a value"))
+    }
+
+    /// Lower a `?`/`|` match, emitting each arm's body at `position`. In
+    /// [`BodyPosition::Value`] every arm always produces a value; in [`BodyPosition::Tail`] an
+    /// arm may instead tail-recurse and branch straight to the loop header, storing nothing —
+    /// if every arm does, the continuation block is unreachable and this returns `None` (see
+    /// `generate_tail_expression`'s `None` invariant).
+    pub(super) fn match_position(
+        &mut self,
+        match_expression: &Expression,
+        scrutinee: &Expression,
+        arms: &[MatchArm],
+        position: BodyPosition,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Evaluate the expression being matched
         let match_val = self.generate_expression(scrutinee)?;
 
@@ -54,6 +74,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build branch"))?;
 
         // Generate code for each arm
+        let mut any_value_arm = false;
         for (i, arm) in arms.iter().enumerate() {
             // Position at check block
             self.builder.position_at_end(check_blocks[i]);
@@ -85,24 +106,41 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Bind pattern variables
             self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
-            let arm_val = self.generate_expression(&arm.body)?;
+            let arm_result = self.emit_body(position, &arm.body)?;
             self.end_di_scope(saved_arm_scope);
-            self.builder
-                .build_store(result_alloca, arm_val)
-                .map_err(ctx("Failed to store result"))?;
-
-            self.builder
-                .build_unconditional_branch(cont_block)
-                .map_err(ctx("Failed to build branch"))?;
+            if let Some(arm_val) = arm_result {
+                any_value_arm = true;
+                self.builder
+                    .build_store(result_alloca, arm_val)
+                    .map_err(ctx("Failed to store result"))?;
+                self.builder
+                    .build_unconditional_branch(cont_block)
+                    .map_err(ctx("Failed to build branch"))?;
+            }
+            // Else (BodyPosition::Tail only): the arm tail-recursed and already branched to
+            // the loop header.
         }
 
         // Position at continuation block
         self.builder.position_at_end(cont_block);
 
-        // Load the result with the match's declared result type (see `result_llvm`).
-        self.builder
-            .build_load(result_llvm, result_alloca, "match_result")
-            .map_err(ctx("Failed to load result"))
+        if any_value_arm {
+            // Load the result with the match's declared result type (see `result_llvm`).
+            Ok(Some(
+                self.builder
+                    .build_load(result_llvm, result_alloca, "match_result")
+                    .map_err(ctx("Failed to load result"))?,
+            ))
+        } else {
+            // Every arm tail-recursed (BodyPosition::Tail only), so nothing branches here at
+            // all (the no-match edge goes to the abort instead). Terminate the block as
+            // `unreachable` and report `None` — keeping the "a `None` leaves the block
+            // terminated" invariant.
+            self.builder
+                .build_unreachable()
+                .map_err(ctx("Failed to build unreachable"))?;
+            Ok(None)
+        }
     }
 
     /// Where a match goes past its last arm, or `None` when there is no past: a last arm
