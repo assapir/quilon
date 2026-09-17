@@ -31,14 +31,14 @@ fn program(address: &str) -> String {
 
 killAndReply = () -> http.Response => <
   server.kill(1)
-  http.Response.ok("bye")
+  http.Response.reply(http.OK, "bye")
 >
 
 answer = (request :: http.Request) -> http.Response => <
   request.method ?
-    | http.Get        => http.Response.ok("chickpeas: plenty")
-    | http.Post(body) => http.Response.created("stocked " + body.content)
-    | _               => http.Response.status(http.MethodNotAllowed)
+    | http.Get        => http.Response.reply(http.OK, "chickpeas: plenty")
+    | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
+    | _               => http.Response.reply(http.MethodNotAllowed)
 >
 
 hummus = (request :: http.Request) -> http.Response => <

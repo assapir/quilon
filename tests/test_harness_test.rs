@@ -575,9 +575,6 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // The private base record `Headers`/`Params` compose over: carried with the
         // module, exported to no importer.
         "core.http.Values",
-        // `Status.describe()`'s own return shape: carried with the module (an exported
-        // item's method returns it), exported to no importer.
-        "core.http.StatusDetail",
         // The native body-framing primitive: carried with the module (an exported item
         // calls it), exported to no importer.
         "core.http.frameBody",
@@ -588,7 +585,6 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
-        "core.http.methodFromToken",
         "core.http.receiveHead",
         "core.http.serveConnection",
         // The client's own PRIVATE test fixtures: carried with the module (an exported

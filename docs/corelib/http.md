@@ -68,9 +68,8 @@ never reads like `Result`'s `Ok`. `Other(Num)` carries any code outside that tab
 | `text() -> Text` | Its reason phrase on the wire: `OK` → `"OK"`, `NotFound` → `"Not Found"`, `Other(_)` → `"Unknown"`. |
 | `Status.parse(code :: Num) -> Status` | The variant a numeric code names — `404` → `NotFound` — or `Other(code)` for a code the table does not carry. Never fails: every `Num` names some `Status`. |
 
-`Status.parse(200).code()` and `OK.code()` agree, and so do `.text()`: `code()`/`text()`
-and `parse()` are two directions over the same table, not two independent ones kept in
-sync by hand.
+`code()` and `text()` are each their own match over `it`, the same shape `Method.token()`
+uses; `Status.parse(200).code()` and `OK.code()` agree, and so do `.text()`.
 
 ## `Headers` and `Params`
 
@@ -216,9 +215,9 @@ it. `kill` is `net.Server`'s own method (see
 
 hummus = (request :: http.Request) -> http.Response => <
   request.method ?
-    | http.Get        => http.Response.ok("chickpeas: plenty")
-    | http.Post(body) => http.Response.created("stocked " + body.content)
-    | _               => http.Response.status(http.MethodNotAllowed)
+    | http.Get        => http.Response.reply(http.OK, "chickpeas: plenty")
+    | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
+    | _               => http.Response.reply(http.MethodNotAllowed)
 >
 
 ^ = () -> Num => <
@@ -239,23 +238,22 @@ hummus = (request :: http.Request) -> http.Response => <
 a target with no scheme or host (`/pantry?x=1`) has an authority of zero length, so the path
 starts at its very first character.
 
-`Response` gains constructors that build `raw` directly, plus `wire()`:
+`Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
 
 | Method | Result |
 |--------|--------|
-| `Response.ok(body :: Text) -> Response` | A 200 reply carrying `body`. |
-| `Response.ok(body :: Text, headers :: Headers) -> Response` | A 200 reply carrying `body`, sending exactly `headers` alongside the generated ones. |
-| `Response.created(body :: Text) -> Response` | A 201 reply carrying `body`. |
-| `Response.status(status :: Status) -> Response` | An empty-body reply carrying `status`'s own reason phrase. |
-| `Response.status(status :: Status, headers :: Headers) -> Response` | `status(status)`, sending exactly `headers` alongside the generated ones. |
-| `Response.status(code :: Num) -> Response` | `status(Status.parse(code))` — an empty-body reply for a caller that only has a bare code. |
-| `Response.status(code :: Num, headers :: Headers) -> Response` | `status(Status.parse(code), headers)`. |
+| `Response.reply(status :: Status) -> Response` | An empty-body reply carrying `status`. |
+| `Response.reply(status :: Status, body :: Text) -> Response` | A reply carrying `status` and `body`. |
+| `Response.reply(status :: Status, body :: Text, headers :: Headers) -> Response` | A reply carrying `status` and `body`, sending exactly `headers` alongside the generated ones. |
+| `Response.reply(code :: Num) -> Response` | `reply(Status.parse(code))`. |
+| `Response.reply(code :: Num, body :: Text) -> Response` | `reply(Status.parse(code), body)`. |
+| `Response.reply(code :: Num, body :: Text, headers :: Headers) -> Response` | `reply(Status.parse(code), body, headers)`. |
 | `wire() -> Text` | The reply's raw text (`it.raw`) — what `serveConnection` writes to the connection. |
 
 Every constructor above sends **only** the headers it was given, plus two generated ones:
 `content-length`, counted in bytes (`Text.size`), and `connection: close`. A `content-type`
-comes from the `headers` overload — a program sets its own, the way it sets any other
-header. `Response.ok("x")` sends exactly
+comes from the three-argument overload — a program sets its own, the way it sets any other
+header. `Response.reply(OK, "x")` sends exactly
 `HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`.
 
 A program wanting a record literal built entirely by hand writes `http.Response { raw =
