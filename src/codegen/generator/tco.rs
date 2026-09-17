@@ -6,7 +6,37 @@
 
 use super::*;
 
+/// Where an if/match arm's body is emitted: [`generate_if`](CodeGenerator::generate_if) and
+/// [`generate_match`](CodeGenerator::generate_match) always want a value back, while
+/// [`generate_tail_if`](CodeGenerator::generate_tail_if) and
+/// [`generate_tail_match`](CodeGenerator::generate_tail_match) want a self-tail-call left
+/// free to end the arm's block with a back-edge instead. `CodeGenerator::emit_body` is the
+/// one place that difference lives; `if_position`/`match_position` (in `exprs`/`matching`)
+/// are otherwise identical for either position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BodyPosition {
+    /// A self-tail-call back-edge may end the body's block with no value — see
+    /// `generate_tail_expression`.
+    Tail,
+    /// The body always yields a value.
+    Value,
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
+    /// Emit an if/match arm's body at `position`. Value position always returns `Some`
+    /// (`generate_expression` never leaves a block mid-air); tail position may return `None`
+    /// with the current block already terminated — see `generate_tail_expression`.
+    pub(super) fn emit_body(
+        &mut self,
+        position: BodyPosition,
+        expression: &Expression,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        match position {
+            BodyPosition::Tail => self.generate_tail_expression(expression),
+            BodyPosition::Value => self.generate_expression(expression).map(Some),
+        }
+    }
+
     // ---- Self-tail-call optimization (loop lowering) --------------------------------
     //
     // A call is in **tail position** when it is the value the enclosing function returns
@@ -282,167 +312,36 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(None)
     }
 
-    /// Tail-position `if`/ternary: emit each arm in tail position. An arm that tail-recurses
-    /// branches to the loop header (yields no value); an arm that produces a value branches
-    /// to a merge block. We `phi` only over the value-producing arms — if both arms tail
-    /// self-call, there is no merge value and we return `None`.
+    /// Tail-position `if`/ternary: [`if_position`](CodeGenerator::if_position) with each arm
+    /// emitted in tail position, so an arm that tail-recurses branches to the loop header
+    /// (yielding no value) instead of joining the merge block. We `phi` only over the
+    /// value-producing arms — if both arms tail self-call, there is no merge value and we
+    /// return `None`.
     pub(super) fn generate_tail_if(
         &mut self,
         condition: &Expression,
         then_expression: &Expression,
         else_expression: &Expression,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let condition_val = self.generate_expression(condition)?;
-        let BasicValueEnum::IntValue(condition_bool) = condition_val else {
-            return Err("Condition must be a boolean".to_string());
-        };
-        let function = self
-            .current_function
-            .ok_or_else(|| "If expression outside of function".to_string())?;
-
-        let then_bb = self.context.append_basic_block(function, "then");
-        let else_bb = self.context.append_basic_block(function, "else");
-        let merge_bb = self.context.append_basic_block(function, "ifcont");
-
-        self.builder
-            .build_conditional_branch(condition_bool, then_bb, else_bb)
-            .map_err(ctx("Failed to build conditional branch"))?;
-
-        // Collect each non-tail-recursing arm's (value, originating block) for the phi.
-        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::new();
-
-        self.builder.position_at_end(then_bb);
-        if let Some(v) = self.generate_tail_expression(then_expression)? {
-            let bb = self.builder.get_insert_block().unwrap();
-            self.builder
-                .build_unconditional_branch(merge_bb)
-                .map_err(ctx("Failed to build branch"))?;
-            incoming.push((v, bb));
-        }
-
-        self.builder.position_at_end(else_bb);
-        if let Some(v) = self.generate_tail_expression(else_expression)? {
-            let bb = self.builder.get_insert_block().unwrap();
-            self.builder
-                .build_unconditional_branch(merge_bb)
-                .map_err(ctx("Failed to build branch"))?;
-            incoming.push((v, bb));
-        }
-
-        self.builder.position_at_end(merge_bb);
-        match incoming.as_slice() {
-            // Both arms tail-recursed: control never reaches the merge block. Terminate it
-            // as `unreachable` (it has no value-producing predecessors) and report `None`
-            // — every `None` from a tail node leaves the current block already terminated.
-            [] => {
-                self.builder
-                    .build_unreachable()
-                    .map_err(ctx("Failed to build unreachable"))?;
-                Ok(None)
-            }
-            _ => {
-                let phi = self
-                    .builder
-                    .build_phi(incoming[0].0.get_type(), "iftmp")
-                    .map_err(ctx("Failed to build phi"))?;
-                for (v, bb) in &incoming {
-                    phi.add_incoming(&[(v as &dyn BasicValue, *bb)]);
-                }
-                Ok(Some(phi.as_basic_value()))
-            }
-        }
+        self.if_position(
+            condition,
+            then_expression,
+            else_expression,
+            BodyPosition::Tail,
+        )
     }
 
-    /// Tail-position `?`/`|` match: same shape as `generate_match`, but each arm body is
-    /// emitted in tail position. An arm that tail-recurses branches to the loop header and
-    /// stores nothing; an arm that yields a value stores it into the shared result slot and
-    /// falls through to the continuation. If EVERY arm tail-recurses, the continuation is
-    /// unreachable and we return `None` (no result to load).
+    /// Tail-position `?`/`|` match: [`match_position`](CodeGenerator::match_position) with
+    /// each arm body emitted in tail position. An arm that tail-recurses branches to the loop
+    /// header and stores nothing; an arm that yields a value stores it into the shared result
+    /// slot and falls through to the continuation. If EVERY arm tail-recurses, the
+    /// continuation is unreachable and we return `None` (no result to load).
     pub(super) fn generate_tail_match(
         &mut self,
         match_expression: &Expression,
         scrutinee: &Expression,
         arms: &[MatchArm],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let match_val = self.generate_expression(scrutinee)?;
-        let function = self
-            .current_function
-            .ok_or_else(|| "Match expression must be in a function".to_string())?;
-
-        let mut arm_blocks = vec![];
-        let mut check_blocks = vec![];
-        for i in 0..arms.len() {
-            check_blocks.push(
-                self.context
-                    .append_basic_block(function, &format!("check_{}", i)),
-            );
-            arm_blocks.push(
-                self.context
-                    .append_basic_block(function, &format!("arm_{}", i)),
-            );
-        }
-        let cont_block = self.context.append_basic_block(function, "match_cont");
-
-        // Result slot for the value-producing (non-tail-recursing) arms, sized from the
-        // oracle exactly as `generate_match` does. Only written by arms that yield a value.
-        let result_llvm = self.oracle_value_type(match_expression)?;
-        let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
-
-        let no_match_block = self.no_match_block_for(arms, match_expression.span())?;
-
-        self.builder
-            .build_unconditional_branch(check_blocks[0])
-            .map_err(ctx("Failed to build branch"))?;
-
-        let mut any_value_arm = false;
-        for (i, arm) in arms.iter().enumerate() {
-            self.builder.position_at_end(check_blocks[i]);
-            let matches = self.check_pattern(&arm.pattern, match_val)?;
-            let next_block = match i + 1 < check_blocks.len() {
-                true => Some(check_blocks[i + 1]),
-                false => no_match_block,
-            };
-            self.branch_to_arm(matches, arm_blocks[i], next_block)?;
-
-            self.builder.position_at_end(arm_blocks[i]);
-            // Under `--debug`: this arm's own lexical scope, mirroring `generate_match` — a
-            // pattern binding is visible only inside this arm's disjoint control-flow path.
-            let saved_arm_scope = self.begin_di_lexical_block(arm.pattern.span());
-            // Refresh the current location to the new scope right away — see the matching
-            // comment in `generate_variable_declaration` for why an unaddressed scope is
-            // dropped along with whatever it declares.
-            self.set_debug_loc(arm.pattern.span());
-            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
-            let tail_result = self.generate_tail_expression(&arm.body)?;
-            self.end_di_scope(saved_arm_scope);
-            if let Some(arm_val) = tail_result {
-                any_value_arm = true;
-                self.builder
-                    .build_store(result_alloca, arm_val)
-                    .map_err(ctx("Failed to store result"))?;
-                self.builder
-                    .build_unconditional_branch(cont_block)
-                    .map_err(ctx("Failed to build branch"))?;
-            }
-            // Else: the arm tail-recursed and already branched to the loop header.
-        }
-
-        self.builder.position_at_end(cont_block);
-        if any_value_arm {
-            Ok(Some(
-                self.builder
-                    .build_load(result_llvm, result_alloca, "match_result")
-                    .map_err(ctx("Failed to load result"))?,
-            ))
-        } else {
-            // Every arm tail-recursed, so nothing branches here at all (the no-match edge
-            // goes to the abort instead). Terminate the block as `unreachable` and report
-            // `None` — keeping the "a `None` leaves the block terminated" invariant.
-            self.builder
-                .build_unreachable()
-                .map_err(ctx("Failed to build unreachable"))?;
-            Ok(None)
-        }
+        self.match_position(match_expression, scrutinee, arms, BodyPosition::Tail)
     }
 }

@@ -4,6 +4,7 @@
 //! Part of the LLVM code generator; see `super` for the `CodeGenerator` state these
 //! methods run against.
 
+use super::tco::BodyPosition;
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -750,12 +751,32 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Value-position `if`/ternary: both arms always yield a value (see
+    /// [`if_position`](CodeGenerator::if_position)'s tail variant for the self-tail-call case).
     pub(super) fn generate_if(
         &mut self,
         cond: &Expression,
         then_expression: &Expression,
         else_expression: &Expression,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        Ok(self
+            .if_position(cond, then_expression, else_expression, BodyPosition::Value)?
+            .expect("value position always yields a value"))
+    }
+
+    /// Lower an `if`/ternary, emitting each arm's body at `position`. In [`BodyPosition::Value`]
+    /// both arms always produce a value and the merge block's `phi` covers both; in
+    /// [`BodyPosition::Tail`] an arm may instead tail-recurse and branch straight to the
+    /// loop header, so the `phi` covers only the arms that did yield a value — if neither
+    /// did, the merge block is `unreachable` and this returns `None` (see
+    /// `generate_tail_expression`'s `None` invariant).
+    pub(super) fn if_position(
+        &mut self,
+        cond: &Expression,
+        then_expression: &Expression,
+        else_expression: &Expression,
+        position: BodyPosition,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let cond_val = self.generate_expression(cond)?;
 
         let cond_bool = if let BasicValueEnum::IntValue(i) = cond_val {
@@ -778,31 +799,53 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_conditional_branch(cond_bool, then_bb, else_bb)
             .map_err(ctx("Failed to build conditional branch"))?;
 
-        // Generate then block
+        // Collect each value-producing arm's (value, originating block) for the phi — in
+        // BodyPosition::Value that is always both arms; in BodyPosition::Tail an arm that
+        // tail-recursed instead already branched to the loop header and contributes nothing.
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
+
         self.builder.position_at_end(then_bb);
-        let then_val = self.generate_expression(then_expression)?;
-        self.builder
-            .build_unconditional_branch(merge_bb)
-            .map_err(ctx("Failed to build branch"))?;
-        let then_bb = self.builder.get_insert_block().unwrap();
+        if let Some(v) = self.emit_body(position, then_expression)? {
+            let bb = self.builder.get_insert_block().unwrap();
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(ctx("Failed to build branch"))?;
+            incoming.push((v, bb));
+        }
 
-        // Generate else block
         self.builder.position_at_end(else_bb);
-        let else_val = self.generate_expression(else_expression)?;
-        self.builder
-            .build_unconditional_branch(merge_bb)
-            .map_err(ctx("Failed to build branch"))?;
-        let else_bb = self.builder.get_insert_block().unwrap();
+        if let Some(v) = self.emit_body(position, else_expression)? {
+            let bb = self.builder.get_insert_block().unwrap();
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(ctx("Failed to build branch"))?;
+            incoming.push((v, bb));
+        }
 
-        // Generate merge block
         self.builder.position_at_end(merge_bb);
-        let phi = self
-            .builder
-            .build_phi(then_val.get_type(), "iftmp")
-            .map_err(ctx("Failed to build phi"))?;
-        phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
-
-        Ok(phi.as_basic_value())
+        match incoming.as_slice() {
+            // Both arms tail-recursed (Tail position only): control never reaches the merge
+            // block. Terminate it as `unreachable` (it has no value-producing predecessors)
+            // and report `None` — every `None` from a tail node leaves the current block
+            // already terminated.
+            [] => {
+                self.builder
+                    .build_unreachable()
+                    .map_err(ctx("Failed to build unreachable"))?;
+                Ok(None)
+            }
+            _ => {
+                let phi = self
+                    .builder
+                    .build_phi(incoming[0].0.get_type(), "iftmp")
+                    .map_err(ctx("Failed to build phi"))?;
+                for (v, bb) in &incoming {
+                    phi.add_incoming(&[(v as &dyn BasicValue, *bb)]);
+                }
+                Ok(Some(phi.as_basic_value()))
+            }
+        }
     }
 
     pub(super) fn generate_block(
