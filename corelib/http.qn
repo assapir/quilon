@@ -154,6 +154,23 @@ Values = {
       | Patch(_) => "PATCH"
   >
 
+  ~ The `Method` a request line's own token names, its carried `Body` always empty (a
+  ~ server never reads one — see `Request.parse`): `Ok(method)` for a token this module
+  ~ recognizes, `NotOk(reason)` for any other token. A ternary chain rather than a match:
+  ~ the pattern grammar has no `Text` literal pattern yet.
+  parse = (token :: Text) -> Result => <
+    noBody = Body { content = "", contentType = "" }
+    token == "GET" ? Ok(Get)
+      : token == "POST" ? Ok(Post(noBody))
+      : token == "PUT" ? Ok(Put(noBody))
+      : token == "QUERY" ? Ok(Query(noBody))
+      : token == "DELETE" ? Ok(Delete)
+      : token == "HEAD" ? Ok(Head)
+      : token == "OPTIONS" ? Ok(Options)
+      : token == "PATCH" ? Ok(Patch(noBody))
+      : NotOk("unrecognized method `token`")
+  >
+
   ~ The body this method carries — an empty one for the methods that carry none.
   payload = () -> Body => <
     it ?
@@ -187,6 +204,281 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   bodiless ? Ok("") : NotOk("")
 >
 
+~ The index of `needle`'s first occurrence in `raw`, or `raw.length` when it never occurs —
+~ the same "found, or the whole length" reading `split(needle)[0].length` gives, without
+~ allocating the split array.
+foundOrEnd = (raw :: Text, needle :: Text) -> Num => <
+  raw.indexOf(needle) ?
+    | Ok(at)   => at
+    | NotOk(_) => raw.length
+>
+
+~ Where the blank line separating a head from what follows begins, or `raw.length` when
+~ none has arrived yet. All four spellings of a blank line are measured and the earliest
+~ wins, so a blank line in the other convention sitting anywhere in `raw` — inside the body,
+~ or even inside what would otherwise read as a header line — cannot move the split later
+~ than its own earliest occurrence. Shared by the client's `Response.blankLine()` and the
+~ server's own request-head reader (`receiveHead`), so both measure the split the same way.
+blankLineIndex = (raw :: Text) -> Num => <
+  atCrlfCrlf = foundOrEnd(raw, "\r\n\r\n")
+  atLfLf = foundOrEnd(raw, "\n\n")
+  atCrlfLf = foundOrEnd(raw, "\r\n\n")
+  atLfCrlf = foundOrEnd(raw, "\n\r\n")
+  pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
+  mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
+  pureConvention < mixedConvention ? pureConvention : mixedConvention
+>
+
+~ Everything in `text` after its first line, or `""` when `text` carries no second line at
+~ all. Shared by `Response.headers()` and `Request.parse` — a status line and a request
+~ line are both followed by header lines split the same way.
+linesAfterFirst = (text :: Text) -> Text => <
+  text.indexOf("\n") ?
+    | Ok(mark) => text.slice(mark + 1, text.length)
+    | NotOk(_) => ""
+>
+
+~ An HTTP status: one variant per code the IANA registry lists as a standard code (every
+~ 1xx–5xx code except the ones the registry itself leaves unassigned), named from its
+~ reason phrase in CamelCase — except `OK` (200), spelled exactly that way so it never
+~ reads like `Result`'s `Ok` — plus `Other(Num)` for any code outside the table. `code()`
+~ and `text()` are each their own match over `it`, the same shape `Method.token()` uses;
+~ `parse()` goes the other way (a number to a `Status`), matching over the number instead.
+>> Status = Continue / SwitchingProtocols / Processing / EarlyHints
+  / OK / Created / Accepted / NonAuthoritativeInformation / NoContent / ResetContent
+  / PartialContent / MultiStatus / AlreadyReported / IMUsed
+  / MultipleChoices / MovedPermanently / Found / SeeOther / NotModified / UseProxy / Unused
+  / TemporaryRedirect / PermanentRedirect
+  / BadRequest / Unauthorized / PaymentRequired / Forbidden / NotFound / MethodNotAllowed
+  / NotAcceptable / ProxyAuthenticationRequired / RequestTimeout / Conflict / Gone
+  / LengthRequired / PreconditionFailed / ContentTooLarge / URITooLong / UnsupportedMediaType
+  / RangeNotSatisfiable / ExpectationFailed / ImATeapot / MisdirectedRequest
+  / UnprocessableContent / Locked / FailedDependency / TooEarly / UpgradeRequired
+  / PreconditionRequired / TooManyRequests / RequestHeaderFieldsTooLarge
+  / UnavailableForLegalReasons
+  / InternalServerError / NotImplemented / BadGateway / ServiceUnavailable / GatewayTimeout
+  / HTTPVersionNotSupported / VariantAlsoNegotiates / InsufficientStorage / LoopDetected
+  / NotExtended / NetworkAuthenticationRequired
+  / Other(Num) {
+  ~ The numeral this status carries on the wire: `OK` → `200`, `Other(n)` → `n`.
+  code = () -> Num => <
+    it ?
+      | Continue                      => 100
+      | SwitchingProtocols            => 101
+      | Processing                    => 102
+      | EarlyHints                    => 103
+      | OK                            => 200
+      | Created                       => 201
+      | Accepted                      => 202
+      | NonAuthoritativeInformation   => 203
+      | NoContent                     => 204
+      | ResetContent                  => 205
+      | PartialContent                => 206
+      | MultiStatus                   => 207
+      | AlreadyReported               => 208
+      | IMUsed                        => 226
+      | MultipleChoices               => 300
+      | MovedPermanently              => 301
+      | Found                         => 302
+      | SeeOther                      => 303
+      | NotModified                   => 304
+      | UseProxy                      => 305
+      | Unused                        => 306
+      | TemporaryRedirect             => 307
+      | PermanentRedirect             => 308
+      | BadRequest                    => 400
+      | Unauthorized                  => 401
+      | PaymentRequired               => 402
+      | Forbidden                     => 403
+      | NotFound                      => 404
+      | MethodNotAllowed              => 405
+      | NotAcceptable                 => 406
+      | ProxyAuthenticationRequired   => 407
+      | RequestTimeout                => 408
+      | Conflict                      => 409
+      | Gone                          => 410
+      | LengthRequired                => 411
+      | PreconditionFailed            => 412
+      | ContentTooLarge               => 413
+      | URITooLong                    => 414
+      | UnsupportedMediaType          => 415
+      | RangeNotSatisfiable           => 416
+      | ExpectationFailed             => 417
+      | ImATeapot                     => 418
+      | MisdirectedRequest            => 421
+      | UnprocessableContent          => 422
+      | Locked                        => 423
+      | FailedDependency              => 424
+      | TooEarly                      => 425
+      | UpgradeRequired               => 426
+      | PreconditionRequired          => 428
+      | TooManyRequests               => 429
+      | RequestHeaderFieldsTooLarge   => 431
+      | UnavailableForLegalReasons    => 451
+      | InternalServerError           => 500
+      | NotImplemented                => 501
+      | BadGateway                    => 502
+      | ServiceUnavailable            => 503
+      | GatewayTimeout                => 504
+      | HTTPVersionNotSupported       => 505
+      | VariantAlsoNegotiates         => 506
+      | InsufficientStorage           => 507
+      | LoopDetected                  => 508
+      | NotExtended                   => 510
+      | NetworkAuthenticationRequired => 511
+      | Other(code)                   => code
+  >
+
+  ~ The reason phrase this status carries on the wire: `OK` → `"OK"`, `NotFound` →
+  ~ `"Not Found"`, `Other(_)` → `"Unknown"`.
+  text = () -> Text => <
+    it ?
+      | Continue                      => "Continue"
+      | SwitchingProtocols            => "Switching Protocols"
+      | Processing                    => "Processing"
+      | EarlyHints                    => "Early Hints"
+      | OK                            => "OK"
+      | Created                       => "Created"
+      | Accepted                      => "Accepted"
+      | NonAuthoritativeInformation   => "Non-Authoritative Information"
+      | NoContent                     => "No Content"
+      | ResetContent                  => "Reset Content"
+      | PartialContent                => "Partial Content"
+      | MultiStatus                   => "Multi-Status"
+      | AlreadyReported               => "Already Reported"
+      | IMUsed                        => "IM Used"
+      | MultipleChoices               => "Multiple Choices"
+      | MovedPermanently              => "Moved Permanently"
+      | Found                         => "Found"
+      | SeeOther                      => "See Other"
+      | NotModified                   => "Not Modified"
+      | UseProxy                      => "Use Proxy"
+      | Unused                        => "Unused"
+      | TemporaryRedirect             => "Temporary Redirect"
+      | PermanentRedirect             => "Permanent Redirect"
+      | BadRequest                    => "Bad Request"
+      | Unauthorized                  => "Unauthorized"
+      | PaymentRequired               => "Payment Required"
+      | Forbidden                     => "Forbidden"
+      | NotFound                      => "Not Found"
+      | MethodNotAllowed              => "Method Not Allowed"
+      | NotAcceptable                 => "Not Acceptable"
+      | ProxyAuthenticationRequired   => "Proxy Authentication Required"
+      | RequestTimeout                => "Request Timeout"
+      | Conflict                      => "Conflict"
+      | Gone                          => "Gone"
+      | LengthRequired                => "Length Required"
+      | PreconditionFailed            => "Precondition Failed"
+      | ContentTooLarge               => "Content Too Large"
+      | URITooLong                    => "URI Too Long"
+      | UnsupportedMediaType          => "Unsupported Media Type"
+      | RangeNotSatisfiable           => "Range Not Satisfiable"
+      | ExpectationFailed             => "Expectation Failed"
+      | ImATeapot                     => "I'm a Teapot"
+      | MisdirectedRequest            => "Misdirected Request"
+      | UnprocessableContent          => "Unprocessable Content"
+      | Locked                        => "Locked"
+      | FailedDependency              => "Failed Dependency"
+      | TooEarly                      => "Too Early"
+      | UpgradeRequired               => "Upgrade Required"
+      | PreconditionRequired          => "Precondition Required"
+      | TooManyRequests               => "Too Many Requests"
+      | RequestHeaderFieldsTooLarge   => "Request Header Fields Too Large"
+      | UnavailableForLegalReasons    => "Unavailable For Legal Reasons"
+      | InternalServerError           => "Internal Server Error"
+      | NotImplemented                => "Not Implemented"
+      | BadGateway                    => "Bad Gateway"
+      | ServiceUnavailable            => "Service Unavailable"
+      | GatewayTimeout                => "Gateway Timeout"
+      | HTTPVersionNotSupported       => "HTTP Version Not Supported"
+      | VariantAlsoNegotiates         => "Variant Also Negotiates"
+      | InsufficientStorage           => "Insufficient Storage"
+      | LoopDetected                  => "Loop Detected"
+      | NotExtended                   => "Not Extended"
+      | NetworkAuthenticationRequired => "Network Authentication Required"
+      | Other(_)                      => "Unknown"
+  >
+
+  ~ The `Status` a numeric code names: one of the variants above for a code the table
+  ~ carries, `Other(code)` for any other — `404` and `MethodNotAllowed.parse` alike never
+  ~ fail, unlike `Request.parse`, since every `Num` names SOME status.
+  parse = (code :: Num) -> Status => <
+    code ?
+      | 100 => Continue
+      | 101 => SwitchingProtocols
+      | 102 => Processing
+      | 103 => EarlyHints
+      | 200 => OK
+      | 201 => Created
+      | 202 => Accepted
+      | 203 => NonAuthoritativeInformation
+      | 204 => NoContent
+      | 205 => ResetContent
+      | 206 => PartialContent
+      | 207 => MultiStatus
+      | 208 => AlreadyReported
+      | 226 => IMUsed
+      | 300 => MultipleChoices
+      | 301 => MovedPermanently
+      | 302 => Found
+      | 303 => SeeOther
+      | 304 => NotModified
+      | 305 => UseProxy
+      | 306 => Unused
+      | 307 => TemporaryRedirect
+      | 308 => PermanentRedirect
+      | 400 => BadRequest
+      | 401 => Unauthorized
+      | 402 => PaymentRequired
+      | 403 => Forbidden
+      | 404 => NotFound
+      | 405 => MethodNotAllowed
+      | 406 => NotAcceptable
+      | 407 => ProxyAuthenticationRequired
+      | 408 => RequestTimeout
+      | 409 => Conflict
+      | 410 => Gone
+      | 411 => LengthRequired
+      | 412 => PreconditionFailed
+      | 413 => ContentTooLarge
+      | 414 => URITooLong
+      | 415 => UnsupportedMediaType
+      | 416 => RangeNotSatisfiable
+      | 417 => ExpectationFailed
+      | 418 => ImATeapot
+      | 421 => MisdirectedRequest
+      | 422 => UnprocessableContent
+      | 423 => Locked
+      | 424 => FailedDependency
+      | 425 => TooEarly
+      | 426 => UpgradeRequired
+      | 428 => PreconditionRequired
+      | 429 => TooManyRequests
+      | 431 => RequestHeaderFieldsTooLarge
+      | 451 => UnavailableForLegalReasons
+      | 500 => InternalServerError
+      | 501 => NotImplemented
+      | 502 => BadGateway
+      | 503 => ServiceUnavailable
+      | 504 => GatewayTimeout
+      | 505 => HTTPVersionNotSupported
+      | 506 => VariantAlsoNegotiates
+      | 507 => InsufficientStorage
+      | 508 => LoopDetected
+      | 510 => NotExtended
+      | 511 => NetworkAuthenticationRequired
+      | _   => Other(code)
+  >
+}
+
+~ The wire text every `Response` constructor below builds: a status line, exactly the
+~ headers it was given (no `content-type` added), then `content-length` counted in BYTES,
+~ `connection: close`, a blank line, and `body`.
+statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
+  "HTTP/1.1 `status.code()` `status.text()`\r\n" + headers.wire()
+    + "content-length: `body.size`\r\nconnection: close\r\n\r\n" + body
+>
+
 ~ A reply: the raw response text, read through the methods below.
 >> Response = {
   raw :: Text,
@@ -199,21 +491,23 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
       : NotOk("malformed HTTP response")
   >
 
-  ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
-  ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
-  ~ carrying a blank line in the other convention cannot move the split. `split(x)[0].length`
-  ~ is "where x first appears, or the whole length when it never does" — a reply with no
-  ~ separator splits into one piece. Each spelling is exactly two graphemes, so the body starts
-  ~ two past this index; searching `raw` directly keeps every offset in one index space.
-  blankLine = () -> Num => <
-    atCrlfCrlf = it.raw.split("\r\n\r\n")[0].length
-    atLfLf = it.raw.split("\n\n")[0].length
-    atCrlfLf = it.raw.split("\r\n\n")[0].length
-    atLfCrlf = it.raw.split("\n\r\n")[0].length
-    pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
-    mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
-    pureConvention < mixedConvention ? pureConvention : mixedConvention
-  >
+  blankLine = () -> Num => < blankLineIndex(it.raw) >
+
+  ~ A reply carrying `status`, `body`, and exactly `headers` alongside the generated ones.
+  reply = (status :: Status, body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(status, body, headers) } >,
+  ~ A reply carrying `status` and `body`, with no headers beyond the generated ones.
+  reply = (status :: Status, body :: Text) -> Response => < Response.reply(status, body, Headers.empty()) >,
+  ~ An empty-body reply carrying `status`.
+  reply = (status :: Status) -> Response => < Response.reply(status, "", Headers.empty()) >,
+  ~ A reply carrying `code`'s status, `body`, and exactly `headers` alongside the generated ones.
+  reply = (code :: Num, body :: Text, headers :: Headers) -> Response => < Response.reply(Status.parse(code), body, headers) >,
+  ~ A reply carrying `code`'s status and `body`, with no headers beyond the generated ones.
+  reply = (code :: Num, body :: Text) -> Response => < Response.reply(Status.parse(code), body, Headers.empty()) >,
+  ~ An empty-body reply carrying `code`'s status.
+  reply = (code :: Num) -> Response => < Response.reply(Status.parse(code), "", Headers.empty()) >,
+
+  ~ The text this reply sends on the wire.
+  wire = () -> Text => < it.raw >
 
   ~ Everything before the blank line — the status line and the header lines — with CRLF endings
   ~ rewritten to LF, so the methods below split on `\n` whichever convention the server used. A
@@ -227,17 +521,14 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   ~ line carrying no colon is not a header and is left out, so a garbled reply yields the
   ~ headers it does have.
   headers = () -> Headers => <
-    section = it.head()
-    afterStatusLine = section.indexOf("\n") ?
-      | Ok(mark) => section.slice(mark + 1, section.length)
-      | NotOk(_) => ""
-    lines = afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+    lines = linesAfterFirst(it.head()).split("\n").map(line => line.trim()).filter(line => line.contains(":"))
     Headers.parse(lines)
   >
 
   ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
   ~ no code that is digits throughout — a garbled reply reads as 0 rather than guessing.
-  status = () -> Num => <
+  ~ `status()` wraps this in `Status.parse`; `bodiless()` below wants the raw number.
+  numericStatus = () -> Num => <
     digitOf = (grapheme :: Text) -> Result => < "0123456789".indexOf(grapheme) >
     isDigit = (grapheme :: Text) -> Bool => <
       digitOf(grapheme) ?
@@ -256,10 +547,15 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
       : 0
   >
 
+  ~ The reply's status, parsed off the status line: `Status.parse`'s own `Other(0)` for a
+  ~ status line carrying no code that is digits throughout, the same "don't guess" rule
+  ~ `numericStatus()` already follows.
+  status = () -> Status => < Status.parse(it.numericStatus()) >
+
   ~ Whether this reply carries no body regardless of what its headers claim: an informational
   ~ (1xx), a 204, or a 304 status.
   bodiless = () -> Bool => <
-    code = it.status()
+    code = it.numericStatus()
     (code >= 100 && code < 200) || code == 204 || code == 304
   >
 
@@ -306,6 +602,24 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   url :: Text,
   options :: RequestOptions,
 
+  ~ The server side of `wire()`: parse a raw request head — everything up to, but not
+  ~ including, the blank line — into a `Request`. `Ok(Request)` when the request line
+  ~ carries a method this module recognizes and a target; `NotOk(reason)` otherwise — the
+  ~ caller's own signal (`serveConnection`) to answer 400 and close.
+  parse = (head :: Text) -> Result => <
+    normalized = head.replaceAll("\r\n", "\n")
+    fields = normalized.split("\n")[0].split(" ")
+    fields.size < 2
+      ? NotOk("malformed request line")
+      : (Method.parse(fields[0]) ?
+          | Ok(method) => Ok(Request {
+              method = method,
+              url = fields[1],
+              options = RequestOptions { headers = Headers.parse(linesAfterFirst(normalized).split("\n")) }
+            })
+          | NotOk(reason) => NotOk(reason))
+  >,
+
   get = (url :: Text) -> Request => < Request { method = Get, url = url, options = RequestOptions.default() } >,
   get = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Get, url = url, options = options } >,
 
@@ -344,9 +658,9 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   ~ `example.com` asking for `/?a=b`, not a host named `example.com?a=b`.
   authorityEnd = () -> Num => <
     rest = it.withoutScheme()
-    atPath = rest.split("/")[0].length
-    atQuery = rest.split("?")[0].length
-    atFragment = rest.split("#")[0].length
+    atPath = foundOrEnd(rest, "/")
+    atQuery = foundOrEnd(rest, "?")
+    atFragment = foundOrEnd(rest, "#")
     nearest = atPath < atQuery ? atPath : atQuery
     nearest < atFragment ? nearest : atFragment
   >
@@ -365,7 +679,7 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   path = () -> Text => <
     rest = it.withoutScheme()
     start = it.authorityEnd()
-    end = rest.split("#")[0].length
+    end = foundOrEnd(rest, "#")
     target = start < end ? rest.slice(start, end) : ""
     target == "" ? "/" : (target.slice(0, 1) == "/" ? target : "/" + target)
   >
@@ -418,6 +732,63 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   >
 }
 
+~ Read from `connection` until a request head has fully arrived (the earliest blank line —
+~ `blankLineIndex`): `Ok(head)`, everything up to but not including that blank line — a
+~ head of zero length included, when the blank line is the very first thing the peer sends,
+~ still a request for `serveConnection` to answer (with a 400, since `Request.parse("")` is
+~ malformed) rather than silence. `NotOk(fragment)` when the peer closes first
+~ (`connection.@read()` answering `""`), carrying whatever bytes did arrive —
+~ `serveConnection` answers nothing in that case, there being no complete request to answer.
+~ Recursion stands in for the loop this language has none of: `soFar` is never already
+~ complete when this is called (this function itself only ever recurses on an incomplete
+~ one), so every call reads exactly one chunk before checking.
+~
+~ ponytail: `blankLineIndex` rescans the whole of `accumulated` on every recursion, so an
+~ adversarial peer trickling a head in over many small reads costs this function quadratic
+~ time in the head's size. A real HTTP head is a few hundred bytes at most, so this is not
+~ worth an incremental scan (searching only the new suffix, carrying over enough of the old
+~ tail to catch a separator split across the boundary) until a header-flooding client shows
+~ up as a real cost.
+receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
+  chunk = connection.@read()
+  accumulated = soFar + chunk
+  splitAt = blankLineIndex(accumulated)
+  chunk == ""
+    ? NotOk(soFar)
+    : (splitAt < accumulated.length
+        ? Ok(accumulated.slice(0, splitAt))
+        : receiveHead(connection, accumulated))
+>
+
+~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
+~ once per accepted connection by the fixed-shape thunk codegen builds over `handler`. Reads
+~ the request head, parses it, calls `handler`, and writes the reply — a malformed request
+~ line answers 400 instead. A peer that closes before a head ever completes gets no reply,
+~ there being no request to answer. Nothing here closes the connection: the runtime does
+~ that once this function returns, the same as any other `net.@tcpServe` handler.
+serveConnection = (connection :: net.Connection, handler :: (Request) -> Response) -> $ => <
+  receiveHead(connection, "") ?
+    | NotOk(_)    => $
+    | Ok(head)    => (Request.parse(head) ?
+        | Ok(request) => connection.@write(handler(request).wire())
+        | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire()))
+>
+
+~ `http.@serve(address, handler) -> net.Server`: compiler-lowered, like `net.@tcpServe` —
+~ a Quilon body here would launch the accept loop as part of THIS function's own block,
+~ which the block-scope join would wait on before this function could return the `Server`
+~ handle. Its lowering (`src/codegen/generator/calls.rs`'s `serve` arm) calls the very same
+~ runtime entry `net.@tcpServe` does, with `serveConnection` filled in as the connection
+~ handler — the whole reason `serveConnection` is written above in ordinary Quilon. The
+~ mention of `serveConnection` below is never actually run (this body is inert, like every
+~ other `@` primitive's) — it exists so the reachability pass, which does not know about
+~ codegen's own call to `serveConnection` by name, still keeps it emitted whenever a
+~ program calls `@serve`.
+>> @serve = (address :: Text, handler :: (Request) -> Response) -> net.Server => <
+  serveConnection(net.Connection { handle = 0 }, handler)
+  net.Server { handle = 0 }
+>
+
 ~ The suite for everything above: every parser and serialiser edge case, offline over canned
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
 ~ other command erases them, and the fixtures below carry no `>>`, so a program importing
@@ -460,34 +831,37 @@ test.describe("validating a reply", () => <
 
 test.describe("the status line", () => <
   test.it("reads the code of a normal reply", () =>
-    expect(parsed(crlfReply).status(), equals(200)))
+    expect(parsed(crlfReply).status().code(), equals(200)))
+
+  test.it("reads the standard reason phrase for the code", () =>
+    expect(parsed(crlfReply).status().text(), equals("OK")))
 
   test.it("hands back the whole line, trimmed", () =>
     expect(parsed(crlfReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("accepts HTTP/1.0", () =>
-    expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status(), equals(301)))
+    expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status().code(), equals(301)))
 
   test.it("accepts HTTP/1.1", () =>
-    expect(parsed("HTTP/1.1 301 Moved\r\n\r\n").status(), equals(301)))
+    expect(parsed("HTTP/1.1 301 Moved\r\n\r\n").status().code(), equals(301)))
 
   test.it("reads a code with no reason phrase", () =>
-    expect(parsed("HTTP/1.1 204\r\n\r\n").status(), equals(204)))
+    expect(parsed("HTTP/1.1 204\r\n\r\n").status().code(), equals(204)))
 
   test.it("reads a non-numeric code as 0 rather than guessing", () => <
     ~ The letter O for a zero: no digit-salvaging, no plausible wrong number.
     garbled = Response { raw = "HTTP/1.1 2O0 OK\r\n\r\n" }
-    expect(garbled.status(), equals(0))
+    expect(garbled.status().code(), equals(0))
   >)
 
   test.it("reads a missing code as 0", () => <
     bare = Response { raw = "HTTP/1.1\r\n\r\n" }
-    expect(bare.status(), equals(0))
+    expect(bare.status().code(), equals(0))
   >)
 
   test.it("reads a garbage first line as 0", () => <
     garbage = Response { raw = "!!!\r\n\r\n" }
-    expect(garbage.status(), equals(0))
+    expect(garbage.status().code(), equals(0))
   >)
 >)
 
@@ -638,7 +1012,7 @@ test.describe("line endings", () => <
     expect(parsed(lineFeedReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("reads a bare-LF reply's status code", () =>
-    expect(parsed(lineFeedReply).status(), equals(200)))
+    expect(parsed(lineFeedReply).status().code(), equals(200)))
 
   test.it("reads a bare-LF reply's headers", () => <
     reply = parsed(lineFeedReply)
@@ -665,7 +1039,7 @@ test.describe("line endings", () => <
     strayCarriageReturn =
       parsed("HTTP/1.1 200 OK\r\nX-Foo: bar\r\r\nContent-Type: t\r\n\r\nbody")
     expect(strayCarriageReturn.body(), equals("body"))
-    expect(strayCarriageReturn.status(), equals(200))
+    expect(strayCarriageReturn.status().code(), equals(200))
   >)
 
   test.it("splits at the first blank line when the body carries a bare-LF one", () => <
@@ -675,11 +1049,22 @@ test.describe("line endings", () => <
     expect(mixed.body(), equals("body with \n\n inside"))
   >)
 
+  test.it("finds the earliest blank line even when one hides inside a header's own value", () => <
+    ~ A bare LF LF inside X-Weird's own value, well before the real CRLF blank line that
+    ~ would otherwise end the head — the earliest of the four spellings wins regardless of
+    ~ where it sits, so the split lands there instead, and everything after it (the header
+    ~ that would have followed included) reads as body.
+    earlySplit = parsed("HTTP/1.1 200 OK\r\nX-Weird: a\n\nb\r\nX-Other: c\r\n\r\nBODY")
+    expect(earlySplit.headers().names().size, equals(1))
+    expect(earlySplit.headers().get("x-other"), isNotOk())
+    expect(earlySplit.body(), contains("X-Other"))
+  >)
+
   test.it("agrees with the CRLF reply field for field", () => <
     crlf = parsed(crlfReply)
     lineFeed = parsed(lineFeedReply)
     expect(lineFeed.statusLine(), equals(crlf.statusLine()))
-    expect(lineFeed.status(), equals(crlf.status()))
+    expect(lineFeed.status().code(), equals(crlf.status().code()))
     expect(lineFeed.body(), equals(crlf.body()))
     expect(headerOr(lineFeed, "content-type", "?"), equals(headerOr(crlf, "content-type", "!")))
   >)
@@ -1000,6 +1385,129 @@ test.describe("a round trip", () => <
     expect(request.wire(), contains("\r\n\r\n" + sent))
     echoed = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + sent)
     expect(echoed.body(), equals(sent))
-    expect(echoed.status(), equals(200))
+    expect(echoed.status().code(), equals(200))
+  >)
+>)
+
+test.describe("Status", () => <
+  test.it("OK is spelled exactly that way, not Ok, and carries code 200", () => <
+    expect(OK.code(), equals(200))
+    expect(OK.text(), equals("OK"))
+  >)
+
+  test.it("parse and the reason phrase agree across every class of status", () => <
+    expect(Status.parse(100).text(), equals("Continue"))
+    expect(Status.parse(226).text(), equals("IM Used"))
+    expect(Status.parse(308).text(), equals("Permanent Redirect"))
+    expect(Status.parse(404).text(), equals("Not Found"))
+    expect(Status.parse(418).text(), equals("I'm a Teapot"))
+    expect(Status.parse(451).text(), equals("Unavailable For Legal Reasons"))
+    expect(Status.parse(511).text(), equals("Network Authentication Required"))
+  >)
+
+  test.it("parse round-trips a known code through its variant's own code()", () =>
+    expect(Status.parse(404).code(), equals(404)))
+
+  test.it("an unrecognized code parses to Other, carrying the code and \"Unknown\"", () => <
+    other = Status.parse(419)
+    expect(other.code(), equals(419))
+    expect(other.text(), equals("Unknown"))
+  >)
+>)
+
+test.describe("Response's server-side constructors", () => <
+  test.it("reply writes the exact bytes: status line, content-length, connection, body", () =>
+    expect(Response.reply(OK, "x").wire(), equals(
+      "HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx")))
+
+  test.it("reply with a Status and a body writes that status's own reason phrase", () =>
+    expect(Response.reply(Created, "stocked chickpeas").wire(), equals(
+      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\nconnection: close\r\n\r\nstocked chickpeas")))
+
+  test.it("reply with only a Status writes an empty body", () =>
+    expect(Response.reply(MethodNotAllowed).wire(), equals(
+      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")))
+
+  test.it("reply takes a Num code too, writing the exact same bytes as the Status overload", () =>
+    expect(Response.reply(405).wire(), equals(Response.reply(MethodNotAllowed).wire())))
+
+  test.it("reply falls back to Unknown for a code the table does not carry", () =>
+    expect(Response.reply(419).wire(), contains("419 Unknown\r\n")))
+
+  test.it("counts content-length in bytes, not graphemes", () => <
+    ~ "café" is four characters and five UTF-8 bytes.
+    built = Response.reply(OK, "café")
+    expect(built.wire(), contains("content-length: 5\r\n"))
+  >)
+
+  test.it("reply with headers sends exactly those headers, and no content-type", () => <
+    headers := Headers.empty()
+    headers.add("X-Served-By", "hummus")
+    built = Response.reply(OK, "chickpeas", headers)
+    expect(built.wire(), contains("x-served-by: hummus\r\n"))
+    expect(built.wire(), not(contains("content-type")))
+  >)
+
+  test.it("reply with a Num code, a body, and headers sends exactly those headers", () => <
+    headers := Headers.empty()
+    headers.add("X-Reason", "no soup for you")
+    expect(Response.reply(404, "", headers).wire(), contains("x-reason: no soup for you\r\n"))
+  >)
+
+  test.it("reply with a Status, a body, and headers takes the same shape as the Num overload", () => <
+    headers := Headers.empty()
+    headers.add("X-Reason", "no soup for you")
+    expect(Response.reply(NotFound, "", headers).wire(), equals(Response.reply(404, "", headers).wire()))
+  >)
+
+  test.it("wire returns the raw text unchanged", () =>
+    expect(Response { raw = "HTTP/1.1 200 OK\r\n\r\n" }.wire(), equals("HTTP/1.1 200 OK\r\n\r\n")))
+>)
+
+~ Parse a request head the case knows is well-formed. `assert`, not `expect`: an
+~ unparseable fixture is a broken test rather than a failed case.
+parsedRequest = (head :: Text) -> Request => <
+  candidate = Request.parse(head)
+  assert(candidate, isOk())
+  candidate ?
+    | Ok(request) => request
+    | NotOk(_)    => Request { method = Get, url = "", options = RequestOptions.default() }
+>
+
+test.describe("Request.parse", () => <
+  test.it("parses a GET request line with no headers", () => <
+    request = parsedRequest("GET /pantry HTTP/1.1")
+    expect(request.method.token(), equals("GET"))
+    expect(request.url, equals("/pantry"))
+  >)
+
+  test.it("parses a POST's method with an empty body, never reading one", () => <
+    request = parsedRequest("POST /pantry HTTP/1.1\r\nContent-Length: 4")
+    request.method ?
+      | Post(body) => expect(body.content, equals(""))
+      | _          => test.failAt("expected a Post")
+  >)
+
+  test.it("parses the headers alongside the request line", () => <
+    request = parsedRequest("GET /pantry HTTP/1.1\r\nX-Trace: abc\r\nHost: shop")
+    expect(request.headers().get("x-trace"), isOk())
+    expect(request.headers().get("host"), isOk())
+  >)
+
+  test.it("rejects a request line with fewer than two fields", () =>
+    expect(Request.parse("GET"), isNotOk()))
+
+  test.it("rejects an unrecognized method token", () =>
+    expect(Request.parse("FETCH /pantry HTTP/1.1"), isNotOk()))
+
+  test.it("reads path() and params() off a bare target with no scheme or host", () => <
+    bare = Request { method = Get, url = "/pantry?x=1", options = RequestOptions.default() }
+    expect(bare.path(), equals("/pantry?x=1"))
+    expect(bare.params().get("x"), isOk())
+  >)
+
+  test.it("reads path() off a bare root target", () => <
+    root = Request { method = Get, url = "/", options = RequestOptions.default() }
+    expect(root.path(), equals("/"))
   >)
 >)

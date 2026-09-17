@@ -11,23 +11,11 @@
 
 mod common;
 
-use common::ensure_runtime_lib;
+use common::{connect_once_listening, connect_with_timeout, ensure_runtime_lib, free_port};
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-
-/// A port nothing is bound to right now — bind an ephemeral one and drop it immediately.
-/// The same race every other test in this suite that hands a chosen port to a subprocess
-/// accepts (`tcp_request_test.rs`'s `closed_address`): vanishingly unlikely on a test box,
-/// and the program under test reports a clear bind failure if it ever loses the race.
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind to find a free port");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    port
-}
 
 /// The program under test: a `net.@tcpServe` echo server bound to `address` (`host:port`),
 /// stopped by the word `quit` on any connection.
@@ -66,32 +54,6 @@ fn temp_ql(tag: &str, source: &str) -> PathBuf {
     ));
     std::fs::write(&path, source).expect("write temp .qn");
     path
-}
-
-/// Connect to `host:port` with a bounded read/write timeout on every op — every client
-/// below dials this way, so a bug that leaves a connection open with nothing arriving
-/// fails the test in a few seconds instead of hanging the run. `host` is a plain string
-/// (not necessarily numeric — the hostname test connects the same way it binds), resolved
-/// by `TcpStream::connect` itself.
-fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream> {
-    let stream = TcpStream::connect((host, port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    Ok(stream)
-}
-
-/// Connect to `host:port`, retrying (bounded) until the server is up — the process under
-/// test needs a moment after starting before `@tcpServe` has actually bound and is
-/// accepting.
-fn connect_once_listening(host: &str, port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match connect_with_timeout(host, port) {
-            Ok(stream) => return stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => panic!("never managed to connect to the test server: {error}"),
-        }
-    }
 }
 
 /// Wait for `child` to exit, killing it and failing loudly instead of hanging the test run
