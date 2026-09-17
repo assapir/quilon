@@ -77,6 +77,19 @@ const TCP_REQUEST_PRIMITIVE: &str = "tcpRequest";
 /// The argument count `@tcpRequest` takes (`address`, `requestBytes`).
 const TCP_REQUEST_ARITY: usize = 2;
 
+/// The bare name of `Connection`'s deferred read primitive, reached through a value —
+/// `connection.@read()` — rather than a module binding; fused the same way
+/// `@readStdin`/`@tcpRequest` are.
+const CONNECTION_READ_PRIMITIVE: &str = "read";
+
+/// The bare name of the raw TCP server primitive, reached as `net.@tcpServe(port,
+/// handler)`. Its own return value (the `Server` handle) is never deferred, but its accept
+/// loop launches in the background all the same — see [`launches_in_background`].
+const TCP_SERVE_PRIMITIVE: &str = "tcpServe";
+
+/// The argument count `@tcpServe` takes (`port`, `handler`).
+const TCP_SERVE_ARITY: usize = 2;
+
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
 pub struct DeferInfo {
@@ -287,22 +300,25 @@ impl<'a> Taint<'a> {
             | Expression::Unit { .. } => false,
             Expression::Identifier { name, .. } => env.is_deferred(name),
 
-            // A value-returning `@` primitive (`@readStdin`, `@tcpRequest`) is the only kind of
-            // deferred-producing call; every other call delivers a ready value (its own body
-            // forced its result). The callee expression and the arguments are all strict slots
-            // (a deferred value used inside `function` — e.g. a called lambda — or passed as an
-            // argument is forced there).
+            // A value-returning `@` primitive (`@readStdin`, `@tcpRequest`, `Connection`'s
+            // `@read`) is the only kind of deferred-producing call; every other call delivers
+            // a ready value (its own body forced its result). The callee expression and the
+            // arguments are all strict slots (a deferred value used inside `function` — e.g. a
+            // called lambda — or passed as an argument is forced there).
             Expression::Call {
                 function,
                 arguments,
+                member_call,
                 ..
             } => {
                 self.strict(function, env);
                 for arg in arguments {
                     self.strict(arg, env);
                 }
-                let deferred = produces_deferred(function, arguments);
-                if deferred && let Some(scope) = self.block_stack.last() {
+                let deferred = produces_deferred(function, arguments, *member_call);
+                if launches_in_background(function, arguments, *member_call)
+                    && let Some(scope) = self.block_stack.last()
+                {
                     self.launch_scopes.insert(scope.clone());
                 }
                 deferred
@@ -506,13 +522,52 @@ fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool 
         && arguments.len() == TCP_REQUEST_ARITY
 }
 
+/// Whether `function`/`arguments` is a call to `Connection`'s `@read` primitive
+/// (`connection.@read()`, the member-call form, no arguments besides the receiver itself).
+fn is_connection_read_call(
+    function: &Expression,
+    arguments: &[Expression],
+    member_call: bool,
+) -> bool {
+    member_call
+        && arguments.len() == 1
+        && matches!(function, Expression::Identifier { name, .. }
+            if at_primitive_name(name) == Some(CONNECTION_READ_PRIMITIVE))
+}
+
 /// Whether `function`/`arguments` is a call to a value-returning `@` primitive — one that hands
-/// back a DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line) or
-/// `@tcpRequest(addr, req)` (a deferred `Result`). Matched on name AND arity, so a call that does
-/// not fit the primitive's signature is not treated as deferred. Effect-only primitives like
-/// `@sleep` (which yields `$`) are never deferred and so never appear here.
-fn produces_deferred(function: &Expression, arguments: &[Expression]) -> bool {
-    is_read_call(function, arguments) || is_tcp_request_call(function, arguments)
+/// back a DEFERRED value the taint must track: `@readStdin()` (a deferred `Text` line),
+/// `@tcpRequest(addr, req)` (a deferred `Result`), or `connection.@read()` (a deferred `Text`).
+/// Matched on name AND arity, so a call that does not fit the primitive's signature is not
+/// treated as deferred. Effect-only primitives like `@sleep` (which yields `$`) are never
+/// deferred and so never appear here.
+fn produces_deferred(function: &Expression, arguments: &[Expression], member_call: bool) -> bool {
+    is_read_call(function, arguments)
+        || is_tcp_request_call(function, arguments)
+        || is_connection_read_call(function, arguments, member_call)
+}
+
+/// Whether `function`/`arguments` is a call to `net.@tcpServe(port, handler)`.
+fn is_tcp_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
+    matches!(function, Expression::Identifier { name, .. }
+        if at_primitive_name(name) == Some(TCP_SERVE_PRIMITIVE))
+        && arguments.len() == TCP_SERVE_ARITY
+}
+
+/// Whether `function`/`arguments` launches work that keeps running in the background after
+/// the call itself returns, so the enclosing `< >` block must join it before its own value
+/// flows out — every deferred-producing call (its producer fiber), plus `@tcpServe` (its
+/// accept loop): `@tcpServe`'s own return value, the `Server` handle, is ready at once and
+/// never deferred, but the accept loop it starts keeps running after the call returns, so it
+/// registers with the block's launch scope the same way a value-returning launch's producer
+/// does (`crate::launch_scope::register`, called directly from the runtime intrinsic here
+/// rather than through the deferred-value taint this pass otherwise tracks).
+fn launches_in_background(
+    function: &Expression,
+    arguments: &[Expression],
+    member_call: bool,
+) -> bool {
+    produces_deferred(function, arguments, member_call) || is_tcp_serve_call(function, arguments)
 }
 
 #[cfg(test)]
@@ -665,6 +720,35 @@ mod tests {
         // not treated as a deferred producer: no value flows out deferred, so nothing is forced.
         let src = "<< core.net\n^ = () -> Num => <\n  r = net.@tcpRequest(\"a:1\")\n  0\n>";
         assert_eq!(force_count(src), 0);
+    }
+
+    #[test]
+    fn bound_connection_read_is_deferred_and_forced_at_a_strict_use() {
+        // `line = connection.@read()` binds a deferred Text (lazy) through the member-call
+        // form, exactly like the module-qualified primitives above; the comparison forces it.
+        let src = "^ = () -> Num => <\n  line = c.@read()\n  line == \"\" ? 0 : 1\n>";
+        assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn a_bare_at_read_with_no_receiver_is_not_a_connection_read() {
+        // `@read` reached bare (no `.` receiver, not a member call) fits no known primitive's
+        // shape — a value that happens to be named `@read` is not this pass's concern, since
+        // only the corelib may declare an `@` name in the first place.
+        let src = "^ = () -> Num => <\n  line = @read()\n  0\n>";
+        assert_eq!(force_count(src), 0);
+    }
+
+    #[test]
+    fn a_block_that_calls_tcp_serve_is_a_launch_scope_though_its_return_is_not_deferred() {
+        // `net.@tcpServe`'s own return value (the `Server` handle) is a ready value, never
+        // forced — but the accept loop it starts keeps running after the call returns, so the
+        // enclosing block still opens and joins a launch scope for it.
+        let src =
+            "<< core.net\n^ = () -> Num => <\n  server = net.@tcpServe(\"127.0.0.1:0\", h)\n  0\n>";
+        let i = info(src);
+        assert_eq!(i.launch_scopes.len(), 1);
+        assert_eq!(i.force_sites.len(), 0);
     }
 
     #[test]

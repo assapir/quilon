@@ -187,6 +187,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_at_primitive(primitive, arguments, function.span());
         }
 
+        // `Connection.close()`/`Server.kill(...)`: compiler-lowered exactly like the `@`
+        // primitives above, but reached through an ordinary (non-`@`) member name since
+        // neither parks on IO the way a leaf primitive does — their corelib bodies are
+        // inert placeholders, so this is checked ahead of the receiver's own method-symbol
+        // lookup, the same way `frameBody` is below. `core.net.Connection`/`core.net.Server`
+        // are corelib-only qualified type names a user program can never produce, so this
+        // never diverts an unrelated type's own same-named method.
+        if member_call
+            && let Some(receiver) = arguments.first()
+            && let Some(type_name) = self.receiver_type_name(receiver).map(str::to_string)
+        {
+            match (type_name.as_str(), function_name.as_str()) {
+                ("core.net.Connection", "close") => {
+                    return self.generate_connection_close(arguments);
+                }
+                ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
+                _ => {}
+            }
+        }
+
         // `core.http`'s native body-framing primitive, resolved by name ahead of the
         // general dispatch chain: its corelib declaration's body is an inert placeholder
         // (there only to pin the checker's inferred `Result` payload type), and the
@@ -541,6 +561,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         global
     }
 
+    /// Check a call's arity against `expected`, naming `qualified_name` (the primitive's
+    /// full `module.Type.member`-style name, e.g. `core.net.Connection.@read`) in the one
+    /// message every fixed-arity primitive this file adds shares — `receiver` says whether
+    /// `arguments[0]` is a `.`-call's own receiver, subtracted from the count shown (a
+    /// receiver is never one of the primitive's own written arguments). Only for a
+    /// primitive with exactly one valid arity; an overloaded one (`Server.kill`, 0 or 1
+    /// explicit argument) is already arity-checked by overload resolution before codegen
+    /// ever sees it, and has no single `expected` this could name.
+    fn expect_arity(
+        qualified_name: &str,
+        arguments: &[Expression],
+        receiver: bool,
+        expected: usize,
+    ) -> Result<(), String> {
+        let actual = arguments.len() - usize::from(receiver);
+        if actual == expected {
+            return Ok(());
+        }
+        let plural = if expected == 1 { "" } else { "s" };
+        Err(format!(
+            "{qualified_name} expects exactly {expected} argument{plural}, got {actual}"
+        ))
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -668,8 +712,172 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_load(result_ty, out, "stream_file")
                     .map_err(ctx("Failed to load @streamFile result"))
             }
+            "tcpServe" => {
+                const NAME: &str = "core.net.@tcpServe";
+                const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
+                Self::expect_arity(NAME, arguments, false, 2)?;
+                let address_value = self.generate_expression(&arguments[0])?;
+                let BasicValueEnum::StructValue(_) = address_value else {
+                    return Err(format!("{NAME} expects a Text address"));
+                };
+                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let BasicValueEnum::StructValue(closure) =
+                    self.generate_expression(&arguments[1])?
+                else {
+                    return Err(format!("{NAME} expects a closure handler"));
+                };
+
+                let bundle = self.bundle_closure(closure, "tcp_serve_bundle")?;
+
+                let thunk = self.emit_tcp_serve_handler_thunk()?;
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+                let launch_site = self.site_value(site)?;
+
+                let serve = self.get_intrinsic("__tcp_serve_launch")?;
+                let call = self
+                    .builder
+                    .build_call(
+                        serve,
+                        &[
+                            address_ptr.into(),
+                            address_len.into(),
+                            thunk_ptr.into(),
+                            bundle.into(),
+                            launch_site.into(),
+                        ],
+                        "tcp_serve",
+                    )
+                    .map_err(ctx(CALL_FAILED))?;
+                let handle = Self::call_result_to_basic(call)?;
+                self.build_handle_record(handle)
+            }
+            // `Connection.@read()`: the receiver (`arguments[0]`) is a `Connection` value;
+            // its `handle` field is the id the runtime table keys the connection by.
+            "read" => {
+                const NAME: &str = "core.net.Connection.@read";
+                const CALL_FAILED: &str = "Failed to call core.net.Connection.@read";
+                Self::expect_arity(NAME, arguments, true, 0)?;
+                let handle = self.handle_field(&arguments[0])?;
+                let read = self.get_intrinsic("__connection_read_launch")?;
+                let call = self
+                    .builder
+                    .build_call(read, &[handle.into()], "connection_read")
+                    .map_err(ctx(CALL_FAILED))?;
+                // The result is a DEFERRED `Text` (`{ promise, -1 }`); the force-set decides
+                // where it is forced.
+                Self::call_result_to_basic(call)
+            }
+            // `Connection.@write(bytes)`: effect-only (`$`).
+            "write" => {
+                const NAME: &str = "core.net.Connection.@write";
+                const CALL_FAILED: &str = "Failed to call core.net.Connection.@write";
+                Self::expect_arity(NAME, arguments, true, 1)?;
+                let handle = self.handle_field(&arguments[0])?;
+                let (data_ptr, data_len) = self.extract_text(&arguments[1])?;
+                let write = self.get_intrinsic("__connection_write")?;
+                self.builder
+                    .build_call(
+                        write,
+                        &[handle.into(), data_ptr.into(), data_len.into()],
+                        "",
+                    )
+                    .map_err(ctx(CALL_FAILED))?;
+                Ok(self.unit_value().into())
+            }
             other => Err(format!("Unknown leaf `@` primitive `@{other}`")),
         }
+    }
+
+    /// `Connection.close()`: close the connection now, if it is not already closed.
+    fn generate_connection_close(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Connection.close";
+        const CALL_FAILED: &str = "Failed to call core.net.Connection.close";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
+        let close = self.get_intrinsic("__connection_close")?;
+        self.builder
+            .build_call(close, &[handle.into()], "")
+            .map_err(ctx(CALL_FAILED))?;
+        Ok(self.unit_value().into())
+    }
+
+    /// `Server.kill(seconds)` / `Server.kill()`: the checker already resolved which of the
+    /// two overloaded arities this call is, so `arguments` (receiver plus, optionally, the
+    /// explicit `seconds`) is one of exactly those two shapes — a missing `seconds` is the
+    /// default 5-second grace period. Overloaded, so no single arity to check here (see
+    /// `expect_arity`'s own doc).
+    fn generate_server_kill(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.kill";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.kill";
+        let handle = self.handle_field(&arguments[0])?;
+        let seconds = match arguments.get(1) {
+            Some(argument) => {
+                let BasicValueEnum::FloatValue(seconds) = self.generate_expression(argument)?
+                else {
+                    return Err(format!("{NAME} expects a Num seconds"));
+                };
+                seconds
+            }
+            None => self.context.f64_type().const_float(5.0),
+        };
+        let kill = self.get_intrinsic("__server_kill")?;
+        self.builder
+            .build_call(kill, &[handle.into(), seconds.into()], "")
+            .map_err(ctx(CALL_FAILED))?;
+        Ok(self.unit_value().into())
+    }
+
+    /// The `handle :: Num` field of a `Connection`/`Server` receiver — the raw id every
+    /// runtime intrinsic behind their methods keys its own table by. A plain field read
+    /// (via [`Self::generate_field_access`]), since `Connection`/`Server` are ordinary
+    /// one-field records at the LLVM level; only their METHODS are compiler-lowered.
+    fn handle_field(
+        &mut self,
+        receiver: &Expression,
+    ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+        let BasicValueEnum::FloatValue(handle) = self.generate_field_access(receiver, "handle")?
+        else {
+            return Err("a Connection/Server handle field must be a Num".to_string());
+        };
+        Ok(handle)
+    }
+
+    /// Build a `{ handle :: Num }` handle record (`Connection`/`Server`) on the GC heap
+    /// around `handle` and return a pointer to it — the compiler-lowered counterpart of an
+    /// ordinary record literal, for wherever a runtime intrinsic hands back a raw id that
+    /// Quilon code sees as one of these two handle types. Shape-only: both types have the
+    /// identical one-`Num`-field layout, so this needs no type name to pick between them —
+    /// the call site's own inferred return type is what tells Quilon code which one it is.
+    fn build_handle_record(
+        &mut self,
+        handle: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let struct_type = self.context.struct_type(&[handle.get_type()], false);
+        let size = struct_type
+            .size_of()
+            .ok_or_else(|| "handle record struct type has no compile-time size".to_string())?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let record_ptr = self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "handle_record")
+            .map_err(ctx("Failed to call __alloc for a handle record"))?
+            .as_any_value_enum()
+            .into_pointer_value();
+        let gep = self
+            .builder
+            .build_struct_gep(struct_type, record_ptr, 0, "handle_field")
+            .map_err(ctx("Failed to build GEP for a handle record"))?;
+        self.builder
+            .build_store(gep, handle)
+            .map_err(ctx("Failed to store a handle record's field"))?;
+        Ok(record_ptr.into())
     }
 
     /// A top-level trampoline `i8 (ptr chunk_data, i64 chunk_len, ptr bundle) -> i8` that
@@ -738,6 +946,58 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_return(Some(&as_i8))
             .map_err(ctx("Failed to return from the onChunk thunk"))?;
+
+        self.resume_enclosing_function(suspended);
+        Ok(function)
+    }
+
+    /// A top-level trampoline `i8 (double connectionId, ptr bundle) -> i8` that builds the
+    /// `Connection { handle = connectionId }` the caller's `(Connection) -> $` handler
+    /// expects, unpacks the `{ ptr fn, ptr env }` bundle `generate_at_primitive`'s
+    /// `tcpServe` arm built, and calls it — the fixed-shape entry point
+    /// `__tcp_serve_launch` calls once per accepted connection, in place of the closure's
+    /// own function pointer (whose direct signature the runtime never sees). Mirrors
+    /// [`Self::emit_stream_file_thunk`]: `handler`'s signature is fixed by `@tcpServe`'s own
+    /// corelib declaration, so one definition serves every call in the module.
+    fn emit_tcp_serve_handler_thunk(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        const NAME: &str = "__tcp_serve_handler_thunk";
+        if let Some(existing) = self.module.get_function(NAME) {
+            return Ok(existing);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let f64_ty = self.context.f64_type();
+        let i8_ty = self.context.i8_type();
+
+        let fn_type = i8_ty.fn_type(&[f64_ty.into(), ptr_ty.into()], false);
+        let function = self.module.add_function(NAME, fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
+
+        let suspended = self.suspend_enclosing_function();
+        self.current_function = Some(function);
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let connection_id = function.get_nth_param(0).unwrap().into_float_value();
+        let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
+
+        let connection = self.build_handle_record(connection_id.into())?;
+        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "tcp_serve_bundle")?;
+
+        let call_type = i8_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let call = self
+            .builder
+            .build_indirect_call(
+                call_type,
+                real_fn,
+                &[connection.into(), real_env.into()],
+                "tcp_serve_call",
+            )
+            .map_err(ctx("Failed to call handler"))?;
+        let result = Self::call_result_to_basic(call)?.into_int_value();
+        self.builder
+            .build_return(Some(&result))
+            .map_err(ctx("Failed to return from the handler thunk"))?;
 
         self.resume_enclosing_function(suspended);
         Ok(function)

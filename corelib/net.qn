@@ -22,3 +22,44 @@
 >> @tcpRequest = (address :: Text, requestBytes :: Text) -> Result => <
   address == "" ? Ok("") : NotOk("")
 >
+
+~ A connection `net.@tcpServe` accepted, delivered fresh to `handler` on its own fiber. Its
+~ one field is an opaque handle into the runtime's connection table; every member below is
+~ compiler-lowered, so the bodies here are inert placeholders.
+>> Connection = {
+  handle :: Num,
+
+  ~ The bytes that have arrived since the last read, as a deferred Text — "" once the peer
+  ~ has closed. Parks on readiness and forces at the first strict use, like `@tcpRequest`.
+  @read = () -> Text => < "" >,
+
+  ~ Write every byte of `bytes`, parking on writability until all of it is sent.
+  @write = (bytes :: Text) -> $ => < $ >,
+
+  ~ Close the connection. A handler that returns without calling this has its connection
+  ~ closed by the runtime.
+  close = () -> $ => < $ >
+}
+
+~ A server `net.@tcpServe` started, returned the moment it begins listening.
+>> Server = {
+  handle :: Num,
+
+  ~ Stop accepting, wait up to `seconds` for in-flight handlers to finish, then close any
+  ~ connection still open and the listener itself. Parks the calling fiber until done.
+  kill = (seconds :: Num) -> $ => < $ >,
+
+  ~ `kill` with the default 5-second grace period.
+  kill = () -> $ => < $ >
+}
+
+~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
+~ address, an IPv6 literal in brackets, or a hostname resolved the same way, on the
+~ runtime's blocking-call pool), listen, and return the `Server` handle at once — never
+~ deferred. The accept loop runs as a launch of the calling block, so `^` stays alive
+~ while the server runs; every accepted connection runs `handler` on its own fiber. A
+~ bind failure (the address does not parse or resolve, the port is taken, or permission
+~ is refused) is fatal.
+>> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
+  Server { handle = 0 }
+>

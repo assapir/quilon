@@ -42,3 +42,52 @@ Being deferred, independent requests on one fiber overlap automatically — each
 its outcome is first read. See the
 [Concurrency model](../concurrency/README.md), and
 `examples/net_request.qn` for a real HTTP GET over `core.net`.
+
+## The raw TCP server layer
+
+`net.@tcpServe`, the raw TCP server layer: the runtime owns only accepting connections and
+running each on its own fiber, and everything protocol-shaped past that is ordinary
+Quilon, reached through the connection the accept loop hands the handler.
+
+| Function | Effect |
+|----------|--------|
+| `net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server` | Bind `address` — `host:port`, exactly the form `net.@tcpRequest` accepts (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a hostname resolved the same way, on the runtime's blocking-call pool) — listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the address does not parse or resolve, the port is taken, or nothing but a privileged process may bind it — is fatal, naming the address as written. |
+
+`net.Connection`, the value `handler` is called with, one per accepted peer:
+
+| Member | Effect |
+|--------|--------|
+| `connection.@read() -> Text` | The bytes that have arrived since the connection's last read, as a deferred `Text` — `""` once the peer has closed. Parks on readiness and forces at the first strict use, exactly like `net.@tcpRequest`. |
+| `connection.@write(bytes :: Text) -> $` | Write every byte of `bytes`, parking on writability until all of it is sent. Effect-only. |
+| `connection.close() -> $` | Close the connection now. A handler that returns without calling this has its connection closed by the runtime. |
+
+`net.Server`, the handle `net.@tcpServe` returns:
+
+| Member | Effect |
+|--------|--------|
+| `server.kill(seconds :: Num) -> $` | Stop accepting, wait up to `seconds` for in-flight handlers to finish, then close any connection still open and the listener itself. Parks the calling fiber until every one of that has happened. |
+| `server.kill() -> $` | `kill` with the default 5-second grace period. |
+
+```quilon
+<< core.net
+<< core.test
+
+holler = (connection :: net.Connection) -> $ => <
+  shout = connection.@read()
+  connection.@write(shout)
+  $
+>
+
+^ = () -> $ => <
+  canyon = net.@tcpServe("127.0.0.1:9047", connection => holler(connection))
+  net.@tcpRequest("127.0.0.1:9047", "hellooo") ?
+    | Ok(echo) => assert(echo, equals("hellooo"))
+    | NotOk(error) => test.failAt(error)
+  canyon.kill(1)
+>
+```
+
+Each accepted connection runs on its own fiber, so two peers exchanging bytes with the
+server at once make progress independently — see the
+[Concurrency model](../concurrency/README.md). `examples/tcp_echo.qn` is the runnable
+version of the program above.

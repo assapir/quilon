@@ -421,6 +421,13 @@ impl<'a> Parser<'a> {
                     ),
                 )
                 .help(format!("declare it with `=`: `{operator} = (other) => …`")));
+            } else if self.check(&TokenKind::At) {
+                // A leaf IO primitive member (`@read`), mirroring the top-level `@name`
+                // declaration this fuses the same way: only a compiler-lowered corelib
+                // record member may be named this way (the front end rejects one outside
+                // a built-in module, same as a top-level `@` declaration).
+                self.advance();
+                format!("@{}", self.expect_definition_name()?)
             } else {
                 self.expect_definition_name()?
             };

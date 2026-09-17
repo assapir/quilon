@@ -258,6 +258,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
                 false,
             ),
+            // double __tcp_serve_launch(i8* address, i64 addressLen, ptr handlerFn, ptr
+            // handlerEnv, Site* site) — `net.@tcpServe`: resolve `address` (`host:port`,
+            // exactly as `@tcpRequest` accepts it), bind and listen, launch the accept loop
+            // in the background (registered with the calling block's launch scope directly,
+            // never exposed as a deferred value — this call's own return is ready at once),
+            // and return the `Server` handle's id. `handlerFn` is the code generator's
+            // fixed-shape trampoline over the caller's `(Connection) -> $` closure (see
+            // `emit_tcp_serve_handler_thunk`), called with `handlerEnv` (the bundled
+            // `{ptr,ptr}` closure) as its second argument. A bind failure is fatal, reported
+            // at `site`, naming `address` as written.
+            "__tcp_serve_launch" => f64t.fn_type(
+                &[ptr.into(), i64t.into(), ptr.into(), ptr.into(), ptr.into()],
+                false,
+            ),
+            // { ptr, i64 } __connection_read_launch(double connectionId) — `Connection`'s
+            // `@read`: launch a background read of whatever bytes have arrived and return
+            // the DEFERRED Text immediately, forced (via `__force_text`) at its strict-use
+            // site exactly like `__read_launch`'s.
+            "__connection_read_launch" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
+            // void __connection_write(double connectionId, i8* data, i64 len) —
+            // `Connection`'s `@write`: write every byte, parking on writability until all of
+            // it is sent. Effect-only (`$`); `data`/`len` are the argument `Text`'s own raw
+            // fields.
+            "__connection_write" => void.fn_type(&[f64t.into(), ptr.into(), i64t.into()], false),
+            // void __connection_close(double connectionId) — `Connection.close()`.
+            "__connection_close" => void.fn_type(&[f64t.into()], false),
+            // void __server_kill(double serverId, double seconds) — `Server.kill`: stop
+            // accepting, wait up to `seconds` for in-flight handlers, force-close whatever
+            // is still open past that grace period, then settle the accept loop's own
+            // launch. Parks the calling fiber until all of that has happened.
+            "__server_kill" => void.fn_type(&[f64t.into(), f64t.into()], false),
             // void __stream_file_run({i8,{ptr,i64}}* out, i8* path,i64, double chunkSize,
             // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: runs on the
             // calling fiber, parking between reads, calling the code generator's fixed-shape

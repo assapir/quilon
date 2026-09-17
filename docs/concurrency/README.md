@@ -11,7 +11,8 @@ sidebar:
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
 > single-threaded fiber scheduler, the effect-only `time.@sleep` pause (`core.time`), the
 > deferred-value `io.@readStdin` (`core.io`), the networked `net.@tcpRequest` (`core.net`),
-> the strict, callback-driven `io.@streamFile` (`core.io`), and the atomic-binding syntax
+> the strict, callback-driven `io.@streamFile` (`core.io`), the raw TCP server layer
+> `net.@tcpServe`/`Connection`/`Server` (`core.net`), and the atomic-binding syntax
 > `@name := …`. Planned for 1.0: a value-returning network primitive such as `@get`, with
 > which two independent reads finish in max-time, and the multicore (M:N) runtime — a
 > work-stealing scheduler running one worker per CPU as reported to the process, the same
@@ -144,6 +145,13 @@ reads return at once), and hands back a plain `Result` once the read finishes or
 returns `false` to stop. `Ok(bytesRead)` carries the total bytes delivered; `NotOk(message)`
 covers a missing file, a read error, invalid UTF-8 in the file, and an invalid `chunkSize`.
 (See `examples/streamFile.qn`.)
+
+`core.net` — **`net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server`**
+binds `address` (`host:port`, the same form `net.@tcpRequest` accepts) and listens,
+returning the `Server` handle at once; a server's connections each run on their own
+fiber, so two peers exchanging bytes with it at once make independent progress.
+See [`core.net`'s reference](../corelib/net.md#the-raw-tcp-server-layer) and
+`examples/tcp_echo.qn`.
 
 ## Where it is headed
 

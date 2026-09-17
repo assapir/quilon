@@ -75,6 +75,20 @@ linkedGreeting = "linked " + "again"
     : true
   assert(reached, equals(true))
 
+  ~ __tcp_serve_launch (net.@tcpServe), __server_kill (server.kill), and — from the
+  ~ handler's own compiled body, even though nothing ever connects to reach it at
+  ~ runtime — __connection_read_launch/__connection_write/__connection_close. An
+  ~ ephemeral port on loopback, unlike @tcpRequest above, needs no guard: binding and
+  ~ immediately killing it is real, deterministic, and fast.
+  respondSmoke = (connection :: net.Connection) -> $ => <
+    line = connection.@read()
+    connection.@write(line)
+    connection.close()
+    $
+  >
+  smokeServer = net.@tcpServe("127.0.0.1:0", connection => respondSmoke(connection))
+  smokeServer.kill(0.01)
+
   ~ __stream_file_run (the io.@streamFile leaf IO primitive) and the onChunk thunk it calls
   ~ through. A missing path is a safe, deterministic NotOk — no real file needed.
   streamed = io.@streamFile("/definitely/does/not/exist/quilon-smoke", 10, chunk => true)

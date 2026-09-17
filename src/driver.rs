@@ -362,6 +362,15 @@ fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
         ast::Item::VariableDeclaration(d) if d.name.starts_with('@') => {
             Some((&d.span, d.name.as_str()))
         }
+        // A record/sum's own method may be fused the same way (`@read`), reaching a
+        // leaf primitive through the value that owns it (`connection.@read()`) rather
+        // than through a module binding — the same corelib-only rule applies.
+        ast::Item::TypeDeclaration(t) => t
+            .type_definition
+            .methods()
+            .iter()
+            .find(|m| m.name.starts_with('@'))
+            .map(|m| (&m.span, m.name.as_str())),
         _ => None,
     })
 }

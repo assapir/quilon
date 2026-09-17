@@ -176,6 +176,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN508 | invalid write file descriptor |
 | QN509 | write failed |
 | QN510 | invalid `replace` count |
+| QN511 | bind failed |
 
 ## Input
 
@@ -1342,3 +1343,24 @@ receiver. A literal violation of either is a compile-time error.
 ```
 
 Pass a whole `count` of 1 or more, no greater than the occurrences of `from` present.
+
+### QN511 — bind failed
+
+`core.net.@tcpServe` could not resolve or bind the requested address (`host:port`, the
+same form `net.@tcpRequest` accepts) — the address does not parse or resolve, the port is
+missing or out of range, the port is already in use, or nothing but a privileged process
+may bind it. The report names the address exactly as written. Starting a server is the
+one point in the raw TCP layer where failure is fatal; every per-connection failure
+afterward stays inside the running server instead.
+
+```quilon ignore
+<< core.net
+
+^ = () -> Num => <
+  first = net.@tcpServe("127.0.0.1:47990", connection => $)
+  second = net.@tcpServe("127.0.0.1:47990", connection => $)
+  0
+>
+```
+
+Pick an address nothing else on the machine is already bound to.

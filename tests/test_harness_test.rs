@@ -560,6 +560,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.reportSummary",
         // core.net, and the client itself.
         "core.net.@tcpRequest",
+        "core.net.@tcpServe",
+        "core.net.Connection",
+        "core.net.Server",
         "core.http.Body",
         "core.http.Method",
         "core.http.Response",

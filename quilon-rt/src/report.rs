@@ -78,6 +78,7 @@ pub mod codes {
     pub const WRITE_FD_NOT_WHOLE: u16 = 508;
     pub const WRITE_FAILED: u16 = 509;
     pub const REPLACE_INVALID_COUNT: u16 = 510;
+    pub const BIND_FAILED: u16 = 511;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants
